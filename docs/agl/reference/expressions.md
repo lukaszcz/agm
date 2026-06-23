@@ -57,7 +57,9 @@ static error.
 ## Constructors
 
 ```ebnf
-constructor ::= NAME ("." NAME)? type_args? ("(" named_args? ")")?
+constructor ::= NAME ("." NAME)? type_args? (constructor_args | record_args)?
+constructor_args ::= "(" named_args? ")"
+record_args ::= "{" named_args? "}"
 type_args   ::= "::" "[" type_expr ("," type_expr)* "]"
 named_args  ::= NAME ":" expr ("," NAME ":" expr)* ","?
 ```
@@ -72,11 +74,12 @@ pins the type arguments of a generic constructor (see
 ### Record construction
 
 ```agl
-Issue(title: "Bug", severity: 2, description: "…")
+Issue{title: "Bug", severity: 2, description: "…"}
 ```
 
 Every declared field must be supplied; unknown and duplicate fields are
-static errors.
+static errors. The older parenthesized form `Issue(title: "Bug", severity: 2)`
+is still accepted.
 
 ### Enum variant construction
 
@@ -436,12 +439,12 @@ The left operand must have enum type; the variant must belong to that enum.
 A `case` **expression** selects among single-expression branches:
 
 ```ebnf
-case_expr ::= "case" expr "of" ("|" pattern "=>" or_expr)+
+case_expr ::= "case" expr "of" "|"? pattern "=>" or_expr ("|" pattern "=>" or_expr)*
 ```
 
 ```agl
 let next: text = case action of
-  | Stop => "Stop."
+  Stop => "Stop."
   | Continue(prompt) => prompt
   | Escalate(reason) => "Investigate blocker:\n${reason}"
 ```

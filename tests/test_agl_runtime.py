@@ -1198,15 +1198,15 @@ class TestRenderValue:
             display_name="Issue",
             fields={"title": TextValue("Missing tests"), "severity": IntValue(3)},
         )
-        assert render_value(v) == 'Issue(title: "Missing tests", severity: 3)'
+        assert render_value(v) == 'Issue{title: "Missing tests", severity: 3}'
 
     def test_record_empty(self) -> None:
-        """A record with no fields renders as ``TypeName()``."""
+        """A record with no fields renders as ``TypeName{}``."""
         from agm.agl.eval.values import RecordValue
         from agm.agl.runtime.render import render_value
 
         v = RecordValue(nominal=NominalId(ENTRY_ID, "Empty"), display_name="Empty", fields={})
-        assert render_value(v) == "Empty()"
+        assert render_value(v) == "Empty{}"
 
     def test_record_nested_record(self) -> None:
         """Nested records render inline."""
@@ -1224,7 +1224,7 @@ class TestRenderValue:
             fields={"title": TextValue("Missing tests"), "author": author},
         )
         out = render_value(issue)
-        assert out == 'Issue(title: "Missing tests", author: Author(name: "Ada", active: true))'
+        assert out == 'Issue{title: "Missing tests", author: Author{name: "Ada", active: true}}'
 
     def test_record_with_list_field(self) -> None:
         """Record with a list field renders correctly (list inline)."""
@@ -1241,7 +1241,7 @@ class TestRenderValue:
             },
         )
         out = render_value(v)
-        assert out == 'Issue(title: "Missing tests", severity: 3, tags: ["tests", "coverage"])'
+        assert out == 'Issue{title: "Missing tests", severity: 3, tags: ["tests", "coverage"]}'
 
     # ------------------------------------------------------------------
     # enum: qualified form, nullary variant
@@ -1381,7 +1381,7 @@ class TestRenderValue:
         out = render_value(v)
         # The json field must be compact (no newlines) so the record stays single-line.
         assert "\n" not in out
-        assert out == 'R(data: {"a": 1, "b": 2})'
+        assert out == 'R{data: {"a": 1, "b": 2}}'
 
     # ------------------------------------------------------------------
     # render_value_repl: non-text values match render_value

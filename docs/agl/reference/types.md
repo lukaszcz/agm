@@ -236,11 +236,11 @@ record Issue
 All fields are required. Records are constructed with named arguments only:
 
 ```agl
-let issue = Issue(
+let issue = Issue{
   title: "Missing tests",
   severity: 3,
   description: "No failure-path tests exist."
-)
+}
 ```
 
 Two record types with identical fields are still distinct types (nominal
@@ -297,7 +297,7 @@ record Point
 import foo
 import bar
 
-let p: foo::Point = foo::Point(x: 0, y: 0)
+let p: foo::Point = foo::Point{x: 0, y: 0}
 # The next line is a static error: bar::Point is not the same type as foo::Point
 # let q: bar::Point = p
 ```

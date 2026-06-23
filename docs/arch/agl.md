@@ -316,7 +316,7 @@ syntax** for every value kind:
 - `list` / `dict` — AgL container syntax (`[…]` / `{"k": v, …}`); dict keys
   always quoted.
 - Record / enum / exception — AgL constructor syntax
-  (`TypeName(f: v, …)` / `TypeName.Variant(…)` / `TypeName.Variant`); the
+  (`TypeName{f: v, …}` / `TypeName.Variant(…)` / `TypeName.Variant`); the
   renderer walks `value.fields` verbatim.
 
 Nominal fields are kept in **declaration order** by the value itself: the

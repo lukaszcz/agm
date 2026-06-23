@@ -38,6 +38,7 @@ from agm.agl.diagnostics import Diagnostic
 from agm.agl.lexer.layout import layout
 from agm.agl.lexer.scanner import _Scanner
 from agm.agl.lexer.tokens import (
+    CALL_LBRACE,
     DCOLON,
     DOT,
     GRAMMAR_TOKEN_REMAP,
@@ -45,6 +46,7 @@ from agm.agl.lexer.tokens import (
     IMPORT,
     INDEX_LSQB,
     INT,
+    LBRACE,
     LOOP_BOUND,
     LSQB,
     MODPATH,
@@ -335,11 +337,11 @@ def apply_module_passes(tokens: list[Token]) -> list[Token]:
     return _merge_modqual(_merge_modpath(_promote_soft_keywords(tokens)))
 
 
-def _remap_index_brackets(tokens: list[Token]) -> list[Token]:
-    """Turn adjacent expression brackets into INDEX_LSQB for the parser."""
+def _remap_adjacent_brackets(tokens: list[Token]) -> list[Token]:
+    """Turn adjacent expression brackets/braces into parser-only suffix tokens."""
     result: list[Token] = []
     previous: Token | None = None
-    for i, tok in enumerate(tokens):
+    for tok in tokens:
         if (
             tok.type == LSQB
             and previous is not None
@@ -347,6 +349,13 @@ def _remap_index_brackets(tokens: list[Token]) -> list[Token]:
             and previous.end_pos == tok.start_pos
         ):
             tok = _retype(tok, INDEX_LSQB)
+        elif (
+            tok.type == LBRACE
+            and previous is not None
+            and previous.type in _INDEX_PREDECESSORS
+            and previous.end_pos == tok.start_pos
+        ):
+            tok = _retype(tok, CALL_LBRACE)
         result.append(tok)
         previous = tok
     return result
@@ -392,7 +401,7 @@ class AglLexer(Lexer):
         scanner = _Scanner(source)
         try:
             after_remap = list(_remap(layout(scanner.scan())))
-            tokens = _remap_index_brackets(apply_module_passes(after_remap))
+            tokens = _remap_adjacent_brackets(apply_module_passes(after_remap))
         finally:
             sink = _TAB_WARNING_SINK.get()
             if sink is not None:

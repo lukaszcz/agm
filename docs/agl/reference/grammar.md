@@ -77,12 +77,18 @@ suite ::= NEWLINE INDENT block DEDENT
 ## Type declarations
 
 ```ebnf
-record_def      ::= "record" NAME type_params? NEWLINE INDENT field_def
-                    (NEWLINE field_def)* NEWLINE? DEDENT
+record_def      ::= "record" NAME type_params? record_body
+record_body     ::= NEWLINE INDENT field_def (NEWLINE field_def)* NEWLINE? DEDENT
+                  | "{" field_list? "}"
+                  | field_list
 field_def       ::= NAME ":" type_expr
 
-enum_def        ::= "enum" NAME type_params? variant_def+
-variant_def     ::= "|" NAME variant_payload?
+enum_def        ::= "enum" NAME type_params? "="? enum_body
+enum_body       ::= enum_variant_seq
+                  | NEWLINE INDENT enum_variant_seq NEWLINE? DEDENT
+enum_variant_seq ::= first_variant_def ("|" variant_def)*
+first_variant_def ::= "|"? NAME variant_payload?
+variant_def     ::= NAME variant_payload?
 variant_payload ::= "(" field_list? ")"
 field_list      ::= field_inline ("," field_inline)* ","?
 field_inline    ::= NAME ":" type_expr
@@ -176,7 +182,7 @@ branches returning a common type `T`, the `if` expression has type `T`.
 ## `case`
 
 ```ebnf
-case_expr    ::= "case" expr "of" ("|" case_branch)+
+case_expr    ::= "case" expr "of" "|"? case_branch ("|" case_branch)*
 case_branch  ::= pattern "=>" (suite | or_expr)
 ```
 

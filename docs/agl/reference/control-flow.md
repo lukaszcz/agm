@@ -71,13 +71,13 @@ with `:=` inside a branch persists after the `if`.
 ## `case`
 
 ```ebnf
-case_expr        ::= "case" expr "of" ("|" case_branch)+
+case_expr        ::= "case" expr "of" "|"? case_branch ("|" case_branch)*
 case_branch      ::= pattern "=>" branch_body
 ```
 
 ```agl
 case result of
-  | Complete(output) => artifact := output
+  Complete(output) => artifact := output
   | Changed(output) => artifact := output
   | Blocked(reason) => raise Abort(message: reason)
   | _ => ()

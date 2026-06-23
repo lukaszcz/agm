@@ -328,6 +328,23 @@ class TestIndexBracketRemap:
             ("RSQB", "]"),
         ]
 
+    def test_adjacent_lbrace_after_expression_ending_token_is_call_lbrace(self) -> None:
+        assert lark_tok('Point{x: 1} {"x": 1}') == [
+            ("NAME", "Point"),
+            ("CALL_LBRACE", "{"),
+            ("NAME", "x"),
+            ("COLON", ":"),
+            ("INT", "1"),
+            ("RBRACE", "}"),
+            ("LBRACE", "{"),
+            ("TEMPLATE_START", '"'),
+            ("STRING_FRAGMENT", "x"),
+            ("TEMPLATE_END", '"'),
+            ("COLON", ":"),
+            ("INT", "1"),
+            ("RBRACE", "}"),
+        ]
+
     def test_spaced_lsqb_stays_list_literal_lsqb(self) -> None:
         assert lark_tok("f [2]") == [
             ("NAME", "f"),

@@ -284,13 +284,13 @@ class AstBuilder(Transformer):
     # ------------------------------------------------------------------
 
     def record_def(self, meta: Meta, args: _Args) -> syntax.RecordDef:
-        # Grammar: "record" name type_params? _INDENT field_def+ _DEDENT
+        # Grammar: "record" name type_params? record_body
         name_tok = _find_name_token(args)
         type_params_val: tuple[str, ...] = ()
         for a in args:
             if _is_str_tuple(a):
                 type_params_val = cast(tuple[str, ...], a)
-        fields = tuple(a for a in args if isinstance(a, syntax.FieldDef))
+        fields = _find_field_tuple(args)
         return syntax.RecordDef(
             name=str(name_tok),
             fields=fields,
@@ -298,6 +298,19 @@ class AstBuilder(Transformer):
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
+
+    def record_indent_body(self, meta: Meta, args: _Args) -> tuple[syntax.FieldDef, ...]:
+        # Grammar: _INDENT field_def (_NEWLINE field_def)* _NEWLINE? _DEDENT
+        return tuple(a for a in args if isinstance(a, syntax.FieldDef))
+
+    def record_brace_body(self, meta: Meta, args: _Args) -> tuple[syntax.FieldDef, ...]:
+        # Grammar: LBRACE field_list? RBRACE
+        for a in args:
+            if _is_field_tuple(a):
+                return cast(tuple[syntax.FieldDef, ...], a)
+        return ()
+
+    record_inline_body = record_brace_body
 
     def field_def(self, meta: Meta, args: _Args) -> syntax.FieldDef:
         # Grammar: field_name COLON type_expr
@@ -316,13 +329,13 @@ class AstBuilder(Transformer):
     # ------------------------------------------------------------------
 
     def enum_def(self, meta: Meta, args: _Args) -> syntax.EnumDef:
-        # Grammar: "enum" name type_params? variant_def+
+        # Grammar: "enum" name type_params? EQ? enum_body
         name_tok = _find_name_token(args)
         type_params_val: tuple[str, ...] = ()
         for a in args:
             if _is_str_tuple(a):
                 type_params_val = cast(tuple[str, ...], a)
-        variants = tuple(a for a in args if isinstance(a, syntax.VariantDef))
+        variants = _find_variant_tuple(args)
         return syntax.EnumDef(
             name=str(name_tok),
             variants=variants,
@@ -331,8 +344,14 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
+    def enum_body(self, meta: Meta, args: _Args) -> tuple[syntax.VariantDef, ...]:
+        return _find_variant_tuple(args)
+
+    def enum_variant_seq(self, meta: Meta, args: _Args) -> tuple[syntax.VariantDef, ...]:
+        return tuple(a for a in args if isinstance(a, syntax.VariantDef))
+
     def variant_def(self, meta: Meta, args: _Args) -> syntax.VariantDef:
-        # Grammar: PIPE name variant_payload?
+        # Grammar: PIPE? name variant_payload?
         name_tok = next(
             (a for a in args if isinstance(a, Token) and a.type == "NAME"),
             None,
@@ -772,6 +791,23 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
+    def braced_call(self, meta: Meta, args: _Args) -> syntax.Call:
+        """postfix LBRACE named_arg_list? RBRACE → Call node with named args."""
+        callee = cast(syntax.Expr, args[0])
+        named_args: tuple[syntax.NamedArg, ...] = ()
+        for a in args[1:]:
+            if isinstance(a, tuple) and (
+                len(a) == 0 or isinstance(a[0], syntax.NamedArg)
+            ):
+                named_args = cast(tuple[syntax.NamedArg, ...], a)
+        return syntax.Call(
+            callee=callee,
+            args=(),
+            named_args=named_args,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
     def field_access(self, meta: Meta, args: _Args) -> syntax.FieldAccess:
         """postfix DOT name — record field access."""
         obj_expr = cast(syntax.Expr, args[0])
@@ -940,6 +976,21 @@ class AstBuilder(Transformer):
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
+
+    def named_arg_list(self, meta: Meta, args: _Args) -> tuple[syntax.NamedArg, ...]:
+        """named_arg_list: named_arg (COMMA named_arg)* COMMA?"""
+        named_args: list[syntax.NamedArg] = []
+        seen_names: dict[str, SourceSpan] = {}
+        for a in args:
+            if isinstance(a, syntax.NamedArg):
+                if a.name in seen_names:
+                    raise AglSyntaxError(
+                        f"duplicate argument {a.name!r}.",
+                        span=a.span,
+                    )
+                seen_names[a.name] = a.span
+                named_args.append(a)
+        return tuple(named_args)
 
     # ------------------------------------------------------------------
     # Binary operators
@@ -1110,10 +1161,22 @@ class AstBuilder(Transformer):
             span=self._span_from_meta(meta), node_id=self._next_id(),
         )
 
+    def first_case_branch(self, meta: Meta, args: _Args) -> syntax.CaseBranch:
+        """first_case_branch: PIPE? case_branch"""
+        return next(a for a in args if isinstance(a, syntax.CaseBranch))
+
+    def case_branch_seq(self, meta: Meta, args: _Args) -> tuple[syntax.CaseBranch, ...]:
+        """case_branch_seq: first_case_branch (PIPE case_branch)*"""
+        return tuple(a for a in args if isinstance(a, syntax.CaseBranch))
+
+    def case_body(self, meta: Meta, args: _Args) -> tuple[syntax.CaseBranch, ...]:
+        """case_body: case_branch_seq | _INDENT case_branch_seq _NEWLINE? _DEDENT"""
+        return _find_case_branch_tuple(args)
+
     def case_expr(self, meta: Meta, args: _Args) -> syntax.Case:
-        """case_expr: "case" or_expr "of" (PIPE case_branch)+"""
+        """case_expr: "case" or_expr "of" case_body"""
         subject = cast(syntax.Expr, args[0])
-        branches = tuple(a for a in args[1:] if isinstance(a, syntax.CaseBranch))
+        branches = _find_case_branch_tuple(args[1:])
         return syntax.Case(
             subject=subject, branches=branches,
             span=self._span_from_meta(meta), node_id=self._next_id(),
@@ -1763,6 +1826,45 @@ def _find_name_token(args: _Args) -> Token:
         if isinstance(a, Token) and a.type in ("NAME", "AGENT"):
             return a
     raise AssertionError(f"_find_name_token: no name token found in {args!r}")  # pragma: no cover
+
+
+def _is_field_tuple(a: object) -> bool:
+    return isinstance(a, tuple) and (
+        len(a) == 0 or isinstance(a[0], syntax.FieldDef)
+    )
+
+
+def _find_field_tuple(args: _Args) -> tuple[syntax.FieldDef, ...]:
+    result = next((a for a in args if _is_field_tuple(a)), None)
+    if result is None:  # pragma: no cover
+        raise AssertionError(f"_find_field_tuple: no field tuple found in {args!r}")
+    return cast(tuple[syntax.FieldDef, ...], result)
+
+
+def _is_variant_tuple(a: object) -> bool:
+    return isinstance(a, tuple) and (
+        len(a) == 0 or isinstance(a[0], syntax.VariantDef)
+    )
+
+
+def _find_variant_tuple(args: _Args) -> tuple[syntax.VariantDef, ...]:
+    result = next((a for a in args if _is_variant_tuple(a)), None)
+    if result is None:  # pragma: no cover
+        raise AssertionError(f"_find_variant_tuple: no variant tuple found in {args!r}")
+    return cast(tuple[syntax.VariantDef, ...], result)
+
+
+def _is_case_branch_tuple(a: object) -> bool:
+    return isinstance(a, tuple) and (
+        len(a) == 0 or isinstance(a[0], syntax.CaseBranch)
+    )
+
+
+def _find_case_branch_tuple(args: _Args) -> tuple[syntax.CaseBranch, ...]:
+    result = next((a for a in args if _is_case_branch_tuple(a)), None)
+    if result is None:  # pragma: no cover
+        raise AssertionError(f"_find_case_branch_tuple: no case branch tuple found in {args!r}")
+    return cast(tuple[syntax.CaseBranch, ...], result)
 
 
 def _require_literal_string(node: object, message: str) -> syntax.StringLit:

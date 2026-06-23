@@ -50,11 +50,11 @@ These were confirmed with the owner one-by-one and frame the implementation.
 | # | Decision |
 |---|----------|
 | D1 | **Global scope.** The single renderer `render_value` becomes AgL-native at *every* output site: `print`, REPL echo, template/`${…}` interpolation (agent prompts **and** `exec` commands), and the `as text` cast. JSON is reachable only via `as json`. |
-| D2 | **Single-line / compact layout.** AgL-form values render on one line: `Issue(title: "x", severity: 3, author: Author(name: "Ada"))`; lists and dicts inline too. No injected newlines. |
+| D2 | **Single-line / compact layout.** AgL-form values render on one line: `Issue{title: "x", severity: 3, author: Author{name: "Ada"}}`; lists and dicts inline too. No injected newlines. |
 | D3 | **Enums render qualified.** `Outcome.Partial(left: 2)`; nullary variant as `Outcome.Done` (no parens). Keeps the type name always visible (parity with records) and is unambiguous under variant-name collisions. |
 | D4 | **Dict keys are always quoted.** `{"origin": "static", "retries": 3}`. This is always valid AgL, avoids coupling the runtime renderer to lexer/keyword rules, and applies only to the AgL `dict` type (`json` retains JSON rendering). |
 | D5 | **Exceptions render record-style with *all* fields, including `trace_id`.** `CastError(message: "…", trace_id: "…")`. No special-casing in the renderer; fully faithful to runtime state. |
-| D6 | **Text: top-level verbatim, nested quoted.** `print("hi")` → `hi`; `print(R(t: "hi"))` → `R(t: "hi")`. Nested `text` is emitted as a fully-escaped AgL string literal (JSON escape set **plus `\$`** so `${` cannot read as interpolation). The REPL echo additionally quotes top-level `text` (preserving today's `render_value_repl` behavior). |
+| D6 | **Text: top-level verbatim, nested quoted.** `print("hi")` -> `hi`; `print(R{t: "hi"})` -> `R{t: "hi"}`. Nested `text` is emitted as a fully-escaped AgL string literal (JSON escape set **plus `\$`** so `${` cannot read as interpolation). The REPL echo additionally quotes top-level `text` (preserving today's `render_value_repl` behavior). |
 | D7 | **Fields render in declaration order**, not construction-argument order, for records, enums, and exceptions — canonical, deterministic output independent of how the value was constructed. Nominal rendering requires an authoritative read-only type lookup. An unknown type, wrong nominal kind/variant, or runtime/declaration field-set mismatch is an internal invariant error; the renderer never falls back or silently omits fields. |
 | D8 | **JSON layout is unchanged** (the `as json` path stays 2-space pretty-printed, multi-line). This feature only *adds* the AgL form; the existing JSON serializer and its tests are left intact. |
 | D9 | **A nested `json`-typed value renders compact** (single-line) so the enclosing AgL value stays single-line (D2); a *top-level* `json` value stays pretty-printed (D8). This top-level-vs-nested split mirrors the text rule in D6. |
@@ -85,7 +85,7 @@ Per-kind rules:
 | `json` (nested) | compact JSON, single-line (D9) |
 | `list` | `[e1, e2, …]`, children nested; empty → `[]` |
 | `dict` | `{"k1": v1, "k2": v2}`, keys always quoted with `_quote_text`, values nested; empty → `{}` |
-| record | `TypeName(f1: v1, f2: v2)`, fields in declaration order (D7), values nested; no fields → `TypeName()` |
+| record | `TypeName{f1: v1, f2: v2}`, fields in declaration order (D7), values nested; no fields → `TypeName{}` |
 | enum | `TypeName.Variant(f1: v1, …)`; nullary → `TypeName.Variant`; fields in declared variant order |
 | exception | `TypeName(f1: v1, …)` with *all* runtime fields incl. `trace_id`, in declaration order (D5/D7) |
 
@@ -97,7 +97,7 @@ Worked examples (with `record Author { name: text, active: bool }` and
 `record Issue { title: text, severity: int, tags: list[text], author: Author }`):
 
 ```
-Issue(title: "Missing tests", severity: 3, tags: ["tests", "coverage"], author: Author(name: "Ada", active: true))
+Issue{title: "Missing tests", severity: 3, tags: ["tests", "coverage"], author: Author{name: "Ada", active: true}}
 Outcome.Partial(left: 2)
 Outcome.Done
 {"origin": "static", "two words": 1}

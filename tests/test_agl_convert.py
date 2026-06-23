@@ -659,7 +659,7 @@ class TestConvertValueNominalToText:
             fields={"x": IntValue(3), "y": IntValue(4)},
         )
         result = convert_value(rv, rec_type, TextType())
-        assert result == TextValue("Point(x: 3, y: 4)")
+        assert result == TextValue("Point{x: 3, y: 4}")
 
     def test_enum_to_text_agl_form(self) -> None:
         enum_type = EnumType(name="Color", variants={"Red": {}, "Blue": {"n": IntType()}})

@@ -162,6 +162,7 @@ LSQB = "LSQB"  # [
 INDEX_LSQB = "INDEX_LSQB"  # [ immediately adjacent to an expression-ending token
 RSQB = "RSQB"  # ]
 LBRACE = "LBRACE"  # {
+CALL_LBRACE = "CALL_LBRACE"  # { immediately adjacent to an expression-ending token
 RBRACE = "RBRACE"  # }
 COLON = "COLON"  # :
 DCOLON = "DCOLON"  # :: (type-argument introducer for typed calls)

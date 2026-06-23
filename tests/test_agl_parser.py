@@ -472,6 +472,27 @@ class TestDeclarations:
         assert rec.fields[0].name == "title"
         assert isinstance(rec.fields[0].type_expr, TextT)
 
+    def test_record_def_with_braces(self) -> None:
+        prog = parse("record Point {x: int, y: int}")
+        rec = first(prog)
+        assert isinstance(rec, RecordDef)
+        assert rec.name == "Point"
+        assert [field.name for field in rec.fields] == ["x", "y"]
+
+    def test_record_def_empty_braces(self) -> None:
+        prog = parse("record Empty {}")
+        rec = first(prog)
+        assert isinstance(rec, RecordDef)
+        assert rec.name == "Empty"
+        assert rec.fields == ()
+
+    def test_record_def_inline_without_braces(self) -> None:
+        prog = parse("record Point x: int, y: int")
+        rec = first(prog)
+        assert isinstance(rec, RecordDef)
+        assert rec.name == "Point"
+        assert [field.name for field in rec.fields] == ["x", "y"]
+
     def test_enum_def(self) -> None:
         prog = parse("enum Status\n  | Pass\n  | Fail")
         en = first(prog)
@@ -480,6 +501,18 @@ class TestDeclarations:
         assert len(en.variants) == 2
         assert en.variants[0].name == "Pass"
         assert en.variants[1].name == "Fail"
+
+    def test_enum_def_first_pipe_optional(self) -> None:
+        prog = parse("enum Status Pass | Fail")
+        en = first(prog)
+        assert isinstance(en, EnumDef)
+        assert [variant.name for variant in en.variants] == ["Pass", "Fail"]
+
+    def test_enum_def_equals_after_name_optional(self) -> None:
+        prog = parse("enum Status = Pass | Fail")
+        en = first(prog)
+        assert isinstance(en, EnumDef)
+        assert [variant.name for variant in en.variants] == ["Pass", "Fail"]
 
     def test_enum_with_payload(self) -> None:
         prog = parse("enum Result\n  | Ok(value: int)\n  | Err(msg: text)")
@@ -932,6 +965,13 @@ class TestFieldAccessAndConstructors:
         assert c.callee.name == "Issue"
         assert len(c.named_args) == 2
 
+    def test_constructor_with_brace_args(self) -> None:
+        c = first(parse("Issue{title: x, severity: 1}"))
+        assert isinstance(c, Call)
+        assert isinstance(c.callee, VarRef)
+        assert c.callee.name == "Issue"
+        assert len(c.named_args) == 2
+
     def test_qualified_constructor(self) -> None:
         c = first(parse("Review.Pass"))
         assert isinstance(c, FieldAccess)
@@ -1139,6 +1179,20 @@ class TestIfExpr:
 class TestCaseExpr:
     def test_case_simple(self) -> None:
         src = "case x of | Pass() => ok | Fail() => err"
+        e = first(parse(src))
+        assert isinstance(e, Case)
+        assert isinstance(e.subject, VarRef)
+        assert len(e.branches) == 2
+
+    def test_case_first_pipe_optional(self) -> None:
+        src = "case x of Pass() => ok | Fail() => err"
+        e = first(parse(src))
+        assert isinstance(e, Case)
+        assert isinstance(e.subject, VarRef)
+        assert len(e.branches) == 2
+
+    def test_case_first_pipe_optional_multiline(self) -> None:
+        src = "case x of\n  Pass() => ok\n  | Fail() => err"
         e = first(parse(src))
         assert isinstance(e, Case)
         assert isinstance(e.subject, VarRef)
@@ -1458,6 +1512,10 @@ class TestNegativeCases:
     def test_duplicate_constructor_arg_raises(self) -> None:
         with pytest.raises(AglSyntaxError, match="duplicate"):
             parse("Issue(title: a, title: b)")
+
+    def test_duplicate_braced_constructor_arg_raises(self) -> None:
+        with pytest.raises(AglSyntaxError, match="duplicate"):
+            parse("Issue{title: a, title: b}")
 
     def test_def_without_return_type_raises(self) -> None:
         """def without -> return type is a parse error."""

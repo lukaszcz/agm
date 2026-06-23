@@ -90,7 +90,7 @@
 %declare ASSIGN EQ NEQ LT LE GT GE
 %declare PLUS MINUS STAR SLASH
 %declare ARROW THIN_ARROW
-%declare LPAR RPAR LSQB INDEX_LSQB RSQB LBRACE RBRACE COLON DCOLON COMMA SEMICOLON PIPE DOT
+%declare LPAR RPAR LSQB INDEX_LSQB RSQB LBRACE CALL_LBRACE RBRACE COLON DCOLON COMMA SEMICOLON PIPE DOT
 %declare LOOP_BOUND
 
 // Note: EQ_EQ (==) is declared by the lexer but not used in any grammar rule.
@@ -139,9 +139,15 @@ _sep: _NEWLINE | SEMICOLON
 // Type declarations
 // ---------------------------------------------------------------------------
 
-// record_def: indented block of field definitions.
+// record_def: indented block of field definitions, braced field list, or inline field list.
 // The custom lexer emits _INDENT directly after the name (no _NEWLINE before _INDENT).
-record_def: "record" name type_params? _INDENT field_def (_NEWLINE field_def)* _NEWLINE? _DEDENT
+record_def: "record" name type_params? record_body
+
+record_body: _INDENT field_def (_NEWLINE field_def)* _NEWLINE? _DEDENT -> record_indent_body
+           | record_lbrace field_list? RBRACE                       -> record_brace_body
+           | field_list                                             -> record_inline_body
+
+record_lbrace: LBRACE | CALL_LBRACE
 
 field_def: field_name COLON type_expr
 
@@ -158,9 +164,15 @@ field_def: field_name COLON type_expr
 // enum_def: flat variant list using the |-continuation layout rule.
 // The |-continuation layout rule suppresses every _NEWLINE / _INDENT / _DEDENT
 // before each | so the entire variant list is a flat token sequence.
-enum_def: "enum" name type_params? variant_def+
+enum_def: "enum" name type_params? EQ? enum_body
 
-variant_def: PIPE name variant_payload?
+enum_body: enum_variant_seq
+         | _INDENT enum_variant_seq _NEWLINE? _DEDENT
+
+enum_variant_seq: first_variant_def variant_tail*
+
+first_variant_def: PIPE? name variant_payload? -> variant_def
+variant_tail: PIPE name variant_payload?       -> variant_def
 
 variant_payload: LPAR field_list? RPAR
 
@@ -313,8 +325,15 @@ if_expr: "if" PIPE? if_cond_branch (PIPE if_cond_branch)* if_else_branch?
 if_cond_branch: or_expr ARROW branch_body
 if_else_branch: PIPE? "else" ARROW branch_body
 
-// case expression: case val of | pat => body [| pat => body]*
-case_expr: "case" or_expr "of" (PIPE case_branch)+
+// case expression: case val of [|] pat => body [| pat => body]*
+case_expr: "case" or_expr "of" case_body
+
+case_body: case_branch_seq
+         | _INDENT case_branch_seq _NEWLINE? _DEDENT
+
+case_branch_seq: first_case_branch (PIPE case_branch)*
+
+first_case_branch: PIPE? case_branch
 
 case_branch: pattern ARROW branch_body
 
@@ -457,6 +476,7 @@ juxt_suffix: DOT field_name       -> juxt_field_suffix
 // ---------------------------------------------------------------------------
 
 ?postfix: postfix LPAR arg_list? RPAR  -> call
+        | postfix CALL_LBRACE named_arg_list? RBRACE -> braced_call
         | postfix DOT field_name       -> field_access
         | postfix INDEX_LSQB expr RSQB -> index_access
         | postfix DCOLON LSQB type_arg_list RSQB LPAR arg_list? RPAR -> typed_postfix_call
@@ -509,6 +529,8 @@ paren_expr_or_unit: LPAR RPAR         -> unit_lit
 // ---------------------------------------------------------------------------
 
 arg_list: arg (COMMA arg)* COMMA?
+
+named_arg_list: named_arg (COMMA named_arg)* COMMA?
 
 ?arg: named_arg | pos_arg
 

@@ -18,6 +18,7 @@ from agm.agl.parser.parser import (
     is_incomplete_source,
     parse_program,
     parse_program_seeded,
+    parse_type_expr,
 )
 
 __all__ = [
@@ -25,4 +26,5 @@ __all__ = [
     "is_incomplete_source",
     "parse_program",
     "parse_program_seeded",
+    "parse_type_expr",
 ]

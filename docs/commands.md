@@ -671,6 +671,13 @@ Blank lines and comment-only entries (everything after a `#` is a comment) are a
 no-op: pressing Enter on them simply returns a fresh prompt, with no evaluation
 and no error.
 
+**Bare type expressions** typed at the prompt are recognized as types rather
+than value expressions: entering `int`, a declared `enum`/`record`/`type` name,
+or a parameterized form like `list[int]` or `(int) -> bool` echoes the resolved
+type (e.g. `<type: int>`) instead of reporting ``'X' is not defined.``. This is
+a REPL convenience only — the language is unchanged, and names that are also
+values (a record constructor, a binding) keep evaluating normally.
+
 Exit codes (the REPL itself only fails before the loop starts; per-entry errors
 are reported inline and never exit the process):
 

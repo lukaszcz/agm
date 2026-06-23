@@ -16,7 +16,7 @@ import importlib.resources
 from dataclasses import replace as dc_replace
 from typing import NoReturn
 
-from lark import Lark
+from lark import Lark, Tree
 from lark.exceptions import (
     LarkError,
     UnexpectedCharacters,
@@ -66,23 +66,44 @@ _PARSER: Lark = Lark(
     maybe_placeholders=True,
 )
 
+# A second Lark instance rooted at the ``type_expr`` grammar rule, built lazily.
+# Used only by :func:`parse_type_expr` for the REPL's bare-type-entry fallback;
+# keeping a separate start symbol avoids perturbing the program parser's start
+# rule.  ``type_expr`` is an existing rule in ``agl.lark`` (every type-expression
+# alternative), so this reuses the same grammar/lexer with no grammar changes.
+_TYPE_PARSER: Lark | None = None
 
-def _parse_to_program(
-    text: str, *, filename: str, start_id: int, source: SourceId | None = None
-) -> tuple[syntax.Program, int]:
-    """Parse *text* into a ``Program`` and report the next unused node id.
 
-    Shared body for :func:`parse_program` and :func:`parse_program_seeded`.
-    Node ids are assigned starting at *start_id*; the returned ``int`` is the
-    first id NOT consumed (the seed for a subsequent incremental parse), read
-    from the builder's counter rather than assuming the root holds the maximum.
+def _type_parser() -> Lark:
+    """Return the lazily-built ``type_expr``-rooted Lark instance."""
+    global _TYPE_PARSER
+    if _TYPE_PARSER is None:
+        _TYPE_PARSER = Lark(
+            _load_grammar(),
+            parser="lalr",
+            lexer=AglLexer,
+            propagate_positions=True,
+            maybe_placeholders=True,
+            start="type_expr",
+        )
+    return _TYPE_PARSER
 
-    When *source* is supplied, every ``SourceSpan`` the builder constructs is
-    stamped with that ``SourceId``; the same id is also stamped on any
-    ``AglSyntaxError`` raised during parsing.
+
+def _parse_tree(
+    parser: Lark,
+    text: str,
+    *,
+    filename: str,
+    source: SourceId | None,
+) -> Tree:
+    """Parse *text* with *parser*, mapping any lex/parse error to ``AglSyntaxError``.
+
+    Shared by the program parser and the ``type_expr`` parser so the error
+    wrapping (and its ``# pragma: no cover`` fallback) exists in one place.
+    Returns the raw Lark tree; the caller transforms it.
     """
     try:
-        tree = _PARSER.parse(text)
+        return parser.parse(text)
     except LexError as exc:
         _reraise_stamped(
             syntax_error_from_lark(exc, filename=filename, source_text=text), source
@@ -99,6 +120,19 @@ def _parse_to_program(
             syntax_error_from_lark(exc, filename=filename, source_text=text), source
         )
 
+
+def _transform_tree(
+    tree: Tree,
+    *,
+    start_id: int,
+    filename: str,
+    source: SourceId | None,
+) -> tuple[object, int]:
+    """Transform a Lark tree via ``AstBuilder``, unwrapping ``VisitError``.
+
+    Returns ``(result, next_node_id)`` where ``next_node_id`` is the first id NOT
+    consumed by the builder's counter (the seed for the next incremental parse).
+    """
     builder = AstBuilder(start_id=start_id, source=source)
     try:
         result = builder.transform(tree)
@@ -109,8 +143,29 @@ def _parse_to_program(
         if isinstance(exc.orig_exc, AglSyntaxError):
             _reraise_stamped(exc.orig_exc, source)
         raise syntax_error_from_lark(exc, filename=filename) from exc  # pragma: no cover
-    assert isinstance(result, syntax.Program)
     return result, builder.next_node_id
+
+
+def _parse_to_program(
+    text: str, *, filename: str, start_id: int, source: SourceId | None = None
+) -> tuple[syntax.Program, int]:
+    """Parse *text* into a ``Program`` and report the next unused node id.
+
+    Shared body for :func:`parse_program` and :func:`parse_program_seeded`.
+    Node ids are assigned starting at *start_id*; the returned ``int`` is the
+    first id NOT consumed (the seed for a subsequent incremental parse), read
+    from the builder's counter rather than assuming the root holds the maximum.
+
+    When *source* is supplied, every ``SourceSpan`` the builder constructs is
+    stamped with that ``SourceId``; the same id is also stamped on any
+    ``AglSyntaxError`` raised during parsing.
+    """
+    tree = _parse_tree(_PARSER, text, filename=filename, source=source)
+    result, next_id = _transform_tree(
+        tree, start_id=start_id, filename=filename, source=source
+    )
+    assert isinstance(result, syntax.Program)
+    return result, next_id
 
 
 # Single-entry memo for is_incomplete_source: (last_text, last_result).
@@ -266,3 +321,50 @@ def parse_program_seeded(
         On any lex or parse error.
     """
     return _parse_to_program(text, filename=filename, start_id=start_id, source=source)
+
+
+def parse_type_expr(
+    text: str,
+    *,
+    start_id: int = 0,
+    filename: str = "<agl>",
+    source: SourceId | None = None,
+) -> syntax.TypeExpr:
+    """Parse *text* as a single AgL type expression and return a ``TypeExpr``.
+
+    This is a REPL-only convenience: the interactive loop uses it to recognize
+    a bare type entry (``int``, ``list[T]``, a declared record/enum name, …) so
+    it can echo the resolved type instead of reporting ``'X' is not defined.``.
+    It reuses the same grammar/lexer/transformer as :func:`parse_program` but
+    roots the parse at the ``type_expr`` rule, so any input that is not a single
+    type expression raises ``AglSyntaxError`` and the caller falls back to the
+    normal evaluation path.  The language and program parser are unchanged.
+
+    Parameters
+    ----------
+    text:
+        The source code to parse (a single type expression).
+    start_id:
+        The first ``node_id`` to assign (default ``0``).  Throwaway for the
+        REPL fallback, which never promotes; passed for symmetry.
+    filename:
+        The logical filename for error messages (default ``"<agl>"``).
+    source:
+        Optional :class:`~agm.agl.syntax.spans.SourceId` stamped on spans.
+
+    Returns
+    -------
+    syntax.TypeExpr
+        The parsed type-expression AST node.
+
+    Raises
+    -----
+    AglSyntaxError
+        On any lex or parse error.
+    """
+    tree = _parse_tree(_type_parser(), text, filename=filename, source=source)
+    result, _next_id = _transform_tree(
+        tree, start_id=start_id, filename=filename, source=source
+    )
+    assert isinstance(result, syntax.TypeExpr)
+    return result

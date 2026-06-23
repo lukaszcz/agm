@@ -1828,3 +1828,146 @@ class TestFunctionAgentValueEcho:
         # render_value on each must not raise.
         for _n, _t, v in binds:
             render_value(v)  # must not raise TypeError
+
+
+# ---------------------------------------------------------------------------
+# Bare type-expression entries (REPL-only: print the type, don't error)
+# ---------------------------------------------------------------------------
+
+
+class TestBareTypeEntry:
+    """A bare type expression at the REPL prints as a type instead of erroring.
+
+    Typing a type (``int``, a declared enum/record name, a parameterized type)
+    is not a value expression and previously surfaced ``'X' is not defined.``
+    The REPL now recognizes such entries and echoes the resolved type.  This is
+    a REPL-only convenience: the language, parser, and checker are unchanged.
+    Entries that successfully evaluate as values are never intercepted.
+    """
+
+    def test_builtin_primitive_type_echoes_as_type(self) -> None:
+        from agm.agl.repl.render import render_entry_result
+
+        s = ReplSession()
+        r = s.eval_entry("int")
+        assert r.ok
+        assert r.kind == "type"
+        assert r.value is None
+        assert isinstance(r.value_type, IntType)
+        assert render_entry_result(r, echo=True) == "<type: int>"
+
+    def test_builtin_container_types_echo_as_type(self) -> None:
+        from agm.agl.typecheck.types import DictType, ListType
+
+        s = ReplSession()
+        r = s.eval_entry("list[int]")
+        assert r.ok
+        assert r.kind == "type"
+        assert isinstance(r.value_type, ListType)
+        assert isinstance(r.value_type.elem, IntType)
+
+        r2 = s.eval_entry("dict[text, int]")
+        assert r2.ok
+        assert r2.kind == "type"
+        assert isinstance(r2.value_type, DictType)
+
+    def test_function_type_echoes_as_type(self) -> None:
+        from agm.agl.typecheck.types import FunctionType
+
+        s = ReplSession()
+        r = s.eval_entry("(int) -> bool")
+        assert r.ok
+        assert r.kind == "type"
+        assert isinstance(r.value_type, FunctionType)
+
+    def test_declared_enum_name_echoes_as_type(self) -> None:
+        from agm.agl.repl.render import render_entry_result
+        from agm.agl.typecheck.types import EnumType
+
+        s = ReplSession()
+        s.eval_entry("enum Color = Red | Green | Blue")
+        r = s.eval_entry("Color")
+        assert r.ok
+        assert r.kind == "type"
+        assert isinstance(r.value_type, EnumType)
+        assert render_entry_result(r, echo=True) == "<type: Color>"
+
+    def test_generic_type_application_echoes_as_type(self) -> None:
+        from agm.agl.typecheck.types import ListType
+
+        s = ReplSession()
+        s.eval_entry("type Pair[A, B] = list[A]")
+        # The alias resolves transparently to its target: list[int].
+        r = s.eval_entry("Pair[int, text]")
+        assert r.ok
+        assert r.kind == "type"
+        assert isinstance(r.value_type, ListType)
+        assert isinstance(r.value_type.elem, IntType)
+
+    def test_record_name_still_evaluates_as_constructor(self) -> None:
+        # A record name doubles as a constructor value, so it must keep
+        # evaluating normally (the type fallback only triggers on failure).
+        from agm.agl.eval.values import ConstructorValue
+
+        s = ReplSession()
+        s.eval_entry("record Point { x: int, y: int }")
+        r = s.eval_entry("Point")
+        assert r.ok
+        assert r.kind == "expression"
+        assert isinstance(r.value, ConstructorValue)
+
+    def test_binding_name_not_intercepted_as_type(self) -> None:
+        # ``x`` parses as a type expression (a NameT), but it is a live value
+        # binding that evaluates successfully, so it must NOT be intercepted.
+        s = ReplSession()
+        s.eval_entry("let x = 5")
+        r = s.eval_entry("x")
+        assert r.ok
+        assert r.kind == "expression"
+        assert r.value is not None
+        assert _int(r.value) == 5
+
+    def test_expression_not_intercepted_as_type(self) -> None:
+        # ``1 + 2`` does not parse as a type expression; it evaluates normally.
+        s = ReplSession()
+        r = s.eval_entry("1 + 2")
+        assert r.ok
+        assert r.kind == "expression"
+        assert r.value is not None
+        assert _int(r.value) == 3
+
+    def test_truly_undefined_name_keeps_original_error(self) -> None:
+        # ``nope`` parses as a type expression but does not resolve to a known
+        # type, so the original "is not defined" error is preserved.
+        s = ReplSession()
+        r = s.eval_entry("nope")
+        assert not r.ok
+        assert r.kind != "type"
+        assert any("not defined" in d.message for d in r.diagnostics)
+
+    def test_type_entry_does_not_mutate_session_state(self) -> None:
+        # Like ``:type``, a bare type entry must not promote, advance node ids,
+        # or install any binding.
+        s = ReplSession()
+        before = s._next_node_id
+        s.eval_entry("int")
+        assert s._next_node_id == before
+        assert s.bindings() == []
+        assert s.type_names() == frozenset()
+
+    def test_type_entry_echo_respects_echo_off(self) -> None:
+        from agm.agl.repl.render import render_entry_result
+
+        s = ReplSession()
+        r = s.eval_entry("int")
+        assert r.ok
+        assert render_entry_result(r, echo=False) is None
+
+    def test_type_entry_in_check_only_mode(self) -> None:
+        from agm.agl.repl.render import render_entry_result
+
+        s = ReplSession()
+        r = s.eval_entry("int", check_only=True)
+        assert r.ok
+        assert r.kind == "type"
+        assert render_entry_result(r, echo=True, check_only=True) == "<type: int>"

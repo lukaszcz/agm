@@ -97,8 +97,12 @@ def _render_check_only(result: "EntryResult") -> str | None:
     A ``check_only`` run never evaluates, so there is no value — the echo shows
     the inferred static type: ``name : Type`` for a binding, ``: Type`` for a
     bare expression.  Declarations confirm the declared name; statements have no
-    type to show and echo nothing.
+    type to show and echo nothing.  A REPL bare-type entry (``kind == "type"``)
+    echoes ``<type: T>`` just as in the live echo.
     """
+    if result.kind == "type":
+        assert result.value_type is not None
+        return f"<type: {result.value_type!r}>"
     if result.kind == "expression":
         # A bare expression always carries a checked type on success.
         assert result.value_type is not None
@@ -118,6 +122,12 @@ def _render_echo(result: "EntryResult") -> str | None:
     """Render the success echo line for *result*, or ``None`` for statements."""
     from agm.agl.runtime.render import render_value_repl
 
+    if result.kind == "type":
+        # A bare type expression entered at the prompt is not a value; echo it
+        # in the same ``<…>`` surface form used for other non-value echoes
+        # (functions, agents, constructors) and tag it as a type.
+        assert result.value_type is not None
+        return f"<type: {result.value_type!r}>"
     if result.kind == "expression":
         # A bare expression always carries a value and type on success.
         assert result.value is not None

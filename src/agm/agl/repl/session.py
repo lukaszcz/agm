@@ -43,7 +43,7 @@ if TYPE_CHECKING:
     from agm.agl.typecheck.types import Type
 
 
-EntryKind = Literal["expression", "binding", "declaration", "statement"]
+EntryKind = Literal["expression", "binding", "declaration", "statement", "type"]
 
 # Layout-only token types that carry no statement to evaluate.
 _TRIVIAL_TOKENS: frozenset[str] = frozenset({"_NEWLINE", "_INDENT", "_DEDENT"})
@@ -88,7 +88,9 @@ class EntryResult:
         (``value``/``value_type`` set); ``let``/``var`` → ``"binding"``
         (``name``/``value_type``/``value``); ``record``/``enum``/``type``/
         ``param``/``def``/``agent`` → ``"declaration"``; ``:=`` or side-
-        effecting expr (``print``, etc.) → ``"statement"``.
+        effecting expr (``print``, etc.) → ``"statement"``; a REPL-only bare
+        type expression (``int``, a declared type name, ``list[T]``) →
+        ``"type"`` (``value_type`` set, no value, no state change).
     ``name``
         The bound/declared name, when meaningful (binding / declaration).
     ``value``
@@ -278,6 +280,64 @@ class ReplSession:
 
     def eval_entry(self, text: str, *, check_only: bool = False) -> EntryResult:
         """Parse → resolve → check → (eval) one entry against the session.
+
+        Completed runtime initializers are promoted even when a later initializer
+        fails. ``check_only`` runs the static pipeline without linking, executing,
+        promoting, or advancing the node-id counter.
+
+        REPL-only fallback: when the entry fails to evaluate as a program, the
+        loop tries to read it as a bare type expression (e.g. ``int``, a declared
+        enum/record name, ``list[T]``).  If that resolves to a known type, a
+        ``kind == "type"`` result echoing the type is returned instead of the
+        original ``'X' is not defined`` error.  Entries that evaluate
+        successfully as values are never intercepted, so record constructors and
+        bindings keep their normal echo.
+        """
+        result = self._eval_entry_pipeline(text, check_only=check_only)
+        if not result.ok:
+            type_result = self._try_type_entry(text)
+            if type_result is not None:
+                return type_result
+        return result
+
+    def _try_type_entry(self, text: str) -> EntryResult | None:
+        """Attempt to interpret *text* as a bare type-expression entry.
+
+        Returns a ``kind == "type"`` :class:`EntryResult` echoing the resolved
+        type when *text* parses as a single type expression AND resolves to a
+        known type in the session type environment; returns ``None`` otherwise
+        so the caller keeps the original failure result.
+
+        This is a REPL-only convenience (the language is unchanged): typing a
+        type is not a value expression, so previously it surfaced ``'X' is not
+        defined.``.  Like :meth:`type_of`, this never evaluates, promotes,
+        advances the node-id counter, or mutates session state.  The parse uses
+        throwaway node ids; only the resolved :class:`Type` is kept.
+        """
+        from agm.agl.parser import AglSyntaxError, parse_type_expr
+        from agm.agl.typecheck import AglTypeError
+
+        try:
+            type_expr = parse_type_expr(text, start_id=self._next_node_id)
+        except AglSyntaxError:
+            return None
+        try:
+            typ = self._type_env.resolve_type_expr(type_expr)
+        except AglTypeError:
+            return None
+        return EntryResult(
+            kind="type",
+            name=None,
+            value=None,
+            value_type=typ,
+            diagnostics=[],
+            warnings=[],
+            error=None,
+            ok=True,
+        )
+
+    def _eval_entry_pipeline(self, text: str, *, check_only: bool = False) -> EntryResult:
+        """Parse → resolve → check → (eval) one entry against the session (core).
 
         Completed runtime initializers are promoted even when a later initializer
         fails. ``check_only`` runs the static pipeline without linking, executing,

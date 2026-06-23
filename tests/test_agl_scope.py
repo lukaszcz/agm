@@ -2538,6 +2538,30 @@ class TestConstructorBindings:
         msg = err.to_diagnostic().message
         assert "A" in msg
 
+    def test_duplicate_record_name_raises(self) -> None:
+        err = reject_scope("record P\n  n: int\nrecord P\n  t: text\n()")
+        msg = err.to_diagnostic().message
+        assert "P" in msg
+        assert "already declared" in msg.lower()
+
+    def test_duplicate_enum_name_raises(self) -> None:
+        err = reject_scope("enum Status\n  | ok\nenum Status\n  | fail\n()")
+        msg = err.to_diagnostic().message
+        assert "Status" in msg
+        assert "already declared" in msg.lower()
+
+    def test_duplicate_type_alias_name_raises(self) -> None:
+        err = reject_scope("type Thing = int\ntype Thing = text\n()")
+        msg = err.to_diagnostic().message
+        assert "Thing" in msg
+        assert "already declared" in msg.lower()
+
+    def test_type_declaration_kinds_share_type_namespace(self) -> None:
+        err = reject_scope("record Id\n  value: int\ntype Id = text\n()")
+        msg = err.to_diagnostic().message
+        assert "Id" in msg
+        assert "already declared" in msg.lower()
+
     def test_unique_type_params_accepted(self) -> None:
         """Unique type parameters in a def are accepted."""
         r = parse_and_resolve(

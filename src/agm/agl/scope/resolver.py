@@ -434,7 +434,8 @@ class _Resolver:
         """Collect names of root-level type declarations and validate type_params.
 
         Populates ``_declared_type_names`` and raises ``AglScopeError`` when
-        a declaration has duplicate type-parameter names.
+        a declaration has duplicate type-parameter names or when two local
+        type declarations use the same name.
 
         Builtin prelude type names are seeded first so that qualified
         constructor access (e.g. ``ParsePolicy.Abort``) resolves correctly.
@@ -444,8 +445,15 @@ class _Resolver:
         for type_name in BUILTIN_PRELUDE_TYPES:
             self._declared_type_names.add(type_name)
 
+        local_type_names: set[str] = set()
         for item in program.body.items:
             if isinstance(item, (RecordDef, EnumDef, TypeAlias)):
+                if item.name in local_type_names:
+                    raise AglScopeError(
+                        f"Type name '{item.name}' is already declared in this scope.",
+                        span=item.span,
+                    )
+                local_type_names.add(item.name)
                 self._declared_type_names.add(item.name)
                 self._validate_type_params(item)
             elif isinstance(item, FuncDef):

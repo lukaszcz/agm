@@ -90,6 +90,7 @@ from agm.agl.typecheck import (
     UnitType,
     check,
 )
+from agm.agl.typecheck.checker import _TypeBuilder
 from agm.agl.typecheck.types import (
     BUILTIN_EXCEPTION_NAMES,
     BUILTIN_PRELUDE_TYPE_NAMES,
@@ -2223,8 +2224,14 @@ class TestTypeDeclarations:
         assert "cycle" in str(err).lower()
 
     def test_duplicate_type_name_raises(self) -> None:
-        err = reject_type("record A\n  x: int\nrecord A\n  y: int\nA(x: 1)")
+        err = reject_any("record A\n  x: int\nrecord A\n  y: int\nA(x: 1)")
         assert "already declared" in str(err).lower() or "duplicate" in str(err).lower()
+
+    def test_type_builder_duplicate_type_name_guard_raises(self) -> None:
+        program = parse_program("record A\n  x: int\nrecord A\n  y: int\nA(x: 1)")
+        with pytest.raises(AglTypeError) as exc_info:
+            _TypeBuilder(TypeEnvironment()).collect(program)
+        assert "already declared" in str(exc_info.value).lower()
 
     def test_record_recursive_raises(self) -> None:
         err = reject_type("record Node\n  child: Node\nNode(child: Node(child: ()))")

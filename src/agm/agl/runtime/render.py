@@ -22,7 +22,7 @@ Per-kind rules:
 - ``json`` (nested)                    → compact JSON, single-line
 - ``list``                             → ``[e1, e2, ...]``, children nested
 - ``dict``                             → ``{"k1": v1, ...}``, keys always quoted
-- record                               → ``TypeName{f1: v1, ...}`` declaration order
+- record                               → ``TypeName(f1: v1, ...)`` declaration order
 - enum   → ``TypeName.Variant(f1: v1, ...)``; nullary variant → ``TypeName.Variant``
 - exception                            → ``TypeName(f1: v1, ...)`` all fields incl. ``trace_id``
 
@@ -164,12 +164,12 @@ def _render(value: Value, *, top_level: bool, repl: bool) -> str:
 
     if isinstance(value, RecordValue):
         if not value.fields:
-            return f"{value.display_name}{{}}"
+            return f"{value.display_name}()"
         field_parts = [
             f"{name}: {_render(v, top_level=False, repl=repl)}"
             for name, v in value.fields.items()
         ]
-        return f"{value.display_name}" + "{" + ", ".join(field_parts) + "}"
+        return f"{value.display_name}(" + ", ".join(field_parts) + ")"
 
     if isinstance(value, (EnumValue, ExceptionValue)):
         prefix = (
@@ -199,7 +199,7 @@ def render_value(value: Value) -> str:
 
     Top-level ``text`` is verbatim (no quotes).  All other rendering follows
     the AgL-native rules: scalars as plain text, ``list``/``dict`` in AgL
-    bracket/brace form, records as ``TypeName{field: value, ...}``, and
+    bracket/brace form, records as ``TypeName(field: value, ...)``, and
     enum/exception values in constructor form with fields in declaration order.
     ``json`` values render as pretty-printed
     JSON (2-space indent) at top level and compact single-line JSON when nested.

@@ -1910,7 +1910,7 @@ class TestBareTypeEntry:
         from agm.agl.eval.values import ConstructorValue
 
         s = ReplSession()
-        s.eval_entry("record Point { x: int, y: int }")
+        s.eval_entry("record Point(x: int, y: int)")
         r = s.eval_entry("Point")
         assert r.ok
         assert r.kind == "expression"

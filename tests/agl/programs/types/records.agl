@@ -16,14 +16,14 @@ param min_severity: int
 
 agent tracker
 
-let issue = Issue{
+let issue = Issue(
   title: "Missing tests",
   severity: 3,
   weight: 0.5,
   tags: ["tests", "coverage"],
   extra: {origin: "static", retries: null},
-  author: Author{name: "Ada", active: true},
-}
+  author: Author(name: "Ada", active: true),
+)
 
 print issue.title
 print issue.severity

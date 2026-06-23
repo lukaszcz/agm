@@ -141,15 +141,13 @@ _sep: _NEWLINE | SEMICOLON
 // Type declarations
 // ---------------------------------------------------------------------------
 
-// record_def: indented block of field definitions, braced field list, or inline field list.
+// record_def: indented block of field definitions, parenthesized field list, or inline field list.
 // The custom lexer emits _INDENT directly after the name (no _NEWLINE before _INDENT).
 record_def: "record" name type_params? record_body
 
 record_body: _INDENT field_def (_NEWLINE field_def)* _NEWLINE? _DEDENT -> record_indent_body
-           | record_lbrace field_list? RBRACE                       -> record_brace_body
+           | LPAR field_list? RPAR                                  -> record_paren_body
            | field_list                                             -> record_inline_body
-
-record_lbrace: LBRACE | CALL_LBRACE
 
 field_def: field_name COLON type_expr
 
@@ -478,7 +476,6 @@ juxt_suffix: DOT field_name       -> juxt_field_suffix
 // ---------------------------------------------------------------------------
 
 ?postfix: postfix LPAR arg_list? RPAR  -> call
-        | postfix CALL_LBRACE named_arg_list? RBRACE -> braced_call
         | postfix DOT field_name       -> field_access
         | postfix INDEX_LSQB expr RSQB -> index_access
         | postfix DCOLON LSQB type_arg_list RSQB LPAR arg_list? RPAR -> typed_postfix_call
@@ -531,8 +528,6 @@ paren_expr_or_unit: LPAR RPAR         -> unit_lit
 // ---------------------------------------------------------------------------
 
 arg_list: arg (COMMA arg)* COMMA?
-
-named_arg_list: named_arg (COMMA named_arg)* COMMA?
 
 ?arg: named_arg | pos_arg
 

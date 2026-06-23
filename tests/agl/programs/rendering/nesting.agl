@@ -21,18 +21,18 @@ record Annotated
 # --- declaration-order normalization ---
 # Construct Issue with fields in reverse of declaration order; rendered order
 # must match declaration (title, severity, tags, author).
-let author = Author{active: true, name: "Ada"}
-let issue = Issue{
+let author = Author(active: true, name: "Ada")
+let issue = Issue(
   author: author,
   tags: ["tests", "coverage"],
   severity: 3,
   title: "Missing tests",
-}
+)
 print author
 print issue
 
 # --- nested containers ---
-let team = [Author{name: "Bo", active: false}, Author{name: "Ada", active: true}]
+let team = [Author(name: "Bo", active: false), Author(name: "Ada", active: true)]
 print team
 
 let scores: dict[text, int] = {"Bo": 0, "Ada": 3}
@@ -45,7 +45,7 @@ print s1
 print s2
 
 # --- nested json field renders compact; top-level json renders pretty ---
-let ann = Annotated{label: "note", meta: {"key": "value", "n": 1}}
+let ann = Annotated(label: "note", meta: {"key": "value", "n": 1})
 print ann
 let top_json: json = {"key": "value", "n": 1}
 print top_json
@@ -59,5 +59,5 @@ def describe(a: Author) -> text =
   if a.active => "active: ${a.name}"
   else => "inactive: ${a.name}"
 
-print(describe(Author{name: "Xe", active: false}))
-print(describe(Author{name: "Ada", active: true}))
+print(describe(Author(name: "Xe", active: false)))
+print(describe(Author(name: "Ada", active: true)))

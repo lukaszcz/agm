@@ -749,7 +749,7 @@ class TestNominalRenderingEcho:
         assert r.value_type is not None
         line = format_typed_value("p", r.value_type, r.value)
         # Declaration order is y, x — so "y: 2" must appear before "x: 1".
-        assert line.startswith("p : Point = Point{y: 2, x: 1}")
+        assert line.startswith("p : Point = Point(y: 2, x: 1)")
 
     def test_record_binding_echo_via_eval_entry(self) -> None:
         # eval_entry result carries the value; render_entry_result with the
@@ -761,7 +761,7 @@ class TestNominalRenderingEcho:
         r = s.eval_entry('let a = Author(name: "Ada", active: true)')
         assert r.ok
         rendered = render_entry_result(r, echo=True)
-        assert rendered == 'a : Author = Author{name: "Ada", active: true}'
+        assert rendered == 'a : Author = Author(name: "Ada", active: true)'
 
     def test_enum_echo_qualified_with_fields(self) -> None:
         from agm.agl.repl.render import render_entry_result
@@ -814,7 +814,7 @@ class TestNominalRenderingEcho:
         s.eval_entry("let p = Point(x: 3, y: 5)")
         outcome = meta_mod.dispatch_meta(":bindings", _session_ctx(s))
         assert outcome.text is not None
-        assert "Point{y: 5, x: 3}" in outcome.text
+        assert "Point(y: 5, x: 3)" in outcome.text
 
     def test_params_meta_renders_record_nominal(self) -> None:
         # :params must render a record param in AgL form (not JSON).
@@ -823,7 +823,7 @@ class TestNominalRenderingEcho:
         s.eval_entry("param cfg: Cfg = Cfg(retries: 3, timeout: 30)")
         outcome = meta_mod.dispatch_meta(":params", _session_ctx(s))
         assert outcome.text is not None
-        assert "Cfg{retries: 3, timeout: 30}" in outcome.text
+        assert "Cfg(retries: 3, timeout: 30)" in outcome.text
 
     def test_load_meta_renders_record_nominal(self, tmp_path: Path) -> None:
         # :load must render record bindings in AgL form (type_lookup threaded).
@@ -834,4 +834,4 @@ class TestNominalRenderingEcho:
         s = ReplSession()
         outcome = meta_mod.dispatch_meta(f":load {src}", _session_ctx(s))
         assert outcome.text is not None
-        assert "Point{y: 2, x: 1}" in outcome.text
+        assert "Point(y: 2, x: 1)" in outcome.text

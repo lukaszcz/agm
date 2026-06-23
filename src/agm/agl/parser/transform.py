@@ -305,14 +305,14 @@ class AstBuilder(Transformer):
         # Grammar: _INDENT field_def (_NEWLINE field_def)* _NEWLINE? _DEDENT
         return tuple(a for a in args if isinstance(a, syntax.FieldDef))
 
-    def record_brace_body(self, meta: Meta, args: _Args) -> tuple[syntax.FieldDef, ...]:
-        # Grammar: LBRACE field_list? RBRACE
+    def record_paren_body(self, meta: Meta, args: _Args) -> tuple[syntax.FieldDef, ...]:
+        # Grammar: LPAR field_list? RPAR
         for a in args:
             if _is_field_tuple(a):
                 return cast(tuple[syntax.FieldDef, ...], a)
         return ()
 
-    record_inline_body = record_brace_body
+    record_inline_body = record_paren_body
 
     def field_def(self, meta: Meta, args: _Args) -> syntax.FieldDef:
         # Grammar: field_name COLON type_expr
@@ -793,23 +793,6 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
-    def braced_call(self, meta: Meta, args: _Args) -> syntax.Call:
-        """postfix LBRACE named_arg_list? RBRACE → Call node with named args."""
-        callee = cast(syntax.Expr, args[0])
-        named_args: tuple[syntax.NamedArg, ...] = ()
-        for a in args[1:]:
-            if isinstance(a, tuple) and (
-                len(a) == 0 or isinstance(a[0], syntax.NamedArg)
-            ):
-                named_args = cast(tuple[syntax.NamedArg, ...], a)
-        return syntax.Call(
-            callee=callee,
-            args=(),
-            named_args=named_args,
-            span=self._span_from_meta(meta),
-            node_id=self._next_id(),
-        )
-
     def field_access(self, meta: Meta, args: _Args) -> syntax.FieldAccess:
         """postfix DOT name — record field access."""
         obj_expr = cast(syntax.Expr, args[0])
@@ -1019,21 +1002,6 @@ class AstBuilder(Transformer):
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
-
-    def named_arg_list(self, meta: Meta, args: _Args) -> tuple[syntax.NamedArg, ...]:
-        """named_arg_list: named_arg (COMMA named_arg)* COMMA?"""
-        named_args: list[syntax.NamedArg] = []
-        seen_names: dict[str, SourceSpan] = {}
-        for a in args:
-            if isinstance(a, syntax.NamedArg):
-                if a.name in seen_names:
-                    raise AglSyntaxError(
-                        f"duplicate argument {a.name!r}.",
-                        span=a.span,
-                    )
-                seen_names[a.name] = a.span
-                named_args.append(a)
-        return tuple(named_args)
 
     # ------------------------------------------------------------------
     # Binary operators

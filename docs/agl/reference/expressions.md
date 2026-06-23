@@ -57,9 +57,8 @@ static error.
 ## Constructors
 
 ```ebnf
-constructor ::= NAME ("." NAME)? type_args? (constructor_args | record_args)?
+constructor ::= NAME ("." NAME)? type_args? constructor_args?
 constructor_args ::= "(" named_args? ")"
-record_args ::= "{" named_args? "}"
 type_args   ::= "::" "[" type_expr ("," type_expr)* "]"
 named_args  ::= NAME ":" expr ("," NAME ":" expr)* ","?
 ```
@@ -74,12 +73,11 @@ pins the type arguments of a generic constructor (see
 ### Record construction
 
 ```agl
-Issue{title: "Bug", severity: 2, description: "…"}
+Issue(title: "Bug", severity: 2, description: "...")
 ```
 
 Every declared field must be supplied; unknown and duplicate fields are
-static errors. The older parenthesized form `Issue(title: "Bug", severity: 2)`
-is still accepted.
+static errors.
 
 ### Enum variant construction
 

@@ -698,7 +698,7 @@ class FieldDef:
 
 @dataclass(frozen=True, slots=True)
 class RecordDef:
-    """``record Name { fields }`` declaration."""
+    """``record Name(fields)`` declaration."""
 
     name: str
     fields: tuple[FieldDef, ...]

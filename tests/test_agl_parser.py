@@ -472,19 +472,23 @@ class TestDeclarations:
         assert rec.fields[0].name == "title"
         assert isinstance(rec.fields[0].type_expr, TextT)
 
-    def test_record_def_with_braces(self) -> None:
-        prog = parse("record Point {x: int, y: int}")
+    def test_record_def_with_parens(self) -> None:
+        prog = parse("record Point(x: int, y: int)")
         rec = first(prog)
         assert isinstance(rec, RecordDef)
         assert rec.name == "Point"
         assert [field.name for field in rec.fields] == ["x", "y"]
 
-    def test_record_def_empty_braces(self) -> None:
-        prog = parse("record Empty {}")
+    def test_record_def_empty_parens(self) -> None:
+        prog = parse("record Empty()")
         rec = first(prog)
         assert isinstance(rec, RecordDef)
         assert rec.name == "Empty"
         assert rec.fields == ()
+
+    def test_record_def_with_braces_raises(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse("record Point {x: int, y: int}")
 
     def test_record_def_inline_without_braces(self) -> None:
         prog = parse("record Point x: int, y: int")
@@ -1020,12 +1024,9 @@ class TestFieldAccessAndConstructors:
         assert c.callee.name == "Issue"
         assert len(c.named_args) == 2
 
-    def test_constructor_with_brace_args(self) -> None:
-        c = first(parse("Issue{title: x, severity: 1}"))
-        assert isinstance(c, Call)
-        assert isinstance(c.callee, VarRef)
-        assert c.callee.name == "Issue"
-        assert len(c.named_args) == 2
+    def test_constructor_with_brace_args_raises(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse("Issue{title: x, severity: 1}")
 
     def test_qualified_constructor(self) -> None:
         c = first(parse("Review.Pass"))
@@ -1563,8 +1564,8 @@ class TestNegativeCases:
         with pytest.raises(AglSyntaxError, match="duplicate"):
             parse("Issue(title: a, title: b)")
 
-    def test_duplicate_braced_constructor_arg_raises(self) -> None:
-        with pytest.raises(AglSyntaxError, match="duplicate"):
+    def test_braced_constructor_arg_raises(self) -> None:
+        with pytest.raises(AglSyntaxError):
             parse("Issue{title: a, title: b}")
 
     def test_def_without_return_type_raises(self) -> None:

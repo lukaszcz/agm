@@ -69,10 +69,15 @@ Run the CLI locally with `uv run agm ...` when iterating on a command.
 - Commit format: `type: subject` in imperative lowercase (e.g., `feat: add transfer flow`).
 - Keep commits focused; avoid mixing unrelated changes.
 
+## Documentation
+
+- Keep docs (README.md and docs/commands.md) and command help texts up to date with implemented command functionality. README.md is a brief description of the AGM program and should not contain overhwelming details, while docs/commands.md and the help texts are comprehensive command references.
+- ALWAYS keep comments and docstrings up-to-date with the codebase.
+- Avoid references to unversioned files in the docs, comments and docstrings.
+
 ## Instructions
 
 - Avoid code duplication. Abstract common logic into parameterized functions.
 - Do NOT create new worktrees - edit the current worktree directly.
 - Do NOT try to circumvent static analysis tools. Adapt the code to pass `just check` properly - do not ignore checks or suppress rules. If you absolutely need to bypass a static analysis tool, ALWAYS ask the user for approval and explain why this is necessary.
-- Keep docs (README.md and docs/commands.md) and command help texts up to date with implemented command functionality. README.md is a brief description of the AGM program and should not contain overhwelming details, while docs/commands.md and the help texts are comprehensive command references.
 - When finished, verify with `just check`.

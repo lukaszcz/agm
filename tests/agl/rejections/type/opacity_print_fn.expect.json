@@ -1,1 +1,1 @@
-{"diagnostic": {"line": 2, "message_contains": ["rendering"]}}
+{"diagnostic": {"line": 1, "message_contains": ["bool"]}}

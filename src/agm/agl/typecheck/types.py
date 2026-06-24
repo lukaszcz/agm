@@ -375,7 +375,7 @@ def is_json_shaped(value_type: Type) -> bool:
     ``json`` value they must first be rendered to text (e.g. via a ``let`` binding).
 
     AgL v2: ``UnitType``, ``AgentType``, and ``FunctionType`` are also NOT
-    JSON-shaped (plan D9 — function/agent values have no rendering).
+    JSON-shaped; function and agent values render only as opaque handles.
     """
     if isinstance(value_type, (TextType, JsonType, BoolType, IntType, DecimalType)):
         return True

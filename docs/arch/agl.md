@@ -46,7 +46,8 @@ The unified expression nodes in `agm.agl.syntax.nodes` that replaced the former
   statement/expression variants. `If` without `else` yields `unit`; `If` with
   `else` yields the common branch type.
 - `Call(callee, args, named_args)` — the single call node for all invocations
-  (user `def`s, built-ins `print`/`exec`/`ask`/`parse_json`, function values).
+  (user `def`s, built-ins `print`/`render`/`exec`/`ask`/`parse_json`,
+  function values).
   Both the parenthesized form `f(a, b, name: v)` and the single-arg sugar `f x`
   desugar to `Call`; the sugar argument may itself be a postfix call such as
   `g(x)` or `Opt.Some(x: 1)`.
@@ -110,8 +111,9 @@ a `let`/`var` binder scopes over the remaining items of the enclosing `Block`.
 A block ending in a `let` with no continuation is a static error.
 
 Built-in call classification: when the `Call.callee` is a `VarRef` whose name
-is `print`, `exec`, `ask`, or `parse_json`, the resolver records the `BuiltinKind` in
-`builtin_calls` and skips the ordinary variable lookup for that name.
+is `print`, `render`, `exec`, `ask`, `ask-request`, or `parse_json`, the
+resolver records the `BuiltinKind` in `builtin_calls` and skips the ordinary
+variable lookup for that name.
 
 **Constructors as value bindings**: record and enum-variant constructors are
 resolved in the ordinary value namespace, not a separate one. A pre-pass collects
@@ -146,8 +148,8 @@ module's `bare_variant_patterns`.
 - **`FunctionType(params, result)`** — purely positional; named/default argument
   information is erased from the value type. Assignability is exact structural
   match.
-- **`AgentType`** — opaque; no fields, no equality, no rendering, not
-  JSON-shaped.
+- **`AgentType`** — opaque; no fields, no equality, renders only as an opaque
+  handle, not JSON-shaped.
 - **`BottomType`** — the type of `raise`; assignable to any expected type.
 - **`TypeVarType(name)`** — a rigid type variable bound by an enclosing generic
   declaration. It is treated as **opaque** by the capability gates
@@ -193,8 +195,11 @@ are never represented at runtime — generic `def`s erase to ordinary closures a
 
 Built-in typing rules (in `agm.agl.typecheck.checker`) consult `builtin_calls`:
 
-- **`PRINT`** — any-to-`unit` rule: accepts one argument of any renderable type;
-  yields `unit`. Rejecting a function or agent value is also done here (D9).
+- **`PRINT`** — any-to-`unit` rule: accepts one argument, renders it with
+  `pretty=false, quote_strings=false`, writes it to stdout, and yields `unit`.
+- **`RENDER`** — `render[T](T, pretty: bool = true, quote_strings: bool = true)
+  -> text`. Its named options are evaluated normally and forwarded to
+  `render_value`.
 - **`ASK`** and **`EXEC`** — reuse the existing target-type propagation and
   `OutputContractSpec` machinery. `ask` takes its result type from the expected
   type in context (defaulting to `text`). `exec` adds the `ExecResult`
@@ -221,8 +226,8 @@ built-in types available without user declarations. Runtime failures such as
 exceptions.
 
 Function and agent types are **not JSON-shaped**: the codec-selection and
-`is_json_shaped` logic rejects them; interpolating or `print`-ing a function
-or agent value is a static error.
+`is_json_shaped` logic rejects them. Rendering can still display them as opaque
+handles such as `<function: (int) -> int>` or `<agent reviewer>`.
 
 ## Decimal arithmetic context
 
@@ -304,16 +309,17 @@ linked source table, and runtime diagnostics select the correct text through the
 
 ## Value rendering
 
-All value display (template/`${…}` interpolation, `print`, `as text`, and REPL
-echo) goes through a single recursive renderer in `agm.agl.runtime.render`
-(`render_value` / `render_value_repl`). The renderer produces **AgL-native
-syntax** for every value kind:
+All value display (template/`${…}` interpolation, `print`, `render`, `as text`,
+and REPL echo) goes through the single recursive `render_value` function in
+`agm.agl.runtime.render`. The renderer accepts `pretty` and `quote_strings`
+keyword options and produces **AgL-native syntax** for every value kind:
 
 - Scalars (`int`, `decimal`, `bool`) — plain text.
-- `text` — verbatim at top level (interpolation), quoted AgL string literal
-  when nested or in REPL echo; dollar signs are escaped as `\$`.
-- `json` — pretty-printed (2-space indent) at top level, compact single-line
-  when nested inside another structured value.
+- `text` — verbatim at top level when `quote_strings=false`, quoted AgL string
+  literal when nested or when `quote_strings=true`; dollar signs are escaped as
+  `\$` inside quoted text.
+- `json` — compact single-line when `pretty=false`; pretty-printed with
+  two-space indentation when `pretty=true`.
 - `list` / `dict` — AgL container syntax (`[…]` / `{"k": v, …}`); dict keys
   always quoted.
 - Record / enum / exception — AgL constructor syntax

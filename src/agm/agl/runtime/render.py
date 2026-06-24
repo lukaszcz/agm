@@ -1,34 +1,17 @@
-"""AgL-native value rendering for string interpolation, print, and REPL echo.
+"""AgL-native value rendering.
 
-Values render in the AgL syntax used to define them by default.  JSON output
-is an explicit opt-in via ``as json``.  Two boolean axes drive the leaf cases:
+This module is the single implementation of value-to-text rendering used by
+template interpolation, ``print``, ``as text``, the AgL ``render(...)`` builtin,
+and REPL display.  Callers choose two display options:
 
-- **top-level vs nested** — the caller passes the value at top level
-  (``top_level=True``); every recursive child call uses ``top_level=False``.
-- **interpolation vs REPL echo** — controls only the top-level ``text`` case:
-  interpolation (``render_value``) leaves ``text`` verbatim; REPL echo
-  (``render_value_repl``) quotes it as an AgL string literal.
+- ``pretty``: render containers, nominal values, and JSON over multiple indented
+  lines when ``True``; keep the output on one line when ``False``.
+- ``quote_strings``: quote a top-level ``text`` value as an AgL string literal
+  when ``True``; leave top-level text verbatim when ``False``.
 
-Per-kind rules:
-
-- ``text`` (top-level, interpolation)  → verbatim, no quotes
-- ``text`` (top-level, REPL echo)      → quoted AgL string literal via ``_quote_text``
-- ``text`` (nested, any mode)          → quoted AgL string literal via ``_quote_text``
-- ``int`` / ``decimal`` / ``bool``     → ``_scalar_text`` at any depth
-- ``unit``                             → ``()``
-- ``agent``                            → ``<agent NAME>``
-- ``function``                         → ``<function: (A, B) -> T>``
-- ``json`` (top-level)                 → pretty JSON, 2-space indent
-- ``json`` (nested)                    → compact JSON, single-line
-- ``list``                             → ``[e1, e2, ...]``, children nested
-- ``dict``                             → ``{"k1": v1, ...}``, keys always quoted
-- record                               → ``TypeName(f1: v1, ...)`` declaration order
-- enum   → ``TypeName.Variant(f1: v1, ...)``; nullary variant → ``TypeName.Variant``
-- exception                            → ``TypeName(f1: v1, ...)`` all fields incl. ``trace_id``
-
-Nominal values (record, enum, exception) carry their fields in declaration
-order already — the interpreter normalizes them at construction time — so the
-renderer simply walks ``value.fields`` and needs no type information.
+Nested ``text`` values are always quoted so structured output remains parseable
+as AgL surface syntax.  Nominal values (record, enum, exception) carry fields in
+declaration order already, so rendering walks ``value.fields`` directly.
 """
 
 from __future__ import annotations
@@ -52,12 +35,6 @@ from agm.agl.eval.values import (
 )
 from agm.agl.runtime.serialize import dumps_exact, value_to_json_obj
 
-# ---------------------------------------------------------------------------
-# Escape mapping for _quote_text
-# ---------------------------------------------------------------------------
-
-# JSON escape set extended with ``$`` so ``${`` cannot be read as interpolation
-# inside a quoted string literal rendered into output.
 _TEXT_ESCAPES: dict[str, str] = {
     '"': '\\"',
     "\\": "\\\\",
@@ -70,14 +47,12 @@ _TEXT_ESCAPES: dict[str, str] = {
 }
 
 
-def _quote_text(s: str) -> str:
-    """Return *s* as a double-quoted AgL string literal surface form.
+def _indent(level: int) -> str:
+    return "  " * level
 
-    Applies the JSON escape set plus ``\\$`` (so ``${`` cannot read as
-    interpolation) and ``\\uXXXX`` for remaining control characters.  Used
-    for both nested ``text`` values and the top-level REPL-echo case so the
-    two never diverge.
-    """
+
+def _quote_text(s: str) -> str:
+    """Return *s* as a double-quoted AgL string literal surface form."""
     out: list[str] = ['"']
     for ch in s:
         esc = _TEXT_ESCAPES.get(ch)
@@ -92,37 +67,56 @@ def _quote_text(s: str) -> str:
 
 
 def _scalar_text(value: IntValue | DecimalValue | BoolValue) -> str:
-    """Render an int, decimal, or bool value as a plain text string."""
+    """Render an int, decimal, or bool value as plain text."""
     if isinstance(value, IntValue):
         return str(value.value)
     if isinstance(value, DecimalValue):
-        # Use normalize() to drop trailing zeros (e.g. "1.50" → "1.5"),
-        # but keep at least one decimal digit.
-        d = value.value.normalize()
-        # Avoid scientific notation (e.g. "1E+2" → "100").
-        return format(d, "f")
-    # BoolValue
+        # Drop trailing zeros without using scientific notation.
+        return format(value.value.normalize(), "f")
     return "true" if value.value else "false"
 
 
-# ---------------------------------------------------------------------------
-# Core recursive renderer
-# ---------------------------------------------------------------------------
+def _shift_after_first(text: str, *, level: int) -> str:
+    """Indent every line after the first by *level* indentation levels."""
+    if "\n" not in text:
+        return text
+    prefix = _indent(level)
+    lines = text.split("\n")
+    return "\n".join((lines[0], *(prefix + line for line in lines[1:])))
 
 
-def _render(value: Value, *, top_level: bool, repl: bool) -> str:
-    """Recursive AgL-native renderer.
+def _render_child(value: Value, *, pretty: bool, level: int) -> str:
+    return _render(
+        value,
+        pretty=pretty,
+        quote_strings=False,
+        top_level=False,
+        level=level,
+    )
 
-    ``top_level=True`` for the outermost call; ``False`` for all children.
-    ``repl=True`` enables REPL-echo quoting for a top-level ``text`` value.
-    Nominal values are rendered straight from ``value.fields``, which the
-    interpreter already keeps in declaration order.
-    """
+
+def _render_sequence(
+    open_token: str,
+    close_token: str,
+    items: list[str],
+    *,
+    level: int,
+    pretty: bool,
+) -> str:
+    if not items:
+        return f"{open_token}{close_token}"
+    if not pretty:
+        return f"{open_token}" + ", ".join(items) + f"{close_token}"
+    item_indent = _indent(level + 1)
+    close_indent = _indent(level)
+    body = ",\n".join(item_indent + item for item in items)
+    return f"{open_token}\n{body}\n{close_indent}{close_token}"
+
+
+def _render(value: Value, *, pretty: bool, quote_strings: bool, top_level: bool, level: int) -> str:
     if isinstance(value, TextValue):
-        if top_level and not repl:
-            # Interpolation context: verbatim.
+        if top_level and not quote_strings:
             return value.value
-        # REPL echo (top-level) or nested (any mode): quoted.
         return _quote_text(value.value)
 
     if isinstance(value, UnitValue):
@@ -140,40 +134,35 @@ def _render(value: Value, *, top_level: bool, repl: bool) -> str:
         return f"<constructor {value.display_name}>"
 
     if isinstance(value, IrClosureValue):
-        if value.param_labels:
-            param_labels = value.param_labels
-        else:
-            param_labels = ("?",) * value.arity
+        param_labels = value.param_labels or ("?",) * value.arity
         return f"<function: ({', '.join(param_labels)}) -> {value.result_label}>"
 
     if isinstance(value, JsonValue):
-        if top_level:
-            return dumps_exact(value_to_json_obj(value), indent=2)
-        return dumps_exact(value_to_json_obj(value), indent=None)
+        rendered = dumps_exact(value_to_json_obj(value), indent=2 if pretty else None)
+        return _shift_after_first(rendered, level=level) if pretty else rendered
 
     if isinstance(value, ListValue):
-        if not value.elements:
-            return "[]"
-        items = [_render(e, top_level=False, repl=repl) for e in value.elements]
-        return "[" + ", ".join(items) + "]"
+        items = [
+            _render_child(element, pretty=pretty, level=level + 1)
+            for element in value.elements
+        ]
+        return _render_sequence("[", "]", items, level=level, pretty=pretty)
 
     if isinstance(value, DictValue):
-        if not value.entries:
-            return "{}"
         items = [
-            f"{_quote_text(k)}: {_render(v, top_level=False, repl=repl)}"
-            for k, v in value.entries.items()
+            f"{_quote_text(key)}: {_render_child(child, pretty=pretty, level=level + 1)}"
+            for key, child in value.entries.items()
         ]
-        return "{" + ", ".join(items) + "}"
+        return _render_sequence("{", "}", items, level=level, pretty=pretty)
 
     if isinstance(value, RecordValue):
-        if not value.fields:
-            return f"{value.display_name}()"
-        field_parts = [
-            f"{name}: {_render(v, top_level=False, repl=repl)}"
-            for name, v in value.fields.items()
+        items = [
+            f"{name}: {_render_child(child, pretty=pretty, level=level + 1)}"
+            for name, child in value.fields.items()
         ]
-        return f"{value.display_name}(" + ", ".join(field_parts) + ")"
+        return _render_sequence(
+            f"{value.display_name}(", ")", items, level=level, pretty=pretty
+        )
 
     if isinstance(value, (EnumValue, ExceptionValue)):
         prefix = (
@@ -183,41 +172,32 @@ def _render(value: Value, *, top_level: bool, repl: bool) -> str:
         )
         if not value.fields:
             return prefix if isinstance(value, EnumValue) else f"{prefix}()"
-        field_parts = [
-            f"{name}: {_render(v, top_level=False, repl=repl)}"
-            for name, v in value.fields.items()
+        items = [
+            f"{name}: {_render_child(child, pretty=pretty, level=level + 1)}"
+            for name, child in value.fields.items()
         ]
-        return f"{prefix}(" + ", ".join(field_parts) + ")"
+        return _render_sequence(f"{prefix}(", ")", items, level=level, pretty=pretty)
 
-    # Exhaustiveness: the Value union is closed; all cases covered above.
     raise RuntimeError(f"render: unhandled value type {type(value).__name__}")  # pragma: no cover
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
+def render_value(
+    value: Value,
+    *,
+    pretty: bool = False,
+    quote_strings: bool = False,
+) -> str:
+    """Render *value* to AgL text.
 
-
-def render_value(value: Value) -> str:
-    """Render *value* for interpolation, ``print``, or ``as text``.
-
-    Top-level ``text`` is verbatim (no quotes).  All other rendering follows
-    the AgL-native rules: scalars as plain text, ``list``/``dict`` in AgL
-    bracket/brace form, records as ``TypeName(field: value, ...)``, and
-    enum/exception values in constructor form with fields in declaration order.
-    ``json`` values render as pretty-printed
-    JSON (2-space indent) at top level and compact single-line JSON when nested.
+    ``pretty=False`` keeps output single-line where possible. ``pretty=True``
+    expands structured values and JSON over multiple lines with two-space
+    indentation. ``quote_strings`` only controls top-level ``text`` values;
+    nested text is always quoted.
     """
-    return _render(value, top_level=True, repl=False)
-
-
-def render_value_repl(value: Value) -> str:
-    """Render *value* for REPL echo (``agl>`` prompt and ``:bindings`` / ``:params``).
-
-    Identical to :func:`render_value` except that a top-level ``text`` value is
-    shown as a quoted AgL string literal so the REPL echo of ``"aaa"`` reads
-    ``"aaa"``.  Text nested inside structured values is also quoted.  Template
-    interpolation (``print`` / ``prompt`` / ``exec``) always uses
-    :func:`render_value` verbatim.
-    """
-    return _render(value, top_level=True, repl=True)
+    return _render(
+        value,
+        pretty=pretty,
+        quote_strings=quote_strings,
+        top_level=True,
+        level=0,
+    )

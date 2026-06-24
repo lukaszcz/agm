@@ -174,7 +174,6 @@ contents is a static error. You cannot:
 
 - compare it with `=`, `!=`, `<`, … (`x = x` on a `T` is rejected),
 - do arithmetic on it,
-- `print` it or interpolate it in a template (a `T` has no rendering),
 - access a field (`x.foo`) or index (`x[0]`) of it,
 - test it with `is` / `is not`.
 
@@ -215,13 +214,13 @@ enum Option[T]
   | none
   | some(value: T)
 
-def render(o: Option[int]) -> text =
+def describe_option(o: Option[int]) -> text =
   case o of
     | Option.none => "missing"
     | Option.some(value) => "found ${value}"
 
 let d: Option[int] = Option.some(value: 11)
-let line = render(d)
+let line = describe_option(d)
 print line
 ```
 

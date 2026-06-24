@@ -27,7 +27,7 @@ argument, an `exec` command, or any other position.
 | ---------- | ----------- |
 | `text` | verbatim (no quotes) |
 | `int`, `decimal`, `bool` | plain scalar text |
-| `json` | pretty JSON (2-space indent, multi-line) |
+| `json` | compact JSON by default; use `render(value, pretty: true)` for indented display |
 | `list[E]` | `[e1, e2, …]` — AgL list syntax |
 | `dict[text, V]` | `{"k1": v1, "k2": v2}` — AgL dict syntax; keys always quoted |
 | record | `TypeName(f1: v1, f2: v2)` — AgL constructor form; fields in declaration order |
@@ -63,18 +63,17 @@ print "${r as json}"   # → {
                        #    }
 ```
 
-## Types that cannot be interpolated
+## Opaque values in interpolation
 
-**Function values** and **agent values** have **no rendering**. Interpolating
-either in a template is a **static error** with a targeted diagnostic:
+Function values and agent values render as opaque handles in templates:
 
 ```agl
 let f = fn(x: int) => x
-print "function is ${f}"   # static error: function value has no rendering
+print "function is ${f}"   # function is <function: (int) -> ?>
 ```
 
-Similarly, storing a function or agent in a `json` slot or `print`ing it
-directly is a static error.
+They still cannot be stored in a `json` slot or used where a JSON-shaped value
+is required.
 
 ## Templates in `exec` commands
 

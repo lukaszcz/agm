@@ -87,6 +87,7 @@ from agm.agl.ir.nodes import (
     IrPrint,
     IrRaise,
     IrRenderTemplate,
+    IrRenderValue,
     IrSequence,
     IrTemplateText,
     IrTemplateValue,
@@ -1181,6 +1182,25 @@ class _Lowerer:
                 arg_ir = self.lower_expr(call_node.args[0])
                 return IrPrint(location=loc, value=arg_ir)
 
+            case BuiltinKind.RENDER:
+                # render(expr, pretty:, quote_strings:) — lower the value and
+                # any supplied boolean display options.
+                arg_ir = self.lower_expr(call_node.args[0])
+                pretty = None
+                quote_strings = None
+                for named in call_node.named_args:
+                    lowered = self.lower_expr(named.value)
+                    if named.name == "pretty":
+                        pretty = lowered
+                    else:
+                        quote_strings = lowered
+                return IrRenderValue(
+                    location=loc,
+                    value=arg_ir,
+                    pretty=pretty,
+                    quote_strings=quote_strings,
+                )
+
             case BuiltinKind.PARSE_JSON:
                 # parse_json(text) — arg is statically text; lower without coercion.
                 arg_ir = self.lower_expr(call_node.args[0])
@@ -1204,8 +1224,8 @@ class _Lowerer:
         Constructor calls (VarRef or FieldAccess callee resolving to a constructor)
         are lowered to IrMakeRecord/IrMakeEnum/IrMakeException.  Direct user function
         calls are lowered to IrDirectCall.  Lambda calls are lowered to IrMakeClosure,
-        indirect calls to IrIndirectCall, and host builtins to IrPrint/IrParseJson/
-        IrAsk/IrAskRequest/IrExec.
+        indirect calls to IrIndirectCall, and host builtins to
+        IrPrint/IrRenderValue/IrParseJson/IrAsk/IrAskRequest/IrExec.
         """
         callee = call_node.callee
 

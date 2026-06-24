@@ -1808,6 +1808,24 @@ class TestM6aPrintParseJsonParam:
         with pytest.raises(InvalidIrError, match="IrParseJson"):
             IrInterpreter(prog).run()
 
+    def test_ir_render_non_bool_option_raises_invalid_ir_error(self) -> None:
+        """IrRenderValue with a non-bool option raises InvalidIrError (bad IR)."""
+        from agm.agl.ir.nodes import IrRenderValue
+
+        sym, desc = _let_sym(0, "r")
+        node = IrBind(
+            _LOC,
+            sym,
+            IrRenderValue(
+                _LOC,
+                IrConstText(_LOC, "x"),
+                pretty=IrConstText(_LOC, "yes"),
+            ),
+        )
+        prog = _make_program(initializers=(node,), symbols={sym: desc})
+        with pytest.raises(InvalidIrError, match="pretty"):
+            IrInterpreter(prog).run()
+
 
 # ===========================================================================
 # M6c: IrExec evaluator unit tests

@@ -53,6 +53,7 @@ def _result(
     error: RunError | None = None,
     ok: bool = True,
     installed: tuple[str, ...] = (),
+    quote_strings: bool = True,
 ) -> EntryResult:
     """Build an ``EntryResult`` with sensible defaults for one test axis."""
     return EntryResult(
@@ -65,6 +66,7 @@ def _result(
         error=error,
         ok=ok,
         installed=installed,
+        quote_strings=quote_strings,
     )
 
 
@@ -87,6 +89,16 @@ class TestRenderEntryResult:
         )
         assert render_mod.render_entry_result(result, echo=True) == '"aaa"'
 
+    def test_standalone_ask_echo_does_not_quote_text(self) -> None:
+        result = _result(
+            kind="expression",
+            value=TextValue("aaa"),
+            value_type=TextType(),
+            ok=True,
+            quote_strings=False,
+        )
+        assert render_mod.render_entry_result(result, echo=True) == "aaa"
+
     def test_binding_echo_quotes_text(self) -> None:
         result = _result(
             kind="binding",
@@ -108,6 +120,21 @@ class TestRenderEntryResult:
         )
         rendered = render_mod.render_entry_result(result, echo=True)
         assert rendered == "x : int = 5"
+
+    def test_expression_echo_pretty_prints_structured_values(self) -> None:
+        from agm.agl.eval.values import IntValue, ListValue, RecordValue
+        from agm.agl.ir.ids import NominalId
+        from agm.agl.modules.ids import ENTRY_ID
+
+        value = RecordValue(
+            nominal=NominalId(ENTRY_ID, "Box"),
+            display_name="Box",
+            fields={"items": ListValue((IntValue(1), IntValue(2)))},
+        )
+        result = _result(kind="expression", value=value, value_type=TextType(), ok=True)
+
+        rendered = render_mod.render_entry_result(result, echo=True)
+        assert rendered == "Box(\n  items: [\n    1,\n    2\n  ]\n)"
 
     def test_declaration_echo(self) -> None:
         result = _result(kind="declaration", name="R", ok=True)
@@ -749,7 +776,7 @@ class TestNominalRenderingEcho:
         assert r.value_type is not None
         line = format_typed_value("p", r.value_type, r.value)
         # Declaration order is y, x — so "y: 2" must appear before "x: 1".
-        assert line.startswith("p : Point = Point(y: 2, x: 1)")
+        assert line == "p : Point = Point(\n  y: 2,\n  x: 1\n)"
 
     def test_record_binding_echo_via_eval_entry(self) -> None:
         # eval_entry result carries the value; render_entry_result with the
@@ -761,7 +788,7 @@ class TestNominalRenderingEcho:
         r = s.eval_entry('let a = Author(name: "Ada", active: true)')
         assert r.ok
         rendered = render_entry_result(r, echo=True)
-        assert rendered == 'a : Author = Author(name: "Ada", active: true)'
+        assert rendered == 'a : Author = Author(\n  name: "Ada",\n  active: true\n)'
 
     def test_enum_echo_qualified_with_fields(self) -> None:
         from agm.agl.repl.render import render_entry_result
@@ -771,7 +798,7 @@ class TestNominalRenderingEcho:
         r = s.eval_entry("let o = Outcome.Partial(left: 7)")
         assert r.ok
         rendered = render_entry_result(r, echo=True)
-        assert rendered == "o : Outcome = Outcome.Partial(left: 7)"
+        assert rendered == "o : Outcome = Outcome.Partial(\n  left: 7\n)"
 
     def test_enum_nullary_variant_echo(self) -> None:
         from agm.agl.repl.render import render_entry_result
@@ -814,7 +841,7 @@ class TestNominalRenderingEcho:
         s.eval_entry("let p = Point(x: 3, y: 5)")
         outcome = meta_mod.dispatch_meta(":bindings", _session_ctx(s))
         assert outcome.text is not None
-        assert "Point(y: 5, x: 3)" in outcome.text
+        assert "Point(\n  y: 5,\n  x: 3\n)" in outcome.text
 
     def test_params_meta_renders_record_nominal(self) -> None:
         # :params must render a record param in AgL form (not JSON).
@@ -823,7 +850,7 @@ class TestNominalRenderingEcho:
         s.eval_entry("param cfg: Cfg = Cfg(retries: 3, timeout: 30)")
         outcome = meta_mod.dispatch_meta(":params", _session_ctx(s))
         assert outcome.text is not None
-        assert "Cfg(retries: 3, timeout: 30)" in outcome.text
+        assert "Cfg(\n  retries: 3,\n  timeout: 30\n)" in outcome.text
 
     def test_load_meta_renders_record_nominal(self, tmp_path: Path) -> None:
         # :load must render record bindings in AgL form (type_lookup threaded).
@@ -834,4 +861,4 @@ class TestNominalRenderingEcho:
         s = ReplSession()
         outcome = meta_mod.dispatch_meta(f":load {src}", _session_ctx(s))
         assert outcome.text is not None
-        assert "Point(y: 2, x: 1)" in outcome.text
+        assert "Point(\n  y: 2,\n  x: 1\n)" in outcome.text

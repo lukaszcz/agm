@@ -105,6 +105,7 @@ from agm.agl.ir.nodes import (
     IrPrint,
     IrRaise,
     IrRenderTemplate,
+    IrRenderValue,
     IrSequence,
     IrTemplateText,
     IrTemplateValue,
@@ -305,6 +306,15 @@ class IrInterpreter:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _eval_render_bool_option(self, expr: IrExpr, option_name: str) -> bool:
+        value = self._eval(expr)
+        if not isinstance(value, BoolValue):
+            raise InvalidIrError(
+                f"IrRenderValue: {option_name} expected BoolValue, "
+                f"got {type(value).__name__}"
+            )
+        return value.value
 
     def _index_failure(self, err: AglIndexOutOfRange | AglMissingKey) -> AglRaise:
         """Convert an index/key sentinel into an ``AglRaise`` with the appropriate fields.
@@ -1042,6 +1052,29 @@ class IrInterpreter:
                 print(rendered)
                 self._trace.print_stmt(rendered=rendered, span=node.location)
                 return UnitValue()
+
+            case IrRenderValue(
+                value=val_expr,
+                pretty=pretty_expr,
+                quote_strings=quote_strings_expr,
+            ):
+                pretty = (
+                    self._eval_render_bool_option(pretty_expr, "pretty")
+                    if pretty_expr is not None
+                    else True
+                )
+                quote_strings = (
+                    self._eval_render_bool_option(quote_strings_expr, "quote_strings")
+                    if quote_strings_expr is not None
+                    else True
+                )
+                return TextValue(
+                    render_value(
+                        self._eval(val_expr),
+                        pretty=pretty,
+                        quote_strings=quote_strings,
+                    )
+                )
 
             case IrParseJson(value=val_expr):
                 val = self._eval(val_expr)

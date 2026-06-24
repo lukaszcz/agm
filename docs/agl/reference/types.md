@@ -120,9 +120,9 @@ value. There is no `len` operator.
 `agent` is an opaque type for declared agent values. Every `agent`
 declaration introduces a name of this type. Agent values may be stored in
 bindings, passed to functions, and held in lists, but have **no fields, no
-operators, no rendering, and no JSON encoding**. Interpolating an agent
-value in a template or storing it where a JSON-shaped type is expected is a
-static error.
+operators, no JSON encoding, and only opaque rendering**. Rendering or
+interpolating an agent value produces a handle such as `<agent reviewer>`.
+Storing it where a JSON-shaped type is expected is a static error.
 
 See [Agent calls](agent-calls.md) for how agent values are used with `ask`.
 
@@ -145,10 +145,11 @@ subtyping applies.
 Named and defaulted arguments are a property of declared names (`def`s and
 built-ins), not of function value types. The value type is purely positional.
 
-Function values have **no rendering, no JSON encoding, and no equality**.
-A function value cannot be interpolated in a template, printed, stored in a
-`json` slot, or compared with `=`. These restrictions exist because function
-values are capability handles, not data.
+Function values have **opaque rendering, no JSON encoding, and no equality**.
+A function value can be rendered, interpolated, or printed as an opaque handle
+such as `<function: (int) -> int>`, but cannot be stored in a `json` slot or
+compared with `=`. These restrictions exist because function values are
+capability handles, not data.
 
 See [Functions](functions.md) for the declaration and call syntax.
 

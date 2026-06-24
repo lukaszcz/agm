@@ -5,7 +5,7 @@ import library
 
 def unbox(box: Box[int]) -> int = box.value
 
-def render(option: library::Option[int]) -> text =
+def describe_option(option: library::Option[int]) -> text =
   case option of
     | none() => "none"
     | some(value) => "some ${value}"
@@ -22,5 +22,5 @@ print(nested.value.value)
 
 let some_value = library::Option.some::[int](value: seed + 5)
 let none_value = library::Option.none::[int]()
-print(render(some_value))
-print(render(none_value))
+print(describe_option(some_value))
+print(describe_option(none_value))

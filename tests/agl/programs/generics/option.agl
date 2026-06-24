@@ -13,28 +13,28 @@ enum Option[T]
 agent picker
 
 # Qualified patterns on a generic enum; `value` is correctly typed `int`.
-def render(o: Option[int]) -> text =
+def describe_option(o: Option[int]) -> text =
   case o of
     | Option.none => "missing"
     | Option.some(value) => "found ${value}"
 
 # Inference from the payload argument.
 let a: Option[int] = some(value: 3)
-print(render(a))
+print(describe_option(a))
 
 # Nullary inference from the expected type.
 let b: Option[int] = none
-print(render(b))
+print(describe_option(b))
 
 # Explicit type-argument override on a type-qualified generic constructor.
 let c = Option.some::[int](value: 8)
-print(render(c))
+print(describe_option(c))
 
 # Qualified constructor expressions select the owning enum.
 let d: Option[int] = Option.some(value: 11)
-print(render(d))
+print(describe_option(d))
 let e: Option[int] = Option.none
-print(render(e))
+print(describe_option(e))
 
 # Qualified `is` / `is not` tests on a generic enum variant.
 let probe: Option[int] = some(value: 99)

@@ -124,9 +124,9 @@ class TextSegment:
 class InterpSegment:
     """An interpolated expression inside a template string (``${expr}``).
 
-    ``expr`` is an arbitrary expression; rendering is always uniform — text
-    verbatim, scalars as plain text, structured values as pretty JSON.  There
-    is no ``as <renderer>`` override: the grammar accepts only ``${expr}``.
+    ``expr`` is an arbitrary expression; interpolation renders it with the
+    default program-output options (single-line, unquoted top-level text).
+    There is no ``as <renderer>`` override: the grammar accepts only ``${expr}``.
     """
 
     expr: Expr

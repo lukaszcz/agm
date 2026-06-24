@@ -978,12 +978,12 @@ class TestCapabilitiesBuiltFromRegistrations:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: render.py — render_value / render_value_repl / _scalar_text
+# Coverage: render.py — render_value / _scalar_text
 # ---------------------------------------------------------------------------
 
 
 class TestRenderValue:
-    """Unit tests for the AgL-native render_value / render_value_repl functions.
+    """Unit tests for the AgL-native render_value function.
 
     Nominal values carry their fields in declaration order already (the
     interpreter normalizes them at construction), so these tests build the
@@ -992,7 +992,7 @@ class TestRenderValue:
     """
 
     # ------------------------------------------------------------------
-    # text: verbatim (render_value) vs quoted (render_value_repl)
+    # text: verbatim by default, quoted for display when requested
     # ------------------------------------------------------------------
 
     def test_text_verbatim_render_value(self) -> None:
@@ -1002,29 +1002,29 @@ class TestRenderValue:
 
         assert render_value(TextValue("hello world")) == "hello world"
 
-    def test_text_quoted_render_value_repl(self) -> None:
-        """render_value_repl: top-level text is wrapped in double quotes."""
+    def test_text_quoted_when_requested(self) -> None:
+        """render_value: top-level text can be wrapped in double quotes."""
         from agm.agl.eval.values import TextValue
-        from agm.agl.runtime.render import render_value_repl
+        from agm.agl.runtime.render import render_value
 
-        assert render_value_repl(TextValue("hello")) == '"hello"'
+        assert render_value(TextValue("hello"), quote_strings=True) == '"hello"'
 
-    def test_text_repl_escapes_special_chars(self) -> None:
-        """render_value_repl: JSON escape set applies to top-level text."""
+    def test_text_quote_escapes_special_chars(self) -> None:
+        """render_value: JSON escape set applies to quoted top-level text."""
         from agm.agl.eval.values import TextValue
-        from agm.agl.runtime.render import render_value_repl
+        from agm.agl.runtime.render import render_value
 
-        assert render_value_repl(TextValue('a"b')) == '"a\\"b"'
-        assert render_value_repl(TextValue("a\\b")) == '"a\\\\b"'
-        assert render_value_repl(TextValue("a\nb")) == '"a\\nb"'
-        assert render_value_repl(TextValue("a\tb")) == '"a\\tb"'
+        assert render_value(TextValue('a"b'), quote_strings=True) == '"a\\"b"'
+        assert render_value(TextValue("a\\b"), quote_strings=True) == '"a\\\\b"'
+        assert render_value(TextValue("a\nb"), quote_strings=True) == '"a\\nb"'
+        assert render_value(TextValue("a\tb"), quote_strings=True) == '"a\\tb"'
 
-    def test_text_repl_escapes_control_chars_as_unicode(self) -> None:
-        """render_value_repl: control chars below 0x20 render as \\uXXXX."""
+    def test_text_quote_escapes_control_chars_as_unicode(self) -> None:
+        """render_value: control chars below 0x20 render as \\uXXXX when quoted."""
         from agm.agl.eval.values import TextValue
-        from agm.agl.runtime.render import render_value_repl
+        from agm.agl.runtime.render import render_value
 
-        assert render_value_repl(TextValue("a\x00b")) == '"a\\u0000b"'
+        assert render_value(TextValue("a\x00b"), quote_strings=True) == '"a\\u0000b"'
 
     # ------------------------------------------------------------------
     # Scalars: int / decimal / bool (unchanged at any depth)
@@ -1363,28 +1363,43 @@ class TestRenderValue:
         out = render_value(v)
         assert out == r'["say \"hi\"\nbye"]'
 
-    def test_repl_top_level_text_escapes_dollar(self) -> None:
-        """render_value_repl: top-level text with ``$`` escapes it as ``\\$``."""
+    def test_quoted_top_level_text_escapes_dollar(self) -> None:
+        """render_value: top-level text with ``$`` escapes it when quoted."""
         from agm.agl.eval.values import TextValue
-        from agm.agl.runtime.render import render_value_repl
+        from agm.agl.runtime.render import render_value
 
-        out = render_value_repl(TextValue("a${b}"))
+        out = render_value(TextValue("a${b}"), quote_strings=True)
         assert out == r'"a\${b}"'
 
     # ------------------------------------------------------------------
-    # json: top-level pretty vs nested compact
+    # pretty: single-line by default, indented when requested
     # ------------------------------------------------------------------
 
-    def test_json_top_level_is_pretty(self) -> None:
-        """Top-level json value renders as pretty-printed JSON (indent=2)."""
+    def test_json_top_level_is_single_line_by_default(self) -> None:
+        """Top-level json value renders as single-line JSON by default."""
         from agm.agl.eval.values import JsonValue
         from agm.agl.runtime.render import render_value
 
         out = render_value(JsonValue({"k": 1}))
+        assert out == '{"k": 1}'
+
+    def test_json_top_level_is_pretty_when_requested(self) -> None:
+        """Top-level json value renders as pretty-printed JSON when requested."""
+        from agm.agl.eval.values import JsonValue
+        from agm.agl.runtime.render import render_value
+
+        out = render_value(JsonValue({"k": 1}), pretty=True)
         assert out == '{\n  "k": 1\n}'
 
+    def test_json_scalar_pretty_has_no_extra_indentation(self) -> None:
+        """Pretty rendering of scalar json remains a single scalar."""
+        from agm.agl.eval.values import JsonValue
+        from agm.agl.runtime.render import render_value
+
+        assert render_value(JsonValue(1), pretty=True) == "1"
+
     def test_json_nested_is_compact(self) -> None:
-        """json nested inside a record field renders compact (single-line)."""
+        """json nested inside a record field renders compact by default."""
         from agm.agl.eval.values import JsonValue, RecordValue
         from agm.agl.runtime.render import render_value
 
@@ -1398,12 +1413,61 @@ class TestRenderValue:
         assert "\n" not in out
         assert out == 'R(data: {"a": 1, "b": 2})'
 
+    def test_list_pretty(self) -> None:
+        """Pretty lists render over multiple indented lines."""
+        from agm.agl.eval.values import IntValue, ListValue
+        from agm.agl.runtime.render import render_value
+
+        v = ListValue(elements=(IntValue(1), IntValue(2)))
+        assert render_value(v, pretty=True) == "[\n  1,\n  2\n]"
+
+    def test_dict_pretty(self) -> None:
+        """Pretty dicts render over multiple indented lines."""
+        from agm.agl.eval.values import DictValue, IntValue
+        from agm.agl.runtime.render import render_value
+
+        v = DictValue({"a": IntValue(1), "b": IntValue(2)})
+        assert render_value(v, pretty=True) == '{\n  "a": 1,\n  "b": 2\n}'
+
+    def test_record_pretty(self) -> None:
+        """Pretty records render fields over multiple indented lines."""
+        from agm.agl.eval.values import IntValue, RecordValue, TextValue
+        from agm.agl.runtime.render import render_value
+
+        v = RecordValue(
+            nominal=NominalId(ENTRY_ID, "Issue"),
+            display_name="Issue",
+            fields={"title": TextValue("Missing tests"), "severity": IntValue(3)},
+        )
+        assert (
+            render_value(v, pretty=True)
+            == 'Issue(\n  title: "Missing tests",\n  severity: 3\n)'
+        )
+
+    def test_pretty_nested_indentation(self) -> None:
+        """Pretty rendering indents nested structures recursively."""
+        from agm.agl.eval.values import IntValue, ListValue, RecordValue, TextValue
+        from agm.agl.runtime.render import render_value
+
+        v = RecordValue(
+            nominal=NominalId(ENTRY_ID, "Issue"),
+            display_name="Issue",
+            fields={
+                "title": TextValue("Missing tests"),
+                "scores": ListValue(elements=(IntValue(1), IntValue(2))),
+            },
+        )
+        assert (
+            render_value(v, pretty=True)
+            == 'Issue(\n  title: "Missing tests",\n  scores: [\n    1,\n    2\n  ]\n)'
+        )
+
     # ------------------------------------------------------------------
-    # render_value_repl: non-text values match render_value
+    # display options: non-text values can use the same single renderer
     # ------------------------------------------------------------------
 
-    def test_repl_non_text_matches_render_value(self) -> None:
-        """render_value_repl matches render_value for non-text values."""
+    def test_display_non_text_matches_default_for_scalar_values(self) -> None:
+        """Display options do not alter scalar values."""
         from decimal import Decimal
 
         from agm.agl.eval.values import (
@@ -1413,7 +1477,7 @@ class TestRenderValue:
             ListValue,
             UnitValue,
         )
-        from agm.agl.runtime.render import render_value, render_value_repl
+        from agm.agl.runtime.render import render_value
 
         for v in (
             IntValue(42),
@@ -1422,14 +1486,16 @@ class TestRenderValue:
             UnitValue(),
             ListValue(elements=(IntValue(1),)),
         ):
-            assert render_value_repl(v) == render_value(v)
+            assert render_value(v, pretty=True, quote_strings=True) == render_value(
+                v, pretty=True
+            )
 
-    def test_repl_nested_text_in_list_is_quoted(self) -> None:
-        """Text inside a list is quoted regardless of repl mode."""
+    def test_nested_text_in_list_is_quoted(self) -> None:
+        """Text inside a list is quoted regardless of top-level quote mode."""
         from agm.agl.eval.values import ListValue, TextValue
-        from agm.agl.runtime.render import render_value_repl
+        from agm.agl.runtime.render import render_value
 
-        out = render_value_repl(ListValue(elements=(TextValue("v"),)))
+        out = render_value(ListValue(elements=(TextValue("v"),)), quote_strings=False)
         assert out == '["v"]'
 
     # ------------------------------------------------------------------
@@ -1487,6 +1553,11 @@ class TestSerialize:
             )
         )
         assert result == {"$case": "A", "msg": "hi"}
+
+    def test_pretty_list_serialized(self) -> None:
+        from agm.agl.runtime.serialize import dumps_exact
+
+        assert dumps_exact([1, 2], indent=2) == "[\n  1,\n  2\n]"
 
     def test_enum_nullary_value_serialized(self) -> None:
         from agm.agl.eval.values import EnumValue
@@ -1951,6 +2022,32 @@ class TestRuntimeErrorPaths:
         assert result.ok is True
         assert result.diagnostics == []
         assert capsys.readouterr().out == "[1.5, 2.25]\n"
+
+    def test_render_builtin_returns_single_line_unquoted_text(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        result = WorkflowRuntime().run(
+            'print(render("hello", quote_strings: false))\n'
+            "print(render([1, 2], pretty: false))\n"
+            'print(render({"a": 1} as json, pretty: false))\n'
+        )
+
+        assert result.ok is True
+        assert result.diagnostics == []
+        assert capsys.readouterr().out == 'hello\n[1, 2]\n{"a": 1}\n'
+
+    def test_render_builtin_accepts_render_options(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        result = WorkflowRuntime().run(
+            'print(render("hello"))\n'
+            "print(render([1, 2]))\n"
+            'print(render({"a": 1} as json))\n'
+        )
+
+        assert result.ok is True
+        assert result.diagnostics == []
+        assert capsys.readouterr().out == '"hello"\n[\n  1,\n  2\n]\n{\n  "a": 1\n}\n'
 
     def test_is_json_shaped_dict_with_non_str_key_is_false(self) -> None:
         """_is_json_shaped: a dict with non-str keys is not JSON-shaped (covers

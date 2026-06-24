@@ -116,6 +116,7 @@ __all__ = [
     "IrParseJson",
     "IrPrint",
     "IrRaise",
+    "IrRenderValue",
     "IrRenderTemplate",
     "IrSequence",
     "IrTemplateSegment",
@@ -860,13 +861,22 @@ class IrIndirectCall:
 class IrPrint:
     """IR host-op: ``print(value)`` — render *value* and write a line to stdout.
 
-    Evaluates ``value``, calls :func:`~agm.agl.runtime.render.render_value` on
-    the result, then prints the rendered string.  Returns ``UnitValue()``.
-    Renders the value and writes one line to standard output.
+    Evaluates ``value``, renders it with the default single-line, unquoted
+    options, then prints the rendered string. Returns ``UnitValue()``.
     """
 
     location: Location
     value: "IrExpr"
+
+
+@dataclass(frozen=True, slots=True)
+class IrRenderValue:
+    """IR host-op: ``render(value)`` — render *value* to a text value."""
+
+    location: Location
+    value: "IrExpr"
+    pretty: "IrExpr | None" = None
+    quote_strings: "IrExpr | None" = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -986,6 +996,7 @@ IrExpr = (
     | IrDirectCall
     | IrIndirectCall
     | IrPrint
+    | IrRenderValue
     | IrParseJson
     | IrAgentHandle
     | IrAsk

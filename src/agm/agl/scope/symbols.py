@@ -11,7 +11,7 @@ Data model
   tree for visibility analysis.
 - ``ResolvedProgram`` — the frozen output of the scope pass: the original
   ``Program`` plus side tables.
-- ``BuiltinKind`` — enum classifying a built-in Call node (print/exec/ask/ask-request).
+- ``BuiltinKind`` — enum classifying a built-in Call node.
 - ``AglScopeError`` — fatal scope error raised by the resolver.
 """
 
@@ -34,10 +34,12 @@ class BuiltinKind(enum.Enum):
     """Classification of a resolved built-in call.
 
     Attached to ``Call.node_id`` in ``ResolvedProgram.builtin_calls`` when the
-    callee is one of the three special built-in names.
+    callee is one of the special built-in names.
 
     ``PRINT``
         ``print(expr)`` — outputs a value; yields ``unit``.
+    ``RENDER``
+        ``render(expr)`` — renders a value to ``text``.
     ``EXEC``
         ``exec(command, ...)`` — shell execution; yields ``ExecResult`` or
         a context-typed value.
@@ -50,6 +52,7 @@ class BuiltinKind(enum.Enum):
     """
 
     PRINT = "PRINT"
+    RENDER = "RENDER"
     EXEC = "EXEC"
     ASK = "ASK"
     ASK_REQUEST = "ASK_REQUEST"
@@ -61,6 +64,7 @@ class BuiltinKind(enum.Enum):
 # layer that needs the set of built-in names derives it from here.
 BUILTIN_CALL_NAMES: dict[str, BuiltinKind] = {
     "print": BuiltinKind.PRINT,
+    "render": BuiltinKind.RENDER,
     "exec": BuiltinKind.EXEC,
     "ask": BuiltinKind.ASK,
     "ask-request": BuiltinKind.ASK_REQUEST,

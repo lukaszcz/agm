@@ -116,6 +116,11 @@ class EntryResult:
     ``installed``
         Names installed before a failed entry stopped. Empty for pre-execution
         failures and successful entries.
+    ``quote_strings``
+        Whether REPL echo should quote a top-level text value. This is normally
+        ``True``. The only exception is a standalone ``ask`` builtin entry,
+        whose response is echoed as display text rather than as an AgL string
+        literal.
     """
 
     kind: EntryKind
@@ -128,6 +133,7 @@ class EntryResult:
     ok: bool
     trace_path: "Path | None" = None
     installed: tuple[str, ...] = ()
+    quote_strings: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -665,6 +671,7 @@ class ReplSession:
             warnings=warnings,
             error=None,
             ok=True,
+            quote_strings=self._quote_strings_for_entry(program),
         )
 
     def _evaluate_and_promote(
@@ -823,6 +830,7 @@ class ReplSession:
             error=None,
             ok=True,
             trace_path=self._trace_path,
+            quote_strings=self._quote_strings_for_entry(orig_program),
         )
 
     def _promote_ir_state(
@@ -1291,6 +1299,7 @@ class ReplSession:
             error=None,
             ok=True,
             trace_path=self._trace_path,
+            quote_strings=self._quote_strings_for_entry(orig_program),
         )
 
     def _classify(self, program: "Program") -> tuple[EntryKind, str | None]:
@@ -1329,6 +1338,20 @@ class ReplSession:
         # Remaining Declaration kinds (ConfigPragma is rejected earlier, but handle
         # defensively).
         return "statement", None  # pragma: no cover
+
+    def _quote_strings_for_entry(self, program: "Program") -> bool:
+        """Return the top-level text quoting mode for REPL echo.
+
+        Only a syntactically standalone ``ask`` builtin call gets unquoted text
+        display. Stored ask results, variables, bindings, and all other
+        expressions use normal REPL value display.
+        """
+        from agm.agl.syntax.nodes import Call, VarRef
+
+        last = program.body.items[-1]
+        if isinstance(last, Call) and isinstance(last.callee, VarRef):
+            return last.callee.name != "ask"
+        return True
 
     def _value_type_of_last(
         self, program: "Program", checked: "CheckedProgram"

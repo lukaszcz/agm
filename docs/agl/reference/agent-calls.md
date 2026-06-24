@@ -66,9 +66,9 @@ def call_first(agents: list[agent], prompt: text) -> text =
   ask(prompt, agent: reviewer)
 ```
 
-The `agent` type is **opaque**: no field access, no equality, no rendering,
-no JSON encoding. Agent values cannot be interpolated in templates or passed
-to `ask` except via the `agent:` parameter.
+The `agent` type is **opaque**: no field access, no equality, no JSON encoding.
+Agent values can be rendered as opaque handles such as `<agent reviewer>`, but
+cannot be passed to `ask` except via the `agent:` parameter.
 
 ### Agent declarations
 

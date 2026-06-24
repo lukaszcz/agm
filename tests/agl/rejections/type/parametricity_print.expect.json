@@ -1,1 +1,1 @@
-{"diagnostic": {"line": 1, "message_contains": ["type variable", "cannot be printed"]}}
+{"diagnostic": {"line": 1, "message_contains": ["bool"]}}

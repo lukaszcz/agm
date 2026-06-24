@@ -802,13 +802,11 @@ class TestPrint:
     def test_print_unit(self) -> None:
         accept_type("print(())")
 
-    def test_print_function_rejected(self) -> None:
-        err = reject_type("let f = fn(x: int) -> int => x\nprint(f)")
-        assert "function" in str(err).lower() or "rendering" in str(err).lower()
+    def test_print_function_accepted(self) -> None:
+        accept_type("let f = fn(x: int) -> int => x\nprint(f)")
 
-    def test_print_agent_rejected(self) -> None:
-        err = reject_type("agent a\nprint(a)")
-        assert "agent" in str(err).lower() or "rendering" in str(err).lower()
+    def test_print_agent_accepted(self) -> None:
+        accept_type("agent a\nprint(a)")
 
     def test_print_wrong_arg_count(self) -> None:
         err = reject_type("print(1, 2)")
@@ -821,6 +819,36 @@ class TestPrint:
     def test_print_named_arg(self) -> None:
         err = reject_type("print(x: 42)")
         assert "print" in str(err).lower() or "argument" in str(err).lower()
+
+
+# ---------------------------------------------------------------------------
+# render() builtin
+# ---------------------------------------------------------------------------
+
+
+class TestRenderBuiltin:
+    def test_render_returns_text(self) -> None:
+        r = accept_type("let s: text = render([1, 2])\ns")
+        decl = r.resolved.program.body.items[0]
+        assert isinstance(decl, LetDecl)
+        assert r.type_env.get_binding_type(decl.node_id) == TextType()
+
+    def test_render_accepts_options(self) -> None:
+        accept_type('render("hello", pretty: false, quote_strings: false)')
+
+    def test_render_wrong_arg_count_rejected(self) -> None:
+        err = reject_type("render(1, 2)")
+        assert "render" in str(err).lower()
+        assert "one positional" in str(err).lower()
+
+    def test_render_unknown_named_arg_rejected(self) -> None:
+        err = reject_type("render(1, style: true)")
+        assert "render" in str(err).lower()
+        assert "unknown" in str(err).lower()
+
+    def test_render_option_must_be_bool(self) -> None:
+        err = reject_type('render(1, pretty: "yes")')
+        assert "bool" in str(err).lower()
 
 
 # ---------------------------------------------------------------------------
@@ -1544,13 +1572,11 @@ class TestTemplate:
         r = accept_type('let x = 42\nlet s = "${x}"\ns')
         assert r.resolved.program is not None
 
-    def test_interpolated_function_rejected(self) -> None:
-        err = reject_type('let f = fn(x: int) -> int => x\n"${f}"')
-        assert "function" in str(err).lower() or "rendering" in str(err).lower()
+    def test_interpolated_function_accepted(self) -> None:
+        accept_type('let f = fn(x: int) -> int => x\n"${f}"')
 
-    def test_interpolated_agent_rejected(self) -> None:
-        err = reject_type('agent a\n"${a}"')
-        assert "agent" in str(err).lower() or "rendering" in str(err).lower()
+    def test_interpolated_agent_accepted(self) -> None:
+        accept_type('agent a\n"${a}"')
 
     def test_interpolated_int_is_ok(self) -> None:
         r = accept_type('let n = 1\n"n is ${n}"')
@@ -4398,13 +4424,11 @@ class TestGenerics:
         err = reject_type("def neg[T](x: T) -> T = -x")
         assert "type variable" in str(err).lower() or "abstract" in str(err).lower()
 
-    def test_d2_print_on_T_rejected(self) -> None:
-        err = reject_type("def show[T](x: T) -> unit = print(x)")
-        assert "type variable" in str(err).lower() or "abstract" in str(err).lower()
+    def test_d2_print_on_T_accepted(self) -> None:
+        accept_type("def show[T](x: T) -> unit = print(x)")
 
-    def test_d2_interpolation_on_T_rejected(self) -> None:
-        err = reject_type('def show[T](x: T) -> text = "${x}"')
-        assert "type variable" in str(err).lower() or "abstract" in str(err).lower()
+    def test_d2_interpolation_on_T_accepted(self) -> None:
+        accept_type('def show[T](x: T) -> text = "${x}"')
 
     def test_d2_field_access_on_T_rejected(self) -> None:
         err = reject_type("def get[T](x: T) -> int = x.field")

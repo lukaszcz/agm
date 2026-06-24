@@ -4,7 +4,7 @@
       "name": "small_int_input",
       "params": {"n": 9},
       "expect": {
-        "stdout": "plain text line\ntwo\nlines\n42\n-7\n2.5\ntrue\nfalse\n9\n[\"a\", \"b\"]\n{\"alpha\": 1, \"beta\": 2}\nPair(name: \"x\", score: 3)\nVerdict.Bad(reason: \"slow\")\nnull\n{\n  \"name\": \"x\",\n  \"score\": 3\n}\n{\n  \"$case\": \"Bad\",\n  \"reason\": \"slow\"\n}\n",
+        "stdout": "plain text line\ntwo\nlines\n42\n-7\n2.5\ntrue\nfalse\n9\n[\"a\", \"b\"]\n{\"alpha\": 1, \"beta\": 2}\nPair(name: \"x\", score: 3)\nVerdict.Bad(reason: \"slow\")\nnull\n{\"name\": \"x\", \"score\": 3}\n{\"$case\": \"Bad\", \"reason\": \"slow\"}\n",
         "stdout_not_contains": ["<dsl-value", "True", "False"]
       }
     },

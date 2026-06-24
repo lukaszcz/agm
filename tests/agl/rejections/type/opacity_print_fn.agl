@@ -1,2 +1,1 @@
-def dbl(n: int) -> int = n * 2
-print dbl
+render(1, pretty: "yes")

@@ -16,21 +16,22 @@ Rules implemented
     - ``param name[: T] [= default]`` — defaults to ``text`` when unannotated
       and defaultless; otherwise defaults are checked/inferred.
 4.  ``name := e`` — expected type is the binding's declared type.
-5.  ``print(expr)`` — accepts any non-function/non-agent type.
-6.  ``ask(prompt, ...)`` — named-agent or default-agent call with codec.
-7.  ``exec(cmd, ...)`` — shell call; requires ``supports_shell_exec``.
-8.  Declared-name calls — checked against the full ``FunctionSignature``.
-9.  Value calls — checked against the ``FunctionType``; named args disallowed.
-10. Lambdas — inferred or annotated return type.
-11. Block typing — last item is the block's value; LetDecl/VarDecl at end is error.
-12. ``if`` with no ``else`` yields ``unit``; with ``else`` branches must unify.
-13. ``case`` — exhaustiveness warning on enum scrutinees.
-14. ``do-until`` — yields ``unit``; condition must be bool.
-15. ``try/catch`` — body and handler types must unify.
-16. ``raise`` — yields ``BottomType`` (bottom, assignable to any target).
-17. Assignability (design §5.8): ``int`` widens to ``decimal``; ``json``
+5.  ``print(expr)`` — accepts any value and yields ``unit``.
+6.  ``render(expr, pretty:, quote_strings:)`` — accepts any value and yields ``text``.
+7.  ``ask(prompt, ...)`` — named-agent or default-agent call with codec.
+8.  ``exec(cmd, ...)`` — shell call; requires ``supports_shell_exec``.
+9.  Declared-name calls — checked against the full ``FunctionSignature``.
+10. Value calls — checked against the ``FunctionType``; named args disallowed.
+11. Lambdas — inferred or annotated return type.
+12. Block typing — last item is the block's value; LetDecl/VarDecl at end is error.
+13. ``if`` with no ``else`` yields ``unit``; with ``else`` branches must unify.
+14. ``case`` — exhaustiveness warning on enum scrutinees.
+15. ``do-until`` — yields ``unit``; condition must be bool.
+16. ``try/catch`` — body and handler types must unify.
+17. ``raise`` — yields ``BottomType`` (bottom, assignable to any target).
+18. Assignability (design §5.8): ``int`` widens to ``decimal``; ``json``
     accepts any JSON-shaped value.  Bottom type is assignable to any target.
-18. Duplicate constructor argument names, duplicate dict keys, and all the
+19. Duplicate constructor argument names, duplicate dict keys, and all the
     constructor checks carried over from v1.
 
 The checker raises ``AglTypeError`` on the first error (first-error abort).
@@ -1126,6 +1127,8 @@ class _Checker:
             kind = self._resolved.builtin_calls[node.node_id]
             if kind == BuiltinKind.PRINT:
                 return self._check_print_call(node)
+            if kind == BuiltinKind.RENDER:
+                return self._check_render_call(node)
             if kind == BuiltinKind.ASK:
                 return self._check_ask_call(node, expected=expected)
             if kind == BuiltinKind.ASK_REQUEST:
@@ -1184,20 +1187,28 @@ class _Checker:
                 "print() requires exactly one positional argument.",
                 span=node.span,
             )
-        arg_type = self._check_expr(node.args[0], expected=None)
-        # D2: reject operations on bare type variables.
-        if isinstance(arg_type, TypeVarType):
-            raise AglTypeError(
-                f"a value of type variable '{arg_type.name}' has no rendering "
-                f"and cannot be printed.",
-                span=node.args[0].span,
-            )
-        if isinstance(arg_type, (FunctionType, AgentType)):
-            raise AglTypeError(
-                "a function/agent value has no rendering and cannot be printed.",
-                span=node.args[0].span,
-            )
+        self._check_expr(node.args[0], expected=None)
         return UnitType()
+
+    # --- render ---
+
+    def _check_render_call(self, node: Call) -> Type:
+        if len(node.args) != 1:
+            raise AglTypeError(
+                "render() requires exactly one positional argument.",
+                span=node.span,
+            )
+        allowed = {"pretty", "quote_strings"}
+        for named in node.named_args:
+            if named.name not in allowed:
+                raise AglTypeError(
+                    f"render() got unknown named argument {named.name!r}.",
+                    span=named.span,
+                )
+            option_type = self._check_expr(named.value, expected=BoolType())
+            self._assert_assignable(option_type, BoolType(), named.value.span)
+        self._check_expr(node.args[0], expected=None)
+        return TextType()
 
     # --- parse_json ---
 
@@ -2118,19 +2129,7 @@ class _Checker:
                     seg_type = self._check_template_literal(seg.expr)
                     self._node_types[seg.expr.node_id] = seg_type
                 else:
-                    seg_type = self._check_expr(seg.expr, expected=None)
-                    # D2: reject operations on bare type variables.
-                    if isinstance(seg_type, TypeVarType):
-                        raise AglTypeError(
-                            f"a value of type variable '{seg_type.name}' has no rendering "
-                            f"and cannot be interpolated.",
-                            span=seg.expr.span,
-                        )
-                    if isinstance(seg_type, (FunctionType, AgentType)):
-                        raise AglTypeError(
-                            "a function/agent value has no rendering and cannot be interpolated.",
-                            span=seg.expr.span,
-                        )
+                    self._check_expr(seg.expr, expected=None)
         return TextType()
 
     def _check_template_literal(self, expr: ListLit | DictLit) -> Type:

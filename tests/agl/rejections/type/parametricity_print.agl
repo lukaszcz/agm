@@ -1,2 +1,1 @@
-def show[T](x: T) -> unit = print(x)
-show(42)
+render(1, quote_strings: 1)

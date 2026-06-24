@@ -93,6 +93,7 @@ from agm.agl.ir.nodes import (
     IrPrint,
     IrRaise,
     IrRenderTemplate,
+    IrRenderValue,
     IrSequence,
     IrTemplateText,
     IrTemplateValue,
@@ -642,6 +643,14 @@ def _validate_expr(node: IrExpr, ctx: _Context) -> None:
         case IrPrint(value=val):
             _validate_location(node.location, ctx)
             _validate_expr(val, ctx)
+
+        case IrRenderValue(value=val, pretty=pretty, quote_strings=quote_strings):
+            _validate_location(node.location, ctx)
+            _validate_expr(val, ctx)
+            if pretty is not None:
+                _validate_expr(pretty, ctx)
+            if quote_strings is not None:
+                _validate_expr(quote_strings, ctx)
 
         case IrParseJson(value=val):
             _validate_location(node.location, ctx)

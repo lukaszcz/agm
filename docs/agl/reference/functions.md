@@ -299,15 +299,15 @@ only the declared name retains the named/default information at call sites.
 
 ## Opacity
 
-Function values have **no rendering, no JSON encoding, and no equality**.
-Interpolating a function value in a template (`"${f}"`) is a static error.
-Printing a function value (`print f`) is a static error. Storing a function
-value in a `json` slot, passing it to `ask`, or using it where a JSON-shaped
-type is expected are all static errors. These restrictions exist because
-function values are capability handles, not data.
+Function values have **opaque rendering, no JSON encoding, and no equality**.
+Rendering a function value, interpolating it in a template, or printing it
+produces a diagnostic surface form such as `<function: (int, int) -> int>`.
+Storing a function value in a `json` slot, passing it to `ask`, or using it
+where a JSON-shaped type is expected are static errors. These restrictions
+exist because function values are capability handles, not data.
 
-The REPL may echo a bare function value as an opaque diagnostic display such
-as `<function: (int, int) -> int>`. That display is not available to AgL
+The REPL echoes bare function values with the same opaque rendering. That
+display is available through AgL rendering, but it is not JSON data.
 programs through `print`, interpolation, `as text`, or JSON conversion.
 
 ## Recursion and the call-depth limit

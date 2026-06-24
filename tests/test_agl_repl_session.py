@@ -322,6 +322,31 @@ class TestExactlyOnce:
         assert _text(r2.value) == "the-answer"
         assert agent.calls == 1
 
+    def test_standalone_ask_echo_is_unquoted(self) -> None:
+        from agm.agl.repl.render import render_entry_result
+
+        agent = CountingAgent("the-answer")
+        s = ReplSession(default_agent=agent)
+        result = s.eval_entry('ask """say something"""')
+
+        assert result.ok
+        assert result.quote_strings is False
+        assert render_entry_result(result, echo=True) == "the-answer"
+
+    def test_stored_ask_result_echo_uses_normal_text_quoting(self) -> None:
+        from agm.agl.repl.render import render_entry_result
+
+        agent = CountingAgent("the-answer")
+        s = ReplSession(default_agent=agent)
+        first = s.eval_entry('let txt: text = ask """say something"""')
+        second = s.eval_entry("txt")
+
+        assert first.ok
+        assert first.quote_strings is True
+        assert second.ok
+        assert second.quote_strings is True
+        assert render_entry_result(second, echo=True) == '"the-answer"'
+
     def test_distinct_agent_responses_across_entries(self) -> None:
         agent = CountingAgent("first", "second", "third")
         s = ReplSession(default_agent=agent)

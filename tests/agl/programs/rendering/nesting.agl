@@ -44,13 +44,13 @@ let s2: Status = Closed(by: "Ada", reason: "fixed")
 print s1
 print s2
 
-# --- nested json field renders compact; top-level json renders pretty ---
+# --- json fields and top-level json both render compact under print ---
 let ann = Annotated(label: "note", meta: {"key": "value", "n": 1})
 print ann
 let top_json: json = {"key": "value", "n": 1}
 print top_json
 
-# --- as json opt-in: record and enum produce pretty-printed JSON ---
+# --- as json opt-in: record and enum produce compact JSON under print ---
 print(author as json)
 print(s2 as json)
 

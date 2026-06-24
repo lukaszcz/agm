@@ -4,7 +4,7 @@
 building the lexical scope chain and populating side tables:
 
 - ``resolution``:     ``VarRef.node_id`` / ``AssignStmt.node_id`` → ``BindingRef``
-- ``builtin_calls``:  ``Call.node_id`` → ``BuiltinKind``  (for print/exec/ask/ask-request)
+- ``builtin_calls``:  ``Call.node_id`` → ``BuiltinKind``  (for contextual built-ins)
 
 Scope rules
 -----------
@@ -1131,8 +1131,8 @@ class _Resolver:
     def _resolve_varref(self, node: VarRef) -> None:
         """Resolve a name reference.
 
-        Built-in names (print/exec/ask/ask-request) are only valid in call position; a
-        bare VarRef to them is an error (D6: they are not first-class values).
+        Built-in names are only valid in call position; a bare VarRef to them
+        is an error (D6: they are not first-class values).
 
         When a VarRef resolves to a constructor_binding, look up the candidate set:
         - Exactly 1 candidate → record in constructor_refs.
@@ -1314,10 +1314,10 @@ class _Resolver:
     def _resolve_call(self, node: Call) -> None:
         """Resolve a ``Call`` node.
 
-        If the callee is a bare ``VarRef`` whose name is a built-in
-        (print/exec/ask/ask-request), classify the call in ``builtin_calls`` and skip
-        normal callee resolution.  For all other callees, resolve the callee
-        expression normally (it must resolve to a binding).
+        If the callee is a bare ``VarRef`` whose name is a built-in, classify
+        the call in ``builtin_calls`` and skip normal callee resolution.  For
+        all other callees, resolve the callee expression normally (it must
+        resolve to a binding).
         """
         callee = node.callee
         if isinstance(callee, VarRef) and callee.name in _BUILTIN_CALL_NAMES:

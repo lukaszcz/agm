@@ -1645,6 +1645,21 @@ class TestM6aLowering:
         assert ir_print is not None, "Expected IrPrint in entry initializers"
         assert isinstance(ir_print, IrPrint)
 
+    def test_render_lowers_to_ir_render_value(self) -> None:
+        """render(x, pretty:, quote_strings:) lowers to IrRenderValue."""
+        from agm.agl.ir.nodes import IrBind, IrRenderValue
+
+        source = 'let s = render("x", pretty: false, quote_strings: false)\n()'
+        prog = _lower(source)
+        entry = prog.modules[list(prog.modules.keys())[-1]]
+        ir_bind = next(
+            (node for node in entry.initializers if isinstance(node, IrBind)), None
+        )
+        assert ir_bind is not None, "Expected IrBind in entry initializers"
+        assert isinstance(ir_bind.value, IrRenderValue)
+        assert ir_bind.value.pretty is not None
+        assert ir_bind.value.quote_strings is not None
+
     def test_parse_json_lowers_to_ir_parse_json(self) -> None:
         """parse_json(s) lowers to IrParseJson wrapping the argument expression."""
         from agm.agl.ir.nodes import IrBind, IrParseJson

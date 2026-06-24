@@ -450,7 +450,7 @@ class TestUndefinedRead:
 
 
 # ---------------------------------------------------------------------------
-# Reserved names: print/exec/ask cannot be bound
+# Reserved names: built-in call names cannot be bound
 # ---------------------------------------------------------------------------
 
 
@@ -460,6 +460,12 @@ class TestReservedNames:
         line, msg = diag(err)
         assert line == 1
         assert "print" in msg
+
+    def test_reserve_render_let(self) -> None:
+        err = reject_scope('let render = "x"\nrender')
+        line, msg = diag(err)
+        assert line == 1
+        assert "render" in msg
 
     def test_reserve_ask_let(self) -> None:
         err = reject_scope('let ask = "not allowed"\nask')
@@ -610,6 +616,13 @@ class TestBuiltinCallClassification:
         call_item = r.program.body.items[1]
         assert isinstance(call_item, Call)
         assert r.builtin_calls[call_item.node_id] == BuiltinKind.PRINT
+
+    def test_render_call_classified(self) -> None:
+        r = parse_and_resolve('let x = render 1\nx')
+        let_node = r.program.body.items[0]
+        assert isinstance(let_node, LetDecl)
+        assert isinstance(let_node.value, Call)
+        assert r.builtin_calls[let_node.value.node_id] == BuiltinKind.RENDER
 
     def test_exec_call_classified(self) -> None:
         r = parse_and_resolve('let x = exec "ls"\nx')

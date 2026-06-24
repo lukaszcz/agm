@@ -429,9 +429,9 @@ class AglCompleter(Completer):
 
     def _candidates(self) -> list[str]:
         names: list[str] = list(_KEYWORDS)
-        # The built-in call names (print/exec/ask/ask-request) are reserved
-        # call-site identifiers, not keywords, so they are absent from
-        # ``KEYWORDS``; add them explicitly so the completer offers them.
+        # Built-in call names are reserved call-site identifiers, not keywords,
+        # so they are absent from ``KEYWORDS``; add them explicitly so the
+        # completer offers them.
         names.extend(BUILTIN_CALL_NAMES)
         names.extend(name for name, _type, _value in self._session.bindings())
         names.extend(self._session.agents())

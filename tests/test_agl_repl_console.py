@@ -497,11 +497,11 @@ class TestCompleter:
         assert _completions(completer, "zzzzz") == []
 
     def test_completes_builtin_calls(self) -> None:
-        # The four builtin call names are not reserved keywords and are not
-        # promoted bindings; the completer must still offer them so a user
-        # typing ``ask-...`` or ``print(`` gets a suggestion.
+        # Builtin call names are not reserved keywords and are not promoted
+        # bindings; the completer must still offer them so a user typing
+        # ``ask-...`` or ``print(`` gets a suggestion.
         completer = AglCompleter(ReplSession())
-        for name in ("print", "exec", "ask", "ask-request"):
+        for name in ("print", "render", "exec", "ask", "ask-request"):
             assert name in _completions(completer, "")
 
     def test_completes_ask_request_prefix(self) -> None:

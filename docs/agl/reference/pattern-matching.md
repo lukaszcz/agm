@@ -154,7 +154,7 @@ enum Option[T]
   | none
   | some(value: T)
 
-def render(o: Option[int]) -> text =
+def describe_option(o: Option[int]) -> text =
   case o of
     | Option.none => "missing"
     | Option.some(value) => "found ${value}"   # value: int, so it can be interpolated

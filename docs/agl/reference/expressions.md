@@ -237,8 +237,8 @@ with `key` and `message` fields.
 ## Calls
 
 All calls use the same uniform parenthesized syntax. This applies equally to
-user `def`s, built-in functions (`ask`, `exec`, `print`), and function values
-stored in bindings:
+user `def`s, built-in functions (`ask`, `exec`, `print`, `render`), and
+function values stored in bindings:
 
 ```ebnf
 call_expr ::= postfix_expr type_args? "(" arg_list? ")"
@@ -273,7 +273,7 @@ For details on named arguments, defaults, and function types, see
 
 `print` is a built-in function that accepts one argument of any type, writes
 its rendered value (followed by a newline) to the host's standard output, and
-returns `unit`. The argument may have any type that has a rendering:
+returns `unit`. It renders with `pretty: false` and `quote_strings: false`:
 
 ```agl
 print "Review round failed; retrying."
@@ -283,7 +283,30 @@ print res.stdout                       # field-access chain as sugar arg
 ```
 
 `print` cannot be bound as a function value (`let f = print` is a static
-error, because `print`'s type is not yet fully expressible in v1).
+error, because built-ins are only valid in call position).
+
+## `render`
+
+`render` is a built-in function that converts any value to `text` using the
+same renderer as interpolation, `print`, casts to `text`, and REPL echo.
+
+```agl
+render(value: T, pretty: bool = true, quote_strings: bool = true) -> text
+```
+
+`pretty` selects single-line versus multi-line indented rendering for
+structured values and JSON. `quote_strings` controls only a top-level `text`
+argument; when it is `false`, rendering text is identity.
+
+```agl
+render("hi")                         # "\"hi\""
+render("hi", quote_strings: false)   # "hi"
+render([1, 2])                       # "[\n  1,\n  2\n]"
+render([1, 2], pretty: false)        # "[1, 2]"
+```
+
+`render` cannot be bound as a function value (`let f = render` is a static
+error, because built-ins are only valid in call position).
 
 ## `parse_json`
 

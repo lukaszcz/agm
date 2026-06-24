@@ -1,3 +1,1 @@
-def dbl(n: int) -> int = n * 2
-let msg = "result: ${dbl}"
-msg
+render(1, style: true)

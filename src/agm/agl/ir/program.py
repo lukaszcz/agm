@@ -143,6 +143,7 @@ class FunctionDescriptor:
     module_id: ModuleId
     params: "tuple[IrFunctionParam, ...]"
     body: IrExpr
+    param_labels: tuple[str, ...] = ()
     result_label: str = "?"
 
 

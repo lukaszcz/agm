@@ -1025,6 +1025,7 @@ class IrInterpreter:
                 return IrClosureValue(
                     function_id=fn_id,
                     captures=tuple(cap_slots),
+                    param_labels=function_desc.param_labels,
                     arity=len(function_desc.params),
                     result_label=function_desc.result_label,
                 )

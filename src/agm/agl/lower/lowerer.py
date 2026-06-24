@@ -549,6 +549,7 @@ class _Lowerer:
             module_id=self._module_id,
             params=tuple(ir_params),
             body=body_ir,
+            param_labels=tuple(repr(param_type) for _, param_type, _ in sig.params),
             result_label=repr(sig.result),
         )
         self._link.functions[fn_id] = desc
@@ -638,6 +639,7 @@ class _Lowerer:
             module_id=self._module_id,
             params=tuple(ir_params),
             body=body_ir,
+            param_labels=tuple(repr(param_type) for param_type in fn_type.params),
             result_label=repr(fn_type.result),
         )
         self._link.functions[fn_id] = desc

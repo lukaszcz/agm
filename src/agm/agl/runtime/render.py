@@ -17,7 +17,7 @@ Per-kind rules:
 - ``int`` / ``decimal`` / ``bool``     → ``_scalar_text`` at any depth
 - ``unit``                             → ``()``
 - ``agent``                            → ``<agent NAME>``
-- ``function``                         → ``<function/N -> T>``
+- ``function``                         → ``<function: (A, B) -> T>``
 - ``json`` (top-level)                 → pretty JSON, 2-space indent
 - ``json`` (nested)                    → compact JSON, single-line
 - ``list``                             → ``[e1, e2, ...]``, children nested
@@ -140,7 +140,11 @@ def _render(value: Value, *, top_level: bool, repl: bool) -> str:
         return f"<constructor {value.display_name}>"
 
     if isinstance(value, IrClosureValue):
-        return f"<function/{value.arity} -> {value.result_label}>"
+        if value.param_labels:
+            param_labels = value.param_labels
+        else:
+            param_labels = ("?",) * value.arity
+        return f"<function: ({', '.join(param_labels)}) -> {value.result_label}>"
 
     if isinstance(value, JsonValue):
         if top_level:

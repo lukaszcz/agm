@@ -306,6 +306,10 @@ value in a `json` slot, passing it to `ask`, or using it where a JSON-shaped
 type is expected are all static errors. These restrictions exist because
 function values are capability handles, not data.
 
+The REPL may echo a bare function value as an opaque diagnostic display such
+as `<function: (int, int) -> int>`. That display is not available to AgL
+programs through `print`, interpolation, `as text`, or JSON conversion.
+
 ## Recursion and the call-depth limit
 
 Top-level `def`s may call themselves and each other without restriction

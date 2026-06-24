@@ -220,6 +220,7 @@ class IrClosureValue:
 
     function_id: FunctionId
     captures: "tuple[tuple[SymbolId, Slot], ...]"
+    param_labels: tuple[str, ...] = ()
     arity: int = 0
     result_label: str = "?"
 

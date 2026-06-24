@@ -1099,7 +1099,7 @@ class TestRenderValue:
         assert render_value(AgentValue(name="reviewer")) == "<agent reviewer>"
 
     def test_closure_renders_as_function_surface_form(self) -> None:
-        """Closure renders as ``<function/N -> T>``."""
+        """Closure renders as ``<function: (A, B) -> T>``."""
         from agm.agl.eval.values import IrClosureValue
         from agm.agl.runtime.render import render_value
 
@@ -1108,10 +1108,10 @@ class TestRenderValue:
         assert result.ok is True
         closure = result.bindings["f"]
         assert isinstance(closure, IrClosureValue)
-        assert render_value(closure) == "<function/2 -> int>"
+        assert render_value(closure) == "<function: (int, int) -> int>"
 
     def test_closure_zero_arity_renders_correctly(self) -> None:
-        """A zero-parameter closure renders as ``<function/0 -> T>``."""
+        """A zero-parameter closure renders as ``<function: () -> T>``."""
         from agm.agl.eval.values import IrClosureValue
         from agm.agl.runtime.render import render_value
 
@@ -1120,7 +1120,22 @@ class TestRenderValue:
         assert result.ok is True
         closure = result.bindings["thunk"]
         assert isinstance(closure, IrClosureValue)
-        assert render_value(closure) == "<function/0 -> int>"
+        assert render_value(closure) == "<function: () -> int>"
+
+    def test_closure_without_param_metadata_renders_unknown_arg_types(self) -> None:
+        """A hand-built closure without type labels uses ``?`` placeholders."""
+        from agm.agl.eval.values import IrClosureValue
+        from agm.agl.ir.ids import FunctionId
+        from agm.agl.runtime.render import render_value
+
+        closure = IrClosureValue(
+            function_id=FunctionId(0),
+            captures=(),
+            arity=2,
+            result_label="int",
+        )
+
+        assert render_value(closure) == "<function: (?, ?) -> int>"
 
     # ------------------------------------------------------------------
     # list: single-line AgL form

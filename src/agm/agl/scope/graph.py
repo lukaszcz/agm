@@ -42,6 +42,7 @@ from agm.agl.scope.symbols import BinderKind, ConstructorRef, ResolvedProgram, S
 from agm.agl.syntax.nodes import (
     AgentDecl,
     EnumDef,
+    ExceptionDef,
     FuncDef,
     ImportDecl,
     Program,
@@ -103,7 +104,7 @@ class ResolvedModuleGraph:
     modules: dict[ModuleId, ResolvedModule]
     entry_id: ModuleId
     all_public_funcs: dict[tuple[ModuleId, str], FuncDef]
-    all_public_types: dict[tuple[ModuleId, str], RecordDef | EnumDef | TypeAlias]
+    all_public_types: dict[tuple[ModuleId, str], RecordDef | EnumDef | ExceptionDef | TypeAlias]
     entry_agents: dict[str, AgentDecl]
     warnings: tuple[Diagnostic, ...]
 
@@ -115,7 +116,7 @@ class ResolvedModuleGraph:
 
 def _build_cross_module_constructor_candidates(
     import_env: ImportEnv,
-    all_public_types: dict[tuple[ModuleId, str], RecordDef | EnumDef | TypeAlias],
+    all_public_types: dict[tuple[ModuleId, str], RecordDef | EnumDef | ExceptionDef | TypeAlias],
 ) -> tuple[dict[str, tuple[ConstructorRef, ...]], frozenset[str]]:
     """Build constructor candidates from open-imported types for a module.
 
@@ -140,7 +141,7 @@ def _build_cross_module_constructor_candidates(
             if decl is None:
                 continue
             type_names.add(exposed_name)
-            if isinstance(decl, RecordDef):
+            if isinstance(decl, (RecordDef, ExceptionDef)):
                 cref = ConstructorRef(
                     owner_name=decl.name,
                     variant=None,
@@ -150,6 +151,10 @@ def _build_cross_module_constructor_candidates(
                 candidates.setdefault(exposed_name, []).append(cref)
             elif isinstance(decl, EnumDef):
                 for variant in decl.variants:
+                    if (mid, variant.name) in all_public_types and isinstance(
+                        all_public_types[(mid, variant.name)], ExceptionDef
+                    ):
+                        continue
                     cref = ConstructorRef(
                         owner_name=decl.name,
                         variant=variant.name,
@@ -171,7 +176,7 @@ def _compute_exports(program: Program) -> frozenset[str]:
     """
     result: set[str] = set()
     for item in program.body.items:
-        if isinstance(item, (FuncDef, RecordDef, EnumDef, TypeAlias)):
+        if isinstance(item, (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias)):
             if not item.is_private:
                 result.add(item.name)
     return frozenset(result)
@@ -285,7 +290,9 @@ def resolve_graph(
     # build decl_info for cross-module BindingRef construction.
     # ------------------------------------------------------------------
     all_public_funcs: dict[tuple[ModuleId, str], FuncDef] = {}
-    all_public_types: dict[tuple[ModuleId, str], RecordDef | EnumDef | TypeAlias] = {}
+    all_public_types: dict[
+        tuple[ModuleId, str], RecordDef | EnumDef | ExceptionDef | TypeAlias
+    ] = {}
 
     # decl_info: (mid, name) → (node_id, span, kind) for building BindingRefs
     decl_info: _DeclInfo = {}
@@ -301,13 +308,13 @@ def resolve_graph(
                 else:
                     all_public_funcs[key] = item
                     decl_info[key] = (item.node_id, item.span, BinderKind.function_binding)
-            elif isinstance(item, (RecordDef, EnumDef, TypeAlias)):
+            elif isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
                 key = (mid, item.name)
                 if item.is_private:
                     private_info[key] = True
                 else:
                     all_public_types[key] = item
-                    # RecordDef/EnumDef use constructor_binding so cross-module
+                    # RecordDef/EnumDef/ExceptionDef use constructor_binding so cross-module
                     # field access (mylib::Color.Red) is detected as type-qualified.
                     # TypeAlias uses let_binding (it's not constructible).
                     kind = (

@@ -1511,7 +1511,7 @@ def test_ir_ask_non_text_prompt_renders_to_string() -> None:
 
 
 def test_ir_ask_request_unit_contract() -> None:
-    """IrAskRequest with is_unit contract → AgentRequest record with None output_contract."""
+    """IrAskRequest with is_unit contract -> AgentRequest.target_type is None."""
     source = """\
 agent a
 let req = ask-request("Do it.", agent: a)
@@ -1741,12 +1741,12 @@ def test_validate_ir_ask_request_deep_valid_contract() -> None:
 
 
 def test_ir_ask_request_unit_typed() -> None:
-    """IrAskRequest with is_unit=True contract → output_contract=None in record."""
+    """IrAskRequest with is_unit=True contract -> target_type=None in record."""
     source = """\
 agent a
 let req = ask-request::[unit]("Do it.", agent: a)
-let oc = req.output_contract
-oc
+let target = req.target_type
+target
 """
     from tests.agl.ir_harness import evaluate_ir_with_agents
 
@@ -1754,11 +1754,10 @@ oc
         source,
         scripts={"a": []},
     )
-    # output_contract should be the None variant (OutputContractOption.None).
-    assert isinstance(ir_reference["oc"], EnumValue)
-    assert ir_reference["oc"].variant == "None"
-    assert isinstance(ir["oc"], EnumValue)
-    assert ir["oc"].variant == "None"
+    assert isinstance(ir_reference["target"], EnumValue)
+    assert ir_reference["target"].variant == "None"
+    assert isinstance(ir["target"], EnumValue)
+    assert ir["target"].variant == "None"
 
 
 def test_ir_ask_no_errors_when_failed_covers_else_branch() -> None:

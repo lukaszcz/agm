@@ -12,6 +12,7 @@ from other functions. The type of a function value is written
 
 ```ebnf
 func_def   ::= "def" NAME type_params? "(" params? ")" "->" type_expr "=" expr
+             | "builtin" "def" NAME type_params? "(" params? ")" "->" type_expr
 type_params ::= "[" NAME ("," NAME)* "]"
 params     ::= param ("," param)* ","?
 param      ::= NAME ":" type_expr ("=" expr)?
@@ -38,6 +39,13 @@ def summarize(doc: text, limit: int = 3) -> text =
 The `-> RetType` annotation is **required** on every `def`. The body is
 checked against it; a mismatch is a static error. There is no `return`
 keyword — the body's value is its last expression.
+
+### Built-in functions
+
+`builtin def` declares a function implemented by the host, so it has no body.
+The declared name and signature must match a recognized built-in exactly. This
+form is used by `std.core`; ordinary programs normally call those declarations
+through the default standard-library import instead of redeclaring them.
 
 ### Parameters
 
@@ -328,7 +336,7 @@ let s = fact(10000)  # raises RecursionError at depth limit
 `RecursionError` is catchable with `try`/`catch`. The limit counts
 activation frames across all `def` calls including mutual recursion.
 
-## Prelude types used with functions
+## Standard core types used with functions
 
 The built-in `ParsePolicy` enum and the `ExecResult` record are described
 in the chapters that cover `ask` ([Agent calls](agent-calls.md)) and `exec`

@@ -65,7 +65,7 @@ from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.graph import ResolvedModuleGraph
 from agm.agl.scope.imports import ImportEnv
 from agm.agl.scope.symbols import ResolvedProgram
-from agm.agl.syntax.nodes import EnumDef, FuncDef, Program, RecordDef, TypeAlias
+from agm.agl.syntax.nodes import EnumDef, ExceptionDef, FuncDef, Program, RecordDef, TypeAlias
 from agm.agl.typecheck.checker import _Checker, _TypeBuilder
 from agm.agl.typecheck.env import (
     CallSiteRecord,
@@ -205,6 +205,12 @@ def _resolve_body_for_one(
             if t is not None:
                 graph_type_table[(mid, item.name)] = t
             return
+        if isinstance(item, ExceptionDef) and item.name == name:
+            builder.ensure_built_exception(name)
+            typ = cross_envs[mid].get_type(name)
+            assert typ is not None, f"Exception type {name!r} not registered"
+            graph_type_table[(mid, name)] = typ
+            return
         if isinstance(item, TypeAlias) and item.name == name:
             resolved = cross_env.resolve_type_expr(item.type_expr, span=item.span)
             graph_type_table[(mid, item.name)] = resolved
@@ -235,7 +241,7 @@ def _collect_all_type_keys(
         program = rmod.resolved.program
         assert isinstance(program, Program)
         for item in program.body.items:
-            if isinstance(item, (RecordDef, EnumDef, TypeAlias)):
+            if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
                 # Builtin/prelude shadowing is rejected in _collect_shells_only
                 # (Step A of _build_graph_type_table), which is called before this
                 # function.  Only non-builtin types reach this point.
@@ -332,7 +338,7 @@ def _compute_type_deps(
         assert isinstance(program, Program)
 
         for item in program.body.items:
-            if isinstance(item, (RecordDef, EnumDef, TypeAlias)):
+            if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
                 key = (mid, item.name)
                 # key is guaranteed to be in all_type_keys: _collect_all_type_keys
                 # adds every RecordDef/EnumDef/TypeAlias under the same conditions
@@ -354,6 +360,15 @@ def _compute_type_deps(
                                     fd.type_expr, mid, import_env, all_type_keys
                                 )
                             )
+                elif isinstance(item, ExceptionDef):
+                    for fd in item.fields:
+                        item_deps.extend(
+                            _collect_type_expr_deps(
+                                fd.type_expr, mid, import_env, all_type_keys
+                            )
+                        )
+                    if item.base is not None and (mid, item.base) in all_type_keys:
+                        item_deps.append((mid, item.base))
                 else:
                     # Must be TypeAlias (outer isinstance guarantees one of the three).
                     item_deps.extend(

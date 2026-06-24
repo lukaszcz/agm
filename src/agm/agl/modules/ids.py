@@ -103,3 +103,6 @@ _PRELUDE_SEGMENT = "\x00prelude"
 #: module.  Its reserved segment contains a NUL byte and can never be produced
 #: by :meth:`ModuleId.from_dotted`.
 PRELUDE_ID: ModuleId = ModuleId(segments=(_PRELUDE_SEGMENT,))
+
+#: Logical module id for the shipped core standard library.
+STD_CORE_ID: ModuleId = ModuleId(segments=("std", "core"))

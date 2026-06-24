@@ -1,7 +1,7 @@
 # Library module imported by programs/modules/generic_library.agl. Exports a
 # generic enum, a generic record, and generic functions over them so the entry
 # can exercise imported generics, qualified constructors, and pattern matching.
-enum Option[T]
+enum Maybe[T]
   | none
   | some(value: T)
 
@@ -9,7 +9,7 @@ record Pair[A, B]
   first: A
   second: B
 
-def or_else[T](o: Option[T], fallback: T) -> T =
+def or_else[T](o: Maybe[T], fallback: T) -> T =
   case o of
     | none() => fallback
     | some(value) => value

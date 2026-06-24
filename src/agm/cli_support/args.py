@@ -220,6 +220,7 @@ class ExecArgs:
     log: bool = False
     command: str | None = None
     module_paths: list[str] = field(default_factory=list)
+    no_stdlib: bool = False
 
 
 @dataclass(slots=True)

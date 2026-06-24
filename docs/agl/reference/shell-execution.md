@@ -52,7 +52,7 @@ exactly as for `ask` ([Agent calls](agent-calls.md)).
 ### Structured form — target is `ExecResult`
 
 When no expected type is present, or the annotation is `ExecResult`, `exec`
-returns the `ExecResult` prelude record:
+returns the `ExecResult` standard core record:
 
 ```text
 stdout:    text

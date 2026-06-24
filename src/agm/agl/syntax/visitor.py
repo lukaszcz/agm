@@ -47,6 +47,7 @@ from agm.agl.syntax.nodes import (
     Do,
     ElseSentinel,
     EnumDef,
+    ExceptionDef,
     FieldAccess,
     FieldDef,
     FuncDef,
@@ -166,6 +167,7 @@ class Visitor:
     def visit_RecordDef(self, node: RecordDef) -> None: ...
     def visit_VariantDef(self, node: VariantDef) -> None: ...
     def visit_EnumDef(self, node: EnumDef) -> None: ...
+    def visit_ExceptionDef(self, node: ExceptionDef) -> None: ...
     def visit_TypeAlias(self, node: TypeAlias) -> None: ...
     def visit_ParamDecl(self, node: ParamDecl) -> None: ...
     def visit_ProgramDecl(self, node: ProgramDecl) -> None: ...
@@ -262,6 +264,7 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         RecordDef,
         VariantDef,
         EnumDef,
+        ExceptionDef,
         TypeAlias,
         ParamDecl,
         ProgramDecl,
@@ -402,6 +405,10 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
         for v in node.variants:
             walk(v, callback)
 
+    elif isinstance(node, ExceptionDef):
+        for f in node.fields:
+            walk(f, callback)
+
     elif isinstance(node, TypeAlias):
         walk(node.type_expr, callback)
 
@@ -421,7 +428,8 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
         for param in node.params:
             walk(param, callback)
         walk(node.return_type, callback)
-        walk(node.body, callback)
+        if node.body is not None:
+            walk(node.body, callback)
 
     elif isinstance(node, ConfigPragma):
         pass  # leaf — key and value are plain scalars

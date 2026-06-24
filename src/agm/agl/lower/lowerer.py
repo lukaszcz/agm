@@ -145,6 +145,7 @@ from agm.agl.syntax.nodes import (
     Do,
     ElseSentinel,
     EnumDef,
+    ExceptionDef,
     Expr,
     FieldAccess,
     FuncDef,
@@ -377,7 +378,7 @@ class _Lowerer:
             case VarRef():
                 self._record_capture(node.node_id, local_ids, captured)
             # Boundaries + declarations introduce no value captures for THIS function:
-            case (Lambda() | FuncDef() | RecordDef() | EnumDef() | TypeAlias()
+            case (Lambda() | FuncDef() | RecordDef() | EnumDef() | ExceptionDef() | TypeAlias()
                   | ParamDecl() | ProgramDecl() | AgentDecl() | ConfigPragma() | ImportDecl()):
                 return
             case LetDecl() | VarDecl():
@@ -493,6 +494,7 @@ class _Lowerer:
         self, funcdef: "FuncDef", param_decl_ids: "set[int]"
     ) -> "tuple[IrCapture, ...]":
         """Compute the captures for a FuncDef body using the single boundary-aware pass."""
+        assert funcdef.body is not None, "builtin functions have no body"
         return self._compute_captures_for(
             funcdef.body, funcdef.params, funcdef.node_id, param_decl_ids
         )
@@ -504,6 +506,8 @@ class _Lowerer:
         so the symbol + function-id are always present; nested ``def`` is rejected by
         the scope checker.
         """
+        assert not funcdef.is_builtin, "builtin functions are host-lowered at call sites"
+        assert funcdef.body is not None, "builtin functions have no body"
         assert funcdef.node_id in self._link.fn_node_to_id, (
             f"compiler bug: FuncDef {funcdef.name!r} was not pre-allocated"
         )
@@ -1811,6 +1815,8 @@ class _Lowerer:
             # Declarations with no runtime action in M2
             # ----------------------------------------------------------
             case FuncDef() as funcdef:
+                if funcdef.is_builtin:
+                    return None
                 return self._lower_funcdef(funcdef)
 
             case ParamDecl() as param_decl:
@@ -1832,6 +1838,7 @@ class _Lowerer:
             case (
                 RecordDef()
                 | EnumDef()
+                | ExceptionDef()
                 | TypeAlias()
                 | ProgramDecl()
                 | ConfigPragma()
@@ -2057,7 +2064,7 @@ class _Lowerer:
         # Phase 1: pre-allocate function symbols and IDs for mutual recursion,
         # and allocate agent symbols so they are resolvable in function bodies.
         for item in body.items:
-            if isinstance(item, FuncDef):
+            if isinstance(item, FuncDef) and not item.is_builtin:
                 self._prealloc_funcdef(item)
             elif isinstance(item, AgentDecl):
                 self._alloc_sym(
@@ -2074,7 +2081,11 @@ class _Lowerer:
         for item in body.items:
             ir = self.lower_item(item, top_level=True)
             if ir is not None:
-                target = function_initializers if isinstance(item, FuncDef) else other_initializers
+                target = (
+                    function_initializers
+                    if isinstance(item, FuncDef) and not item.is_builtin
+                    else other_initializers
+                )
                 target.append(ir)
 
         entry_mod = ExecutableModule(

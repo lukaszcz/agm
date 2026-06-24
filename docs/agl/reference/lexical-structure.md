@@ -63,7 +63,8 @@ variable, agent, or function names:
 
 ```text
 record enum type param program agent config def fn let var do until if else
-case of try catch raise as as? and or not is in true false null
+case of try catch raise exception extends builtin as as? and or not is in
+true false null
 ```
 
 **`as?`** is a single reserved keyword/token — the `?` is part of the
@@ -90,7 +91,8 @@ binders — but they remain legal as field names.
 **Type-annotation keywords** — `text`, `json`, `bool`, `int`, `decimal`,
 `list`, `dict`, and `unit` are **not** reserved; they are recognized
 contextually in type positions. `fn` is reserved (it introduces a lambda).
-`def` is reserved (it introduces a function declaration).
+`def` is reserved (it introduces a function declaration). `builtin` is
+reserved for standard-library declarations that are implemented by the host.
 
 **Module system soft keywords** — `import`, `private`, `qualified`, `using`,
 and `hiding` are **not reserved**. They remain valid identifiers in all

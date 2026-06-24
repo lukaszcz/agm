@@ -21,8 +21,20 @@ trace_id: text    # links the exception to its record in the run trace
 static error. It exists for typing: a wildcard catch binds its variable as
 `Exception`, so only `message`, `trace_id`, and whole-value interpolation
 (`${e}`) are available there. Accessing a subtype field such as `e.raw`
-requires catching the concrete type. User-defined exception types do not
-exist in v1.
+requires catching the concrete type.
+
+Programs may declare concrete exception types:
+
+```agl
+exception DeployError extends Exception
+  service: text
+  exit_code: int
+```
+
+An exception extends exactly one base exception type. Constructor fields include
+the inherited fields first, followed by fields declared on the subtype.
+`builtin exception` is the standard-library form for host-recognized exception
+types; the name, base, and fields must match the recognized shape exactly.
 
 Exception values support field access (`e.raw`), equality, and rendering.
 In interpolation and `print` an exception renders in **AgL record form**,
@@ -102,7 +114,8 @@ raise Abort(message: "Cannot continue without repository access.")
 
 Any concrete built-in exception type is constructible with named arguments
 for its fields; `trace_id` is injected by the runtime and is not written
-in source. `Abort` is the conventional type for user-initiated failures.
+in source when omitted. The same construction rule applies to user-declared
+exception types. `Abort` is the conventional type for user-initiated failures.
 
 ## Built-in exception catalog
 

@@ -834,6 +834,7 @@ class WorkflowRuntime:
         *,
         entry_path: "Path | None",
         roots: "RootSet",
+        default_stdlib: bool = True,
     ) -> PreparedGraph:
         """Load + scope the full module graph for *entry_source* ONCE.
 
@@ -862,7 +863,12 @@ class WorkflowRuntime:
 
         with tab_warning_collector() as tab_sink:
             try:
-                graph = load_graph(entry_source, entry_path=entry_path, roots=roots)
+                graph = load_graph(
+                    entry_source,
+                    entry_path=entry_path,
+                    roots=roots,
+                    default_stdlib=default_stdlib,
+                )
             except AglSyntaxError as exc:
                 return PreparedGraph(
                     entry_source,

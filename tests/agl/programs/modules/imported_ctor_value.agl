@@ -9,8 +9,8 @@ import collections
 param n: int
 
 # Imported generic ENUM payload constructor as a value, called positionally.
-let mk: (int) -> Option[int] = some
-let o: Option[int] = mk(n)
+let mk: (int) -> Maybe[int] = some
+let o: Maybe[int] = mk(n)
 # Bare `none` is an open-imported nullary variant → a constructor pattern.
 case o of
   | none => print "none"

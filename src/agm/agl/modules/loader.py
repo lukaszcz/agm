@@ -24,17 +24,19 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+from importlib import resources
 from pathlib import Path
 
 import agm.agl.syntax as syntax
 from agm.agl._text import normalize_newlines
 from agm.agl.modules.errors import ImportEntryError
-from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
 from agm.agl.modules.resolver import expand_wildcard, resolve_module
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser.parser import parse_program_seeded
 from agm.agl.syntax.nodes import ImportDecl
-from agm.agl.syntax.spans import SourceId
+from agm.agl.syntax.spans import SourceId, SourceSpan
+from agm.agl.syntax.types import ImportMode
 from agm.core import fs
 
 
@@ -107,6 +109,57 @@ def _extract_imports(program: syntax.Program) -> tuple[ImportDecl, ...]:
     return tuple(
         item for item in program.body.items if isinstance(item, ImportDecl)
     )
+
+
+def _synthetic_stdlib_import(node_id: int) -> ImportDecl:
+    span = SourceSpan(
+        start_line=0,
+        start_col=0,
+        end_line=0,
+        end_col=0,
+        start_offset=0,
+        end_offset=0,
+        source=SourceId(label="<stdlib-import>"),
+    )
+    return ImportDecl(
+        module_path=STD_CORE_ID.segments,
+        wildcard=False,
+        qualified=False,
+        alias=None,
+        mode=ImportMode.ALL,
+        items=(),
+        span=span,
+        node_id=node_id,
+    )
+
+
+def _with_default_stdlib_import(
+    program: syntax.Program,
+    *,
+    import_node_id: int,
+) -> syntax.Program:
+    std_import = _synthetic_stdlib_import(import_node_id)
+    body = syntax.Block(
+        items=(std_import, *program.body.items),
+        span=program.body.span,
+        node_id=program.body.node_id,
+    )
+    return syntax.Program(body=body, span=program.span, node_id=program.node_id)
+
+
+def _load_std_core(start_id: int) -> tuple[LoadedModule, int]:
+    source = resources.files("agm.agl.stdlib").joinpath("core.agl").read_text()
+    source_id = SourceId(label="<stdlib:std.core>")
+    program, next_id = parse_program_seeded(source, start_id=start_id, source=source_id)
+    loaded = LoadedModule(
+        module_id=STD_CORE_ID,
+        program=program,
+        path=None,
+        source=source_id,
+        imports=_extract_imports(program),
+        source_text=source,
+    )
+    return loaded, next_id
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +246,7 @@ def _load_into_graph(
     canonical_entry_path: Path | None,
     seed_modules: dict[ModuleId, LoadedModule],
     start_id: int,
+    default_stdlib: bool,
 ) -> tuple[ModuleGraph, int, dict[ModuleId, LoadedModule]]:
     """BFS the transitive module graph from *entry_loaded*.
 
@@ -261,6 +315,9 @@ def _load_into_graph(
             start_id=next_id,
             source=file_source_id,
         )
+        if default_stdlib:
+            program = _with_default_stdlib_import(program, import_node_id=next_id)
+            next_id += 1
         loaded = LoadedModule(
             module_id=mid,
             program=program,
@@ -290,6 +347,7 @@ def load_graph(
     *,
     entry_path: Path | None,
     roots: RootSet,
+    default_stdlib: bool = True,
 ) -> ModuleGraph:
     """Parse and load the full transitive module graph.
 
@@ -335,6 +393,13 @@ def load_graph(
         start_id=0,
         source=entry_source_id,
     )
+    std_core, next_id = _load_std_core(next_id)
+    if default_stdlib:
+        entry_program = _with_default_stdlib_import(
+            entry_program,
+            import_node_id=next_id,
+        )
+        next_id += 1
     entry_loaded = LoadedModule(
         module_id=ENTRY_ID,
         program=entry_program,
@@ -348,8 +413,9 @@ def load_graph(
         entry_loaded,
         roots=roots,
         canonical_entry_path=canonical_entry_path,
-        seed_modules={},
+        seed_modules={STD_CORE_ID: std_core},
         start_id=next_id,
+        default_stdlib=default_stdlib,
     )
     return graph
 
@@ -395,6 +461,13 @@ def build_repl_graph(
     label = str(canonical_entry_path) if canonical_entry_path is not None else "<repl>"
     entry_source_id = SourceId(label=label)
 
+    seed_modules = dict(cached)
+    if STD_CORE_ID not in seed_modules:
+        std_core, next_start_id = _load_std_core(next_start_id)
+        seed_modules[STD_CORE_ID] = std_core
+    program = _with_default_stdlib_import(program, import_node_id=next_start_id)
+    next_start_id += 1
+
     entry_loaded = LoadedModule(
         module_id=ENTRY_ID,
         program=program,
@@ -408,6 +481,7 @@ def build_repl_graph(
         entry_loaded,
         roots=roots,
         canonical_entry_path=canonical_entry_path,
-        seed_modules=cached,
+        seed_modules=seed_modules,
         start_id=next_start_id,
+        default_stdlib=True,
     )

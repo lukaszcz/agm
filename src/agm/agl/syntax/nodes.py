@@ -290,11 +290,12 @@ class FuncDef:
     name: str
     params: tuple[Param, ...]
     return_type: TypeExpr
-    body: Expr
+    body: Expr | None
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     type_params: tuple[str, ...] = ()
     is_private: bool = False
+    is_builtin: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -706,6 +707,7 @@ class RecordDef:
     node_id: int = dc_field(compare=False)
     type_params: tuple[str, ...] = ()
     is_private: bool = False
+    is_builtin: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -728,6 +730,21 @@ class EnumDef:
     node_id: int = dc_field(compare=False)
     type_params: tuple[str, ...] = ()
     is_private: bool = False
+    is_builtin: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ExceptionDef:
+    """``exception Name [extends Base](fields...)`` declaration."""
+
+    name: str
+    fields: tuple[FieldDef, ...]
+    base: str | None
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+    type_params: tuple[str, ...] = ()
+    is_private: bool = False
+    is_builtin: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -817,6 +834,7 @@ Declaration = (
     FuncDef
     | RecordDef
     | EnumDef
+    | ExceptionDef
     | TypeAlias
     | ParamDecl
     | ProgramDecl

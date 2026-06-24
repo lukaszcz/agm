@@ -15,6 +15,25 @@ replaced by `.` and the `.agl` suffix stripped. For example, a file at
 The **entry module** is the program being run — it has no dot-path of its own
 and is always the root of the import graph.
 
+## Standard library
+
+The core standard library module is `std.core`. It defines common names such as
+`Option[T]`, `ExecResult`, `ParsePolicy`, `AgentRequest`, built-in exception
+types, and the host-implemented built-in functions.
+
+For batch execution, `std.core` is opened unqualified in the entry module by
+default. This is equivalent to an implicit leading:
+
+```agl
+import std.core
+```
+
+Use `agm exec --no-stdlib` to disable that implicit import. Explicit
+`import std.core` declarations still work and follow the same duplicate and
+ambiguity rules as any other import. If another open import also exports
+`Option`, for example, an unqualified use of `Option` is ambiguous until one of
+the references is qualified.
+
 ## Importing modules
 
 ```ebnf

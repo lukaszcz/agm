@@ -404,7 +404,7 @@ Sandbox settings resolution:
 
 | Command | Description |
 |---------|-------------|
-| `agm exec [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--log\|--log-file PATH\|--no-log] [-I DIR]... (FILE \| -c COMMAND) [--PARAM VALUE]...` | Execute an AgL workflow program |
+| `agm exec [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--log\|--log-file PATH\|--no-log] [--no-stdlib] [-I DIR]... (FILE \| -c COMMAND) [--PARAM VALUE]...` | Execute an AgL workflow program |
 | `agm repl [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--confirm-agents] [--quiet] [--log\|--log-file PATH\|--no-log]` | Start an interactive AgL REPL |
 
 ### `agm exec (FILE | -c COMMAND)`
@@ -424,6 +424,7 @@ or two or more distinct files are static errors (exit 1 with a diagnostic).
 agm exec [--strict-json|--no-strict-json]
          [--max-iters N] [--runner COMMAND]
          [--log|--log-file PATH|--no-log]
+         [--no-stdlib]
          [-I DIR]...
          (FILE | -c COMMAND) [--PARAM VALUE]...
 ```
@@ -446,6 +447,8 @@ Options:
   the file's directory (or cwd for `-c`), the global library root, and any roots declared in
   config. A module id found in two roots is an ambiguity error. This option is also how
   e2e/fixture tests point `agm exec` at test-specific module roots.
+- `--no-stdlib`: Do not automatically open `std.core` in the entry module. Explicit
+  `import std.core` still uses the normal module import semantics.
 - `--strict-json`: Require agents to return exactly one bare JSON value (no fences, prose, or
   repair). Overridable per call site with the `strict_json:` named argument to `ask`.
 - `--no-strict-json`: Use lenient JSON recovery (the default): the runtime recovers exactly

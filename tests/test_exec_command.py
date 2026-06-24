@@ -789,12 +789,18 @@ class TestExecParsesSourceOnce:
         def counting_load(
             entry_source: str,
             *,
-            entry_path: object,
+            entry_path: Path | None,
             roots: RootSet,
+            default_stdlib: bool = True,
         ) -> ModuleGraph:
             nonlocal load_calls
             load_calls += 1
-            return real_load(entry_source, entry_path=entry_path, roots=roots)  # type: ignore[arg-type]
+            return real_load(
+                entry_source,
+                entry_path=entry_path,
+                roots=roots,
+                default_stdlib=default_stdlib,
+            )
 
         def counting_resolve_graph(
             graph: ModuleGraph,
@@ -2464,10 +2470,16 @@ class TestExecPragmaPrecedence:
         def fake_prepare_program(
             source: str,
             *,
-            entry_path: object,
+            entry_path: Path | None,
             roots: RootSet,
+            default_stdlib: bool = True,
         ) -> object:
-            real_pg = real_prepare_program(source, entry_path=entry_path, roots=roots)  # type: ignore[arg-type]
+            real_pg = real_prepare_program(
+                source,
+                entry_path=entry_path,
+                roots=roots,
+                default_stdlib=default_stdlib,
+            )
             # Wrap the real PreparedGraph with an invalid timeout in config_pragmas.
             fake_pg = MagicMock()
             fake_pg.config_pragmas = {"timeout": "forever"}

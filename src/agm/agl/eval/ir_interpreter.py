@@ -131,7 +131,7 @@ from agm.agl.ir.operations import (
 )
 from agm.agl.ir.program import ExecutableProgram, FunctionDescriptor
 from agm.agl.ir.validate import InvalidIrError
-from agm.agl.modules.ids import PRELUDE_ID, ModuleId
+from agm.agl.modules.ids import PRELUDE_ID, STD_CORE_ID, ModuleId
 from agm.agl.runtime.agents import AgentRegistry
 from agm.agl.runtime.codec import ParseResult, _parse_contract_output
 from agm.agl.runtime.convert import StrictJsonParseError, parse_json_strict
@@ -1311,50 +1311,51 @@ class IrInterpreter:
 
         contract = self._program.contracts[contract_id]
 
-        if contract.is_unit:
-            return RecordValue(
-                nominal=NominalId(PRELUDE_ID, "AgentRequest"),
-                display_name="AgentRequest",
-                fields={
-                    "agent": TextValue(agent_name),
-                    "prompt": TextValue(prompt_text),
-                    "attempt": IntValue(0),
-                    "output_contract": EnumValue(
-                        nominal=NominalId(PRELUDE_ID, "OutputContractOption"),
-                        display_name="OutputContractOption",
-                        variant="None",
-                        fields={},
-                    ),
-                },
+        option_nominal = NominalId(STD_CORE_ID, "Option")
+
+        def _none() -> EnumValue:
+            return EnumValue(
+                nominal=option_nominal,
+                display_name="Option",
+                variant="None",
+                fields={},
             )
 
-        output_contract_value = RecordValue(
-            nominal=NominalId(PRELUDE_ID, "OutputContract"),
-            display_name="OutputContract",
-            fields={
-                "target_type": TextValue(contract.target_type_label),
-                "codec_name": TextValue(contract.codec_name),
-                "strict_json": JsonValue(contract.strict_json),
-                "format_instructions": TextValue(contract.format_instructions),
-                "json_schema": JsonValue(
-                    None if contract.json_schema is None
-                    else cast(object, json.loads(contract.json_schema))
-                ),
-                "structured_exec": BoolValue(contract.structured_exec),
-            },
-        )
+        def _some(value: Value) -> EnumValue:
+            return EnumValue(
+                nominal=option_nominal,
+                display_name="Option",
+                variant="Some",
+                fields={"value": value},
+            )
+
+        json_schema_value: Value
+        if contract.json_schema is None:
+            json_schema_value = _none()
+        else:
+            json_schema_value = _some(JsonValue(cast(object, json.loads(contract.json_schema))))
+
         return RecordValue(
             nominal=NominalId(PRELUDE_ID, "AgentRequest"),
             display_name="AgentRequest",
             fields={
                 "agent": TextValue(agent_name),
                 "prompt": TextValue(prompt_text),
+                "target_type": _none()
+                if contract.is_unit
+                else _some(TextValue(contract.target_type_label)),
+                "format_instructions": _none()
+                if not contract.format_instructions
+                else _some(TextValue(contract.format_instructions)),
+                "json_schema": json_schema_value,
                 "attempt": IntValue(0),
-                "output_contract": EnumValue(
-                    nominal=NominalId(PRELUDE_ID, "OutputContractOption"),
-                    display_name="OutputContractOption",
-                    variant="Some",
-                    fields={"value": output_contract_value},
+                "previous_error": _none(),
+                "metadata": JsonValue(
+                    {
+                        "codec_name": contract.codec_name,
+                        "strict_json": contract.strict_json,
+                        "structured_exec": contract.structured_exec,
+                    }
                 ),
             },
         )

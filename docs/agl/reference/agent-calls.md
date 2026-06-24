@@ -195,7 +195,7 @@ default applies; the portable default is **lenient recovery** (see below).
 ### `on_parse_error:`
 
 The parse policy for invalid structured output. The value is a `ParsePolicy`
-— one of two variants from the prelude enum:
+— one of two variants from the standard core enum:
 
 ```agl
 enum ParsePolicy
@@ -405,10 +405,9 @@ let r = ask-request("Anything goes")   # target type is text
 
 The target type drives the output contract exactly as it would for `ask`:
 a `Review` target selects the JSON codec, derives a JSON Schema, and produces
-format instructions; a `text` target selects the text codec. The contract is
-surfaced as `Some(value: ...)` on the returned
-`AgentRequest.output_contract`. A `unit` target produces `None` because its
-response is ignored and it has no output contract:
+format instructions; a `text` target selects the text codec. The returned
+`AgentRequest.target_type` is `Some(value: "...")` for parsed response types
+and `None` for `unit`, because a `unit` response is ignored:
 
 ```agl
 let r = ask-request::[unit]("Perform this task")
@@ -435,5 +434,6 @@ parse policy) but has no runtime effect since no call is made.
 ### Result
 
 The result is an `AgentRequest` record (see [Types](types.md)) with `attempt`
-set to `0`. Because no call is made, `ask-request` works even when no default
-agent is configured.
+set to `0`, `previous_error` set to `None`, and optional contract details
+represented with `Option[T]`. Because no call is made, `ask-request` works even
+when no default agent is configured.

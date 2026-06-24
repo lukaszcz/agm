@@ -45,7 +45,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import assert_never
 
-from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CORE_ID, ModuleId
 
 # ---------------------------------------------------------------------------
 # Primitive types (singletons-by-construction; frozen dataclasses)
@@ -779,6 +779,7 @@ _EXEC_RESULT_TYPE = RecordType(
         "stderr": TextType(),
         "timed_out": BoolType(),
     },
+    module_id=PRELUDE_ID,
 )
 
 # ``ParsePolicy`` — controls ``ask``/``exec`` error handling (plan D11).
@@ -790,12 +791,29 @@ _PARSE_POLICY_TYPE = EnumType(
         "Abort": {},
         "Retry": {"n": IntType()},
     },
+    module_id=PRELUDE_ID,
 )
 
-# ``OutputContract`` — the materialized output contract of an agent/exec call
-# site, surfaced as an AgL value by ``ask-request``.  ``strict_json`` and
-# ``json_schema`` use ``json`` because they are nullable (``null`` when the
-# codec is not JSON-based / when no schema applies).
+_OPTION_TEXT_TYPE = EnumType(
+    name="Option",
+    variants={
+        "None": {},
+        "Some": {"value": TextType()},
+    },
+    type_args=(TextType(),),
+    module_id=STD_CORE_ID,
+)
+
+_OPTION_JSON_TYPE = EnumType(
+    name="Option",
+    variants={
+        "None": {},
+        "Some": {"value": JsonType()},
+    },
+    type_args=(JsonType(),),
+    module_id=STD_CORE_ID,
+)
+
 _OUTPUT_CONTRACT_TYPE = RecordType(
     name="OutputContract",
     fields={
@@ -806,17 +824,16 @@ _OUTPUT_CONTRACT_TYPE = RecordType(
         "json_schema": JsonType(),
         "structured_exec": BoolType(),
     },
+    module_id=PRELUDE_ID,
 )
 
-# ``OutputContractOption`` — an explicit optional output contract.  ``unit``
-# agent calls use ``None`` because their response is intentionally discarded;
-# all parsed-output calls use ``Some``.
 _OUTPUT_CONTRACT_OPTION_TYPE = EnumType(
     name="OutputContractOption",
     variants={
         "None": {},
         "Some": {"value": _OUTPUT_CONTRACT_TYPE},
     },
+    module_id=PRELUDE_ID,
 )
 
 # ``AgentRequest`` — the request that the corresponding ``ask`` call would
@@ -829,9 +846,14 @@ _AGENT_REQUEST_TYPE = RecordType(
     fields={
         "agent": TextType(),
         "prompt": TextType(),
+        "target_type": _OPTION_TEXT_TYPE,
+        "format_instructions": _OPTION_TEXT_TYPE,
+        "json_schema": _OPTION_JSON_TYPE,
         "attempt": IntType(),
-        "output_contract": _OUTPUT_CONTRACT_OPTION_TYPE,
+        "previous_error": _OPTION_TEXT_TYPE,
+        "metadata": JsonType(),
     },
+    module_id=PRELUDE_ID,
 )
 
 BUILTIN_PRELUDE_TYPES: dict[str, Type] = {
@@ -844,6 +866,13 @@ BUILTIN_PRELUDE_TYPES: dict[str, Type] = {
 
 # Names of built-in prelude types (non-shadowable, like built-in exceptions).
 BUILTIN_PRELUDE_TYPE_NAMES: frozenset[str] = frozenset(BUILTIN_PRELUDE_TYPES)
+
+# Legacy built-in types kept for compatibility with already-compiled tests and
+# internal APIs.  They remain available as nominal types, but their constructors
+# are not exported into source scope because std.core replaces this surface.
+COMPATIBILITY_PRELUDE_TYPE_NAMES: frozenset[str] = frozenset(
+    {"OutputContract", "OutputContractOption"}
+)
 
 
 # ---------------------------------------------------------------------------

@@ -1060,6 +1060,11 @@ def exec_cmd(
         ),
         autocompletion=completion.complete_dir_argument,
     ),
+    no_stdlib: bool = typer.Option(
+        False,
+        "--no-stdlib",
+        help="Do not automatically open the core AgL standard library in the entry module.",
+    ),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
     # ``_RUN_CONTEXT_SETTINGS`` disables Click's built-in ``--help`` interception
@@ -1117,6 +1122,7 @@ def exec_cmd(
             log_file=log_file,
             log=log,
             module_paths=module_paths,
+            no_stdlib=no_stdlib,
         )
     )
 

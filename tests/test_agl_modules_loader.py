@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from agm.agl.syntax.nodes import Program
 
 from agm.agl.modules.errors import AmbiguousModule, ImportEntryError, ModuleNotFound
-from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
 from agm.agl.modules.loader import LoadedModule, ModuleGraph, build_repl_graph, load_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.syntax.nodes import ImportDecl
@@ -126,8 +126,9 @@ class TestGraphBuild:
         root = tmp_path / "r"
         root.mkdir()
         graph = load_graph("let x = 1", entry_path=None, roots=_roots(root))
-        assert len(graph.modules) == 1
+        assert len(graph.modules) == 2
         assert ENTRY_ID in graph.modules
+        assert STD_CORE_ID in graph.modules
 
     def test_imported_module_appears_in_graph(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
@@ -136,6 +137,20 @@ class TestGraphBuild:
         entry = "import util"
         graph = load_graph(entry, entry_path=None, roots=_roots(root))
         assert ModuleId.from_dotted("util") in graph.modules
+
+    def test_imported_module_without_default_stdlib(self, tmp_path: Path) -> None:
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(root, "util", "def one() -> int = 1\n")
+        graph = load_graph(
+            "import util\none()",
+            entry_path=None,
+            roots=_roots(root),
+            default_stdlib=False,
+        )
+        assert ModuleId.from_dotted("util") in graph.modules
+        util = graph.modules[ModuleId.from_dotted("util")]
+        assert not any(decl.module_path == STD_CORE_ID.segments for decl in util.imports)
 
     def test_transitive_import_resolved(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
@@ -195,8 +210,8 @@ class TestCycles:
         graph = load_graph("import a", entry_path=None, roots=_roots(root))
         assert ModuleId.from_dotted("a") in graph.modules
         assert ModuleId.from_dotted("b") in graph.modules
-        # Exactly 3 modules: entry + a + b
-        assert len(graph.modules) == 3
+        # Exactly 4 modules: std.core + entry + a + b
+        assert len(graph.modules) == 4
 
     def test_longer_cycle_terminates(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
@@ -205,7 +220,7 @@ class TestCycles:
         _write_module(root, "y", "import z")
         _write_module(root, "z", "import x")
         graph = load_graph("import x", entry_path=None, roots=_roots(root))
-        assert len(graph.modules) == 4  # entry + x + y + z
+        assert len(graph.modules) == 5  # std.core + entry + x + y + z
 
     def test_cycle_nodes_linked_in_sccs(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
@@ -560,8 +575,8 @@ class TestFileBasedEntry:
         _write_module(root, "mod")
         graph = load_graph("import mod", entry_path=None, roots=_roots(root))
         for mid, mod in graph.modules.items():
-            if mid == ENTRY_ID:
-                assert mod.path is None  # inline entry
+            if mid in (ENTRY_ID, STD_CORE_ID):
+                assert mod.path is None  # inline entry and synthetic stdlib
             else:
                 assert mod.path is not None
 
@@ -650,6 +665,26 @@ class TestBuildReplGraph:
             program2, next_id, path=None, cached=cached, roots=_roots(tmp_path)
         )
         assert mid not in new2
+
+    def test_cached_std_core_not_reloaded(self, tmp_path: Path) -> None:
+        """The REPL graph builder reuses cached std.core when present."""
+        program1 = _parse_for_repl("()")
+        graph1, next_id, _new1 = build_repl_graph(
+            program1, 0, path=None, cached={}, roots=_roots(tmp_path)
+        )
+        std_core = graph1.modules[STD_CORE_ID]
+
+        program2 = _parse_for_repl("let x: Option[int] = None\nx")
+        graph2, _next2, new2 = build_repl_graph(
+            program2,
+            next_id,
+            path=None,
+            cached={STD_CORE_ID: std_core},
+            roots=_roots(tmp_path),
+        )
+
+        assert graph2.modules[STD_CORE_ID] is std_core
+        assert STD_CORE_ID not in new2
 
     def test_path_sets_entry_source_id(self, tmp_path: Path) -> None:
         """When *path* is given, the entry source ID uses the canonical path label."""

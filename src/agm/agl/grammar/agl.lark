@@ -125,15 +125,21 @@ _sep: _NEWLINE | SEMICOLON
 
 ?declaration: record_def
             | enum_def
+            | exception_def
             | type_alias
             | param_decl
             | program_decl
             | agent_decl
             | config_pragma
             | func_def
+            | builtin_record_def
+            | builtin_enum_def
+            | builtin_exception_def
+            | builtin_func_def
             | import_decl
             | private_record_def
             | private_enum_def
+            | private_exception_def
             | private_type_alias
             | private_func_def
 
@@ -180,6 +186,15 @@ field_list: field_inline (COMMA field_inline)* COMMA?
 
 field_inline: field_name COLON type_expr
 
+// exception_def: record-like throwable nominal with an optional base exception.
+exception_def: "exception" name exception_base? exception_body
+
+exception_base: "extends" name
+
+exception_body: _INDENT field_def (_NEWLINE field_def)* _NEWLINE? _DEDENT -> exception_indent_body
+              | LPAR field_list? RPAR                                  -> exception_paren_body
+              | field_list                                             -> exception_inline_body
+
 // type_alias: "type" name type_params? = type_expr
 type_alias: "type" name type_params? EQ type_expr
 
@@ -216,6 +231,13 @@ pragma_value: "true"     -> pragma_true
 // inline expression.  The suite_expr alternative is unambiguous because
 // _NEWLINE does not start any expr form.
 func_def: "def" name type_params? LPAR param_list? RPAR THIN_ARROW type_expr EQ func_body
+
+// Host-implemented builtin function declaration. It has a signature but no body.
+builtin_func_def: "builtin" "def" name type_params? LPAR param_list? RPAR THIN_ARROW type_expr
+
+builtin_record_def: "builtin" record_def
+builtin_enum_def: "builtin" enum_def
+builtin_exception_def: "builtin" exception_def
 
 param_list: param_def (COMMA param_def)* COMMA?
 
@@ -625,6 +647,7 @@ import_item : name "as" name    -> import_item_rename
 // Private declaration wrappers
 private_record_def  : PRIVATE record_def
 private_enum_def    : PRIVATE enum_def
+private_exception_def : PRIVATE exception_def
 private_type_alias  : PRIVATE type_alias
 private_func_def    : PRIVATE func_def
 

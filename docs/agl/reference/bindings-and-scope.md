@@ -270,14 +270,14 @@ constructor for the rest of its scope, exactly like any other shadowing.
 def shadow(tagged: int) -> int = tagged * 10   # parameter hides the constructor
 ```
 
-The same applies to the **built-in** constructor names — the exception types
-(`Abort`, `Retry`, …) and prelude records (`ExecResult`, `AgentRequest`). They
-are conveniences, not reserved words: a `let`, `var`, `def`, or `param` may
-declare any of them, shadowing the built-in constructor for the rest of the
-scope.
+The same applies to the **standard core** constructor names — exception types
+(`Abort`, `AgentParseError`, …), enum variants (`Some`, `Retry`, …), and records
+(`ExecResult`, `AgentRequest`). They are conveniences, not reserved words: a
+`let`, `var`, `def`, or `param` may declare any of them, shadowing the
+constructor for the rest of the scope.
 
 ```agl
-let ExecResult = 0          # shadows the prelude record constructor
+let ExecResult = 0          # shadows the standard core record constructor
 def Retry(n: int) -> int = n + 1   # shadows the exception constructor
 ```
 

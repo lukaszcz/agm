@@ -141,7 +141,7 @@ def run(args: ExecArgs) -> None:
     )
 
     prepared = WorkflowRuntime.prepare_program(
-        source, entry_path=entry_path, roots=roots
+        source, entry_path=entry_path, roots=roots, default_stdlib=not args.no_stdlib
     )
     pragmas = prepared.config_pragmas
 

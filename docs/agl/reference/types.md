@@ -153,10 +153,23 @@ capability handles, not data.
 
 See [Functions](functions.md) for the declaration and call syntax.
 
-## Prelude types
+## Standard core types
 
-The following types are defined by the language prelude and are available
-without any `record` or `enum` declaration.
+The following types are defined by `std.core`, which is opened unqualified in
+the entry module by default.
+
+### `Option[T]`
+
+A generic enum for optional values:
+
+```text
+enum Option[T]
+  | None
+  | Some(value: T)
+```
+
+`null` is only a value of type `json`; ordinary AgL types are not nullable.
+Use `Option[T]` when a value may be absent.
 
 ### `ExecResult`
 
@@ -185,42 +198,27 @@ enum ParsePolicy
 `Abort` is the portable default. `Retry(n: N)` permits up to `N`
 corrective retries after the initial attempt.
 
-### `AgentRequest` and `OutputContract`
+### `AgentRequest`
 
-The records surfaced by `ask-request` (see [Agent calls](agent-calls.md)).
 `AgentRequest` is the first-attempt request that the matching `ask` call would
-dispatch to its agent:
+dispatch to its agent (see [Agent calls](agent-calls.md)):
 
 ```text
 record AgentRequest
-  agent:           text
-  prompt:          text
-  attempt:         int
-  output_contract: OutputContractOption
+  agent:               text
+  prompt:              text
+  target_type:         Option[text]
+  format_instructions: Option[text]
+  json_schema:         Option[json]
+  attempt:             int
+  previous_error:      Option[text]
+  metadata:            json
 ```
 
-```text
-enum OutputContractOption
-  | None
-  | Some(value: OutputContract)
-```
-
-`None` is used for a `unit` response target. `Some` contains the contract for
-all response types that are parsed.
-
-`OutputContract` carries the materialized contract for the call site:
-
-```text
-record OutputContract
-  target_type:         text
-  codec_name:          text
-  strict_json:         json   (* null when the codec is not JSON-based *)
-  format_instructions: text
-  json_schema:         json   (* null when no schema applies *)
-  structured_exec:     bool
-```
-
-`target_type` is the type's display name (e.g. `"Review"`, `"text"`).
+`target_type` is `None` for a `unit` response target and `Some("Review")`,
+`Some("text")`, etc. otherwise. `format_instructions` and `json_schema` are
+`None` when no such contract data applies. `previous_error` is `None` for
+`ask-request` because it constructs only the first-attempt request.
 
 ## Record types
 
@@ -251,6 +249,10 @@ they have the same name and the same fields — see
 A record may be generic — `record Box[T]` then a field `value: T`
 (see [Generics](generics.md)).
 
+`builtin record` is the body-equivalent form for host-recognized nominal record
+types in `std.core`. The name and full field shape must match a recognized
+built-in type exactly.
+
 ## Enum types
 
 An `enum` declares a tagged union (algebraic data type). Variants are
@@ -276,6 +278,9 @@ Construction, qualification, and ambiguity rules are covered in
 [Expressions](expressions.md); destructuring in
 [Pattern matching](pattern-matching.md); the JSON wire shape (the `"$case"`
 tag) in [Agent calls](agent-calls.md).
+
+`builtin enum` similarly declares a host-recognized nominal enum type. Its
+variant names and payload fields must match the built-in shape exactly.
 
 ## Module-qualified type identity
 

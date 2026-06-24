@@ -71,6 +71,7 @@ from agm.agl.syntax.nodes import (
     DictLit,
     Do,
     EnumDef,
+    ExceptionDef,
     Expr,
     FieldAccess,
     FuncDef,
@@ -412,7 +413,7 @@ class _Resolver:
 
     def _declare_function(self, decl: FuncDef) -> None:
         """Validate and record a function declaration."""
-        if decl.name in _RESERVED_NAMES:
+        if decl.name in _RESERVED_NAMES and not decl.is_builtin:
             raise AglScopeError(
                 f"'{decl.name}' is a built-in name and cannot be used as a "
                 f"function name.",
@@ -447,7 +448,7 @@ class _Resolver:
 
         local_type_names: set[str] = set()
         for item in program.body.items:
-            if isinstance(item, (RecordDef, EnumDef, TypeAlias)):
+            if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
                 if item.name in local_type_names:
                     raise AglScopeError(
                         f"Type name '{item.name}' is already declared in this scope.",
@@ -459,7 +460,9 @@ class _Resolver:
             elif isinstance(item, FuncDef):
                 self._validate_type_params(item)
 
-    def _validate_type_params(self, decl: FuncDef | RecordDef | EnumDef | TypeAlias) -> None:
+    def _validate_type_params(
+        self, decl: FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias
+    ) -> None:
         """Raise AglScopeError if *decl* has duplicate type-parameter names."""
         seen: set[str] = set()
         for tp in decl.type_params:
@@ -490,6 +493,7 @@ class _Resolver:
         from agm.agl.typecheck.types import (  # local import avoids circular dep
             BUILTIN_EXCEPTIONS,
             BUILTIN_PRELUDE_TYPES,
+            COMPATIBILITY_PRELUDE_TYPE_NAMES,
             EnumType,
         )
 
@@ -502,9 +506,11 @@ class _Resolver:
                 owner_decl_node_id=_BUILTIN_CONSTRUCTOR_NODE_ID,
                 type_params=(),
             )
-            self._constructor_candidates.setdefault(exc_name, []).append(cref)
+            self._add_constructor_candidate(exc_name, cref)
 
         for type_name, type_val in BUILTIN_PRELUDE_TYPES.items():
+            if type_name in COMPATIBILITY_PRELUDE_TYPE_NAMES:
+                continue
             if isinstance(type_val, EnumType):
                 # Register variants that don't conflict with exception names.
                 # Conflicting variants (e.g. ParsePolicy.Abort ↔ Abort exception)
@@ -517,7 +523,7 @@ class _Resolver:
                             owner_decl_node_id=_BUILTIN_CONSTRUCTOR_NODE_ID,
                             type_params=(),
                         )
-                        self._constructor_candidates.setdefault(variant_name, []).append(cref)
+                        self._add_constructor_candidate(variant_name, cref)
             else:
                 cref = ConstructorRef(
                     owner_name=type_name,
@@ -525,7 +531,7 @@ class _Resolver:
                     owner_decl_node_id=_BUILTIN_CONSTRUCTOR_NODE_ID,
                     type_params=(),
                 )
-                self._constructor_candidates.setdefault(type_name, []).append(cref)
+                self._add_constructor_candidate(type_name, cref)
 
     def _add_constructor_candidate(self, ctor_key: str, cref: ConstructorRef) -> None:
         """Add *cref* to the candidates list for *ctor_key*.
@@ -568,6 +574,14 @@ class _Resolver:
                         type_params=item.type_params,
                     )
                     self._add_constructor_candidate(variant.name, cref)
+            elif isinstance(item, ExceptionDef):
+                cref = ConstructorRef(
+                    owner_name=item.name,
+                    variant=None,
+                    owner_decl_node_id=item.node_id,
+                    type_params=(),
+                )
+                self._add_constructor_candidate(item.name, cref)
 
     def _define_constructor_bindings(self) -> None:
         """Define each constructor name as a value binding in the current (root) scope.
@@ -849,7 +863,7 @@ class _Resolver:
                         span=item.span,
                     )
                 self._resolve_agent_decl(item)
-            elif isinstance(item, (RecordDef, EnumDef, TypeAlias)):
+            elif isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
                 self._resolve_type_decl(item)
             elif isinstance(item, LetDecl):
                 if is_non_entry_root:
@@ -944,7 +958,7 @@ class _Resolver:
         # evaluated in the function's DEFINITION scope (plan D5).
         self._resolve_params_and_body(node)
 
-    def _resolve_type_decl(self, node: RecordDef | EnumDef | TypeAlias) -> None:
+    def _resolve_type_decl(self, node: RecordDef | EnumDef | ExceptionDef | TypeAlias) -> None:
         """Reject type declarations outside the program root."""
         if not self._at_root:
             kind_word = (
@@ -952,6 +966,8 @@ class _Resolver:
                 if isinstance(node, RecordDef)
                 else "enum"
                 if isinstance(node, EnumDef)
+                else "exception"
+                if isinstance(node, ExceptionDef)
                 else "type"
             )
             raise AglScopeError(
@@ -1131,9 +1147,6 @@ class _Resolver:
     def _resolve_varref(self, node: VarRef) -> None:
         """Resolve a name reference.
 
-        Built-in names are only valid in call position; a bare VarRef to them
-        is an error (D6: they are not first-class values).
-
         When a VarRef resolves to a constructor_binding, look up the candidate set:
         - Exactly 1 candidate → record in constructor_refs.
         - ≥ 2 candidates → ambiguity error (D7).
@@ -1143,12 +1156,6 @@ class _Resolver:
         - ``node.module_qualifier.segments == ()`` (``::name``) → self-ref to own scope.
         - ``node.module_qualifier.segments != ()`` → qualified cross-module access.
         """
-        if node.name in _RESERVED_NAMES:
-            raise AglScopeError(
-                f"'{node.name}' is a built-in and cannot be used as a value.",
-                span=node.span,
-            )
-
         # Graph mode: handle module_qualifier and ImportEnv lookup.
         if self._import_env is not None and node.module_qualifier is not None:
             self._resolve_varref_qualified(node)
@@ -1161,6 +1168,11 @@ class _Resolver:
             if self._import_env is not None:
                 ref = self._lookup_import_env_unqualified(node)
             if ref is None:
+                if node.name in _RESERVED_NAMES:
+                    raise AglScopeError(
+                        f"'{node.name}' is a built-in and cannot be used as a value.",
+                        span=node.span,
+                    )
                 raise AglScopeError(
                     f"'{node.name}' is not defined.",
                     span=node.span,
@@ -1320,12 +1332,18 @@ class _Resolver:
         resolve to a binding).
         """
         callee = node.callee
-        if isinstance(callee, VarRef) and callee.name in _BUILTIN_CALL_NAMES:
-            # Built-in call: record classification; do NOT resolve callee VarRef.
+        if (
+            self._import_env is None
+            and isinstance(callee, VarRef)
+            and callee.name in _BUILTIN_CALL_NAMES
+        ):
             self._builtin_calls[node.node_id] = _BUILTIN_CALL_NAMES[callee.name]
         else:
-            # User-defined callee: resolve normally.
             self._resolve_expr(callee)
+            if isinstance(callee, VarRef) and callee.name in _BUILTIN_CALL_NAMES:
+                ref = self._resolution.get(callee.node_id)
+                if ref is not None and ref.kind is BinderKind.function_binding:
+                    self._builtin_calls[node.node_id] = _BUILTIN_CALL_NAMES[callee.name]
         # Resolve positional args.
         for arg in node.args:
             self._resolve_expr(arg)
@@ -1502,7 +1520,8 @@ class _Resolver:
                         span=param.span,
                     )
                 param_scope.define(param.name, ref)
-            self._resolve_expr_or_block(node.body)
+            if node.body is not None:
+                self._resolve_expr_or_block(node.body)
 
     # ------------------------------------------------------------------
     # Pattern variable binding

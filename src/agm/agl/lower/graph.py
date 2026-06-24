@@ -21,7 +21,7 @@ from agm.agl.ir.program import (
 )
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.lowerer import _LinkState, _Lowerer
-from agm.agl.modules.ids import PRELUDE_ID, ModuleId
+from agm.agl.modules.ids import PRELUDE_ID, STD_CORE_ID, ModuleId
 from agm.agl.syntax.nodes import AgentDecl, FuncDef
 from agm.agl.typecheck.graph import CheckedModuleGraph
 from agm.agl.typecheck.types import BUILTIN_EXCEPTIONS, EnumType, ExceptionType, RecordType
@@ -49,7 +49,7 @@ def lower_graph(
     # Step 1: Register a SourceFile for every module.
     module_source_ids: dict[ModuleId, SourceId] = {}
     for mid, cm in checked_graph.modules.items():
-        if mid in _already_linked:
+        if mid in _already_linked or mid == STD_CORE_ID:
             continue
         source_id = SourceId(link.next_source)
         link.next_source += 1
@@ -147,7 +147,7 @@ def lower_graph(
     # across ALL modules before any body is lowered (enables cross-module calls).
     module_lowerers: dict[ModuleId, _Lowerer] = {}
     for mid, cm in checked_graph.modules.items():
-        if mid in _already_linked:
+        if mid in _already_linked or mid == STD_CORE_ID:
             continue
         source_id = module_source_ids[mid]
         lowerer = _Lowerer(
@@ -162,7 +162,7 @@ def lower_graph(
         module_lowerers[mid] = lowerer
         body = cm.resolved.program.body
         for item in body.items:
-            if isinstance(item, FuncDef):
+            if isinstance(item, FuncDef) and not item.is_builtin:
                 lowerer._prealloc_funcdef(item)
             elif isinstance(item, AgentDecl):
                 lowerer._alloc_sym(
@@ -176,7 +176,7 @@ def lower_graph(
     # Step 4: Phase 2 — lower bodies.
     # Library modules first, entry last, so the insertion order of
     # executable_modules matches dependency order (Python dicts preserve order).
-    ordered_mids = [mid for mid in checked_graph.modules if not mid.is_entry]
+    ordered_mids = [mid for mid in checked_graph.modules if not mid.is_entry and mid != STD_CORE_ID]
     ordered_mids = [mid for mid in ordered_mids if mid not in _already_linked]
     ordered_mids.append(checked_graph.entry_id)
 

@@ -44,7 +44,7 @@ from typing import TypeGuard
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
-from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
 from agm.agl.scope.symbols import (
     BUILTIN_CALL_NAMES,
     BinderKind,
@@ -71,6 +71,7 @@ from agm.agl.syntax.nodes import (
     Do,
     ElseSentinel,
     EnumDef,
+    ExceptionDef,
     Expr,
     FieldAccess,
     FieldDef,
@@ -122,7 +123,9 @@ from agm.agl.typecheck.env import (
 )
 from agm.agl.typecheck.types import (
     BUILTIN_EXCEPTION_NAMES,
+    BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPE_NAMES,
+    BUILTIN_PRELUDE_TYPES,
     AgentType,
     BoolType,
     BottomType,
@@ -159,6 +162,7 @@ _BUILTIN_TYPE_NAMES: frozenset[str] = (
     | BUILTIN_EXCEPTION_NAMES
     | BUILTIN_PRELUDE_TYPE_NAMES
 )
+_BUILTIN_NOMINAL_NAMES: frozenset[str] = BUILTIN_EXCEPTION_NAMES | BUILTIN_PRELUDE_TYPE_NAMES
 
 # Built-in function names that user-defined defs may not shadow. Derived from
 # the single source of truth in ``scope.symbols`` so the two never drift.
@@ -166,6 +170,72 @@ _BUILTIN_FUNC_NAMES: frozenset[str] = frozenset(BUILTIN_CALL_NAMES)
 
 
 _IndexLike = IndexAccess | IndexTarget
+
+
+def _builtin_function_signature(name: str) -> FunctionSignature | None:
+    t = TypeVarType("T")
+    match name:
+        case "print":
+            return FunctionSignature(
+                params=(("value", t, False),), result=UnitType(), type_params=("T",)
+            )
+        case "render":
+            return FunctionSignature(
+                params=(("value", t, False),), result=TextType(), type_params=("T",)
+            )
+        case "parse_json":
+            return FunctionSignature(params=(("value", TextType(), False),), result=JsonType())
+        case "ask":
+            return FunctionSignature(params=(("prompt", TextType(), False),), result=TextType())
+        case "ask-request":
+            return FunctionSignature(
+                params=(("prompt", TextType(), False),),
+                result=RecordType(name="AgentRequest", fields={}),
+            )
+        case "exec":
+            return FunctionSignature(
+                params=(("command", TextType(), False),),
+                result=RecordType(name="ExecResult", fields={}),
+            )
+        case _:
+            return None
+
+
+def _signature_matches(actual: FunctionSignature, expected: FunctionSignature) -> bool:
+    if actual.type_params != expected.type_params:
+        return False
+    if len(actual.params) != len(expected.params):
+        return False
+    for (aname, atype, adefault), (ename, etype, edefault) in zip(
+        actual.params, expected.params
+    ):
+        if aname != ename or adefault != edefault:
+            return False
+        if isinstance(etype, RecordType):
+            if not isinstance(atype, RecordType) or atype.name != etype.name:
+                return False
+        elif atype != etype:
+            return False
+    if isinstance(expected.result, RecordType):
+        return isinstance(actual.result, RecordType) and actual.result.name == expected.result.name
+    return actual.result == expected.result
+
+
+def _type_shape_matches(actual: Type, expected: Type) -> bool:
+    if isinstance(expected, RecordType):
+        return isinstance(actual, RecordType) and actual.fields == expected.fields
+    if isinstance(expected, EnumType):
+        return isinstance(actual, EnumType) and actual.variants == expected.variants
+    if isinstance(expected, ExceptionType):
+        return isinstance(actual, ExceptionType) and actual.fields == expected.fields
+    return actual == expected
+
+
+def _expected_builtin_type(name: str) -> Type | None:
+    prelude = BUILTIN_PRELUDE_TYPES.get(name)
+    if prelude is not None:
+        return prelude
+    return BUILTIN_EXCEPTIONS.get(name)
 
 
 def _is_index_like(node: object) -> TypeGuard[_IndexLike]:
@@ -208,6 +278,7 @@ class _TypeBuilder:
         # Index of record/enum definitions for on-demand phase-2 building.
         self._record_defs: dict[str, RecordDef] = {}
         self._enum_defs: dict[str, EnumDef] = {}
+        self._exception_defs: dict[str, ExceptionDef] = {}
         # Names currently being resolved in phase 2 (cycle detection).
         self._building: set[str] = set()
         # Names that have been fully resolved in phase 2.
@@ -220,20 +291,27 @@ class _TypeBuilder:
         # ----------------------------------------------------------------
         for item in program.body.items:
             if isinstance(item, RecordDef):
-                self._register_name(item.name, item.span)
+                self._register_name(item.name, item.span, is_builtin=item.is_builtin)
                 self._env.unregister_name(item.name)
                 self._env.register_type(
                     item.name, RecordType(name=item.name, fields={}, module_id=self._module_id)
                 )
                 self._record_defs[item.name] = item
             elif isinstance(item, EnumDef):
-                self._register_name(item.name, item.span)
+                self._register_name(item.name, item.span, is_builtin=item.is_builtin)
                 self._env.unregister_name(item.name)
                 self._env.register_type(
                     item.name,
                     EnumType(name=item.name, variants={}, module_id=self._module_id),
                 )
                 self._enum_defs[item.name] = item
+            elif isinstance(item, ExceptionDef):
+                self._register_name(item.name, item.span, is_builtin=item.is_builtin)
+                self._env.register_type(
+                    item.name,
+                    ExceptionType(name=item.name, fields={}, abstract=item.base is None),
+                )
+                self._exception_defs[item.name] = item
             elif isinstance(item, TypeAlias):
                 self._register_name(item.name, item.span)
                 self._env.unregister_name(item.name)
@@ -249,6 +327,8 @@ class _TypeBuilder:
                 self._ensure_built_record(item.name)
             elif isinstance(item, EnumDef):
                 self._ensure_built_enum(item.name)
+            elif isinstance(item, ExceptionDef):
+                self._ensure_built_exception(item.name)
             elif isinstance(item, TypeAlias):
                 self._validate_alias(item)
 
@@ -263,7 +343,7 @@ class _TypeBuilder:
         """
         for item in program.body.items:
             if isinstance(item, RecordDef):
-                self._register_name(item.name, item.span)
+                self._register_name(item.name, item.span, is_builtin=item.is_builtin)
                 self._env.unregister_name(item.name)
                 self._env.register_type(
                     item.name,
@@ -271,13 +351,20 @@ class _TypeBuilder:
                 )
                 self._record_defs[item.name] = item
             elif isinstance(item, EnumDef):
-                self._register_name(item.name, item.span)
+                self._register_name(item.name, item.span, is_builtin=item.is_builtin)
                 self._env.unregister_name(item.name)
                 self._env.register_type(
                     item.name,
                     EnumType(name=item.name, variants={}, module_id=self._module_id),
                 )
                 self._enum_defs[item.name] = item
+            elif isinstance(item, ExceptionDef):
+                self._register_name(item.name, item.span, is_builtin=item.is_builtin)
+                self._env.register_type(
+                    item.name,
+                    ExceptionType(name=item.name, fields={}, abstract=item.base is None),
+                )
+                self._exception_defs[item.name] = item
             elif isinstance(item, TypeAlias):
                 self._register_name(item.name, item.span)
                 self._env.unregister_name(item.name)
@@ -299,8 +386,17 @@ class _TypeBuilder:
         """
         self._ensure_built_enum(name)
 
-    def _register_name(self, name: str, span: SourceSpan) -> None:
-        if name in _BUILTIN_TYPE_NAMES:
+    def ensure_built_exception(self, name: str) -> None:
+        """Public proxy for :meth:`_ensure_built_exception`."""
+        self._ensure_built_exception(name)
+
+    def _register_name(self, name: str, span: SourceSpan, *, is_builtin: bool = False) -> None:
+        if is_builtin and name not in _BUILTIN_NOMINAL_NAMES:
+            raise AglTypeError(
+                f"Unknown builtin type '{name}'.",
+                span=span,
+            )
+        if name in _BUILTIN_TYPE_NAMES and not is_builtin:
             raise AglTypeError(
                 f"'{name}' is a built-in type name and cannot be redeclared.",
                 span=span,
@@ -344,6 +440,21 @@ class _TypeBuilder:
         self._building.discard(name)
         self._built.add(name)
 
+    def _ensure_built_exception(self, name: str) -> None:
+        """Build the exception type for *name* if not already built."""
+        if name in self._built:
+            return
+        stmt = self._exception_defs[name]
+        if name in self._building:
+            raise AglTypeError(
+                f"Exception type '{name}' is directly or indirectly recursive.",
+                span=self._declared[name],
+            )
+        self._building.add(name)
+        self._build_exception(stmt)
+        self._building.discard(name)
+        self._built.add(name)
+
     def _build_record(self, stmt: RecordDef) -> None:
         if stmt.type_params:
             self._build_generic_record(stmt)
@@ -359,9 +470,13 @@ class _TypeBuilder:
             seen_fields[fd.name] = fd.span
             field_type = self._resolve_field_type(fd, stmt.name)
             fields[fd.name] = field_type
-        self._env.register_type(
-            stmt.name, RecordType(name=stmt.name, fields=fields, module_id=self._module_id)
+        typ = RecordType(
+            name=stmt.name,
+            fields=fields,
+            module_id=PRELUDE_ID if stmt.is_builtin else self._module_id,
         )
+        self._validate_builtin_type_shape(stmt, typ)
+        self._env.register_type(stmt.name, typ)
 
     def _build_enum(self, stmt: EnumDef) -> None:
         if stmt.type_params:
@@ -388,9 +503,56 @@ class _TypeBuilder:
                 seen_vfields[fd.name] = fd.span
                 vfields[fd.name] = self._resolve_field_type(fd, f"{stmt.name}.{vd.name}")
             variants[vd.name] = vfields
-        self._env.register_type(
-            stmt.name, EnumType(name=stmt.name, variants=variants, module_id=self._module_id)
+        typ = EnumType(
+            name=stmt.name,
+            variants=variants,
+            module_id=PRELUDE_ID if stmt.is_builtin else self._module_id,
         )
+        self._validate_builtin_type_shape(stmt, typ)
+        self._env.register_type(stmt.name, typ)
+
+    def _build_exception(self, stmt: ExceptionDef) -> None:
+        fields: dict[str, Type] = {}
+        if stmt.base is not None:
+            if stmt.base in self._exception_defs:
+                self._ensure_built_exception(stmt.base)
+            base_type = self._env.resolve_named_type(stmt.base)
+            if not isinstance(base_type, ExceptionType):
+                raise AglTypeError(
+                    f"Exception '{stmt.name}' extends unknown exception '{stmt.base}'.",
+                    span=stmt.span,
+                )
+            fields.update(base_type.fields)
+        seen_fields: dict[str, SourceSpan] = {}
+        for fd in stmt.fields:
+            if fd.name in fields or fd.name in seen_fields:
+                raise AglTypeError(
+                    f"Duplicate field '{fd.name}' in exception '{stmt.name}'.",
+                    span=fd.span,
+                )
+            seen_fields[fd.name] = fd.span
+            field_type = self._resolve_field_type(fd, stmt.name)
+            fields[fd.name] = field_type
+        typ = ExceptionType(
+            name=stmt.name,
+            fields=fields,
+            abstract=stmt.base is None,
+        )
+        self._validate_builtin_type_shape(stmt, typ)
+        self._env.register_type(stmt.name, typ)
+
+    def _validate_builtin_type_shape(
+        self, stmt: RecordDef | EnumDef | ExceptionDef, typ: Type
+    ) -> None:
+        if not stmt.is_builtin:
+            return
+        expected = _expected_builtin_type(stmt.name)
+        assert expected is not None
+        if not _type_shape_matches(typ, expected):
+            raise AglTypeError(
+                f"Builtin type '{stmt.name}' has an invalid definition.",
+                span=stmt.span,
+            )
 
     def _resolve_field_type(
         self, fd: FieldDef, owner: str, type_vars: frozenset[str] = frozenset()
@@ -411,6 +573,8 @@ class _TypeBuilder:
                 self._ensure_built_record(name)
             elif name in self._enum_defs:
                 self._ensure_built_enum(name)
+            elif name in self._exception_defs:
+                self._ensure_built_exception(name)
             elif self._env.get_alias_target_expr(name) is not None:
                 if name not in _alias_seen:
                     self._ensure_referenced_type_built(
@@ -427,6 +591,8 @@ class _TypeBuilder:
                 self._ensure_built_record(name)
             elif name in self._enum_defs:
                 self._ensure_built_enum(name)
+            elif name in self._exception_defs:
+                self._ensure_built_exception(name)
             for arg in type_expr.args:
                 self._ensure_referenced_type_built(arg, _alias_seen)
 
@@ -571,9 +737,14 @@ class _Checker:
                 f"'{node.name}' is a built-in type name and cannot be used as a function name.",
                 span=node.span,
             )
-        if node.name in _BUILTIN_FUNC_NAMES:
+        if node.name in _BUILTIN_FUNC_NAMES and not node.is_builtin:
             raise AglTypeError(
                 f"'{node.name}' is a built-in function name and cannot be redefined.",
+                span=node.span,
+            )
+        if node.is_builtin and node.name not in _BUILTIN_FUNC_NAMES:
+            raise AglTypeError(
+                f"Unknown builtin function '{node.name}'.",
                 span=node.span,
             )
         type_vars: frozenset[str] = frozenset(node.type_params)
@@ -599,6 +770,14 @@ class _Checker:
         sig = FunctionSignature(
             params=tuple(params), result=result_type, type_params=node.type_params
         )
+        if node.is_builtin:
+            expected_sig = _builtin_function_signature(node.name)
+            assert expected_sig is not None
+            if not _signature_matches(sig, expected_sig):
+                raise AglTypeError(
+                    f"Builtin function '{node.name}' has an invalid signature.",
+                    span=node.span,
+                )
         self._env.register_function_signature(node.name, sig)
         # Register by node_id so that cross-module callee signature lookups in
         # _check_declared_name_call find the correct signature even when another
@@ -656,7 +835,7 @@ class _Checker:
             # Signature already registered in pre-pass; check body now.
             self._check_funcdef_body(item)
             return UnitType()
-        if isinstance(item, (RecordDef, EnumDef, TypeAlias, ConfigPragma)):
+        if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias, ConfigPragma)):
             return UnitType()
         if isinstance(item, AgentDecl):
             self._env.set_binding_type(item.node_id, AgentType())
@@ -686,6 +865,9 @@ class _Checker:
         """Check the body of a ``def`` against its registered signature."""
         sig = self._env.get_function_signature(node.name)
         assert sig is not None, f"FuncDef '{node.name}' not pre-registered"
+        if node.is_builtin:
+            return
+        assert node.body is not None, f"FuncDef '{node.name}' has no body"
         # Save and update current type vars for this def's scope. A non-generic
         # def resets the set to empty (defs never nest, but this stays correct
         # regardless): the body's annotations see exactly this def's type vars.

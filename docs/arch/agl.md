@@ -46,7 +46,7 @@ The unified expression nodes in `agm.agl.syntax.nodes` that replaced the former
   statement/expression variants. `If` without `else` yields `unit`; `If` with
   `else` yields the common branch type.
 - `Call(callee, args, named_args)` — the single call node for all invocations
-  (user `def`s, built-ins `print`/`render`/`exec`/`ask`/`parse_json`,
+  (user `def`s, `std.core` built-ins `print`/`render`/`exec`/`ask`/`parse_json`,
   function values).
   Both the parenthesized form `f(a, b, name: v)` and the single-arg sugar `f x`
   desugar to `Call`; the sugar argument may itself be a postfix call such as
@@ -88,11 +88,11 @@ side tables live in `ResolvedProgram` (scope pass output) and `CheckedProgram`
 (typecheck pass output).
 
 A key v2 side table: `ResolvedProgram.builtin_calls` — a `dict[int, BuiltinKind]`
-mapping `Call.node_id` to `PRINT`, `EXEC`, or `ASK`. The scope pass populates
-this when the callee of a `Call` node is one of the three built-in names; it does
-**not** attempt to resolve the callee as an ordinary variable reference in that
-case. Typecheck and eval consult this table to dispatch to the correct built-in
-typing rule and evaluation path.
+mapping `Call.node_id` to a recognized host built-in such as `PRINT`, `EXEC`, or
+`ASK`. In graph mode these names are ordinary `builtin def` declarations from
+`std.core`; the resolver classifies a call as built-in after the callee resolves
+to one of those declarations. Typecheck and eval consult this table to dispatch
+to the correct built-in typing rule and evaluation path.
 
 ## Scope pass
 
@@ -110,14 +110,13 @@ typing rule and evaluation path.
 a `let`/`var` binder scopes over the remaining items of the enclosing `Block`.
 A block ending in a `let` with no continuation is a static error.
 
-Built-in call classification: when the `Call.callee` is a `VarRef` whose name
-is `print`, `render`, `exec`, `ask`, `ask-request`, or `parse_json`, the
-resolver records the `BuiltinKind` in `builtin_calls` and skips the ordinary
-variable lookup for that name.
+Built-in call classification: when the `Call.callee` resolves to a recognized
+`builtin def` such as `print`, `render`, `exec`, `ask`, `ask-request`, or
+`parse_json`, the resolver records the `BuiltinKind` in `builtin_calls`.
 
 **Constructors as value bindings**: record and enum-variant constructors are
 resolved in the ordinary value namespace, not a separate one. A pre-pass collects
-candidates from every `RecordDef`/`EnumDef` (plus seeded built-in/prelude
+candidates from every `RecordDef`/`EnumDef` (plus seeded built-in/std.core
 constructors) into `ResolvedProgram.constructor_candidates` (name → ordered
 `ConstructorRef` tuple). A single candidate resolves to a `ConstructorRef` in the
 `constructor_refs` side table (keyed by the `VarRef`/`Call` node); two or more
@@ -219,11 +218,11 @@ casts to/from `unit`/`agent`/function types) are static errors. Nominal types
 Implicit assignability to `json` is unchanged — nominal values are still not
 JSON-shaped. `as?` nodes are always typed as `bool` regardless of source/target.
 
-The prelude types `ExecResult` (a record with `stdout`, `stderr`, `exit_code`,
-`timed_out`) and `ParsePolicy` (enum `Abort | Retry(n: int)`) are registered as
-built-in types available without user declarations. Runtime failures such as
-`RecursionError`, `IndexError`, and `KeyError` are built-in catchable
-exceptions.
+The standard core types `Option`, `ExecResult` (a record with `stdout`,
+`stderr`, `exit_code`, `timed_out`), and `ParsePolicy` (enum
+`Abort | Retry(n: int)`) are registered through `std.core` builtin declarations.
+Runtime failures such as `RecursionError`, `IndexError`, and `KeyError` are
+built-in catchable exceptions.
 
 Function and agent types are **not JSON-shaped**: the codec-selection and
 `is_json_shaped` logic rejects them. Rendering can still display them as opaque

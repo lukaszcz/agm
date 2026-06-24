@@ -386,6 +386,31 @@ class AstBuilder(Transformer):
     field_inline = field_def
 
     # ------------------------------------------------------------------
+    # exception_def / exception_body
+    # ------------------------------------------------------------------
+
+    def exception_def(self, meta: Meta, args: _Args) -> syntax.ExceptionDef:
+        # Grammar: "exception" name exception_base? exception_body
+        name_tok = _find_name_token(args)
+        base = next((a for a in args if type(a) is str), None)
+        fields = _find_field_tuple(args)
+        return syntax.ExceptionDef(
+            name=str(name_tok),
+            fields=fields,
+            base=base,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    def exception_base(self, meta: Meta, args: _Args) -> str:
+        name_tok = _find_name_token(args)
+        return str(name_tok)
+
+    exception_indent_body = record_indent_body
+    exception_paren_body = record_paren_body
+    exception_inline_body = record_paren_body
+
+    # ------------------------------------------------------------------
     # type_alias
     # ------------------------------------------------------------------
 
@@ -428,6 +453,27 @@ class AstBuilder(Transformer):
             type_params=type_params_val,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
+        )
+
+    def builtin_func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
+        """builtin_func_def: "builtin" "def" name type_params? (...) -> type_expr"""
+        name_tok = _find_name_token(args)
+        type_params_val: tuple[str, ...] = ()
+        for a in args:
+            if _is_str_tuple(a):
+                type_params_val = cast(tuple[str, ...], a)
+        params, return_type, body = self._split_params_type_body(args)
+        assert return_type is not None, "builtin_func_def: no return type"
+        assert body is None, "builtin_func_def: unexpected body"
+        return syntax.FuncDef(
+            name=str(name_tok),
+            params=params,
+            return_type=return_type,
+            body=None,
+            type_params=type_params_val,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+            is_builtin=True,
         )
 
     def param_list(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
@@ -1599,6 +1645,7 @@ class AstBuilder(Transformer):
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
             is_private=True,
+            is_builtin=rec.is_builtin,
         )
 
     def private_enum_def(self, meta: Meta, args: _Args) -> syntax.EnumDef:
@@ -1611,6 +1658,21 @@ class AstBuilder(Transformer):
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
             is_private=True,
+            is_builtin=e.is_builtin,
+        )
+
+    def private_exception_def(self, meta: Meta, args: _Args) -> syntax.ExceptionDef:
+        """private_exception_def: PRIVATE exception_def"""
+        exc = next(a for a in args if isinstance(a, syntax.ExceptionDef))
+        return syntax.ExceptionDef(
+            name=exc.name,
+            fields=exc.fields,
+            base=exc.base,
+            type_params=exc.type_params,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+            is_private=True,
+            is_builtin=exc.is_builtin,
         )
 
     def private_type_alias(self, meta: Meta, args: _Args) -> syntax.TypeAlias:
@@ -1637,6 +1699,47 @@ class AstBuilder(Transformer):
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
             is_private=True,
+            is_builtin=f.is_builtin,
+        )
+
+    def builtin_record_def(self, meta: Meta, args: _Args) -> syntax.RecordDef:
+        """builtin_record_def: BUILTIN record_def"""
+        rec = next(a for a in args if isinstance(a, syntax.RecordDef))
+        return syntax.RecordDef(
+            name=rec.name,
+            fields=rec.fields,
+            type_params=rec.type_params,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+            is_private=rec.is_private,
+            is_builtin=True,
+        )
+
+    def builtin_enum_def(self, meta: Meta, args: _Args) -> syntax.EnumDef:
+        """builtin_enum_def: BUILTIN enum_def"""
+        e = next(a for a in args if isinstance(a, syntax.EnumDef))
+        return syntax.EnumDef(
+            name=e.name,
+            variants=e.variants,
+            type_params=e.type_params,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+            is_private=e.is_private,
+            is_builtin=True,
+        )
+
+    def builtin_exception_def(self, meta: Meta, args: _Args) -> syntax.ExceptionDef:
+        """builtin_exception_def: BUILTIN exception_def"""
+        exc = next(a for a in args if isinstance(a, syntax.ExceptionDef))
+        return syntax.ExceptionDef(
+            name=exc.name,
+            fields=exc.fields,
+            base=exc.base,
+            type_params=exc.type_params,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+            is_private=exc.is_private,
+            is_builtin=True,
         )
 
     # ------------------------------------------------------------------

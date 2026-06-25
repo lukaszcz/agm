@@ -186,7 +186,17 @@ def _builtin_function_signature(name: str) -> FunctionSignature | None:
         case "parse_json":
             return FunctionSignature(params=(("value", TextType(), False),), result=JsonType())
         case "ask":
-            return FunctionSignature(params=(("prompt", TextType(), False),), result=TextType())
+            return FunctionSignature(
+                params=(
+                    ("prompt", TextType(), False),
+                    ("agent", AgentType(), True),
+                    ("format", TextType(), True),
+                    ("strict_json", BoolType(), True),
+                    ("on_parse_error", EnumType(name="ParsePolicy", variants={}), True),
+                ),
+                result=t,
+                type_params=("T",),
+            )
         case "ask-request":
             return FunctionSignature(
                 params=(("prompt", TextType(), False),),
@@ -201,6 +211,18 @@ def _builtin_function_signature(name: str) -> FunctionSignature | None:
             return None
 
 
+def _builtin_function_signature_alternates(name: str) -> tuple[FunctionSignature, ...]:
+    expected = _builtin_function_signature(name)
+    if expected is None:
+        return ()
+    if name == "ask":
+        return (
+            expected,
+            FunctionSignature(params=(("prompt", TextType(), False),), result=TextType()),
+        )
+    return (expected,)
+
+
 def _signature_matches(actual: FunctionSignature, expected: FunctionSignature) -> bool:
     if actual.type_params != expected.type_params:
         return False
@@ -213,6 +235,9 @@ def _signature_matches(actual: FunctionSignature, expected: FunctionSignature) -
             return False
         if isinstance(etype, RecordType):
             if not isinstance(atype, RecordType) or atype.name != etype.name:
+                return False
+        elif isinstance(etype, EnumType):
+            if not isinstance(atype, EnumType) or atype.name != etype.name:
                 return False
         elif atype != etype:
             return False
@@ -771,9 +796,9 @@ class _Checker:
             params=tuple(params), result=result_type, type_params=node.type_params
         )
         if node.is_builtin:
-            expected_sig = _builtin_function_signature(node.name)
-            assert expected_sig is not None
-            if not _signature_matches(sig, expected_sig):
+            expected_sigs = _builtin_function_signature_alternates(node.name)
+            assert expected_sigs
+            if not any(_signature_matches(sig, expected_sig) for expected_sig in expected_sigs):
                 raise AglTypeError(
                     f"Builtin function '{node.name}' has an invalid signature.",
                     span=node.span,

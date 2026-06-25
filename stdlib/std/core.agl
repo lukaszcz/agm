@@ -64,6 +64,12 @@ builtin exception JsonParseError extends Exception(raw: text)
 builtin def print[T](value: T) -> unit
 builtin def render[T](value: T) -> text
 builtin def parse_json(value: text) -> json
-builtin def ask(prompt: text) -> text
+builtin def ask[T](
+  prompt: text,
+  agent: agent = null,
+  format: text = "",
+  strict_json: bool = false,
+  on_parse_error: ParsePolicy = ParsePolicy.Abort,
+) -> T
 builtin def ask-request(prompt: text) -> AgentRequest
 builtin def exec(command: text) -> ExecResult

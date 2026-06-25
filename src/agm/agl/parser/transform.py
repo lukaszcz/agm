@@ -481,7 +481,7 @@ class AstBuilder(Transformer):
         return tuple(a for a in args if isinstance(a, syntax.Param))
 
     def param_def(self, meta: Meta, args: _Args) -> syntax.Param:
-        """param_def: name COLON type_expr (EQ or_expr)?"""
+        """param_def: field_name COLON type_expr (EQ or_expr)?"""
         name_tok = _find_name_token(args)
         type_expr = _find_type_expr(args[1:])
         # Default value: the or_expr after EQ, if present.

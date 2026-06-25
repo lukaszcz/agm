@@ -242,7 +242,9 @@ builtin_exception_def: "builtin" exception_def
 param_list: param_def (COMMA param_def)* COMMA?
 
 // param_def default value uses or_expr (inside LPAR…RPAR, COMMA terminates).
-param_def: name COLON type_expr (EQ or_expr)?
+// `agent` is accepted as a parameter name so builtin signatures can expose
+// named arguments such as ask(..., agent: worker).
+param_def: field_name COLON type_expr (EQ or_expr)?
 
 // func_body: indented suite OR inline expr (full expr, including if/case/do/try/lambda).
 // The suite_expr alternative starts with _INDENT; expr never starts with _INDENT,

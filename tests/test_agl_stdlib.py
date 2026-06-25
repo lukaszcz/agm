@@ -6,6 +6,7 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.lower import lower_program
+from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.loader import load_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import parse_program
@@ -14,12 +15,21 @@ from agm.agl.scope.graph import resolve_graph
 from agm.agl.typecheck import check
 from agm.agl.typecheck.checker import (
     _builtin_function_signature,
+    _builtin_function_signature_alternates,
     _signature_matches,
     _type_shape_matches,
 )
 from agm.agl.typecheck.env import AglTypeError, FunctionSignature
 from agm.agl.typecheck.graph import check_graph
-from agm.agl.typecheck.types import IntType, RecordType, TextType
+from agm.agl.typecheck.types import (
+    AgentType,
+    BoolType,
+    EnumType,
+    IntType,
+    RecordType,
+    TextType,
+    TypeVarType,
+)
 
 _ROOTS = RootSet(frozenset({Path(__file__).resolve().parents[1] / "stdlib"}))
 _CAPS = HostCapabilities()
@@ -63,6 +73,29 @@ def test_builtin_function_signature_must_match() -> None:
         _check("builtin def print(value: text) -> text\n()\n")
 
 
+def test_stdlib_ask_signature_is_context_inferred_with_optional_arguments() -> None:
+    graph = load_graph("()\n", entry_path=None, roots=_ROOTS, default_stdlib=True)
+    resolved = resolve_graph(graph)
+    checked = check_graph(resolved, _CAPS)
+    std_core = checked.modules[ModuleId.from_dotted("std.core")]
+
+    ask_sig = std_core.function_signatures["ask"]
+
+    assert ask_sig.type_params == ("T",)
+    assert ask_sig.result == TypeVarType("T")
+    assert ask_sig.params[:4] == (
+        ("prompt", TextType(), False),
+        ("agent", AgentType(), True),
+        ("format", TextType(), True),
+        ("strict_json", BoolType(), True),
+    )
+    policy_name, policy_type, policy_has_default = ask_sig.params[4]
+    assert policy_name == "on_parse_error"
+    assert isinstance(policy_type, EnumType)
+    assert policy_type.name == "ParsePolicy"
+    assert policy_has_default is True
+
+
 def test_builtin_function_signature_mismatches_are_rejected() -> None:
     cases = [
         "builtin def print[T](value: T, extra: int) -> unit\n()\n",
@@ -79,6 +112,7 @@ def test_builtin_function_signature_mismatches_are_rejected() -> None:
 def test_builtin_signature_helpers_cover_negative_paths() -> None:
     sig = FunctionSignature(params=(("value", TextType(), False),), result=TextType())
     assert _builtin_function_signature("unknown") is None
+    assert _builtin_function_signature_alternates("unknown") == ()
     assert not _signature_matches(
         sig,
         FunctionSignature(params=(("value", IntType(), False),), result=TextType()),
@@ -97,6 +131,16 @@ def test_builtin_signature_helpers_cover_negative_paths() -> None:
         ),
         FunctionSignature(
             params=(("value", RecordType(name="R", fields={}), False),),
+            result=TextType(),
+        ),
+    )
+    assert not _signature_matches(
+        FunctionSignature(
+            params=(("value", EnumType(name="Actual", variants={}), False),),
+            result=TextType(),
+        ),
+        FunctionSignature(
+            params=(("value", EnumType(name="Expected", variants={}), False),),
             result=TextType(),
         ),
     )

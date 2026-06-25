@@ -317,6 +317,26 @@ def _collect_type_expr_deps(
     return deps
 
 
+def _collect_unqualified_type_name_deps(
+    name: str,
+    owning_mid: ModuleId,
+    import_env: ImportEnv,
+    all_type_keys: set[tuple[ModuleId, str]],
+) -> list[tuple[ModuleId, str]]:
+    """Return graph dependencies for an unqualified type name."""
+    own_key = (owning_mid, name)
+    if own_key in all_type_keys:
+        return [own_key]
+
+    deps: list[tuple[ModuleId, str]] = []
+    candidates = import_env.unqualified.get(name, frozenset())
+    for qn in candidates:
+        key = (qn[0], qn[1])
+        if key in all_type_keys:
+            deps.append(key)
+    return deps
+
+
 def _compute_type_deps(
     resolved_graph: ResolvedModuleGraph,
     all_type_keys: set[tuple[ModuleId, str]],
@@ -367,8 +387,12 @@ def _compute_type_deps(
                                 fd.type_expr, mid, import_env, all_type_keys
                             )
                         )
-                    if item.base is not None and (mid, item.base) in all_type_keys:
-                        item_deps.append((mid, item.base))
+                    if item.base is not None:
+                        item_deps.extend(
+                            _collect_unqualified_type_name_deps(
+                                item.base, mid, import_env, all_type_keys
+                            )
+                        )
                 else:
                     # Must be TypeAlias (outer isinstance guarantees one of the three).
                     item_deps.extend(

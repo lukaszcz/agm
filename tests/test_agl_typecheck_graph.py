@@ -530,6 +530,52 @@ def test_whole_graph_type_pre_pass_with_cycles(tmp_path: Path) -> None:
     assert mid_b in cg.modules  # type: ignore[attr-defined]
 
 
+def test_imported_exception_base_is_built_before_child(tmp_path: Path) -> None:
+    """A child exception inherits fields from an open-imported base exception."""
+    from agm.agl.typecheck.graph import CheckedModuleGraph
+    from agm.agl.typecheck.types import ExceptionType
+
+    modules = {
+        "entry": (
+            "import a\n"
+            "let value = a::make()\n"
+            "value"
+        ),
+        "a": (
+            "import z\n"
+            "exception Child extends Base\n"
+            "  code: int\n"
+            "def make() -> text =\n"
+            "  let err = Child(message: \"m\", detail: \"d\", code: 1)\n"
+            "  err.detail"
+        ),
+        "z": (
+            "exception Base extends Exception\n"
+            "  detail: text"
+        ),
+    }
+    cg: object = _check_graph(tmp_path, modules)
+    assert isinstance(cg, CheckedModuleGraph)
+    child_type = cg.graph_type_table[(ModuleId.from_dotted("a"), "Child")]
+    assert isinstance(child_type, ExceptionType)
+    assert "detail" in child_type.fields
+
+
+def test_imported_exception_base_ignores_non_type_export(tmp_path: Path) -> None:
+    """A same-named imported value is not treated as an exception-base dependency."""
+    modules = {
+        "entry": "import a\n()",
+        "a": (
+            "import z\n"
+            "exception Child extends Base\n"
+            "  code: int"
+        ),
+        "z": "def Base() -> int = 1",
+    }
+    with pytest.raises(AglTypeError, match="extends unknown exception 'Base'"):
+        _check_graph(tmp_path, modules)
+
+
 # ---------------------------------------------------------------------------
 # 17. Enum variant qualification: foo::Color.Red
 # ---------------------------------------------------------------------------

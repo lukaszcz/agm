@@ -36,6 +36,7 @@ def _canonicalize(path: Path) -> Path:
 def assemble_roots(
     *,
     invocation_root: Path,
+    stdlib_root: Path | None = None,
     lib_root: Path | None,
     configured: Iterable[tuple[str, Path]],
     cli: Iterable[str],
@@ -48,6 +49,9 @@ def assemble_roots(
     invocation_root:
         The cwd (for ``exec -c``) or the entry file's directory (for
         ``exec <file>``).
+    stdlib_root:
+        The selected standard-library module root (e.g. ``~/.agm/stdlib``), or
+        ``None`` if the caller does not want to add one.
     lib_root:
         The global library root (e.g. ``~/.agm/lib``), or ``None`` if not
         configured.  Applied as-is; caller supplies the default if desired.
@@ -75,11 +79,15 @@ def assemble_roots(
     # 1. Invocation root
     _add(invocation_root)
 
-    # 2. Global library root
+    # 2. Standard library root
+    if stdlib_root is not None:
+        _add(stdlib_root)
+
+    # 3. Global library root
     if lib_root is not None:
         _add(lib_root)
 
-    # 3. Configured roots — relative paths resolve against their origin dir
+    # 4. Configured roots — relative paths resolve against their origin dir
     for raw, origin_dir in configured:
         raw_path = Path(os.path.expanduser(raw))
         if raw_path.is_absolute():
@@ -87,7 +95,7 @@ def assemble_roots(
         else:
             _add(origin_dir / raw_path)
 
-    # 4. CLI roots — relative paths resolve against cwd
+    # 5. CLI roots — relative paths resolve against cwd
     for raw in cli:
         raw_path = Path(os.path.expanduser(raw))
         if raw_path.is_absolute():

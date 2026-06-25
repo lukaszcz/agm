@@ -37,7 +37,7 @@ from agm.config.general import (
     load_repl_config,
     save_repl_theme,
 )
-from agm.config.module_roots import load_module_roots, resolve_lib_root
+from agm.config.module_roots import load_module_roots, resolve_lib_root, resolve_stdlib_root
 from agm.core import dry_run
 from agm.core.log import prepare_trace_log_from_layers
 
@@ -93,6 +93,7 @@ def run(args: ReplArgs) -> None:
     mod_roots_cfg = load_module_roots(
         home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd
     )
+    stdlib_root = resolve_stdlib_root(home=ctx.home)
     lib_root = resolve_lib_root(mod_roots_cfg)
 
     session = ReplSession(
@@ -103,6 +104,7 @@ def run(args: ReplArgs) -> None:
         trace_path=trace_path,
         params_config_loader=_params_config_loader,
         cwd=ctx.cwd,
+        stdlib_root=stdlib_root,
         lib_root=lib_root,
         configured_roots=mod_roots_cfg.extra,
     )

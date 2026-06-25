@@ -6,7 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from agm.config.module_roots import ModuleRootsConfig, load_module_roots, resolve_lib_root
+import agm.config.module_roots as module_roots
+from agm.config.module_roots import (
+    ModuleRootsConfig,
+    load_module_roots,
+    resolve_lib_root,
+    resolve_stdlib_root,
+)
 
 
 class TestModuleRootsConfigConstruction:
@@ -261,3 +267,35 @@ class TestResolveLibRoot:
         result = resolve_lib_root(cfg)
         assert result == Path(os.path.expanduser("~/.agm/lib"))
         assert result.is_absolute()
+
+
+class TestResolveStdlibRoot:
+    def test_home_stdlib_is_selected_when_present(self, tmp_path: Path) -> None:
+        home = tmp_path / "home"
+        stdlib = home / ".agm" / "stdlib"
+        stdlib.mkdir(parents=True)
+
+        assert resolve_stdlib_root(home=home) == stdlib
+
+    def test_missing_home_stdlib_returns_source_tree_fallback(self, tmp_path: Path) -> None:
+        home = tmp_path / "home"
+        home.mkdir()
+
+        result = resolve_stdlib_root(home=home)
+
+        assert result.name == "stdlib"
+        assert result.is_dir()
+
+    def test_missing_all_stdlib_roots_returns_home_destination(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake_module = tmp_path / "pkg" / "src" / "agm" / "config" / "module_roots.py"
+        fake_module.parent.mkdir(parents=True)
+        fake_module.write_text("")
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setattr(module_roots, "__file__", str(fake_module))
+
+        result = resolve_stdlib_root(home=home)
+
+        assert result == home / ".agm" / "stdlib"

@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 
 MULTI_FILE_DIR = Path(__file__).parent / "agl" / "multi_file"
+REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 
 
 def _make_runtime(
@@ -45,7 +46,11 @@ def _run_graph(
     from agm.agl import WorkflowRuntime
     from agm.agl.modules.roots import RootSet
 
-    roots = RootSet(roots=frozenset(d.resolve() for d in roots_dirs if d.exists()))
+    roots = RootSet(
+        roots=frozenset(
+            {*(d.resolve() for d in roots_dirs if d.exists()), REPO_STDLIB_ROOT}
+        )
+    )
     prepared = WorkflowRuntime.prepare_program(
         entry_source, entry_path=entry_path, roots=roots
     )
@@ -349,7 +354,7 @@ class TestMultiFileParams:
         from agm.agl import WorkflowRuntime
         from agm.agl.modules.roots import RootSet
 
-        roots = RootSet(roots=frozenset([lib_dir.resolve()]))
+        roots = RootSet(roots=frozenset({lib_dir.resolve(), REPO_STDLIB_ROOT}))
         prepared = WorkflowRuntime.prepare_program(source, entry_path=None, roots=roots)
 
         rt = WorkflowRuntime()
@@ -369,7 +374,7 @@ class TestMultiFileParams:
         from agm.agl import WorkflowRuntime
         from agm.agl.modules.roots import RootSet
 
-        roots = RootSet(roots=frozenset([lib_dir.resolve()]))
+        roots = RootSet(roots=frozenset({lib_dir.resolve(), REPO_STDLIB_ROOT}))
         prepared = WorkflowRuntime.prepare_program(source, entry_path=None, roots=roots)
 
         rt = WorkflowRuntime()

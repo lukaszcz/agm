@@ -31,6 +31,8 @@ from agm.agl.typecheck.types import Type
 if TYPE_CHECKING:
     from agm.agl.runtime.codec import OutputCodec
 
+_STDLIB_ROOT = pathlib.Path(__file__).resolve().parents[1] / "stdlib"
+
 
 class TestWorkflowRuntimeConstructor:
     def test_default_constructor_uses_documented_defaults(self) -> None:
@@ -2857,7 +2859,7 @@ class TestPrepareProgram:
         from agm.agl.modules.roots import RootSet
         from agm.agl.runtime.runtime import PreparedGraph
 
-        roots = RootSet(roots=frozenset())
+        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = WorkflowRuntime.prepare_program(
             "let x = 1\nx", entry_path=None, roots=roots
         )
@@ -2871,7 +2873,7 @@ class TestPrepareProgram:
         """A syntax error is captured as a diagnostic, not raised."""
         from agm.agl.modules.roots import RootSet
 
-        roots = RootSet(roots=frozenset())
+        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = WorkflowRuntime.prepare_program(
             "let x = !!!", entry_path=None, roots=roots
         )
@@ -2884,7 +2886,7 @@ class TestPrepareProgram:
         """A missing import is captured as a diagnostic, not raised."""
         from agm.agl.modules.roots import RootSet
 
-        roots = RootSet(roots=frozenset())
+        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = WorkflowRuntime.prepare_program(
             "import nonexistent.module\nlet x = 1\nx",
             entry_path=None,
@@ -2904,7 +2906,7 @@ class TestPrepareProgram:
         lib_dir.mkdir()
         (lib_dir / "mymod.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
 
-        roots = RootSet(roots=frozenset([lib_dir]))
+        roots = RootSet(roots=frozenset({lib_dir, _STDLIB_ROOT}))
         entry = "import mymod\nlet r = add(2, 3)\nr"
         prepared = WorkflowRuntime.prepare_program(
             entry, entry_path=None, roots=roots
@@ -2918,7 +2920,7 @@ class TestPrepareProgram:
         """declared_agents reads from the entry module only."""
         from agm.agl.modules.roots import RootSet
 
-        roots = RootSet(roots=frozenset())
+        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = WorkflowRuntime.prepare_program(
             'agent reviewer\nask("q", agent: reviewer)',
             entry_path=None,
@@ -2933,7 +2935,7 @@ class TestPrepareProgram:
         """config_pragmas reads from the entry module."""
         from agm.agl.modules.roots import RootSet
 
-        roots = RootSet(roots=frozenset())
+        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = WorkflowRuntime.prepare_program(
             "config max_iters = 7\nlet x = 1\nx",
             entry_path=None,
@@ -2948,7 +2950,7 @@ class TestPrepareProgram:
         """When scope fails, declared_agents returns ()."""
         from agm.agl.modules.roots import RootSet
 
-        roots = RootSet(roots=frozenset())
+        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = WorkflowRuntime.prepare_program(
             "let x = undefined_name", entry_path=None, roots=roots
         )
@@ -2967,7 +2969,7 @@ class TestRunPreparedGraph:
         from agm.agl.modules.roots import RootSet
 
         rt = WorkflowRuntime()
-        roots = RootSet(roots=frozenset())
+        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = WorkflowRuntime.prepare_program(
             "let x = 1\nx", entry_path=None, roots=roots
         )
@@ -2985,7 +2987,7 @@ class TestRunPreparedGraph:
         lib_dir.mkdir()
         (lib_dir / "mymod.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
 
-        roots = RootSet(roots=frozenset([lib_dir.resolve()]))
+        roots = RootSet(roots=frozenset({lib_dir.resolve(), _STDLIB_ROOT}))
         entry = "import mymod\nlet r = add(2, 3)\nr"
         prepared = WorkflowRuntime.prepare_program(
             entry, entry_path=None, roots=roots
@@ -3001,7 +3003,7 @@ class TestRunPreparedGraph:
         """When the load phase captured a scope error, run_prepared_graph reports it."""
         from agm.agl.modules.roots import RootSet
 
-        roots = RootSet(roots=frozenset())
+        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = WorkflowRuntime.prepare_program(
             "let x = undefined_name", entry_path=None, roots=roots
         )
@@ -3017,7 +3019,7 @@ class TestRunPreparedGraph:
         """A missing import error from prepare_program flows through run_prepared_graph."""
         from agm.agl.modules.roots import RootSet
 
-        roots = RootSet(roots=frozenset())
+        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = WorkflowRuntime.prepare_program(
             "import missing.module\nlet x = 1\nx", entry_path=None, roots=roots
         )
@@ -3032,7 +3034,7 @@ class TestRunPreparedGraph:
         """Agents are entry-program-owned; a registered undeclared agent is an error."""
         from agm.agl.modules.roots import RootSet
 
-        roots = RootSet(roots=frozenset())
+        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = WorkflowRuntime.prepare_program(
             "let x = 1\nx", entry_path=None, roots=roots
         )
@@ -3048,7 +3050,7 @@ class TestRunPreparedGraph:
         """check_only=True produces call_sites from the entry module."""
         from agm.agl.modules.roots import RootSet
 
-        roots = RootSet(roots=frozenset())
+        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = WorkflowRuntime.prepare_program(
             'let r = ask("hello")\nprint r', entry_path=None, roots=roots
         )
@@ -3073,7 +3075,7 @@ class TestRunPreparedGraph:
             'def greet(name: text) -> text = "Hello, " + name + "!"\n'
         )
 
-        roots = RootSet(roots=frozenset([lib_dir.resolve()]))
+        roots = RootSet(roots=frozenset({lib_dir.resolve(), _STDLIB_ROOT}))
         entry = 'import utils.*\nlet n = add(2, 3)\nlet g = greet("World")\nprint n\nprint g\n'
         prepared = WorkflowRuntime.prepare_program(
             entry, entry_path=None, roots=roots
@@ -3094,7 +3096,7 @@ class TestRunPreparedGraph:
             "def square(n: int) -> int = n * n\n"
         )
 
-        roots = RootSet(roots=frozenset([lib_dir.resolve()]))
+        roots = RootSet(roots=frozenset({lib_dir.resolve(), _STDLIB_ROOT}))
         entry = "import calc qualified\nlet r = calc::square(5)\nr"
         prepared = WorkflowRuntime.prepare_program(
             entry, entry_path=None, roots=roots
@@ -3113,7 +3115,7 @@ class TestDiscoverParamsGraph:
         """discover_params_graph returns empty params for a program with no params."""
         from agm.agl.modules.roots import RootSet
 
-        roots = RootSet(roots=frozenset())
+        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = WorkflowRuntime.prepare_program(
             "let x = 1\nx", entry_path=None, roots=roots
         )
@@ -3128,7 +3130,7 @@ class TestDiscoverParamsGraph:
         """discover_params_graph discovers typed param declarations."""
         from agm.agl.modules.roots import RootSet
 
-        roots = RootSet(roots=frozenset())
+        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = WorkflowRuntime.prepare_program(
             "param name: text\nprint name",
             entry_path=None,
@@ -3146,7 +3148,7 @@ class TestDiscoverParamsGraph:
         """discover_params_graph returns diagnostics when the prepare phase failed."""
         from agm.agl.modules.roots import RootSet
 
-        roots = RootSet(roots=frozenset())
+        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = WorkflowRuntime.prepare_program(
             "import no_such_module\nlet x = 1", entry_path=None, roots=roots
         )
@@ -3176,7 +3178,7 @@ class TestPreparedGraphDefensivePaths:
         fake_graph.modules = {}  # empty — no ENTRY_ID
         assert ENTRY_ID not in fake_graph.modules
 
-        roots = RootSet(roots=frozenset())
+        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         pg = PreparedGraph(
             source="let x = 1",
             entry_path=None,
@@ -3197,7 +3199,7 @@ class TestPreparedGraphDefensivePaths:
         fake_graph = MagicMock()
         fake_graph.modules = {}
 
-        roots = RootSet(roots=frozenset())
+        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         pg = PreparedGraph(
             source="let x = 1",
             entry_path=None,
@@ -3216,7 +3218,7 @@ class TestPreparedGraphDefensivePaths:
 
         from agm.agl.modules.roots import RootSet
 
-        roots = RootSet(roots=frozenset([tmp_path.resolve()]))
+        roots = RootSet(roots=frozenset({tmp_path.resolve(), _STDLIB_ROOT}))
         with patch("agm.agl.modules.loader.load_graph", side_effect=RuntimeError("boom")):
             prepared = WorkflowRuntime.prepare_program(
                 "let x = 1\nx", entry_path=None, roots=roots
@@ -3232,7 +3234,7 @@ class TestPreparedGraphDefensivePaths:
 
         from agm.agl.modules.roots import RootSet
 
-        roots = RootSet(roots=frozenset([tmp_path.resolve()]))
+        roots = RootSet(roots=frozenset({tmp_path.resolve(), _STDLIB_ROOT}))
         with patch(
             "agm.agl.scope.graph.resolve_graph",
             side_effect=RuntimeError("resolve fail"),
@@ -3255,7 +3257,7 @@ class TestDiscoverParamsDefensivePaths:
 
         from agm.agl.modules.roots import RootSet
 
-        roots = RootSet(roots=frozenset())
+        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = WorkflowRuntime.prepare_program(
             "let x = 1\nx", entry_path=None, roots=roots
         )
@@ -3295,7 +3297,7 @@ class TestDiscoverParamsDefensivePaths:
         from agm.agl.modules.roots import RootSet
         from agm.agl.runtime.runtime import PreparedGraph
 
-        roots = RootSet(roots=frozenset())
+        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         # Build a PreparedGraph with a fake resolved_graph so we reach check_graph.
         fake_rg = MagicMock()
         fake_rg.warnings = ()
@@ -3355,7 +3357,7 @@ class TestRunPreparedDefensivePaths:
 
         from agm.agl.modules.roots import RootSet
 
-        roots = RootSet(roots=frozenset())
+        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         # Use ask() so the checked graph has at least one contract_spec to materialize.
         prepared = WorkflowRuntime.prepare_program(
             'let r = ask("hi")\nprint r', entry_path=None, roots=roots
@@ -3379,7 +3381,7 @@ class TestRunPreparedDefensivePaths:
         from agm.agl.modules.roots import RootSet
         from agm.agl.typecheck.graph import check_graph as real_check_graph
 
-        roots = RootSet(roots=frozenset())
+        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = WorkflowRuntime.prepare_program(
             "param n: int\nprint n", entry_path=None, roots=roots
         )

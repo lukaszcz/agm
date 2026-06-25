@@ -480,8 +480,9 @@ declaration (deduplication by `(module_path, wildcard)`).
 
 **Root set:** Module search roots are assembled lazily on first import use by
 `_ensure_roots` using `assemble_roots`.  The `agm repl` command resolves
-`lib_root` from the `[modules] lib_root` config key (or defaults to `~/.agm/lib`)
-and passes it to `ReplSession(cwd=..., lib_root=..., configured_roots=...)`.
+the stdlib root (normally `~/.agm/stdlib`) and `lib_root` from the `[modules]`
+`lib_root` config key (or defaults to `~/.agm/lib`) and passes them to
+`ReplSession(cwd=..., stdlib_root=..., lib_root=..., configured_roots=...)`.
 
 ## Agent declarations and source↔host reconciliation
 
@@ -667,8 +668,9 @@ entry program. `ModuleId.relpath()` maps a module id to its relative file path
 
 **Root set.** `modules/roots.py` provides `RootSet` — an unordered,
 canonicalized, deduplicated set of search roots. Roots are assembled from the
-invocation directory, global library root (`~/.agm/lib`), configured roots
-(origin-relative), and `-I` CLI flags. The set is unordered by design;
+invocation directory, selected stdlib root (`~/.agm/stdlib` after install),
+global library root (`~/.agm/lib`), configured roots (origin-relative), and
+`-I` CLI flags. The set is unordered by design;
 `sorted_roots()` provides a stable order for diagnostics.
 
 **Resolver.** `modules/resolver.py` provides:
@@ -736,13 +738,14 @@ failure — the same interface as `PreparedProgram`, so the exec command's pragm
 and agent-wiring code is unchanged.
 
 `agm exec` routes ALL programs through the graph pipeline (single-file programs
-produce a graph with only the `ENTRY_ID` module).  It assembles module roots via
-`assemble_roots(invocation_root, lib_root, configured, cli, cwd)` where
-`invocation_root` is the entry file's parent (file exec) or `cwd` (inline `-c`
-exec), and `lib_root` defaults to `Path("~/.agm/lib")` when no config overrides
-it.  Additional roots are supplied via the repeatable `-I/--module-path DIR`
-CLI flag (resolved relative to the invocation cwd) and the `[modules] roots`
-config key.
+produce a graph with `ENTRY_ID` plus default stdlib imports).  It assembles
+module roots via `assemble_roots(invocation_root, stdlib_root, lib_root,
+configured, cli, cwd)` where `invocation_root` is the entry file's parent (file
+exec) or `cwd` (inline `-c` exec), `stdlib_root` is the selected `.agm/stdlib`
+module tree, and `lib_root` defaults to `Path("~/.agm/lib")` when no config
+overrides it.  Additional roots are supplied via the repeatable
+`-I/--module-path DIR` CLI flag (resolved relative to the invocation cwd) and
+the `[modules] roots` config key.
 
 The module-roots configuration (`agm.config.module_roots`) reads `[modules]`
 sections from the layered config files and returns a `ModuleRootsConfig` with

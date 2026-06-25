@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
@@ -19,7 +21,7 @@ from agm.agl.typecheck.env import AglTypeError, FunctionSignature
 from agm.agl.typecheck.graph import check_graph
 from agm.agl.typecheck.types import IntType, RecordType, TextType
 
-_ROOTS = RootSet(frozenset())
+_ROOTS = RootSet(frozenset({Path(__file__).resolve().parents[1] / "stdlib"}))
 _CAPS = HostCapabilities()
 
 

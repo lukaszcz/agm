@@ -66,6 +66,21 @@ class TestAssembleRoots:
         )
         assert lib.resolve() in rs.roots
 
+    def test_includes_stdlib_root(self, tmp_path: Path) -> None:
+        inv_root = tmp_path / "inv"
+        inv_root.mkdir()
+        stdlib = tmp_path / "stdlib"
+        stdlib.mkdir()
+        rs = assemble_roots(
+            invocation_root=inv_root,
+            stdlib_root=stdlib,
+            lib_root=None,
+            configured=[],
+            cli=[],
+            cwd=tmp_path,
+        )
+        assert stdlib.resolve() in rs.roots
+
     def test_none_lib_root_not_included(self, tmp_path: Path) -> None:
         inv_root = tmp_path / "inv"
         inv_root.mkdir()

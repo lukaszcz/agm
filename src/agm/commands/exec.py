@@ -63,7 +63,7 @@ from agm.config.general import (
     params_config_from_merged,
     parse_timeout,
 )
-from agm.config.module_roots import load_module_roots, resolve_lib_root
+from agm.config.module_roots import load_module_roots, resolve_lib_root, resolve_stdlib_root
 from agm.core import dry_run
 from agm.core.fs import read_text_arg
 from agm.core.log import prepare_trace_log_from_layers
@@ -123,6 +123,7 @@ def run(args: ExecArgs) -> None:
         raise SystemExit(1) from exc
 
     # Resolve the lib_root path.
+    stdlib_root = resolve_stdlib_root(home=ctx.home)
     resolved_lib_root = resolve_lib_root(mr_config)
 
     # The invocation root is the entry file's directory (for file exec) or
@@ -134,6 +135,7 @@ def run(args: ExecArgs) -> None:
 
     roots = assemble_roots(
         invocation_root=invocation_root,
+        stdlib_root=stdlib_root,
         lib_root=resolved_lib_root,
         configured=mr_config.extra,
         cli=args.module_paths,

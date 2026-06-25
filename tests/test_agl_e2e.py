@@ -49,6 +49,7 @@ import pytest
 AGL_DIR = Path(__file__).parent / "agl"
 PROGRAMS_DIR = AGL_DIR / "programs"
 REJECTIONS_DIR = AGL_DIR / "rejections"
+REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 
 
 def _load_json(path: Path) -> Any:
@@ -111,7 +112,12 @@ def _run_program(source: str, scenario: dict[str, Any]) -> tuple[Any, dict[str, 
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(
-            roots=frozenset((AGL_DIR / str(root)).resolve() for root in module_roots)
+            roots=frozenset(
+                {
+                    *((AGL_DIR / str(root)).resolve() for root in module_roots),
+                    REPO_STDLIB_ROOT,
+                }
+            )
         )
         prepared = WorkflowRuntime.prepare_program(source, entry_path=None, roots=roots)
         result = runtime.run_prepared_graph(

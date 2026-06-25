@@ -52,6 +52,8 @@ from agm.agl.typecheck import AglTypeError, CheckedProgram, EnumType, RecordType
 # Shared helpers
 # ---------------------------------------------------------------------------
 
+_REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
+
 _CAPS = HostCapabilities(
     agent_names=frozenset(),
     has_default_agent=True,
@@ -66,7 +68,7 @@ _CAPS = HostCapabilities(
 
 
 def _roots(*paths: Path) -> RootSet:
-    return RootSet(roots=frozenset(paths))
+    return RootSet(roots=frozenset((*paths, _REPO_STDLIB_ROOT)))
 
 
 def _write_module(root: Path, dotted: str, source: str) -> Path:

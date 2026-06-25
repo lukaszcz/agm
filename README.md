@@ -24,8 +24,8 @@ Set up the development environment:
 just setup
 ```
 
-Install the CLI into an isolated `uv tool` environment and copy AGM config files into
-`$HOME/.agm/`:
+Install the CLI into an isolated `uv tool` environment and copy AGM config files,
+prompts, sandbox templates, and the AgL standard library into `$HOME/.agm/`:
 
 ```bash
 just install
@@ -182,8 +182,8 @@ optionally `= "runner"`). All calls — including `ask`, `print`, and `exec` —
 `[loop] runner`, or `claude -p` (built-in default).
 
 Programs can span multiple `.agl` files via the module system (`import utils.math`). `agm exec`
-searches the entry file's directory, `~/.agm/lib`, and any configured `[modules] roots` for
-imported modules.
+searches the entry file's directory, the installed stdlib root (`~/.agm/stdlib`),
+`~/.agm/lib`, and any configured `[modules] roots` for imported modules.
 
 ```bash
 agm exec workflow.agl

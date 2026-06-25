@@ -29,6 +29,8 @@ from agm.agl.typecheck import check
 from agm.agl.typecheck.graph import check_graph
 from agm.core.process import ProcessCaptureResult
 
+_REPO_STDLIB_ROOT = Path(__file__).resolve().parents[2] / "stdlib"
+
 
 def m2_caps() -> HostCapabilities:
     return HostCapabilities(
@@ -99,7 +101,9 @@ def _checked_graph(
     for dotted, source in modules.items():
         _write_module_file(root, dotted, source)
     graph = load_graph(
-        entry_source, entry_path=None, roots=RootSet(roots=frozenset({root}))
+        entry_source,
+        entry_path=None,
+        roots=RootSet(roots=frozenset({root, _REPO_STDLIB_ROOT})),
     )
     return check_graph(resolve_graph(graph), m2_caps())
 

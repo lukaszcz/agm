@@ -43,6 +43,26 @@ def _install_file(*, source: Path, destination: Path, force: bool) -> bool:
     return True
 
 
+def _install_tree_files(
+    *,
+    source_dir: Path,
+    destination_dir: Path,
+    force: bool,
+    installed: list[Path],
+    skipped: list[Path],
+) -> None:
+    for source in sorted(source_dir.rglob("*")):
+        if not source.is_file():
+            continue
+        relative = source.relative_to(source_dir)
+        destination = destination_dir / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if _install_file(source=source, destination=destination, force=force):
+            installed.append(destination)
+        else:
+            skipped.append(destination)
+
+
 def install_user_config(
     *,
     repo_root: Path,
@@ -52,8 +72,10 @@ def install_user_config(
     agm_config_dir = install_root / ".agm"
     sandbox_dir = agm_config_dir / "sandbox"
     prompts_dir = agm_config_dir / "prompts"
+    stdlib_dir = agm_config_dir / "stdlib"
     sandbox_dir.mkdir(parents=True, exist_ok=True)
     prompts_dir.mkdir(parents=True, exist_ok=True)
+    stdlib_dir.mkdir(parents=True, exist_ok=True)
 
     installed: list[Path] = []
     skipped: list[Path] = []
@@ -82,6 +104,14 @@ def install_user_config(
             installed.append(prompt_destination)
         else:
             skipped.append(prompt_destination)
+
+    _install_tree_files(
+        source_dir=repo_root / "stdlib",
+        destination_dir=stdlib_dir,
+        force=force,
+        installed=installed,
+        skipped=skipped,
+    )
 
     return InstallUserConfigResult(installed=installed, skipped=skipped)
 

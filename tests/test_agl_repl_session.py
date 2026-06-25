@@ -1301,6 +1301,7 @@ class TestImports:
 
         roots = assemble_roots(
             invocation_root=root,
+            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
             lib_root=None,
             configured=[],
             cli=[],
@@ -1395,11 +1396,13 @@ class TestImports:
         assert r.diagnostics
 
     def test_no_roots_set_but_import_attempted(self) -> None:
-        # Without any configured roots, import should fail gracefully
+        # With only the stdlib root, an unrelated import should fail gracefully.
         s = ReplSession()
         from agm.agl.modules.roots import RootSet
 
-        s._roots = RootSet(roots=frozenset())
+        s._roots = RootSet(
+            roots=frozenset({Path(__file__).resolve().parents[1] / "stdlib"})
+        )
         r = s.eval_entry("import something\n1")
         assert not r.ok
         assert r.diagnostics

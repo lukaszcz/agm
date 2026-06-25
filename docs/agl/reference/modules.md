@@ -21,6 +21,10 @@ The core standard library module is `std.core`. It defines common names such as
 `Option[T]`, `ExecResult`, `ParsePolicy`, `AgentRequest`, built-in exception
 types, and the host-implemented built-in functions.
 
+The stdlib is a normal module tree. In the source checkout it lives under
+`stdlib/`; `just install` copies it to `.agm/stdlib/`, so `std.core` resolves
+from `.agm/stdlib/std/core.agl` and can be replaced without reinstalling AGM.
+
 For batch execution, `std.core` is opened unqualified in the entry module by
 default. This is equivalent to an implicit leading:
 

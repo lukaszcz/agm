@@ -26,7 +26,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from agm.config.general import config_file_candidates
+from agm.config.general import agm_path_candidates, config_file_candidates
 from agm.core.toml import load_toml_file, toml_dict
 
 
@@ -121,3 +121,24 @@ def resolve_lib_root(mr_config: ModuleRootsConfig) -> Path:
         raw_path = Path(os.path.expanduser(raw_str))
         return raw_path if raw_path.is_absolute() else origin_dir / raw_path
     return Path(os.path.expanduser("~/.agm/lib"))
+
+
+def resolve_stdlib_root(*, home: Path) -> Path:
+    """Return the selected AgL standard-library module root.
+
+    The stdlib is a normal module tree installed under ``.agm/stdlib``.  A
+    user-writable home stdlib wins when present, then an installation-prefix
+    stdlib, then the repository ``stdlib/`` tree for source-checkout workflows.
+    If none exists yet, return the home destination so diagnostics mention the
+    path that ``just install`` populates.
+    """
+    candidates = agm_path_candidates(home=home, relative_path=Path("stdlib"))
+    repo_stdlib = Path(__file__).resolve().parents[3] / "stdlib"
+    if repo_stdlib.is_dir():
+        candidates.append(repo_stdlib)
+    for candidate in reversed(candidates[:2]):
+        if candidate.is_dir():
+            return candidate
+    if repo_stdlib.is_dir():
+        return repo_stdlib
+    return candidates[-1]

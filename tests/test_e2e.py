@@ -347,6 +347,7 @@ def _agm_install(tmp_path_factory: pytest.TempPathFactory) -> None:
     bin_dir = venv / "bin"
     agm_bin = bin_dir / "agm"
     assert agm_bin.is_file(), f"installed agm binary missing at {agm_bin}"
+    shutil.copytree(repo_root / "stdlib", venv / ".agm" / "stdlib", dirs_exist_ok=True)
     # Install hard-failing guard shims for every external agent/sandbox CLI in
     # a dedicated directory.  ``_agm_env`` places this guard dir AFTER the test's
     # own fake-CLI dirs and the venv ``bin/`` but BEFORE the rest of PATH, so:

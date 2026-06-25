@@ -163,14 +163,18 @@ class ReplSession:
         trace_path: "Path | None" = None,
         params_config_loader: "Callable[[str], dict[str, object]] | None" = None,
         cwd: "Path | None" = None,
+        stdlib_root: "Path | None" = None,
         lib_root: "Path | None" = None,
         configured_roots: "Iterable[tuple[str, Path]]" = (),
         extra_cli_roots: "Iterable[str]" = (),
     ) -> None:
+        from pathlib import Path
+
         from agm.agl.lower import LinkImage
         from agm.agl.runtime.runtime import WorkflowRuntime
         from agm.agl.scope.symbols import ScopeNode
         from agm.agl.typecheck.env import TypeEnvironment
+        from agm.config.module_roots import resolve_stdlib_root
 
         self._default_loop_limit = default_loop_limit
         self._default_strict_json = default_strict_json
@@ -227,6 +231,9 @@ class ReplSession:
         # Module roots configuration (M6 REPL import support).
         # These are stored so _ensure_roots() can assemble the RootSet lazily.
         self._cwd: Path | None = cwd
+        self._stdlib_root: Path | None = (
+            resolve_stdlib_root(home=Path.home()) if stdlib_root is None else stdlib_root
+        )
         self._lib_root: Path | None = lib_root
         self._configured_roots: tuple[tuple[str, Path], ...] = tuple(configured_roots)
         self._extra_cli_roots: tuple[str, ...] = tuple(extra_cli_roots)
@@ -273,6 +280,7 @@ class ReplSession:
         cwd = self._cwd if self._cwd is not None else Path.cwd()
         self._roots = assemble_roots(
             invocation_root=cwd,
+            stdlib_root=self._stdlib_root,
             lib_root=self._lib_root,
             configured=self._configured_roots,
             cli=self._extra_cli_roots,

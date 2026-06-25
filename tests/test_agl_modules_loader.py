@@ -22,9 +22,11 @@ from agm.agl.syntax.spans import SourceId
 # Helpers
 # ---------------------------------------------------------------------------
 
+_REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
+
 
 def _roots(*paths: Path) -> RootSet:
-    return RootSet(roots=frozenset(paths))
+    return RootSet(roots=frozenset((*paths, _REPO_STDLIB_ROOT)))
 
 
 def _write_agl(path: Path, source: str = "") -> None:
@@ -129,6 +131,7 @@ class TestGraphBuild:
         assert len(graph.modules) == 2
         assert ENTRY_ID in graph.modules
         assert STD_CORE_ID in graph.modules
+        assert graph.modules[STD_CORE_ID].path == (_REPO_STDLIB_ROOT / "std" / "core.agl").resolve()
 
     def test_imported_module_appears_in_graph(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
@@ -575,8 +578,8 @@ class TestFileBasedEntry:
         _write_module(root, "mod")
         graph = load_graph("import mod", entry_path=None, roots=_roots(root))
         for mid, mod in graph.modules.items():
-            if mid in (ENTRY_ID, STD_CORE_ID):
-                assert mod.path is None  # inline entry and synthetic stdlib
+            if mid == ENTRY_ID:
+                assert mod.path is None  # inline entry
             else:
                 assert mod.path is not None
 
@@ -625,13 +628,14 @@ class TestBuildReplGraph:
     """Tests for :func:`~agm.agl.modules.loader.build_repl_graph`."""
 
     def test_simple_program_no_imports(self, tmp_path: Path) -> None:
-        """Graph for a program with no imports has only ENTRY_ID."""
+        """Graph for a program with no explicit imports still loads std.core."""
         program = _parse_for_repl("let x = 1")
         graph, _next_id, new_modules = build_repl_graph(
             program, 1000, path=None, cached={}, roots=_roots(tmp_path)
         )
         assert ENTRY_ID in graph.modules
-        assert len(new_modules) == 0
+        assert STD_CORE_ID in graph.modules
+        assert new_modules == {STD_CORE_ID: graph.modules[STD_CORE_ID]}
 
     def test_import_loads_lib_module(self, tmp_path: Path) -> None:
         """A program with import declarations loads the referenced lib module."""

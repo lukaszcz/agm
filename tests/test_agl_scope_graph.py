@@ -39,9 +39,11 @@ from agm.agl.syntax.nodes import VarRef
 # Helpers
 # ---------------------------------------------------------------------------
 
+_REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
+
 
 def _roots(*paths: Path) -> RootSet:
-    return RootSet(roots=frozenset(paths))
+    return RootSet(roots=frozenset((*paths, _REPO_STDLIB_ROOT)))
 
 
 def _write_module(root: Path, dotted: str, source: str) -> Path:

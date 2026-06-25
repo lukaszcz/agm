@@ -71,6 +71,8 @@ def test_install_user_config_installs_prompts(tmp_path: Path) -> None:
     (repo_root / "config" / "sandbox" / "default.json").write_text("{}")
     (repo_root / "prompts").mkdir(parents=True)
     (repo_root / "prompts" / "loop.md").write_text("loop prompt\n")
+    (repo_root / "stdlib" / "std").mkdir(parents=True)
+    (repo_root / "stdlib" / "std" / "core.agl").write_text("def f() -> int = 1\n")
     (repo_root / "config" / "config.toml").write_text("[run]\n")
 
     result = module.install_user_config(repo_root=repo_root, install_root=install_root)
@@ -78,3 +80,27 @@ def test_install_user_config_installs_prompts(tmp_path: Path) -> None:
     prompt_path = install_root / ".agm" / "prompts" / "loop.md"
     assert prompt_path in result.installed
     assert prompt_path.read_text() == "loop prompt\n"
+    stdlib_path = install_root / ".agm" / "stdlib" / "std" / "core.agl"
+    assert stdlib_path in result.installed
+    assert stdlib_path.read_text() == "def f() -> int = 1\n"
+
+
+def test_install_user_config_preserves_existing_stdlib_without_force(tmp_path: Path) -> None:
+    module = _load_install_module()
+    repo_root = tmp_path / "repo"
+    install_root = tmp_path / "install"
+
+    (repo_root / "config" / "sandbox").mkdir(parents=True)
+    (repo_root / "config" / "sandbox" / "default.json").write_text("{}")
+    (repo_root / "prompts").mkdir(parents=True)
+    (repo_root / "config" / "config.toml").write_text("[run]\n")
+    (repo_root / "stdlib" / "std").mkdir(parents=True)
+    (repo_root / "stdlib" / "std" / "core.agl").write_text("upstream\n")
+    destination = install_root / ".agm" / "stdlib" / "std" / "core.agl"
+    destination.parent.mkdir(parents=True)
+    destination.write_text("custom\n")
+
+    result = module.install_user_config(repo_root=repo_root, install_root=install_root)
+
+    assert destination in result.skipped
+    assert destination.read_text() == "custom\n"

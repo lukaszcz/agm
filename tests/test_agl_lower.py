@@ -64,6 +64,8 @@ from agm.agl.typecheck.types import (
     UnitType,
 )
 
+_REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
+
 # ---------------------------------------------------------------------------
 # Pipeline helper
 # ---------------------------------------------------------------------------
@@ -1459,7 +1461,11 @@ class TestLowerGraph:
         lib_path.parent.mkdir(parents=True, exist_ok=True)
         lib_path.write_text(lib_source)
 
-        mg = load_graph(entry_source, entry_path=None, roots=RootSet(roots=frozenset([root])))
+        mg = load_graph(
+            entry_source,
+            entry_path=None,
+            roots=RootSet(roots=frozenset({root, _REPO_STDLIB_ROOT})),
+        )
         rg = resolve_graph(mg)
         cg = check_graph(rg, _caps())
 
@@ -1564,7 +1570,11 @@ class TestLowerGraph:
         lib_path.parent.mkdir(parents=True, exist_ok=True)
         lib_path.write_text(lib_source)
 
-        mg = load_graph(entry_source, entry_path=None, roots=RootSet(roots=frozenset([root])))
+        mg = load_graph(
+            entry_source,
+            entry_path=None,
+            roots=RootSet(roots=frozenset({root, _REPO_STDLIB_ROOT})),
+        )
         rg = resolve_graph(mg)
         cg = check_graph(rg, _caps())
 
@@ -1614,7 +1624,11 @@ class TestLowerGraph:
         lib_path.parent.mkdir(parents=True, exist_ok=True)
         lib_path.write_text(lib_source)
 
-        mg = load_graph(entry_source, entry_path=None, roots=RootSet(roots=frozenset([root])))
+        mg = load_graph(
+            entry_source,
+            entry_path=None,
+            roots=RootSet(roots=frozenset({root, _REPO_STDLIB_ROOT})),
+        )
         rg = resolve_graph(mg)
         cg = check_graph(rg, _caps())
 

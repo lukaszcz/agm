@@ -5528,7 +5528,7 @@ class TestLoop:
 
         assert result.returncode == 0
         assert f"Logging to {log_file}" in result.stdout
-        tasks_dir_line = f"Tasks dir: {work / '.agent-files' / 'tasks'}"
+        tasks_dir_line = f"Tasks dir: {Path('.agent-files') / 'tasks'}"
         assert tasks_dir_line in result.stdout
         assert result.stdout.index(f"Logging to {log_file}") < result.stdout.index(tasks_dir_line)
         assert result.stdout.index(tasks_dir_line) < result.stdout.index("Step 1")

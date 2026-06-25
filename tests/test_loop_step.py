@@ -683,6 +683,23 @@ class TestPrintStartup:
         assert out == expected
         assert log_file.read_text(encoding="utf-8") == expected
 
+    def test_displays_tasks_dir_relative_to_current_directory(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        log_file = tmp_path / "out.log"
+        runtime = _make_runtime(tmp_path, log_file=log_file)
+
+        print_startup(runtime)
+
+        out, _ = capsys.readouterr()
+        expected = f"Tasks dir: {Path('tasks')}\n"
+        assert out == expected
+        assert log_file.read_text(encoding="utf-8") == expected
+
 
 # ===========================================================================
 # execute_single_step

@@ -39,6 +39,7 @@ from agm.cli_support.args import LoopArgs
 from agm.core import dry_run
 from agm.core.fs import is_file
 from agm.core.log import append_log, prepare_log_file, resolve_log_file
+from agm.core.path import display_path
 
 
 @dataclass(slots=True)
@@ -302,7 +303,7 @@ def print_dry_run(runtime: LoopStepRuntime) -> None:
 
 
 def print_startup(runtime: LoopStepRuntime) -> None:
-    message = f"Tasks dir: {runtime.resolved_tasks_dir}\n"
+    message = f"Tasks dir: {display_path(runtime.resolved_tasks_dir)}\n"
     print(message, end="")
     append_log(runtime.log_file, message)
 

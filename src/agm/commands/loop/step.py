@@ -301,6 +301,12 @@ def print_dry_run(runtime: LoopStepRuntime) -> None:
     )
 
 
+def print_startup(runtime: LoopStepRuntime) -> None:
+    message = f"Tasks dir: {runtime.resolved_tasks_dir}\n"
+    print(message, end="")
+    append_log(runtime.log_file, message)
+
+
 def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
     header = step_header_text(step_number)
     print(header, end="")
@@ -407,6 +413,7 @@ def run(args: LoopArgs) -> None:
         if dry_run.enabled():
             print_dry_run(runtime)
             return
+        print_startup(runtime)
         execute_single_step(runtime, step_number=1)
     except KeyboardInterrupt:
         print("\nInterrupted")

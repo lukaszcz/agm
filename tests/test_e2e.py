@@ -5528,8 +5528,13 @@ class TestLoop:
 
         assert result.returncode == 0
         assert f"Logging to {log_file}" in result.stdout
+        tasks_dir_line = f"Tasks dir: {work / '.agent-files' / 'tasks'}"
+        assert tasks_dir_line in result.stdout
+        assert result.stdout.index(f"Logging to {log_file}") < result.stdout.index(tasks_dir_line)
+        assert result.stdout.index(tasks_dir_line) < result.stdout.index("Step 1")
         assert not list((work / ".agent-files").glob("loop-*.log"))
         log_text = log_file.read_text()
+        assert log_text.startswith(f"{tasks_dir_line}\n")
         assert re.search(r"Step 1\s+\(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\)", log_text)
         assert re.search(r"Step 2\s+\(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\)", log_text)
         assert "keep going\n" in log_text

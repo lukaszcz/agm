@@ -16,6 +16,7 @@ def run(args: LoopArgs) -> None:
             step_command.print_dry_run(runtime)
             return
 
+        step_command.print_startup(runtime)
         step_number = 1
         while not step_command.execute_single_step(runtime, step_number=step_number):
             step_number += 1

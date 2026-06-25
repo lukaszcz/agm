@@ -24,6 +24,7 @@ from agm.commands.loop.step import (
     cleanup_runtime,
     execute_single_step,
     prepare_runtime,
+    print_startup,
     run,
 )
 from agm.core.log import (
@@ -664,6 +665,26 @@ class TestPrepareRuntime:
 
 
 # ===========================================================================
+# print_startup
+# ===========================================================================
+
+
+class TestPrintStartup:
+    def test_prints_and_logs_resolved_tasks_dir(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        log_file = tmp_path / "out.log"
+        runtime = _make_runtime(tmp_path, log_file=log_file)
+
+        print_startup(runtime)
+
+        out, _ = capsys.readouterr()
+        expected = f"Tasks dir: {runtime.resolved_tasks_dir}\n"
+        assert out == expected
+        assert log_file.read_text(encoding="utf-8") == expected
+
+
+# ===========================================================================
 # execute_single_step
 # ===========================================================================
 
@@ -1101,13 +1122,17 @@ class TestStepRun:
         return runtime
 
     def test_calls_execute_single_step_and_returns(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
-        self._stub_prepare(tmp_path, monkeypatch)
+        runtime = self._stub_prepare(tmp_path, monkeypatch)
         step_calls: list[int] = []
 
         def fake_execute(r: LoopStepRuntime, *, step_number: int) -> bool:
             step_calls.append(step_number)
+            print(f"Step {step_number}")
             return True
 
         monkeypatch.setattr("agm.commands.loop.step.execute_single_step", fake_execute)
@@ -1115,7 +1140,9 @@ class TestStepRun:
 
         args = _make_loop_args()
         run(args)
+        out, _ = capsys.readouterr()
         assert step_calls == [1]
+        assert out.startswith(f"Tasks dir: {runtime.resolved_tasks_dir}\nStep 1\n")
 
     def test_dry_run_prints_and_does_not_execute(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -1433,22 +1460,29 @@ class TestLoopRun:
         return runtime
 
     def test_loops_until_execute_returns_true(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
-        self._stub_prepare(tmp_path, monkeypatch)
+        runtime = self._stub_prepare(tmp_path, monkeypatch)
         monkeypatch.setattr("agm.commands.loop.run.dry_run.enabled", lambda: False)
 
         call_count = [0]
 
         def fake_execute(r: LoopStepRuntime, *, step_number: int) -> bool:
             call_count[0] += 1
+            print(f"Step {step_number}")
             return call_count[0] >= 3
 
         monkeypatch.setattr("agm.commands.loop.run.step_command.execute_single_step", fake_execute)
 
         args = _make_loop_args()
         loop_run(args)
+        out, _ = capsys.readouterr()
         assert call_count[0] == 3
+        assert out.startswith(f"Tasks dir: {runtime.resolved_tasks_dir}\nStep 1\n")
+        assert out.count("Tasks dir:") == 1
 
     def test_increments_step_number_across_iterations(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

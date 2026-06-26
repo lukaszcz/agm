@@ -38,7 +38,6 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
         (
             "lower",
             (
-                "agm.agl._text",
                 "agm.agl.ir",
                 "agm.agl.lower",
                 "agm.agl.modules.ids",

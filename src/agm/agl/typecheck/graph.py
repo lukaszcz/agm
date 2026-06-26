@@ -55,7 +55,6 @@ entry's :class:`~agm.agl.scope.symbols.ResolvedProgram`.
 
 from __future__ import annotations
 
-import bisect
 from dataclasses import dataclass
 from typing import Mapping
 
@@ -80,6 +79,7 @@ from agm.agl.typecheck.env import (
     OutputContractSpec,
     TypeEnvironment,
 )
+from agm.util.graph import GraphCycleError, toposort
 
 # ---------------------------------------------------------------------------
 # Output types
@@ -427,43 +427,12 @@ def _topological_sort_types(
     def _sort_key(k: tuple[ModuleId, str]) -> tuple[tuple[str, ...], str]:
         return (k[0].segments, k[1])
 
-    # Build in-degree and adjacency list (for Kahn's).
-    # adj[u] = list of nodes that depend ON u (u must be resolved before them).
-    in_degree: dict[tuple[ModuleId, str], int] = {k: 0 for k in all_type_keys}
-    adj: dict[tuple[ModuleId, str], list[tuple[ModuleId, str]]] = {
-        k: [] for k in all_type_keys
-    }
-
-    for node, node_deps in deps.items():
-        for dep in node_deps:
-            # dep is guaranteed to be in adj: _collect_type_expr_deps only
-            # adds keys that are in all_type_keys, from which adj is built.
-            adj[dep].append(node)
-            in_degree[node] = in_degree.get(node, 0) + 1
-
-    # Kahn's: start with all zero-in-degree nodes, sorted for determinism.
-    ready: list[tuple[ModuleId, str]] = sorted(
-        (k for k, d in in_degree.items() if d == 0),
-        key=_sort_key,
-    )
-    order: list[tuple[ModuleId, str]] = []
-
-    while ready:
-        node = ready.pop(0)
-        order.append(node)
-        dependents = sorted(adj.get(node, []), key=_sort_key)
-        for dep in dependents:
-            in_degree[dep] -= 1
-            if in_degree[dep] == 0:
-                bisect.insort(ready, dep, key=_sort_key)
-
-    if len(order) < len(all_type_keys):
-        # There is a cycle in the structural type-definition dependency graph.
-        # Find the cycle participants and raise an error.
-        remaining = {k for k in all_type_keys if k not in set(order)}
-        raise _CycleInTypeDeps(remaining)
-
-    return order
+    try:
+        return toposort(all_type_keys, deps, key=_sort_key)
+    except GraphCycleError as exc:
+        # Reconstruct the typed set from all_type_keys (exc.cycle is set[object]).
+        remaining = {k for k in all_type_keys if k in exc.cycle}
+        raise _CycleInTypeDeps(remaining) from exc
 
 
 class _CycleInTypeDeps(Exception):

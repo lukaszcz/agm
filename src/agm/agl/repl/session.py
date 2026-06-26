@@ -1536,9 +1536,9 @@ class ReplSession:
         the parse diagnostic.  An empty or comment-only file has no items to
         run and yields an empty list (a benign no-op).
         """
-        from agm.agl._text import normalize_newlines
         from agm.agl.parser import AglSyntaxError, parse_program
         from agm.core.fs import read_text
+        from agm.util.text import normalize_newlines
 
         # Normalize newlines with the SAME helper the lexer/interpreter use so the
         # item-span char offsets align with the text we slice below.

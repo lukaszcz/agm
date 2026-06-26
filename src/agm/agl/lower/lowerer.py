@@ -32,7 +32,6 @@ import json
 from dataclasses import dataclass, field
 from typing import assert_never
 
-from agm.agl._text import normalize_newlines
 from agm.agl.ir.contracts import ContractRequest, ConversionFailureMode, ParamDecoder
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import (
@@ -203,6 +202,7 @@ from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import build_decode_schema, build_format_instructions, derive_schema
 from agm.agl.typecheck.env import CheckedProgram
 from agm.agl.typecheck.graph import CheckedModule
+from agm.util.text import normalize_newlines
 
 __all__ = ["_LinkState", "lower_program"]
 

@@ -1329,7 +1329,7 @@ class TestNewlineNormalization:
     def test_shared_normalize_newlines_helper(self) -> None:
         """F10: the shared universal-newline helper converts CRLF and lone CR to
         LF (the single source of truth shared by the scanner and the evaluator)."""
-        from agm.agl._text import normalize_newlines
+        from agm.util.text import normalize_newlines
 
         assert normalize_newlines("a\r\nb\rc\nd") == "a\nb\nc\nd"
         assert normalize_newlines("") == ""

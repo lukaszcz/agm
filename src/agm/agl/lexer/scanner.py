@@ -35,7 +35,6 @@ from typing import Iterator
 
 from lark.lexer import Token
 
-from agm.agl._text import normalize_newlines
 from agm.agl.diagnostics import Diagnostic, SourceSpan
 from agm.agl.lexer.errors import LexError
 from agm.agl.lexer.tokens import (
@@ -76,6 +75,7 @@ from agm.agl.lexer.tokens import (
     TEMPLATE_START,
     THIN_ARROW,
 )
+from agm.util.text import normalize_newlines
 
 # ---------------------------------------------------------------------------
 # Constants

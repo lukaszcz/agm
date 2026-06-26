@@ -27,7 +27,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import agm.agl.syntax as syntax
-from agm.agl._text import normalize_newlines
 from agm.agl.modules.errors import ImportEntryError
 from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
 from agm.agl.modules.resolver import expand_wildcard, resolve_module
@@ -37,6 +36,8 @@ from agm.agl.syntax.nodes import ImportDecl
 from agm.agl.syntax.spans import SourceId, SourceSpan
 from agm.agl.syntax.types import ImportMode
 from agm.core import fs
+from agm.util.graph import sccs as _compute_sccs
+from agm.util.text import normalize_newlines
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,45 +178,7 @@ def _tarjan_sccs(
     tuple[tuple[ModuleId, ...], ...]
         SCCs in **reverse topological order** (sinks first, roots last).
     """
-    index_counter = [0]
-    stack: list[ModuleId] = []
-    on_stack: set[ModuleId] = set()
-    index: dict[ModuleId, int] = {}
-    lowlink: dict[ModuleId, int] = {}
-    sccs: list[tuple[ModuleId, ...]] = []
-
-    def strongconnect(node: ModuleId) -> None:
-        idx = index_counter[0]
-        index[node] = idx
-        lowlink[node] = idx
-        index_counter[0] += 1
-        stack.append(node)
-        on_stack.add(node)
-
-        for neighbour in graph.get(node, []):
-            if neighbour not in index:
-                strongconnect(neighbour)
-                lowlink[node] = min(lowlink[node], lowlink[neighbour])
-            elif neighbour in on_stack:
-                lowlink[node] = min(lowlink[node], index[neighbour])
-
-        if lowlink[node] == index[node]:
-            scc: list[ModuleId] = []
-            while True:
-                w = stack.pop()
-                on_stack.discard(w)
-                scc.append(w)
-                if w == node:
-                    break
-            scc.sort(key=_mid_sort_key)
-            sccs.append(tuple(scc))
-
-    nodes = sorted(graph.keys(), key=_mid_sort_key)
-    for node in nodes:
-        if node not in index:
-            strongconnect(node)
-
-    return tuple(sccs)
+    return _compute_sccs(graph, key=_mid_sort_key)
 
 
 # ---------------------------------------------------------------------------

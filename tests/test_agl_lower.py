@@ -132,11 +132,11 @@ def _lower(source: str, *, validate: bool = True) -> ExecutableProgram:
 
 def _make_lowerer(checked: CheckedProgram, source: str) -> "_Lowerer":
     """Create a _Lowerer with a fresh _LinkState for unit tests."""
-    from agm.agl._text import normalize_newlines
     from agm.agl.ir.ids import SourceId
     from agm.agl.ir.program import SourceFile
     from agm.agl.lower.lowerer import _LinkState, _Lowerer
     from agm.agl.modules.ids import ENTRY_ID
+    from agm.util.text import normalize_newlines
     link = _LinkState()
     source_id = SourceId(link.next_source)
     link.next_source += 1

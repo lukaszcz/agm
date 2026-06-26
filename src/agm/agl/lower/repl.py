@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
-from agm.agl._text import normalize_newlines
 from agm.agl.ir.ids import SourceId, SymbolId
 from agm.agl.ir.program import ExecutableProgram, SourceFile
 from agm.agl.ir.validate import validate_ir
@@ -14,6 +13,7 @@ from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.syntax.nodes import Binder, Declaration
 from agm.agl.typecheck.env import CheckedProgram
 from agm.agl.typecheck.graph import CheckedModuleGraph
+from agm.util.text import normalize_newlines
 
 __all__ = ["LinkImage", "LoweredReplEntry", "lower_repl_entry", "lower_repl_graph"]
 

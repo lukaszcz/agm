@@ -1,4 +1,4 @@
-"""Shared text helpers for the AgL pipeline.
+"""Shared text helpers for AGM.
 
 This is a small, dependency-free leaf module so that *both* the lexer
 (``agm.agl.lexer.scanner``) and lowering/runtime diagnostics
@@ -7,6 +7,8 @@ other (the eval pass must never import the lexer — see ``agm/agl/CLAUDE.md``).
 """
 
 from __future__ import annotations
+
+__all__ = ["normalize_newlines"]
 
 
 def normalize_newlines(text: str) -> str:

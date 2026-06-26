@@ -168,7 +168,7 @@ class TextCodec:
         """The set of type-kind strings this codec can handle.
 
         Single source of truth for ``HostCapabilities.codec_kinds["text"]``
-        (CARRY-IN 1 — eliminates the duplicated literal in ``runtime.py``).
+        (CARRY-IN 1 — eliminates a duplicated literal at the host-environment assembly site).
         """
         return frozenset({"text"})
 
@@ -634,7 +634,7 @@ class JsonCodec:
         """The set of type-kind strings this codec can handle.
 
         Single source of truth for ``HostCapabilities.codec_kinds["json"]``
-        (CARRY-IN 1 — eliminates the duplicated literal in ``runtime.py``).
+        (CARRY-IN 1 — eliminates a duplicated literal at the host-environment assembly site).
         Matches ``_JSON_CODEC_KINDS`` (kept in this module as a local constant
         to drive ``supports_type``; the runtime no longer duplicates it).
         """

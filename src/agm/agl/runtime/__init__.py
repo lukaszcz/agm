@@ -1,12 +1,9 @@
-"""AgL host runtime package.
+"""AgL host runtime services package (eval-free).
 
 Public API
 ----------
-- :class:`WorkflowRuntime` — the main host API façade.
-- :class:`RunResult` — result of a ``WorkflowRuntime.run`` call.
-- :class:`RunError` — structured uncaught AgL exception.
-- :class:`CallSiteInfo` — static summary of one agent-call/exec site.
 - :class:`AgentDeclInfo` — static summary of one ``agent`` declaration.
+- :class:`CallSiteInfo` — static summary of one agent-call/exec site.
 - :class:`AgentRequest` — request object passed to host agent callables.
 - :class:`AgentResponse` — response from a host agent callable.
 - :class:`AgentRegistry` — registry of host agents.
@@ -25,12 +22,6 @@ from agm.agl.runtime.codec import JsonCodec, OutputCodec, ParseResult, TextCodec
 from agm.agl.runtime.contract import OutputContract
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.request import AgentRequest, AgentResponse
-from agm.agl.runtime.runtime import (
-    PreparedProgram,
-    RunError,
-    RunResult,
-    WorkflowRuntime,
-)
 from agm.agl.runtime.types import AgentDeclInfo, CallSiteInfo
 
 __all__ = [
@@ -44,10 +35,6 @@ __all__ = [
     "OutputCodec",
     "OutputContract",
     "ParseResult",
-    "PreparedProgram",
-    "RunError",
-    "RunResult",
     "TextCodec",
-    "WorkflowRuntime",
     "render_value",
 ]

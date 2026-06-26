@@ -589,13 +589,13 @@ class TestExecExitCodeMapping:
         fields: dict[str, object],
         expected_fragments: list[str],
     ) -> None:
-        from agm.agl.runtime.runtime import RunError, RunResult, WorkflowRuntime
+        from agm.agl.pipeline import PipelineDriver, RunError, RunResult
 
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("let x = 1\n")
 
         def fake_run(
-            self: WorkflowRuntime,
+            self: PipelineDriver,
             prepared: object,
             *,
             param_values: object = None,
@@ -608,9 +608,9 @@ class TestExecExitCodeMapping:
                 error=RunError(type_name="AgentParseError", fields=fields),
             )
 
-        import agm.agl.runtime.runtime as rt_mod
+        import agm.agl.pipeline as pipeline_mod
 
-        monkeypatch.setattr(rt_mod.WorkflowRuntime, "run_prepared_graph", fake_run)
+        monkeypatch.setattr(pipeline_mod.PipelineDriver, "run_prepared_graph", fake_run)
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args(agl_file))
@@ -635,7 +635,8 @@ class TestExecCommandWarnings:
     ) -> None:
         # Mocked: no organic M1 warning exists (lands in M2/M3). This pins that a
         # warning prints to stderr and never raises SystemExit (exit 0).
-        from agm.agl.runtime.runtime import Diagnostic, RunResult, WorkflowRuntime
+        from agm.agl.diagnostics import Diagnostic
+        from agm.agl.pipeline import PipelineDriver, RunResult
 
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("let x = 1\n")
@@ -650,7 +651,7 @@ class TestExecCommandWarnings:
         )
 
         def fake_run(
-            self: WorkflowRuntime,
+            self: PipelineDriver,
             prepared: object,
             *,
             param_values: object = None,
@@ -659,9 +660,9 @@ class TestExecCommandWarnings:
         ) -> RunResult:
             return RunResult(ok=True, diagnostics=[], error=None, warnings=[warning])
 
-        import agm.agl.runtime.runtime as rt_mod
+        import agm.agl.pipeline as pipeline_mod
 
-        monkeypatch.setattr(rt_mod.WorkflowRuntime, "run_prepared_graph", fake_run)
+        monkeypatch.setattr(pipeline_mod.PipelineDriver, "run_prepared_graph", fake_run)
 
         # ok=True even with a warning: returns normally (exit 0).
         assert exec_command.run(_exec_args(agl_file)) is None
@@ -712,7 +713,8 @@ class TestExecCommandWarnings:
     ) -> None:
         # Mocked: combining a warning with an error requires an organic warning,
         # which does not exist until M2/M3 — pins that both print and exit is 1.
-        from agm.agl.runtime.runtime import Diagnostic, RunResult, WorkflowRuntime
+        from agm.agl.diagnostics import Diagnostic
+        from agm.agl.pipeline import PipelineDriver, RunResult
 
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("let x = 1\n")
@@ -734,7 +736,7 @@ class TestExecCommandWarnings:
         )
 
         def fake_run(
-            self: WorkflowRuntime,
+            self: PipelineDriver,
             prepared: object,
             *,
             param_values: object = None,
@@ -745,9 +747,9 @@ class TestExecCommandWarnings:
                 ok=False, diagnostics=[error], error=None, warnings=[warning]
             )
 
-        import agm.agl.runtime.runtime as rt_mod
+        import agm.agl.pipeline as pipeline_mod
 
-        monkeypatch.setattr(rt_mod.WorkflowRuntime, "run_prepared_graph", fake_run)
+        monkeypatch.setattr(pipeline_mod.PipelineDriver, "run_prepared_graph", fake_run)
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args(agl_file))
@@ -1042,11 +1044,11 @@ class TestExecCommandM1:
 
 
 def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
-    """Patch ``exec.WorkflowRuntime`` with a recording subclass.
+    """Patch ``exec.PipelineDriver`` with a recording subclass.
 
     Returns a dict that captures the constructor kwargs the command passed.
     """
-    from agm.agl.runtime.runtime import WorkflowRuntime as RealRuntime
+    from agm.agl.pipeline import PipelineDriver as RealRuntime
 
     captured: dict[str, object] = {}
 
@@ -1068,7 +1070,7 @@ def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
                 shell_exec_timeout=shell_exec_timeout,
             )
 
-    monkeypatch.setattr(exec_command, "WorkflowRuntime", RecordingRuntime)
+    monkeypatch.setattr(exec_command, "PipelineDriver", RecordingRuntime)
     return captured
 
 
@@ -1148,7 +1150,7 @@ class TestExecConfigWiring:
     def test_timeout_config_flows_to_shell_exec_timeout(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """[exec] timeout config is wired to shell_exec_timeout on WorkflowRuntime."""
+        """[exec] timeout config is wired to shell_exec_timeout on PipelineDriver."""
         from agm.cli_support.args import ExecArgs
         from agm.config.context import ConfigContext
 
@@ -1219,14 +1221,14 @@ class TestExecConfigWiring:
 def _exec_args_with_fallback_runtime(
     agl_file: Path, monkeypatch: pytest.MonkeyPatch, *, param_tokens: list[str] | None = None
 ) -> ExecArgs:
-    """Return ExecArgs for *agl_file* and patch WorkflowRuntime to have a fallback agent.
+    """Return ExecArgs for *agl_file* and patch PipelineDriver to have a fallback agent.
 
     In real use the CLI wires the runner-backed default agent (M5); in tests we
     patch the runtime to avoid the "no default agent" static error on prompt/named-agent calls.
     """
+    from agm.agl.pipeline import PipelineDriver as RealRuntime
     from agm.agl.runtime.agents import AgentFn
     from agm.agl.runtime.request import AgentRequest, AgentResponse
-    from agm.agl.runtime.runtime import WorkflowRuntime as RealRuntime
 
     def stub_agent(req: AgentRequest) -> AgentResponse:
         return AgentResponse(content="stub")
@@ -1247,7 +1249,7 @@ def _exec_args_with_fallback_runtime(
                 shell_exec_timeout=shell_exec_timeout,
             )
 
-    monkeypatch.setattr(exec_command, "WorkflowRuntime", FallbackRuntime)
+    monkeypatch.setattr(exec_command, "PipelineDriver", FallbackRuntime)
     return _exec_args(agl_file, param_tokens=param_tokens)
 
 
@@ -1365,9 +1367,9 @@ class TestDryRunInventory:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """--dry-run: the registered agent stub is never invoked."""
+        from agm.agl.pipeline import PipelineDriver as RealRuntime
         from agm.agl.runtime.agents import AgentFn
         from agm.agl.runtime.request import AgentRequest, AgentResponse
-        from agm.agl.runtime.runtime import WorkflowRuntime as RealRuntime
         from agm.core import dry_run
 
         monkeypatch.setattr(dry_run, "_ENABLED", True)
@@ -1394,7 +1396,7 @@ class TestDryRunInventory:
                     shell_exec_timeout=shell_exec_timeout,
                 )
 
-        monkeypatch.setattr(exec_command, "WorkflowRuntime", SpyRuntime)
+        monkeypatch.setattr(exec_command, "PipelineDriver", SpyRuntime)
 
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text('ask("Hi")\n')
@@ -1602,7 +1604,7 @@ class TestUncaughtExceptionOutputFormat:
         """Exit-2 stderr includes 'line N' when only line is set (col is None)."""
         from unittest.mock import MagicMock, patch
 
-        from agm.agl.runtime.runtime import RunError, RunResult
+        from agm.agl.pipeline import RunError, RunResult
         from agm.commands import exec as exec_command
 
         agl_file = tmp_path / "prog.agl"
@@ -1619,7 +1621,7 @@ class TestUncaughtExceptionOutputFormat:
                 col=None,
             ),
         )
-        with patch("agm.commands.exec.WorkflowRuntime") as mock_rt:
+        with patch("agm.commands.exec.PipelineDriver") as mock_rt:
             # prepare_program() must return a fake PreparedGraph with empty pragmas so
             # the pragma-resolution logic does not choke on MagicMock values.
             fake_prepared = MagicMock()
@@ -2349,7 +2351,7 @@ class TestExecPragmaPrecedence:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """``config strict_json = true`` in source sets ``default_strict_json=True``
-        on the WorkflowRuntime (observable via the spy pattern)."""
+        on the PipelineDriver (observable via the spy pattern)."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text("config strict_json = true\nlet x = 1\nx\n")
 
@@ -2460,7 +2462,7 @@ class TestExecPragmaPrecedence:
         from unittest.mock import MagicMock
 
         from agm.agl.modules.roots import RootSet
-        from agm.agl.runtime.runtime import WorkflowRuntime as RealRuntime
+        from agm.agl.pipeline import PipelineDriver as RealRuntime
 
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text("let x = 1\n")
@@ -2490,7 +2492,7 @@ class TestExecPragmaPrecedence:
             return fake_pg
 
         monkeypatch.setattr(
-            exec_command.WorkflowRuntime,
+            exec_command.PipelineDriver,
             "prepare_program",
             staticmethod(fake_prepare_program),
         )

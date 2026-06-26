@@ -6,7 +6,7 @@ session state (symbols, types, declarations, runtime values).  Agent calls fire
 exactly once and are never replayed, because each entry executes ONLY its own
 statements — references to earlier bindings read stored runtime ``Value``s.
 
-The driver reproduces ``WorkflowRuntime.run``'s IR pipeline incrementally. A
+The driver reproduces ``PipelineDriver.run``'s IR pipeline incrementally. A
 persistent link image and base frame retain IDs, metadata, closures, values, and
 cells across entries. Runtime failure is non-transactional: every initializer
 completed before the failure remains visible, while unreached initializers do not.
@@ -30,9 +30,9 @@ if TYPE_CHECKING:
     from agm.agl.modules.ids import ModuleId
     from agm.agl.modules.loader import LoadedModule
     from agm.agl.modules.roots import RootSet
+    from agm.agl.pipeline import RunError
     from agm.agl.runtime.agents import AgentFn
     from agm.agl.runtime.codec import OutputCodec
-    from agm.agl.runtime.runtime import RunError
     from agm.agl.runtime.types import HostEnvironment
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
@@ -144,9 +144,9 @@ class EntryResult:
 class ReplSession:
     """Persistent incremental AgL evaluation session (UI-free core).
 
-    Constructor parameters mirror ``WorkflowRuntime`` so a host can wire the same
+    Constructor parameters mirror ``PipelineDriver`` so a host can wire the same
     agent backing.  Registration (``register_agent``/``register_codec``) is
-    delegated to an internal ``WorkflowRuntime`` so the reserved-name / duplicate
+    delegated to an internal ``PipelineDriver`` so the reserved-name / duplicate
     validation and host-environment assembly are shared rather than duplicated.
 
     Each entry is incrementally linked and executed against a persistent IR base
@@ -171,7 +171,7 @@ class ReplSession:
         from pathlib import Path
 
         from agm.agl.lower import LinkImage
-        from agm.agl.runtime.runtime import WorkflowRuntime
+        from agm.agl.pipeline import PipelineDriver
         from agm.agl.scope.symbols import ScopeNode
         from agm.agl.typecheck.env import TypeEnvironment
         from agm.config.module_roots import resolve_stdlib_root
@@ -188,7 +188,7 @@ class ReplSession:
         self._params_config_loader = params_config_loader
 
         # Internal runtime owns the registrations + host-environment assembly.
-        self._runtime = WorkflowRuntime(
+        self._runtime = PipelineDriver(
             default_loop_limit=default_loop_limit,
             default_strict_json=default_strict_json,
             default_agent=default_agent,
@@ -258,11 +258,11 @@ class ReplSession:
     # ------------------------------------------------------------------
 
     def register_agent(self, name: str, fn: "AgentFn") -> None:
-        """Register a named agent (shares ``WorkflowRuntime`` validation)."""
+        """Register a named agent (shares ``PipelineDriver`` validation)."""
         self._runtime.register_agent(name, fn)
 
     def register_codec(self, codec: "OutputCodec") -> None:
-        """Register a custom output codec (shares ``WorkflowRuntime`` validation)."""
+        """Register a custom output codec (shares ``PipelineDriver`` validation)."""
         self._runtime.register_codec(codec)
 
     # ------------------------------------------------------------------
@@ -366,7 +366,7 @@ class ReplSession:
 
         # TAB advisories come from the parse's single lex pass (no separate TAB
         # scan).  The collector is populated even on a failed parse, so they
-        # surface on EVERY return path (mirroring ``WorkflowRuntime.prepare``).
+        # surface on EVERY return path (mirroring ``PipelineDriver.prepare``).
         # [1] Parse (seeded so node ids stay globally unique across entries).
         with tab_warning_collector() as tab_sink:
             try:
@@ -706,8 +706,8 @@ class ReplSession:
         """
         from agm.agl.eval.ir_interpreter import IrInterpreter
         from agm.agl.lower import lower_repl_entry
+        from agm.agl.pipeline import exception_value_to_run_error
         from agm.agl.runtime.request import AgentCancelled
-        from agm.agl.runtime.runtime import exception_value_to_run_error
         from agm.agl.runtime.trace import TraceStore
         from agm.agl.semantics.exceptions import AglRaise
 
@@ -1163,9 +1163,9 @@ class ReplSession:
         """Lower and execute one graph-mode entry in the persistent IR image."""
         from agm.agl.eval.ir_interpreter import IrInterpreter
         from agm.agl.lower import lower_repl_graph
+        from agm.agl.pipeline import exception_value_to_run_error
         from agm.agl.runtime.params import _materialize_ir_contracts
         from agm.agl.runtime.request import AgentCancelled
-        from agm.agl.runtime.runtime import exception_value_to_run_error
         from agm.agl.runtime.trace import TraceStore
         from agm.agl.semantics.exceptions import AglRaise
         from agm.agl.syntax.nodes import ImportDecl

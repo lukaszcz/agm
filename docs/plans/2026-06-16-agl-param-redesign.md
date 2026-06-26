@@ -83,7 +83,7 @@ the owner's selection. Alternatives are recorded for rationale.
 > route is consistent with `loop` and still delivers A's UX contract.
 
 > Cost note: on the **execution** path this adds **zero** extra front-end work — `agm
-> exec` already calls `WorkflowRuntime.prepare(source)` once (`exec.py:121`) and
+> exec` already calls `PipelineDriver.prepare(source)` once (`exec.py:121`) and
 > reuses the result via `run_prepared`. We reuse that single `PreparedProgram`.
 > `prepare` runs lex+parse+scope; building the typed CLI options additionally needs
 > the **typecheck** pass (to obtain resolved param types — see §6.7), which `run`
@@ -267,7 +267,7 @@ This is the substantive behavioral change: `param` is no longer a static no-op.
     CLI shape — none of which is known without typechecking. So `declared_params`
     exposes resolved types only **after typecheck**. Add a typed-discovery entry point
     — `PreparedProgram.typecheck()` (caching the resulting `type_env`) or a
-    `WorkflowRuntime.discover_params(prepared)` helper — that runs typecheck once.
+    `PipelineDriver.discover_params(prepared)` helper — that runs typecheck once.
     It is **non-raising** like `prepare`: on a typecheck failure it surfaces the
     diagnostic and degrades to no typed options (mirrors the parse-failure degrade in
     §7.2). `run_prepared` reuses the cached typecheck result so the source is
@@ -309,7 +309,7 @@ machinery (as `loop` already does) rather than injecting dynamic Click options:
    `--log-file`, `--no-log`, `--strict-json`, `--max-iters`) and the `FILE` positional
    parse normally; leftover `--param`/`--no-param`/`--param value` tokens land in
    `ctx.args`.
-2. In `exec.py`, after the existing single `WorkflowRuntime.prepare(source)`
+2. In `exec.py`, after the existing single `PipelineDriver.prepare(source)`
    (`exec.py:121`), run typed discovery (§6.7) and:
    - **Bail out first on a front-end failure.** If `prepared.resolved is None` (parse
      or scope error) or typed discovery failed, **skip** leftover-token validation

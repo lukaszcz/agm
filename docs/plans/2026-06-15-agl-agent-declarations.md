@@ -186,10 +186,10 @@ This is where the **binding error** lives.
   runtime). Reframe its docstring: the fallback is the documented backing for a
   *declared* agent that has no dedicated registration, not an implicit name
   resolver.
-- `WorkflowRuntime.run(...)`: after the static pipeline produces the declared
+- `PipelineDriver.run(...)`: after the static pipeline produces the declared
   agent set, enforce the host/source contract (see §8) before execution.
 
-### 8. Source↔host reconciliation (in `WorkflowRuntime.run`)
+### 8. Source↔host reconciliation (in `PipelineDriver.run`)
 
 After parse+scope yields `declared_agents` and before execution:
 
@@ -205,7 +205,7 @@ To expose the declared set to the `exec` host **without re-running the whole
 pipeline twice**, add a lightweight API:
 
 ```python
-class WorkflowRuntime:
+class PipelineDriver:
     def declared_agents(self, source: str) -> tuple[AgentDeclInfo, ...]:
         """Parse + scope only; return declared agents with optional runner hints."""
 ```

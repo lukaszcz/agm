@@ -9,9 +9,9 @@ in tests/agl/README.md.
 
 Public contract exercised here (notes/PLAN_DSL.md §9, notes/dsl_design.md §7.6):
 
-    from agm.agl import WorkflowRuntime
+    from agm.agl import PipelineDriver
 
-    runtime = WorkflowRuntime(
+    runtime = PipelineDriver(
         default_loop_limit=5,       # `do` bound default (design §2.11)
         default_strict_json=False,  # lenient JSON recovery is the default (design §2.8)
         default_agent=fn,           # the built-in `ask` agent (a host callable;
@@ -90,7 +90,7 @@ def _agent_from_spec(name: str, spec: Any) -> ScriptedAgent:
 
 
 def _run_program(source: str, scenario: dict[str, Any]) -> tuple[Any, dict[str, ScriptedAgent]]:
-    from agm.agl import WorkflowRuntime
+    from agm.agl import PipelineDriver
 
     agents = {
         name: _agent_from_spec(name, spec) for name, spec in scenario.get("agents", {}).items()
@@ -103,7 +103,7 @@ def _run_program(source: str, scenario: dict[str, Any]) -> tuple[Any, dict[str, 
         kwargs["default_strict_json"] = runtime_cfg["default_strict_json"]
     if "ask" in agents:
         kwargs["default_agent"] = agents["ask"]
-    runtime = WorkflowRuntime(**kwargs)
+    runtime = PipelineDriver(**kwargs)
     for name, agent in agents.items():
         if name != "ask":
             runtime.register_agent(name, agent)
@@ -119,7 +119,7 @@ def _run_program(source: str, scenario: dict[str, Any]) -> tuple[Any, dict[str, 
                 }
             )
         )
-        prepared = WorkflowRuntime.prepare_program(source, entry_path=None, roots=roots)
+        prepared = PipelineDriver.prepare_program(source, entry_path=None, roots=roots)
         result = runtime.run_prepared_graph(
             prepared, param_values=scenario.get("params", {})
         )
@@ -236,10 +236,10 @@ def test_program_scenario(
 
 @pytest.mark.parametrize("program", _rejection_params())
 def test_static_rejection(program: Path) -> None:
-    from agm.agl import WorkflowRuntime
+    from agm.agl import PipelineDriver
 
     expect = _load_json(program.with_name(program.stem + ".expect.json"))["diagnostic"]
-    result = WorkflowRuntime().run(program.read_text(encoding="utf-8"), param_values={})
+    result = PipelineDriver().run(program.read_text(encoding="utf-8"), param_values={})
     assert not result.ok, "expected the program to be rejected statically"
     assert result.error is None, "static rejection must happen before execution"
     diagnostics = list(result.diagnostics)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from agm.agl.runtime.runtime import ParamDeclInfo
+from agm.agl.runtime.types import ParamDeclInfo
 from agm.agl.semantics.types import BoolType, IntType, ListType, TextType
 
 

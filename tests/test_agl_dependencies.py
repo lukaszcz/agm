@@ -73,6 +73,20 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
                 "agm.agl.semantics",
             ),
         ),
+        (
+            "runtime",
+            (
+                "agm.agl.capabilities",
+                "agm.agl.diagnostics",
+                "agm.agl.ir",
+                "agm.agl.modules.ids",
+                "agm.agl.runtime",
+                "agm.agl.semantics",
+                "agm.agl.syntax.spans",
+                "agm.agl.typecheck.env",
+                "agm.agl.type_schema",
+            ),
+        ),
     ],
 )
 def test_execution_package_dependency_contract(

@@ -1,10 +1,14 @@
-"""WorkflowRuntime — the public façade for the AgL host runtime.
+"""PipelineDriver — top-of-stack orchestrator for the AgL execution pipeline.
 
 Drives the full ``parse → scope → typecheck → lower/link → IR eval`` pipeline:
 registers agents/codecs, validates host params, materializes output
 contracts, and executes the program (or stops after static checking for
 ``agm exec --dry-run``).  Structured outputs use the JSON codec with
 lenient-by-default recovery (design §2.8).
+
+``agm.agl.runtime`` is the eval-free services layer (agents, codecs, params,
+types).  This module is the top-of-stack host façade that depends on both
+``runtime`` services and ``agm.agl.eval``.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from agm.agl.diagnostics import Diagnostic
+from agm.agl.eval.ir_interpreter import IrInterpreter
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.params import _materialize_ir_contracts, _prepare_ir_params
 from agm.agl.runtime.types import (
@@ -48,7 +53,7 @@ _RESERVED_AGENT_NAMES: frozenset[str] = frozenset({"ask", "exec", "ask-request"}
 
 @dataclass(frozen=True, slots=True)
 class ParamDiscovery:
-    """Result of ``WorkflowRuntime.discover_params``."""
+    """Result of ``PipelineDriver.discover_params``."""
 
     params: tuple[ParamDeclInfo, ...]
     program_name: str | None
@@ -62,8 +67,8 @@ class ParamDiscovery:
 class PreparedProgram:
     """Result of the lex + parse + scope phase of an AgL program.
 
-    Produced by :meth:`WorkflowRuntime.prepare` and consumed by
-    :meth:`WorkflowRuntime.run_prepared`, so those two static phases run exactly
+    Produced by :meth:`PipelineDriver.prepare` and consumed by
+    :meth:`PipelineDriver.run_prepared`, so those two static phases run exactly
     ONCE even when a host inspects :attr:`declared_agents` (to wire registrations)
     before executing.  ``run(source)`` is exactly
     ``run_prepared(prepare(source))``.
@@ -128,8 +133,8 @@ class PreparedProgram:
 class PreparedGraph:
     """Result of the load + scope phase of an AgL multi-module program.
 
-    Produced by :meth:`WorkflowRuntime.prepare_program` and consumed by
-    :meth:`WorkflowRuntime.run_prepared_graph`.  Properties mirror
+    Produced by :meth:`PipelineDriver.prepare_program` and consumed by
+    :meth:`PipelineDriver.run_prepared_graph`.  Properties mirror
     :class:`PreparedProgram` but read from the entry module of the graph.
 
     ``resolved_graph``
@@ -240,7 +245,7 @@ class RunError:
 
 @dataclass(slots=True)
 class RunResult:
-    """Result of a ``WorkflowRuntime.run`` call.
+    """Result of a ``PipelineDriver.run`` call.
 
     ``ok``
         ``True`` iff there are no error-severity ``diagnostics`` **and** no
@@ -284,7 +289,7 @@ class RunResult:
     trace_path: Path | None = field(default=None)
 
 
-class WorkflowRuntime:
+class PipelineDriver:
     """Host API for the AgL interpreter.
 
     Constructor parameters
@@ -472,7 +477,7 @@ class WorkflowRuntime:
         parse or scope error it returns ``()`` (the subsequent ``run`` resurfaces
         the diagnostic).
         """
-        return WorkflowRuntime.prepare(source).declared_agents
+        return PipelineDriver.prepare(source).declared_agents
 
     def discover_params(self, prepared: PreparedProgram) -> ParamDiscovery:
         """Typecheck-only discovery for typed ``param`` declarations."""
@@ -693,7 +698,6 @@ class WorkflowRuntime:
         # ----------------------------------------------------------------
         # [7] Build and run the interpreter
         # ----------------------------------------------------------------
-        from agm.agl.eval.ir_interpreter import IrInterpreter
         from agm.agl.runtime.trace import TraceStore
         from agm.agl.semantics.exceptions import AglRaise
 
@@ -1043,7 +1047,6 @@ class WorkflowRuntime:
             )
 
         # Execute the graph.
-        from agm.agl.eval.ir_interpreter import IrInterpreter
         from agm.agl.runtime.trace import TraceStore
         from agm.agl.semantics.exceptions import AglRaise
 
@@ -1216,7 +1219,7 @@ def assemble_host_environment(
     """Assemble the shared host runtime environment from registrations.
 
     Builds the merged codec table, the ``AgentRegistry``, and the derived
-    ``HostCapabilities`` exactly as ``WorkflowRuntime.run`` did inline.
+    ``HostCapabilities`` exactly as ``PipelineDriver.run`` does inline.
     Used by BOTH ``run`` and ``ReplSession`` so the two share identical
     agent/codec wiring (CARRY-IN 1: codec_kinds are derived from the actual
     registries, not from duplicated constants).

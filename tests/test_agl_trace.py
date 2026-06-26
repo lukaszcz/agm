@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 import agm.commands.exec as exec_command
-from agm.agl import WorkflowRuntime
+from agm.agl import PipelineDriver
 from agm.agl.runtime import AgentRequest, AgentResponse
 from agm.cli_support.args import ExecArgs
 
@@ -65,7 +65,7 @@ class TestTraceFileCreated:
     def test_trace_file_created_at_custom_path(self, tmp_path: Path) -> None:
         """A custom --log-file path receives JSONL trace output after a run."""
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run('let x = 1\nprint "hello"', log_file=log_path)
         assert result.ok
         assert log_path.exists(), "trace file must be created when log_file is given"
@@ -73,7 +73,7 @@ class TestTraceFileCreated:
     def test_trace_file_has_jsonl_content(self, tmp_path: Path) -> None:
         """Each line of the trace file is a valid JSON object."""
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.run('let x = 1\nprint "hello"', log_file=log_path)
         records = _load_jsonl(log_path)
         assert len(records) >= 1
@@ -82,7 +82,7 @@ class TestTraceFileCreated:
 
     def test_trace_file_not_created_when_no_log(self, tmp_path: Path) -> None:
         """When log_file is None (no-log semantics), no trace file is written."""
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run('let x = 1\nprint "hello"', log_file=None)
         assert result.ok
         # No trace file: any file created would be under .agent-files/ which
@@ -92,7 +92,7 @@ class TestTraceFileCreated:
     def test_run_result_exposes_trace_path(self, tmp_path: Path) -> None:
         """RunResult.trace_path is the Path of the written JSONL file."""
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run('let x = 1\nx', log_file=log_path)
         assert result.ok
         assert result.trace_path == log_path
@@ -106,7 +106,7 @@ class TestTraceFileCreated:
 class TestPrintRecord:
     def test_print_produces_trace_record(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.run('print "hello world"', log_file=log_path)
         records = _load_jsonl(log_path)
         kinds = [r.get("kind") for r in records]
@@ -114,7 +114,7 @@ class TestPrintRecord:
 
     def test_print_record_has_value(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.run('print "hello world"', log_file=log_path)
         records = _load_jsonl(log_path)
         print_recs = [r for r in records if r.get("kind") == "print"]
@@ -124,7 +124,7 @@ class TestPrintRecord:
 
     def test_print_record_has_span(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.run('print "hello"', log_file=log_path)
         records = _load_jsonl(log_path)
         print_recs = [r for r in records if r.get("kind") == "print"]
@@ -136,7 +136,7 @@ class TestPrintRecord:
 class TestMutationRecord:
     def test_assign_produces_mutation_record(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.run("var x = 1\nx := 2", log_file=log_path)
         records = _load_jsonl(log_path)
         kinds = [r.get("kind") for r in records]
@@ -144,7 +144,7 @@ class TestMutationRecord:
 
     def test_mutation_record_has_name_and_value(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.run("var x = 1\nx := 42", log_file=log_path)
         records = _load_jsonl(log_path)
         mut_recs = [r for r in records if r.get("kind") == "mutation"]
@@ -156,7 +156,7 @@ class TestMutationRecord:
 class TestExecCommandRecord:
     def test_exec_produces_exec_record(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.run('let x: text = exec "echo hi"\nx', log_file=log_path)
         records = _load_jsonl(log_path)
         kinds = [r.get("kind") for r in records]
@@ -164,7 +164,7 @@ class TestExecCommandRecord:
 
     def test_exec_record_has_exit_code(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.run('let x: text = exec "echo hi"\nx', log_file=log_path)
         records = _load_jsonl(log_path)
         exec_recs = [r for r in records if r.get("kind") == "exec_command"]
@@ -174,7 +174,7 @@ class TestExecCommandRecord:
 
     def test_exec_record_has_stdout(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.run('let x: text = exec "echo captured"\nx', log_file=log_path)
         records = _load_jsonl(log_path)
         exec_recs = [r for r in records if r.get("kind") == "exec_command"]
@@ -184,7 +184,7 @@ class TestExecCommandRecord:
 
     def test_exec_record_has_command(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.run('let x: text = exec "echo hello"\nx', log_file=log_path)
         records = _load_jsonl(log_path)
         exec_recs = [r for r in records if r.get("kind") == "exec_command"]
@@ -193,7 +193,7 @@ class TestExecCommandRecord:
 
     def test_exec_record_has_duration(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.run('let x: text = exec "echo hello"\nx', log_file=log_path)
         records = _load_jsonl(log_path)
         exec_recs = [r for r in records if r.get("kind") == "exec_command"]
@@ -206,7 +206,7 @@ class TestExecCommandRecord:
 class TestAgentCallRecord:
     def test_agent_call_produces_attempt_record(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.register_agent("reviewer", _agent_returning("good"))
         rt.run(
             'agent reviewer\nlet x: text = ask("check this", agent: reviewer)\nx',
@@ -218,7 +218,7 @@ class TestAgentCallRecord:
 
     def test_agent_call_record_has_agent_name(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.register_agent("critic", _agent_returning("ok"))
         rt.run(
             'agent critic\nlet x: text = ask("review", agent: critic)\nx',
@@ -231,7 +231,7 @@ class TestAgentCallRecord:
 
     def test_agent_call_record_has_attempt_number(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.register_agent("impl", _agent_returning("result"))
         rt.run(
             'agent impl\nlet x: text = ask("do work", agent: impl)\nx',
@@ -252,7 +252,7 @@ class TestRetryRecords:
     def test_retry_produces_multiple_attempt_records(self, tmp_path: Path) -> None:
         """With on_parse_error: retry[2], failed attempts appear in the trace."""
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime(default_strict_json=True)
+        rt = PipelineDriver(default_strict_json=True)
 
         call_count = 0
 
@@ -275,7 +275,7 @@ class TestRetryRecords:
     def test_retry_records_carry_attempt_index(self, tmp_path: Path) -> None:
         """Attempt indices should be 0, 1, 2 for three attempts."""
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime(default_strict_json=True)
+        rt = PipelineDriver(default_strict_json=True)
 
         call_count = 0
 
@@ -299,7 +299,7 @@ class TestRetryRecords:
     def test_parse_result_record_emitted_for_each_attempt(self, tmp_path: Path) -> None:
         """A parse_result record follows each agent_call_attempt."""
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime(default_strict_json=True)
+        rt = PipelineDriver(default_strict_json=True)
 
         def agent(request: AgentRequest) -> AgentResponse:
             return AgentResponse(content="not json at all")
@@ -324,7 +324,7 @@ class TestRetryRecords:
 class TestExceptionRecord:
     def test_uncaught_exception_produces_exception_record(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime(default_strict_json=True)
+        rt = PipelineDriver(default_strict_json=True)
 
         def agent(request: AgentRequest) -> AgentResponse:
             return AgentResponse(content="not json")
@@ -342,7 +342,7 @@ class TestExceptionRecord:
 
     def test_exception_record_has_type_name(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime(default_strict_json=True)
+        rt = PipelineDriver(default_strict_json=True)
 
         def agent(request: AgentRequest) -> AgentResponse:
             return AgentResponse(content="not json")
@@ -359,7 +359,7 @@ class TestExceptionRecord:
 
     def test_exception_record_has_trace_id(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime(default_strict_json=True)
+        rt = PipelineDriver(default_strict_json=True)
 
         def agent(request: AgentRequest) -> AgentResponse:
             return AgentResponse(content="not json")
@@ -379,7 +379,7 @@ class TestExceptionRecord:
         """The trace_id in the exception record matches the .trace_id field on
         the uncaught AgL exception (RunResult.error.fields['trace_id'])."""
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime(default_strict_json=True)
+        rt = PipelineDriver(default_strict_json=True)
 
         def agent(request: AgentRequest) -> AgentResponse:
             return AgentResponse(content="not json")
@@ -408,7 +408,7 @@ class TestExceptionRecord:
         """An exception caught by try/catch is NOT written as an 'exception' record
         (it was handled in-language and did not escape the program)."""
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime(default_strict_json=True)
+        rt = PipelineDriver(default_strict_json=True)
 
         def agent(request: AgentRequest) -> AgentResponse:
             return AgentResponse(content="not json")
@@ -445,7 +445,7 @@ class TestBuiltinExceptionTraceId:
         self, tmp_path: Path
     ) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         # Uncaught division by zero → ArithmeticError escapes the program.
         result = rt.run("let x = 1 / 0\nx", log_file=log_path)
         assert not result.ok
@@ -464,7 +464,7 @@ class TestBuiltinExceptionTraceId:
         assert isinstance(rec_trace_id, str) and rec_trace_id
 
     def test_arithmetic_error_trace_id_non_empty_without_logging(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         # With logging OFF the trace_id still exists (references nothing; §8.1
         # only requires the field be present).
         result = rt.run("let x = 1 / 0\nx", log_file=None)
@@ -475,7 +475,7 @@ class TestBuiltinExceptionTraceId:
         assert isinstance(agl_trace_id, str) and agl_trace_id
 
     def test_match_error_trace_id_non_empty_without_logging(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         # A case statement with no matching pattern raises MatchError.
         result = rt.run(
             "case 5 of\n  | 0 => ()\n",
@@ -489,7 +489,7 @@ class TestBuiltinExceptionTraceId:
 
     def test_max_iterations_trace_id_linked_with_logging(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         # A do-loop whose condition never becomes true exhausts its limit.
         result = rt.run(
             "var x = 0\ndo[2]\n  x := x\nuntil false\n",
@@ -516,7 +516,7 @@ class TestBuiltinExceptionTraceId:
 class TestRunBoundaryRecords:
     def test_run_start_record_present(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.run("let x = 1\nx", log_file=log_path)
         records = _load_jsonl(log_path)
         kinds = [r.get("kind") for r in records]
@@ -524,7 +524,7 @@ class TestRunBoundaryRecords:
 
     def test_run_end_record_present(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.run("let x = 1\nx", log_file=log_path)
         records = _load_jsonl(log_path)
         kinds = [r.get("kind") for r in records]
@@ -532,7 +532,7 @@ class TestRunBoundaryRecords:
 
     def test_run_start_before_run_end(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.run("let x = 1\nx", log_file=log_path)
         records = _load_jsonl(log_path)
         kinds = [r.get("kind") for r in records]
@@ -543,7 +543,7 @@ class TestRunBoundaryRecords:
     def test_all_records_share_run_id(self, tmp_path: Path) -> None:
         """Every record in a trace file carries the same run_id."""
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.run('var x = 1\nx := 2\nprint "done"', log_file=log_path)
         records = _load_jsonl(log_path)
         assert len(records) >= 3
@@ -561,7 +561,7 @@ class TestRunBoundaryRecords:
 class TestNoLog:
     def test_no_log_writes_nothing(self, tmp_path: Path) -> None:
         """With log_file=None the trace store is a no-op and no files are created."""
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run('let x = 1\nprint "silent"', log_file=None)
         assert result.ok
         # No JSONL files created anywhere in tmp_path.
@@ -569,12 +569,12 @@ class TestNoLog:
         assert not jsonl_files
 
     def test_no_log_result_trace_path_is_none(self, tmp_path: Path) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run("let x = 1\nx", log_file=None)
         assert result.trace_path is None
 
     def test_no_log_with_agent_call_writes_nothing(self, tmp_path: Path) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.register_agent("a", _agent_returning("hello"))
         result = rt.run('agent a\nlet x: text = ask("hi", agent: a)\nx', log_file=None)
         assert result.ok
@@ -584,7 +584,7 @@ class TestNoLog:
     def test_no_log_with_decimal_mutation_still_works(self, tmp_path: Path) -> None:
         """A no-log run that mutates a decimal binding still succeeds and writes
         nothing (F3 early-out before any serialization/UUID work)."""
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run(
             "var x: decimal = 0.1\nx := x + 0.2",
             log_file=None,
@@ -644,7 +644,7 @@ class TestDryRunNoTrace:
     def test_dry_run_does_not_write_trace(self, tmp_path: Path) -> None:
         """check_only=True (--dry-run) must produce no trace output."""
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run("let x = 1\nx", log_file=log_path, check_only=True)
         assert result.ok
         # No trace file created for dry-run.
@@ -652,7 +652,7 @@ class TestDryRunNoTrace:
 
     def test_dry_run_trace_path_is_none(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run("let x = 1\nx", log_file=log_path, check_only=True)
         assert result.trace_path is None
 
@@ -666,7 +666,7 @@ class TestDecimalExactness:
     def test_decimal_value_traced_exactly(self, tmp_path: Path) -> None:
         """A Decimal in a mutation trace must survive round-trip without float error."""
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         # 0.1 + 0.2 should NOT produce the float approximation 0.30000000000000004.
         rt.run(
             "var x: decimal = 0.1\nx := x + 0.2",
@@ -689,7 +689,7 @@ class TestDecimalExactness:
 class TestSourceSpans:
     def test_exec_record_has_source_span(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.run('let x: text = exec "echo hi"\nx', log_file=log_path)
         records = _load_jsonl(log_path)
         exec_recs = [r for r in records if r.get("kind") == "exec_command"]
@@ -701,7 +701,7 @@ class TestSourceSpans:
 
     def test_agent_record_has_source_span(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.register_agent("impl", _agent_returning("hello"))
         rt.run('agent impl\nlet x: text = ask("do work", agent: impl)\nx', log_file=log_path)
         records = _load_jsonl(log_path)
@@ -889,7 +889,7 @@ class TestUnparseableFeedback:
     ) -> None:
         """Second attempt's validation_errors is non-empty with the parse reason."""
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime(default_strict_json=True)
+        rt = PipelineDriver(default_strict_json=True)
 
         captured_requests: list[AgentRequest] = []
         call_count = 0
@@ -924,7 +924,7 @@ class TestUnparseableFeedback:
     ) -> None:
         """parse_result trace record's error_summary is non-empty for unparseable output."""
         log_path = tmp_path / "trace.jsonl"
-        rt = WorkflowRuntime(default_strict_json=True)
+        rt = PipelineDriver(default_strict_json=True)
 
         def agent(request: AgentRequest) -> AgentResponse:
             return AgentResponse(content="totally not json #@!")
@@ -952,7 +952,7 @@ class TestUnparseableFeedback:
 
         from agm.agl.runtime.codec import ParseResult
 
-        rt = WorkflowRuntime(default_strict_json=True)
+        rt = PipelineDriver(default_strict_json=True)
 
         def agent(request: AgentRequest) -> AgentResponse:
             return AgentResponse(content="42")

@@ -57,10 +57,10 @@ def discover_params_from_source(source: str) -> tuple[ParamDeclInfo, ...]:
     discovered params and must tolerate unreadable/unparsable sources.
     """
     try:
-        from agm.agl import WorkflowRuntime
+        from agm.agl import PipelineDriver
 
-        prepared = WorkflowRuntime.prepare(source)
-        discovery = WorkflowRuntime(
+        prepared = PipelineDriver.prepare(source)
+        discovery = PipelineDriver(
             default_agent=lambda request: AgentResponse(content="")
         ).discover_params(prepared)
         return discovery.params

@@ -1,7 +1,7 @@
-"""Tests for WorkflowRuntime — M0 shell behaviors preserved, M1 additions.
+"""Tests for PipelineDriver — M0 shell behaviors preserved, M1 additions.
 
 Covers:
-- WorkflowRuntime constructor with default kwargs
+- PipelineDriver constructor with default kwargs
 - register_agent: duplicate rejection, reserved-name rejection (ask, exec)
 - run: full pipeline now active; valid programs succeed; static errors fail
 - Diagnostic has .message (str) and .line (int)
@@ -20,12 +20,12 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from agm.agl import AglError, SourceSpan, WorkflowRuntime
+from agm.agl import AglError, PipelineDriver, SourceSpan
 from agm.agl.diagnostics import Diagnostic, format_diagnostic, format_diagnostic_location
 from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
+from agm.agl.pipeline import RunResult
 from agm.agl.runtime import AgentRequest
-from agm.agl.runtime.runtime import RunResult
 from agm.agl.semantics.types import Type
 
 if TYPE_CHECKING:
@@ -34,19 +34,19 @@ if TYPE_CHECKING:
 _STDLIB_ROOT = pathlib.Path(__file__).resolve().parents[1] / "stdlib"
 
 
-class TestWorkflowRuntimeConstructor:
+class TestPipelineDriverConstructor:
     def test_default_constructor_uses_documented_defaults(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         # Documented constructor defaults (design §2.8/§2.11).
         assert rt.default_loop_limit == 5
         assert rt.default_strict_json is False
 
     def test_default_loop_limit_kwarg_is_observable(self) -> None:
-        rt = WorkflowRuntime(default_loop_limit=10)
+        rt = PipelineDriver(default_loop_limit=10)
         assert rt.default_loop_limit == 10
 
     def test_default_strict_json_kwarg_is_observable(self) -> None:
-        rt = WorkflowRuntime(default_strict_json=True)
+        rt = PipelineDriver(default_strict_json=True)
         assert rt.default_strict_json is True
 
     def test_default_agent_constructed_runtime_runs(self) -> None:
@@ -55,7 +55,7 @@ class TestWorkflowRuntimeConstructor:
         def my_agent(request: object) -> str:
             return "response"
 
-        rt = WorkflowRuntime(default_agent=my_agent)
+        rt = PipelineDriver(default_agent=my_agent)
         rt.register_agent("reviewer", my_agent)  # should not raise
         # The source declares the registered agent so the source↔host contract
         # holds (M4); a valid program then returns ok=True.
@@ -66,7 +66,7 @@ class TestWorkflowRuntimeConstructor:
 
 class TestRegisterAgent:
     def test_register_agent_accepted(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         prompts: list[str] = []
 
         def my_agent(request: AgentRequest) -> str:
@@ -83,7 +83,7 @@ class TestRegisterAgent:
         assert prompts == ["meaningful prompt"]
 
     def test_register_duplicate_raises(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
 
         def my_agent(request: object) -> str:
             return "response"
@@ -93,7 +93,7 @@ class TestRegisterAgent:
             rt.register_agent("my_agent", my_agent)
 
     def test_register_reserved_name_ask_raises(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
 
         def my_agent(request: object) -> str:
             return "response"
@@ -102,7 +102,7 @@ class TestRegisterAgent:
             rt.register_agent("ask", my_agent)
 
     def test_register_reserved_name_exec_raises(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
 
         def my_agent(request: object) -> str:
             return "response"
@@ -111,7 +111,7 @@ class TestRegisterAgent:
             rt.register_agent("exec", my_agent)
 
     def test_register_reserved_name_ask_request_raises(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
 
         def my_agent(request: object) -> str:
             return "response"
@@ -124,56 +124,56 @@ class TestRunBehavior:
     """M1 run() behavior: valid programs run, static errors fail cleanly."""
 
     def test_run_returns_run_result(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run("let x = 1")
         assert isinstance(result, RunResult)
 
     def test_valid_program_ok(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run("let x = 1\nx")
         assert result.ok is True
 
     def test_static_error_not_ok(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run("let x = undefined_name")
         assert result.ok is False
         assert result.error is None
         assert len(result.diagnostics) >= 1
 
     def test_static_error_diagnostic_has_message(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run("let x = undefined_name")
         diag = result.diagnostics[0]
         assert isinstance(diag.message, str)
         assert diag.message
 
     def test_static_error_diagnostic_has_line(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run("let x = undefined_name")
         diag = result.diagnostics[0]
         assert isinstance(diag.line, int)
         assert diag.line >= 1
 
     def test_run_result_error_none_for_static_failure(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run("let x = undefined_name")
         # pre-execution failure: error is None (no AgL exception was raised)
         assert result.error is None
 
     def test_run_with_params(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run("param k\nprint k", param_values={"k": "value"})
         assert isinstance(result, RunResult)
         assert result.ok is True
 
     def test_run_with_empty_params(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run("let x = 1\nx", param_values={})
         assert isinstance(result, RunResult)
         assert result.ok is True
 
     def test_run_parse_error_not_ok(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         # Invalid syntax
         result = rt.run("@@@@@")
         assert result.ok is False
@@ -184,24 +184,24 @@ class TestFallbackAgent:
     """Default-agent backing behavior for capability checking."""
 
     def test_no_default_agent_ask_call_static_error(self) -> None:
-        rt = WorkflowRuntime()  # no default_agent
+        rt = PipelineDriver()  # no default_agent
         result = rt.run('let x = ask "hi"')
         assert result.ok is False
         assert result.error is None  # static, not runtime
 
     def test_with_default_agent_ask_call_succeeds(self) -> None:
-        rt = WorkflowRuntime(default_agent=lambda req: "ok")
+        rt = PipelineDriver(default_agent=lambda req: "ok")
         result = rt.run('let x = ask "hi"\nx')
         assert result.ok is True
 
     def test_named_agent_registered_accepted(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.register_agent("impl", lambda req: "output")
         result = rt.run('agent impl\nask("do it", agent: impl)')
         assert result.ok is True
 
     def test_undeclared_named_agent_is_static_error(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         # An undeclared named agent is a static scope binding error: it is
         # rejected before execution regardless of host backing.
         result = rt.run('let x = mysterious_agent "hi"')
@@ -209,7 +209,7 @@ class TestFallbackAgent:
         assert result.error is None
 
     def test_default_agent_backs_declared_name(self) -> None:
-        rt = WorkflowRuntime(default_agent=lambda req: "ok")
+        rt = PipelineDriver(default_agent=lambda req: "ok")
         # A default_agent backs any declared name without a dedicated registration.
         result = rt.run('agent any_agent_name\nask("hi", agent: any_agent_name)')
         assert result.ok is True
@@ -219,7 +219,7 @@ class TestFallbackAgent:
         # source↔host contract holds (decision 11): a declared+backed agent
         # that is never called is a non-fatal scope WARNING, surfaced on
         # result.warnings without affecting result.ok.
-        rt = WorkflowRuntime(default_agent=lambda req: "ok")
+        rt = PipelineDriver(default_agent=lambda req: "ok")
         result = rt.run('agent unused_helper\nprint "hi"')
         assert result.ok is True
         joined = " ".join(d.message for d in result.warnings)
@@ -230,25 +230,25 @@ class TestInputValidationRuntime:
     """Param validation before execution (§11.3, §9.5)."""
 
     def test_missing_param_fails_not_ok(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run("param spec\nprint spec", param_values={})
         assert result.ok is False
         assert result.error is None  # host error, not AgL exception
 
     def test_missing_param_mentions_name(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run("param spec\nprint spec", param_values={})
         msgs = " ".join(d.message for d in result.diagnostics)
         assert "spec" in msgs.lower()
 
     def test_undeclared_extra_is_ignored(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run("param a\nprint a", param_values={"a": "ok", "b": "extra"})
         assert result.ok is True
         assert result.diagnostics == []
 
     def test_text_param_verbatim(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run("param msg\nprint msg", param_values={"msg": "hello world"})
         assert result.ok is True
 
@@ -259,26 +259,26 @@ class TestInputValidationRuntime:
             calls.append(req.prompt)
             return "ok"
 
-        rt = WorkflowRuntime(default_agent=agent)
+        rt = PipelineDriver(default_agent=agent)
         rt.run('param x\nask("Hi")', param_values={})
         assert calls == []
 
     def test_int_param_json_parsed(self, capsys: pytest.CaptureFixture[str]) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run("param n: int\nprint n", param_values={"n": 5})
         assert result.ok
         out = capsys.readouterr().out
         assert "5" in out
 
     def test_invalid_typed_param_fails(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run("param n: int\nprint n", param_values={"n": "five"})
         assert result.ok is False
         assert result.error is None
 
     def test_missing_param_reports_declaration_line(self) -> None:
         """F3: the missing-param diagnostic carries the declaration's line."""
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         # ``param spec`` is on line 3; the diagnostic must report line 3, not 1.
         src = "let a = 1\nlet b = 2\nparam spec\nprint spec"
         result = rt.run(src, param_values={})
@@ -289,7 +289,7 @@ class TestInputValidationRuntime:
 
     def test_invalid_typed_param_reports_declaration_line(self) -> None:
         """F3 parity: the type-invalid diagnostic already reports the line."""
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         src = "let a = 1\nlet b = 2\nparam n: int\nprint n"
         result = rt.run(src, param_values={"n": "five"})
         assert result.ok is False
@@ -302,7 +302,7 @@ class TestEmptyResponse:
     """Exit 0 with empty stdout is a valid empty response (plan §9.5)."""
 
     def test_empty_string_response_is_valid_text(self) -> None:
-        rt = WorkflowRuntime(default_agent=lambda req: "")
+        rt = PipelineDriver(default_agent=lambda req: "")
         result = rt.run('let x = ask "Say nothing."\nx')
         assert result.ok is True
         from agm.agl.semantics.values import TextValue
@@ -320,7 +320,7 @@ class TestAgentRequest:
             received.append(req)
             return "ok"
 
-        rt = WorkflowRuntime(default_agent=agent)
+        rt = PipelineDriver(default_agent=agent)
         rt.run('ask "Hello world"')
         assert received[0].prompt == "Hello world"
 
@@ -331,7 +331,7 @@ class TestAgentRequest:
             received.append(req)
             return "ok"
 
-        rt = WorkflowRuntime(default_agent=agent)
+        rt = PipelineDriver(default_agent=agent)
         rt.run('ask "Hi"')
         assert received[0].agent == "ask"
 
@@ -342,7 +342,7 @@ class TestAgentRequest:
             received.append(req)
             return "ok"
 
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.register_agent("reviewer", reviewer)
         rt.run('agent reviewer\nask("Review this", agent: reviewer)')
         assert received[0].agent == "reviewer"
@@ -356,7 +356,7 @@ class TestUncaughtAgentCallErrorSpan:
     reports ``at line N`` (design §12.6).
     """
 
-    def _failing_runtime(self) -> WorkflowRuntime:
+    def _failing_runtime(self) -> PipelineDriver:
         from agm.agl.runtime.agents import AgentCallHostError
 
         def failing_agent(req: AgentRequest) -> str:
@@ -367,7 +367,7 @@ class TestUncaughtAgentCallErrorSpan:
                 elapsed=0.0,
             )
 
-        return WorkflowRuntime(default_agent=failing_agent)
+        return PipelineDriver(default_agent=failing_agent)
 
     def test_dispatch_preserves_existing_span(self) -> None:
         """A span the raise site already supplied is never overwritten."""
@@ -391,7 +391,7 @@ class TestUncaughtAgentCallErrorSpan:
             )
             raise AglRaise(exc_val, span=existing)
 
-        rt = WorkflowRuntime(default_agent=agent)
+        rt = PipelineDriver(default_agent=agent)
         result = rt.run('let a = 1\nask("hi")')
         assert result.ok is False
         assert result.error is not None
@@ -492,7 +492,7 @@ class TestRunResultType:
         assert result.error is None
 
     def test_run_result_has_bindings(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run("let x = 1\nx")
         assert hasattr(result, "bindings")
         assert isinstance(result.bindings, dict)
@@ -677,17 +677,17 @@ class TestTokenConstants:
         assert tokens.KW_NULL == "null"
 
 
-class TestWorkflowRuntimeProperties:
+class TestPipelineDriverProperties:
     def test_default_loop_limit_property(self) -> None:
-        rt = WorkflowRuntime(default_loop_limit=7)
+        rt = PipelineDriver(default_loop_limit=7)
         assert rt.default_loop_limit == 7
 
     def test_default_strict_json_property(self) -> None:
-        rt = WorkflowRuntime(default_strict_json=True)
+        rt = PipelineDriver(default_strict_json=True)
         assert rt.default_strict_json is True
 
     def test_default_strict_json_property_false(self) -> None:
-        rt = WorkflowRuntime(default_strict_json=False)
+        rt = PipelineDriver(default_strict_json=False)
         assert rt.default_strict_json is False
 
 
@@ -695,7 +695,7 @@ class TestNoDefaultAgent:
     """F1a/F1b: an ``ask`` call needs a default (or fallback) agent."""
 
     def test_ask_without_default_agent_is_static_error(self) -> None:
-        rt = WorkflowRuntime()  # no default agent configured
+        rt = PipelineDriver()  # no default agent configured
         result = rt.run('ask "hi"')
         assert result.ok is False
         assert result.error is None  # static (pre-execution), not an AgL exception
@@ -705,7 +705,7 @@ class TestNoDefaultAgent:
         def agent(request: object) -> str:
             return "answer"
 
-        rt = WorkflowRuntime(default_agent=agent)
+        rt = PipelineDriver(default_agent=agent)
         result = rt.run('ask "hi"')
         assert result.ok is True
         assert result.error is None
@@ -717,7 +717,7 @@ class TestDryRunCheckOnly:
     def test_check_only_printing_program_produces_no_output(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run('print "hello"', check_only=True)
         assert result.ok is True
         assert result.bindings == {}
@@ -725,7 +725,7 @@ class TestDryRunCheckOnly:
         assert captured.out == ""
 
     def test_check_only_static_error_still_fails(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run("let x = undefined_name", check_only=True)
         assert result.ok is False
 
@@ -736,14 +736,14 @@ class TestDryRunCheckOnly:
             calls.append(request)
             return "should not be called"
 
-        rt = WorkflowRuntime(default_agent=agent)
+        rt = PipelineDriver(default_agent=agent)
         result = rt.run('let x = ask "hi"\nx', check_only=True)
         assert result.ok is True
         # The agent must never be invoked during a dry run.
         assert calls == []
 
     def test_check_only_unit_ask_reports_no_codec(self) -> None:
-        rt = WorkflowRuntime(default_agent=lambda request: "ignored")
+        rt = PipelineDriver(default_agent=lambda request: "ignored")
         result = rt.run('let result: unit = ask "hi"\nresult', check_only=True)
         assert result.ok is True
         assert len(result.call_sites) == 1
@@ -753,7 +753,7 @@ class TestDryRunCheckOnly:
         assert site.has_schema is False
 
     def test_check_only_param_validation_still_runs(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         # Missing declared param is caught even under check_only.
         result = rt.run("param msg\nprint msg", param_values={}, check_only=True)
         assert result.ok is False
@@ -766,7 +766,7 @@ class TestDecimalSerialization:
     def test_json_param_with_decimal_prints_exactly(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run(
             'param data: json\nprint data', param_values={"data": '{"a": 1.5}'}
         )
@@ -779,7 +779,7 @@ class TestDecimalSerialization:
     def test_decimal_value_prints_exact_text(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run('let x = 0.1\nprint x')
         assert result.ok is True
         captured = capsys.readouterr()
@@ -788,7 +788,7 @@ class TestDecimalSerialization:
     def test_run_error_preserves_decimal_exactness(self) -> None:
         import decimal
 
-        from agm.agl.runtime.runtime import exception_value_to_run_error
+        from agm.agl.pipeline import exception_value_to_run_error
         from agm.agl.semantics.values import DecimalValue, ExceptionValue, TextValue
 
         exc = ExceptionValue(
@@ -835,7 +835,7 @@ class TestWarningsThreadedOnFailurePaths:
 
         monkeypatch.setattr(tc_mod, "check", check_with_warning)
 
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run("param msg\nprint msg", param_values={})
         assert result.ok is False
         # The warning is threaded onto its own channel even on a failure path.
@@ -900,7 +900,7 @@ class TestParamBindingInvariant:
             TypeEnvironment, "get_binding_type", lambda self, node_id: None
         )
 
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         with pytest.raises(AssertionError, match="binding type"):
             rt.run("param msg\nprint msg", param_values={"msg": "hi"})
 
@@ -911,13 +911,13 @@ class TestParamBindingInvariant:
 
 
 class TestCapabilitiesBuiltFromRegistrations:
-    """CARRY-IN 1: WorkflowRuntime.run builds HostCapabilities from codec/renderer registries."""
+    """CARRY-IN 1: PipelineDriver.run builds HostCapabilities from codec/renderer registries."""
 
     def test_default_runtime_has_text_and_json_codecs(self) -> None:
         """Built-in text + json codecs are always present."""
         from agm.agl.runtime.codec import JsonCodec, TextCodec
 
-        rt = WorkflowRuntime(default_agent=lambda req: "ok")
+        rt = PipelineDriver(default_agent=lambda req: "ok")
         # A json-typed call passes typecheck → json codec is registered.
         tc, jc = TextCodec(), JsonCodec()
         assert tc.name == "text"
@@ -964,7 +964,7 @@ class TestCapabilitiesBuiltFromRegistrations:
             ) -> ParseResult:
                 return ParseResult.success(TV(raw))
 
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.register_codec(FooCodec())
         # The program just needs to run without capability errors.
         result = rt.run("let x = 1\nx")
@@ -972,7 +972,7 @@ class TestCapabilitiesBuiltFromRegistrations:
 
     def test_as_renderer_syntax_is_parse_error(self) -> None:
         """``${x as name}`` is a syntax error (renderer syntax removed)."""
-        rt = WorkflowRuntime(default_agent=lambda req: "ok")
+        rt = PipelineDriver(default_agent=lambda req: "ok")
         result = rt.run(
             'param x\nlet y = ask "see ${x as fancy}"', param_values={"x": "hi"}
         )
@@ -1105,7 +1105,7 @@ class TestRenderValue:
         from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import IrClosureValue
 
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run("let f = fn(x: int, y: int) -> int => x + y\nf\n")
         assert result.ok is True
         closure = result.bindings["f"]
@@ -1117,7 +1117,7 @@ class TestRenderValue:
         from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import IrClosureValue
 
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run("let thunk = fn() -> int => 42\nthunk\n")
         assert result.ok is True
         closure = result.bindings["thunk"]
@@ -1662,12 +1662,12 @@ class TestMaterializeContractMissingCodec:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: runtime.py — generic exception handlers and error paths
+# Coverage: pipeline.py — generic exception handlers and error paths
 # ---------------------------------------------------------------------------
 
 
 class TestRuntimeErrorPaths:
-    """Cover the generic exception handler branches in WorkflowRuntime.run."""
+    """Cover the generic exception handler branches in PipelineDriver.run."""
 
     def test_generic_parse_exception_covered(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1679,7 +1679,7 @@ class TestRuntimeErrorPaths:
             raise RuntimeError("unexpected parse error")
 
         monkeypatch.setattr(parser_mod, "parse_program", bad_parse)
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run("let x = 1")
         assert result.ok is False
         assert any("unexpected parse error" in d.message for d in result.diagnostics)
@@ -1688,7 +1688,7 @@ class TestRuntimeErrorPaths:
         """Tab advisories come from the lexer's single scan, so they survive a
         parse failure: the scan completes (recording the TAB) before the grammar
         rejects the token stream."""
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run("\tprint")  # leading TAB, then an incomplete `print`
         assert result.ok is False
         assert result.diagnostics  # genuine parse error surfaced
@@ -1706,7 +1706,7 @@ class TestRuntimeErrorPaths:
             raise RuntimeError("unexpected scope error")
 
         monkeypatch.setattr(scope_mod, "resolve", bad_resolve)
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run("let x = 1")
         assert result.ok is False
         assert any("Scope error" in d.message for d in result.diagnostics)
@@ -1721,7 +1721,7 @@ class TestRuntimeErrorPaths:
             raise RuntimeError("unexpected type error")
 
         monkeypatch.setattr(tc_mod, "check", bad_check)
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run("let x = 1")
         assert result.ok is False
         assert any("Type error" in d.message for d in result.diagnostics)
@@ -1730,7 +1730,7 @@ class TestRuntimeErrorPaths:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Contract materialization error → ok=False with contract error diagnostic."""
-        import agm.agl.runtime.runtime as runtime_mod
+        import agm.agl.pipeline as runtime_mod
 
         monkeypatch.setattr(
             runtime_mod,
@@ -1740,7 +1740,7 @@ class TestRuntimeErrorPaths:
                 [Diagnostic(message="Contract error: bad contract", line=1)],
             ),
         )
-        rt = WorkflowRuntime(default_agent=lambda req: "ok")
+        rt = PipelineDriver(default_agent=lambda req: "ok")
         result = rt.run('ask "hi"')
         assert result.ok is False
         assert any("Contract error" in d.message for d in result.diagnostics)
@@ -1759,7 +1759,7 @@ class TestRuntimeErrorPaths:
                 )
             )
 
-        rt = WorkflowRuntime(default_agent=bad_agent)
+        rt = PipelineDriver(default_agent=bad_agent)
         result = rt.run('ask "hi"')
         assert result.ok is False
         assert result.error is not None
@@ -1846,7 +1846,7 @@ class TestRuntimeErrorPaths:
 
         monkeypatch.setattr(IrInterpreter, "run", bad_execute)
 
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         with pytest.raises(RuntimeError, match="internal crash"):
             rt.run("let x = 1\nx")
 
@@ -1858,7 +1858,7 @@ class TestRuntimeErrorPaths:
         """
         import decimal
 
-        from agm.agl.runtime.runtime import RunError, exception_value_to_run_error
+        from agm.agl.pipeline import RunError, exception_value_to_run_error
         from agm.agl.semantics.values import (
             BoolValue,
             DecimalValue,
@@ -1951,7 +1951,7 @@ class TestRuntimeErrorPaths:
 
         monkeypatch.setattr(IrInterpreter, "run", bad_execute)
 
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run("let x = 1\nx")
         assert result.ok is False
         assert result.error is not None
@@ -2003,7 +2003,7 @@ class TestRuntimeErrorPaths:
         """Task 3 e2e: param xs: list[decimal] with Decimal values binds and prints."""
         import decimal as _decimal
 
-        result = WorkflowRuntime().run(
+        result = PipelineDriver().run(
             "param xs: list[decimal]\nprint xs\n",
             param_values={"xs": [_decimal.Decimal("1.5"), _decimal.Decimal("2.25")]},
         )
@@ -2016,7 +2016,7 @@ class TestRuntimeErrorPaths:
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """Native JSON-shaped floats are canonicalized before typed decoding."""
-        result = WorkflowRuntime().run(
+        result = PipelineDriver().run(
             "param xs: list[decimal]\nprint xs\n",
             param_values={"xs": [1.5, 2.25]},
         )
@@ -2028,7 +2028,7 @@ class TestRuntimeErrorPaths:
     def test_render_builtin_returns_single_line_unquoted_text(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        result = WorkflowRuntime().run(
+        result = PipelineDriver().run(
             'print(render("hello", quote_strings: false))\n'
             "print(render([1, 2], pretty: false))\n"
             'print(render({"a": 1} as json, pretty: false))\n'
@@ -2041,7 +2041,7 @@ class TestRuntimeErrorPaths:
     def test_render_builtin_accepts_render_options(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        result = WorkflowRuntime().run(
+        result = PipelineDriver().run(
             'print(render("hello"))\n'
             "print(render([1, 2]))\n"
             'print(render({"a": 1} as json))\n'
@@ -2073,7 +2073,7 @@ class TestUniformRenderingInPrompts:
             received.append(req)
             return "ok"
 
-        rt = WorkflowRuntime(default_agent=agent)
+        rt = PipelineDriver(default_agent=agent)
         result = rt.run(
             'param x\nask("see: ${x}")',
             param_values={"x": "hello"},
@@ -2091,7 +2091,7 @@ class TestUniformRenderingInPrompts:
             received.append(req)
             return "ok"
 
-        rt = WorkflowRuntime(default_agent=agent)
+        rt = PipelineDriver(default_agent=agent)
         result = rt.run(
             'let items: list[text] = ["a", "b"]\nask("items: ${items}")',
         )
@@ -2127,7 +2127,7 @@ class TestMaxIterationsExceededSchema:
     def test_fields_surface_through_real_source(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run(self._PROGRAM)
         # The exception is caught, so the run completes successfully.
         assert result.ok is True
@@ -2141,7 +2141,7 @@ class TestMaxIterationsExceededSchema:
     ) -> None:
         # ``metadata`` is a json placeholder (null until the M4 trace store), but
         # it is part of the schema and must be readable as a field.
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         program = (
             "try\n"
             "  do[1] ()\n"
@@ -2158,7 +2158,7 @@ class TestMaxIterationsExceededSchema:
     ) -> None:
         # A different until-expression must yield a different ``condition`` slice,
         # proving the source text is recovered per-node rather than hard-coded.
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         program = (
             "let done = false\n"
             "try\n"
@@ -2185,7 +2185,7 @@ class TestExhaustivenessWarningSurfaces:
     def test_warning_surfaces_and_run_succeeds(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         program = (
             "enum R\n"
             "  | Pass\n"
@@ -2211,11 +2211,11 @@ class TestShellExecTimeoutProperty:
     """M4: shell_exec_timeout is a readable constructor parameter."""
 
     def test_default_shell_exec_timeout_is_none(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         assert rt.shell_exec_timeout is None
 
     def test_shell_exec_timeout_kwarg_is_observable(self) -> None:
-        rt = WorkflowRuntime(shell_exec_timeout=30.0)
+        rt = PipelineDriver(shell_exec_timeout=30.0)
         assert rt.shell_exec_timeout == 30.0
 
 
@@ -2271,7 +2271,7 @@ class TestTraceWriteFailureIsBestEffort:
         from pathlib import Path
 
         log_file = Path(str(tmp_path)) / "trace.log"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
 
         # Pre-create the trace file and make it read-only so the first record
         # write (run_start) fails — the run must still complete normally.
@@ -2299,7 +2299,7 @@ class TestTabWarningsInRunResult:
     """Tab characters in source produce warning diagnostics in RunResult.warnings."""
 
     def test_no_tab_no_warning(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run("let x = 1")
         tab_warns = [w for w in result.warnings if "TAB" in w.message]
         assert tab_warns == []
@@ -2307,7 +2307,7 @@ class TestTabWarningsInRunResult:
     def test_tab_in_valid_source_yields_warning(self) -> None:
         # TAB used as whitespace inside a valid statement on the second line.
         source = "let x = 1\nlet\ty = 2"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run(source)
         tab_warns = [w for w in result.warnings if "TAB" in w.message]
         assert len(tab_warns) == 1
@@ -2316,14 +2316,14 @@ class TestTabWarningsInRunResult:
     def test_tab_warning_does_not_affect_ok(self) -> None:
         # A tab warning must not cause ok to become False.
         source = "let\tx = 1\nx"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run(source)
         assert result.ok is True
         assert result.error is None
 
     def test_multiple_tabs_multiple_warnings(self) -> None:
         source = "let\tx = 1\nlet\ty = 2"
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run(source)
         tab_warns = [w for w in result.warnings if "TAB" in w.message]
         assert len(tab_warns) == 2
@@ -2335,12 +2335,12 @@ class TestTabWarningsInRunResult:
 
 
 class TestDeclaredAgentsApi:
-    """WorkflowRuntime.declared_agents(): parse + scope only, non-raising."""
+    """PipelineDriver.declared_agents(): parse + scope only, non-raising."""
 
     def test_returns_agent_decl_info_with_names_runners_and_positions(self) -> None:
         from agm.agl import AgentDeclInfo
 
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         source = 'agent impl = "claude -p %{PROMPT_FILE}"\nagent reviewer'
         decls = rt.declared_agents(source)
         assert all(isinstance(d, AgentDeclInfo) for d in decls)
@@ -2355,21 +2355,21 @@ class TestDeclaredAgentsApi:
         assert reviewer.line == 2
 
     def test_no_declarations_returns_empty(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         assert rt.declared_agents("let x = 1") == ()
 
     def test_parse_error_returns_empty_tuple(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         # Syntax garbage: declared_agents stays non-raising and returns ().
         assert rt.declared_agents("@@@@@") == ()
 
     def test_scope_error_returns_empty_tuple(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         # Duplicate agent declaration is a scope error → ().
         assert rt.declared_agents("agent dup\nagent dup") == ()
 
     def test_undeclared_call_scope_error_returns_empty_tuple(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         # Calling an undeclared agent is a scope error → ().
         assert rt.declared_agents('let x = ghost "hi"') == ()
 
@@ -2389,7 +2389,7 @@ class TestAgentReconciliation:
             calls.append(req.prompt)
             return "ok"
 
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.register_agent("ghost", agent)
         # 'ghost' is registered but the source never declares it.
         result = rt.run("let x = 1")
@@ -2402,13 +2402,13 @@ class TestAgentReconciliation:
         assert calls == []
 
     def test_registered_but_undeclared_diagnostic_line_is_one(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.register_agent("ghost", lambda req: "ok")
         result = rt.run("let x = 1")
         assert result.diagnostics[0].line == 1
 
     def test_declared_but_unbacked_is_host_error(self) -> None:
-        rt = WorkflowRuntime()  # no registration, no default agent
+        rt = PipelineDriver()  # no registration, no default agent
         result = rt.run('agent orphan\nlet x = orphan "hi"')
         assert result.ok is False
         assert result.error is None
@@ -2417,7 +2417,7 @@ class TestAgentReconciliation:
         assert "backing" in msgs.lower()
 
     def test_declared_but_unbacked_diagnostic_reports_declaration_line(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run('let y = 1\nagent orphan\nlet x = orphan "hi"')
         assert result.ok is False
         # The declaration is on line 2.
@@ -2430,7 +2430,7 @@ class TestAgentReconciliation:
             calls.append(req.prompt)
             return "output"
 
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.register_agent("impl", agent)
         result = rt.run('agent impl\nask("do it", agent: impl)')
         assert result.ok is True
@@ -2438,12 +2438,12 @@ class TestAgentReconciliation:
 
     def test_declared_with_default_agent_runs(self) -> None:
         # No dedicated registration, but a default agent backs the declared name.
-        rt = WorkflowRuntime(default_agent=lambda req: "ok")
+        rt = PipelineDriver(default_agent=lambda req: "ok")
         result = rt.run('agent any_name\nask("hi", agent: any_name)')
         assert result.ok is True
 
     def test_both_error_categories_reported_together(self) -> None:
-        rt = WorkflowRuntime()  # no default agent
+        rt = PipelineDriver()  # no default agent
         rt.register_agent("ghost", lambda req: "ok")
         # 'orphan' is declared but unbacked; 'ghost' is registered but undeclared.
         result = rt.run('agent orphan\nlet x = orphan "hi"')
@@ -2460,7 +2460,7 @@ class TestAgentReconciliation:
             calls.append(req.prompt)
             return "ok"
 
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.register_agent("ghost", agent)
         rt.run('print "side effect?"')
         assert calls == []
@@ -2584,19 +2584,19 @@ class TestSerializeV2OpaqueValues:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: runtime.py — uncovered branches and new v2 properties
+# Coverage: pipeline.py — uncovered branches and new v2 properties
 # ---------------------------------------------------------------------------
 
 
 class TestIrHostMetadataCoverage:
     def test_invalid_external_param_shapes_are_diagnostics(self) -> None:
-        text_result = WorkflowRuntime().run(
+        text_result = PipelineDriver().run(
             "param value: text\nprint value", param_values={"value": 3}
         )
         assert not text_result.ok
         assert "text value" in text_result.diagnostics[0].message
 
-        json_result = WorkflowRuntime().run(
+        json_result = PipelineDriver().run(
             "param value: int\nprint value", param_values={"value": {1, 2}}
         )
         assert not json_result.ok
@@ -2647,7 +2647,7 @@ class TestRunErrorToMessage:
     """RunError.to_message with include_trace_id=True/False."""
 
     def test_to_message_with_trace_id(self) -> None:
-        from agm.agl.runtime.runtime import RunError
+        from agm.agl.pipeline import RunError
 
         err = RunError(
             type_name="AgentParseError",
@@ -2660,7 +2660,7 @@ class TestRunErrorToMessage:
         assert "at line 5, col 3" in msg
 
     def test_to_message_without_trace_id(self) -> None:
-        from agm.agl.runtime.runtime import RunError
+        from agm.agl.pipeline import RunError
 
         err = RunError(
             type_name="SomeError",
@@ -2673,16 +2673,16 @@ class TestRunErrorToMessage:
 
 
 class TestHostEnvironmentCache:
-    """WorkflowRuntime.host_environment() caches and is invalidated on registration."""
+    """PipelineDriver.host_environment() caches and is invalidated on registration."""
 
     def test_host_environment_returns_same_object_on_second_call(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         env1 = rt.host_environment()
         env2 = rt.host_environment()
         assert env1 is env2
 
     def test_register_agent_invalidates_cache(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         env1 = rt.host_environment()
         rt.register_agent("impl", lambda req: "ok")
         env2 = rt.host_environment()
@@ -2733,13 +2733,13 @@ class TestRegisterCodecErrors:
         return _Codec()
 
     def test_reserved_name_raises(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         codec = self._make_codec("text")  # "text" is a builtin codec name
         with pytest.raises(ValueError, match="reserved"):
             rt.register_codec(codec)
 
     def test_duplicate_name_raises(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         codec1 = self._make_codec("mycodec")
         codec2 = self._make_codec("mycodec")
         rt.register_codec(codec1)
@@ -2751,11 +2751,11 @@ class TestDefaultCallDepthLimit:
     """default_call_depth_limit constructor parameter and property."""
 
     def test_default_is_256(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         assert rt.default_call_depth_limit == 256
 
     def test_custom_value_is_observable(self) -> None:
-        rt = WorkflowRuntime(default_call_depth_limit=128)
+        rt = PipelineDriver(default_call_depth_limit=128)
         assert rt.default_call_depth_limit == 128
 
 
@@ -2779,7 +2779,7 @@ class TestV2UserDefinedFunctions:
     """v2 def expressions: first-class functions, recursion, call depth limit."""
 
     def test_def_call_basic(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run(
             "def add(a: int, b: int) -> int = a + b\n"
             "add(1, 2)\n"
@@ -2787,7 +2787,7 @@ class TestV2UserDefinedFunctions:
         assert result.ok is True
 
     def test_def_recursive_call(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run(
             "def fact(n: int) -> int =\n"
             "  if n <= 1 =>\n"
@@ -2800,7 +2800,7 @@ class TestV2UserDefinedFunctions:
 
     def test_def_call_depth_limit_enforced(self) -> None:
         """Exceeding max_call_depth raises a RecursionError (D8)."""
-        rt = WorkflowRuntime(default_call_depth_limit=10)
+        rt = PipelineDriver(default_call_depth_limit=10)
         result = rt.run(
             "def inf(n: int) -> int =\n"
             "  inf(n + 1)\n"
@@ -2813,14 +2813,14 @@ class TestV2ExecStructuredForm:
     """v2 exec structured form: let x: T = exec ... raises on nonzero."""
 
     def test_exec_text_form_captures_stdout(self, capsys: pytest.CaptureFixture[str]) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run('let out: text = exec "echo hello"\nprint out\n')
         assert result.ok is True
         captured = capsys.readouterr()
         assert "hello" in captured.out
 
     def test_exec_nonzero_raises_when_typed(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run('let out: text = exec "false"\nprint out\n')
         assert result.ok is False
         # Uncaught AgL exception (exit 2 semantics): error is set
@@ -2837,7 +2837,7 @@ class TestV2AskWithAgentValue:
             received.append(req.prompt)
             return "answer"
 
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.register_agent("helper", agent)
         result = rt.run('agent helper\nask("question", agent: helper)\n')
         assert result.ok is True
@@ -2850,17 +2850,17 @@ class TestV2AskWithAgentValue:
 
 
 class TestPrepareProgram:
-    """WorkflowRuntime.prepare_program: graph-mode front-end (M5b)."""
+    """PipelineDriver.prepare_program: graph-mode front-end (M5b)."""
 
     def test_prepare_program_no_imports_returns_prepared_graph(
         self, tmp_path: pathlib.Path
     ) -> None:
         """A single-file program with no imports produces a valid PreparedGraph."""
         from agm.agl.modules.roots import RootSet
-        from agm.agl.runtime.runtime import PreparedGraph
+        from agm.agl.pipeline import PreparedGraph
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = WorkflowRuntime.prepare_program(
+        prepared = PipelineDriver.prepare_program(
             "let x = 1\nx", entry_path=None, roots=roots
         )
         assert isinstance(prepared, PreparedGraph)
@@ -2874,7 +2874,7 @@ class TestPrepareProgram:
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = WorkflowRuntime.prepare_program(
+        prepared = PipelineDriver.prepare_program(
             "let x = !!!", entry_path=None, roots=roots
         )
         assert prepared.resolved_graph is None
@@ -2887,7 +2887,7 @@ class TestPrepareProgram:
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = WorkflowRuntime.prepare_program(
+        prepared = PipelineDriver.prepare_program(
             "import nonexistent.module\nlet x = 1\nx",
             entry_path=None,
             roots=roots,
@@ -2908,7 +2908,7 @@ class TestPrepareProgram:
 
         roots = RootSet(roots=frozenset({lib_dir, _STDLIB_ROOT}))
         entry = "import mymod\nlet r = add(2, 3)\nr"
-        prepared = WorkflowRuntime.prepare_program(
+        prepared = PipelineDriver.prepare_program(
             entry, entry_path=None, roots=roots
         )
         assert prepared.resolved_graph is not None
@@ -2921,7 +2921,7 @@ class TestPrepareProgram:
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = WorkflowRuntime.prepare_program(
+        prepared = PipelineDriver.prepare_program(
             'agent reviewer\nask("q", agent: reviewer)',
             entry_path=None,
             roots=roots,
@@ -2936,7 +2936,7 @@ class TestPrepareProgram:
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = WorkflowRuntime.prepare_program(
+        prepared = PipelineDriver.prepare_program(
             "config max_iters = 7\nlet x = 1\nx",
             entry_path=None,
             roots=roots,
@@ -2951,7 +2951,7 @@ class TestPrepareProgram:
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = WorkflowRuntime.prepare_program(
+        prepared = PipelineDriver.prepare_program(
             "let x = undefined_name", entry_path=None, roots=roots
         )
         # scope error → resolved_graph is None
@@ -2960,7 +2960,7 @@ class TestPrepareProgram:
 
 
 class TestRunPreparedGraph:
-    """WorkflowRuntime.run_prepared_graph: graph execution (M5b)."""
+    """PipelineDriver.run_prepared_graph: graph execution (M5b)."""
 
     def test_single_entry_graph_behaves_like_run(
         self, tmp_path: pathlib.Path
@@ -2968,9 +2968,9 @@ class TestRunPreparedGraph:
         """A single-file program via run_prepared_graph returns same result as run()."""
         from agm.agl.modules.roots import RootSet
 
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = WorkflowRuntime.prepare_program(
+        prepared = PipelineDriver.prepare_program(
             "let x = 1\nx", entry_path=None, roots=roots
         )
         result = rt.run_prepared_graph(prepared)
@@ -2989,10 +2989,10 @@ class TestRunPreparedGraph:
 
         roots = RootSet(roots=frozenset({lib_dir.resolve(), _STDLIB_ROOT}))
         entry = "import mymod\nlet r = add(2, 3)\nr"
-        prepared = WorkflowRuntime.prepare_program(
+        prepared = PipelineDriver.prepare_program(
             entry, entry_path=None, roots=roots
         )
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run_prepared_graph(prepared)
         assert result.ok is True
         assert result.error is None
@@ -3004,10 +3004,10 @@ class TestRunPreparedGraph:
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = WorkflowRuntime.prepare_program(
+        prepared = PipelineDriver.prepare_program(
             "let x = undefined_name", entry_path=None, roots=roots
         )
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run_prepared_graph(prepared)
         assert result.ok is False
         assert result.error is None
@@ -3020,10 +3020,10 @@ class TestRunPreparedGraph:
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = WorkflowRuntime.prepare_program(
+        prepared = PipelineDriver.prepare_program(
             "import missing.module\nlet x = 1\nx", entry_path=None, roots=roots
         )
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run_prepared_graph(prepared)
         assert result.ok is False
         assert "missing.module" in result.diagnostics[0].message
@@ -3035,10 +3035,10 @@ class TestRunPreparedGraph:
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = WorkflowRuntime.prepare_program(
+        prepared = PipelineDriver.prepare_program(
             "let x = 1\nx", entry_path=None, roots=roots
         )
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.register_agent("reviewer", lambda req: "resp")  # type: ignore[arg-type]
         result = rt.run_prepared_graph(prepared)
         assert result.ok is False
@@ -3051,10 +3051,10 @@ class TestRunPreparedGraph:
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = WorkflowRuntime.prepare_program(
+        prepared = PipelineDriver.prepare_program(
             'let r = ask("hello")\nprint r', entry_path=None, roots=roots
         )
-        rt = WorkflowRuntime(default_agent=lambda req: "x")  # type: ignore[arg-type]
+        rt = PipelineDriver(default_agent=lambda req: "x")  # type: ignore[arg-type]
         result = rt.run_prepared_graph(prepared, check_only=True)
         assert result.ok is True
         assert len(result.call_sites) >= 1
@@ -3077,10 +3077,10 @@ class TestRunPreparedGraph:
 
         roots = RootSet(roots=frozenset({lib_dir.resolve(), _STDLIB_ROOT}))
         entry = 'import utils.*\nlet n = add(2, 3)\nlet g = greet("World")\nprint n\nprint g\n'
-        prepared = WorkflowRuntime.prepare_program(
+        prepared = PipelineDriver.prepare_program(
             entry, entry_path=None, roots=roots
         )
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run_prepared_graph(prepared, check_only=True)
         assert result.ok is True
 
@@ -3098,16 +3098,16 @@ class TestRunPreparedGraph:
 
         roots = RootSet(roots=frozenset({lib_dir.resolve(), _STDLIB_ROOT}))
         entry = "import calc qualified\nlet r = calc::square(5)\nr"
-        prepared = WorkflowRuntime.prepare_program(
+        prepared = PipelineDriver.prepare_program(
             entry, entry_path=None, roots=roots
         )
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run_prepared_graph(prepared)
         assert result.ok is True
 
 
 class TestDiscoverParamsGraph:
-    """WorkflowRuntime.discover_params_graph: typed param discovery (M5b)."""
+    """PipelineDriver.discover_params_graph: typed param discovery (M5b)."""
 
     def test_discover_params_no_params(
         self, tmp_path: pathlib.Path
@@ -3116,10 +3116,10 @@ class TestDiscoverParamsGraph:
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = WorkflowRuntime.prepare_program(
+        prepared = PipelineDriver.prepare_program(
             "let x = 1\nx", entry_path=None, roots=roots
         )
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         discovery = rt.discover_params_graph(prepared)
         assert discovery.diagnostics == ()
         assert discovery.params == ()
@@ -3131,12 +3131,12 @@ class TestDiscoverParamsGraph:
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = WorkflowRuntime.prepare_program(
+        prepared = PipelineDriver.prepare_program(
             "param name: text\nprint name",
             entry_path=None,
             roots=roots,
         )
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         discovery = rt.discover_params_graph(prepared)
         assert discovery.diagnostics == ()
         assert len(discovery.params) == 1
@@ -3149,10 +3149,10 @@ class TestDiscoverParamsGraph:
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = WorkflowRuntime.prepare_program(
+        prepared = PipelineDriver.prepare_program(
             "import no_such_module\nlet x = 1", entry_path=None, roots=roots
         )
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         discovery = rt.discover_params_graph(prepared)
         assert len(discovery.diagnostics) >= 1
 
@@ -3171,7 +3171,7 @@ class TestPreparedGraphDefensivePaths:
 
         from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.modules.roots import RootSet
-        from agm.agl.runtime.runtime import PreparedGraph
+        from agm.agl.pipeline import PreparedGraph
 
         # Build a fake resolved_graph with no ENTRY_ID key.
         fake_graph = MagicMock()
@@ -3194,7 +3194,7 @@ class TestPreparedGraphDefensivePaths:
         from unittest.mock import MagicMock
 
         from agm.agl.modules.roots import RootSet
-        from agm.agl.runtime.runtime import PreparedGraph
+        from agm.agl.pipeline import PreparedGraph
 
         fake_graph = MagicMock()
         fake_graph.modules = {}
@@ -3220,7 +3220,7 @@ class TestPreparedGraphDefensivePaths:
 
         roots = RootSet(roots=frozenset({tmp_path.resolve(), _STDLIB_ROOT}))
         with patch("agm.agl.modules.loader.load_graph", side_effect=RuntimeError("boom")):
-            prepared = WorkflowRuntime.prepare_program(
+            prepared = PipelineDriver.prepare_program(
                 "let x = 1\nx", entry_path=None, roots=roots
             )
         assert len(prepared.diagnostics) >= 1
@@ -3239,7 +3239,7 @@ class TestPreparedGraphDefensivePaths:
             "agm.agl.scope.graph.resolve_graph",
             side_effect=RuntimeError("resolve fail"),
         ):
-            prepared = WorkflowRuntime.prepare_program(
+            prepared = PipelineDriver.prepare_program(
                 "let x = 1\nx", entry_path=None, roots=roots
             )
         assert len(prepared.diagnostics) >= 1
@@ -3258,10 +3258,10 @@ class TestDiscoverParamsDefensivePaths:
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = WorkflowRuntime.prepare_program(
+        prepared = PipelineDriver.prepare_program(
             "let x = 1\nx", entry_path=None, roots=roots
         )
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         # Patch check_graph to return a graph with no ENTRY_ID.
         fake_checked_graph = MagicMock()
         fake_checked_graph.modules = {}
@@ -3279,10 +3279,10 @@ class TestDiscoverParamsDefensivePaths:
 
         from agm.agl.typecheck import AglTypeError
 
-        prepared = WorkflowRuntime.prepare(
+        prepared = PipelineDriver.prepare(
             'def f(x: int) -> text = "bad"\nlet r = f(1)\nprint r'
         )
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         with patch("agm.agl.typecheck.check", side_effect=AglTypeError("type error")):
             discovery = rt.discover_params(prepared)
         assert discovery.checked is None
@@ -3295,7 +3295,7 @@ class TestDiscoverParamsDefensivePaths:
         from unittest.mock import MagicMock, patch
 
         from agm.agl.modules.roots import RootSet
-        from agm.agl.runtime.runtime import PreparedGraph
+        from agm.agl.pipeline import PreparedGraph
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         # Build a PreparedGraph with a fake resolved_graph so we reach check_graph.
@@ -3311,7 +3311,7 @@ class TestDiscoverParamsDefensivePaths:
             diagnostics=(),
             warnings=(),
         )
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         with patch(
             "agm.agl.typecheck.graph.check_graph",
             side_effect=RuntimeError("graph type crash"),
@@ -3329,9 +3329,9 @@ class TestRunPreparedDefensivePaths:
         """run_prepared skips typecheck when pre-computed checked is passed."""
         from agm.agl.typecheck import check
 
-        prepared = WorkflowRuntime.prepare("let x = 1\nx")
+        prepared = PipelineDriver.prepare("let x = 1\nx")
         assert prepared.resolved is not None
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         env = rt.host_environment()
         precomputed = check(prepared.resolved, env.capabilities)
         # Pass the pre-computed checked: the branch `if checked is None:` is skipped.
@@ -3344,8 +3344,8 @@ class TestRunPreparedDefensivePaths:
 
         from agm.agl.typecheck import AglTypeError
 
-        prepared = WorkflowRuntime.prepare("let x = 1\nx")
-        rt = WorkflowRuntime()
+        prepared = PipelineDriver.prepare("let x = 1\nx")
+        rt = PipelineDriver()
         with patch("agm.agl.typecheck.check", side_effect=AglTypeError("tc fail")):
             result = rt.run_prepared(prepared)
         assert result.ok is False
@@ -3359,12 +3359,12 @@ class TestRunPreparedDefensivePaths:
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         # Use ask() so the checked graph has at least one contract_spec to materialize.
-        prepared = WorkflowRuntime.prepare_program(
+        prepared = PipelineDriver.prepare_program(
             'let r = ask("hi")\nprint r', entry_path=None, roots=roots
         )
-        rt = WorkflowRuntime(default_agent=lambda req: "ok")  # type: ignore[arg-type]
+        rt = PipelineDriver(default_agent=lambda req: "ok")  # type: ignore[arg-type]
         with patch(
-            "agm.agl.runtime.runtime._materialize_ir_contracts",
+            "agm.agl.pipeline._materialize_ir_contracts",
             return_value=(
                 {},
                 [Diagnostic(message="Contract error: bad contract", line=1)],
@@ -3382,10 +3382,10 @@ class TestRunPreparedDefensivePaths:
         from agm.agl.typecheck.graph import check_graph as real_check_graph
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = WorkflowRuntime.prepare_program(
+        prepared = PipelineDriver.prepare_program(
             "param n: int\nprint n", entry_path=None, roots=roots
         )
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         env = rt.host_environment()
         checked_graph = real_check_graph(prepared.resolved_graph, env.capabilities)  # type: ignore[arg-type]
         result = rt.run_prepared_graph(

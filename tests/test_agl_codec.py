@@ -14,7 +14,7 @@ Covers (per PLAN_DSL §9.3 and §13):
 6. Typed Value construction: RecordValue, EnumValue, ListValue, DictValue,
    scalars; int→decimal widening where the target type says decimal.
 7. Multiple JSON values / ambiguous output → failure (design §2.8: exactly one).
-8. WorkflowRuntime wire-up: JsonCodec registered; checker passes json/record/enum
+8. PipelineDriver wire-up: JsonCodec registered; checker passes json/record/enum
    targets; format_instructions reach AgentRequest; make_contract API.
 9. decimal exactness end-to-end: 1.5 parsed from agent response stays Decimal("1.5").
 
@@ -27,7 +27,7 @@ from decimal import Decimal
 
 import pytest
 
-from agm.agl import WorkflowRuntime
+from agm.agl import PipelineDriver
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.runtime.agents import AgentFn, AgentRegistry
 from agm.agl.runtime.codec import JsonCodec, ParseResult, TextCodec
@@ -1219,7 +1219,7 @@ class TestMakeContract:
 
 
 # ---------------------------------------------------------------------------
-# 9. WorkflowRuntime wire-up
+# 9. PipelineDriver wire-up
 # ---------------------------------------------------------------------------
 
 
@@ -1231,12 +1231,12 @@ def _dict_ty(value: tast.TypeExpr) -> tast.DictT:
     return tast.DictT(value=value, span=_sp(), node_id=_nid())
 
 
-class TestWorkflowRuntimeWireUp:
+class TestPipelineDriverWireUp:
     """JsonCodec registered in runtime; checker passes json/record/enum targets.
 
     Note: typed agent-call bindings (let x: T = agent "...") are tested via the
     direct-AST helpers because the M1 parser wraps agent calls in an 'access'
-    tree node for non-text typed bindings.  WorkflowRuntime.run() tests cover the
+    tree node for non-text typed bindings.  PipelineDriver.run() tests cover the
     static pipeline (codec_kinds) and the error reporting paths.
     """
 
@@ -1546,7 +1546,7 @@ class TestRecordEnumParams:
     """Runtime.convert_param now accepts record/enum types via JsonCodec."""
 
     def test_record_param_parsed_from_json_string(self) -> None:
-        result = WorkflowRuntime().run(
+        result = PipelineDriver().run(
             """
 record Issue
   title: text
@@ -1571,7 +1571,7 @@ issue
         assert result.value.variant == "Done"
 
     def test_list_param_parsed_from_json_string(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run(
             "param tags: list[text]",
             param_values={"tags": '["a", "b"]'},
@@ -2269,7 +2269,7 @@ class TestRegisterCodec:
 
     def test_register_codec_accepted(self, capsys: pytest.CaptureFixture[str]) -> None:
         from agm.agl.runtime.codec import TextCodec as TC
-        rt = WorkflowRuntime(default_agent=lambda request: "response")
+        rt = PipelineDriver(default_agent=lambda request: "response")
 
         class AltTextCodec(TC):
             @property
@@ -2318,18 +2318,18 @@ class TestRegisterCodec:
             ) -> PR:
                 raise NotImplementedError
 
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         rt.register_codec(CustomCodec())
         with pytest.raises(ValueError, match="custom_dup"):
             rt.register_codec(CustomCodec())
 
     def test_register_reserved_codec_name_text_raises(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         with pytest.raises(ValueError, match="text"):
             rt.register_codec(TextCodec())
 
     def test_register_reserved_codec_name_json_raises(self) -> None:
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         with pytest.raises(ValueError, match="json"):
             rt.register_codec(JsonCodec())
 
@@ -2385,7 +2385,7 @@ class TestRegisterCodec:
             received.append(req)
             return "hello"
 
-        rt = WorkflowRuntime(default_agent=agent)
+        rt = PipelineDriver(default_agent=agent)
         rt.register_codec(TagCodec())
         # v2: format: arg takes the codec name as a string; let needs a continuation.
         result = rt.run('let y: text = ask("Q", format: "tagcodec")\ny')
@@ -2418,12 +2418,12 @@ class TestRuntimeBuildsCodecKinds:
         # v2: format: arg takes the codec name as a string; let needs a continuation.
         src = 'let x: text = ask("Q", format: "altcodec")\nx'
 
-        rt_unreg = WorkflowRuntime(default_agent=lambda req: "ok")
+        rt_unreg = PipelineDriver(default_agent=lambda req: "ok")
         unreg = rt_unreg.run(src)
         assert unreg.ok is False  # altcodec unknown without registration
         assert any("altcodec" in d.message for d in unreg.diagnostics)
 
-        rt = WorkflowRuntime(default_agent=lambda req: "ok")
+        rt = PipelineDriver(default_agent=lambda req: "ok")
         rt.register_codec(AltCodec())
         reg = rt.run(src)
         assert reg.ok is True

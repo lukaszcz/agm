@@ -401,7 +401,7 @@ per milestone with per-task review; the orchestrator owns design and verifies di
   lowering as pure-data descriptors interpreted by runtime; dry-run inventory from `call_sites`;
   built-in/host nodes refer only to `ContractId`. Remove runtime reads of `contract_specs`,
   `call_sites`, param binding types.
-- **M7 — Runtime switch.** `WorkflowRuntime` lowers after checking and executes only
+- **M7 — Runtime switch.** `PipelineDriver` lowers after checking and executes only
   `ExecutableProgram`. Oracle runs over the full corpus comparing values/errors/traces/external
   calls. Update `docs/arch/agl.md` for the production lowering/linking pipeline and transitional
   oracle boundary.

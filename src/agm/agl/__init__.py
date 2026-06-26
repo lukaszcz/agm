@@ -2,15 +2,15 @@
 
 Usage::
 
-    from agm.agl import WorkflowRuntime
+    from agm.agl import PipelineDriver
 
-    runtime = WorkflowRuntime(
+    driver = PipelineDriver(
         default_loop_limit=5,
         default_strict_json=False,
         default_agent=my_agent_fn,
     )
-    runtime.register_agent("reviewer", reviewer_fn)
-    result = runtime.run(source_text, param_values={"spec": "..."})
+    driver.register_agent("reviewer", reviewer_fn)
+    result = driver.run(source_text, param_values={"spec": "..."})
 
     if result.ok:
         ...
@@ -22,16 +22,16 @@ Usage::
 from __future__ import annotations
 
 from agm.agl.diagnostics import AglError, Diagnostic, SourceSpan, format_diagnostic
-from agm.agl.runtime.agents import AgentFn
-from agm.agl.runtime.runtime import (
+from agm.agl.pipeline import (
     AgentDeclInfo,
     CallSiteInfo,
+    PipelineDriver,
     PreparedGraph,
     PreparedProgram,
     RunError,
     RunResult,
-    WorkflowRuntime,
 )
+from agm.agl.runtime.agents import AgentFn
 
 __all__ = [
     "AgentDeclInfo",
@@ -40,10 +40,10 @@ __all__ = [
     "CallSiteInfo",
     "Diagnostic",
     "format_diagnostic",
+    "PipelineDriver",
     "PreparedGraph",
     "PreparedProgram",
     "RunError",
     "RunResult",
     "SourceSpan",
-    "WorkflowRuntime",
 ]

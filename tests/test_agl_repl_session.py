@@ -716,7 +716,7 @@ class TestWarnings:
 
     def test_tab_warning_surfaced(self) -> None:
         # A TAB character in the entry source surfaces a per-entry advisory
-        # warning (mirroring ``WorkflowRuntime.run``), without failing the entry.
+        # warning (mirroring ``PipelineDriver.run``), without failing the entry.
         s = ReplSession()
         r = s.eval_entry("let x =\t1")
         assert r.ok

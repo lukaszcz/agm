@@ -23,7 +23,7 @@ class HostEnvironment:
     """Assembled host-runtime environment shared by ``run`` and the REPL session.
 
     Bundles the three pieces that both the whole-program runner
-    (``WorkflowRuntime.run``) and the incremental ``ReplSession`` need to build
+    (``PipelineDriver.run``) and the incremental ``ReplSession`` need to build
     identically from a set of agent/codec registrations:
 
     ``registry``

@@ -1487,10 +1487,10 @@ class TestExecParamCompletionItems:
         assert items == []
 
     def test_exception_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from agm.agl import WorkflowRuntime
+        from agm.agl import PipelineDriver
 
         monkeypatch.setattr(
-            WorkflowRuntime,
+            PipelineDriver,
             "prepare",
             staticmethod(lambda source: (_ for _ in ()).throw(RuntimeError("boom"))),
         )

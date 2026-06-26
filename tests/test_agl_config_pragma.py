@@ -23,7 +23,7 @@ import pytest
 
 from agm.agl.lexer import tokenize
 from agm.agl.parser import AglSyntaxError, parse_program
-from agm.agl.runtime.runtime import WorkflowRuntime
+from agm.agl.pipeline import PipelineDriver
 from agm.agl.scope import AglScopeError, resolve
 from agm.agl.scope.symbols import ResolvedProgram
 from agm.agl.syntax.nodes import Call, ConfigPragma
@@ -390,7 +390,7 @@ class TestScopeCollectedPragmas:
 class TestPreparedProgramExposure:
     def test_config_pragmas_property_present(self) -> None:
         """PreparedProgram.config_pragmas is populated from scope pass."""
-        prepared = WorkflowRuntime.prepare(
+        prepared = PipelineDriver.prepare(
             "config log = true\n"
             "config max_iters = 3\n"
         )
@@ -398,25 +398,25 @@ class TestPreparedProgramExposure:
 
     def test_config_pragmas_empty_on_scope_failure(self) -> None:
         """config_pragmas is empty when the scope pass failed."""
-        prepared = WorkflowRuntime.prepare("config bogus_key = true")
+        prepared = PipelineDriver.prepare("config bogus_key = true")
         assert prepared.config_pragmas == {}
         # Should have a diagnostic.
         assert prepared.diagnostics
 
     def test_config_pragmas_empty_on_parse_failure(self) -> None:
         """config_pragmas is empty when the parse failed."""
-        prepared = WorkflowRuntime.prepare("let = bad syntax {{{{")
+        prepared = PipelineDriver.prepare("let = bad syntax {{{{")
         assert prepared.config_pragmas == {}
         assert prepared.diagnostics
 
     def test_config_pragmas_empty_when_no_pragmas(self) -> None:
         """config_pragmas is empty when the program has none."""
-        prepared = WorkflowRuntime.prepare("print 1")
+        prepared = PipelineDriver.prepare("print 1")
         assert prepared.config_pragmas == {}
 
     def test_config_pragmas_coexists_with_declared_agents(self) -> None:
         """config_pragmas and declared_agents coexist independently."""
-        prepared = WorkflowRuntime.prepare(
+        prepared = PipelineDriver.prepare(
             "config log = true\n"
             "agent my_agent\n"
         )
@@ -433,7 +433,7 @@ class TestPreparedProgramExposure:
 class TestInterpreterNoOp:
     def test_pragmas_plus_print_runs_fine(self) -> None:
         """A program of pragmas + a print executes without error."""
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run(
             "config log = true\n"
             "config max_iters = 5\n"
@@ -444,7 +444,7 @@ class TestInterpreterNoOp:
 
     def test_pragmas_only_program_runs_fine(self) -> None:
         """A program consisting only of pragmas executes without error."""
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run("config log = false\nconfig strict_json = true")
         assert result.ok
 
@@ -455,7 +455,7 @@ class TestInterpreterNoOp:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             trace_path = Path(tmpdir) / "trace.jsonl"
-            rt = WorkflowRuntime()
+            rt = PipelineDriver()
             result = rt.run(
                 "config log = true\n"
                 "print 1\n",

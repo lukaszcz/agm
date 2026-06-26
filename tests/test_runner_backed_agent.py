@@ -9,7 +9,7 @@ Covers:
   - AgentCallError mapping: cause=spawn_failure/nonzero_exit/timeout + metadata fields
   - exit-0 empty stdout = valid empty response
   - verbatim prompt preservation ($NAME/${NAME} not expanded)
-- WorkflowRuntime: fallback from runner config, default_agent from runner config
+- PipelineDriver: fallback from runner config, default_agent from runner config
 - CLI-level fake-runner binary integration test
 """
 
@@ -1007,7 +1007,7 @@ class TestRunnerMessageComposition:
 
 
 # ---------------------------------------------------------------------------
-# AgentCallError via WorkflowRuntime — integration (mocked boundary)
+# AgentCallError via PipelineDriver — integration (mocked boundary)
 # ---------------------------------------------------------------------------
 
 
@@ -1030,9 +1030,9 @@ class TestAgentCallErrorViaRuntime:
         return agent
 
     def test_uncaught_agent_call_error_exits_2(self) -> None:
-        from agm.agl import WorkflowRuntime
+        from agm.agl import PipelineDriver
 
-        rt = WorkflowRuntime(
+        rt = PipelineDriver(
             default_agent=self._make_failing_default_agent(cause="nonzero_exit")
         )
         result = rt.run('let x = ask("hi")\nx')
@@ -1041,7 +1041,7 @@ class TestAgentCallErrorViaRuntime:
         assert result.error.type_name == "AgentCallError"
 
     def test_caught_agent_call_error_run_succeeds(self) -> None:
-        from agm.agl import WorkflowRuntime
+        from agm.agl import PipelineDriver
 
         program = (
             "try\n"
@@ -1050,7 +1050,7 @@ class TestAgentCallErrorViaRuntime:
             "catch AgentCallError as e =>\n"
             "  print(e.cause)\n"
         )
-        rt = WorkflowRuntime(
+        rt = PipelineDriver(
             default_agent=self._make_failing_default_agent(cause="nonzero_exit")
         )
         result = rt.run(program)
@@ -1060,7 +1060,7 @@ class TestAgentCallErrorViaRuntime:
     def test_cause_field_accessible_in_catch(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        from agm.agl import WorkflowRuntime
+        from agm.agl import PipelineDriver
 
         program = (
             "try\n"
@@ -1069,7 +1069,7 @@ class TestAgentCallErrorViaRuntime:
             "catch AgentCallError as e =>\n"
             "  print(e.cause)\n"
         )
-        rt = WorkflowRuntime(
+        rt = PipelineDriver(
             default_agent=self._make_failing_default_agent(cause="spawn_failure", exit_code=None)
         )
         result = rt.run(program)
@@ -1079,9 +1079,9 @@ class TestAgentCallErrorViaRuntime:
 
     def test_exit_0_empty_stdout_is_valid_response(self) -> None:
         """Exit 0 with empty stdout = valid empty response (plan §9.5)."""
-        from agm.agl import WorkflowRuntime
+        from agm.agl import PipelineDriver
 
-        rt = WorkflowRuntime(default_agent=lambda req: "")
+        rt = PipelineDriver(default_agent=lambda req: "")
         result = rt.run('let x = ask("say nothing")\nx')
         assert result.ok is True
         from agm.agl.semantics.values import TextValue
@@ -1099,44 +1099,44 @@ class TestAgentCallErrorViaRuntime:
                 cause="nonzero_exit", exit_code=1, stderr_tail="", elapsed=0.0
             )
 
-        from agm.agl import WorkflowRuntime
+        from agm.agl import PipelineDriver
 
-        rt = WorkflowRuntime(default_agent=counting_agent)
+        rt = PipelineDriver(default_agent=counting_agent)
         rt.run('let x = ask("hi", on_parse_error: Retry(n: 3))\nx')
         # Must only be called once — transport failures are not retried
         assert call_count[0] == 1
 
 
 # ---------------------------------------------------------------------------
-# WorkflowRuntime: runner config wiring (M5a)
+# PipelineDriver: runner config wiring (M5a)
 # ---------------------------------------------------------------------------
 
 
-class TestWorkflowRuntimeRunnerWiring:
-    """WorkflowRuntime accepts runner_config to build runner-backed default + fallback."""
+class TestPipelineDriverRunnerWiring:
+    """PipelineDriver accepts runner_config to build runner-backed default + fallback."""
 
     def test_runtime_declared_agent_falls_back_to_default(self) -> None:
         """A declared agent with no dedicated registration is backed by the default agent."""
-        # We wire through the exec.py path; test at the WorkflowRuntime level
+        # We wire through the exec.py path; test at the PipelineDriver level
         # by verifying a DECLARED agent name resolves via the default agent.
         # The default-agent fallback fires only for declared names — calling an
         # undeclared agent is a static scope error.
-        from agm.agl import WorkflowRuntime
+        from agm.agl import PipelineDriver
 
-        rt = WorkflowRuntime(default_agent=lambda req: "ok")
+        rt = PipelineDriver(default_agent=lambda req: "ok")
         result = rt.run('agent any_random_agent\nlet x = ask("hi", agent: any_random_agent)\nx')
         assert result.ok is True  # default agent backs the declared name
 
     def test_exec_config_runner_wires_through_to_runtime(self) -> None:
         """exec.py constructs runtime using runner from ExecConfig (not dead code)."""
         import agm.commands.exec as exec_mod
-        from agm.agl.runtime.runtime import WorkflowRuntime
+        from agm.agl.pipeline import PipelineDriver
         from agm.cli_support.args import ExecArgs
 
-        constructed_runtimes: list[WorkflowRuntime] = []
-        original_init = WorkflowRuntime.__init__
+        constructed_runtimes: list[PipelineDriver] = []
+        original_init = PipelineDriver.__init__
 
-        def capturing_init(self: WorkflowRuntime, **kwargs: object) -> None:
+        def capturing_init(self: PipelineDriver, **kwargs: object) -> None:
             constructed_runtimes.append(self)
             original_init(self, **kwargs)
 
@@ -1154,7 +1154,7 @@ class TestWorkflowRuntimeRunnerWiring:
             log_file=None,
         )
 
-        import agm.agl.runtime.runtime as rt_mod
+        import agm.agl.pipeline as rt_mod
 
         agl_file = Path("/tmp/nonexistent_test.agl")
         # Just check that load_exec_config is called and runner is used; we
@@ -1166,9 +1166,9 @@ class TestWorkflowRuntimeRunnerWiring:
                 "read_text_arg",
                 return_value="let x = 1\nx\n",
             ),
-            patch.object(rt_mod.WorkflowRuntime, "__init__", capturing_init),
+            patch.object(rt_mod.PipelineDriver, "__init__", capturing_init),
             patch.object(
-                rt_mod.WorkflowRuntime,
+                rt_mod.PipelineDriver,
                 "run",
                 return_value=MagicMock(
                     ok=True, diagnostics=[], error=None, warnings=[],

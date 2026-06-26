@@ -2,7 +2,7 @@
 
 Behaviour: read the ``.agl`` source — either from the inline ``-c/--command``
 argument or from the source file (exit 1 if unreadable), load the
-``[exec]`` configuration, construct a ``WorkflowRuntime`` with the resolved
+``[exec]`` configuration, construct a ``PipelineDriver`` with the resolved
 settings, call ``runtime.run`` (or a static-only dry run under ``--dry-run``),
 print diagnostics to stderr, and exit per the exit-code contract.
 
@@ -45,7 +45,7 @@ from typing import TypeVar
 
 from agm.agent.config import default_agent_runner
 from agm.agent.runner import split_command
-from agm.agl import WorkflowRuntime
+from agm.agl import PipelineDriver
 from agm.agl.diagnostics import format_diagnostic
 from agm.agl.modules.roots import assemble_roots
 from agm.agl.runtime.agents import runner_backed_agent_factory
@@ -142,7 +142,7 @@ def run(args: ExecArgs) -> None:
         cwd=ctx.cwd,
     )
 
-    prepared = WorkflowRuntime.prepare_program(
+    prepared = PipelineDriver.prepare_program(
         source, entry_path=entry_path, roots=roots, default_stdlib=not args.no_stdlib
     )
     pragmas = prepared.config_pragmas
@@ -257,7 +257,7 @@ def run(args: ExecArgs) -> None:
         idle_timeout=resolved_timeout,
     )
 
-    runtime = WorkflowRuntime(
+    runtime = PipelineDriver(
         default_loop_limit=resolved_loop_limit,
         default_strict_json=resolved_strict_json,
         default_agent=factory,

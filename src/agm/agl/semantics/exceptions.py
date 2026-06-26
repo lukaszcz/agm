@@ -9,7 +9,7 @@ wraps the ``ExceptionValue`` being thrown.
 (which represents *static* pipeline errors).  At runtime, only ``AglRaise``
 is raised; it propagates up the Python call stack and is caught by:
   - a ``try``/``catch`` statement evaluator (matching by type name),
-  - or the top-level ``WorkflowRuntime.run()`` dispatcher (converts to
+  - or the top-level ``PipelineDriver.run()`` dispatcher (converts to
     ``RunResult.error``).
 
 ``make_builtin_exception`` is the single shared factory for built-in exception

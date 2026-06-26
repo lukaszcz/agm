@@ -2,7 +2,7 @@
 
 ``HostCapabilities`` is a frozen, data-only dataclass that describes which
 agents and codecs the host has registered.  It is constructed by
-``WorkflowRuntime.run()`` before the static passes execute and is consumed by
+``PipelineDriver.run()`` before the static passes execute and is consumed by
 the type checker (Component 5) — the checker never imports agent/codec
 *implementations*, only their capability descriptors.
 
@@ -19,7 +19,7 @@ Design
   strings the codec supports.  Built-in codecs: ``"text"`` (supports
   ``{"text"}``); ``"json"`` (supports
   ``{"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}``).
-  Hosts may register additional codecs via ``WorkflowRuntime``.
+  Hosts may register additional codecs via ``PipelineDriver``.
 
 The string type-kind identifiers used in ``codec_kinds`` match the names of
 the semantic ``Type`` subclasses in ``agm.agl.semantics.types`` (lower-cased,
@@ -48,7 +48,7 @@ class HostCapabilities:
         When ``False``, an ``ask`` call is a static error.
     supports_shell_exec:
         When ``True``, the host can execute ``exec`` (shell) calls.  When
-        ``False``, any ``exec`` call site is a static error.  ``WorkflowRuntime``
+        ``False``, any ``exec`` call site is a static error.  ``PipelineDriver``
         sets this to ``True``; test harnesses that do not want shell execution
         may set it to ``False``.
     codec_kinds:

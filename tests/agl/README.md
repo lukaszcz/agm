@@ -78,7 +78,7 @@ Field notes:
   test); the object form allows `repeat_last` for loop-exhaustion scenarios. The key
   `ask` scripts the built-in default agent (passed as the runtime's
   `default_agent`, since `ask` cannot be registered by name).
-- `runtime` — optional `WorkflowRuntime` constructor overrides
+- `runtime` — optional `PipelineDriver` constructor overrides
   (`default_loop_limit`, `default_strict_json`).
 - `module_roots` — optional paths relative to `tests/agl/`. When present, the
   program runs through the multi-file module graph with these library roots.

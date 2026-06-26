@@ -1,7 +1,7 @@
 """AgentRegistry for the AgL runtime.
 
 ``AgentRegistry`` holds the callable agents registered with a
-``WorkflowRuntime``.  It distinguishes:
+``PipelineDriver``.  It distinguishes:
 
 - **Named agents**: registered with ``register_agent(name, fn)``.
 - **Default agent** (``ask``): registered via the ``default_agent``
@@ -38,7 +38,7 @@ This design was chosen because:
    conversion happens once for all call sites and agents, without duplicating
    conversion logic.
 4. Circular-import concern is sidestepped via local imports inside the method
-   (the same pattern already used throughout ``runtime.py``).
+   (the same function-local-import pattern used elsewhere in the runtime layer).
 """
 
 from __future__ import annotations
@@ -143,7 +143,7 @@ class AgentRegistry:
         interpreter can handle it as a catchable in-language exception.
         Transport failures are NOT eligible for ``on_parse_error`` retries
         (design §7.11): the ``AglRaise`` propagates directly to the
-        interpreter's ``try/catch`` or the top-level ``WorkflowRuntime.run``
+        interpreter's ``try/catch`` or the top-level ``PipelineDriver.run``
         dispatcher.
         """
         fn: AgentFn | None = self._named.get(name)

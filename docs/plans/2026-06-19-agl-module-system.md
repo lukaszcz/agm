@@ -336,7 +336,7 @@ ref_name     : VAR_NAME | TYPE_NAME
 
 ## 9. Host integration, config, CLI
 
-- New entrypoint, e.g. `WorkflowRuntime.prepare_program(entry_source, *, entry_path, roots)`:
+- New entrypoint, e.g. `PipelineDriver.prepare_program(entry_source, *, entry_path, roots)`:
   loader → resolve → typecheck/eval. Existing single-file callers (no imports) behave identically.
 - `agm exec <file>`: file's dir is a root; entry id = `main`. `agm exec -c <code>`: cwd is a root;
   entry id = `main`.

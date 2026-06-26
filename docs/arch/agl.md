@@ -15,7 +15,7 @@ source (.agl)
         ↘ host runtime: agents, shell execution, codecs, trace store
 ```
 
-`WorkflowRuntime` and the REPL always execute this pipeline. Linked IR is the only
+`PipelineDriver` and the REPL always execute this pipeline. Linked IR is the only
 execution format; checked frontend objects are never evaluator inputs.
 
 ## Firewall rule
@@ -288,6 +288,11 @@ The package boundaries are enforced by `tests/test_agl_dependencies.py`:
   execution modules.
 - `agm.agl.eval` may import IR, runtime services, `agm.agl.semantics`, and
   module IDs, but never syntax, scope, typecheck, or REPL modules.
+- `agm.agl.runtime` is the eval-free services layer: it imports no
+  `agm.agl.eval` and no `agm.agl.pipeline` (enforced by the dependency contract
+  test).
+- `agm.agl.pipeline` is the top-of-stack orchestrator; it imports both
+  `agm.agl.eval` and `agm.agl.runtime`.
 
 `agm.agl.type_schema` owns pure checker-type-to-JSON-schema compilation and format
 instruction generation. This keeps lowering independent of runtime execution.
@@ -377,7 +382,7 @@ resolves each one in declaration order at evaluation time (no deferred "unset"
 state). Resolution precedence: external value (CLI option / `[params.<program>]`
 config) > default expression > pre-execution error for required params. The
 `program NAME` declaration names the program for config keying — if absent, the
-`.agl` file stem is used instead. `WorkflowRuntime.discover_params(prepared)`
+`.agl` file stem is used instead. `PipelineDriver.discover_params(prepared)`
 runs typecheck on an already-`prepare`d program and returns a `ParamDiscovery`
 (program name + typed `ParamDeclInfo` tuples), giving callers the full param
 inventory before execution. External values are converted via `convert_param_value`
@@ -405,10 +410,11 @@ config context; tests supply fakes). IR param descriptors map those pre-converte
 values to their persistent `SymbolId`s before execution.
 
 The session shares the host-environment assembly, param conversion, and
-exception→`RunError` mapping with `WorkflowRuntime` via public helpers in
-`agm.agl.runtime.runtime` (`assemble_host_environment`/`HostEnvironment`,
-`convert_param_value`, `exception_value_to_run_error`); registration is delegated to an
-internal `WorkflowRuntime` so reserved-name/duplicate validation is not
+exception→`RunError` mapping with `PipelineDriver` via public helpers:
+`assemble_host_environment`/`exception_value_to_run_error` are in
+`agm.agl.pipeline`; `HostEnvironment` is in `agm.agl.runtime.types`;
+`convert_param_value` is in `agm.agl.runtime.params`.  Registration is delegated
+to an internal `PipelineDriver` so reserved-name/duplicate validation is not
 duplicated. REPL entries execute through `IrInterpreter` against a persistent linked image.
 
 Agent calls are gated by `agm.agl.repl.agents.ConfirmingAgent`, a wrapper
@@ -460,7 +466,7 @@ kind, and collects the validated set into `ResolvedProgram.config_pragmas`.
 Typecheck and eval treat `ConfigPragma` as a no-op. `PreparedProgram.config_pragmas`
 exposes the collected map (empty on parse/scope failure) for the host to read.
 
-`agm exec` reads `prepared.config_pragmas` after `WorkflowRuntime.prepare(source)`
+`agm exec` reads `prepared.config_pragmas` after `PipelineDriver.prepare(source)`
 and applies each pragma with **CLI > pragma > config-file** precedence: CLI flags
 win, then pragma values, then `[exec]` config. Trace logging is off by default;
 `config log = true` (or `--log` / `[exec] log = true`) opts in.
@@ -504,7 +510,7 @@ scope pass owns binding: it collects declarations into
 pre-pass, and simultaneously defines each declared name as an immutable value
 binding of type `agent` in the root scope — agents are now first-class values,
 not a separate namespace. The **host only backs declared names** — it never owns
-the name set. `WorkflowRuntime.prepare(source)` runs the lex + parse + scope
+the name set. `PipelineDriver.prepare(source)` runs the lex + parse + scope
 phase ONCE, returning a `PreparedProgram` (captured AST/resolution plus
 diagnostics and warnings); `run_prepared` resumes from type checking on that
 object, and `run(source)` is just `run_prepared(prepare(source))`. A host that
@@ -515,7 +521,7 @@ registrations) calls `prepare` once and hands the same `PreparedProgram` to
 `()` on any parse/scope error, which `run_prepared` resurfaces) yielding
 `AgentDeclInfo` tuples.
 
-`WorkflowRuntime.run_prepared` enforces the contract before execution (helper
+`PipelineDriver.run_prepared` enforces the contract before execution (helper
 `_reconcile_agents`), reporting all violations as error diagnostics
 (`ok=False`, nothing executes): a registered name the source never declares,
 and a declared name with neither a dedicated registration nor a default agent.
@@ -724,9 +730,15 @@ filesystem-discovery order: `sorted_roots()` orders roots, BFS queues are
 sorted by `ModuleId` before enqueuing, and `expand_wildcard` results are ordered
 by `ModuleId`. The SCC algorithm visits nodes in sorted order.
 
-## Host runtime graph integration (`agm.agl.runtime`)
+## Host pipeline and runtime services
 
-`WorkflowRuntime` exposes a graph-mode API that mirrors the single-file API:
+`agm.agl.pipeline` contains `PipelineDriver` — the top-of-stack orchestrator
+that drives the full compile+lower+evaluate pipeline.  `agm.agl.runtime` is the
+eval-free services layer (agents, codecs, params, types); it imports no
+`agm.agl.eval` and no `agm.agl.pipeline` (enforced by
+`tests/test_agl_dependencies.py`).
+
+`PipelineDriver` exposes a graph-mode API that mirrors the single-file API:
 
 - `prepare_program(source, *, entry_path, roots) → PreparedGraph` — non-raising
   front-end: calls `load_graph` then `resolve_graph`, captures any exception
@@ -777,7 +789,8 @@ modules used by those tests are in `tests/agl/multi_file/`.
 | `agm.agl.scope` | 4 — name resolution | `tests/test_agl_scope.py` |
 | `agm.agl.typecheck` | 5 — type checking | `tests/test_agl_typecheck.py` |
 | `agm.agl.eval` | 6 — evaluator | `tests/test_agl_eval.py`, `tests/test_agl_eval_graph.py` |
-| `agm.agl.runtime` | host API | `tests/test_agl_runtime.py` |
+| `agm.agl.pipeline` | top-of-stack orchestrator (`PipelineDriver`) | `tests/test_agl_runtime.py` |
+| `agm.agl.runtime` | eval-free services (agents, codecs, params, types) | `tests/test_agl_runtime.py` |
 | `agm.agl.repl` | incremental REPL session (UI-free) | `tests/test_agl_repl_session.py` |
 | `agm.commands.exec` | CLI command | `tests/test_exec_command.py` |
 | `agm.config.module_roots` | module roots config | `tests/test_config_module_roots.py` |

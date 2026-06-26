@@ -76,7 +76,7 @@ _INDEX_PREDECESSORS = frozenset(
 # Ambient sink for TAB advisories produced during a Lark-driven parse.  The
 # lexer scans the source exactly once (no separate TAB pass); when a sink is
 # active, ``AglLexer.lex`` deposits the scan's TAB advisories into it so the
-# caller (e.g. ``WorkflowRuntime.prepare``) can surface them alongside parse
+# caller (e.g. ``PipelineDriver.prepare``) can surface them alongside parse
 # diagnostics.  A ``ContextVar`` keeps nested/reentrant parses isolated.
 _TAB_WARNING_SINK: contextvars.ContextVar[list[Diagnostic] | None] = (
     contextvars.ContextVar("agl_tab_warning_sink", default=None)

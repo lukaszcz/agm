@@ -25,10 +25,10 @@ def _make_runtime(
     *,
     default_agent: Any | None = None,
 ) -> Any:
-    """Build a WorkflowRuntime with optional default agent."""
-    from agm.agl import WorkflowRuntime
+    """Build a PipelineDriver with optional default agent."""
+    from agm.agl import PipelineDriver
 
-    return WorkflowRuntime(
+    return PipelineDriver(
         default_agent=default_agent,
     )
 
@@ -43,7 +43,7 @@ def _run_graph(
     agents: dict[str, Any] | None = None,
 ) -> Any:
     """Run a multi-file AgL program and return the RunResult."""
-    from agm.agl import WorkflowRuntime
+    from agm.agl import PipelineDriver
     from agm.agl.modules.roots import RootSet
 
     roots = RootSet(
@@ -51,7 +51,7 @@ def _run_graph(
             {*(d.resolve() for d in roots_dirs if d.exists()), REPO_STDLIB_ROOT}
         )
     )
-    prepared = WorkflowRuntime.prepare_program(
+    prepared = PipelineDriver.prepare_program(
         entry_source, entry_path=entry_path, roots=roots
     )
     rt = _make_runtime(default_agent=default_agent)
@@ -351,13 +351,13 @@ class TestMultiFileParams:
 
         source = "import math\nparam n: int\nlet r = square(n)\nprint r\n"
 
-        from agm.agl import WorkflowRuntime
+        from agm.agl import PipelineDriver
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({lib_dir.resolve(), REPO_STDLIB_ROOT}))
-        prepared = WorkflowRuntime.prepare_program(source, entry_path=None, roots=roots)
+        prepared = PipelineDriver.prepare_program(source, entry_path=None, roots=roots)
 
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run_prepared_graph(prepared, param_values={"n": 7})
         assert result.ok is True
         captured = capsys.readouterr()
@@ -371,13 +371,13 @@ class TestMultiFileParams:
 
         source = "import calc\nparam n: int\nlet r = sq(n)\nprint r\n"
 
-        from agm.agl import WorkflowRuntime
+        from agm.agl import PipelineDriver
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({lib_dir.resolve(), REPO_STDLIB_ROOT}))
-        prepared = WorkflowRuntime.prepare_program(source, entry_path=None, roots=roots)
+        prepared = PipelineDriver.prepare_program(source, entry_path=None, roots=roots)
 
-        rt = WorkflowRuntime()
+        rt = PipelineDriver()
         result = rt.run_prepared_graph(prepared, param_values={})
         assert result.ok is False
         assert any("n" in d.message for d in result.diagnostics)

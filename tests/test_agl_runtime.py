@@ -1767,7 +1767,7 @@ class TestRuntimeErrorPaths:
 
     def test_text_param_not_str_raises(self) -> None:
         """convert_param_value: text type with non-str value → ValueError."""
-        from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.runtime.params import convert_param_value
         from agm.agl.semantics.types import TextType
 
         with pytest.raises(ValueError, match="expected a text value"):
@@ -1777,7 +1777,7 @@ class TestRuntimeErrorPaths:
         """convert_param_value: integral Decimal → IntValue for int type."""
         from decimal import Decimal
 
-        from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.runtime.params import convert_param_value
         from agm.agl.semantics.types import IntType
         from agm.agl.semantics.values import IntValue
 
@@ -1786,7 +1786,7 @@ class TestRuntimeErrorPaths:
 
     def test_int_param_non_integral_fails(self) -> None:
         """convert_param_value: non-integral value → ValueError for int type."""
-        from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.runtime.params import convert_param_value
         from agm.agl.semantics.types import IntType
 
         with pytest.raises(ValueError, match="expected an integer"):
@@ -1796,7 +1796,7 @@ class TestRuntimeErrorPaths:
         """convert_param_value: int value → DecimalValue for decimal type."""
         from decimal import Decimal
 
-        from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.runtime.params import convert_param_value
         from agm.agl.semantics.types import DecimalType
         from agm.agl.semantics.values import DecimalValue
 
@@ -1806,7 +1806,7 @@ class TestRuntimeErrorPaths:
 
     def test_decimal_param_invalid_type_fails(self) -> None:
         """convert_param_value: bool value → ValueError for decimal type."""
-        from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.runtime.params import convert_param_value
         from agm.agl.semantics.types import DecimalType
 
         with pytest.raises(ValueError, match="expected a decimal"):
@@ -1814,7 +1814,7 @@ class TestRuntimeErrorPaths:
 
     def test_bool_param_invalid_type_fails(self) -> None:
         """convert_param_value: non-bool value → ValueError for bool type."""
-        from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.runtime.params import convert_param_value
         from agm.agl.semantics.types import BoolType
 
         with pytest.raises(ValueError, match="expected a bool"):
@@ -1822,7 +1822,7 @@ class TestRuntimeErrorPaths:
 
     def test_bool_param_true_succeeds(self) -> None:
         """convert_param_value: bool value → BoolValue for bool type."""
-        from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.runtime.params import convert_param_value
         from agm.agl.semantics.types import BoolType
         from agm.agl.semantics.values import BoolValue
 
@@ -1916,7 +1916,7 @@ class TestRuntimeErrorPaths:
         assert isinstance(error.fields["exc_val"], dict)
 
     def test_convert_param_value_json_type_accepts_any(self) -> None:
-        from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.runtime.params import convert_param_value
         from agm.agl.semantics.types import JsonType
         from agm.agl.semantics.values import JsonValue
 
@@ -1925,7 +1925,7 @@ class TestRuntimeErrorPaths:
 
     def test_convert_param_value_list_type_parsed_via_json_codec(self) -> None:
         # M2: list/dict/record/enum params are now accepted via the JsonCodec.
-        from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.runtime.params import convert_param_value
         from agm.agl.semantics.types import ListType, TextType
         from agm.agl.semantics.values import ListValue, TextValue
 
@@ -1969,7 +1969,7 @@ class TestRuntimeErrorPaths:
         """
         import decimal as _decimal
 
-        from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.runtime.params import convert_param_value
         from agm.agl.semantics.types import DecimalType, ListType
         from agm.agl.semantics.values import DecimalValue, ListValue
 
@@ -1987,7 +1987,7 @@ class TestRuntimeErrorPaths:
         param-validation error naming the param, not a stringified value or
         traceback.
         """
-        from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.runtime.params import convert_param_value
         from agm.agl.semantics.types import ListType, TextType
 
         with pytest.raises(ValueError, match="xs") as exc_info:
@@ -2055,7 +2055,7 @@ class TestRuntimeErrorPaths:
         """_is_json_shaped: a dict with non-str keys is not JSON-shaped (covers
         the dict branch of _is_json_shaped, line 790).
         """
-        from agm.agl.runtime.runtime import _is_json_shaped
+        from agm.agl.runtime.params import _is_json_shaped
 
         # Dict with non-str key.
         assert _is_json_shaped({1: "a"}) is False
@@ -2607,7 +2607,7 @@ class TestIrHostMetadataCoverage:
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.program import ExecutableProgram
         from agm.agl.modules.ids import ENTRY_ID
-        from agm.agl.runtime.runtime import _materialize_ir_contracts
+        from agm.agl.runtime.params import _materialize_ir_contracts
 
         request = ContractRequest(
             codec_name="missing",
@@ -2763,7 +2763,7 @@ class TestConvertInputUnsupportedType:
     """convert_param_value raises ValueError for unsupported types (e.g. ListType of records)."""
 
     def test_unsupported_type_raises(self) -> None:
-        from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.runtime.params import convert_param_value
         from agm.agl.semantics.types import AgentType
 
         with pytest.raises(ValueError, match="unsupported type"):

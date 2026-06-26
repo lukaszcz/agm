@@ -12,8 +12,8 @@ from agm.agl.ir.ids import FunctionId, NominalId
 from agm.agl.ir.operations import CmpOp, ContainsKind
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.runtime.contract import materialize_contract
+from agm.agl.runtime.params import convert_param_value
 from agm.agl.runtime.render import render_value
-from agm.agl.runtime.runtime import convert_param_value
 from agm.agl.runtime.serialize import value_to_json_obj
 from agm.agl.semantics.types import DecimalType, TextType, UnitType
 from agm.agl.semantics.values import (

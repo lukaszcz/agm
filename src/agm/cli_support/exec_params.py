@@ -16,7 +16,7 @@ from collections.abc import Mapping
 
 from agm.agl.diagnostics import Diagnostic, format_diagnostic
 from agm.agl.runtime.request import AgentResponse
-from agm.agl.runtime.runtime import ParamDeclInfo
+from agm.agl.runtime.types import ParamDeclInfo
 from agm.agl.semantics.types import BoolType
 
 # Reserved built-in flag strings for the ``agm exec`` command.

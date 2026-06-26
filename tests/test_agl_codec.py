@@ -183,7 +183,7 @@ def _run_with_json_codec(
     from agm.agl.eval.ir_interpreter import IrInterpreter
     from agm.agl.lower import lower_program
     from agm.agl.runtime.codec import JsonCodec, OutputCodec, TextCodec
-    from agm.agl.runtime.runtime import _materialize_ir_contracts
+    from agm.agl.runtime.params import _materialize_ir_contracts
 
     checked = _check_program_with_json(body)
     text_codec = TextCodec()
@@ -1580,7 +1580,7 @@ issue
 
     def test_structured_param_accepts_python_list(self) -> None:
         """Structured params may be provided as a Python list (JSON-compatible)."""
-        from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.runtime.params import convert_param_value
         from agm.agl.semantics.values import IntValue, ListValue
 
         result = convert_param_value("xs", [1, 2, 3], ListType(elem=IntType()))
@@ -1589,14 +1589,14 @@ issue
 
     def test_structured_param_must_be_string_or_compatible(self) -> None:
         """Structured params that are not a string or JSON-compatible Python value raise."""
-        from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.runtime.params import convert_param_value
 
         with pytest.raises(ValueError, match="JSON"):
             convert_param_value("xs", object(), ListType(elem=IntType()))
 
     def test_invalid_structured_param_raises(self) -> None:
         """A JSON string that fails schema validation for the declared type raises."""
-        from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.runtime.params import convert_param_value
 
         with pytest.raises(ValueError, match="could not parse"):
             convert_param_value(
@@ -1607,7 +1607,7 @@ issue
 
     def test_unsupported_type_in_convert_param_value_raises(self) -> None:
         """ExceptionType is not a supported param type."""
-        from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.runtime.params import convert_param_value
         from agm.agl.semantics.types import ExceptionType
 
         with pytest.raises(ValueError, match="unsupported type"):
@@ -1620,7 +1620,7 @@ issue
         output) must be rejected for a user-supplied structured param, with an
         error that makes the JSON requirement clear.
         """
-        from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.runtime.params import convert_param_value
 
         with pytest.raises(ValueError, match="valid JSON value"):
             convert_param_value(
@@ -1631,7 +1631,7 @@ issue
 
     def test_structured_param_rejects_fenced_json(self) -> None:
         """F7: a Markdown-fenced --param value is not stripped (strict parsing)."""
-        from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.runtime.params import convert_param_value
 
         with pytest.raises(ValueError, match="valid JSON value"):
             convert_param_value(

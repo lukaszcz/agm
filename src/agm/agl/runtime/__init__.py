@@ -26,13 +26,12 @@ from agm.agl.runtime.contract import OutputContract
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.runtime.runtime import (
-    AgentDeclInfo,
-    CallSiteInfo,
     PreparedProgram,
     RunError,
     RunResult,
     WorkflowRuntime,
 )
+from agm.agl.runtime.types import AgentDeclInfo, CallSiteInfo
 
 __all__ = [
     "AgentDeclInfo",

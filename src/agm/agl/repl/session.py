@@ -32,7 +32,8 @@ if TYPE_CHECKING:
     from agm.agl.modules.roots import RootSet
     from agm.agl.runtime.agents import AgentFn
     from agm.agl.runtime.codec import OutputCodec
-    from agm.agl.runtime.runtime import HostEnvironment, RunError
+    from agm.agl.runtime.runtime import RunError
+    from agm.agl.runtime.types import HostEnvironment
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import Frame, Value
@@ -587,7 +588,7 @@ class ReplSession:
         warnings: list[Diagnostic],
     ) -> tuple[EntryResult | None, dict[str, Value], str | None, dict[str, object]]:
         """Validate and convert config-backed params without mutating session state."""
-        from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.runtime.params import convert_param_value
         from agm.agl.syntax.nodes import ParamDecl, ProgramDecl
 
         def reject(message: str, span: "SourceSpan") -> EntryResult:
@@ -722,7 +723,7 @@ class ReplSession:
             for param in lowered.program.params
             if param.public_name in param_values
         }
-        from agm.agl.runtime.runtime import _materialize_ir_contracts
+        from agm.agl.runtime.params import _materialize_ir_contracts
 
         host_contracts, _ = _materialize_ir_contracts(lowered.program, host_env.codecs)
 
@@ -1162,11 +1163,9 @@ class ReplSession:
         """Lower and execute one graph-mode entry in the persistent IR image."""
         from agm.agl.eval.ir_interpreter import IrInterpreter
         from agm.agl.lower import lower_repl_graph
+        from agm.agl.runtime.params import _materialize_ir_contracts
         from agm.agl.runtime.request import AgentCancelled
-        from agm.agl.runtime.runtime import (
-            _materialize_ir_contracts,
-            exception_value_to_run_error,
-        )
+        from agm.agl.runtime.runtime import exception_value_to_run_error
         from agm.agl.runtime.trace import TraceStore
         from agm.agl.semantics.exceptions import AglRaise
         from agm.agl.syntax.nodes import ImportDecl

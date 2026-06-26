@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from agm.agl.capabilities import HostCapabilities
+    from agm.agl.ir.program import ExecutableProgram
     from agm.agl.modules.roots import RootSet
     from agm.agl.runtime.agents import AgentRegistry
     from agm.agl.runtime.codec import OutputCodec
@@ -661,6 +662,36 @@ class PipelineDriver:
             validate=True,
         )
 
+        return self._execute_ir(
+            executable,
+            host_env=host_env,
+            param_values=param_values,
+            check_only=check_only,
+            log_file=log_file,
+            warnings=warnings,
+        )
+
+    def _execute_ir(
+        self,
+        executable: "ExecutableProgram",
+        *,
+        host_env: HostEnvironment,
+        param_values: Mapping[str, object],
+        check_only: bool,
+        log_file: "Path | None",
+        warnings: list[Diagnostic],
+    ) -> RunResult:
+        """Run a freshly lowered ``executable`` — the shared tail of the
+        single-program and module-graph pipelines.
+
+        Validates external params, materializes host codec contracts, honours
+        the ``check_only`` dry-run stop (call-site inventory, no execution),
+        then builds and runs the :class:`IrInterpreter`, mapping an uncaught
+        ``AglRaise`` to a failing ``RunResult``.  All return paths carry
+        *warnings*.
+        """
+        registry = host_env.registry
+
         ir_param_values, param_errors = _prepare_ir_params(executable, param_values)
         if param_errors:
             return RunResult(ok=False, diagnostics=param_errors, error=None, warnings=warnings)
@@ -696,7 +727,7 @@ class PipelineDriver:
             )
 
         # ----------------------------------------------------------------
-        # [7] Build and run the interpreter
+        # Build and run the interpreter
         # ----------------------------------------------------------------
         from agm.agl.runtime.trace import TraceStore
         from agm.agl.semantics.exceptions import AglRaise
@@ -1018,84 +1049,13 @@ class PipelineDriver:
 
         executable = lower_graph(checked_graph, validate=True)
 
-        ir_param_values, param_errors = _prepare_ir_params(executable, param_values)
-        if param_errors:
-            return RunResult(ok=False, diagnostics=param_errors, error=None, warnings=warnings)
-
-        host_contracts, contract_errors = _materialize_ir_contracts(
-            executable, host_env.codecs
-        )
-        if contract_errors:
-            return RunResult(
-                ok=False,
-                diagnostics=contract_errors,
-                error=None,
-                warnings=list(warnings),
-            )
-
-        # Dry-run stop: build call-site inventory from entry module only.
-        if check_only:
-            inventory = _build_call_inventory_from_ir(executable.dry_run_inventory)
-            return RunResult(
-                ok=True,
-                diagnostics=[],
-                error=None,
-                warnings=list(warnings),
-                bindings={},
-                call_sites=tuple(inventory),
-                trace_path=None,
-            )
-
-        # Execute the graph.
-        from agm.agl.runtime.trace import TraceStore
-        from agm.agl.semantics.exceptions import AglRaise
-
-        trace = TraceStore(path=log_file)
-        if log_file is not None:
-            from agm.core.fs import mkdir
-
-            mkdir(log_file.parent, parents=True, exist_ok=True)
-        trace.run_start()
-
-        try:
-            root_bindings = IrInterpreter(
-                executable,
-                registry=registry,
-                loop_limit=self._default_loop_limit,
-                strict_json=self._default_strict_json,
-                shell_exec_timeout=self._shell_exec_timeout,
-                trace=trace,
-                max_call_depth=self._default_call_depth_limit,
-                param_values=ir_param_values,
-                host_contracts=host_contracts,
-            ).run()
-        except AglRaise as exc:
-            error = exception_value_to_run_error(exc.exc, span=exc.span)
-            trace_id = str(error.fields.get("trace_id", ""))
-            trace.exception(
-                type_name=error.type_name,
-                message=str(error.fields.get("message", "")),
-                trace_id=trace_id,
-                span=exc.span,
-            )
-            trace.run_end(ok=False)
-            return RunResult(
-                ok=False,
-                diagnostics=[],
-                error=error,
-                warnings=list(warnings),
-                bindings={},
-                trace_path=log_file,
-            )
-
-        trace.run_end(ok=True)
-        return RunResult(
-            ok=True,
-            diagnostics=[],
-            error=None,
-            warnings=list(warnings),
-            bindings=root_bindings,
-            trace_path=log_file,
+        return self._execute_ir(
+            executable,
+            host_env=host_env,
+            param_values=param_values,
+            check_only=check_only,
+            log_file=log_file,
+            warnings=warnings,
         )
 
     @property

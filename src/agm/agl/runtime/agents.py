@@ -43,11 +43,11 @@ This design was chosen because:
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from pathlib import Path
 
 from agm.agl.runtime.request import AgentRequest, AgentResponse
+from agm.core.env import clone_env
 
 # A host agent callable may return a plain ``str`` or a full ``AgentResponse``.
 AgentFn = Callable[[AgentRequest], AgentResponse | str]
@@ -271,7 +271,7 @@ def runner_backed_agent_factory(
                 full_message,
                 runner=runner_cmd,
                 temp_files=temp_files,
-                env=dict(os.environ),
+                env=clone_env(),
             )
 
             # 4. Run and collect structured result.

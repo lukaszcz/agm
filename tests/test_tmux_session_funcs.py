@@ -143,6 +143,7 @@ class TestFocusTmuxSession:
             calls.append(cmd)
             return FakeResult()
 
+        # focus_tmux_session uses subprocess.run directly: interactive TTY takeover
         monkeypatch.setattr(session_module.subprocess, "run", fake_run)
         rc = focus_tmux_session(session_name="s1", cwd=tmp_path, env={})
         assert rc == 0
@@ -161,6 +162,7 @@ class TestFocusTmuxSession:
             calls.append(cmd)
             return FakeResult()
 
+        # focus_tmux_session uses subprocess.run directly: interactive TTY takeover
         monkeypatch.setattr(session_module.subprocess, "run", fake_run)
         rc = focus_tmux_session(
             session_name="s1", cwd=tmp_path, env={"TMUX": "/run/tmux.sock"}
@@ -190,14 +192,11 @@ class TestKillTmuxSession:
     ) -> None:
         calls: list[list[str]] = []
 
-        class FakeResult:
-            returncode = 0
-
-        def fake_run(cmd: list[str], **kwargs: Any) -> FakeResult:
+        def fake_foreground(cmd: list[str], **kwargs: Any) -> int:
             calls.append(cmd)
-            return FakeResult()
+            return 0
 
-        monkeypatch.setattr(session_module.subprocess, "run", fake_run)
+        monkeypatch.setattr(session_module, "run_foreground", fake_foreground)
         rc = kill_tmux_session(session_name="to-kill", cwd=tmp_path, env={})
         assert rc == 0
         assert "kill-session" in calls[0]
@@ -206,10 +205,7 @@ class TestKillTmuxSession:
     def test_live_returns_nonzero_returncode(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        class FakeResult:
-            returncode = 2
-
-        monkeypatch.setattr(session_module.subprocess, "run", lambda *a, **kw: FakeResult())
+        monkeypatch.setattr(session_module, "run_foreground", lambda *a, **kw: 2)
         rc = kill_tmux_session(session_name="bad", cwd=tmp_path, env={})
         assert rc == 2
 
@@ -218,15 +214,15 @@ class TestKillTmuxSession:
     ) -> None:
         calls: list[dict[str, Any]] = []
 
-        class FakeResult:
-            returncode = 0
-
-        def fake_run(cmd: list[str], **kwargs: Any) -> FakeResult:
+        def fake_foreground(cmd: list[str], **kwargs: Any) -> int:
             calls.append(kwargs)
-            return FakeResult()
+            return 0
 
-        monkeypatch.setattr(session_module.subprocess, "run", fake_run)
-        monkeypatch.setattr(session_module.os, "environ", {"MY": "env"})
+        monkeypatch.setattr(session_module, "run_foreground", fake_foreground)
+        # patch clone_env on session_module to intercept the env=None path
+        monkeypatch.setattr(
+            session_module, "clone_env", lambda e: {"MY": "env"} if e is None else dict(e)
+        )
         kill_tmux_session(session_name="s", cwd=tmp_path)
         assert calls[0]["env"] == {"MY": "env"}
 
@@ -235,14 +231,11 @@ class TestKillTmuxSession:
     ) -> None:
         calls: list[dict[str, Any]] = []
 
-        class FakeResult:
-            returncode = 0
-
-        def fake_run(cmd: list[str], **kwargs: Any) -> FakeResult:
+        def fake_foreground(cmd: list[str], **kwargs: Any) -> int:
             calls.append(kwargs)
-            return FakeResult()
+            return 0
 
-        monkeypatch.setattr(session_module.subprocess, "run", fake_run)
+        monkeypatch.setattr(session_module, "run_foreground", fake_foreground)
         monkeypatch.setattr(session_module.Path, "cwd", staticmethod(lambda: tmp_path))
         kill_tmux_session(session_name="s", env={})
         assert calls[0]["cwd"] == tmp_path
@@ -314,14 +307,11 @@ class TestQueueCommandInSession:
     ) -> None:
         calls: list[list[str]] = []
 
-        class FakeResult:
-            returncode = 0
-
-        def fake_run(cmd: list[str], **kwargs: Any) -> FakeResult:
+        def fake_foreground(cmd: list[str], **kwargs: Any) -> int:
             calls.append(cmd)
-            return FakeResult()
+            return 0
 
-        monkeypatch.setattr(session_module.subprocess, "run", fake_run)
+        monkeypatch.setattr(session_module, "run_foreground", fake_foreground)
         queue_command_in_session(
             session_name="s1",
             command=["agm", "setup"],
@@ -334,10 +324,7 @@ class TestQueueCommandInSession:
     def test_live_raises_on_failure(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        class FakeResult:
-            returncode = 5
-
-        monkeypatch.setattr(session_module.subprocess, "run", lambda *a, **kw: FakeResult())
+        monkeypatch.setattr(session_module, "run_foreground", lambda *a, **kw: 5)
         with pytest.raises(SystemExit) as exc_info:
             queue_command_in_session(
                 session_name="s1",
@@ -352,14 +339,11 @@ class TestQueueCommandInSession:
     ) -> None:
         calls: list[list[str]] = []
 
-        class FakeResult:
-            returncode = 0
-
-        def fake_run(cmd: list[str], **kwargs: Any) -> FakeResult:
+        def fake_foreground(cmd: list[str], **kwargs: Any) -> int:
             calls.append(cmd)
-            return FakeResult()
+            return 0
 
-        monkeypatch.setattr(session_module.subprocess, "run", fake_run)
+        monkeypatch.setattr(session_module, "run_foreground", fake_foreground)
         queue_command_in_session(
             session_name="s1",
             command=["echo", "hello world"],
@@ -540,29 +524,29 @@ class TestCreateTmuxSessionLive:
         returncode: int = 0,
         stdout: str = "mysession\n",
     ) -> list[list[str]]:
+        """Patch run_capture and run_foreground for the non-interactive tmux RPCs."""
         calls: list[list[str]] = []
 
-        class FakeResult:
-            def __init__(self, rc: int = 0, out: str = "") -> None:
-                self.returncode = rc
-                self.stdout = out
-                self.stderr = ""
-
-        def fake_run(cmd: list[str], **kwargs: Any) -> FakeResult:
+        def fake_capture(cmd: list[str], **kwargs: Any) -> tuple[int, str, str]:
             calls.append(list(cmd))
             if cmd[1] == "new-session":
-                return FakeResult(returncode, stdout)
+                return (returncode, stdout, "")
             if cmd[1] == "display-message":
                 fmt = cmd[-1]
                 if "window_id" in fmt:
-                    return FakeResult(0, "@0\n")
+                    return (0, "@0\n", "")
                 if "window_width" in fmt:
-                    return FakeResult(0, "200\n")
+                    return (0, "200\n", "")
                 if "window_height" in fmt:
-                    return FakeResult(0, "50\n")
-            return FakeResult(0, "")
+                    return (0, "50\n", "")
+            return (0, "", "")
 
-        monkeypatch.setattr(session_module.subprocess, "run", fake_run)
+        def fake_foreground(cmd: list[str], **kwargs: Any) -> int:
+            calls.append(list(cmd))
+            return 0
+
+        monkeypatch.setattr(session_module, "run_capture", fake_capture)
+        monkeypatch.setattr(session_module, "run_foreground", fake_foreground)
         return calls
 
     def test_detached_live_returns_session_name(
@@ -597,20 +581,18 @@ class TestCreateTmuxSessionLive:
     def test_detached_live_raises_on_split_failure(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        class FakeResult:
-            def __init__(self, rc: int = 0) -> None:
-                self.returncode = rc
-                self.stdout = "mysession\n"
-                self.stderr = ""
-
-        def fake_run(cmd: list[str], **kwargs: Any) -> FakeResult:
+        def fake_capture(cmd: list[str], **kwargs: Any) -> tuple[int, str, str]:
             if cmd[1] == "new-session":
-                return FakeResult(0)
-            if cmd[1] == "split-window":
-                return FakeResult(1)
-            return FakeResult(0)
+                return (0, "mysession\n", "")
+            return (0, "", "")
 
-        monkeypatch.setattr(session_module.subprocess, "run", fake_run)
+        def fake_foreground(cmd: list[str], **kwargs: Any) -> int:
+            if cmd[1] == "split-window":
+                return 1
+            return 0
+
+        monkeypatch.setattr(session_module, "run_capture", fake_capture)
+        monkeypatch.setattr(session_module, "run_foreground", fake_foreground)
         monkeypatch.setattr(session_module, "apply_layout", lambda **kw: None)
         with pytest.raises(SystemExit):
             create_tmux_session(
@@ -624,20 +606,18 @@ class TestCreateTmuxSessionLive:
     def test_detached_live_raises_on_display_failure(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        class FakeResult:
-            def __init__(self, rc: int = 0, out: str = "") -> None:
-                self.returncode = rc
-                self.stdout = out
-                self.stderr = "err"
-
-        def fake_run(cmd: list[str], **kwargs: Any) -> FakeResult:
+        def fake_capture(cmd: list[str], **kwargs: Any) -> tuple[int, str, str]:
             if cmd[1] == "new-session":
-                return FakeResult(0, "mysession\n")
+                return (0, "mysession\n", "")
             if cmd[1] == "display-message":
-                return FakeResult(1, "")
-            return FakeResult(0, "")
+                return (1, "", "err")
+            return (0, "", "")
 
-        monkeypatch.setattr(session_module.subprocess, "run", fake_run)
+        def fake_foreground(cmd: list[str], **kwargs: Any) -> int:
+            return 0
+
+        monkeypatch.setattr(session_module, "run_capture", fake_capture)
+        monkeypatch.setattr(session_module, "run_foreground", fake_foreground)
         monkeypatch.setattr(session_module, "apply_layout", lambda **kw: None)
         with pytest.raises(SystemExit):
             create_tmux_session(
@@ -651,28 +631,26 @@ class TestCreateTmuxSessionLive:
     def test_detached_live_raises_on_select_pane_failure(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        class FakeResult:
-            def __init__(self, rc: int = 0, out: str = "") -> None:
-                self.returncode = rc
-                self.stdout = out
-                self.stderr = ""
-
-        def fake_run(cmd: list[str], **kwargs: Any) -> FakeResult:
+        def fake_capture(cmd: list[str], **kwargs: Any) -> tuple[int, str, str]:
             if cmd[1] == "new-session":
-                return FakeResult(0, "mysession\n")
+                return (0, "mysession\n", "")
             if cmd[1] == "display-message":
                 fmt = cmd[-1]
                 if "window_id" in fmt:
-                    return FakeResult(0, "@0\n")
+                    return (0, "@0\n", "")
                 if "window_width" in fmt:
-                    return FakeResult(0, "200\n")
+                    return (0, "200\n", "")
                 if "window_height" in fmt:
-                    return FakeResult(0, "50\n")
-            if cmd[1] == "select-pane":
-                return FakeResult(1, "")
-            return FakeResult(0, "")
+                    return (0, "50\n", "")
+            return (0, "", "")
 
-        monkeypatch.setattr(session_module.subprocess, "run", fake_run)
+        def fake_foreground(cmd: list[str], **kwargs: Any) -> int:
+            if cmd[1] == "select-pane":
+                return 1
+            return 0
+
+        monkeypatch.setattr(session_module, "run_capture", fake_capture)
+        monkeypatch.setattr(session_module, "run_foreground", fake_foreground)
         monkeypatch.setattr(session_module, "apply_layout", lambda **kw: None)
         with pytest.raises(SystemExit):
             create_tmux_session(
@@ -686,28 +664,29 @@ class TestCreateTmuxSessionLive:
     def test_detached_live_switch_client_when_tmux_set(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        class FakeResult:
-            def __init__(self, rc: int = 0, out: str = "") -> None:
-                self.returncode = rc
-                self.stdout = out
-                self.stderr = ""
-
-        def fake_run(cmd: list[str], **kwargs: Any) -> FakeResult:
+        def fake_capture(cmd: list[str], **kwargs: Any) -> tuple[int, str, str]:
             if cmd[1] == "new-session":
-                return FakeResult(0, "s1\n")
+                return (0, "s1\n", "")
             if cmd[1] == "display-message":
                 fmt = cmd[-1]
                 if "window_id" in fmt:
-                    return FakeResult(0, "@0\n")
+                    return (0, "@0\n", "")
                 if "window_width" in fmt:
-                    return FakeResult(0, "200\n")
+                    return (0, "200\n", "")
                 if "window_height" in fmt:
-                    return FakeResult(0, "50\n")
-            if cmd[1] in {"select-pane", "switch-client"}:
-                return FakeResult(0, "")
-            return FakeResult(0, "")
+                    return (0, "50\n", "")
+            return (0, "", "")
 
-        monkeypatch.setattr(session_module.subprocess, "run", fake_run)
+        def fake_foreground(cmd: list[str], **kwargs: Any) -> int:
+            return 0
+
+        class FakeResult:
+            returncode = 0
+
+        monkeypatch.setattr(session_module, "run_capture", fake_capture)
+        monkeypatch.setattr(session_module, "run_foreground", fake_foreground)
+        # focus_tmux_session uses subprocess.run directly for interactive attach/switch
+        monkeypatch.setattr(session_module.subprocess, "run", lambda *a, **kw: FakeResult())
         monkeypatch.setattr(session_module, "apply_layout", lambda **kw: None)
         # TMUX set + detach=False → switch_to_session=True → raises SystemExit(0)
         with pytest.raises(SystemExit) as exc_info:
@@ -726,6 +705,7 @@ class TestCreateTmuxSessionLive:
         class FakeResult:
             returncode = 0
 
+        # Non-detached new-session is an interactive terminal takeover: uses subprocess.run
         monkeypatch.setattr(session_module.subprocess, "run", lambda *a, **kw: FakeResult())
         with pytest.raises(SystemExit):
             create_tmux_session(
@@ -741,12 +721,9 @@ class TestCreateTmuxSessionLive:
     ) -> None:
         """Cover sys.stderr.write when new-session fails with stderr output."""
 
-        class FakeResult:
-            returncode = 1
-            stdout = ""
-            stderr = "some tmux error"
-
-        monkeypatch.setattr(session_module.subprocess, "run", lambda *a, **kw: FakeResult())
+        monkeypatch.setattr(
+            session_module, "run_capture", lambda *a, **kw: (1, "", "some tmux error")
+        )
         with pytest.raises(SystemExit):
             create_tmux_session(
                 detach=True,
@@ -763,12 +740,9 @@ class TestCreateTmuxSessionLive:
     ) -> None:
         """Cover the sys.stdout.write branch when new-session fails with stdout."""
 
-        class FakeResult:
-            returncode = 1
-            stdout = "unexpected output"
-            stderr = ""
-
-        monkeypatch.setattr(session_module.subprocess, "run", lambda *a, **kw: FakeResult())
+        monkeypatch.setattr(
+            session_module, "run_capture", lambda *a, **kw: (1, "unexpected output", "")
+        )
         with pytest.raises(SystemExit):
             create_tmux_session(
                 detach=True,
@@ -785,20 +759,18 @@ class TestCreateTmuxSessionLive:
     ) -> None:
         """Cover sys.stdout.write when display-message fails with stdout."""
 
-        class FakeResult:
-            def __init__(self, rc: int = 0, out: str = "") -> None:
-                self.returncode = rc
-                self.stdout = out
-                self.stderr = ""
-
-        def fake_run(cmd: list[str], **kwargs: Any) -> FakeResult:
+        def fake_capture(cmd: list[str], **kwargs: Any) -> tuple[int, str, str]:
             if cmd[1] == "new-session":
-                return FakeResult(0, "mysession\n")
+                return (0, "mysession\n", "")
             if cmd[1] == "display-message":
-                return FakeResult(1, "display stdout output")
-            return FakeResult(0, "")
+                return (1, "display stdout output", "")
+            return (0, "", "")
 
-        monkeypatch.setattr(session_module.subprocess, "run", fake_run)
+        def fake_foreground(cmd: list[str], **kwargs: Any) -> int:
+            return 0
+
+        monkeypatch.setattr(session_module, "run_capture", fake_capture)
+        monkeypatch.setattr(session_module, "run_foreground", fake_foreground)
         monkeypatch.setattr(session_module, "apply_layout", lambda **kw: None)
         with pytest.raises(SystemExit):
             create_tmux_session(

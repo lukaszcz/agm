@@ -10,7 +10,8 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from agm.core import dry_run
-from agm.core.env import is_safe_shell_env_assignment_name
+from agm.core.env import clone_env, is_safe_shell_env_assignment_name
+from agm.core.process import run_capture, run_foreground
 from agm.parser import exit_with_usage_error
 from agm.tmux.layout import apply_layout
 
@@ -118,7 +119,7 @@ def create_tmux_session(
                 )
             print(f"Detached tmux session {planned_session} created")
             return planned_session
-        result = subprocess.run(
+        returncode, stdout, stderr = run_capture(
             [
                 "tmux",
                 "new-session",
@@ -131,22 +132,19 @@ def create_tmux_session(
                 *session_name_args,
                 *([] if shell_command is None else [shell_command]),
             ],
-            capture_output=True,
-            text=True,
             cwd=current,
             env=resolved_env,
-            check=False,
         )
-        if result.returncode != 0:
-            if result.stdout:
-                sys.stdout.write(result.stdout)
-            if result.stderr:
-                sys.stderr.write(result.stderr)
-            raise SystemExit(result.returncode)
+        if returncode != 0:
+            if stdout:
+                sys.stdout.write(stdout)
+            if stderr:
+                sys.stderr.write(stderr)
+            raise SystemExit(returncode)
 
-        target_session = result.stdout.strip()
+        target_session = stdout.strip()
         for _ in range(1, pane_total):
-            status = subprocess.run(
+            status = run_foreground(
                 [
                     "tmux",
                     "split-window",
@@ -160,27 +158,23 @@ def create_tmux_session(
                 ],
                 cwd=current,
                 env=resolved_env,
-                check=False,
-            ).returncode
+            )
             if status != 0:
                 raise SystemExit(status)
 
         def _display(format_string: str) -> str:
-            display = subprocess.run(
+            rc, out, err = run_capture(
                 ["tmux", "display-message", "-p", "-t", f"{target_session}:0", format_string],
-                capture_output=True,
-                text=True,
                 cwd=current,
                 env=resolved_env,
-                check=False,
             )
-            if display.returncode != 0:
-                if display.stdout:
-                    sys.stdout.write(display.stdout)
-                if display.stderr:
-                    sys.stderr.write(display.stderr)
-                raise SystemExit(display.returncode)
-            return display.stdout.strip()
+            if rc != 0:
+                if out:
+                    sys.stdout.write(out)
+                if err:
+                    sys.stderr.write(err)
+                raise SystemExit(rc)
+            return out.strip()
 
         apply_layout(
             pane_count=pane_total,
@@ -188,12 +182,11 @@ def create_tmux_session(
             width=int(_display("#{window_width}")),
             height=int(_display("#{window_height}")),
         )
-        status = subprocess.run(
+        status = run_foreground(
             ["tmux", "select-pane", "-t", f"{target_session}:0.0"],
             cwd=current,
             env=resolved_env,
-            check=False,
-        ).returncode
+        )
         if status != 0:
             raise SystemExit(status)
         if switch_to_session:
@@ -229,6 +222,10 @@ def create_tmux_session(
     if dry_run.enabled():
         dry_run.print_command(args, cwd=current)
         return None
+    # Direct subprocess call intentional: this path creates and immediately attaches an
+    # interactive tmux session, handing the controlling terminal to tmux.  The
+    # core/process capture/foreground helpers are not appropriate for interactive
+    # terminal-takeover sessions that must inherit the real TTY directly.
     raise SystemExit(subprocess.run(args, cwd=current, env=resolved_env, check=False).returncode)
 
 
@@ -243,7 +240,7 @@ def queue_shell_command_in_session(
     """Queue a shell command in one pane of a tmux session."""
 
     current = Path.cwd() if cwd is None else cwd.resolve()
-    resolved_env = dict(os.environ if env is None else env)
+    resolved_env = clone_env(env)
     target = f"{session_name}:0.{pane_index}"
     if dry_run.enabled():
         dry_run.print_command(
@@ -251,12 +248,11 @@ def queue_shell_command_in_session(
             cwd=current,
         )
         return
-    status = subprocess.run(
+    status = run_foreground(
         ["tmux", "send-keys", "-t", target, shell_command, "C-m"],
         cwd=current,
         env=resolved_env,
-        check=False,
-    ).returncode
+    )
     if status != 0:
         raise SystemExit(status)
 
@@ -287,7 +283,7 @@ def focus_tmux_session(
     """Attach or switch to an existing tmux session."""
 
     current = Path.cwd() if cwd is None else cwd.resolve()
-    resolved_env = dict(os.environ if env is None else env)
+    resolved_env = clone_env(env)
     command = (
         ["tmux", "switch-client", "-t", session_name]
         if resolved_env.get("TMUX")
@@ -296,6 +292,9 @@ def focus_tmux_session(
     if dry_run.enabled():
         dry_run.print_command(command, cwd=current)
         return 0
+    # Direct subprocess call intentional: attach-session/switch-client is an interactive
+    # terminal-takeover that must inherit the real controlling TTY.  The core/process
+    # capture/foreground helpers are not appropriate for interactive attach sessions.
     return subprocess.run(command, cwd=current, env=resolved_env, check=False).returncode
 
 
@@ -308,16 +307,15 @@ def kill_tmux_session(
     """Kill an existing tmux session."""
 
     current = Path.cwd() if cwd is None else cwd.resolve()
-    resolved_env = dict(os.environ if env is None else env)
+    resolved_env = clone_env(env)
     if dry_run.enabled():
         dry_run.print_command(["tmux", "kill-session", "-t", session_name], cwd=current)
         return 0
-    return subprocess.run(
+    return run_foreground(
         ["tmux", "kill-session", "-t", session_name],
         cwd=current,
         env=resolved_env,
-        check=False,
-    ).returncode
+    )
 
 
 def close_tmux_session(

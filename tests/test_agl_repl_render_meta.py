@@ -16,13 +16,13 @@ from pathlib import Path
 import pytest
 
 from agm.agl.diagnostics import Diagnostic
-from agm.agl.eval.values import IntValue, TextValue, Value
 from agm.agl.repl import meta as meta_mod
 from agm.agl.repl import render as render_mod
 from agm.agl.repl.agentmode import AgentMode
 from agm.agl.repl.session import EntryKind, EntryResult, ReplSession
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.runtime.runtime import RunError
+from agm.agl.semantics.values import IntValue, TextValue, Value
 from agm.agl.typecheck.types import IntType, TextType, Type
 
 
@@ -122,9 +122,9 @@ class TestRenderEntryResult:
         assert rendered == "x : int = 5"
 
     def test_expression_echo_pretty_prints_structured_values(self) -> None:
-        from agm.agl.eval.values import IntValue, ListValue, RecordValue
         from agm.agl.ir.ids import NominalId
         from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.semantics.values import IntValue, ListValue, RecordValue
 
         value = RecordValue(
             nominal=NominalId(ENTRY_ID, "Box"),

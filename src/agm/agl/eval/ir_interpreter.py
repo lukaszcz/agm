@@ -5,9 +5,8 @@ frame / let-by-value / var-by-cell model.
 
 Allowed imports (per M2 contract):
 - ``agm.agl.ir.*``
-- ``agm.agl.values``
-- ``agm.agl.eval.values`` (container/nominal tags)
-- ``agm.agl.eval.frames`` (Cell, Frame)
+- ``agm.agl.semantics.values`` (all value types, Cell, Frame)
+- ``agm.agl.semantics.exceptions`` (AglRaise, make_builtin_exception)
 - ``agm.agl.eval._decimal`` (shared pinned decimal context)
 - ``agm.agl.runtime.serialize`` (value_to_json_obj for ToJson coercion)
 
@@ -35,28 +34,8 @@ from agm.agl.eval.arith import (
     value_eq,
 )
 from agm.agl.eval.conversions import AglCastConversion, run_recipe
-from agm.agl.eval.exceptions import AglRaise
-from agm.agl.eval.exceptions import make_builtin_exception as _make_exc_value
-from agm.agl.eval.frames import Cell, Frame
 from agm.agl.eval.indexing import AglIndexOutOfRange, AglMissingKey, index_get, index_set
 from agm.agl.eval.matching import make_match_error as _make_match_error
-from agm.agl.eval.values import (
-    AgentValue,
-    BoolValue,
-    ConstructorValue,
-    DecimalValue,
-    DictValue,
-    EnumValue,
-    ExceptionValue,
-    IntValue,
-    IrClosureValue,
-    JsonValue,
-    ListValue,
-    RecordValue,
-    TextValue,
-    UnitValue,
-    Value,
-)
 from agm.agl.ir.contracts import ConversionFailureMode
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SymbolId
 from agm.agl.ir.nodes import (
@@ -139,6 +118,27 @@ from agm.agl.runtime.render import render_value
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.runtime.serialize import value_to_json_obj
 from agm.agl.runtime.trace import TraceStore, noop_trace
+from agm.agl.semantics.exceptions import AglRaise
+from agm.agl.semantics.exceptions import make_builtin_exception as _make_exc_value
+from agm.agl.semantics.values import (
+    AgentValue,
+    BoolValue,
+    Cell,
+    ConstructorValue,
+    DecimalValue,
+    DictValue,
+    EnumValue,
+    ExceptionValue,
+    Frame,
+    IntValue,
+    IrClosureValue,
+    JsonValue,
+    ListValue,
+    RecordValue,
+    TextValue,
+    UnitValue,
+    Value,
+)
 
 if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract

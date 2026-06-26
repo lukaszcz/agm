@@ -10,7 +10,7 @@ from __future__ import annotations
 import decimal
 import textwrap
 
-from agm.agl.eval.values import (
+from agm.agl.semantics.values import (
     DecimalValue,
     IntValue,
     JsonValue,

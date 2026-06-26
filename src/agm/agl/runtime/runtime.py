@@ -21,7 +21,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from agm.agl.capabilities import HostCapabilities
-    from agm.agl.eval.values import ExceptionValue, Value
     from agm.agl.ir.ids import ContractId, SymbolId
     from agm.agl.ir.program import ExecutableProgram
     from agm.agl.modules.roots import RootSet
@@ -30,6 +29,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract
     from agm.agl.scope.graph import ResolvedModuleGraph
     from agm.agl.scope.symbols import ResolvedProgram
+    from agm.agl.semantics.values import ExceptionValue, Value
     from agm.agl.syntax.nodes import AgentDecl as AgentDeclNode
     from agm.agl.syntax.nodes import PragmaValue, Program
     from agm.agl.typecheck.env import CheckedProgram as CheckedProgramType
@@ -765,9 +765,9 @@ class WorkflowRuntime:
         # ----------------------------------------------------------------
         # [7] Build and run the interpreter
         # ----------------------------------------------------------------
-        from agm.agl.eval.exceptions import AglRaise
         from agm.agl.eval.ir_interpreter import IrInterpreter
         from agm.agl.runtime.trace import TraceStore
+        from agm.agl.semantics.exceptions import AglRaise
 
         # Create the trace store for this run.  When log_file is None the
         # store is a no-op and no file is touched.
@@ -1115,9 +1115,9 @@ class WorkflowRuntime:
             )
 
         # Execute the graph.
-        from agm.agl.eval.exceptions import AglRaise
         from agm.agl.eval.ir_interpreter import IrInterpreter
         from agm.agl.runtime.trace import TraceStore
+        from agm.agl.semantics.exceptions import AglRaise
 
         trace = TraceStore(path=log_file)
         if log_file is not None:
@@ -1421,6 +1421,13 @@ def convert_param_value(name: str, raw: object, type_obj: "AglType") -> "Value":
     """
     import decimal as _decimal
 
+    from agm.agl.semantics.values import (
+        BoolValue,
+        DecimalValue,
+        IntValue,
+        JsonValue,
+        TextValue,
+    )
     from agm.agl.typecheck.types import (
         BoolType,
         DecimalType,
@@ -1431,13 +1438,6 @@ def convert_param_value(name: str, raw: object, type_obj: "AglType") -> "Value":
         ListType,
         RecordType,
         TextType,
-    )
-    from agm.agl.values import (
-        BoolValue,
-        DecimalValue,
-        IntValue,
-        JsonValue,
-        TextValue,
     )
 
     # Text: verbatim.

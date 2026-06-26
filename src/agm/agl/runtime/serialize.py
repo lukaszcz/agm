@@ -23,7 +23,7 @@ import json
 from decimal import Decimal
 from typing import assert_never
 
-from agm.agl.eval.values import (
+from agm.agl.semantics.values import (
     AgentValue,
     BoolValue,
     ConstructorValue,

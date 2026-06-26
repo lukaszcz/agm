@@ -1,9 +1,9 @@
 """AgL exception model and Python control-flow carriers.
 
-``ExceptionValue`` (defined in ``values.py``) is the AgL-level exception
-object — it is a first-class value.  Python's control flow for propagating
-AgL exceptions uses ``AglRaise``, a subclass of ``Exception`` that wraps the
-``ExceptionValue`` being thrown.
+``ExceptionValue`` (defined in ``agm.agl.semantics.values``) is the AgL-level
+exception object — it is a first-class value.  Python's control flow for
+propagating AgL exceptions uses ``AglRaise``, a subclass of ``Exception`` that
+wraps the ``ExceptionValue`` being thrown.
 
 ``AglRaise`` is intentionally separate from ``agm.agl.diagnostics.AglError``
 (which represents *static* pipeline errors).  At runtime, only ``AglRaise``
@@ -18,18 +18,13 @@ values. The IR interpreter supplies the trace id.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
-from agm.agl.eval.values import ExceptionValue, TextValue
 from agm.agl.ir.ids import Location, NominalId
 from agm.agl.modules.ids import PRELUDE_ID
-
-if TYPE_CHECKING:
-    from agm.agl.eval.values import Value
+from agm.agl.semantics.values import ExceptionValue, TextValue, Value
 
 
 def make_builtin_exception(
-    type_name: str, message: str, *, trace_id: str = "", **extra: "Value"
+    type_name: str, message: str, *, trace_id: str = "", **extra: Value
 ) -> ExceptionValue:
     """Create an ``ExceptionValue`` for a built-in exception type.
 
@@ -38,7 +33,7 @@ def make_builtin_exception(
     Extra keyword arguments become additional fields beyond ``message`` and
     ``trace_id``.
     """
-    fields: dict[str, "Value"] = {
+    fields: dict[str, Value] = {
         "message": TextValue(message),
         "trace_id": TextValue(trace_id),
     }

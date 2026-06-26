@@ -29,12 +29,6 @@ from __future__ import annotations
 
 import pytest
 
-from agm.agl.eval.exceptions import AglRaise
-from agm.agl.eval.values import (
-    IntValue,
-    JsonValue,
-    TextValue,
-)
 from agm.agl.ir.ids import Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import (
     IrBind,
@@ -62,6 +56,12 @@ from agm.agl.ir.program import (
 )
 from agm.agl.ir.validate import InvalidIrError, validate_ir
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
+from agm.agl.semantics.exceptions import AglRaise
+from agm.agl.semantics.values import (
+    IntValue,
+    JsonValue,
+    TextValue,
+)
 from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises
 
 # ---------------------------------------------------------------------------

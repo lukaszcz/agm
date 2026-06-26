@@ -13,7 +13,7 @@ import decimal
 
 import pytest
 
-from agm.agl.eval.values import (
+from agm.agl.semantics.values import (
     BoolValue,
     DecimalValue,
     IntValue,
@@ -328,134 +328,134 @@ def test_unary_neg_decimal() -> None:
 def test_arith_sub_text_raises() -> None:
     """sub with TEXT kind must raise AssertionError (invalid in well-formed IR)."""
     from agm.agl.eval.arith import sub
-    from agm.agl.eval.values import TextValue
     from agm.agl.ir.operations import ArithKind
+    from agm.agl.semantics.values import TextValue
     with pytest.raises(AssertionError):
         sub(ArithKind.TEXT, TextValue("a"), TextValue("b"))
 
 def test_arith_mul_text_raises() -> None:
     """mul with TEXT kind must raise AssertionError."""
     from agm.agl.eval.arith import mul
-    from agm.agl.eval.values import TextValue
     from agm.agl.ir.operations import ArithKind
+    from agm.agl.semantics.values import TextValue
     with pytest.raises(AssertionError):
         mul(ArithKind.TEXT, TextValue("a"), TextValue("b"))
 
 def test_arith_div_by_zero_raises_sentinel() -> None:
     """div() raises AglDivisionByZero on zero divisor."""
     from agm.agl.eval.arith import AglDivisionByZero, div
-    from agm.agl.eval.values import IntValue
+    from agm.agl.semantics.values import IntValue
     with pytest.raises(AglDivisionByZero):
         div(IntValue(5), IntValue(0))
 
 def test_logical_not_requires_bool() -> None:
     """logical_not raises AssertionError on non-bool."""
     from agm.agl.eval.arith import logical_not
-    from agm.agl.eval.values import IntValue
+    from agm.agl.semantics.values import IntValue
     with pytest.raises(AssertionError):
         logical_not(IntValue(1))
 
 def test_order_called_with_eq_raises() -> None:
     """order() with a non-ordering op (EQ) must raise AssertionError."""
     from agm.agl.eval.arith import order
-    from agm.agl.eval.values import IntValue
     from agm.agl.ir.operations import CmpOp
+    from agm.agl.semantics.values import IntValue
     with pytest.raises(AssertionError, match="non-ordering op"):
         order(CmpOp.EQ, IntValue(1), IntValue(2))
 
 def test_contains_list_wrong_container() -> None:
     """contains LIST with a non-ListValue raises AssertionError."""
     from agm.agl.eval.arith import contains
-    from agm.agl.eval.values import IntValue, TextValue
     from agm.agl.ir.operations import ContainsKind
+    from agm.agl.semantics.values import IntValue, TextValue
     with pytest.raises(AssertionError, match="contains LIST"):
         contains(ContainsKind.LIST, IntValue(1), TextValue("not-a-list"))
 
 def test_contains_dict_wrong_container() -> None:
     """contains DICT with a non-DictValue raises AssertionError."""
     from agm.agl.eval.arith import contains
-    from agm.agl.eval.values import TextValue
     from agm.agl.ir.operations import ContainsKind
+    from agm.agl.semantics.values import TextValue
     with pytest.raises(AssertionError, match="contains DICT"):
         contains(ContainsKind.DICT, TextValue("a"), TextValue("not-a-dict"))
 
 def test_contains_text_wrong_types() -> None:
     """contains TEXT with non-TextValue types raises AssertionError."""
     from agm.agl.eval.arith import contains
-    from agm.agl.eval.values import IntValue, TextValue
     from agm.agl.ir.operations import ContainsKind
+    from agm.agl.semantics.values import IntValue, TextValue
     with pytest.raises(AssertionError, match="contains TEXT"):
         contains(ContainsKind.TEXT, IntValue(1), TextValue("hello"))
 
 def test_add_int_wrong_types() -> None:
     """add INT with non-IntValues raises AssertionError."""
     from agm.agl.eval.arith import add
-    from agm.agl.eval.values import IntValue, TextValue
     from agm.agl.ir.operations import ArithKind
+    from agm.agl.semantics.values import IntValue, TextValue
     with pytest.raises(AssertionError, match="add INT"):
         add(ArithKind.INT, IntValue(1), TextValue("x"))
 
 def test_add_decimal_wrong_types() -> None:
     """add DECIMAL with non-numeric values raises AssertionError."""
     from agm.agl.eval.arith import add
-    from agm.agl.eval.values import IntValue, TextValue
     from agm.agl.ir.operations import ArithKind
+    from agm.agl.semantics.values import IntValue, TextValue
     with pytest.raises(AssertionError, match="add DECIMAL"):
         add(ArithKind.DECIMAL, IntValue(1), TextValue("x"))
 
 def test_add_text_wrong_types() -> None:
     """add TEXT with non-TextValues raises AssertionError."""
     from agm.agl.eval.arith import add
-    from agm.agl.eval.values import IntValue, TextValue
     from agm.agl.ir.operations import ArithKind
+    from agm.agl.semantics.values import IntValue, TextValue
     with pytest.raises(AssertionError, match="add TEXT"):
         add(ArithKind.TEXT, IntValue(1), TextValue("x"))
 
 def test_sub_int_wrong_types() -> None:
     """sub INT with non-IntValues raises AssertionError."""
     from agm.agl.eval.arith import sub
-    from agm.agl.eval.values import IntValue, TextValue
     from agm.agl.ir.operations import ArithKind
+    from agm.agl.semantics.values import IntValue, TextValue
     with pytest.raises(AssertionError, match="sub INT"):
         sub(ArithKind.INT, IntValue(1), TextValue("x"))
 
 def test_sub_decimal_wrong_types() -> None:
     """sub DECIMAL with non-numeric values raises AssertionError."""
     from agm.agl.eval.arith import sub
-    from agm.agl.eval.values import IntValue, TextValue
     from agm.agl.ir.operations import ArithKind
+    from agm.agl.semantics.values import IntValue, TextValue
     with pytest.raises(AssertionError, match="sub DECIMAL"):
         sub(ArithKind.DECIMAL, IntValue(1), TextValue("x"))
 
 def test_mul_int_wrong_types() -> None:
     """mul INT with non-IntValues raises AssertionError."""
     from agm.agl.eval.arith import mul
-    from agm.agl.eval.values import IntValue, TextValue
     from agm.agl.ir.operations import ArithKind
+    from agm.agl.semantics.values import IntValue, TextValue
     with pytest.raises(AssertionError, match="mul INT"):
         mul(ArithKind.INT, IntValue(1), TextValue("x"))
 
 def test_mul_decimal_wrong_types() -> None:
     """mul DECIMAL with non-numeric values raises AssertionError."""
     from agm.agl.eval.arith import mul
-    from agm.agl.eval.values import IntValue, TextValue
     from agm.agl.ir.operations import ArithKind
+    from agm.agl.semantics.values import IntValue, TextValue
     with pytest.raises(AssertionError, match="mul DECIMAL"):
         mul(ArithKind.DECIMAL, IntValue(1), TextValue("x"))
 
 def test_negate_int_wrong_type() -> None:
     """negate INT with non-IntValue raises AssertionError."""
     from agm.agl.eval.arith import negate
-    from agm.agl.eval.values import DecimalValue
     from agm.agl.ir.operations import NumericKind
+    from agm.agl.semantics.values import DecimalValue
     with pytest.raises(AssertionError, match="negate INT"):
         negate(NumericKind.INT, DecimalValue(decimal.Decimal("1.5")))
 
 def test_negate_decimal_wrong_type() -> None:
     """negate DECIMAL with non-DecimalValue raises AssertionError."""
     from agm.agl.eval.arith import negate
-    from agm.agl.eval.values import IntValue
     from agm.agl.ir.operations import NumericKind
+    from agm.agl.semantics.values import IntValue
     with pytest.raises(AssertionError, match="negate DECIMAL"):
         negate(NumericKind.DECIMAL, IntValue(5))
 

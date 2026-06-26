@@ -305,7 +305,7 @@ class TestEmptyResponse:
         rt = WorkflowRuntime(default_agent=lambda req: "")
         result = rt.run('let x = ask "Say nothing."\nx')
         assert result.ok is True
-        from agm.agl.eval.values import TextValue
+        from agm.agl.semantics.values import TextValue
 
         assert result.bindings["x"] == TextValue("")
 
@@ -371,8 +371,8 @@ class TestUncaughtAgentCallErrorSpan:
 
     def test_dispatch_preserves_existing_span(self) -> None:
         """A span the raise site already supplied is never overwritten."""
-        from agm.agl.eval.exceptions import AglRaise
-        from agm.agl.eval.values import ExceptionValue, TextValue
+        from agm.agl.semantics.exceptions import AglRaise
+        from agm.agl.semantics.values import ExceptionValue, TextValue
 
         existing = SourceSpan(
             start_line=99,
@@ -788,8 +788,8 @@ class TestDecimalSerialization:
     def test_run_error_preserves_decimal_exactness(self) -> None:
         import decimal
 
-        from agm.agl.eval.values import DecimalValue, ExceptionValue, TextValue
         from agm.agl.runtime.runtime import exception_value_to_run_error
+        from agm.agl.semantics.values import DecimalValue, ExceptionValue, TextValue
 
         exc = ExceptionValue(
             nominal=NominalId(ENTRY_ID, "ValidationError"),
@@ -928,9 +928,9 @@ class TestCapabilitiesBuiltFromRegistrations:
 
     def test_register_codec_before_run_extends_capabilities(self) -> None:
         """A custom codec registered before run() makes its kinds available to typecheck."""
-        from agm.agl.eval.values import TextValue as TV
         from agm.agl.runtime.codec import ParseResult, TextCodec
         from agm.agl.runtime.contract import OutputContract
+        from agm.agl.semantics.values import TextValue as TV
         from agm.agl.typecheck.types import TextType
 
         class FooCodec:
@@ -999,22 +999,22 @@ class TestRenderValue:
 
     def test_text_verbatim_render_value(self) -> None:
         """render_value: top-level text is verbatim, no quotes."""
-        from agm.agl.eval.values import TextValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import TextValue
 
         assert render_value(TextValue("hello world")) == "hello world"
 
     def test_text_quoted_when_requested(self) -> None:
         """render_value: top-level text can be wrapped in double quotes."""
-        from agm.agl.eval.values import TextValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import TextValue
 
         assert render_value(TextValue("hello"), quote_strings=True) == '"hello"'
 
     def test_text_quote_escapes_special_chars(self) -> None:
         """render_value: JSON escape set applies to quoted top-level text."""
-        from agm.agl.eval.values import TextValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import TextValue
 
         assert render_value(TextValue('a"b'), quote_strings=True) == '"a\\"b"'
         assert render_value(TextValue("a\\b"), quote_strings=True) == '"a\\\\b"'
@@ -1023,8 +1023,8 @@ class TestRenderValue:
 
     def test_text_quote_escapes_control_chars_as_unicode(self) -> None:
         """render_value: control chars below 0x20 render as \\uXXXX when quoted."""
-        from agm.agl.eval.values import TextValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import TextValue
 
         assert render_value(TextValue("a\x00b"), quote_strings=True) == '"a\\u0000b"'
 
@@ -1033,22 +1033,22 @@ class TestRenderValue:
     # ------------------------------------------------------------------
 
     def test_int_value_is_plain_text(self) -> None:
-        from agm.agl.eval.values import IntValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import IntValue
 
         assert render_value(IntValue(42)) == "42"
 
     def test_decimal_value_is_plain_text(self) -> None:
         from decimal import Decimal
 
-        from agm.agl.eval.values import DecimalValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import DecimalValue
 
         assert render_value(DecimalValue(Decimal("1.5"))) == "1.5"
 
     def test_bool_value_is_plain_text(self) -> None:
-        from agm.agl.eval.values import BoolValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import BoolValue
 
         assert render_value(BoolValue(True)) == "true"
         assert render_value(BoolValue(False)) == "false"
@@ -1059,8 +1059,8 @@ class TestRenderValue:
 
     def test_scalar_text_int(self) -> None:
         """_scalar_text(IntValue) renders as plain decimal digits."""
-        from agm.agl.eval.values import IntValue
         from agm.agl.runtime.render import _scalar_text
+        from agm.agl.semantics.values import IntValue
 
         assert _scalar_text(IntValue(42)) == "42"
 
@@ -1068,16 +1068,16 @@ class TestRenderValue:
         """_scalar_text(DecimalValue) drops trailing zeros, no sci notation."""
         from decimal import Decimal
 
-        from agm.agl.eval.values import DecimalValue
         from agm.agl.runtime.render import _scalar_text
+        from agm.agl.semantics.values import DecimalValue
 
         assert _scalar_text(DecimalValue(Decimal("1.50"))) == "1.5"
         assert _scalar_text(DecimalValue(Decimal("100"))) == "100"
 
     def test_scalar_text_bool(self) -> None:
         """_scalar_text(BoolValue) renders as 'true'/'false'."""
-        from agm.agl.eval.values import BoolValue
         from agm.agl.runtime.render import _scalar_text
+        from agm.agl.semantics.values import BoolValue
 
         assert _scalar_text(BoolValue(True)) == "true"
         assert _scalar_text(BoolValue(False)) == "false"
@@ -1088,22 +1088,22 @@ class TestRenderValue:
 
     def test_unit_value_renders_as_unit_literal(self) -> None:
         """Unit value renders as ``()``."""
-        from agm.agl.eval.values import UnitValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import UnitValue
 
         assert render_value(UnitValue()) == "()"
 
     def test_agent_value_renders_as_angle_bracket_form(self) -> None:
         """AgentValue renders as ``<agent NAME>``."""
-        from agm.agl.eval.values import AgentValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import AgentValue
 
         assert render_value(AgentValue(name="reviewer")) == "<agent reviewer>"
 
     def test_closure_renders_as_function_surface_form(self) -> None:
         """Closure renders as ``<function: (A, B) -> T>``."""
-        from agm.agl.eval.values import IrClosureValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import IrClosureValue
 
         rt = WorkflowRuntime()
         result = rt.run("let f = fn(x: int, y: int) -> int => x + y\nf\n")
@@ -1114,8 +1114,8 @@ class TestRenderValue:
 
     def test_closure_zero_arity_renders_correctly(self) -> None:
         """A zero-parameter closure renders as ``<function: () -> T>``."""
-        from agm.agl.eval.values import IrClosureValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import IrClosureValue
 
         rt = WorkflowRuntime()
         result = rt.run("let thunk = fn() -> int => 42\nthunk\n")
@@ -1126,9 +1126,9 @@ class TestRenderValue:
 
     def test_closure_without_param_metadata_renders_unknown_arg_types(self) -> None:
         """A hand-built closure without type labels uses ``?`` placeholders."""
-        from agm.agl.eval.values import IrClosureValue
         from agm.agl.ir.ids import FunctionId
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import IrClosureValue
 
         closure = IrClosureValue(
             function_id=FunctionId(0),
@@ -1145,23 +1145,23 @@ class TestRenderValue:
 
     def test_list_single_line(self) -> None:
         """Lists render as single-line ``[e1, e2, ...]``."""
-        from agm.agl.eval.values import IntValue, ListValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import IntValue, ListValue
 
         v = ListValue(elements=(IntValue(1), IntValue(2)))
         assert render_value(v) == "[1, 2]"
 
     def test_list_empty(self) -> None:
         """Empty list renders as ``[]``."""
-        from agm.agl.eval.values import ListValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import ListValue
 
         assert render_value(ListValue(elements=())) == "[]"
 
     def test_list_nested_text_is_quoted(self) -> None:
         """Text inside a list is quoted."""
-        from agm.agl.eval.values import ListValue, TextValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import ListValue, TextValue
 
         v = ListValue(elements=(TextValue("tests"), TextValue("coverage")))
         assert render_value(v) == '["tests", "coverage"]'
@@ -1172,31 +1172,31 @@ class TestRenderValue:
 
     def test_dict_single_line_quoted_keys(self) -> None:
         """Dict renders single-line with always-quoted keys."""
-        from agm.agl.eval.values import DictValue, IntValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import DictValue, IntValue
 
         v = DictValue({"origin": IntValue(1)})
         assert render_value(v) == '{"origin": 1}'
 
     def test_dict_key_with_space_is_quoted(self) -> None:
         """Dict keys with spaces (or any content) are always quoted."""
-        from agm.agl.eval.values import DictValue, IntValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import DictValue, IntValue
 
         v = DictValue({"two words": IntValue(1)})
         assert render_value(v) == '{"two words": 1}'
 
     def test_dict_empty(self) -> None:
         """Empty dict renders as ``{}``."""
-        from agm.agl.eval.values import DictValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import DictValue
 
         assert render_value(DictValue({})) == "{}"
 
     def test_dict_multiple_entries(self) -> None:
         """Multiple dict entries, in insertion order, keys quoted."""
-        from agm.agl.eval.values import DictValue, IntValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import DictValue, IntValue
 
         v = DictValue({"origin": IntValue(1), "two words": IntValue(2)})
         assert render_value(v) == '{"origin": 1, "two words": 2}'
@@ -1207,8 +1207,8 @@ class TestRenderValue:
 
     def test_record_renders_fields_in_stored_order(self) -> None:
         """Record renders fields in the order they are stored (declaration order)."""
-        from agm.agl.eval.values import IntValue, RecordValue, TextValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import IntValue, RecordValue, TextValue
 
         v = RecordValue(
             nominal=NominalId(ENTRY_ID, "Issue"),
@@ -1219,16 +1219,16 @@ class TestRenderValue:
 
     def test_record_empty(self) -> None:
         """A record with no fields renders as ``TypeName()``."""
-        from agm.agl.eval.values import RecordValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import RecordValue
 
         v = RecordValue(nominal=NominalId(ENTRY_ID, "Empty"), display_name="Empty", fields={})
         assert render_value(v) == "Empty()"
 
     def test_record_nested_record(self) -> None:
         """Nested records render inline."""
-        from agm.agl.eval.values import BoolValue, RecordValue, TextValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import BoolValue, RecordValue, TextValue
 
         author = RecordValue(
             nominal=NominalId(ENTRY_ID, "Author"),
@@ -1245,8 +1245,8 @@ class TestRenderValue:
 
     def test_record_with_list_field(self) -> None:
         """Record with a list field renders correctly (list inline)."""
-        from agm.agl.eval.values import IntValue, ListValue, RecordValue, TextValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import IntValue, ListValue, RecordValue, TextValue
 
         v = RecordValue(
             nominal=NominalId(ENTRY_ID, "Issue"),
@@ -1266,8 +1266,8 @@ class TestRenderValue:
 
     def test_enum_with_payload(self) -> None:
         """Enum with payload renders as ``TypeName.Variant(field: value)``."""
-        from agm.agl.eval.values import EnumValue, IntValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import EnumValue, IntValue
 
         v = EnumValue(
             nominal=NominalId(ENTRY_ID, "Outcome"), display_name="Outcome",
@@ -1277,8 +1277,8 @@ class TestRenderValue:
 
     def test_enum_nullary_variant(self) -> None:
         """Nullary enum variant renders as ``TypeName.Variant`` (no parens)."""
-        from agm.agl.eval.values import EnumValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import EnumValue
 
         v = EnumValue(
             nominal=NominalId(ENTRY_ID, "Outcome"), display_name="Outcome",
@@ -1288,8 +1288,8 @@ class TestRenderValue:
 
     def test_enum_multi_field_payload(self) -> None:
         """Enum with multiple payload fields renders them in stored order."""
-        from agm.agl.eval.values import EnumValue, IntValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import EnumValue, IntValue
 
         v = EnumValue(
             nominal=NominalId(ENTRY_ID, "E"),
@@ -1305,8 +1305,8 @@ class TestRenderValue:
 
     def test_exception_renders_record_style_with_trace_id(self) -> None:
         """Exception renders like a record with all fields in declaration order."""
-        from agm.agl.eval.values import ExceptionValue, TextValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import ExceptionValue, TextValue
 
         v = ExceptionValue(
             nominal=NominalId(PRELUDE_ID, "CastError"),
@@ -1328,8 +1328,8 @@ class TestRenderValue:
 
     def test_exception_abort_renders_with_trace_id(self) -> None:
         """Abort exception includes both message and trace_id."""
-        from agm.agl.eval.values import ExceptionValue, TextValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import ExceptionValue, TextValue
 
         v = ExceptionValue(
             nominal=NominalId(ENTRY_ID, "Abort"),
@@ -1349,8 +1349,8 @@ class TestRenderValue:
 
     def test_nested_text_escapes_dollar(self) -> None:
         """Nested text containing ``${`` escapes ``$`` as ``\\$``."""
-        from agm.agl.eval.values import ListValue, TextValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import ListValue, TextValue
 
         v = ListValue(elements=(TextValue("a${b}"),))
         out = render_value(v)
@@ -1358,8 +1358,8 @@ class TestRenderValue:
 
     def test_nested_text_escapes_quotes_and_newlines(self) -> None:
         """Nested text: quotes and newlines are escaped."""
-        from agm.agl.eval.values import ListValue, TextValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import ListValue, TextValue
 
         v = ListValue(elements=(TextValue('say "hi"\nbye'),))
         out = render_value(v)
@@ -1367,8 +1367,8 @@ class TestRenderValue:
 
     def test_quoted_top_level_text_escapes_dollar(self) -> None:
         """render_value: top-level text with ``$`` escapes it when quoted."""
-        from agm.agl.eval.values import TextValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import TextValue
 
         out = render_value(TextValue("a${b}"), quote_strings=True)
         assert out == r'"a\${b}"'
@@ -1379,31 +1379,31 @@ class TestRenderValue:
 
     def test_json_top_level_is_single_line_by_default(self) -> None:
         """Top-level json value renders as single-line JSON by default."""
-        from agm.agl.eval.values import JsonValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import JsonValue
 
         out = render_value(JsonValue({"k": 1}))
         assert out == '{"k": 1}'
 
     def test_json_top_level_is_pretty_when_requested(self) -> None:
         """Top-level json value renders as pretty-printed JSON when requested."""
-        from agm.agl.eval.values import JsonValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import JsonValue
 
         out = render_value(JsonValue({"k": 1}), pretty=True)
         assert out == '{\n  "k": 1\n}'
 
     def test_json_scalar_pretty_has_no_extra_indentation(self) -> None:
         """Pretty rendering of scalar json remains a single scalar."""
-        from agm.agl.eval.values import JsonValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import JsonValue
 
         assert render_value(JsonValue(1), pretty=True) == "1"
 
     def test_json_nested_is_compact(self) -> None:
         """json nested inside a record field renders compact by default."""
-        from agm.agl.eval.values import JsonValue, RecordValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import JsonValue, RecordValue
 
         v = RecordValue(
             nominal=NominalId(ENTRY_ID, "R"),
@@ -1417,24 +1417,24 @@ class TestRenderValue:
 
     def test_list_pretty(self) -> None:
         """Pretty lists render over multiple indented lines."""
-        from agm.agl.eval.values import IntValue, ListValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import IntValue, ListValue
 
         v = ListValue(elements=(IntValue(1), IntValue(2)))
         assert render_value(v, pretty=True) == "[\n  1,\n  2\n]"
 
     def test_dict_pretty(self) -> None:
         """Pretty dicts render over multiple indented lines."""
-        from agm.agl.eval.values import DictValue, IntValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import DictValue, IntValue
 
         v = DictValue({"a": IntValue(1), "b": IntValue(2)})
         assert render_value(v, pretty=True) == '{\n  "a": 1,\n  "b": 2\n}'
 
     def test_record_pretty(self) -> None:
         """Pretty records render fields over multiple indented lines."""
-        from agm.agl.eval.values import IntValue, RecordValue, TextValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import IntValue, RecordValue, TextValue
 
         v = RecordValue(
             nominal=NominalId(ENTRY_ID, "Issue"),
@@ -1448,8 +1448,8 @@ class TestRenderValue:
 
     def test_pretty_nested_indentation(self) -> None:
         """Pretty rendering indents nested structures recursively."""
-        from agm.agl.eval.values import IntValue, ListValue, RecordValue, TextValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import IntValue, ListValue, RecordValue, TextValue
 
         v = RecordValue(
             nominal=NominalId(ENTRY_ID, "Issue"),
@@ -1472,14 +1472,14 @@ class TestRenderValue:
         """Display options do not alter scalar values."""
         from decimal import Decimal
 
-        from agm.agl.eval.values import (
+        from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import (
             BoolValue,
             DecimalValue,
             IntValue,
             ListValue,
             UnitValue,
         )
-        from agm.agl.runtime.render import render_value
 
         for v in (
             IntValue(42),
@@ -1494,8 +1494,8 @@ class TestRenderValue:
 
     def test_nested_text_in_list_is_quoted(self) -> None:
         """Text inside a list is quoted regardless of top-level quote mode."""
-        from agm.agl.eval.values import ListValue, TextValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import ListValue, TextValue
 
         out = render_value(ListValue(elements=(TextValue("v"),)), quote_strings=False)
         assert out == '["v"]'
@@ -1506,8 +1506,8 @@ class TestRenderValue:
 
     def test_no_dsl_value_tags_in_interpolation(self) -> None:
         """Interpolation never wraps values in <dsl-value> tags."""
-        from agm.agl.eval.values import IntValue, TextValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import IntValue, TextValue
 
         assert "<dsl-value" not in render_value(TextValue("x"))
         assert "<dsl-value" not in render_value(IntValue(1))
@@ -1522,22 +1522,22 @@ class TestSerialize:
     """Coverage for serialize.py branches not exercised by higher-level tests."""
 
     def test_bool_value_serialized(self) -> None:
-        from agm.agl.eval.values import BoolValue
         from agm.agl.runtime.serialize import value_to_json_obj
+        from agm.agl.semantics.values import BoolValue
 
         assert value_to_json_obj(BoolValue(True)) is True
         assert value_to_json_obj(BoolValue(False)) is False
 
     def test_dict_value_serialized(self) -> None:
-        from agm.agl.eval.values import DictValue, IntValue
         from agm.agl.runtime.serialize import value_to_json_obj
+        from agm.agl.semantics.values import DictValue, IntValue
 
         result = value_to_json_obj(DictValue(entries={"a": IntValue(1)}))
         assert result == {"a": 1}
 
     def test_record_value_serialized(self) -> None:
-        from agm.agl.eval.values import IntValue, RecordValue
         from agm.agl.runtime.serialize import value_to_json_obj
+        from agm.agl.semantics.values import IntValue, RecordValue
 
         result = value_to_json_obj(RecordValue(
             nominal=NominalId(ENTRY_ID, "R"), display_name="R", fields={"x": IntValue(5)}
@@ -1545,8 +1545,8 @@ class TestSerialize:
         assert result == {"x": 5}
 
     def test_enum_value_serialized(self) -> None:
-        from agm.agl.eval.values import EnumValue, TextValue
         from agm.agl.runtime.serialize import value_to_json_obj
+        from agm.agl.semantics.values import EnumValue, TextValue
 
         result = value_to_json_obj(
             EnumValue(
@@ -1562,8 +1562,8 @@ class TestSerialize:
         assert dumps_exact([1, 2], indent=2) == "[\n  1,\n  2\n]"
 
     def test_enum_nullary_value_serialized(self) -> None:
-        from agm.agl.eval.values import EnumValue
         from agm.agl.runtime.serialize import value_to_json_obj
+        from agm.agl.semantics.values import EnumValue
 
         result = value_to_json_obj(EnumValue(
             nominal=NominalId(ENTRY_ID, "E"), display_name="E", variant="Done", fields={}
@@ -1571,8 +1571,8 @@ class TestSerialize:
         assert result == {"$case": "Done"}
 
     def test_exception_value_serialized(self) -> None:
-        from agm.agl.eval.values import ExceptionValue, TextValue
         from agm.agl.runtime.serialize import value_to_json_obj
+        from agm.agl.semantics.values import ExceptionValue, TextValue
 
         result = value_to_json_obj(
             ExceptionValue(
@@ -1747,8 +1747,8 @@ class TestRuntimeErrorPaths:
 
     def test_uncaught_agl_raise_in_run(self) -> None:
         """AglRaise propagating from the interpreter → RunResult with error."""
-        from agm.agl.eval.exceptions import AglRaise
-        from agm.agl.eval.values import ExceptionValue, TextValue
+        from agm.agl.semantics.exceptions import AglRaise
+        from agm.agl.semantics.values import ExceptionValue, TextValue
 
         def bad_agent(req: object) -> str:
             raise AglRaise(
@@ -1777,8 +1777,8 @@ class TestRuntimeErrorPaths:
         """convert_param_value: integral Decimal → IntValue for int type."""
         from decimal import Decimal
 
-        from agm.agl.eval.values import IntValue
         from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.semantics.values import IntValue
         from agm.agl.typecheck.types import IntType
 
         result = convert_param_value("n", Decimal("3"), IntType())
@@ -1796,8 +1796,8 @@ class TestRuntimeErrorPaths:
         """convert_param_value: int value → DecimalValue for decimal type."""
         from decimal import Decimal
 
-        from agm.agl.eval.values import DecimalValue
         from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.semantics.values import DecimalValue
         from agm.agl.typecheck.types import DecimalType
 
         result = convert_param_value("d", 3, DecimalType())
@@ -1822,8 +1822,8 @@ class TestRuntimeErrorPaths:
 
     def test_bool_param_true_succeeds(self) -> None:
         """convert_param_value: bool value → BoolValue for bool type."""
-        from agm.agl.eval.values import BoolValue
         from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.semantics.values import BoolValue
         from agm.agl.typecheck.types import BoolType
 
         result = convert_param_value("b", True, BoolType())
@@ -1858,7 +1858,8 @@ class TestRuntimeErrorPaths:
         """
         import decimal
 
-        from agm.agl.eval.values import (
+        from agm.agl.runtime.runtime import RunError, exception_value_to_run_error
+        from agm.agl.semantics.values import (
             BoolValue,
             DecimalValue,
             DictValue,
@@ -1870,7 +1871,6 @@ class TestRuntimeErrorPaths:
             RecordValue,
             TextValue,
         )
-        from agm.agl.runtime.runtime import RunError, exception_value_to_run_error
 
         exc_val = ExceptionValue(
             nominal=NominalId(PRELUDE_ID, "AgentParseError"),
@@ -1916,8 +1916,8 @@ class TestRuntimeErrorPaths:
         assert isinstance(error.fields["exc_val"], dict)
 
     def test_convert_param_value_json_type_accepts_any(self) -> None:
-        from agm.agl.eval.values import JsonValue
         from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.semantics.values import JsonValue
         from agm.agl.typecheck.types import JsonType
 
         result = convert_param_value("meta", [1, 2, 3], JsonType())
@@ -1925,8 +1925,8 @@ class TestRuntimeErrorPaths:
 
     def test_convert_param_value_list_type_parsed_via_json_codec(self) -> None:
         # M2: list/dict/record/enum params are now accepted via the JsonCodec.
-        from agm.agl.eval.values import ListValue, TextValue
         from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.semantics.values import ListValue, TextValue
         from agm.agl.typecheck.types import ListType, TextType
 
         result = convert_param_value("xs", '["a", "b"]', ListType(elem=TextType()))
@@ -1937,9 +1937,9 @@ class TestRuntimeErrorPaths:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """An AglRaise from the interpreter → RunResult.error (not None)."""
-        from agm.agl.eval.exceptions import AglRaise
         from agm.agl.eval.ir_interpreter import IrInterpreter
-        from agm.agl.eval.values import ExceptionValue, TextValue
+        from agm.agl.semantics.exceptions import AglRaise
+        from agm.agl.semantics.values import ExceptionValue, TextValue
 
         def bad_execute(self: IrInterpreter) -> dict[str, object]:
             exc_val = ExceptionValue(
@@ -1969,8 +1969,8 @@ class TestRuntimeErrorPaths:
         """
         import decimal as _decimal
 
-        from agm.agl.eval.values import DecimalValue, ListValue
         from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.semantics.values import DecimalValue, ListValue
         from agm.agl.typecheck.types import DecimalType, ListType
 
         result = convert_param_value(
@@ -2559,24 +2559,24 @@ class TestSerializeV2OpaqueValues:
     """Unit, agent, and IR closure values have no JSON representation (D9)."""
 
     def test_unit_value_raises(self) -> None:
-        from agm.agl.eval.values import UnitValue
         from agm.agl.runtime.serialize import value_to_json_obj
+        from agm.agl.semantics.values import UnitValue
 
         with pytest.raises(TypeError, match="UnitValue"):
             value_to_json_obj(UnitValue())
 
     def test_agent_value_raises(self) -> None:
-        from agm.agl.eval.values import AgentValue
         from agm.agl.runtime.serialize import value_to_json_obj
+        from agm.agl.semantics.values import AgentValue
 
         with pytest.raises(TypeError, match="AgentValue"):
             value_to_json_obj(AgentValue(name="myagent"))
 
     def test_ir_closure_value_raises(self) -> None:
         """IrClosureValue has no JSON representation — TypeError is raised."""
-        from agm.agl.eval.values import IrClosureValue
         from agm.agl.ir.ids import FunctionId
         from agm.agl.runtime.serialize import value_to_json_obj
+        from agm.agl.semantics.values import IrClosureValue
 
         ir_closure = IrClosureValue(function_id=FunctionId(0), captures=())
         with pytest.raises(TypeError, match="IrClosureValue"):
@@ -2634,9 +2634,9 @@ class TestIrHostMetadataCoverage:
         from decimal import Decimal
 
         from agm.agl.eval.conversions import decode_value
-        from agm.agl.eval.values import IntValue
         from agm.agl.ir.contracts import ScalarDecode, ScalarKind
         from agm.agl.runtime.contract import _type_from_decode
+        from agm.agl.semantics.values import IntValue
 
         assert decode_value(ScalarDecode(ScalarKind.INT), Decimal("2.0")) == IntValue(2)
         with pytest.raises(AssertionError, match="Unknown decode schema"):
@@ -2693,9 +2693,9 @@ class TestRegisterCodecErrors:
     """register_codec raises for reserved names and duplicates."""
 
     def _make_codec(self, name: str) -> OutputCodec:
-        from agm.agl.eval.values import TextValue
         from agm.agl.runtime.codec import OutputCodec, ParseResult, TextCodec
         from agm.agl.runtime.contract import OutputContract
+        from agm.agl.semantics.values import TextValue
         from agm.agl.typecheck.types import TextType
 
         class _Codec(OutputCodec):

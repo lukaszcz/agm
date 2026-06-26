@@ -10,9 +10,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.eval.exceptions import AglRaise
 from agm.agl.eval.ir_interpreter import IrInterpreter
-from agm.agl.eval.values import ExceptionValue, TextValue, Value
 from agm.agl.ir.ids import SymbolId
 from agm.agl.ir.program import ExecutableProgram
 from agm.agl.lower import lower_program
@@ -25,6 +23,8 @@ from agm.agl.runtime.agents import AgentFn, AgentRegistry
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.scope import resolve
 from agm.agl.scope.graph import resolve_graph
+from agm.agl.semantics.exceptions import AglRaise
+from agm.agl.semantics.values import ExceptionValue, TextValue, Value
 from agm.agl.typecheck import check
 from agm.agl.typecheck.graph import check_graph
 from agm.core.process import ProcessCaptureResult

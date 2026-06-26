@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from agm.agl.eval.exceptions import AglRaise
-from agm.agl.eval.values import (
+from agm.agl.semantics.exceptions import AglRaise
+from agm.agl.semantics.values import (
     UNIT_VALUE,
     AgentValue,
     BoolValue,

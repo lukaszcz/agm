@@ -10,16 +10,6 @@ import decimal
 
 import pytest
 
-from agm.agl.eval.values import (
-    BoolValue,
-    ConstructorValue,
-    DecimalValue,
-    EnumValue,
-    ExceptionValue,
-    IntValue,
-    RecordValue,
-    TextValue,
-)
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.nodes import (
     AutoTraceField,
@@ -37,6 +27,16 @@ from agm.agl.ir.program import (
 )
 from agm.agl.ir.validate import InvalidIrError
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
+from agm.agl.semantics.values import (
+    BoolValue,
+    ConstructorValue,
+    DecimalValue,
+    EnumValue,
+    ExceptionValue,
+    IntValue,
+    RecordValue,
+    TextValue,
+)
 from tests.agl.ir_harness import evaluate_ir
 
 # ---------------------------------------------------------------------------

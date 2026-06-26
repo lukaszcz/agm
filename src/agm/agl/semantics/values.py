@@ -1,42 +1,163 @@
-"""AgL runtime value hierarchy for the typeless IR evaluator.
+"""Single value-model home for the AgL semantics layer.
 
-The leaf value tags (``TextValue``, ``IntValue``, etc.) live in the canonical,
-frontend-free home ``agm.agl.values``; this module re-exports them for backward
-compatibility so that all existing ``from agm.agl.eval.values import ...`` sites
-keep working unchanged.
+This module is the **single source of truth** for every runtime value type in
+the AgL execution pipeline: leaf primitive value tags, container and nominal
+types, IR closures, and the per-invocation frame model (``Cell``, ``Slot``,
+``Frame``).
 
-Container, nominal, constructor, and IR closure forms live here because their
-recursive payloads reference the broad ``Value`` union.
+There is exactly one ``Value`` union — the broad 14-member union covering all
+leaf primitive, container, nominal, and callable value kinds.
+
+Design constraints
+------------------
+- Imports ONLY from the Python standard library and ``agm.agl.ir.ids``.
+  Must NOT import from ``eval``, ``syntax``, ``scope``, ``typecheck``,
+  ``runtime``, or ``modules`` — not even under ``TYPE_CHECKING``.
+- All value types are frozen dataclasses with ``__slots__`` for memory
+  efficiency.
+- ``Cell`` is the sole mutable type (not frozen) — it is a mutable box for
+  ``var`` bindings.
 """
 
 from __future__ import annotations
 
+import decimal
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TypeAlias
 
 from agm.agl.ir.ids import FunctionId, NominalId, SymbolId
 
 # ---------------------------------------------------------------------------
-# Re-export all leaf tags and helpers from the canonical home
+# JSON-tree comparison helpers
 # ---------------------------------------------------------------------------
-from agm.agl.values import (
-    UNIT_VALUE,
-    AgentValue,
-    BoolValue,
-    DecimalValue,
-    IntValue,
-    JsonValue,
-    TextValue,
-    UnitValue,
-    _json_eq,
-    _json_hash,
-)
-from agm.agl.values import (
-    Value as BaseValue,
-)
 
-if TYPE_CHECKING:
-    from agm.agl.eval.frames import Slot
+
+def _json_eq(left: object, right: object) -> bool:
+    """Compare two JSON-shaped trees with bool-guarded numeric equivalence.
+
+    Mirrors the semantics in the interpreter: JSON numbers compare numerically
+    (``1 == 1.0``), but ``bool`` is a distinct JSON kind and never compares
+    equal to a number (no Python ``True == 1`` conflation).  Containers recurse
+    structurally; ``text`` and ``null`` compare exactly.
+    """
+    # bool first: Python treats bool as a subclass of int, so ``True == 1``.
+    # Guard: a bool only equals another bool of the same value.
+    if isinstance(left, bool) or isinstance(right, bool):
+        return isinstance(left, bool) and isinstance(right, bool) and left == right
+    if isinstance(left, (int, decimal.Decimal)) and isinstance(
+        right, (int, decimal.Decimal)
+    ):
+        return decimal.Decimal(left) == decimal.Decimal(right)
+    if isinstance(left, list) and isinstance(right, list):
+        if len(left) != len(right):
+            return False
+        return all(_json_eq(left[i], right[i]) for i in range(len(left)))
+    if isinstance(left, dict) and isinstance(right, dict):
+        if left.keys() != right.keys():
+            return False
+        return all(_json_eq(left[k], right[k]) for k in left)
+    return left == right
+
+
+def _json_hash(obj: object) -> int:
+    """Stable hash for a JSON-shaped tree.
+
+    Must be consistent with ``_json_eq``: objects that compare equal must hash
+    equal.  Because ``_json_eq`` treats numeric int/Decimal equivalently, we
+    normalise numbers to ``Decimal`` before hashing.  Lists and dicts recurse;
+    bools are guarded so ``True`` never hashes the same as ``1``.
+    """
+    if isinstance(obj, bool):
+        # Hash True/False distinctly from integers.
+        return hash(("__bool__", obj))
+    if isinstance(obj, (int, decimal.Decimal)):
+        # Normalise to Decimal so 1 and Decimal("1") hash the same.
+        return hash(decimal.Decimal(obj))
+    if isinstance(obj, list):
+        return hash(tuple(_json_hash(e) for e in obj))
+    if isinstance(obj, dict):
+        return hash(frozenset((_json_hash(k), _json_hash(v)) for k, v in obj.items()))
+    return hash(obj)
+
+
+# ---------------------------------------------------------------------------
+# Primitive value types
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class TextValue:
+    """A ``text`` value: a plain Python ``str``."""
+
+    value: str
+
+
+@dataclass(frozen=True, slots=True)
+class IntValue:
+    """An ``int`` value: an arbitrary-precision Python ``int``."""
+
+    value: int
+
+
+@dataclass(frozen=True, slots=True)
+class DecimalValue:
+    """A ``decimal`` value: an exact ``decimal.Decimal``."""
+
+    value: decimal.Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class BoolValue:
+    """A ``bool`` value."""
+
+    value: bool
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class JsonValue:
+    """A ``json`` value: any JSON-shaped Python object (the dynamic boundary).
+
+    The ``raw`` field is ``object`` to allow ``None``, dicts, lists, strings,
+    ints, floats, and bools — exactly what ``json.loads`` can return.  All
+    operations on the payload use ``isinstance`` guards, never bare ``Any``
+    access.
+
+    ``__eq__`` delegates to ``_json_eq`` so that JSON bool/number conflation is
+    prevented inside containers (e.g. ``JsonValue([True]) != JsonValue([1])``),
+    consistent with the top-level ``json = json`` comparison semantics.
+    ``__hash__`` is consistent with ``__eq__`` via ``_json_hash``.
+    """
+
+    raw: object
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, JsonValue):
+            return _json_eq(self.raw, other.raw)
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return _json_hash(self.raw)
+
+
+# ---------------------------------------------------------------------------
+# Unit and agent handle value types
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class UnitValue:
+    """The single value of the ``unit`` type: ``()``."""
+
+
+UNIT_VALUE: UnitValue = UnitValue()
+
+
+@dataclass(frozen=True, slots=True)
+class AgentValue:
+    """A first-class agent handle — opaque; not renderable or comparable."""
+
+    name: str
+
 
 # ---------------------------------------------------------------------------
 # Callable value types
@@ -67,15 +188,6 @@ class ConstructorValue:
 
 
 # ---------------------------------------------------------------------------
-# Broad Value union (forward-declared for container field annotations)
-# ---------------------------------------------------------------------------
-
-# The broad union is defined after the container/nominal classes below.
-# We use a forward reference string in their field annotations so Python
-# does not complain at class-body time (from __future__ import annotations
-# makes all annotations strings anyway).
-
-# ---------------------------------------------------------------------------
 # Container value types
 # ---------------------------------------------------------------------------
 
@@ -84,7 +196,7 @@ class ConstructorValue:
 class ListValue:
     """A ``list[T]`` value: an immutable tuple of ``Value`` items."""
 
-    elements: "tuple[Value, ...]"
+    elements: tuple[Value, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,7 +204,7 @@ class DictValue:
     """A ``dict[text, V]`` value: an immutable mapping of str → Value."""
 
     # Stored as a plain dict; frozen by convention (no mutation after creation).
-    entries: "dict[str, Value]" = field(default_factory=dict)
+    entries: dict[str, Value] = field(default_factory=dict)
 
     def __hash__(self) -> int:
         # Hash via hash(v) so that the contract hash(a) == hash(b) whenever a == b
@@ -128,7 +240,7 @@ class RecordValue:
 
     nominal: NominalId
     display_name: str = field(compare=False, hash=False)
-    fields: "dict[str, Value]" = field(default_factory=dict)
+    fields: dict[str, Value] = field(default_factory=dict)
 
     def __hash__(self) -> int:
         # Use hash(v) rather than repr(v) so that the eq/hash contract holds:
@@ -159,7 +271,7 @@ class EnumValue:
     nominal: NominalId
     display_name: str = field(compare=False, hash=False)
     variant: str
-    fields: "dict[str, Value]" = field(default_factory=dict)
+    fields: dict[str, Value] = field(default_factory=dict)
 
     def __hash__(self) -> int:
         # Use hash(v) rather than repr(v) so that the eq/hash contract holds.
@@ -199,7 +311,7 @@ class ExceptionValue:
 
     nominal: NominalId
     display_name: str = field(compare=False, hash=False)
-    fields: "dict[str, Value]" = field(default_factory=dict)
+    fields: dict[str, Value] = field(default_factory=dict)
 
     def __hash__(self) -> int:
         # Use hash(v) rather than repr(v) so that the eq/hash contract holds.
@@ -213,13 +325,12 @@ class ExceptionValue:
         return NotImplemented
 
 
-
 @dataclass(frozen=True, slots=True)
 class IrClosureValue:
     """An IR closure: function_id plus its captured environment."""
 
     function_id: FunctionId
-    captures: "tuple[tuple[SymbolId, Slot], ...]"
+    captures: tuple[tuple[SymbolId, Slot], ...]
     param_labels: tuple[str, ...] = ()
     arity: int = 0
     result_label: str = "?"
@@ -252,22 +363,51 @@ Value: TypeAlias = (
     | IrClosureValue
 )
 
+# ---------------------------------------------------------------------------
+# Frame and cell model (D5)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True)
+class Cell:
+    """A mutable box wrapping a ``Value``.
+
+    Used as the slot for ``var`` (mutable) bindings in the per-invocation
+    frame.  The cell itself is mutable (not frozen) so that ``IrAssign`` can
+    update the contained value in place.
+
+    Closures capture a ``var`` by capturing the ``Cell`` reference; the cell
+    is allocated fresh each time ``IrBind`` executes for a ``var`` symbol (D5).
+    """
+
+    value: Value
+
+
+#: A slot in the runtime frame is either a ``Value`` (for ``let`` bindings)
+#: or a ``Cell`` (for ``var`` bindings).  Discriminate with ``isinstance``.
+Slot = Value | Cell
+
+#: Runtime frame type: maps each bound ``SymbolId`` to its slot.
+Frame = dict[SymbolId, Slot]
+
 __all__ = [
     "UNIT_VALUE",
     "AgentValue",
-    "BaseValue",
     "BoolValue",
-    "IrClosureValue",
+    "Cell",
     "ConstructorValue",
     "DecimalValue",
     "DictValue",
     "EnumValue",
     "ExceptionValue",
+    "Frame",
     "IntValue",
+    "IrClosureValue",
     "JsonValue",
     "ListValue",
     "NominalId",
     "RecordValue",
+    "Slot",
     "TextValue",
     "UnitValue",
     "Value",

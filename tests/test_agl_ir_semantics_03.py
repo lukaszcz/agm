@@ -14,16 +14,6 @@ import pytest
 
 from agm.agl.eval.conversions import AglCastConversion, run_recipe
 from agm.agl.eval.conversions import decode_value as _decode
-from agm.agl.eval.values import (
-    BoolValue,
-    DecimalValue,
-    EnumValue,
-    IntValue,
-    JsonValue,
-    ListValue,
-    RecordValue,
-    TextValue,
-)
 from agm.agl.ir.contracts import (
     ConversionFailureMode,
     ConversionRecipe,
@@ -39,6 +29,16 @@ from agm.agl.ir.contracts import (
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.nodes import IrBind, IrConvert, IrSequence
 from agm.agl.modules.ids import ENTRY_ID
+from agm.agl.semantics.values import (
+    BoolValue,
+    DecimalValue,
+    EnumValue,
+    IntValue,
+    JsonValue,
+    ListValue,
+    RecordValue,
+    TextValue,
+)
 from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises
 
 

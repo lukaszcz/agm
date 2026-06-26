@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from agm.agl.eval.values import (
+from agm.agl.semantics.values import (
     BoolValue,
     EnumValue,
     ExceptionValue,
@@ -1822,7 +1822,7 @@ def test_ir_ask_no_errors_when_failed_covers_else_branch() -> None:
     # Patch _parse_contract_output to return failure with EMPTY errors AND EMPTY error_msg.
     empty_failure = ParseResult(ok=False, value=None, error_msg="", errors=())
     with patch("agm.agl.eval.ir_interpreter._parse_contract_output", return_value=empty_failure):
-        from agm.agl.eval.exceptions import AglRaise
+        from agm.agl.semantics.exceptions import AglRaise
         with pytest.raises(AglRaise):
             interp.run()
 
@@ -2329,7 +2329,7 @@ status
     assert ir_reference_exc.display_name == "AgentParseError"
     assert ir_exc.display_name == "AgentParseError"
     # validation_errors is stored as a JsonValue(raw=[{...}]) in both pipelines.
-    from agm.agl.eval.values import JsonValue
+    from agm.agl.semantics.values import JsonValue
 
     errors_val = ir_exc.fields.get("validation_errors")
     assert isinstance(errors_val, JsonValue)
@@ -2368,7 +2368,7 @@ status
     assert ir_reference_exc.display_name == "AgentParseError"
     assert ir_exc.display_name == "AgentParseError"
 
-    from agm.agl.eval.values import JsonValue
+    from agm.agl.semantics.values import JsonValue
 
     errors_val = ir_exc.fields.get("validation_errors")
     assert isinstance(errors_val, JsonValue)
@@ -2419,7 +2419,7 @@ status
     assert ir_reference_exc.display_name == "AgentParseError"
     assert ir_exc.display_name == "AgentParseError"
 
-    from agm.agl.eval.values import JsonValue
+    from agm.agl.semantics.values import JsonValue
 
     errors_val = ir_exc.fields.get("validation_errors")
     assert isinstance(errors_val, JsonValue)

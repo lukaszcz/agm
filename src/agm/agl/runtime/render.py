@@ -16,7 +16,8 @@ declaration order already, so rendering walks ``value.fields`` directly.
 
 from __future__ import annotations
 
-from agm.agl.eval.values import (
+from agm.agl.runtime.serialize import dumps_exact, value_to_json_obj
+from agm.agl.semantics.values import (
     AgentValue,
     BoolValue,
     ConstructorValue,
@@ -33,7 +34,6 @@ from agm.agl.eval.values import (
     UnitValue,
     Value,
 )
-from agm.agl.runtime.serialize import dumps_exact, value_to_json_obj
 
 _TEXT_ESCAPES: dict[str, str] = {
     '"': '\\"',

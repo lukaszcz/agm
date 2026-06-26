@@ -17,7 +17,16 @@ from decimal import Decimal
 
 import pytest
 
-from agm.agl.eval.values import (
+from agm.agl.ir.ids import NominalId
+from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
+from agm.agl.runtime.convert import (
+    CastConversionError,
+    StrictJsonParseError,
+    convert_value,
+    json_obj_to_value,
+    parse_json_strict,
+)
+from agm.agl.semantics.values import (
     BoolValue,
     DecimalValue,
     DictValue,
@@ -28,15 +37,6 @@ from agm.agl.eval.values import (
     ListValue,
     RecordValue,
     TextValue,
-)
-from agm.agl.ir.ids import NominalId
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
-from agm.agl.runtime.convert import (
-    CastConversionError,
-    StrictJsonParseError,
-    convert_value,
-    json_obj_to_value,
-    parse_json_strict,
 )
 from agm.agl.typecheck.types import (
     BoolType,
@@ -284,7 +284,7 @@ class TestJsonObjToValue:
             json_obj_to_value({"$case": "Green"}, enum_type)
 
     def test_enum_variant_with_fields(self) -> None:
-        from agm.agl.eval.values import IntValue
+        from agm.agl.semantics.values import IntValue
 
         enum_type = EnumType(
             name="Result",

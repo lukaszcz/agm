@@ -10,15 +10,15 @@ import decimal
 import pytest
 
 from agm.agl.eval.indexing import AglIndexOutOfRange, AglMissingKey, index_get, index_set
-from agm.agl.eval.values import (
+from agm.agl.ir.operations import IndexKind
+from agm.agl.ir.program import ExecutableProgram
+from agm.agl.semantics.values import (
     DecimalValue,
     DictValue,
     IntValue,
     ListValue,
     TextValue,
 )
-from agm.agl.ir.operations import IndexKind
-from agm.agl.ir.program import ExecutableProgram
 from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises
 
 # ---------------------------------------------------------------------------

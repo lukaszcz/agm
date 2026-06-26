@@ -277,8 +277,9 @@ The package boundaries are enforced by `tests/test_agl_dependencies.py`:
 - `agm.agl.ir` imports only its own data modules and `agm.agl.modules.ids`.
 - `agm.agl.lower` may import syntax, scope, typecheck, IR, and the neutral
   compile-time schema helper, but never evaluator or runtime execution modules.
-- `agm.agl.eval` may import IR, runtime services, runtime values, and module IDs,
-  but never syntax, scope, typecheck, or REPL modules.
+- `agm.agl.eval` may import IR, runtime services, `agm.agl.semantics` (the
+  unified value and exception home), and module IDs, but never syntax, scope,
+  typecheck, or REPL modules.
 
 `agm.agl.type_schema` owns pure checker-type-to-JSON-schema compilation and format
 instruction generation. This keeps lowering independent of runtime execution.

@@ -3,7 +3,7 @@
 Used by the IR evaluator.
 This module is the single source of truth for list/dict indexing semantics.
 
-IMPORTANT: Only imports from stdlib, agm.agl.eval.values, and agm.agl.ir.operations.
+IMPORTANT: Only imports from stdlib, agm.agl.semantics.values, and agm.agl.ir.operations.
 No syntax, scope, or typecheck imports are permitted here.
 """
 
@@ -11,8 +11,8 @@ from __future__ import annotations
 
 from typing import assert_never
 
-from agm.agl.eval.values import DictValue, IntValue, ListValue, TextValue, Value
 from agm.agl.ir.operations import IndexKind
+from agm.agl.semantics.values import DictValue, IntValue, ListValue, TextValue, Value
 
 __all__ = [
     "AglIndexOutOfRange",

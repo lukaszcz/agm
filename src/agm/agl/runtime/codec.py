@@ -25,7 +25,6 @@ from jsonschema import Draft202012Validator
 from jsonschema import ValidationError as JsonschemaValidationError
 
 from agm.agl.eval.conversions import decode_value
-from agm.agl.eval.values import Value
 from agm.agl.ir.contracts import (
     ContractRequest,
     DecodeSchema,
@@ -36,9 +35,9 @@ from agm.agl.ir.contracts import (
 )
 from agm.agl.runtime.convert import normalize_integral_decimals
 from agm.agl.runtime.request import ValidationError
+from agm.agl.semantics.values import TextValue, Value
 from agm.agl.type_schema import build_decode_schema, build_format_instructions, derive_schema
 from agm.agl.typecheck.types import TextType, Type
-from agm.agl.values import TextValue
 
 if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract

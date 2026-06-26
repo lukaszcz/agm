@@ -27,19 +27,6 @@ import pathlib
 import pytest
 
 from agm.agl.eval.ir_interpreter import IrInterpreter
-from agm.agl.eval.values import (
-    BoolValue,
-    DecimalValue,
-    DictValue,
-    EnumValue,
-    IntValue,
-    JsonValue,
-    ListValue,
-    RecordValue,
-    TextValue,
-    UnitValue,
-    Value,
-)
 from agm.agl.ir import (
     ExecutableModule,
     ExecutableProgram,
@@ -89,6 +76,19 @@ from agm.agl.ir import (
 )
 from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import ENTRY_ID
+from agm.agl.semantics.values import (
+    BoolValue,
+    DecimalValue,
+    DictValue,
+    EnumValue,
+    IntValue,
+    JsonValue,
+    ListValue,
+    RecordValue,
+    TextValue,
+    UnitValue,
+    Value,
+)
 
 # ---------------------------------------------------------------------------
 # Helper factories
@@ -905,7 +905,7 @@ class TestDefensiveErrors:
 
     def test_assign_with_path_list(self) -> None:
         """IrAssign with a non-empty path performs indexed assignment on a list."""
-        from agm.agl.eval.values import IntValue, ListValue
+        from agm.agl.semantics.values import IntValue, ListValue
         sym, desc = _var_sym(0, "v")
         prog = _make_program(
             (
@@ -1117,7 +1117,7 @@ class TestIrAssignPathErrors:
 
     def test_assign_path_intermediate_list_oob_raises(self) -> None:
         """IrAssign: intermediate step with out-of-bounds list index raises AglRaise."""
-        from agm.agl.eval.exceptions import AglRaise
+        from agm.agl.semantics.exceptions import AglRaise
         # xss = [[1, 2]], then xss[5][0] := 99 — step 0 is OOB
         sym, desc = self._var(0, "xss")
         inner = IrMakeList(_LOC, (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2)))
@@ -1141,7 +1141,7 @@ class TestIrAssignPathErrors:
 
     def test_assign_path_intermediate_dict_missing_key_raises(self) -> None:
         """IrAssign: intermediate step with missing dict key raises AglRaise."""
-        from agm.agl.eval.exceptions import AglRaise
+        from agm.agl.semantics.exceptions import AglRaise
         # m = {"a": [1, 2]}, then m["z"]["a"] := 99 — step 0 key is missing
         sym, desc = self._var(0, "m")
         inner = IrMakeList(_LOC, (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2)))
@@ -1169,7 +1169,7 @@ class TestIrAssignPathErrors:
 
     def test_assign_path_final_list_oob_raises(self) -> None:
         """IrAssign: final step with out-of-bounds list index raises AglRaise."""
-        from agm.agl.eval.exceptions import AglRaise
+        from agm.agl.semantics.exceptions import AglRaise
         # xs = [1, 2], then xs[5] := 99 — final step is OOB
         sym, desc = self._var(0, "xs")
         prog = _make_program(
@@ -1191,7 +1191,7 @@ class TestIrAssignPathErrors:
 
     def test_assign_path_final_dict_missing_key_raises(self) -> None:
         """IrAssign: final step with missing dict key raises AglRaise."""
-        from agm.agl.eval.exceptions import AglRaise
+        from agm.agl.semantics.exceptions import AglRaise
         # m = {"a": 1}, then m["z"] := 99 — final step key is missing
         sym, desc = self._var(0, "m")
         prog = _make_program(
@@ -1360,7 +1360,7 @@ class TestM4aFunctionEvaluation:
             functions={_FN_ID: fn_desc},
         )
         result = IrInterpreter(prog).run()
-        from agm.agl.eval.values import IntValue
+        from agm.agl.semantics.values import IntValue
         assert result["result"] == IntValue(42)
 
     def test_param_default_can_call_top_level_function(self) -> None:
@@ -1405,7 +1405,7 @@ class TestM4aFunctionEvaluation:
 
     def test_agl_raise_preserves_inner_function_span(self) -> None:
         """Nested AglRaise failures keep the innermost IR node location."""
-        from agm.agl.eval.exceptions import AglRaise
+        from agm.agl.semantics.exceptions import AglRaise
 
         raise_loc = _loc_at_line(1)
         call_loc = _loc_at_line(3)
@@ -1465,7 +1465,7 @@ class TestM4aFunctionEvaluation:
             functions={_FN_ID: fn_desc},
         )
         result = IrInterpreter(prog).run()
-        from agm.agl.eval.values import IntValue
+        from agm.agl.semantics.values import IntValue
         assert result["result"] == IntValue(7)
 
     def test_direct_call_with_use_default(self) -> None:
@@ -1490,7 +1490,7 @@ class TestM4aFunctionEvaluation:
             functions={_FN_ID: fn_desc},
         )
         result = IrInterpreter(prog).run()
-        from agm.agl.eval.values import IntValue
+        from agm.agl.semantics.values import IntValue
         assert result["result"] == IntValue(99)
 
     def test_direct_call_param_bound_by_value(self) -> None:
@@ -1523,7 +1523,7 @@ class TestM4aFunctionEvaluation:
             functions={_FN_ID: fn_desc},
         )
         result = IrInterpreter(prog).run()
-        from agm.agl.eval.values import IntValue
+        from agm.agl.semantics.values import IntValue
         assert result["result2"] == IntValue(55)
 
 
@@ -1657,7 +1657,7 @@ class TestM4bInterpreterDefensivePaths:
 
     def test_indirect_call_depth_limit_raises(self) -> None:
         """IrIndirectCall with max_call_depth=1 raises AglRaise(RecursionError) on reentry."""
-        from agm.agl.eval.exceptions import AglRaise
+        from agm.agl.semantics.exceptions import AglRaise
 
         # Build: def f() = f(); let result = f()
         # f() calls itself via IrIndirectCall to test the depth guard.
@@ -1908,7 +1908,7 @@ class TestM6cIrExec:
         """On retry, spawn_error in subsequent shell call raises ExecError (line 1275)."""
         import unittest.mock
 
-        from agm.agl.eval.exceptions import AglRaise
+        from agm.agl.semantics.exceptions import AglRaise
         from agm.core.process import ProcessCaptureResult
 
         call_count = [0]
@@ -1988,8 +1988,8 @@ class TestM6cIrExec:
         import json
         import unittest.mock
 
-        from agm.agl.eval.exceptions import AglRaise
         from agm.agl.runtime.trace import TraceStore
+        from agm.agl.semantics.exceptions import AglRaise
         from agm.core.process import ProcessCaptureResult
 
         fake_result = ProcessCaptureResult(
@@ -2022,7 +2022,7 @@ class TestM6cIrExec:
 
     def test_ir_exec_preserves_command_expression_raise_span(self) -> None:
         """IrExec does not overwrite a span from its command expression."""
-        from agm.agl.eval.exceptions import AglRaise
+        from agm.agl.semantics.exceptions import AglRaise
 
         command_loc = _loc_at_line(4)
         exec_loc = _loc_at_line(8)
@@ -2047,10 +2047,10 @@ class TestM6cIrExec:
         import json
         import unittest.mock
 
-        from agm.agl.eval.exceptions import AglRaise
         from agm.agl.ir.contracts import ContractRequest
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.nodes import IrExec
+        from agm.agl.semantics.exceptions import AglRaise
         from agm.agl.type_schema import build_decode_schema
         from agm.agl.typecheck.types import IntType
         from agm.core.process import ProcessCaptureResult
@@ -2115,7 +2115,7 @@ class TestM6cIrExec:
         with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=fake_rcr):
             with pytest.raises(AglRaise) as exc_info:
                 IrInterpreter(prog).run()
-        from agm.agl.eval.values import BoolValue
+        from agm.agl.semantics.values import BoolValue
         assert exc_info.value.exc.display_name == "ExecError"
         assert exc_info.value.exc.fields["timed_out"] == BoolValue(True)
 
@@ -2124,10 +2124,10 @@ class TestM6cIrExec:
         import json
         import unittest.mock
 
-        from agm.agl.eval.exceptions import AglRaise
         from agm.agl.ir.contracts import ContractRequest
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.nodes import IrExec
+        from agm.agl.semantics.exceptions import AglRaise
         from agm.agl.type_schema import build_decode_schema
         from agm.agl.typecheck.types import IntType
         from agm.core.process import ProcessCaptureResult
@@ -2199,10 +2199,10 @@ class TestM6cIrExec:
         import json
         import unittest.mock
 
-        from agm.agl.eval.exceptions import AglRaise
         from agm.agl.ir.contracts import ContractRequest
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.nodes import IrExec
+        from agm.agl.semantics.exceptions import AglRaise
         from agm.agl.type_schema import build_decode_schema
         from agm.agl.typecheck.types import IntType
         from agm.core.process import ProcessCaptureResult

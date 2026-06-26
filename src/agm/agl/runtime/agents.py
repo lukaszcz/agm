@@ -171,13 +171,13 @@ class AgentRegistry:
 
 def _raise_agent_call_error(agent_name: str, err: AgentCallHostError) -> None:
     """Convert ``AgentCallHostError`` to ``AglRaise(ExceptionValue("AgentCallError", ...))``."""
-    # Local imports keep runtime → eval dependency cycle-free at module level;
-    # this mirrors the existing pattern in ``agm.agl.runtime.runtime``.
-    from agm.agl.eval.exceptions import AglRaise
-    from agm.agl.eval.values import ExceptionValue, NominalId
+    # Imports are kept function-local to confine the exception-construction
+    # dependencies to this single error path; all are leaf modules
+    # (semantics, modules.ids, runtime.trace) so no import cycle is involved.
     from agm.agl.modules.ids import PRELUDE_ID
     from agm.agl.runtime.trace import new_trace_id
-    from agm.agl.values import JsonValue, TextValue
+    from agm.agl.semantics.exceptions import AglRaise
+    from agm.agl.semantics.values import ExceptionValue, JsonValue, NominalId, TextValue
 
     metadata: dict[str, object] = {
         "exit_code": err.exit_code,

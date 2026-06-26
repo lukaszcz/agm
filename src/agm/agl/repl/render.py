@@ -28,8 +28,8 @@ from typing import TYPE_CHECKING
 from agm.agl.diagnostics import format_diagnostic
 
 if TYPE_CHECKING:
-    from agm.agl.eval.values import Value
     from agm.agl.repl.session import EntryResult
+    from agm.agl.semantics.values import Value
     from agm.agl.typecheck.types import Type
 
 

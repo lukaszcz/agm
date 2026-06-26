@@ -8,7 +8,14 @@ import pytest
 
 from agm.agl.eval.arith import contains, div, order, value_eq
 from agm.agl.eval.matching import _describe_value
-from agm.agl.eval.values import (
+from agm.agl.ir.ids import FunctionId, NominalId
+from agm.agl.ir.operations import CmpOp, ContainsKind
+from agm.agl.modules.ids import ENTRY_ID
+from agm.agl.runtime.contract import materialize_contract
+from agm.agl.runtime.render import render_value
+from agm.agl.runtime.runtime import convert_param_value
+from agm.agl.runtime.serialize import value_to_json_obj
+from agm.agl.semantics.values import (
     AgentValue,
     BoolValue,
     ConstructorValue,
@@ -23,17 +30,11 @@ from agm.agl.eval.values import (
     RecordValue,
     TextValue,
     UnitValue,
+    _json_eq,
+    _json_hash,
 )
-from agm.agl.ir.ids import FunctionId, NominalId
-from agm.agl.ir.operations import CmpOp, ContainsKind
-from agm.agl.modules.ids import ENTRY_ID
-from agm.agl.runtime.contract import materialize_contract
-from agm.agl.runtime.render import render_value
-from agm.agl.runtime.runtime import convert_param_value
-from agm.agl.runtime.serialize import value_to_json_obj
 from agm.agl.typecheck.env import OutputContractSpec
 from agm.agl.typecheck.types import DecimalType, TextType, UnitType
-from agm.agl.values import _json_eq, _json_hash
 
 
 def test_arithmetic_mixed_and_defensive_edges() -> None:

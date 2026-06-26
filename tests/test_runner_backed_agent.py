@@ -343,8 +343,8 @@ class TestAgentCallErrorSeam:
         return AgentRegistry(named={"tester": failing_agent}, default_agent=None)
 
     def test_nonzero_exit_raises_agl_raise(self) -> None:
-        from agm.agl.eval.exceptions import AglRaise
         from agm.agl.runtime import AgentRequest
+        from agm.agl.semantics.exceptions import AglRaise
 
         registry = self._make_registry_with_failing_agent(
             cause="nonzero_exit", exit_code=1, stderr_tail="err", elapsed=0.1
@@ -355,8 +355,8 @@ class TestAgentCallErrorSeam:
         assert exc_val.display_name == "AgentCallError"
 
     def test_spawn_failure_raises_agl_raise(self) -> None:
-        from agm.agl.eval.exceptions import AglRaise
         from agm.agl.runtime import AgentRequest
+        from agm.agl.semantics.exceptions import AglRaise
 
         registry = self._make_registry_with_failing_agent(
             cause="spawn_failure", exit_code=None, stderr_tail="", elapsed=0.0
@@ -367,8 +367,8 @@ class TestAgentCallErrorSeam:
         assert exc_val.display_name == "AgentCallError"
 
     def test_timeout_raises_agl_raise(self) -> None:
-        from agm.agl.eval.exceptions import AglRaise
         from agm.agl.runtime import AgentRequest
+        from agm.agl.semantics.exceptions import AglRaise
 
         registry = self._make_registry_with_failing_agent(
             cause="timeout", exit_code=124, stderr_tail="", elapsed=30.0
@@ -379,9 +379,9 @@ class TestAgentCallErrorSeam:
         assert exc_val.display_name == "AgentCallError"
 
     def test_cause_field_preserved(self) -> None:
-        from agm.agl.eval.exceptions import AglRaise
-        from agm.agl.eval.values import TextValue
         from agm.agl.runtime import AgentRequest
+        from agm.agl.semantics.exceptions import AglRaise
+        from agm.agl.semantics.values import TextValue
 
         registry = self._make_registry_with_failing_agent(
             cause="nonzero_exit", exit_code=2, stderr_tail="fail msg", elapsed=0.5
@@ -394,9 +394,9 @@ class TestAgentCallErrorSeam:
         assert cause.value == "nonzero_exit"
 
     def test_metadata_exit_code_preserved(self) -> None:
-        from agm.agl.eval.exceptions import AglRaise
-        from agm.agl.eval.values import JsonValue
         from agm.agl.runtime import AgentRequest
+        from agm.agl.semantics.exceptions import AglRaise
+        from agm.agl.semantics.values import JsonValue
 
         registry = self._make_registry_with_failing_agent(
             cause="nonzero_exit", exit_code=42, stderr_tail="some err", elapsed=1.0
@@ -411,9 +411,9 @@ class TestAgentCallErrorSeam:
         assert raw.get("exit_code") == 42
 
     def test_metadata_stderr_tail_preserved(self) -> None:
-        from agm.agl.eval.exceptions import AglRaise
-        from agm.agl.eval.values import JsonValue
         from agm.agl.runtime import AgentRequest
+        from agm.agl.semantics.exceptions import AglRaise
+        from agm.agl.semantics.values import JsonValue
 
         registry = self._make_registry_with_failing_agent(
             cause="nonzero_exit", exit_code=1, stderr_tail="the error msg", elapsed=0.0
@@ -428,9 +428,9 @@ class TestAgentCallErrorSeam:
         assert "the error msg" in str(raw.get("stderr_tail", ""))
 
     def test_metadata_elapsed_preserved(self) -> None:
-        from agm.agl.eval.exceptions import AglRaise
-        from agm.agl.eval.values import JsonValue
         from agm.agl.runtime import AgentRequest
+        from agm.agl.semantics.exceptions import AglRaise
+        from agm.agl.semantics.values import JsonValue
 
         registry = self._make_registry_with_failing_agent(
             cause="timeout", exit_code=124, stderr_tail="", elapsed=5.5
@@ -446,9 +446,9 @@ class TestAgentCallErrorSeam:
         assert abs(float(raw.get("elapsed", 0)) - 5.5) < 0.01
 
     def test_agent_field_reflects_agent_name(self) -> None:
-        from agm.agl.eval.exceptions import AglRaise
-        from agm.agl.eval.values import TextValue
         from agm.agl.runtime import AgentRequest
+        from agm.agl.semantics.exceptions import AglRaise
+        from agm.agl.semantics.values import TextValue
 
         registry = self._make_registry_with_failing_agent(
             cause="spawn_failure", exit_code=None, stderr_tail="", elapsed=0.0
@@ -461,9 +461,9 @@ class TestAgentCallErrorSeam:
         assert agent_field.value == "tester"
 
     def test_agl_raise_carries_exception_base_fields(self) -> None:
-        from agm.agl.eval.exceptions import AglRaise
-        from agm.agl.eval.values import TextValue
         from agm.agl.runtime import AgentRequest
+        from agm.agl.semantics.exceptions import AglRaise
+        from agm.agl.semantics.values import TextValue
 
         registry = self._make_registry_with_failing_agent(
             cause="nonzero_exit", exit_code=1, stderr_tail="", elapsed=0.0
@@ -1084,7 +1084,7 @@ class TestAgentCallErrorViaRuntime:
         rt = WorkflowRuntime(default_agent=lambda req: "")
         result = rt.run('let x = ask("say nothing")\nx')
         assert result.ok is True
-        from agm.agl.eval.values import TextValue
+        from agm.agl.semantics.values import TextValue
 
         assert result.bindings["x"] == TextValue("")
 

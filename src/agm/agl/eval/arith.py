@@ -3,7 +3,7 @@
 Used by the IR evaluator.
 This module is the single source of truth for operator semantics.
 
-IMPORTANT: Only imports from stdlib, agm.agl.eval.values, and agm.agl.ir.operations.
+IMPORTANT: Only imports from stdlib, agm.agl.semantics.values, and agm.agl.ir.operations.
 No syntax, scope, or typecheck imports are permitted here.
 """
 
@@ -12,7 +12,8 @@ from __future__ import annotations
 import decimal
 from typing import TypeVar, assert_never
 
-from agm.agl.eval.values import (
+from agm.agl.ir.operations import ArithKind, CmpOp, ContainsKind, NumericKind
+from agm.agl.semantics.values import (
     BoolValue,
     DecimalValue,
     DictValue,
@@ -21,7 +22,6 @@ from agm.agl.eval.values import (
     TextValue,
     Value,
 )
-from agm.agl.ir.operations import ArithKind, CmpOp, ContainsKind, NumericKind
 
 __all__ = [
     "AglDivisionByZero",

@@ -6,14 +6,15 @@ AgL type-name string) and ``make_match_error`` (builds a ``MatchError``
 
 The IR evaluator delegates here so match diagnostics have one implementation.
 
-Allowed imports: stdlib, ``agm.agl.eval.values``, ``agm.agl.eval.exceptions``,
+Allowed imports: stdlib, ``agm.agl.semantics.values``, ``agm.agl.semantics.exceptions``,
 ``agm.agl.runtime.serialize``.  No syntax, scope, or typecheck imports.
 """
 
 from __future__ import annotations
 
-from agm.agl.eval.exceptions import make_builtin_exception
-from agm.agl.eval.values import (
+from agm.agl.runtime.serialize import value_to_json_obj
+from agm.agl.semantics.exceptions import make_builtin_exception
+from agm.agl.semantics.values import (
     AgentValue,
     BoolValue,
     ConstructorValue,
@@ -30,7 +31,6 @@ from agm.agl.eval.values import (
     UnitValue,
     Value,
 )
-from agm.agl.runtime.serialize import value_to_json_obj
 
 __all__ = ["_describe_value", "make_match_error"]
 

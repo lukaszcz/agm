@@ -26,8 +26,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
     from pathlib import Path
 
-    from agm.agl.eval.frames import Frame
-    from agm.agl.eval.values import Value
     from agm.agl.ir.ids import Location
     from agm.agl.modules.ids import ModuleId
     from agm.agl.modules.loader import LoadedModule
@@ -36,6 +34,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.runtime import HostEnvironment, RunError
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
+    from agm.agl.semantics.values import Frame, Value
     from agm.agl.syntax.nodes import ImportDecl, Program
     from agm.agl.syntax.spans import SourceSpan
     from agm.agl.typecheck.env import CheckedProgram, TypeEnvironment
@@ -704,12 +703,12 @@ class ReplSession:
         echo data, and promotion use ``orig_program`` so the user-visible outcome
         is accurate.
         """
-        from agm.agl.eval.exceptions import AglRaise
         from agm.agl.eval.ir_interpreter import IrInterpreter
         from agm.agl.lower import lower_repl_entry
         from agm.agl.runtime.request import AgentCancelled
         from agm.agl.runtime.runtime import exception_value_to_run_error
         from agm.agl.runtime.trace import TraceStore
+        from agm.agl.semantics.exceptions import AglRaise
 
         lowered = lower_repl_entry(
             checked,
@@ -955,7 +954,7 @@ class ReplSession:
     def _echo_data_ir(
         self, program: "Program", checked: "CheckedProgram", captured: "Value | None"
     ) -> tuple["Value | None", "Type | None"]:
-        from agm.agl.eval.frames import Cell
+        from agm.agl.semantics.values import Cell
         from agm.agl.syntax.nodes import Binder, Declaration, LetDecl, VarDecl
 
         last = program.body.items[-1]
@@ -1161,7 +1160,6 @@ class ReplSession:
         entry_active_config: dict[str, object],
     ) -> EntryResult:
         """Lower and execute one graph-mode entry in the persistent IR image."""
-        from agm.agl.eval.exceptions import AglRaise
         from agm.agl.eval.ir_interpreter import IrInterpreter
         from agm.agl.lower import lower_repl_graph
         from agm.agl.runtime.request import AgentCancelled
@@ -1170,6 +1168,7 @@ class ReplSession:
             exception_value_to_run_error,
         )
         from agm.agl.runtime.trace import TraceStore
+        from agm.agl.semantics.exceptions import AglRaise
         from agm.agl.syntax.nodes import ImportDecl
 
         del contracts
@@ -1434,8 +1433,8 @@ class ReplSession:
         Constructor bindings are excluded — they are type-system entities with no
         independent runtime value.
         """
-        from agm.agl.eval.frames import Cell
         from agm.agl.scope.symbols import BinderKind
+        from agm.agl.semantics.values import Cell
 
         result: list[tuple[str, Type, Value]] = []
         for name, ref in self._session_scope.bindings.items():
@@ -1466,7 +1465,7 @@ class ReplSession:
     def declared_params(self) -> list[tuple[str, "Type", "Value"]]:
         """Return declared params as (name, type, resolved value)."""
         result: list[tuple[str, Type, Value]] = []
-        from agm.agl.eval.frames import Cell
+        from agm.agl.semantics.values import Cell
 
         for name, typ in self._declared_params.items():
             ref = self._session_scope.bindings[name]

@@ -18,12 +18,12 @@ import decimal
 
 import pytest
 
-from agm.agl.eval.exceptions import AglRaise
 from agm.agl.eval.ir_interpreter import IrInterpreter
-from agm.agl.eval.values import BoolValue, DecimalValue, IntValue, TextValue
 from agm.agl.lower import lower_program
 from agm.agl.parser import parse_program
 from agm.agl.scope import resolve
+from agm.agl.semantics.exceptions import AglRaise
+from agm.agl.semantics.values import BoolValue, DecimalValue, IntValue, TextValue
 from agm.agl.typecheck import check
 from tests.agl.ir_harness import evaluate_ir, m2_caps
 
@@ -111,7 +111,7 @@ def test_closure_value_normalized() -> None:
 
 def test_call_depth_guard_ir_only() -> None:
     """IR call-depth guard raises RecursionError at a custom low depth (IR-side only)."""
-    from agm.agl.eval.values import TextValue
+    from agm.agl.semantics.values import TextValue
 
     source = "def inf(n: int) -> int = inf(n + 1)\nlet result = inf(0)\n()"
     program = parse_program(source)
@@ -231,7 +231,7 @@ def test_function_with_list_in_body() -> None:
         "def make_list(x: int) -> list[int] = [base, x, x * 2]\n"
         "let result = make_list(3)\n()"
     )
-    from agm.agl.eval.values import ListValue
+    from agm.agl.semantics.values import ListValue
 
     ir_reference, ir = evaluate_ir(source)
     assert ir["result"] == ListValue((IntValue(1), IntValue(3), IntValue(6)))
@@ -347,7 +347,7 @@ def test_function_with_dict_literal_and_capture() -> None:
         "def make_dict(x: int) -> dict[text, int] = {\"a\": base + x, \"b\": x}\n"
         "let result = make_dict(5)\n()"
     )
-    from agm.agl.eval.values import DictValue
+    from agm.agl.semantics.values import DictValue
 
     ir_reference, ir = evaluate_ir(source)
     assert ir["result"] == DictValue({"a": IntValue(15), "b": IntValue(5)})
@@ -388,7 +388,7 @@ def test_index_target_capture() -> None:
     root) and the outer `let k` (index expression).  Before the fix the root was missed
     and lowering raised InvalidIrError.  Both evaluators must agree on arr = [0, 99, 0].
     """
-    from agm.agl.eval.values import ListValue
+    from agm.agl.semantics.values import ListValue
 
     source = (
         "var arr = [0, 0, 0]\n"
@@ -410,7 +410,7 @@ def test_assignment_as_function_result_yields_unit() -> None:
     assignment exposes it: `let z = setit()` must observe UnitValue in both
     evaluators, not the mutated container/value.
     """
-    from agm.agl.eval.values import UnitValue
+    from agm.agl.semantics.values import UnitValue
 
     # Index-target assignment as the function body / return value.
     index_source = (

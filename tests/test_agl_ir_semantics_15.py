@@ -88,7 +88,7 @@ def test_t1_text_exec() -> None:
     source = 'let result: text = exec("echo hello")\nresult'
     commands = {"echo hello": _ok("hello\n")}
     ir_reference, ir = evaluate_ir_with_shell(source, commands)
-    from agm.agl.eval.values import TextValue
+    from agm.agl.semantics.values import TextValue
 
     assert ir["result"] == TextValue("hello")
 
@@ -103,7 +103,7 @@ def test_t2_typed_exec_json() -> None:
     source = "let n: int = exec(\"echo 42\")\nn"
     commands = {"echo 42": _ok("42\n")}
     ir_reference, ir = evaluate_ir_with_shell(source, commands)
-    from agm.agl.eval.values import IntValue
+    from agm.agl.semantics.values import IntValue
 
     assert ir["n"] == IntValue(42)
 
@@ -118,7 +118,7 @@ def test_t3_structured_exec() -> None:
     source = "let r: ExecResult = exec(\"exit 1\")\nr"
     commands = {"exit 1": _fail(1, stdout="", stderr="error msg")}
     ir_reference, ir = evaluate_ir_with_shell(source, commands)
-    from agm.agl.eval.values import IntValue, RecordValue
+    from agm.agl.semantics.values import IntValue, RecordValue
 
     assert isinstance(ir["r"], RecordValue)
     assert ir["r"].display_name == "ExecResult"
@@ -148,7 +148,7 @@ def test_t5_timeout() -> None:
     source = 'let result: text = exec("sleep 999")\nresult'
     commands = {"sleep 999": _timed_out()}
     ir_reference_exc, ir_exc = evaluate_ir_raises_with_shell(source, commands)
-    from agm.agl.eval.values import BoolValue
+    from agm.agl.semantics.values import BoolValue
 
     assert ir_exc.display_name == "ExecError"
     assert ir_exc.fields["timed_out"] == BoolValue(True)
@@ -164,7 +164,7 @@ def test_t6_spawn_error() -> None:
     source = 'let result: text = exec("nonexistent_cmd")\nresult'
     commands = {"nonexistent_cmd": _spawn_failed("No such file or directory")}
     ir_reference_exc, ir_exc = evaluate_ir_raises_with_shell(source, commands)
-    from agm.agl.eval.values import BoolValue
+    from agm.agl.semantics.values import BoolValue
 
     assert ir_exc.display_name == "ExecError"
     assert ir_exc.fields["timed_out"] == BoolValue(False)
@@ -200,7 +200,7 @@ def test_t7_retry_success() -> None:
     call_count[0] = 0
     ir_snap, _ = _run_ir_exec(source, fake_shell, caps)
 
-    from agm.agl.eval.values import IntValue
+    from agm.agl.semantics.values import IntValue
 
     assert ir_reference_snap["n"] == IntValue(99)
     assert ir_snap["n"] == IntValue(99)
@@ -237,7 +237,7 @@ def test_t9_exec_inside_function() -> None:
     )
     commands = {"echo from_fn": _ok("from_fn\n")}
     ir_reference, ir = evaluate_ir_with_shell(source, commands)
-    from agm.agl.eval.values import TextValue
+    from agm.agl.semantics.values import TextValue
 
     assert ir["result"] == TextValue("from_fn")
 
@@ -295,7 +295,6 @@ def test_t11_exec_empty_parse_failure_raises_agent_parse_error() -> None:
     with neither errors nor error_msg, AgentParseError still raises (line 1334)."""
     import unittest.mock
 
-    from agm.agl.eval.exceptions import AglRaise
     from agm.agl.eval.ir_interpreter import IrInterpreter
     from agm.agl.ir.contracts import ContractRequest
     from agm.agl.ir.ids import ContractId, SourceId
@@ -306,6 +305,7 @@ def test_t11_exec_empty_parse_failure_raises_agent_parse_error() -> None:
         SourceFile,
     )
     from agm.agl.modules.ids import ENTRY_ID
+    from agm.agl.semantics.exceptions import AglRaise
     from agm.core.process import ProcessCaptureResult
 
     source_id = SourceId(0)
@@ -393,7 +393,7 @@ def test_t12_retry_then_nonzero_exit() -> None:
         return _fail(1, stdout="", stderr="retry failed")
 
     source = "let n: int = exec(\"cmd\", on_parse_error: Retry(n: 1))\nn"
-    from agm.agl.eval.exceptions import AglRaise
+    from agm.agl.semantics.exceptions import AglRaise
     from tests.agl.ir_harness import _normalize_exception, _run_ir_exec
 
     caps = m6c_caps()
@@ -412,7 +412,7 @@ def test_t12_retry_then_nonzero_exit() -> None:
     except AglRaise as e:
         ir_exc = e.exc
 
-    from agm.agl.eval.values import ExceptionValue
+    from agm.agl.semantics.values import ExceptionValue
 
     assert isinstance(ir_reference_exc, ExceptionValue), "IR reference did not raise AglRaise"
     assert isinstance(ir_exc, ExceptionValue), "IR did not raise AglRaise"

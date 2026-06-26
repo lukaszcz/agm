@@ -13,7 +13,7 @@ the existing runtime leaf primitives (rendering, JSON serialization, strict
 parse, integral-decimal normalization, JSON-Schema validation) rather than
 reimplementing them.
 
-Imports: stdlib + ``agm.agl.values``/``agm.agl.eval.values`` + ``agm.agl.ir``
+Imports: stdlib + ``agm.agl.semantics.values`` + ``agm.agl.ir``
 contracts + ``agm.agl.runtime`` leaf helpers.  No ``syntax`` / ``scope`` /
 ``typecheck`` imports are permitted here.
 """
@@ -26,18 +26,6 @@ from typing import assert_never
 
 from jsonschema import Draft202012Validator
 
-from agm.agl.eval.values import (
-    BoolValue,
-    DecimalValue,
-    DictValue,
-    EnumValue,
-    IntValue,
-    JsonValue,
-    ListValue,
-    RecordValue,
-    TextValue,
-    Value,
-)
 from agm.agl.ir.contracts import (
     ConversionRecipe,
     ConversionStrategy,
@@ -57,6 +45,18 @@ from agm.agl.runtime.convert import (
 )
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.serialize import value_to_json_obj
+from agm.agl.semantics.values import (
+    BoolValue,
+    DecimalValue,
+    DictValue,
+    EnumValue,
+    IntValue,
+    JsonValue,
+    ListValue,
+    RecordValue,
+    TextValue,
+    Value,
+)
 
 __all__ = ["AglCastConversion", "decode_value", "run_recipe"]
 

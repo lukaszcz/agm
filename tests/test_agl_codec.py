@@ -29,8 +29,13 @@ import pytest
 
 from agm.agl import WorkflowRuntime
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.eval.exceptions import AglRaise
-from agm.agl.eval.values import (
+from agm.agl.runtime.agents import AgentFn, AgentRegistry
+from agm.agl.runtime.codec import JsonCodec, ParseResult, TextCodec
+from agm.agl.runtime.contract import OutputContract, materialize_contract
+from agm.agl.runtime.request import AgentRequest
+from agm.agl.scope import resolve
+from agm.agl.semantics.exceptions import AglRaise
+from agm.agl.semantics.values import (
     BoolValue,
     DecimalValue,
     DictValue,
@@ -41,11 +46,6 @@ from agm.agl.eval.values import (
     RecordValue,
     TextValue,
 )
-from agm.agl.runtime.agents import AgentFn, AgentRegistry
-from agm.agl.runtime.codec import JsonCodec, ParseResult, TextCodec
-from agm.agl.runtime.contract import OutputContract, materialize_contract
-from agm.agl.runtime.request import AgentRequest
-from agm.agl.scope import resolve
 from agm.agl.syntax import nodes as ast
 from agm.agl.syntax import types as tast
 from agm.agl.syntax.nodes import (
@@ -1580,8 +1580,8 @@ issue
 
     def test_structured_param_accepts_python_list(self) -> None:
         """Structured params may be provided as a Python list (JSON-compatible)."""
-        from agm.agl.eval.values import IntValue, ListValue
         from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.semantics.values import IntValue, ListValue
 
         result = convert_param_value("xs", [1, 2, 3], ListType(elem=IntType()))
         assert isinstance(result, ListValue)
@@ -2289,7 +2289,7 @@ class TestRegisterCodec:
         (observable as a distinctive prefix on the resulting binding) are
         exercised end-to-end through ``run()`` with a stub agent.
         """
-        from agm.agl.eval.values import TextValue
+        from agm.agl.semantics.values import TextValue
 
         class TagCodec:
             @property

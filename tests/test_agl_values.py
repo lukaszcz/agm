@@ -1,14 +1,13 @@
-"""Tests for the agm.agl.values shared value module (M1-A).
+"""Tests for the agm.agl.semantics.values value module.
 
 This module tests:
-- Leaf value tags importable from agm.agl.values (not just agm.agl.eval.values).
-- The narrow Value union defined in agm.agl.values (leaf tags only).
+- All value types (leaf tags, containers, nominals, IR closure, Cell/Slot/Frame)
+  are importable from agm.agl.semantics.values.
+- The single broad Value union defined in agm.agl.semantics.values.
 - Key eq/hash invariants for JsonValue.
-- That agm.agl.values does not import from eval/syntax/scope/typecheck/runtime —
+- That agm.agl.semantics.values does not import from eval/syntax/scope/typecheck/runtime —
   not even under TYPE_CHECKING.
-- Container/nominal tag eq/hash tests live here but import from agm.agl.eval.values,
-  since those types now reside there.
-- Backward-compatibility re-exports from agm.agl.eval.values.
+- Container/nominal tag eq/hash tests.
 """
 
 from __future__ import annotations
@@ -21,8 +20,8 @@ import decimal
 
 
 def test_leaf_tags_importable_from_values_module() -> None:
-    """All leaf value tags are importable directly from agm.agl.values."""
-    import agm.agl.values as vals
+    """All leaf value tags are importable directly from agm.agl.semantics.values."""
+    import agm.agl.semantics.values as vals
 
     # Verify all expected names exist on the module.
     expected = [
@@ -39,18 +38,18 @@ def test_leaf_tags_importable_from_values_module() -> None:
         "_json_hash",
     ]
     for name in expected:
-        assert hasattr(vals, name), f"agm.agl.values missing {name!r}"
+        assert hasattr(vals, name), f"agm.agl.semantics.values missing {name!r}"
 
 
 def test_values_module_has_correct_name() -> None:
     """The module's __name__ is as expected."""
-    import agm.agl.values as vals
+    import agm.agl.semantics.values as vals
 
-    assert vals.__name__ == "agm.agl.values"
+    assert vals.__name__ == "agm.agl.semantics.values"
 
 
 def test_values_module_no_forbidden_imports() -> None:
-    """agm.agl.values must not import from eval, syntax, scope, typecheck, or runtime.
+    """agm.agl.semantics.values must not import from eval, syntax, scope, typecheck, or runtime.
 
     This guard is STRICT: no imports from forbidden packages are allowed at any
     level — not at module level AND not inside ``if TYPE_CHECKING:`` blocks.
@@ -59,9 +58,9 @@ def test_values_module_no_forbidden_imports() -> None:
     import ast
     import inspect
 
-    import agm.agl.values  # ensure it's loaded
+    import agm.agl.semantics.values  # ensure it's loaded
 
-    src = inspect.getsource(agm.agl.values)
+    src = inspect.getsource(agm.agl.semantics.values)
 
     # The forbidden sub-packages that values.py must not import from at all.
     forbidden_prefixes = [
@@ -79,14 +78,14 @@ def test_values_module_no_forbidden_imports() -> None:
         if isinstance(node, ast.ImportFrom) and node.module:
             for prefix in forbidden_prefixes:
                 assert not node.module.startswith(prefix), (
-                    f"agm.agl.values imports from {node.module!r}, "
+                    f"agm.agl.semantics.values imports from {node.module!r}, "
                     f"which is in forbidden package {prefix!r}."
                 )
         if isinstance(node, ast.Import):
             for alias in node.names:
                 for prefix in forbidden_prefixes:
                     assert not alias.name.startswith(prefix), (
-                        f"agm.agl.values imports {alias.name!r}, "
+                        f"agm.agl.semantics.values imports {alias.name!r}, "
                         f"which is in forbidden package {prefix!r}."
                     )
 
@@ -98,7 +97,7 @@ def test_values_module_no_forbidden_imports() -> None:
 
 def test_unit_value_singleton() -> None:
     """UNIT_VALUE is the singleton UnitValue instance."""
-    from agm.agl.values import UNIT_VALUE, UnitValue
+    from agm.agl.semantics.values import UNIT_VALUE, UnitValue
 
     assert isinstance(UNIT_VALUE, UnitValue)
     assert UNIT_VALUE == UnitValue()
@@ -106,7 +105,7 @@ def test_unit_value_singleton() -> None:
 
 def test_primitive_values_constructible() -> None:
     """Primitive value tags can be constructed and hold their payload."""
-    from agm.agl.values import (
+    from agm.agl.semantics.values import (
         AgentValue,
         BoolValue,
         DecimalValue,
@@ -128,7 +127,7 @@ def test_primitive_values_constructible() -> None:
 
 def test_json_value_bool_not_equal_to_int() -> None:
     """JsonValue([True]) != JsonValue([1]) — bool/number conflation is prevented."""
-    from agm.agl.values import JsonValue
+    from agm.agl.semantics.values import JsonValue
 
     assert JsonValue([True]) != JsonValue([1])
     assert JsonValue(True) != JsonValue(1)
@@ -137,7 +136,7 @@ def test_json_value_bool_not_equal_to_int() -> None:
 
 def test_json_value_numeric_equality() -> None:
     """JsonValue(1) == JsonValue(Decimal('1')) — int and Decimal compare equal."""
-    from agm.agl.values import JsonValue
+    from agm.agl.semantics.values import JsonValue
 
     assert JsonValue(1) == JsonValue(decimal.Decimal("1"))
     assert JsonValue(2) == JsonValue(decimal.Decimal("2.0"))
@@ -145,7 +144,7 @@ def test_json_value_numeric_equality() -> None:
 
 def test_json_value_hash_consistent_with_eq() -> None:
     """JsonValue hash is consistent with eq."""
-    from agm.agl.values import JsonValue
+    from agm.agl.semantics.values import JsonValue
 
     jv1 = JsonValue(1)
     jv2 = JsonValue(decimal.Decimal("1"))
@@ -160,7 +159,7 @@ def test_json_value_hash_consistent_with_eq() -> None:
 
 def test_json_value_nested_list_eq() -> None:
     """Nested JsonValue list equality follows the same bool/int rules."""
-    from agm.agl.values import JsonValue
+    from agm.agl.semantics.values import JsonValue
 
     assert JsonValue([1, 2]) == JsonValue([1, 2])
     assert JsonValue([True, 2]) != JsonValue([1, 2])
@@ -168,7 +167,7 @@ def test_json_value_nested_list_eq() -> None:
 
 def test_json_value_dict_eq() -> None:
     """JsonValue dict equality is key-and-value structural."""
-    from agm.agl.values import JsonValue
+    from agm.agl.semantics.values import JsonValue
 
     assert JsonValue({"a": 1}) == JsonValue({"a": 1})
     assert JsonValue({"a": 1}) != JsonValue({"a": 2})
@@ -176,13 +175,13 @@ def test_json_value_dict_eq() -> None:
 
 
 # ---------------------------------------------------------------------------
-# DictValue order-insensitive hash (type lives in agm.agl.eval.values)
+# DictValue order-insensitive hash (type lives in agm.agl.semantics.values)
 # ---------------------------------------------------------------------------
 
 
 def test_dict_value_hash_order_insensitive() -> None:
     """DictValue hash is order-insensitive (same keys/values → same hash)."""
-    from agm.agl.eval.values import DictValue, IntValue
+    from agm.agl.semantics.values import DictValue, IntValue
 
     d1 = DictValue(entries={"a": IntValue(1), "b": IntValue(2)})
     d2 = DictValue(entries={"b": IntValue(2), "a": IntValue(1)})
@@ -193,7 +192,7 @@ def test_dict_value_hash_order_insensitive() -> None:
 
 def test_dict_value_eq_contract() -> None:
     """DictValue equality works correctly."""
-    from agm.agl.eval.values import DictValue, IntValue, TextValue
+    from agm.agl.semantics.values import DictValue, IntValue, TextValue
 
     d1 = DictValue(entries={"x": IntValue(5)})
     d2 = DictValue(entries={"x": IntValue(5)})
@@ -203,7 +202,7 @@ def test_dict_value_eq_contract() -> None:
 
 
 # ---------------------------------------------------------------------------
-# RecordValue eq/hash contract (type lives in agm.agl.eval.values)
+# RecordValue eq/hash contract (type lives in agm.agl.semantics.values)
 # ---------------------------------------------------------------------------
 
 
@@ -220,8 +219,8 @@ def test_record_value_eq_and_hash() -> None:
     Two records with same nominal+fields but different display_name are equal;
     same declared_name in different modules are NOT equal (D2).
     """
-    from agm.agl.eval.values import IntValue, NominalId, RecordValue
     from agm.agl.modules.ids import ModuleId
+    from agm.agl.semantics.values import IntValue, NominalId, RecordValue
 
     mod_a = ModuleId.from_dotted("mymod")
     mod_b = ModuleId.from_dotted("other")
@@ -253,8 +252,8 @@ def test_record_value_eq_and_hash() -> None:
 
 def test_constructor_value_eq_and_hash() -> None:
     """ConstructorValue equality considers nominal+variant; display_name excluded (D2)."""
-    from agm.agl.eval.values import ConstructorValue, NominalId
     from agm.agl.modules.ids import ModuleId
+    from agm.agl.semantics.values import ConstructorValue, NominalId
 
     mod_a = ModuleId.from_dotted("mymod")
     mod_b = ModuleId.from_dotted("other")
@@ -279,8 +278,8 @@ def test_constructor_value_eq_and_hash() -> None:
 
 def test_record_value_hash_with_json_payload() -> None:
     """RecordValue hash is consistent with JsonValue eq (numerically equal payloads)."""
-    from agm.agl.eval.values import JsonValue, NominalId, RecordValue
     from agm.agl.modules.ids import ModuleId
+    from agm.agl.semantics.values import JsonValue, NominalId, RecordValue
 
     nom = NominalId(ModuleId.from_dotted("m"), "R")
     r1 = RecordValue(nominal=nom, display_name="R", fields={"v": JsonValue(1)})
@@ -291,7 +290,7 @@ def test_record_value_hash_with_json_payload() -> None:
 
 
 # ---------------------------------------------------------------------------
-# EnumValue eq/hash (type lives in agm.agl.eval.values)
+# EnumValue eq/hash (type lives in agm.agl.semantics.values)
 # ---------------------------------------------------------------------------
 
 
@@ -300,8 +299,8 @@ def test_enum_value_eq_and_hash() -> None:
 
     display_name is excluded from eq/hash (D2).
     """
-    from agm.agl.eval.values import EnumValue, NominalId
     from agm.agl.modules.ids import ModuleId
+    from agm.agl.semantics.values import EnumValue, NominalId
 
     mod = ModuleId.from_dotted("m")
     mod2 = ModuleId.from_dotted("other")
@@ -330,7 +329,7 @@ def test_enum_value_eq_and_hash() -> None:
 
 
 # ---------------------------------------------------------------------------
-# ExceptionValue eq/hash (type lives in agm.agl.eval.values)
+# ExceptionValue eq/hash (type lives in agm.agl.semantics.values)
 # ---------------------------------------------------------------------------
 
 
@@ -339,8 +338,8 @@ def test_exception_value_eq() -> None:
 
     display_name is excluded from eq/hash (D2). Built-in exceptions use PRELUDE_ID.
     """
-    from agm.agl.eval.values import ExceptionValue, NominalId, TextValue
     from agm.agl.modules.ids import PRELUDE_ID, ModuleId
+    from agm.agl.semantics.values import ExceptionValue, NominalId, TextValue
 
     nom_err = NominalId(PRELUDE_ID, "Err")
     nom_err2 = NominalId(PRELUDE_ID, "Err2")
@@ -373,8 +372,8 @@ def test_exception_value_eq() -> None:
 
 def test_builtin_exception_value_uses_prelude_id() -> None:
     """Built-in exception values carry NominalId(PRELUDE_ID, name)."""
-    from agm.agl.eval.values import ExceptionValue, NominalId, TextValue
     from agm.agl.modules.ids import PRELUDE_ID
+    from agm.agl.semantics.values import ExceptionValue, NominalId, TextValue
 
     exc = ExceptionValue(
         nominal=NominalId(PRELUDE_ID, "AgentParseError"),
@@ -387,13 +386,13 @@ def test_builtin_exception_value_uses_prelude_id() -> None:
 
 
 # ---------------------------------------------------------------------------
-# ListValue (type lives in agm.agl.eval.values)
+# ListValue (type lives in agm.agl.semantics.values)
 # ---------------------------------------------------------------------------
 
 
 def test_list_value_eq_and_hash() -> None:
     """ListValue equality and hash compare elements structurally."""
-    from agm.agl.eval.values import IntValue, ListValue
+    from agm.agl.semantics.values import IntValue, ListValue
 
     lv1 = ListValue(elements=(IntValue(1), IntValue(2)))
     lv2 = ListValue(elements=(IntValue(1), IntValue(2)))
@@ -405,77 +404,74 @@ def test_list_value_eq_and_hash() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Narrow Value union type
+# Broad Value union — all types live in agm.agl.semantics.values
 # ---------------------------------------------------------------------------
 
 
-def test_narrow_value_union_does_not_include_closure_or_constructor() -> None:
-    """The narrow Value union in agm.agl.values has only leaf tags."""
-    import agm.agl.values as vals
+def test_semantics_values_includes_callable_forms() -> None:
+    """The single Value union in agm.agl.semantics.values includes closure and constructor types."""
+    import agm.agl.semantics.values as vals
 
-    # agm.agl.values must NOT define Closure or ConstructorValue.
-    assert not hasattr(vals, "Closure"), "agm.agl.values must not define Closure"
-    assert not hasattr(vals, "ConstructorValue"), (
-        "agm.agl.values must not define ConstructorValue"
+    for name in ("ConstructorValue", "IrClosureValue"):
+        assert hasattr(vals, name), f"agm.agl.semantics.values missing {name!r}"
+
+
+def test_semantics_values_includes_container_types() -> None:
+    """The single Value union in agm.agl.semantics.values includes all container/nominal types."""
+    import agm.agl.semantics.values as vals
+
+    for name in ("ListValue", "DictValue", "RecordValue", "EnumValue", "ExceptionValue"):
+        assert hasattr(vals, name), f"agm.agl.semantics.values missing {name!r}"
+
+
+def test_semantics_values_includes_frame_model() -> None:
+    """agm.agl.semantics.values exports the frame model: Cell, Slot, Frame."""
+    import agm.agl.semantics.values as vals
+
+    for name in ("Cell", "Slot", "Frame"):
+        assert hasattr(vals, name), f"agm.agl.semantics.values missing {name!r}"
+
+
+# ---------------------------------------------------------------------------
+# Unified value module exports all expected names
+# ---------------------------------------------------------------------------
+
+
+def test_semantics_values_exports_all_leaf_tags() -> None:
+    """agm.agl.semantics.values exports all leaf primitive value tags."""
+    from agm.agl.semantics.values import (
+        UNIT_VALUE,
+        AgentValue,
+        BoolValue,
+        DecimalValue,
+        IntValue,
+        JsonValue,
+        TextValue,
+        UnitValue,
     )
 
-
-def test_narrow_value_union_does_not_include_container_types() -> None:
-    """The narrow Value union in agm.agl.values has only leaf tags — no containers/nominals."""
-    import agm.agl.values as vals
-
-    # Container/nominal types live in agm.agl.eval.values, not here.
-    for name in ("ListValue", "DictValue", "RecordValue", "EnumValue", "ExceptionValue"):
-        assert not hasattr(vals, name), f"agm.agl.values must not define {name}"
-
-
-# ---------------------------------------------------------------------------
-# Backward-compatibility: eval.values re-exports leaf tags
-# ---------------------------------------------------------------------------
+    assert TextValue is not None
+    assert IntValue is not None
+    assert DecimalValue is not None
+    assert BoolValue is not None
+    assert JsonValue is not None
+    assert UnitValue is not None
+    assert UNIT_VALUE is not None
+    assert AgentValue is not None
 
 
-def test_eval_values_still_exports_leaf_tags() -> None:
-    """agm.agl.eval.values still exports all leaf tags for backward compatibility."""
-    # Import from both modules and verify identity (same class object).
-    from agm.agl.eval.values import UNIT_VALUE as ev_UNIT_VALUE
-    from agm.agl.eval.values import AgentValue as ev_AgentValue
-    from agm.agl.eval.values import BoolValue as ev_BoolValue
-    from agm.agl.eval.values import DecimalValue as ev_DecimalValue
-    from agm.agl.eval.values import IntValue as ev_IntValue
-    from agm.agl.eval.values import JsonValue as ev_JsonValue
-    from agm.agl.eval.values import TextValue as ev_TextValue
-    from agm.agl.eval.values import UnitValue as ev_UnitValue
-    from agm.agl.values import UNIT_VALUE as bv_UNIT_VALUE
-    from agm.agl.values import AgentValue as bv_AgentValue
-    from agm.agl.values import BoolValue as bv_BoolValue
-    from agm.agl.values import DecimalValue as bv_DecimalValue
-    from agm.agl.values import IntValue as bv_IntValue
-    from agm.agl.values import JsonValue as bv_JsonValue
-    from agm.agl.values import TextValue as bv_TextValue
-    from agm.agl.values import UnitValue as bv_UnitValue
-
-    assert ev_TextValue is bv_TextValue
-    assert ev_IntValue is bv_IntValue
-    assert ev_DecimalValue is bv_DecimalValue
-    assert ev_BoolValue is bv_BoolValue
-    assert ev_JsonValue is bv_JsonValue
-    assert ev_UnitValue is bv_UnitValue
-    assert ev_UNIT_VALUE is bv_UNIT_VALUE
-    assert ev_AgentValue is bv_AgentValue
-
-
-def test_eval_values_broad_value_includes_ir_callable_forms() -> None:
+def test_broad_value_includes_ir_callable_forms() -> None:
     """The broad runtime union includes IR closure and constructor values."""
-    from agm.agl.eval.values import ConstructorValue, IrClosureValue, Value
+    from agm.agl.semantics.values import ConstructorValue, IrClosureValue, Value
 
     assert IrClosureValue is not None
     assert ConstructorValue is not None
     assert Value is not None
 
 
-def test_helpers_re_exported_from_eval_values() -> None:
-    """_json_eq and _json_hash are accessible from agm.agl.eval.values."""
-    from agm.agl.eval.values import _json_eq, _json_hash
+def test_helpers_accessible_from_semantics_values() -> None:
+    """_json_eq and _json_hash are accessible from agm.agl.semantics.values."""
+    from agm.agl.semantics.values import _json_eq, _json_hash
 
     assert _json_eq(1, decimal.Decimal("1")) is True
     assert _json_eq(True, 1) is False
@@ -484,8 +480,8 @@ def test_helpers_re_exported_from_eval_values() -> None:
 
 def test_ir_closure_value_identity_equality() -> None:
     """IrClosureValue uses identity-based equality (__eq__ = self is other)."""
-    from agm.agl.eval.values import IrClosureValue
     from agm.agl.ir.ids import FunctionId
+    from agm.agl.semantics.values import IrClosureValue
 
     v = IrClosureValue(function_id=FunctionId(0), captures=())
     # Same object is equal to itself
@@ -500,8 +496,8 @@ def test_ir_closure_value_identity_equality() -> None:
 
 def test_ir_closure_value_identity_hash() -> None:
     """IrClosureValue uses identity-based hash (__hash__ = id(self))."""
-    from agm.agl.eval.values import IrClosureValue
     from agm.agl.ir.ids import FunctionId
+    from agm.agl.semantics.values import IrClosureValue
 
     v = IrClosureValue(function_id=FunctionId(0), captures=())
     # Hash is id(v) 

@@ -39,7 +39,9 @@ from decimal import Decimal
 from jsonschema import Draft202012Validator
 from jsonschema import ValidationError as JsonschemaValidationError
 
-from agm.agl.eval.values import (
+from agm.agl.runtime.render import render_value
+from agm.agl.runtime.serialize import dumps_exact, value_to_json_obj
+from agm.agl.semantics.values import (
     BoolValue,
     DecimalValue,
     DictValue,
@@ -52,9 +54,7 @@ from agm.agl.eval.values import (
     TextValue,
     Value,
 )
-from agm.agl.eval.values import Value as BaseValue
-from agm.agl.runtime.render import render_value
-from agm.agl.runtime.serialize import dumps_exact, value_to_json_obj
+from agm.agl.semantics.values import Value as BaseValue
 from agm.agl.type_schema import derive_schema
 from agm.agl.typecheck.types import (
     BoolType,
@@ -399,12 +399,12 @@ def convert_value(value: Value, source_type: Type, target_type: Type) -> Value:
 
     ``→ text`` (total):
         :func:`~agm.agl.runtime.render.render_value` is used to produce a
-        :class:`~agm.agl.eval.values.TextValue`.  Nominal sources render in
+        :class:`~agm.agl.semantics.values.TextValue`.  Nominal sources render in
         declaration order (the interpreter normalizes their fields).
 
     ``→ json`` (total):
         :func:`~agm.agl.runtime.serialize.value_to_json_obj` is used to
-        produce a :class:`~agm.agl.eval.values.JsonValue`.  Per D9, ``text``
+        produce a :class:`~agm.agl.semantics.values.JsonValue`.  Per D9, ``text``
         is already JSON-shaped (a JSON string), so ``"42" as json`` yields
         ``JsonValue("42")``, not ``JsonValue(42)``.  Nominal values
         (record/enum/exception) are accepted and serialised structurally.
@@ -423,7 +423,7 @@ def convert_value(value: Value, source_type: Type, target_type: Type) -> Value:
 
     No-op / assignable cases (D6):
         Exact-type identity returns the value unchanged.  ``int → decimal``
-        widens to :class:`~agm.agl.eval.values.DecimalValue`.
+        widens to :class:`~agm.agl.semantics.values.DecimalValue`.
 
     :raises CastConversionError: When a fallible conversion fails for an
         expected reason (parse error, type mismatch, non-integral narrowing).

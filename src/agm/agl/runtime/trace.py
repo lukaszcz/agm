@@ -31,8 +31,8 @@ from agm.agl.runtime.serialize import value_to_json_obj
 from agm.core.log import append_jsonl
 
 if TYPE_CHECKING:
-    from agm.agl.eval.values import Value
     from agm.agl.ir.ids import Location
+    from agm.agl.semantics.values import Value
     from agm.agl.syntax.spans import SourceSpan
 
 

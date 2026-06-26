@@ -597,8 +597,8 @@ class TestNoLog:
         """``mutation()`` on a no-op store (path=None) returns without invoking
         the serializer.  Observable via a value the serializer would choke on:
         the early-out means no serialization (and no file) happens (F3)."""
-        from agm.agl.eval.values import DecimalValue
         from agm.agl.runtime.trace import TraceStore
+        from agm.agl.semantics.values import DecimalValue
 
         ts = TraceStore(path=None)
         # If the early-out were missing this would still run dumps_exact; the
@@ -824,8 +824,8 @@ class TestTraceStoreProperties:
         """Methods called with span=None still emit valid JSONL (no line/col keys)."""
         import json as _json
 
-        from agm.agl.eval.values import IntValue
         from agm.agl.runtime.trace import TraceStore
+        from agm.agl.semantics.values import IntValue
 
         p = tmp_path / "t.jsonl"
         ts = TraceStore(path=p)

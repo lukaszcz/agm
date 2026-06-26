@@ -15,9 +15,9 @@ from pathlib import Path
 import pytest
 
 from agm.agl.diagnostics import AglError
-from agm.agl.eval.values import BoolValue, IntValue
 from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.runtime.request import AgentRequest, AgentResponse
+from agm.agl.semantics.values import BoolValue, IntValue
 from agm.agl.typecheck.types import IntType, TextType
 
 # ---------------------------------------------------------------------------
@@ -273,7 +273,7 @@ class TestFailureEffects:
         assert vals["v"] == 99
 
     def test_runtime_raise_preserves_indexed_assign_to_prior_var(self) -> None:
-        from agm.agl.eval.values import IntValue, ListValue
+        from agm.agl.semantics.values import IntValue, ListValue
 
         s = ReplSession()
         r1 = s.eval_entry("var xs = [1, 2, 3]")
@@ -1373,7 +1373,7 @@ class TestImports:
         # Import forces graph mode; ::x must still resolve to x=100, not the param.
         r2 = s.eval_entry("import dummy\ndef shadow(x: int) -> int = ::x\nshadow(7)")
         assert r2.ok, r2.diagnostics
-        from agm.agl.eval.values import IntValue
+        from agm.agl.semantics.values import IntValue
         assert r2.value == IntValue(100), f"Expected 100, got {r2.value}"
 
     def test_import_error_rollback(self, tmp_path: Path) -> None:
@@ -1642,7 +1642,7 @@ class TestImports:
         # Entry 3: val() from foo.a must still resolve (wildcard import persists)
         r3 = s.eval_entry("val()")
         assert r3.ok, r3.diagnostics
-        from agm.agl.eval.values import IntValue
+        from agm.agl.semantics.values import IntValue
         assert r3.value == IntValue(42)
 
     def test_generic_graph_load_error_surfaces_as_diagnostic(
@@ -1676,14 +1676,14 @@ class TestImports:
 
 
 def _int(value: object) -> int:
-    from agm.agl.eval.values import IntValue
+    from agm.agl.semantics.values import IntValue
 
     assert isinstance(value, IntValue)
     return value.value
 
 
 def _text(value: object) -> str:
-    from agm.agl.eval.values import TextValue
+    from agm.agl.semantics.values import TextValue
 
     assert isinstance(value, TextValue)
     return value.value
@@ -1803,8 +1803,8 @@ class TestFunctionAgentValueEcho:
         assert r.kind == "expression"
         assert r.value is not None
         # The value is a Closure; render_value must not raise.
-        from agm.agl.eval.values import IrClosureValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import IrClosureValue
 
         assert isinstance(r.value, IrClosureValue)
         rendered = render_value(r.value)
@@ -1819,8 +1819,8 @@ class TestFunctionAgentValueEcho:
         assert r.ok
         assert r.kind == "expression"
         assert r.value is not None
-        from agm.agl.eval.values import IrClosureValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import IrClosureValue
 
         assert isinstance(r.value, IrClosureValue)
         rendered = render_value(r.value)
@@ -1836,8 +1836,8 @@ class TestFunctionAgentValueEcho:
         assert r.ok
         assert r.kind == "expression"
         assert r.value is not None
-        from agm.agl.eval.values import AgentValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import AgentValue
 
         assert isinstance(r.value, AgentValue)
         rendered = render_value(r.value)
@@ -1849,8 +1849,8 @@ class TestFunctionAgentValueEcho:
         s.eval_entry("def dbl(x: int) -> int = x * 2")
         # bindings() returns Closure values; the meta-command renders them.
         binds = s.bindings()
-        from agm.agl.eval.values import IrClosureValue
         from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import IrClosureValue
 
         assert any(isinstance(v, IrClosureValue) for _n, _t, v in binds)
         # render_value on each must not raise.
@@ -1935,7 +1935,7 @@ class TestBareTypeEntry:
     def test_record_name_still_evaluates_as_constructor(self) -> None:
         # A record name doubles as a constructor value, so it must keep
         # evaluating normally (the type fallback only triggers on failure).
-        from agm.agl.eval.values import ConstructorValue
+        from agm.agl.semantics.values import ConstructorValue
 
         s = ReplSession()
         s.eval_entry("record Point(x: int, y: int)")

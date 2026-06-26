@@ -55,7 +55,7 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
                 "agm.agl.ir",
                 "agm.agl.modules.ids",
                 "agm.agl.runtime",
-                "agm.agl.values",
+                "agm.agl.semantics",
             ),
         ),
     ],

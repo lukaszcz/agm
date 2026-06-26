@@ -36,7 +36,13 @@ from __future__ import annotations
 
 import decimal
 
-from agm.agl.eval.values import (
+from agm.agl.ir.nodes import IrBind, IrCoerce, IrMakeDict, IrMakeList
+from agm.agl.ir.operations import IntToDecimal, ToJson
+from agm.agl.ir.program import ExecutableProgram
+from agm.agl.lower import lower_program
+from agm.agl.parser import parse_program
+from agm.agl.scope import resolve
+from agm.agl.semantics.values import (
     DecimalValue,
     DictValue,
     IntValue,
@@ -45,12 +51,6 @@ from agm.agl.eval.values import (
     TextValue,
     Value,
 )
-from agm.agl.ir.nodes import IrBind, IrCoerce, IrMakeDict, IrMakeList
-from agm.agl.ir.operations import IntToDecimal, ToJson
-from agm.agl.ir.program import ExecutableProgram
-from agm.agl.lower import lower_program
-from agm.agl.parser import parse_program
-from agm.agl.scope import resolve
 from agm.agl.typecheck import check
 from tests.agl.ir_harness import evaluate_ir, m2_caps
 

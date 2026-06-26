@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import pytest
 
-from agm.agl.eval.values import BoolValue
 from agm.agl.ir.ids import Location, NominalId, SourceId
 from agm.agl.ir.nodes import IrBind, IrConstInt, IrVariantIs
 from agm.agl.ir.program import (
@@ -19,6 +18,7 @@ from agm.agl.ir.program import (
 )
 from agm.agl.ir.validate import InvalidIrError, validate_ir
 from agm.agl.modules.ids import ENTRY_ID
+from agm.agl.semantics.values import BoolValue
 from tests.agl.ir_harness import evaluate_ir
 
 

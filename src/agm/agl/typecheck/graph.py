@@ -65,6 +65,11 @@ from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.graph import ResolvedModuleGraph
 from agm.agl.scope.imports import ImportEnv
 from agm.agl.scope.symbols import ResolvedProgram
+from agm.agl.semantics.types import (
+    CastSpec,
+    FunctionType,
+    Type,
+)
 from agm.agl.syntax.nodes import EnumDef, ExceptionDef, FuncDef, Program, RecordDef, TypeAlias
 from agm.agl.typecheck.checker import _Checker, _TypeBuilder
 from agm.agl.typecheck.env import (
@@ -74,11 +79,6 @@ from agm.agl.typecheck.env import (
     GenericTypeDef,
     OutputContractSpec,
     TypeEnvironment,
-)
-from agm.agl.typecheck.types import (
-    CastSpec,
-    FunctionType,
-    Type,
 )
 
 # ---------------------------------------------------------------------------
@@ -95,7 +95,7 @@ class CheckedModule:
     ``resolved``
         The :class:`~agm.agl.scope.symbols.ResolvedProgram` from M3.
     ``node_types``
-        Maps ``node_id`` → resolved :class:`~agm.agl.typecheck.types.Type`
+        Maps ``node_id`` → resolved :class:`~agm.agl.semantics.types.Type`
         for every expression node that was type-checked in this module.
     ``contract_specs``
         Maps ``AgentCall.node_id`` →
@@ -110,7 +110,7 @@ class CheckedModule:
         Maps function name → :class:`~agm.agl.typecheck.env.FunctionSignature`
         for all top-level ``def`` declarations in this module.
     ``cast_specs``
-        Maps ``Cast.node_id`` → :class:`~agm.agl.typecheck.types.CastSpec`
+        Maps ``Cast.node_id`` → :class:`~agm.agl.semantics.types.CastSpec`
         for every cast expression in this module.
     ``type_env``
         The module-aware :class:`~agm.agl.typecheck.env.TypeEnvironment`
@@ -140,7 +140,7 @@ class CheckedModuleGraph:
         Always :data:`~agm.agl.modules.ids.ENTRY_ID`.
     ``graph_type_table``
         Whole-graph type table mapping ``(ModuleId, name)`` to the fully-built
-        :class:`~agm.agl.typecheck.types.Type` object stamped with the owning
+        :class:`~agm.agl.semantics.types.Type` object stamped with the owning
         ``module_id``.  Built in the graph pre-pass; shared (read-only) across
         all per-module environments.
     ``warnings``

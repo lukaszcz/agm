@@ -1,7 +1,7 @@
 """Compile-time JSON Schema and decode-schema derivation.
 
 :func:`derive_schema` produces a JSON Schema ``dict[str, object]`` from a
-semantic :class:`~agm.agl.typecheck.types.Type`.  The derived schema is used:
+semantic :class:`~agm.agl.semantics.types.Type`.  The derived schema is used:
 
 1. Embedded in ``OutputContract.format_instructions`` (pretty-printed) so the
    agent receives the precise shape, and as ``OutputContract.json_schema`` so
@@ -44,7 +44,7 @@ from agm.agl.ir.contracts import (
     VariantDecode,
 )
 from agm.agl.ir.ids import NominalId
-from agm.agl.typecheck.types import (
+from agm.agl.semantics.types import (
     AgentType,
     BoolType,
     BottomType,

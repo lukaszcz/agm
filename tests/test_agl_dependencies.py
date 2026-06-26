@@ -43,10 +43,25 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
                 "agm.agl.lower",
                 "agm.agl.modules.ids",
                 "agm.agl.scope",
+                "agm.agl.semantics",
                 "agm.agl.syntax",
                 "agm.agl.type_schema",
                 "agm.agl.typecheck",
             ),
+        ),
+        (
+            "scope",
+            (
+                "agm.agl.diagnostics",
+                "agm.agl.modules",
+                "agm.agl.scope",
+                "agm.agl.semantics",
+                "agm.agl.syntax",
+            ),
+        ),
+        (
+            "semantics",
+            ("agm.agl.ir", "agm.agl.modules.ids", "agm.agl.semantics"),
         ),
         (
             "eval",

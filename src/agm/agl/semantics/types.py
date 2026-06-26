@@ -1,4 +1,4 @@
-"""Semantic type model for the AgL type checker.
+"""Shared resolved semantic type model for AgL.
 
 These are *resolved* nominal types distinct from the syntactic ``TypeExpr``
 hierarchy in ``agm.agl.syntax.types``.  Aliases are resolved transparently

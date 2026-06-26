@@ -22,7 +22,7 @@ Design
   Hosts may register additional codecs via ``WorkflowRuntime``.
 
 The string type-kind identifiers used in ``codec_kinds`` match the names of
-the semantic ``Type`` subclasses in ``agm.agl.typecheck.types`` (lower-cased,
+the semantic ``Type`` subclasses in ``agm.agl.semantics.types`` (lower-cased,
 with the ``"Type"`` suffix stripped).  For example ``TextType`` → ``"text"``,
 ``RecordType`` → ``"record"``.
 """

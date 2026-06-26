@@ -22,9 +22,9 @@ from agm.agl.ir.program import (
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.lowerer import _LinkState, _Lowerer
 from agm.agl.modules.ids import PRELUDE_ID, STD_CORE_ID, ModuleId
+from agm.agl.semantics.types import BUILTIN_EXCEPTIONS, EnumType, ExceptionType, RecordType
 from agm.agl.syntax.nodes import AgentDecl, FuncDef
 from agm.agl.typecheck.graph import CheckedModuleGraph
-from agm.agl.typecheck.types import BUILTIN_EXCEPTIONS, EnumType, ExceptionType, RecordType
 
 __all__ = ["lower_graph"]
 

@@ -51,6 +51,12 @@ from agm.agl.scope.symbols import (
     ResolvedProgram,
     ScopeNode,
 )
+from agm.agl.semantics.types import (
+    BUILTIN_EXCEPTIONS,
+    BUILTIN_PRELUDE_TYPES,
+    COMPATIBILITY_PRELUDE_TYPE_NAMES,
+    EnumType,
+)
 
 if TYPE_CHECKING:
     from agm.agl.scope.imports import ImportEnv
@@ -441,8 +447,6 @@ class _Resolver:
         Builtin prelude type names are seeded first so that qualified
         constructor access (e.g. ``ParsePolicy.Abort``) resolves correctly.
         """
-        from agm.agl.typecheck.types import BUILTIN_PRELUDE_TYPES  # avoid circular dep
-
         for type_name in BUILTIN_PRELUDE_TYPES:
             self._declared_type_names.add(type_name)
 
@@ -490,13 +494,6 @@ class _Resolver:
         The ``owner_decl_node_id`` is set to -1 (a sentinel) because these types have
         no AST declaration node.
         """
-        from agm.agl.typecheck.types import (  # local import avoids circular dep
-            BUILTIN_EXCEPTIONS,
-            BUILTIN_PRELUDE_TYPES,
-            COMPATIBILITY_PRELUDE_TYPE_NAMES,
-            EnumType,
-        )
-
         exception_names: frozenset[str] = frozenset(BUILTIN_EXCEPTIONS)
 
         for exc_name in BUILTIN_EXCEPTIONS:

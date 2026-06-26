@@ -29,8 +29,8 @@ from agm.agl.diagnostics import format_diagnostic
 
 if TYPE_CHECKING:
     from agm.agl.repl.session import EntryResult
+    from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import Value
-    from agm.agl.typecheck.types import Type
 
 
 def format_typed_value(name: str, value_type: "Type", value: "Value") -> str:

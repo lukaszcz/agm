@@ -12,6 +12,15 @@ from agm.agl.modules.roots import RootSet
 from agm.agl.parser import parse_program
 from agm.agl.scope import AglScopeError, resolve
 from agm.agl.scope.graph import resolve_graph
+from agm.agl.semantics.types import (
+    AgentType,
+    BoolType,
+    EnumType,
+    IntType,
+    RecordType,
+    TextType,
+    TypeVarType,
+)
 from agm.agl.typecheck import check
 from agm.agl.typecheck.checker import (
     _builtin_function_signature,
@@ -21,15 +30,6 @@ from agm.agl.typecheck.checker import (
 )
 from agm.agl.typecheck.env import AglTypeError, FunctionSignature
 from agm.agl.typecheck.graph import check_graph
-from agm.agl.typecheck.types import (
-    AgentType,
-    BoolType,
-    EnumType,
-    IntType,
-    RecordType,
-    TextType,
-    TypeVarType,
-)
 
 _ROOTS = RootSet(frozenset({Path(__file__).resolve().parents[1] / "stdlib"}))
 _CAPS = HostCapabilities()

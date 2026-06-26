@@ -29,12 +29,12 @@ if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract
     from agm.agl.scope.graph import ResolvedModuleGraph
     from agm.agl.scope.symbols import ResolvedProgram
+    from agm.agl.semantics.types import Type as AglType
     from agm.agl.semantics.values import ExceptionValue, Value
     from agm.agl.syntax.nodes import AgentDecl as AgentDeclNode
     from agm.agl.syntax.nodes import PragmaValue, Program
     from agm.agl.typecheck.env import CheckedProgram as CheckedProgramType
     from agm.agl.typecheck.graph import CheckedModuleGraph
-    from agm.agl.typecheck.types import Type as AglType
 
 # Reserved agent names: cannot be registered by callers.
 _RESERVED_AGENT_NAMES: frozenset[str] = frozenset({"ask", "exec", "ask-request"})
@@ -1421,14 +1421,7 @@ def convert_param_value(name: str, raw: object, type_obj: "AglType") -> "Value":
     """
     import decimal as _decimal
 
-    from agm.agl.semantics.values import (
-        BoolValue,
-        DecimalValue,
-        IntValue,
-        JsonValue,
-        TextValue,
-    )
-    from agm.agl.typecheck.types import (
+    from agm.agl.semantics.types import (
         BoolType,
         DecimalType,
         DictType,
@@ -1438,6 +1431,13 @@ def convert_param_value(name: str, raw: object, type_obj: "AglType") -> "Value":
         ListType,
         RecordType,
         TextType,
+    )
+    from agm.agl.semantics.values import (
+        BoolValue,
+        DecimalValue,
+        IntValue,
+        JsonValue,
+        TextValue,
     )
 
     # Text: verbatim.

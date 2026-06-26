@@ -399,7 +399,7 @@ def _exec_param_completion_items(source: str, incomplete: str) -> list[Completio
     Used by :class:`ExecCommand` to augment the standard shell_complete results.
     Degrades silently to ``[]`` on any error.
     """
-    from agm.agl.typecheck.types import BoolType
+    from agm.agl.semantics.types import BoolType
     from agm.cli_support.exec_params import (
         discover_params_from_source,
         negative_param_flag,

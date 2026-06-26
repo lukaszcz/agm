@@ -48,9 +48,7 @@ from agm.agl.lower import LinkImage, compile_coercion, lower_program, lower_repl
 from agm.agl.lower.lowerer import _Lowerer
 from agm.agl.parser import parse_program, parse_program_seeded
 from agm.agl.scope import resolve
-from agm.agl.typecheck import check
-from agm.agl.typecheck.env import CheckedProgram
-from agm.agl.typecheck.types import (
+from agm.agl.semantics.types import (
     BoolType,
     DecimalType,
     DictType,
@@ -63,6 +61,8 @@ from agm.agl.typecheck.types import (
     TypeVarType,
     UnitType,
 )
+from agm.agl.typecheck import check
+from agm.agl.typecheck.env import CheckedProgram
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 
@@ -719,7 +719,7 @@ class TestNominalsEmpty:
         (they are always in scope).  User-declared records/enums are added on top.
         """
         from agm.agl.ir.program import NominalKind
-        from agm.agl.typecheck.types import BUILTIN_EXCEPTIONS
+        from agm.agl.semantics.types import BUILTIN_EXCEPTIONS
 
         prog = _lower("()")
         # All built-in exception names must appear in the table
@@ -1806,7 +1806,7 @@ class TestM6aLowering:
         from dataclasses import replace
 
         from agm.agl.ir.nodes import IrExec
-        from agm.agl.typecheck.types import UnitType
+        from agm.agl.semantics.types import UnitType
 
         # Start with a valid exec program
         source = 'exec("echo hi")\n()'

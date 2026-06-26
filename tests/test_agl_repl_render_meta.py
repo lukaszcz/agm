@@ -22,8 +22,8 @@ from agm.agl.repl.agentmode import AgentMode
 from agm.agl.repl.session import EntryKind, EntryResult, ReplSession
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.runtime.runtime import RunError
+from agm.agl.semantics.types import IntType, TextType, Type
 from agm.agl.semantics.values import IntValue, TextValue, Value
-from agm.agl.typecheck.types import IntType, TextType, Type
 
 
 class _CountingAgent:

@@ -35,6 +35,18 @@ from agm.agl.runtime.contract import OutputContract, materialize_contract
 from agm.agl.runtime.request import AgentRequest
 from agm.agl.scope import resolve
 from agm.agl.semantics.exceptions import AglRaise
+from agm.agl.semantics.types import (
+    BoolType,
+    DecimalType,
+    DictType,
+    EnumType,
+    IntType,
+    JsonType,
+    ListType,
+    RecordType,
+    TextType,
+    Type,
+)
 from agm.agl.semantics.values import (
     BoolValue,
     DecimalValue,
@@ -56,18 +68,6 @@ from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import derive_schema
 from agm.agl.typecheck import check
 from agm.agl.typecheck.env import CheckedProgram, OutputContractSpec
-from agm.agl.typecheck.types import (
-    BoolType,
-    DecimalType,
-    DictType,
-    EnumType,
-    IntType,
-    JsonType,
-    ListType,
-    RecordType,
-    TextType,
-    Type,
-)
 from tests._agl_helpers import ambient_agents_for
 
 # ---------------------------------------------------------------------------
@@ -1608,7 +1608,7 @@ issue
     def test_unsupported_type_in_convert_param_value_raises(self) -> None:
         """ExceptionType is not a supported param type."""
         from agm.agl.runtime.runtime import convert_param_value
-        from agm.agl.typecheck.types import ExceptionType
+        from agm.agl.semantics.types import ExceptionType
 
         with pytest.raises(ValueError, match="unsupported type"):
             convert_param_value("e", "val", ExceptionType(name="Boom"))
@@ -1749,7 +1749,7 @@ class TestJsonToValueErrorBranches:
 
     def test_exception_type_not_supported(self) -> None:
         from agm.agl.runtime.convert import json_to_value as _json_to_value
-        from agm.agl.typecheck.types import ExceptionType
+        from agm.agl.semantics.types import ExceptionType
 
         with pytest.raises(ValueError, match="Cannot deserialise"):
             _json_to_value({}, ExceptionType(name="Boom"))
@@ -1808,7 +1808,7 @@ class TestJsonToValueErrorBranches:
 
 class TestSchemaExceptionType:
     def test_exception_type_raises_type_error(self) -> None:
-        from agm.agl.typecheck.types import ExceptionType
+        from agm.agl.semantics.types import ExceptionType
 
         with pytest.raises(TypeError, match="ExceptionType"):
             derive_schema(ExceptionType(name="Boom"))
@@ -2170,7 +2170,7 @@ class TestCodecSupportedKinds:
 
     def test_supported_kinds_consistent_with_supports_type(self) -> None:
         """Every kind in supported_kinds matches a Type that supports_type returns True for."""
-        from agm.agl.typecheck.types import (
+        from agm.agl.semantics.types import (
             BoolType,
             DecimalType,
             DictType,
@@ -2301,7 +2301,7 @@ class TestRegisterCodec:
                 return frozenset({"text"})
 
             def supports_type(self, t: Type) -> bool:
-                from agm.agl.typecheck.types import TextType as TT
+                from agm.agl.semantics.types import TextType as TT
                 return isinstance(t, TT)
 
             def make_contract(self, type_ref: Type) -> "OutputContract":

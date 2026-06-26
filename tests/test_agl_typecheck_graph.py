@@ -532,8 +532,8 @@ def test_whole_graph_type_pre_pass_with_cycles(tmp_path: Path) -> None:
 
 def test_imported_exception_base_is_built_before_child(tmp_path: Path) -> None:
     """A child exception inherits fields from an open-imported base exception."""
+    from agm.agl.semantics.types import ExceptionType
     from agm.agl.typecheck.graph import CheckedModuleGraph
-    from agm.agl.typecheck.types import ExceptionType
 
     modules = {
         "entry": (
@@ -2617,9 +2617,9 @@ def test_d5_generic_def_as_value_single_module(tmp_path: Path) -> None:
     # env level: verify that get_function_signature_by_node_id takes priority.
     # This is the path the fixed checker takes; before the fix it only called
     # get_function_signature(ref.name) which returns wrong/None cross-module.
+    from agm.agl.semantics.types import IntType, TypeVarType
     from agm.agl.typecheck.env import FunctionSignature as FS
     from agm.agl.typecheck.env import TypeEnvironment
-    from agm.agl.typecheck.types import IntType, TypeVarType
 
     env = TypeEnvironment()
     T = TypeVarType("T")
@@ -2660,8 +2660,8 @@ def test_cross_module_generic_func_call_inferred(tmp_path: Path) -> None:
     type_params is threaded into FunctionSignature, so lib::id(5) typechecks and
     infers result type int.
     """
+    from agm.agl.semantics.types import IntType
     from agm.agl.typecheck.graph import CheckedModuleGraph
-    from agm.agl.typecheck.types import IntType
 
     modules = {
         "lib": "def id[T](x: T) -> T = x",
@@ -2696,8 +2696,8 @@ def test_cross_module_generic_func_call_open_import_inferred(tmp_path: Path) -> 
     This exercises the same _build_graph_func_sig_table fix but via open import,
     ensuring the inferred result type is int.
     """
+    from agm.agl.semantics.types import IntType
     from agm.agl.typecheck.graph import CheckedModuleGraph
-    from agm.agl.typecheck.types import IntType
 
     modules = {
         "lib": "def id[T](x: T) -> T = x",

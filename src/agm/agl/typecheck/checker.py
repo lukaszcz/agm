@@ -53,6 +53,36 @@ from agm.agl.scope.symbols import (
     ConstructorRef,
     ResolvedProgram,
 )
+from agm.agl.semantics.types import (
+    BUILTIN_EXCEPTION_NAMES,
+    BUILTIN_EXCEPTIONS,
+    BUILTIN_PRELUDE_TYPE_NAMES,
+    BUILTIN_PRELUDE_TYPES,
+    AgentType,
+    BoolType,
+    BottomType,
+    CastKind,
+    CastSpec,
+    DecimalType,
+    DictType,
+    EnumType,
+    ExceptionType,
+    FunctionType,
+    IntType,
+    JsonType,
+    ListType,
+    RecordType,
+    TextType,
+    Type,
+    TypeVarType,
+    UnitType,
+    cast_classification,
+    comparable_types,
+    contains_type_var,
+    free_type_vars,
+    is_assignable,
+    substitute,
+)
 from agm.agl.syntax.nodes import (
     AgentDecl,
     AssignStmt,
@@ -120,36 +150,6 @@ from agm.agl.typecheck.env import (
     GenericTypeDef,
     OutputContractSpec,
     TypeEnvironment,
-)
-from agm.agl.typecheck.types import (
-    BUILTIN_EXCEPTION_NAMES,
-    BUILTIN_EXCEPTIONS,
-    BUILTIN_PRELUDE_TYPE_NAMES,
-    BUILTIN_PRELUDE_TYPES,
-    AgentType,
-    BoolType,
-    BottomType,
-    CastKind,
-    CastSpec,
-    DecimalType,
-    DictType,
-    EnumType,
-    ExceptionType,
-    FunctionType,
-    IntType,
-    JsonType,
-    ListType,
-    RecordType,
-    TextType,
-    Type,
-    TypeVarType,
-    UnitType,
-    cast_classification,
-    comparable_types,
-    contains_type_var,
-    free_type_vars,
-    is_assignable,
-    substitute,
 )
 
 # ---------------------------------------------------------------------------
@@ -2297,7 +2297,7 @@ class _Checker:
 
     def _check_catch_clause(self, clause: CatchClause, *, expected: Type | None) -> Type:
         if clause.exc_type is None or clause.exc_type == "_":
-            from agm.agl.typecheck.types import EXCEPTION_BASE
+            from agm.agl.semantics.types import EXCEPTION_BASE
 
             exc_type: ExceptionType = EXCEPTION_BASE
         else:

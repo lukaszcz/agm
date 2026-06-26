@@ -19,8 +19,7 @@ from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.scope.imports import ImportEnv, QName
 from agm.agl.scope.symbols import BindingRef, ResolvedProgram
-from agm.agl.syntax.spans import SourceSpan
-from agm.agl.typecheck.types import (
+from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPE_NAMES,
     BUILTIN_PRELUDE_TYPES,
@@ -40,6 +39,7 @@ from agm.agl.typecheck.types import (
     TypeVarType,
     UnitType,
 )
+from agm.agl.syntax.spans import SourceSpan
 
 # ---------------------------------------------------------------------------
 # FunctionSignature — full declared signature of a top-level def
@@ -412,7 +412,7 @@ class TypeEnvironment:
         in the own-module ``_generic_types`` table.
         The optional *span* is forwarded to any ``AglTypeError`` raised.
         """
-        from agm.agl.typecheck.types import substitute as _subst
+        from agm.agl.semantics.types import substitute as _subst
 
         if len(args) != len(gdef.type_params):
             raise AglTypeError(
@@ -621,7 +621,7 @@ class TypeEnvironment:
                 type_vars=type_vars,
             )
         if isinstance(type_expr, AppliedT):
-            from agm.agl.typecheck.types import substitute as _subst
+            from agm.agl.semantics.types import substitute as _subst
 
             name = type_expr.name
             eff_span = span if span is not None else type_expr.span

@@ -1,6 +1,6 @@
 """Tests for the AgL v2 type model (S3a).
 
-Imports ONLY ``agm.agl.typecheck.types`` and ``agm.agl.typecheck.env`` —
+Imports ONLY ``agm.agl.semantics.types`` and ``agm.agl.typecheck.env`` —
 both import cleanly without depending on the checker (which is mid-rewrite).
 
 Coverage:
@@ -19,8 +19,7 @@ from __future__ import annotations
 import pytest
 
 from agm.agl.modules.ids import ModuleId
-from agm.agl.typecheck.env import TypeEnvironment
-from agm.agl.typecheck.types import (
+from agm.agl.semantics.types import (
     AgentType,
     BoolType,
     BottomType,
@@ -43,6 +42,7 @@ from agm.agl.typecheck.types import (
     is_json_shaped,
     substitute,
 )
+from agm.agl.typecheck.env import TypeEnvironment
 
 # ---------------------------------------------------------------------------
 # UnitType
@@ -224,7 +224,7 @@ class TestIsAssignable:
 
     def test_function_not_assignable_to_json(self) -> None:
         # json accepts JSON-shaped values; function is not JSON-shaped.
-        from agm.agl.typecheck.types import JsonType
+        from agm.agl.semantics.types import JsonType
 
         f = FunctionType(params=(IntType(),), result=TextType())
         assert is_assignable(f, JsonType()) is False
@@ -684,15 +684,15 @@ class TestCapabilityGates:
 
 class TestNewExceptions:
     def test_cast_error_in_builtin_exceptions(self) -> None:
-        from agm.agl.typecheck.types import BUILTIN_EXCEPTION_NAMES
+        from agm.agl.semantics.types import BUILTIN_EXCEPTION_NAMES
         assert "CastError" in BUILTIN_EXCEPTION_NAMES
 
     def test_json_parse_error_in_builtin_exceptions(self) -> None:
-        from agm.agl.typecheck.types import BUILTIN_EXCEPTION_NAMES
+        from agm.agl.semantics.types import BUILTIN_EXCEPTION_NAMES
         assert "JsonParseError" in BUILTIN_EXCEPTION_NAMES
 
     def test_cast_error_fields(self) -> None:
-        from agm.agl.typecheck.types import BUILTIN_EXCEPTIONS, TextType
+        from agm.agl.semantics.types import BUILTIN_EXCEPTIONS, TextType
         e = BUILTIN_EXCEPTIONS["CastError"]
         assert "source_type" in e.fields
         assert "target_type" in e.fields
@@ -700,7 +700,7 @@ class TestNewExceptions:
         assert e.fields["source_type"] == TextType()
 
     def test_json_parse_error_fields(self) -> None:
-        from agm.agl.typecheck.types import BUILTIN_EXCEPTIONS, TextType
+        from agm.agl.semantics.types import BUILTIN_EXCEPTIONS, TextType
         e = BUILTIN_EXCEPTIONS["JsonParseError"]
         assert "raw" in e.fields
         assert e.fields["raw"] == TextType()
@@ -708,7 +708,7 @@ class TestNewExceptions:
 
 class TestCastClassification:
     def test_bottom_source_is_assignable_to_cast_target(self) -> None:
-        from agm.agl.typecheck.types import (
+        from agm.agl.semantics.types import (
             BottomType,
             CastKind,
             TextType,
@@ -718,63 +718,63 @@ class TestCastClassification:
         assert cast_classification(BottomType(), TextType()) == CastKind.TOTAL_NOOP
 
     def test_text_to_text_noop(self) -> None:
-        from agm.agl.typecheck.types import CastKind, TextType, cast_classification
+        from agm.agl.semantics.types import CastKind, TextType, cast_classification
         assert cast_classification(TextType(), TextType()) == CastKind.TOTAL_NOOP
 
     def test_int_to_text_render(self) -> None:
-        from agm.agl.typecheck.types import CastKind, IntType, TextType, cast_classification
+        from agm.agl.semantics.types import CastKind, IntType, TextType, cast_classification
         assert cast_classification(IntType(), TextType()) == CastKind.TOTAL_RENDER
 
     def test_bool_to_text_render(self) -> None:
-        from agm.agl.typecheck.types import BoolType, CastKind, TextType, cast_classification
+        from agm.agl.semantics.types import BoolType, CastKind, TextType, cast_classification
         assert cast_classification(BoolType(), TextType()) == CastKind.TOTAL_RENDER
 
     def test_int_to_json_total_json(self) -> None:
-        from agm.agl.typecheck.types import CastKind, IntType, JsonType, cast_classification
+        from agm.agl.semantics.types import CastKind, IntType, JsonType, cast_classification
         assert cast_classification(IntType(), JsonType()) == CastKind.TOTAL_JSON
 
     def test_text_to_json_total_json(self) -> None:
-        from agm.agl.typecheck.types import CastKind, JsonType, TextType, cast_classification
+        from agm.agl.semantics.types import CastKind, JsonType, TextType, cast_classification
         assert cast_classification(TextType(), JsonType()) == CastKind.TOTAL_JSON
 
     def test_json_to_json_noop(self) -> None:
-        from agm.agl.typecheck.types import CastKind, JsonType, cast_classification
+        from agm.agl.semantics.types import CastKind, JsonType, cast_classification
         assert cast_classification(JsonType(), JsonType()) == CastKind.TOTAL_NOOP
 
     def test_text_to_int_fallible(self) -> None:
-        from agm.agl.typecheck.types import CastKind, IntType, TextType, cast_classification
+        from agm.agl.semantics.types import CastKind, IntType, TextType, cast_classification
         assert cast_classification(TextType(), IntType()) == CastKind.FALLIBLE
 
     def test_json_to_bool_fallible(self) -> None:
-        from agm.agl.typecheck.types import BoolType, CastKind, JsonType, cast_classification
+        from agm.agl.semantics.types import BoolType, CastKind, JsonType, cast_classification
         assert cast_classification(JsonType(), BoolType()) == CastKind.FALLIBLE
 
     def test_decimal_to_int_fallible(self) -> None:
-        from agm.agl.typecheck.types import CastKind, DecimalType, IntType, cast_classification
+        from agm.agl.semantics.types import CastKind, DecimalType, IntType, cast_classification
         assert cast_classification(DecimalType(), IntType()) == CastKind.FALLIBLE
 
     def test_int_to_decimal_noop(self) -> None:
-        from agm.agl.typecheck.types import CastKind, DecimalType, IntType, cast_classification
+        from agm.agl.semantics.types import CastKind, DecimalType, IntType, cast_classification
         assert cast_classification(IntType(), DecimalType()) == CastKind.TOTAL_NOOP
 
     def test_bool_to_int_static_error(self) -> None:
-        from agm.agl.typecheck.types import BoolType, CastKind, IntType, cast_classification
+        from agm.agl.semantics.types import BoolType, CastKind, IntType, cast_classification
         assert cast_classification(BoolType(), IntType()) == CastKind.STATIC_ERROR
 
     def test_int_to_bool_static_error(self) -> None:
-        from agm.agl.typecheck.types import BoolType, CastKind, IntType, cast_classification
+        from agm.agl.semantics.types import BoolType, CastKind, IntType, cast_classification
         assert cast_classification(IntType(), BoolType()) == CastKind.STATIC_ERROR
 
     def test_unit_source_static_error(self) -> None:
-        from agm.agl.typecheck.types import CastKind, TextType, UnitType, cast_classification
+        from agm.agl.semantics.types import CastKind, TextType, UnitType, cast_classification
         assert cast_classification(UnitType(), TextType()) == CastKind.STATIC_ERROR
 
     def test_agent_target_static_error(self) -> None:
-        from agm.agl.typecheck.types import AgentType, CastKind, TextType, cast_classification
+        from agm.agl.semantics.types import AgentType, CastKind, TextType, cast_classification
         assert cast_classification(TextType(), AgentType()) == CastKind.STATIC_ERROR
 
     def test_record_to_json_total(self) -> None:
-        from agm.agl.typecheck.types import CastKind, JsonType, RecordType, cast_classification
+        from agm.agl.semantics.types import CastKind, JsonType, RecordType, cast_classification
         r = RecordType(name="R", fields={})
         assert cast_classification(r, JsonType()) == CastKind.TOTAL_JSON
 
@@ -782,7 +782,7 @@ class TestCastClassification:
         # A list whose elements are nominal is not json-shaped and not itself a
         # nominal source, so `list[record] as json` remains a static error: only
         # a direct record/enum/exception source supports the explicit json cast.
-        from agm.agl.typecheck.types import (
+        from agm.agl.semantics.types import (
             CastKind,
             JsonType,
             ListType,
@@ -793,17 +793,17 @@ class TestCastClassification:
         assert cast_classification(lst, JsonType()) == CastKind.STATIC_ERROR
 
     def test_text_to_record_fallible(self) -> None:
-        from agm.agl.typecheck.types import CastKind, RecordType, TextType, cast_classification
+        from agm.agl.semantics.types import CastKind, RecordType, TextType, cast_classification
         r = RecordType(name="R", fields={})
         assert cast_classification(TextType(), r) == CastKind.FALLIBLE
 
     def test_json_to_record_fallible(self) -> None:
-        from agm.agl.typecheck.types import CastKind, JsonType, RecordType, cast_classification
+        from agm.agl.semantics.types import CastKind, JsonType, RecordType, cast_classification
         r = RecordType(name="R", fields={})
         assert cast_classification(JsonType(), r) == CastKind.FALLIBLE
 
     def test_exception_as_target_static_error(self) -> None:
-        from agm.agl.typecheck.types import (
+        from agm.agl.semantics.types import (
             CastKind,
             ExceptionType,
             TextType,
@@ -813,7 +813,7 @@ class TestCastClassification:
         assert cast_classification(TextType(), exc) == CastKind.STATIC_ERROR
 
     def test_exception_source_to_text_render(self) -> None:
-        from agm.agl.typecheck.types import (
+        from agm.agl.semantics.types import (
             CastKind,
             ExceptionType,
             TextType,
@@ -823,11 +823,11 @@ class TestCastClassification:
         assert cast_classification(exc, TextType()) == CastKind.TOTAL_RENDER
 
     def test_json_to_text_render(self) -> None:
-        from agm.agl.typecheck.types import CastKind, JsonType, TextType, cast_classification
+        from agm.agl.semantics.types import CastKind, JsonType, TextType, cast_classification
         assert cast_classification(JsonType(), TextType()) == CastKind.TOTAL_RENDER
 
     def test_int_to_list_static_error(self) -> None:
-        from agm.agl.typecheck.types import (
+        from agm.agl.semantics.types import (
             CastKind,
             IntType,
             ListType,
@@ -850,21 +850,21 @@ class TestNominalEquality:
         return ModuleId(segments=(name,))
 
     def test_record_same_name_module_different_fields_equal(self) -> None:
-        from agm.agl.typecheck.types import IntType, RecordType, TextType
+        from agm.agl.semantics.types import IntType, RecordType, TextType
 
         r1 = RecordType(name="Point", fields={"x": IntType(), "y": IntType()})
         r2 = RecordType(name="Point", fields={"z": TextType()})
         assert r1 == r2
 
     def test_enum_same_name_module_different_variants_equal(self) -> None:
-        from agm.agl.typecheck.types import EnumType, IntType
+        from agm.agl.semantics.types import EnumType, IntType
 
         e1 = EnumType(name="Color", variants={"Red": {}, "Green": {}})
         e2 = EnumType(name="Color", variants={"Blue": {"n": IntType()}})
         assert e1 == e2
 
     def test_record_different_module_not_equal(self) -> None:
-        from agm.agl.typecheck.types import IntType, RecordType
+        from agm.agl.semantics.types import IntType, RecordType
 
         mod_foo = self._mod("foo")
         mod_bar = self._mod("bar")
@@ -873,7 +873,7 @@ class TestNominalEquality:
         assert r1 != r2
 
     def test_enum_different_module_not_equal(self) -> None:
-        from agm.agl.typecheck.types import EnumType
+        from agm.agl.semantics.types import EnumType
 
         mod_foo = self._mod("foo")
         mod_bar = self._mod("bar")
@@ -882,35 +882,35 @@ class TestNominalEquality:
         assert e1 != e2
 
     def test_record_different_name_not_equal(self) -> None:
-        from agm.agl.typecheck.types import IntType, RecordType
+        from agm.agl.semantics.types import IntType, RecordType
 
         r1 = RecordType(name="Point", fields={"x": IntType()})
         r2 = RecordType(name="Color", fields={"x": IntType()})
         assert r1 != r2
 
     def test_enum_different_name_not_equal(self) -> None:
-        from agm.agl.typecheck.types import EnumType
+        from agm.agl.semantics.types import EnumType
 
         e1 = EnumType(name="Color", variants={"Red": {}})
         e2 = EnumType(name="Shape", variants={"Red": {}})
         assert e1 != e2
 
     def test_record_hashable(self) -> None:
-        from agm.agl.typecheck.types import IntType, RecordType
+        from agm.agl.semantics.types import IntType, RecordType
 
         r = RecordType(name="Point", fields={"x": IntType()})
         h = hash(r)
         assert isinstance(h, int)
 
     def test_enum_hashable(self) -> None:
-        from agm.agl.typecheck.types import EnumType
+        from agm.agl.semantics.types import EnumType
 
         e = EnumType(name="Color", variants={"Red": {}})
         h = hash(e)
         assert isinstance(h, int)
 
     def test_equal_records_hash_equal(self) -> None:
-        from agm.agl.typecheck.types import IntType, RecordType, TextType
+        from agm.agl.semantics.types import IntType, RecordType, TextType
 
         r1 = RecordType(name="Point", fields={"x": IntType()})
         r2 = RecordType(name="Point", fields={"z": TextType()})
@@ -918,7 +918,7 @@ class TestNominalEquality:
         assert hash(r1) == hash(r2)
 
     def test_equal_enums_hash_equal(self) -> None:
-        from agm.agl.typecheck.types import EnumType, IntType
+        from agm.agl.semantics.types import EnumType, IntType
 
         e1 = EnumType(name="Color", variants={"Red": {}})
         e2 = EnumType(name="Color", variants={"Blue": {"n": IntType()}})
@@ -926,7 +926,7 @@ class TestNominalEquality:
         assert hash(e1) == hash(e2)
 
     def test_record_usable_as_dict_key(self) -> None:
-        from agm.agl.typecheck.types import IntType, RecordType, TextType
+        from agm.agl.semantics.types import IntType, RecordType, TextType
 
         r1 = RecordType(name="Point", fields={"x": IntType()})
         r2 = RecordType(name="Point", fields={"z": TextType()})
@@ -934,7 +934,7 @@ class TestNominalEquality:
         assert d[r2] == "found"
 
     def test_enum_usable_in_set(self) -> None:
-        from agm.agl.typecheck.types import EnumType, IntType
+        from agm.agl.semantics.types import EnumType, IntType
 
         e1 = EnumType(name="Color", variants={"Red": {}})
         e2 = EnumType(name="Color", variants={"Blue": {"n": IntType()}})
@@ -942,7 +942,7 @@ class TestNominalEquality:
         assert len(s) == 1
 
     def test_shell_record_equals_built(self) -> None:
-        from agm.agl.typecheck.types import IntType, RecordType
+        from agm.agl.semantics.types import IntType, RecordType
 
         shell = RecordType(name="Point", fields={})
         built = RecordType(name="Point", fields={"x": IntType(), "y": IntType()})

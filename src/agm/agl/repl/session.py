@@ -34,12 +34,12 @@ if TYPE_CHECKING:
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.runtime import HostEnvironment, RunError
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
+    from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import Frame, Value
     from agm.agl.syntax.nodes import ImportDecl, Program
     from agm.agl.syntax.spans import SourceSpan
     from agm.agl.typecheck.env import CheckedProgram, TypeEnvironment
     from agm.agl.typecheck.graph import CheckedModule, CheckedModuleGraph
-    from agm.agl.typecheck.types import Type
 
 
 EntryKind = Literal["expression", "binding", "declaration", "statement", "type"]
@@ -248,7 +248,7 @@ class ReplSession:
     @staticmethod
     def _make_agent_type() -> "Type":
         """Return an ``AgentType`` instance (deferred import, used at init and reset)."""
-        from agm.agl.typecheck.types import AgentType
+        from agm.agl.semantics.types import AgentType
 
         return AgentType()
 

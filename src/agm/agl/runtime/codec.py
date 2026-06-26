@@ -35,9 +35,9 @@ from agm.agl.ir.contracts import (
 )
 from agm.agl.runtime.convert import normalize_integral_decimals
 from agm.agl.runtime.request import ValidationError
+from agm.agl.semantics.types import TextType, Type
 from agm.agl.semantics.values import TextValue, Value
 from agm.agl.type_schema import build_decode_schema, build_format_instructions, derive_schema
-from agm.agl.typecheck.types import TextType, Type
 
 if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract

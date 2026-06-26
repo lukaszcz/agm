@@ -15,19 +15,7 @@ Public API
 - :class:`AglTypeError` — fatal type error (span-aware ``AglError`` subclass).
 """
 
-from agm.agl.typecheck.checker import check
-from agm.agl.typecheck.env import (
-    AglTypeError,
-    CallSiteRecord,
-    CheckedProgram,
-    ConstructorSignature,
-    FunctionSignature,
-    GenericTypeDef,
-    OutputContractSpec,
-    TypeEnvironment,
-)
-from agm.agl.typecheck.graph import CheckedModule, CheckedModuleGraph, check_graph
-from agm.agl.typecheck.types import (
+from agm.agl.semantics.types import (
     AgentType,
     BoolType,
     BottomType,
@@ -48,6 +36,18 @@ from agm.agl.typecheck.types import (
     free_type_vars,
     substitute,
 )
+from agm.agl.typecheck.checker import check
+from agm.agl.typecheck.env import (
+    AglTypeError,
+    CallSiteRecord,
+    CheckedProgram,
+    ConstructorSignature,
+    FunctionSignature,
+    GenericTypeDef,
+    OutputContractSpec,
+    TypeEnvironment,
+)
+from agm.agl.typecheck.graph import CheckedModule, CheckedModuleGraph, check_graph
 
 __all__ = [
     "AgentType",

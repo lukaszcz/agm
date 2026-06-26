@@ -28,8 +28,7 @@ from agm.agl.ir.contracts import (
     ScalarKind,
 )
 from agm.agl.runtime.codec import OutputCodec
-from agm.agl.typecheck.env import OutputContractSpec
-from agm.agl.typecheck.types import (
+from agm.agl.semantics.types import (
     BoolType,
     DecimalType,
     DictType,
@@ -42,6 +41,7 @@ from agm.agl.typecheck.types import (
     Type,
     UnitType,
 )
+from agm.agl.typecheck.env import OutputContractSpec
 
 
 @dataclass(frozen=True, slots=True)

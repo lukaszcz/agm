@@ -7,7 +7,7 @@ the recipe's ``strategy`` and walks the typeless ``DecodeSchema`` / JSON schema
 without ever sniffing checker types.
 
 Strategy selection mirrors ``runtime.convert.convert_value`` + the
-``CastKind`` classification (``typecheck.types.cast_classification``):
+``CastKind`` classification (``semantics.types.cast_classification``):
 total casts (``TOTAL_NOOP`` / ``TOTAL_RENDER`` / ``TOTAL_JSON``) never fail;
 fallible casts (``decimal → int`` narrowing, ``text → T``, ``json → T``) carry
 the derived JSON schema and decode walk.
@@ -24,8 +24,8 @@ import json
 from typing import assert_never
 
 from agm.agl.ir.contracts import ConversionRecipe, ConversionStrategy
+from agm.agl.semantics.types import CastKind, DecimalType, IntType, JsonType, TextType, Type
 from agm.agl.type_schema import build_decode_schema, derive_schema
-from agm.agl.typecheck.types import CastKind, DecimalType, IntType, JsonType, TextType, Type
 
 __all__ = ["compile_recipe"]
 

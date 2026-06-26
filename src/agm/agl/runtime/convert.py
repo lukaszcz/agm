@@ -41,6 +41,18 @@ from jsonschema import ValidationError as JsonschemaValidationError
 
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.serialize import dumps_exact, value_to_json_obj
+from agm.agl.semantics.types import (
+    BoolType,
+    DecimalType,
+    DictType,
+    EnumType,
+    IntType,
+    JsonType,
+    ListType,
+    RecordType,
+    TextType,
+    Type,
+)
 from agm.agl.semantics.values import (
     BoolValue,
     DecimalValue,
@@ -56,18 +68,6 @@ from agm.agl.semantics.values import (
 )
 from agm.agl.semantics.values import Value as BaseValue
 from agm.agl.type_schema import derive_schema
-from agm.agl.typecheck.types import (
-    BoolType,
-    DecimalType,
-    DictType,
-    EnumType,
-    IntType,
-    JsonType,
-    ListType,
-    RecordType,
-    TextType,
-    Type,
-)
 
 # ---------------------------------------------------------------------------
 # Internal exceptions

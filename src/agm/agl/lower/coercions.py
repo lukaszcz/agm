@@ -29,7 +29,7 @@ from agm.agl.ir.operations import (
     MapRecordFields,
     ToJson,
 )
-from agm.agl.typecheck.types import (
+from agm.agl.semantics.types import (
     DecimalType,
     DictType,
     EnumType,

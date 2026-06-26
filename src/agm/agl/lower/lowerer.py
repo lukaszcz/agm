@@ -125,6 +125,21 @@ from agm.agl.lower.coercions import compile_coercion
 from agm.agl.lower.conversions import compile_recipe
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
 from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind
+from agm.agl.semantics.types import (
+    BUILTIN_EXCEPTIONS,
+    CastKind,
+    DecimalType,
+    DictType,
+    EnumType,
+    ExceptionType,
+    FunctionType,
+    IntType,
+    ListType,
+    RecordType,
+    TextType,
+    Type,
+    UnitType,
+)
 from agm.agl.syntax.nodes import (
     AgentDecl,
     AssignStmt,
@@ -188,21 +203,6 @@ from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import build_decode_schema, build_format_instructions, derive_schema
 from agm.agl.typecheck.env import CheckedProgram
 from agm.agl.typecheck.graph import CheckedModule
-from agm.agl.typecheck.types import (
-    BUILTIN_EXCEPTIONS,
-    CastKind,
-    DecimalType,
-    DictType,
-    EnumType,
-    ExceptionType,
-    FunctionType,
-    IntType,
-    ListType,
-    RecordType,
-    TextType,
-    Type,
-    UnitType,
-)
 
 __all__ = ["_LinkState", "lower_program"]
 

@@ -17,8 +17,8 @@ import pytest
 from agm.agl.diagnostics import AglError
 from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.runtime.request import AgentRequest, AgentResponse
+from agm.agl.semantics.types import IntType, TextType
 from agm.agl.semantics.values import BoolValue, IntValue
-from agm.agl.typecheck.types import IntType, TextType
 
 # ---------------------------------------------------------------------------
 # Fake agents
@@ -1885,7 +1885,7 @@ class TestBareTypeEntry:
         assert render_entry_result(r, echo=True) == "<type: int>"
 
     def test_builtin_container_types_echo_as_type(self) -> None:
-        from agm.agl.typecheck.types import DictType, ListType
+        from agm.agl.semantics.types import DictType, ListType
 
         s = ReplSession()
         r = s.eval_entry("list[int]")
@@ -1900,7 +1900,7 @@ class TestBareTypeEntry:
         assert isinstance(r2.value_type, DictType)
 
     def test_function_type_echoes_as_type(self) -> None:
-        from agm.agl.typecheck.types import FunctionType
+        from agm.agl.semantics.types import FunctionType
 
         s = ReplSession()
         r = s.eval_entry("(int) -> bool")
@@ -1910,7 +1910,7 @@ class TestBareTypeEntry:
 
     def test_declared_enum_name_echoes_as_type(self) -> None:
         from agm.agl.repl.render import render_entry_result
-        from agm.agl.typecheck.types import EnumType
+        from agm.agl.semantics.types import EnumType
 
         s = ReplSession()
         s.eval_entry("enum Color = Red | Green | Blue")
@@ -1921,7 +1921,7 @@ class TestBareTypeEntry:
         assert render_entry_result(r, echo=True) == "<type: Color>"
 
     def test_generic_type_application_echoes_as_type(self) -> None:
-        from agm.agl.typecheck.types import ListType
+        from agm.agl.semantics.types import ListType
 
         s = ReplSession()
         s.eval_entry("type Pair[A, B] = list[A]")

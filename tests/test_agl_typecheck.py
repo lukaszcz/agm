@@ -26,6 +26,15 @@ from agm.agl.parser import parse_program
 from agm.agl.scope import resolve
 from agm.agl.scope.symbols import BinderKind, BindingRef, ScopeNode
 from agm.agl.scope.symbols import ResolvedProgram as _ResolvedProgram
+from agm.agl.semantics.types import (
+    BUILTIN_EXCEPTION_NAMES,
+    BUILTIN_PRELUDE_TYPE_NAMES,
+    BUILTIN_PRELUDE_TYPES,
+    EXCEPTION_BASE,
+    comparable_types,
+    is_assignable,
+    is_json_shaped,
+)
 from agm.agl.syntax.nodes import (
     AgentDecl,
     AssignStmt,
@@ -91,15 +100,6 @@ from agm.agl.typecheck import (
     check,
 )
 from agm.agl.typecheck.checker import _TypeBuilder
-from agm.agl.typecheck.types import (
-    BUILTIN_EXCEPTION_NAMES,
-    BUILTIN_PRELUDE_TYPE_NAMES,
-    BUILTIN_PRELUDE_TYPES,
-    EXCEPTION_BASE,
-    comparable_types,
-    is_assignable,
-    is_json_shaped,
-)
 from tests._agl_helpers import all_node_ids
 
 # ---------------------------------------------------------------------------
@@ -3933,11 +3933,11 @@ class TestValueCallErrors:
 # ---------------------------------------------------------------------------
 
 
+from agm.agl.semantics.types import TypeVarType  # noqa: E402
 from agm.agl.typecheck.env import (  # noqa: E402 — module-level import after test classes
     ConstructorSignature,
     GenericTypeDef,
 )
-from agm.agl.typecheck.types import TypeVarType  # noqa: E402
 
 
 class TestGenericTypeDef:
@@ -4078,8 +4078,8 @@ class TestResolveTypeExprTypeVars:
     def test_open_imported_generic_lookup_edge_cases(self) -> None:
         from agm.agl.modules.ids import ModuleId
         from agm.agl.scope.imports import ImportEnv
+        from agm.agl.semantics.types import TypeVarType
         from agm.agl.typecheck.env import GenericTypeDef
-        from agm.agl.typecheck.types import TypeVarType
 
         lib_a = ModuleId.from_dotted("a")
         lib_b = ModuleId.from_dotted("b")
@@ -5696,7 +5696,7 @@ class TestCast:
 
     def test_record_as_json_accepted(self) -> None:
         """record as json is now TOTAL_JSON (D10 — explicit nominal→json cast)."""
-        from agm.agl.typecheck.types import CastKind
+        from agm.agl.semantics.types import CastKind
         r = accept_type("record R\n  x: int\nlet r = R(x: 1)\nr as json")
         assert r
         spec = next(iter(r.cast_specs.values()))
@@ -5734,7 +5734,7 @@ class TestCast:
 
     def test_cast_spec_stored(self) -> None:
         """CastSpec is stored in CheckedProgram.cast_specs."""
-        from agm.agl.typecheck.types import CastKind
+        from agm.agl.semantics.types import CastKind
         r = accept_type("1 as text")
         assert len(r.cast_specs) == 1
         spec = next(iter(r.cast_specs.values()))
@@ -5742,7 +5742,7 @@ class TestCast:
 
     def test_as_question_spec_stored(self) -> None:
         """as? CastSpec is stored with same kind as as."""
-        from agm.agl.typecheck.types import CastKind
+        from agm.agl.semantics.types import CastKind
         r = accept_type('"hello" as? int')
         assert len(r.cast_specs) == 1
         spec = next(iter(r.cast_specs.values()))
@@ -5758,25 +5758,25 @@ class TestCastClassificationTable:
     """Direct unit tests for cast_classification() covering the new nominal→json pairs."""
 
     def test_record_to_json_is_total_json(self) -> None:
-        from agm.agl.typecheck.types import CastKind, cast_classification
+        from agm.agl.semantics.types import CastKind, cast_classification
 
         source = RecordType(name="R", fields={"x": IntType()})
         assert cast_classification(source, JsonType()) == CastKind.TOTAL_JSON
 
     def test_enum_to_json_is_total_json(self) -> None:
-        from agm.agl.typecheck.types import CastKind, cast_classification
+        from agm.agl.semantics.types import CastKind, cast_classification
 
         source = EnumType(name="E", variants={"A": {}, "B": {}})
         assert cast_classification(source, JsonType()) == CastKind.TOTAL_JSON
 
     def test_exception_to_json_is_total_json(self) -> None:
-        from agm.agl.typecheck.types import CastKind, cast_classification
+        from agm.agl.semantics.types import CastKind, cast_classification
 
         source = ExceptionType(name="Abort", fields={"message": TextType(), "trace_id": TextType()})
         assert cast_classification(source, JsonType()) == CastKind.TOTAL_JSON
 
     def test_exception_to_text_is_total_render(self) -> None:
-        from agm.agl.typecheck.types import CastKind, cast_classification
+        from agm.agl.semantics.types import CastKind, cast_classification
 
         source = ExceptionType(name="Abort", fields={"message": TextType(), "trace_id": TextType()})
         assert cast_classification(source, TextType()) == CastKind.TOTAL_RENDER
@@ -5867,8 +5867,8 @@ class TestGenericNominalModuleId:
         module_id matches the template's module_id.
         """
         from agm.agl.modules.ids import ENTRY_ID, ModuleId
+        from agm.agl.semantics.types import TypeVarType
         from agm.agl.typecheck.env import GenericTypeDef
-        from agm.agl.typecheck.types import TypeVarType
 
         lib_id = ModuleId.from_dotted("mylib")
         template = RecordType("Box", {"value": TypeVarType("T")}, module_id=lib_id)
@@ -5885,8 +5885,8 @@ class TestGenericNominalModuleId:
     def test_instantiate_from_gdef_preserves_enum_module_id(self) -> None:
         """instantiate_from_gdef stamps EnumType result with gdef.template.module_id."""
         from agm.agl.modules.ids import ENTRY_ID, ModuleId
+        from agm.agl.semantics.types import TypeVarType
         from agm.agl.typecheck.env import GenericTypeDef
-        from agm.agl.typecheck.types import TypeVarType
 
         lib_id = ModuleId.from_dotted("mylib")
         template = EnumType(
@@ -5910,8 +5910,8 @@ class TestGenericNominalModuleId:
         This directly tests the invariant that nominal identity includes module_id.
         """
         from agm.agl.modules.ids import ModuleId
+        from agm.agl.semantics.types import TypeVarType
         from agm.agl.typecheck.env import GenericTypeDef
-        from agm.agl.typecheck.types import TypeVarType
 
         lib_a = ModuleId.from_dotted("libA")
         lib_b = ModuleId.from_dotted("libB")

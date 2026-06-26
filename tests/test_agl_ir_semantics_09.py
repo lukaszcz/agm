@@ -67,7 +67,7 @@ def _make_minimal_program(
     symbols: dict | None = None,
 ) -> ExecutableProgram:
     """Build a minimal ExecutableProgram for hand-crafted IR tests."""
-    from agm.agl.typecheck.types import BUILTIN_EXCEPTIONS
+    from agm.agl.semantics.types import BUILTIN_EXCEPTIONS
 
     max_iter_nominal = NominalId(PRELUDE_ID, "MaxIterationsExceeded")
     exc_type = BUILTIN_EXCEPTIONS["MaxIterationsExceeded"]

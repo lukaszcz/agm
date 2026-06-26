@@ -1948,8 +1948,8 @@ class TestM6cIrExec:
         from agm.agl.ir.contracts import ContractRequest
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.nodes import IrExec
+        from agm.agl.semantics.types import IntType
         from agm.agl.type_schema import build_decode_schema
-        from agm.agl.typecheck.types import IntType
 
         cid = ContractId(value=0)
         decode_schema = build_decode_schema(IntType())
@@ -2051,8 +2051,8 @@ class TestM6cIrExec:
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.nodes import IrExec
         from agm.agl.semantics.exceptions import AglRaise
+        from agm.agl.semantics.types import IntType
         from agm.agl.type_schema import build_decode_schema
-        from agm.agl.typecheck.types import IntType
         from agm.core.process import ProcessCaptureResult
 
         call_count = [0]
@@ -2128,8 +2128,8 @@ class TestM6cIrExec:
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.nodes import IrExec
         from agm.agl.semantics.exceptions import AglRaise
+        from agm.agl.semantics.types import IntType
         from agm.agl.type_schema import build_decode_schema
-        from agm.agl.typecheck.types import IntType
         from agm.core.process import ProcessCaptureResult
 
         call_count = [0]
@@ -2203,8 +2203,8 @@ class TestM6cIrExec:
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.nodes import IrExec
         from agm.agl.semantics.exceptions import AglRaise
+        from agm.agl.semantics.types import IntType
         from agm.agl.type_schema import build_decode_schema
-        from agm.agl.typecheck.types import IntType
         from agm.core.process import ProcessCaptureResult
 
         # JSON parse of a string where int is expected yields structured errors

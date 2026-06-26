@@ -26,6 +26,18 @@ from agm.agl.runtime.convert import (
     json_obj_to_value,
     parse_json_strict,
 )
+from agm.agl.semantics.types import (
+    BoolType,
+    DecimalType,
+    DictType,
+    EnumType,
+    ExceptionType,
+    IntType,
+    JsonType,
+    ListType,
+    RecordType,
+    TextType,
+)
 from agm.agl.semantics.values import (
     BoolValue,
     DecimalValue,
@@ -37,18 +49,6 @@ from agm.agl.semantics.values import (
     ListValue,
     RecordValue,
     TextValue,
-)
-from agm.agl.typecheck.types import (
-    BoolType,
-    DecimalType,
-    DictType,
-    EnumType,
-    ExceptionType,
-    IntType,
-    JsonType,
-    ListType,
-    RecordType,
-    TextType,
 )
 
 # ---------------------------------------------------------------------------

@@ -26,7 +26,7 @@ from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
 from agm.agl.runtime import AgentRequest
 from agm.agl.runtime.runtime import RunResult
-from agm.agl.typecheck.types import Type
+from agm.agl.semantics.types import Type
 
 if TYPE_CHECKING:
     from agm.agl.runtime.codec import OutputCodec
@@ -930,8 +930,8 @@ class TestCapabilitiesBuiltFromRegistrations:
         """A custom codec registered before run() makes its kinds available to typecheck."""
         from agm.agl.runtime.codec import ParseResult, TextCodec
         from agm.agl.runtime.contract import OutputContract
+        from agm.agl.semantics.types import TextType
         from agm.agl.semantics.values import TextValue as TV
-        from agm.agl.typecheck.types import TextType
 
         class FooCodec:
             @property
@@ -1649,8 +1649,8 @@ class TestMaterializeContractMissingCodec:
     def test_missing_codec_raises_value_error(self) -> None:
         from agm.agl.runtime.codec import TextCodec
         from agm.agl.runtime.contract import materialize_contract
+        from agm.agl.semantics.types import TextType
         from agm.agl.typecheck.env import OutputContractSpec
-        from agm.agl.typecheck.types import TextType
 
         spec = OutputContractSpec(
             target_type=TextType(),
@@ -1768,7 +1768,7 @@ class TestRuntimeErrorPaths:
     def test_text_param_not_str_raises(self) -> None:
         """convert_param_value: text type with non-str value → ValueError."""
         from agm.agl.runtime.runtime import convert_param_value
-        from agm.agl.typecheck.types import TextType
+        from agm.agl.semantics.types import TextType
 
         with pytest.raises(ValueError, match="expected a text value"):
             convert_param_value("msg", 42, TextType())
@@ -1778,8 +1778,8 @@ class TestRuntimeErrorPaths:
         from decimal import Decimal
 
         from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.semantics.types import IntType
         from agm.agl.semantics.values import IntValue
-        from agm.agl.typecheck.types import IntType
 
         result = convert_param_value("n", Decimal("3"), IntType())
         assert result == IntValue(3)
@@ -1787,7 +1787,7 @@ class TestRuntimeErrorPaths:
     def test_int_param_non_integral_fails(self) -> None:
         """convert_param_value: non-integral value → ValueError for int type."""
         from agm.agl.runtime.runtime import convert_param_value
-        from agm.agl.typecheck.types import IntType
+        from agm.agl.semantics.types import IntType
 
         with pytest.raises(ValueError, match="expected an integer"):
             convert_param_value("n", "1.5", IntType())
@@ -1797,8 +1797,8 @@ class TestRuntimeErrorPaths:
         from decimal import Decimal
 
         from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.semantics.types import DecimalType
         from agm.agl.semantics.values import DecimalValue
-        from agm.agl.typecheck.types import DecimalType
 
         result = convert_param_value("d", 3, DecimalType())
         assert isinstance(result, DecimalValue)
@@ -1807,7 +1807,7 @@ class TestRuntimeErrorPaths:
     def test_decimal_param_invalid_type_fails(self) -> None:
         """convert_param_value: bool value → ValueError for decimal type."""
         from agm.agl.runtime.runtime import convert_param_value
-        from agm.agl.typecheck.types import DecimalType
+        from agm.agl.semantics.types import DecimalType
 
         with pytest.raises(ValueError, match="expected a decimal"):
             convert_param_value("d", "true", DecimalType())
@@ -1815,7 +1815,7 @@ class TestRuntimeErrorPaths:
     def test_bool_param_invalid_type_fails(self) -> None:
         """convert_param_value: non-bool value → ValueError for bool type."""
         from agm.agl.runtime.runtime import convert_param_value
-        from agm.agl.typecheck.types import BoolType
+        from agm.agl.semantics.types import BoolType
 
         with pytest.raises(ValueError, match="expected a bool"):
             convert_param_value("b", "1", BoolType())
@@ -1823,8 +1823,8 @@ class TestRuntimeErrorPaths:
     def test_bool_param_true_succeeds(self) -> None:
         """convert_param_value: bool value → BoolValue for bool type."""
         from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.semantics.types import BoolType
         from agm.agl.semantics.values import BoolValue
-        from agm.agl.typecheck.types import BoolType
 
         result = convert_param_value("b", True, BoolType())
         assert result == BoolValue(True)
@@ -1917,8 +1917,8 @@ class TestRuntimeErrorPaths:
 
     def test_convert_param_value_json_type_accepts_any(self) -> None:
         from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.semantics.types import JsonType
         from agm.agl.semantics.values import JsonValue
-        from agm.agl.typecheck.types import JsonType
 
         result = convert_param_value("meta", [1, 2, 3], JsonType())
         assert result == JsonValue([1, 2, 3])
@@ -1926,8 +1926,8 @@ class TestRuntimeErrorPaths:
     def test_convert_param_value_list_type_parsed_via_json_codec(self) -> None:
         # M2: list/dict/record/enum params are now accepted via the JsonCodec.
         from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.semantics.types import ListType, TextType
         from agm.agl.semantics.values import ListValue, TextValue
-        from agm.agl.typecheck.types import ListType, TextType
 
         result = convert_param_value("xs", '["a", "b"]', ListType(elem=TextType()))
         assert isinstance(result, ListValue)
@@ -1970,8 +1970,8 @@ class TestRuntimeErrorPaths:
         import decimal as _decimal
 
         from agm.agl.runtime.runtime import convert_param_value
+        from agm.agl.semantics.types import DecimalType, ListType
         from agm.agl.semantics.values import DecimalValue, ListValue
-        from agm.agl.typecheck.types import DecimalType, ListType
 
         result = convert_param_value(
             "xs", [_decimal.Decimal("1.5"), _decimal.Decimal("2.75")], ListType(elem=DecimalType())
@@ -1988,7 +1988,7 @@ class TestRuntimeErrorPaths:
         traceback.
         """
         from agm.agl.runtime.runtime import convert_param_value
-        from agm.agl.typecheck.types import ListType, TextType
+        from agm.agl.semantics.types import ListType, TextType
 
         with pytest.raises(ValueError, match="xs") as exc_info:
             convert_param_value("xs", {1, 2, 3}, ListType(elem=TextType()))
@@ -2475,27 +2475,27 @@ class TestDeriveSchema:
     """Unit tests for derive_schema covering all type branches."""
 
     def test_bool_type(self) -> None:
+        from agm.agl.semantics.types import BoolType
         from agm.agl.type_schema import derive_schema
-        from agm.agl.typecheck.types import BoolType
 
         assert derive_schema(BoolType()) == {"type": "boolean"}
 
     def test_json_type(self) -> None:
+        from agm.agl.semantics.types import JsonType
         from agm.agl.type_schema import derive_schema
-        from agm.agl.typecheck.types import JsonType
 
         assert derive_schema(JsonType()) == {}
 
     def test_dict_type(self) -> None:
+        from agm.agl.semantics.types import DictType, IntType
         from agm.agl.type_schema import derive_schema
-        from agm.agl.typecheck.types import DictType, IntType
 
         result = derive_schema(DictType(value=IntType()))
         assert result == {"type": "object", "additionalProperties": {"type": "integer"}}
 
     def test_record_type(self) -> None:
+        from agm.agl.semantics.types import RecordType, TextType
         from agm.agl.type_schema import derive_schema
-        from agm.agl.typecheck.types import RecordType, TextType
 
         result = derive_schema(RecordType(name="Point", fields={"x": TextType()}))
         assert result["type"] == "object"
@@ -2503,8 +2503,8 @@ class TestDeriveSchema:
         assert result["additionalProperties"] is False
 
     def test_enum_type_with_payload(self) -> None:
+        from agm.agl.semantics.types import EnumType, TextType
         from agm.agl.type_schema import derive_schema
-        from agm.agl.typecheck.types import EnumType, TextType
 
         typ = EnumType(
             name="Status",
@@ -2515,36 +2515,36 @@ class TestDeriveSchema:
         assert len(result["oneOf"]) == 2
 
     def test_exception_type_raises(self) -> None:
+        from agm.agl.semantics.types import ExceptionType
         from agm.agl.type_schema import derive_schema
-        from agm.agl.typecheck.types import ExceptionType
 
         with pytest.raises(TypeError, match="ExceptionType"):
             derive_schema(ExceptionType(name="MyErr", fields={}))
 
     def test_unit_type_raises(self) -> None:
+        from agm.agl.semantics.types import UnitType
         from agm.agl.type_schema import derive_schema
-        from agm.agl.typecheck.types import UnitType
 
         with pytest.raises(TypeError, match="UnitType"):
             derive_schema(UnitType())
 
     def test_agent_type_raises(self) -> None:
+        from agm.agl.semantics.types import AgentType
         from agm.agl.type_schema import derive_schema
-        from agm.agl.typecheck.types import AgentType
 
         with pytest.raises(TypeError, match="AgentType"):
             derive_schema(AgentType())
 
     def test_function_type_raises(self) -> None:
+        from agm.agl.semantics.types import FunctionType, TextType
         from agm.agl.type_schema import derive_schema
-        from agm.agl.typecheck.types import FunctionType, TextType
 
         with pytest.raises(TypeError, match="FunctionType"):
             derive_schema(FunctionType(params=(TextType(),), result=TextType()))
 
     def test_bottom_type_raises(self) -> None:
+        from agm.agl.semantics.types import BottomType
         from agm.agl.type_schema import derive_schema
-        from agm.agl.typecheck.types import BottomType
 
         with pytest.raises(TypeError, match="BottomType"):
             derive_schema(BottomType())
@@ -2695,8 +2695,8 @@ class TestRegisterCodecErrors:
     def _make_codec(self, name: str) -> OutputCodec:
         from agm.agl.runtime.codec import OutputCodec, ParseResult, TextCodec
         from agm.agl.runtime.contract import OutputContract
+        from agm.agl.semantics.types import TextType
         from agm.agl.semantics.values import TextValue
-        from agm.agl.typecheck.types import TextType
 
         class _Codec(OutputCodec):
             @property
@@ -2764,7 +2764,7 @@ class TestConvertInputUnsupportedType:
 
     def test_unsupported_type_raises(self) -> None:
         from agm.agl.runtime.runtime import convert_param_value
-        from agm.agl.typecheck.types import AgentType
+        from agm.agl.semantics.types import AgentType
 
         with pytest.raises(ValueError, match="unsupported type"):
             convert_param_value("x", "agent_val", AgentType())

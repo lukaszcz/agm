@@ -1,0 +1,157 @@
+"""Review pass logic."""
+
+from __future__ import annotations
+
+import os
+from datetime import datetime
+from pathlib import Path
+
+from agm.agent.config import default_agent_runner
+from agm.agent.io import StreamCallback, write_stderr, write_stdout
+from agm.agent.prompt_source import PromptSourceOptions
+from agm.agent.review.prompt_pass import prepare_prompt_pass
+from agm.agent.runner import (
+    PreparedPromptRun,
+    cleanup_temp_files,
+    run_prepared_prompt,
+)
+from agm.cli_support.args import ReviewArgs
+from agm.config.context import current_config_context
+from agm.config.errors import exit_config_command_not_found
+from agm.config.general import (
+    ConfigCommandNotFound,
+    ReviewConfig,
+    load_review_config,
+    resolve_default_prompt_file,
+)
+from agm.core import dry_run
+from agm.core.fs import mkdir, write_text
+from agm.core.log import default_agent_files_dir
+from agm.core.path import display_path
+
+DEFAULT_REVIEW_SCOPE = "changes on current branch"
+DEFAULT_REVIEW_ASPECTS = "correctness, completeness, maintainability, adherence to AGENTS.md"
+REVIEW_FILE_AUTO = "auto"
+REVIEW_FILE_NONE = "none"
+
+
+def _review_config(command_name: str | None, *, require_command: bool) -> ReviewConfig:
+    context = current_config_context()
+    try:
+        return load_review_config(
+            home=context.home,
+            proj_dir=context.proj_dir,
+            cwd=context.cwd,
+            command_name=command_name,
+            require_command=require_command,
+        )
+    except ConfigCommandNotFound as error:
+        exit_config_command_not_found(error)
+
+
+def _resolved_review_aspects(args: ReviewArgs, config: ReviewConfig) -> str:
+    aspects = args.aspects or config.aspects or DEFAULT_REVIEW_ASPECTS
+    extra_aspects = args.extra_aspects or config.extra_aspects
+    if extra_aspects is None:
+        return aspects
+    return f"{aspects}, {extra_aspects}"
+
+
+def prepare_review(
+    args: ReviewArgs,
+    *,
+    temp_files: list[Path] | None = None,
+    config: ReviewConfig | None = None,
+) -> PreparedPromptRun:
+    owned_temp_files: list[Path] = [] if temp_files is None else temp_files
+    context = current_config_context()
+    if config is None:
+        config = _review_config(args.command_name, require_command=args.require_command_config)
+    runner = args.runner or config.runner or default_agent_runner()
+    scope = args.scope or config.scope or DEFAULT_REVIEW_SCOPE
+    aspects = _resolved_review_aspects(args, config)
+    env = dict(os.environ)
+    env["REVIEW_SCOPE"] = scope
+    env["REVIEW_ASPECTS"] = aspects
+    default_prompt_file = resolve_default_prompt_file("review.md", home=context.home)
+    return prepare_prompt_pass(
+        runner=runner,
+        primary=PromptSourceOptions(
+            prompt=args.prompt,
+            prompt_file=args.prompt_file,
+            config_prompt=config.prompt,
+            config_prompt_file=config.prompt_file,
+            default_prompt_file=default_prompt_file,
+        ),
+        extra=PromptSourceOptions(
+            prompt=args.extra_prompt,
+            prompt_file=args.extra_prompt_file,
+            config_prompt=config.extra_prompt,
+            config_prompt_file=config.extra_prompt_file,
+        ),
+        env=env,
+        temp_files=owned_temp_files,
+        kind="review runner",
+        cwd=context.cwd,
+    )
+
+
+def _default_review_file() -> Path:
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    return default_agent_files_dir() / f"review-{timestamp}.md"
+
+
+def _resolve_output_review_file(args: ReviewArgs, config: ReviewConfig) -> Path | None:
+    if args.no_review_file:
+        return None
+    value = args.review_file or config.review_file or REVIEW_FILE_AUTO
+    if value == REVIEW_FILE_NONE:
+        return None
+    if value == REVIEW_FILE_AUTO:
+        return _default_review_file()
+    path = Path(value)
+    if path.is_absolute():
+        return path
+    return current_config_context().cwd / path
+
+
+def _save_review_output(path: Path | None, output: str) -> Path | None:
+    if path is None:
+        return None
+    mkdir(path.parent, parents=True, exist_ok=True)
+    write_text(path, output, encoding="utf-8")
+    return path
+
+
+def review_once(
+    args: ReviewArgs,
+    *,
+    stdout_callback: StreamCallback = write_stdout,
+    stderr_callback: StreamCallback = write_stderr,
+) -> str:
+    temp_files: list[Path] = []
+    try:
+        config = _review_config(args.command_name, require_command=args.require_command_config)
+        review_file = _resolve_output_review_file(args, config)
+        prepared = prepare_review(args, temp_files=temp_files, config=config)
+        if dry_run.enabled():
+            dry_run.print_configuration("review")
+            dry_run.print_detail(
+                "review file",
+                "disabled" if review_file is None else str(review_file),
+            )
+        output = run_prepared_prompt(
+            prepared,
+            stdout_callback=stdout_callback,
+            stderr_callback=stderr_callback,
+        )
+        if dry_run.enabled():
+            return output
+        if review_file is not None and review_file.exists():
+            stderr_callback(f"warning: overwriting existing review file {review_file}\n")
+        saved_review_file = _save_review_output(review_file, output)
+        if saved_review_file is not None:
+            stdout_callback(f"\nSaved review to {display_path(saved_review_file)}\n")
+        return output
+    finally:
+        cleanup_temp_files(temp_files)

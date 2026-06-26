@@ -8,16 +8,15 @@ from pathlib import Path
 
 import pytest
 
+import agm.agent.review.review as review_pass
+import agm.agent.review.revise as revise_pass
 import agm.commands.refine as refine_mod
 import agm.commands.review as review_mod
 import agm.commands.revise as revise_mod
+from agm.agent.review.review import DEFAULT_REVIEW_ASPECTS, prepare_review
+from agm.agent.review.revise import prepare_revise
 from agm.cli_support.args import RefineArgs, ReviewArgs, ReviseArgs
 from agm.commands.refine import _write_review_file, refine
-from agm.commands.review import (
-    DEFAULT_REVIEW_ASPECTS,
-    prepare_review,
-)
-from agm.commands.revise import prepare_revise
 from agm.core import dry_run
 
 
@@ -156,7 +155,7 @@ def test_prepare_review_uses_inline_prompt_and_extra_prompt(
     )
 
     assert prepared.effective_file.read_text(encoding="utf-8") == (
-        f"inline {review_mod.DEFAULT_REVIEW_SCOPE}\n"
+        f"inline {review_pass.DEFAULT_REVIEW_SCOPE}\n"
         f"extra {DEFAULT_REVIEW_ASPECTS}"
     )
 
@@ -179,7 +178,7 @@ def test_prepare_review_uses_cli_prompt_files(
     )
 
     assert prepared.effective_file.read_text(encoding="utf-8") == (
-        f"custom {review_mod.DEFAULT_REVIEW_SCOPE}\nextra"
+        f"custom {review_pass.DEFAULT_REVIEW_SCOPE}\nextra"
     )
 
 
@@ -197,7 +196,7 @@ def test_prepare_review_uses_config_prompt_and_extra(
     prepared = prepare_review(_review_args(prompt=None, extra_prompt=None), temp_files=[])
 
     assert prepared.effective_file.read_text(encoding="utf-8") == (
-        f"from config {review_mod.DEFAULT_REVIEW_SCOPE}\nextra"
+        f"from config {review_pass.DEFAULT_REVIEW_SCOPE}\nextra"
     )
 
 
@@ -216,7 +215,7 @@ def test_prepare_review_uses_named_config_prompt_and_extra(
     prepared = prepare_review(_review_args(command_name="frontend"), temp_files=[])
 
     assert prepared.effective_file.read_text(encoding="utf-8") == (
-        f"frontend {review_mod.DEFAULT_REVIEW_SCOPE}\nbase extra"
+        f"frontend {review_pass.DEFAULT_REVIEW_SCOPE}\nbase extra"
     )
 
 
@@ -467,7 +466,7 @@ def test_review_once_runs_prompt_and_cleans_temp_files(
     ) -> str:
         assert command == ["fake-reviewer"]
         assert target.is_file()
-        assert env["REVIEW_SCOPE"] == review_mod.DEFAULT_REVIEW_SCOPE
+        assert env["REVIEW_SCOPE"] == review_pass.DEFAULT_REVIEW_SCOPE
         if callable(stdout_callback):
             stdout_callback("out")
         if callable(stderr_callback):
@@ -478,7 +477,7 @@ def test_review_once_runs_prompt_and_cleans_temp_files(
         cleaned.append(list(temp_files))
 
     monkeypatch.setattr("agm.agent.runner.run_prompt_command", fake_run_prompt_command)
-    monkeypatch.setattr("agm.commands.review.cleanup_temp_files", fake_cleanup)
+    monkeypatch.setattr("agm.agent.review.review.cleanup_temp_files", fake_cleanup)
 
     output = review_mod.review_once(_review_args(no_review_file=True))
 
@@ -496,12 +495,12 @@ def test_review_once_reuses_config_for_preparation(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
-    original_review_config = review_mod._review_config
+    original_review_config = review_pass._review_config
     load_count = 0
 
     def counting_review_config(
         command_name: str | None, *, require_command: bool
-    ) -> review_mod.ReviewConfig:
+    ) -> review_pass.ReviewConfig:
         nonlocal load_count
         load_count += 1
         return original_review_config(command_name, require_command=require_command)
@@ -517,7 +516,7 @@ def test_review_once_reuses_config_for_preparation(
         del command, target, env, stdout_callback, stderr_callback
         return "review output\n"
 
-    monkeypatch.setattr("agm.commands.review._review_config", counting_review_config)
+    monkeypatch.setattr("agm.agent.review.review._review_config", counting_review_config)
     monkeypatch.setattr("agm.agent.runner.run_prompt_command", fake_run_prompt_command)
 
     review_mod.review_once(_review_args(no_review_file=True))
@@ -533,7 +532,7 @@ def test_review_once_saves_output_to_default_review_file(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
     monkeypatch.setattr("agm.core.log.git_helpers.containing_root", lambda _path: None)
-    monkeypatch.setattr("agm.commands.review.datetime", _FixedDatetime)
+    monkeypatch.setattr("agm.agent.review.review.datetime", _FixedDatetime)
 
     def fake_run_prompt_command(
         command: list[str],
@@ -725,7 +724,7 @@ def test_revise_once_runs_prepared_prompt_when_dry_run_disabled(
         run_called[0] = True
         return "agent output"
 
-    monkeypatch.setattr("agm.commands.revise.run_prepared_prompt", fake_run_prepared_prompt)
+    monkeypatch.setattr("agm.agent.review.revise.run_prepared_prompt", fake_run_prepared_prompt)
 
     # Ensure dry_run is disabled (it should be by default, but be explicit)
     assert not dry_run.enabled()
@@ -736,10 +735,10 @@ def test_revise_once_runs_prepared_prompt_when_dry_run_disabled(
 
 
 def test_revise_stream_callbacks_write_non_empty_chunks(capsys: pytest.CaptureFixture[str]) -> None:
-    revise_mod.write_stdout("out")
-    revise_mod.write_stderr("err")
-    revise_mod.write_stdout("")
-    revise_mod.write_stderr("")
+    revise_pass.write_stdout("out")
+    revise_pass.write_stderr("err")
+    revise_pass.write_stdout("")
+    revise_pass.write_stderr("")
 
     captured = capsys.readouterr()
     assert captured.out == "out"
@@ -786,8 +785,8 @@ def test_review_once_dry_run_prints_configuration(
 def test_write_stream_helpers_ignore_empty_chunks(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    review_mod.write_stdout("")
-    review_mod.write_stderr("")
+    review_pass.write_stdout("")
+    review_pass.write_stderr("")
 
     captured = capsys.readouterr()
     assert captured.out == ""
@@ -806,8 +805,8 @@ def test_refine_repeats_revise_for_unknown_status_and_honors_max_steps(
     def fake_review_once(
         args: ReviewArgs,
         *,
-        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
-        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
     ) -> str:
         del stdout_callback, stderr_callback
         reviews.append(args)
@@ -816,8 +815,8 @@ def test_refine_repeats_revise_for_unknown_status_and_honors_max_steps(
     def fake_revise_once(
         args: ReviseArgs,
         *,
-        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
-        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
     ) -> str:
         del stdout_callback, stderr_callback
         revisions.append(args)
@@ -860,8 +859,8 @@ def test_refine_max_steps_limits_iterations_to_exact_count(
     def fake_review_once(
         args: ReviewArgs,
         *,
-        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
-        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
     ) -> str:
         del stdout_callback, stderr_callback
         reviews.append(args)
@@ -870,8 +869,8 @@ def test_refine_max_steps_limits_iterations_to_exact_count(
     def fake_revise_once(
         args: ReviseArgs,
         *,
-        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
-        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
     ) -> str:
         del stdout_callback, stderr_callback
         revisions.append(args)
@@ -917,8 +916,8 @@ def test_refine_max_steps_one_with_continue_still_exits(
     def fake_review_once(
         args: ReviewArgs,
         *,
-        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
-        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
     ) -> str:
         del stdout_callback, stderr_callback
         reviews.append(args)
@@ -927,8 +926,8 @@ def test_refine_max_steps_one_with_continue_still_exits(
     def fake_revise_once(
         args: ReviseArgs,
         *,
-        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
-        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
     ) -> str:
         del stdout_callback, stderr_callback
         revisions.append(args)
@@ -974,8 +973,8 @@ def test_refine_max_steps_with_alternating_continue_and_unknown(
     def fake_review_once(
         args: ReviewArgs,
         *,
-        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
-        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
     ) -> str:
         del stdout_callback, stderr_callback
         reviews.append(args)
@@ -984,8 +983,8 @@ def test_refine_max_steps_with_alternating_continue_and_unknown(
     def fake_revise_once(
         args: ReviseArgs,
         *,
-        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
-        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
     ) -> str:
         del stdout_callback, stderr_callback
         revisions.append(args)
@@ -1035,8 +1034,8 @@ def test_refine_runs_fresh_review_after_continue(
     def fake_review_once(
         args: ReviewArgs,
         *,
-        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
-        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
     ) -> str:
         del stdout_callback, stderr_callback
         reviews.append(args)
@@ -1045,8 +1044,8 @@ def test_refine_runs_fresh_review_after_continue(
     def fake_revise_once(
         args: ReviseArgs,
         *,
-        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
-        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
     ) -> str:
         del args, stdout_callback, stderr_callback
         return next(outputs)
@@ -1093,8 +1092,8 @@ def test_refine_no_save_review_disables_review_file_for_each_review(
     def fake_review_once(
         args: ReviewArgs,
         *,
-        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
-        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
     ) -> str:
         del stdout_callback, stderr_callback
         reviews.append(args)
@@ -1103,8 +1102,8 @@ def test_refine_no_save_review_disables_review_file_for_each_review(
     def fake_revise_once(
         args: ReviseArgs,
         *,
-        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
-        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
     ) -> str:
         del args, stdout_callback, stderr_callback
         return next(outputs)
@@ -1149,8 +1148,8 @@ def test_refine_save_review_enables_auto_review_file_for_each_review(
     def fake_review_once(
         args: ReviewArgs,
         *,
-        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
-        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
     ) -> str:
         del stdout_callback, stderr_callback
         reviews.append(args)
@@ -1159,8 +1158,8 @@ def test_refine_save_review_enables_auto_review_file_for_each_review(
     def fake_revise_once(
         args: ReviseArgs,
         *,
-        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
-        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
     ) -> str:
         del args, stdout_callback, stderr_callback
         return next(outputs)
@@ -1205,8 +1204,8 @@ def test_refine_review_file_uses_custom_review_file_for_each_review(
     def fake_review_once(
         args: ReviewArgs,
         *,
-        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
-        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
     ) -> str:
         del stdout_callback, stderr_callback
         reviews.append(args)
@@ -1215,8 +1214,8 @@ def test_refine_review_file_uses_custom_review_file_for_each_review(
     def fake_revise_once(
         args: ReviseArgs,
         *,
-        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
-        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
     ) -> str:
         del args, stdout_callback, stderr_callback
         return next(outputs)
@@ -1261,8 +1260,8 @@ def test_refine_leaves_missing_scope_and_aspects_for_review_config(
     def fake_review_once(
         args: ReviewArgs,
         *,
-        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
-        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
     ) -> str:
         del stdout_callback, stderr_callback
         reviews.append(args)
@@ -1271,8 +1270,8 @@ def test_refine_leaves_missing_scope_and_aspects_for_review_config(
     def fake_revise_once(
         args: ReviseArgs,
         *,
-        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
-        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
     ) -> str:
         del args, stdout_callback, stderr_callback
         return "COMPLETE\n"
@@ -1319,8 +1318,8 @@ def test_refine_uses_named_config_and_forwards_command_name(
     def fake_review_once(
         args: ReviewArgs,
         *,
-        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
-        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
     ) -> str:
         del stdout_callback, stderr_callback
         reviews.append(args)
@@ -1329,8 +1328,8 @@ def test_refine_uses_named_config_and_forwards_command_name(
     def fake_revise_once(
         args: ReviseArgs,
         *,
-        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
-        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
     ) -> str:
         del stdout_callback, stderr_callback
         revisions.append(args)
@@ -1377,8 +1376,8 @@ def test_refine_writes_review_and_revise_output_to_log_file(
     def fake_review_once(
         args: ReviewArgs,
         *,
-        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
-        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
     ) -> str:
         del args
         stdout_callback("review stdout\n")
@@ -1388,8 +1387,8 @@ def test_refine_writes_review_and_revise_output_to_log_file(
     def fake_revise_once(
         args: ReviseArgs,
         *,
-        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
-        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
     ) -> str:
         del args
         stdout_callback("revise stdout\n")
@@ -1437,8 +1436,8 @@ def test_refine_step_header_is_printed_and_logged(
     def fake_review_once(
         args: ReviewArgs,
         *,
-        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
-        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
     ) -> str:
         del args, stderr_callback
         stdout_callback("review stdout\n")
@@ -1447,8 +1446,8 @@ def test_refine_step_header_is_printed_and_logged(
     def fake_revise_once(
         args: ReviseArgs,
         *,
-        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
-        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
     ) -> str:
         del args, stderr_callback
         stdout_callback("revise stdout\n")
@@ -1498,8 +1497,8 @@ def test_refine_prints_logging_to_full_default_log_path(
     def fake_review_once(
         args: ReviewArgs,
         *,
-        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
-        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
     ) -> str:
         del args, stdout_callback, stderr_callback
         return "review result\n"
@@ -1507,8 +1506,8 @@ def test_refine_prints_logging_to_full_default_log_path(
     def fake_revise_once(
         args: ReviseArgs,
         *,
-        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
-        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
     ) -> str:
         del args, stdout_callback, stderr_callback
         return "COMPLETE\n"
@@ -1626,8 +1625,8 @@ def test_refine_no_max_steps_runs_until_complete(
     def fake_review_once(
         args: ReviewArgs,
         *,
-        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
-        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
     ) -> str:
         del stdout_callback, stderr_callback
         return "review result\n"
@@ -1635,8 +1634,8 @@ def test_refine_no_max_steps_runs_until_complete(
     def fake_revise_once(
         args: ReviseArgs,
         *,
-        stdout_callback: Callable[[str], None] = review_mod.write_stdout,
-        stderr_callback: Callable[[str], None] = review_mod.write_stderr,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
     ) -> str:
         del stdout_callback, stderr_callback
         revisions.append(args)

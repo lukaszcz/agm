@@ -38,7 +38,7 @@ __all__ = [
 
 # ---------------------------------------------------------------------------
 # Decode schema — typeless mirror of the checker-type recursion that
-# ``runtime.convert.json_to_value`` performs.  Built at lowering from the cast
+# ``runtime.convert.decode_value`` performs.  Built at lowering from the cast
 # target type; walked at evaluation to construct the typed value.
 # ---------------------------------------------------------------------------
 

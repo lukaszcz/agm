@@ -1,15 +1,11 @@
-"""Shared strict-parse/validate conversion core for AgL type casts.
+"""Strict-parse/normalize primitives and the typeless decode walk for AgL.
 
-This module provides the reusable building blocks for both the strict cast path
-(``as`` / ``as?`` operators) and the ``parse_json`` built-in:
+This module is the canonical home for the reusable building blocks shared by
+the cast path (``as`` / ``as?`` operators), the agent/exec output codec, and
+host parameter decoding:
 
 - :exc:`StrictJsonParseError` — raised by :func:`parse_json_strict` on any
   malformed or non-conforming input.
-- :exc:`CastConversionError` — raised by :func:`json_obj_to_value` and
-  :func:`convert_value` when a conversion fails for expected reasons (type
-  mismatch, non-integral narrowing, schema violation, parse failure).  Carries
-  enough context (``source_type``, ``target_type``, ``raw``, ``message``) to
-  build an AgL ``CastError`` exception value in the evaluator (M5).
 - :func:`parse_json_strict` — strict ``json.loads`` with ``parse_float=Decimal``
   and ``parse_constant`` that rejects non-standard constants
   (``NaN`` / ``Infinity`` / ``-Infinity``) even when nested inside containers.
@@ -17,17 +13,12 @@ This module provides the reusable building blocks for both the strict cast path
   Python object.
 - :func:`normalize_integral_decimals` — walk a JSON-shaped tree and replace
   integral ``Decimal`` values with ``int`` (D4 / F2 rule).
-- :func:`json_to_value` — convert a JSON-shaped Python object into the typed
-  ``Value`` for a given ``Type``.  Raises ``ValueError`` on mismatch.
-- :func:`json_obj_to_value` — normalize integral decimals, validate against the
-  JSON Schema derived from ``typ``, then construct the typed ``Value``.
-- :func:`convert_value` — the single conversion entry point realizing the full
-  D1 matrix.  Translates only :exc:`StrictJsonParseError` and expected
-  validation/conversion failures into :exc:`CastConversionError`; all other
-  exceptions propagate unchanged.
-
-The lenient agent/``exec`` parsing path in :mod:`agm.agl.runtime.codec` imports
-:func:`normalize_integral_decimals` and :func:`json_to_value` from this module.
+- :func:`_clean_validation_message` — strip Python ``Decimal(...)`` reprs from
+  jsonschema error messages before surfacing them to users.
+- :func:`decode_value` / :func:`_decode_scalar` — the typeless
+  ``DecodeSchema``-driven decode walk.  The single decode path shared by
+  casts, the agent/exec codec, and host param decoding.  Raises ``ValueError``
+  on any type mismatch; callers convert this into domain errors.
 """
 
 from __future__ import annotations
@@ -35,23 +26,18 @@ from __future__ import annotations
 import json
 import re
 from decimal import Decimal
+from typing import assert_never
 
-from jsonschema import Draft202012Validator
 from jsonschema import ValidationError as JsonschemaValidationError
 
-from agm.agl.runtime.render import render_value
-from agm.agl.runtime.serialize import dumps_exact, value_to_json_obj
-from agm.agl.semantics.types import (
-    BoolType,
-    DecimalType,
-    DictType,
-    EnumType,
-    IntType,
-    JsonType,
-    ListType,
-    RecordType,
-    TextType,
-    Type,
+from agm.agl.ir.contracts import (
+    DecodeSchema,
+    DictDecode,
+    EnumDecode,
+    ListDecode,
+    RecordDecode,
+    ScalarDecode,
+    ScalarKind,
 )
 from agm.agl.semantics.values import (
     BoolValue,
@@ -61,13 +47,10 @@ from agm.agl.semantics.values import (
     IntValue,
     JsonValue,
     ListValue,
-    NominalId,
     RecordValue,
     TextValue,
     Value,
 )
-from agm.agl.semantics.values import Value as BaseValue
-from agm.agl.type_schema import derive_schema
 
 # ---------------------------------------------------------------------------
 # Internal exceptions
@@ -90,36 +73,6 @@ class StrictJsonParseError(Exception):
         self.message = message
 
 
-class CastConversionError(Exception):
-    """Raised when a type conversion fails for an expected reason.
-
-    Carries the context needed for M5 to build an AgL ``CastError`` value:
-
-    ``source_type``  — display name of the source type (e.g. ``"text"``).
-    ``target_type``  — display name of the target type (e.g. ``"int"``).
-    ``raw``          — rendered source value (via :func:`render_value`).
-    ``message``      — human-readable description of the failure.
-
-    Only raised for conversion failures that are expected at runtime (type
-    mismatch, non-integral narrowing, schema violation, strict-parse error).
-    Unexpected internal errors and programming defects propagate unchanged.
-    """
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        source_type: str,
-        target_type: str,
-        raw: str,
-    ) -> None:
-        super().__init__(message)
-        self.message = message
-        self.source_type = source_type
-        self.target_type = target_type
-        self.raw = raw
-
-
 # ---------------------------------------------------------------------------
 # normalize_integral_decimals (D4 / F2) — canonical home in convert.py
 # ---------------------------------------------------------------------------
@@ -134,7 +87,7 @@ def normalize_integral_decimals(obj: object) -> object:
     ``1.0`` satisfy an ``{"type": "integer"}`` schema; non-integral decimals
     such as ``1.5`` are preserved and continue to fail integer targets.
 
-    Decimal targets re-widen ``int`` → ``Decimal`` via ``json_to_value`` and a
+    Decimal targets re-widen ``int`` → ``Decimal`` via ``decode_value`` and a
     ``json`` passthrough sees a JSON-equal value, so this is loss-free.
     """
     if isinstance(obj, bool):
@@ -150,113 +103,6 @@ def normalize_integral_decimals(obj: object) -> object:
         mapping: dict[object, object] = obj
         return {k: normalize_integral_decimals(v) for k, v in mapping.items()}
     return obj
-
-
-# ---------------------------------------------------------------------------
-# json_to_value — canonical home in convert.py
-# ---------------------------------------------------------------------------
-
-
-def json_to_value(obj: object, typ: Type) -> BaseValue:
-    """Convert a JSON-shaped Python object to the appropriate typed ``Value``.
-
-    ``obj`` is the result of ``json.loads(parse_float=Decimal)`` — it may be
-    ``dict``, ``list``, ``str``, ``int``, ``Decimal``, ``bool``, or ``None``.
-    ``Decimal`` is never converted to ``float`` (design §5.1).
-
-    Raises ``ValueError`` for type mismatches (the caller handles these).
-    """
-    if isinstance(typ, TextType):
-        if isinstance(obj, str):
-            return TextValue(obj)
-        raise ValueError(f"Expected string, got {type(obj).__name__}")
-
-    if isinstance(typ, IntType):
-        if isinstance(obj, bool):
-            raise ValueError("Expected integer, got bool")
-        if isinstance(obj, int):
-            return IntValue(obj)
-        # Integral Decimals are normalized to ``int`` before validation/conversion
-        # (see ``normalize_integral_decimals``), so any Decimal reaching here is
-        # non-integral and rejected for an int target.
-        raise ValueError(f"Expected integer, got {type(obj).__name__} {obj!r}")
-
-    if isinstance(typ, DecimalType):
-        if isinstance(obj, bool):
-            raise ValueError("Expected decimal, got bool")
-        if isinstance(obj, Decimal):
-            return DecimalValue(obj)
-        if isinstance(obj, int):
-            return DecimalValue(Decimal(obj))
-        raise ValueError(f"Expected decimal, got {type(obj).__name__} {obj!r}")
-
-    if isinstance(typ, BoolType):
-        if isinstance(obj, bool):
-            return BoolValue(obj)
-        raise ValueError(f"Expected bool, got {type(obj).__name__}")
-
-    if isinstance(typ, JsonType):
-        # Accept any JSON-shaped value.
-        return JsonValue(obj)
-
-    if isinstance(typ, ListType):
-        if not isinstance(obj, list):
-            raise ValueError(f"Expected array, got {type(obj).__name__}")
-        elements = tuple(json_to_value(e, typ.elem) for e in obj)
-        return ListValue(elements=elements)
-
-    if isinstance(typ, DictType):
-        if not isinstance(obj, dict):
-            raise ValueError(f"Expected object, got {type(obj).__name__}")
-        entries: dict[str, BaseValue] = {}
-        for k, v in obj.items():
-            if not isinstance(k, str):
-                raise ValueError(f"Dict key must be string, got {type(k).__name__}")
-            entries[k] = json_to_value(v, typ.value)
-        return DictValue(entries=entries)
-
-    if isinstance(typ, RecordType):
-        if not isinstance(obj, dict):
-            raise ValueError(f"Expected object for record, got {type(obj).__name__}")
-        fields: dict[str, BaseValue] = {}
-        for field_name, field_type in typ.fields.items():
-            if field_name not in obj:
-                raise ValueError(f"Missing field {field_name!r}")
-            fields[field_name] = json_to_value(obj[field_name], field_type)
-        return RecordValue(
-            nominal=NominalId(typ.module_id, typ.name),
-            display_name=typ.name,
-            fields=fields,
-        )
-
-    if isinstance(typ, EnumType):
-        if not isinstance(obj, dict):
-            raise ValueError(f"Expected object for enum, got {type(obj).__name__}")
-        case_val = obj.get("$case")
-        if not isinstance(case_val, str):
-            raise ValueError("Enum object must have a string '$case' field")
-        variant_fields = typ.variants.get(case_val)
-        if variant_fields is None:
-            raise ValueError(
-                f"Unknown enum variant {case_val!r} for {typ.name!r}. "
-                f"Valid variants: {list(typ.variants.keys())}"
-            )
-        payload: dict[str, BaseValue] = {}
-        for field_name, field_type in variant_fields.items():
-            if field_name not in obj:
-                raise ValueError(
-                    f"Enum variant {case_val!r} is missing field {field_name!r}"
-                )
-            payload[field_name] = json_to_value(obj[field_name], field_type)
-        return EnumValue(
-            nominal=NominalId(typ.module_id, typ.name),
-            display_name=typ.name,
-            variant=case_val,
-            fields=payload,
-        )
-
-    # ExceptionType is not wire-serialised by the JSON codec.
-    raise ValueError(f"Cannot deserialise type {typ!r} from JSON")
 
 
 # ---------------------------------------------------------------------------
@@ -315,57 +161,8 @@ def parse_json_strict(text: str) -> object:
 
 
 # ---------------------------------------------------------------------------
-# json_obj_to_value
+# _clean_validation_message
 # ---------------------------------------------------------------------------
-
-
-def json_obj_to_value(obj: object, typ: Type) -> Value:
-    """Convert a JSON-shaped Python object *obj* into the typed ``Value`` for *typ*.
-
-    The *obj* is typically the result of :func:`parse_json_strict` (which uses
-    ``parse_float=Decimal``) or the ``.raw`` attribute of a :class:`JsonValue`.
-
-    Steps:
-    1. Normalize integral ``Decimal`` values to ``int`` (D4 / F2 rule): a
-       ``Decimal`` that equals its integral value is replaced with the
-       equivalent ``int``.  This lets ``1.0`` satisfy an integer schema while
-       ``1.5`` still fails.
-    2. Validate the normalized object against the JSON Schema derived from
-       *typ* via :func:`~agm.agl.type_schema.derive_schema`.
-    3. Construct the typed ``Value`` via :func:`json_to_value`.
-
-    :raises CastConversionError: On schema validation failure or type-mismatch
-        in value construction.
-    """
-    normalized = normalize_integral_decimals(obj)
-
-    schema = derive_schema(typ)
-    validator = Draft202012Validator(schema)
-    errors = list(validator.iter_errors(normalized))
-    if errors:
-        # Build a clean message that does not leak Python Decimal(...) reprs.
-        # We use the clean rendering of the source object and the target type
-        # name instead of the raw jsonschema instance repr.
-        clean_raw = dumps_exact(obj, indent=None)
-        msgs = "; ".join(_clean_validation_message(e) for e in errors)
-        raise CastConversionError(
-            f"Schema validation failed: {msgs}",
-            source_type="json",
-            target_type=repr(typ),
-            raw=clean_raw,
-        )
-
-    try:
-        return json_to_value(normalized, typ)
-    except ValueError as exc:
-        # Translate any ValueError from json_to_value into CastConversionError
-        # so no bare ValueError escapes this module boundary.
-        raise CastConversionError(
-            f"Value conversion failed: {exc}",
-            source_type="json",
-            target_type=repr(typ),
-            raw=dumps_exact(obj, indent=None),
-        ) from exc
 
 
 def _clean_validation_message(error: JsonschemaValidationError) -> str:
@@ -381,138 +178,102 @@ def _clean_validation_message(error: JsonschemaValidationError) -> str:
 
 
 # ---------------------------------------------------------------------------
-# convert_value — the single conversion entry point (D1 matrix)
+# decode_value / _decode_scalar — the typeless DecodeSchema-driven decode walk
 # ---------------------------------------------------------------------------
 
 
-def _rewrap_conversion_error(
-    exc: CastConversionError, src_name: str, tgt_name: str, raw: str
-) -> CastConversionError:
-    """Return a new CastConversionError with the correct source/target/raw context."""
-    return CastConversionError(exc.message, source_type=src_name, target_type=tgt_name, raw=raw)
+def decode_value(schema: DecodeSchema, obj: object) -> Value:
+    """Construct a typed ``Value`` from JSON-shaped *obj* per *schema*.
 
-
-def convert_value(value: Value, source_type: Type, target_type: Type) -> Value:
-    """Convert *value* of *source_type* to *target_type*, realizing the D1 matrix.
-
-    Conversions by target type:
-
-    ``→ text`` (total):
-        :func:`~agm.agl.runtime.render.render_value` is used to produce a
-        :class:`~agm.agl.semantics.values.TextValue`.  Nominal sources render in
-        declaration order (the interpreter normalizes their fields).
-
-    ``→ json`` (total):
-        :func:`~agm.agl.runtime.serialize.value_to_json_obj` is used to
-        produce a :class:`~agm.agl.semantics.values.JsonValue`.  Per D9, ``text``
-        is already JSON-shaped (a JSON string), so ``"42" as json`` yields
-        ``JsonValue("42")``, not ``JsonValue(42)``.  Nominal values
-        (record/enum/exception) are accepted and serialised structurally.
-
-    ``text → T`` (fallible, T not json):
-        :func:`parse_json_strict` parses the text strictly, then
-        :func:`json_obj_to_value` validates and constructs the typed value.
-
-    ``json → T`` (fallible, T not json):
-        :func:`json_obj_to_value` validates ``.raw`` directly (no re-parse).
-
-    ``decimal → int`` (D4, fallible):
-        Succeeds iff the decimal has no fractional part; yields the exact
-        integer.  Routes through :func:`json_obj_to_value` for consistency
-        with the integrality rule.
-
-    No-op / assignable cases (D6):
-        Exact-type identity returns the value unchanged.  ``int → decimal``
-        widens to :class:`~agm.agl.semantics.values.DecimalValue`.
-
-    :raises CastConversionError: When a fallible conversion fails for an
-        expected reason (parse error, type mismatch, non-integral narrowing).
-        Carries ``source_type``, ``target_type``, ``raw``, and ``message``.
-        All other exceptions propagate unchanged.
+    The typeless ``DecodeSchema``-driven decode walk shared by the cast path
+    (``as`` / ``as?``), the agent/exec output codec, and host param decoding.
+    Raises ``ValueError`` on any type mismatch; callers convert this into the
+    appropriate domain error (``AglCastConversion``, ``ValidationError``, etc.).
     """
-    # ------------------------------------------------------------------
-    # → text (total): render any value to text
-    # ``raw`` is the rendered form and also the result here.
-    # ------------------------------------------------------------------
-    if isinstance(target_type, TextType):
-        return TextValue(render_value(value))
+    match schema:
+        case ScalarDecode(kind=kind):
+            return _decode_scalar(kind, obj)
+        case ListDecode(elem=elem):
+            if not isinstance(obj, list):
+                raise ValueError(f"Expected array, got {type(obj).__name__}")
+            return ListValue(tuple(decode_value(elem, e) for e in obj))
+        case DictDecode(value=value_schema):
+            if not isinstance(obj, dict):
+                raise ValueError(f"Expected object, got {type(obj).__name__}")
+            entries: dict[str, Value] = {}
+            for k, v in obj.items():
+                if not isinstance(k, str):
+                    raise ValueError(f"Dict key must be string, got {type(k).__name__}")
+                entries[k] = decode_value(value_schema, v)
+            return DictValue(entries=entries)
+        case RecordDecode(nominal=nominal, display_name=display_name, fields=fields):
+            if not isinstance(obj, dict):
+                raise ValueError(f"Expected object for record, got {type(obj).__name__}")
+            record_fields: dict[str, Value] = {}
+            for fname, fschema in fields:
+                if fname not in obj:
+                    raise ValueError(f"Missing field {fname!r}")
+                record_fields[fname] = decode_value(fschema, obj[fname])
+            return RecordValue(
+                nominal=nominal, display_name=display_name, fields=record_fields
+            )
+        case EnumDecode(nominal=nominal, display_name=display_name, variants=variants):
+            if not isinstance(obj, dict):
+                raise ValueError(f"Expected object for enum, got {type(obj).__name__}")
+            case_val = obj.get("$case")
+            if not isinstance(case_val, str):
+                raise ValueError("Enum object must have a string '$case' field")
+            variant = next((v for v in variants if v.name == case_val), None)
+            if variant is None:
+                raise ValueError(
+                    f"Unknown enum variant {case_val!r} for {display_name!r}. "
+                    f"Valid variants: {[v.name for v in variants]}"
+                )
+            payload: dict[str, Value] = {}
+            for fname, fschema in variant.fields:
+                if fname not in obj:
+                    raise ValueError(
+                        f"Enum variant {case_val!r} is missing field {fname!r}"
+                    )
+                payload[fname] = decode_value(fschema, obj[fname])
+            return EnumValue(
+                nominal=nominal,
+                display_name=display_name,
+                variant=case_val,
+                fields=payload,
+            )
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
 
-    # ------------------------------------------------------------------
-    # → json (total): canonicalize any JSON-shaped value
-    # Per D9: text as json wraps the text as a JSON string (no parsing).
-    # Nominal values (record/enum/exception) are serialised structurally.
-    # ------------------------------------------------------------------
-    if isinstance(target_type, JsonType):
-        return JsonValue(value_to_json_obj(value))
 
-    # ------------------------------------------------------------------
-    # No-op / identity: source == target (return unchanged)
-    # Note: must come after the total → text / → json branches.
-    # ------------------------------------------------------------------
-    if source_type == target_type:
-        return value
-
-    # ------------------------------------------------------------------
-    # int → decimal widening (D6 coercion)
-    # ------------------------------------------------------------------
-    if isinstance(source_type, IntType) and isinstance(target_type, DecimalType):
-        assert isinstance(value, IntValue)
-        return DecimalValue(Decimal(value.value))
-
-    # Fallible paths below need source/target names and raw for error context.
-    # ``render_value`` is called here (lazily) so the total → json / identity /
-    # widening branches above never pay to render the value to text.
-    src_name = repr(source_type)
-    tgt_name = repr(target_type)
-    raw = render_value(value)
-
-    # ------------------------------------------------------------------
-    # decimal → int narrowing (D4: must be integral)
-    # ------------------------------------------------------------------
-    if isinstance(source_type, DecimalType) and isinstance(target_type, IntType):
-        assert isinstance(value, DecimalValue)
-        obj: object = value.value
-        try:
-            return json_obj_to_value(obj, target_type)
-        except CastConversionError as exc:
-            raise _rewrap_conversion_error(exc, src_name, tgt_name, raw) from exc
-
-    # ------------------------------------------------------------------
-    # text → T (fallible, T is not json — handled above)
-    # ------------------------------------------------------------------
-    if isinstance(source_type, TextType):
-        assert isinstance(value, TextValue)
-        try:
-            parsed_obj = parse_json_strict(value.value)
-        except StrictJsonParseError as exc:
-            raise CastConversionError(
-                f"Failed to parse text as JSON: {exc.message}",
-                source_type=src_name,
-                target_type=tgt_name,
-                raw=raw,
-            ) from exc
-        try:
-            return json_obj_to_value(parsed_obj, target_type)
-        except CastConversionError as exc:
-            raise _rewrap_conversion_error(exc, src_name, tgt_name, raw) from exc
-
-    # ------------------------------------------------------------------
-    # json → T (fallible, T is not json)
-    # ------------------------------------------------------------------
-    if isinstance(source_type, JsonType):
-        assert isinstance(value, JsonValue)
-        try:
-            return json_obj_to_value(value.raw, target_type)
-        except CastConversionError as exc:
-            raise _rewrap_conversion_error(exc, src_name, tgt_name, raw) from exc
-
-    # ------------------------------------------------------------------
-    # Fallthrough: should not be reached for valid (typechecked) casts.
-    # The typecheck pass (M3) rejects statically-impossible pairs, so
-    # this path indicates an implementation bug — raise unconditionally.
-    # ------------------------------------------------------------------
-    raise ValueError(  # pragma: no cover
-        f"convert_value: no conversion path from {src_name!r} to {tgt_name!r}; "
-        "this is an implementation bug — the typecheck pass should have rejected "
-        "this combination as a static cast error."
-    )
+def _decode_scalar(kind: ScalarKind, obj: object) -> Value:
+    """Decode a JSON scalar into the matching leaf ``Value``."""
+    match kind:
+        case ScalarKind.TEXT:
+            if isinstance(obj, str):
+                return TextValue(obj)
+            raise ValueError(f"Expected string, got {type(obj).__name__}")
+        case ScalarKind.INT:
+            if isinstance(obj, bool):
+                raise ValueError("Expected integer, got bool")
+            if isinstance(obj, int):
+                return IntValue(obj)
+            if isinstance(obj, Decimal) and obj == obj.to_integral_value():
+                return IntValue(int(obj))
+            raise ValueError(f"Expected integer, got {type(obj).__name__} {obj!r}")
+        case ScalarKind.DECIMAL:
+            if isinstance(obj, bool):
+                raise ValueError("Expected decimal, got bool")
+            if isinstance(obj, Decimal):
+                return DecimalValue(obj)
+            if isinstance(obj, int):
+                return DecimalValue(Decimal(obj))
+            raise ValueError(f"Expected decimal, got {type(obj).__name__} {obj!r}")
+        case ScalarKind.BOOL:
+            if isinstance(obj, bool):
+                return BoolValue(obj)
+            raise ValueError(f"Expected bool, got {type(obj).__name__}")
+        case ScalarKind.JSON:
+            return JsonValue(obj)
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)

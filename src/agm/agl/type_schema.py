@@ -160,7 +160,7 @@ def _enum_schema(typ: EnumType) -> dict[str, object]:
 def build_decode_schema(typ: Type) -> DecodeSchema:
     """Compile a checker ``Type`` into a typeless ``DecodeSchema``.
 
-    Mirrors the type recursion of ``runtime.convert.json_to_value`` so the
+    Mirrors the type recursion of ``runtime.convert.decode_value`` so the
     evaluator can reconstruct the typed value without the checker ``Type``.
     """
     if isinstance(typ, TextType):

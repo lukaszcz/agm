@@ -299,13 +299,16 @@ instruction generation. This keeps lowering independent of runtime execution.
   raises `ExecError` on nonzero exit or parse failure; mirrors the pre-v2
   behavior.
 
-**Cast and `parse_json` evaluation** share a strict-parse/validate conversion
-helper in `agm.agl.runtime.convert` (`convert_value`). This helper handles
-strict JSON parsing (no lenient recovery), schema validation, and the full
-source→target conversion matrix. Both `as` casts on `text`/`json` sources and
-the `parse_json` built-in call into this helper — they always use strict
-parsing. Agent-output and `exec`-output parsing continues to use the
-existing configurable strict/lenient codec pipeline and is not affected.
+**Cast and `parse_json` evaluation** are pre-resolved at lowering into a typeless
+`ConversionRecipe` (carrying a `DecodeSchema`), then executed by
+`agm.agl.eval.conversions.run_recipe`. The recipe reuses the strict leaf helpers
+in `agm.agl.runtime.convert` — `parse_json_strict` (strict JSON parsing, no
+lenient recovery), `normalize_integral_decimals`, and the typeless `decode_value`
+decode walk — plus JSON-Schema validation. Both `as` casts on `text`/`json`
+sources and the `parse_json` built-in always use strict parsing. Agent-output and
+`exec`-output parsing continues to use the existing configurable strict/lenient
+codec pipeline (which shares the same `decode_value`/`normalize_integral_decimals`
+leaves) and is not affected.
 
 Agent-value dispatch: `_eval_ask_call` extracts the `AgentValue` from the
 `agent:` named argument (or uses the default agent when absent) and issues the

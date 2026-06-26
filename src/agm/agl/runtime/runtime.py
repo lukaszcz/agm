@@ -1330,9 +1330,9 @@ def _prepare_ir_params(
     """Validate and typelessly decode external params from IR metadata."""
     from jsonschema import Draft202012Validator
 
-    from agm.agl.eval.conversions import decode_value
     from agm.agl.runtime.convert import (
         StrictJsonParseError,
+        decode_value,
         normalize_integral_decimals,
         parse_json_strict,
     )

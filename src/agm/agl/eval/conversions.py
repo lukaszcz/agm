@@ -6,12 +6,9 @@ failure it raises the module-private ``AglCastConversion`` sentinel (carrying
 the message + user-facing source/target labels + rendered raw value); the
 caller wraps it into the appropriate ``CastError`` / ``BoolValue(False)``.
 
-This module is the single source of truth for the typeless decode walk
-(``_decode``), which mirrors ``runtime.convert.json_to_value`` so the two
-conversion paths share one implementation. It reuses
-the existing runtime leaf primitives (rendering, JSON serialization, strict
-parse, integral-decimal normalization, JSON-Schema validation) rather than
-reimplementing them.
+It reuses the existing runtime leaf primitives (rendering, JSON serialization,
+strict parse, integral-decimal normalization, JSON-Schema validation, and the
+typeless ``decode_value`` decode walk) rather than reimplementing them.
 
 Imports: stdlib + ``agm.agl.semantics.values`` + ``agm.agl.ir``
 contracts + ``agm.agl.runtime`` leaf helpers.  No ``syntax`` / ``scope`` /
@@ -29,36 +26,25 @@ from jsonschema import Draft202012Validator
 from agm.agl.ir.contracts import (
     ConversionRecipe,
     ConversionStrategy,
-    DecodeSchema,
-    DictDecode,
-    EnumDecode,
-    ListDecode,
-    RecordDecode,
-    ScalarDecode,
-    ScalarKind,
 )
 from agm.agl.runtime.convert import (
     StrictJsonParseError,
     _clean_validation_message,
+    decode_value,
     normalize_integral_decimals,
     parse_json_strict,
 )
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.serialize import value_to_json_obj
 from agm.agl.semantics.values import (
-    BoolValue,
     DecimalValue,
-    DictValue,
-    EnumValue,
     IntValue,
     JsonValue,
-    ListValue,
-    RecordValue,
     TextValue,
     Value,
 )
 
-__all__ = ["AglCastConversion", "decode_value", "run_recipe"]
+__all__ = ["AglCastConversion", "run_recipe"]
 
 
 class AglCastConversion(Exception):
@@ -138,7 +124,7 @@ def run_recipe(recipe: ConversionRecipe, value: Value) -> Value:
 
 
 def _decode_from_json(recipe: ConversionRecipe, obj: object, value: Value) -> Value:
-    """Normalize → JSON-Schema validate → decode, mirroring json_obj_to_value."""
+    """Normalize → JSON-Schema validate → decode."""
     raw = render_value(value)
     normalized = normalize_integral_decimals(obj)
 
@@ -165,99 +151,3 @@ def _decode_from_json(recipe: ConversionRecipe, obj: object, value: Value) -> Va
             target_label=recipe.target_label,
             raw=raw,
         ) from exc
-
-
-def decode_value(schema: DecodeSchema, obj: object) -> Value:
-    """Construct a typed ``Value`` from JSON-shaped *obj* per *schema*.
-
-    Mirrors ``runtime.convert.json_to_value`` (identical ``ValueError``
-    messages) but walks the typeless ``DecodeSchema`` instead of a checker
-    ``Type``.
-    """
-    match schema:
-        case ScalarDecode(kind=kind):
-            return _decode_scalar(kind, obj)
-        case ListDecode(elem=elem):
-            if not isinstance(obj, list):
-                raise ValueError(f"Expected array, got {type(obj).__name__}")
-            return ListValue(tuple(decode_value(elem, e) for e in obj))
-        case DictDecode(value=value_schema):
-            if not isinstance(obj, dict):
-                raise ValueError(f"Expected object, got {type(obj).__name__}")
-            entries: dict[str, Value] = {}
-            for k, v in obj.items():
-                if not isinstance(k, str):
-                    raise ValueError(f"Dict key must be string, got {type(k).__name__}")
-                entries[k] = decode_value(value_schema, v)
-            return DictValue(entries=entries)
-        case RecordDecode(nominal=nominal, display_name=display_name, fields=fields):
-            if not isinstance(obj, dict):
-                raise ValueError(f"Expected object for record, got {type(obj).__name__}")
-            record_fields: dict[str, Value] = {}
-            for fname, fschema in fields:
-                if fname not in obj:
-                    raise ValueError(f"Missing field {fname!r}")
-                record_fields[fname] = decode_value(fschema, obj[fname])
-            return RecordValue(
-                nominal=nominal, display_name=display_name, fields=record_fields
-            )
-        case EnumDecode(nominal=nominal, display_name=display_name, variants=variants):
-            if not isinstance(obj, dict):
-                raise ValueError(f"Expected object for enum, got {type(obj).__name__}")
-            case_val = obj.get("$case")
-            if not isinstance(case_val, str):
-                raise ValueError("Enum object must have a string '$case' field")
-            variant = next((v for v in variants if v.name == case_val), None)
-            if variant is None:
-                raise ValueError(
-                    f"Unknown enum variant {case_val!r} for {display_name!r}. "
-                    f"Valid variants: {[v.name for v in variants]}"
-                )
-            payload: dict[str, Value] = {}
-            for fname, fschema in variant.fields:
-                if fname not in obj:
-                    raise ValueError(
-                        f"Enum variant {case_val!r} is missing field {fname!r}"
-                    )
-                payload[fname] = decode_value(fschema, obj[fname])
-            return EnumValue(
-                nominal=nominal,
-                display_name=display_name,
-                variant=case_val,
-                fields=payload,
-            )
-        case _ as unreachable:  # pragma: no cover
-            assert_never(unreachable)
-
-
-def _decode_scalar(kind: ScalarKind, obj: object) -> Value:
-    """Decode a JSON scalar into the matching leaf ``Value`` (json_to_value parity)."""
-    match kind:
-        case ScalarKind.TEXT:
-            if isinstance(obj, str):
-                return TextValue(obj)
-            raise ValueError(f"Expected string, got {type(obj).__name__}")
-        case ScalarKind.INT:
-            if isinstance(obj, bool):
-                raise ValueError("Expected integer, got bool")
-            if isinstance(obj, int):
-                return IntValue(obj)
-            if isinstance(obj, Decimal) and obj == obj.to_integral_value():
-                return IntValue(int(obj))
-            raise ValueError(f"Expected integer, got {type(obj).__name__} {obj!r}")
-        case ScalarKind.DECIMAL:
-            if isinstance(obj, bool):
-                raise ValueError("Expected decimal, got bool")
-            if isinstance(obj, Decimal):
-                return DecimalValue(obj)
-            if isinstance(obj, int):
-                return DecimalValue(Decimal(obj))
-            raise ValueError(f"Expected decimal, got {type(obj).__name__} {obj!r}")
-        case ScalarKind.BOOL:
-            if isinstance(obj, bool):
-                return BoolValue(obj)
-            raise ValueError(f"Expected bool, got {type(obj).__name__}")
-        case ScalarKind.JSON:
-            return JsonValue(obj)
-        case _ as unreachable:  # pragma: no cover
-            assert_never(unreachable)

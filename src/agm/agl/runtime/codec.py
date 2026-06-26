@@ -24,7 +24,6 @@ import json_repair
 from jsonschema import Draft202012Validator
 from jsonschema import ValidationError as JsonschemaValidationError
 
-from agm.agl.eval.conversions import decode_value
 from agm.agl.ir.contracts import (
     ContractRequest,
     DecodeSchema,
@@ -33,7 +32,7 @@ from agm.agl.ir.contracts import (
     ListDecode,
     RecordDecode,
 )
-from agm.agl.runtime.convert import normalize_integral_decimals
+from agm.agl.runtime.convert import decode_value, normalize_integral_decimals
 from agm.agl.runtime.request import ValidationError
 from agm.agl.semantics.types import TextType, Type
 from agm.agl.semantics.values import TextValue, Value

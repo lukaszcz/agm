@@ -1642,125 +1642,178 @@ issue
 
 
 # ---------------------------------------------------------------------------
-# 13. Coverage: _json_to_value error branches
+# 13. Coverage: decode_value error branches
 # ---------------------------------------------------------------------------
 
 
-class TestJsonToValueErrorBranches:
-    """Cover the ValueError branches inside _json_to_value."""
+class TestDecodeValueErrorBranches:
+    """Cover the ValueError branches inside decode_value / _decode_scalar."""
 
     def _parse(self, raw: str, typ: Type) -> ParseResult:
         return JsonCodec().parse(raw, typ, strict_json=False)
 
     def test_text_type_got_non_string(self) -> None:
-        # Schema accepts any string but we can test _json_to_value directly.
-        from agm.agl.runtime.convert import json_to_value as _json_to_value
+        from agm.agl.ir.contracts import ScalarDecode, ScalarKind
+        from agm.agl.runtime.convert import decode_value
 
         with pytest.raises(ValueError, match="string"):
-            _json_to_value(42, TextType())
+            decode_value(ScalarDecode(kind=ScalarKind.TEXT), 42)
 
     def test_int_type_got_bool(self) -> None:
-        from agm.agl.runtime.convert import json_to_value as _json_to_value
+        from agm.agl.ir.contracts import ScalarDecode, ScalarKind
+        from agm.agl.runtime.convert import decode_value
 
         with pytest.raises(ValueError, match="bool"):
-            _json_to_value(True, IntType())
+            decode_value(ScalarDecode(kind=ScalarKind.INT), True)
 
     def test_int_type_got_non_integer_decimal(self) -> None:
-        from agm.agl.runtime.convert import json_to_value as _json_to_value
+        from agm.agl.ir.contracts import ScalarDecode, ScalarKind
+        from agm.agl.runtime.convert import decode_value
 
         with pytest.raises(ValueError, match="integer"):
-            _json_to_value(Decimal("1.5"), IntType())
+            decode_value(ScalarDecode(kind=ScalarKind.INT), Decimal("1.5"))
 
     def test_decimal_type_got_bool(self) -> None:
-        from agm.agl.runtime.convert import json_to_value as _json_to_value
+        from agm.agl.ir.contracts import ScalarDecode, ScalarKind
+        from agm.agl.runtime.convert import decode_value
 
         with pytest.raises(ValueError, match="bool"):
-            _json_to_value(True, DecimalType())
+            decode_value(ScalarDecode(kind=ScalarKind.DECIMAL), True)
 
     def test_decimal_type_got_string(self) -> None:
-        from agm.agl.runtime.convert import json_to_value as _json_to_value
+        from agm.agl.ir.contracts import ScalarDecode, ScalarKind
+        from agm.agl.runtime.convert import decode_value
 
         with pytest.raises(ValueError, match="decimal"):
-            _json_to_value("not a number", DecimalType())
+            decode_value(ScalarDecode(kind=ScalarKind.DECIMAL), "not a number")
 
     def test_bool_type_got_int(self) -> None:
-        from agm.agl.runtime.convert import json_to_value as _json_to_value
+        from agm.agl.ir.contracts import ScalarDecode, ScalarKind
+        from agm.agl.runtime.convert import decode_value
 
         with pytest.raises(ValueError, match="bool"):
-            _json_to_value(1, BoolType())
+            decode_value(ScalarDecode(kind=ScalarKind.BOOL), 1)
 
     def test_list_type_got_non_list(self) -> None:
-        from agm.agl.runtime.convert import json_to_value as _json_to_value
+        from agm.agl.ir.contracts import ListDecode, ScalarDecode, ScalarKind
+        from agm.agl.runtime.convert import decode_value
 
         with pytest.raises(ValueError, match="array"):
-            _json_to_value("not a list", ListType(elem=TextType()))
+            decode_value(ListDecode(elem=ScalarDecode(kind=ScalarKind.TEXT)), "not a list")
 
     def test_dict_type_got_non_dict(self) -> None:
-        from agm.agl.runtime.convert import json_to_value as _json_to_value
+        from agm.agl.ir.contracts import DictDecode, ScalarDecode, ScalarKind
+        from agm.agl.runtime.convert import decode_value
 
         with pytest.raises(ValueError, match="object"):
-            _json_to_value([1, 2], DictType(value=TextType()))
+            decode_value(DictDecode(value=ScalarDecode(kind=ScalarKind.TEXT)), [1, 2])
 
     def test_dict_non_string_key(self) -> None:
-        from agm.agl.runtime.convert import json_to_value as _json_to_value
+        from agm.agl.ir.contracts import DictDecode, ScalarDecode, ScalarKind
+        from agm.agl.runtime.convert import decode_value
 
         # Construct a dict with a non-str key (not normally from json.loads but defensive).
         with pytest.raises(ValueError, match="Dict key must be string"):
-            _json_to_value({1: "val"}, DictType(value=TextType()))
-
-    def test_record_type_got_non_dict(self) -> None:
-        from agm.agl.runtime.convert import json_to_value as _json_to_value
-
-        with pytest.raises(ValueError, match="record"):
-            _json_to_value([1, 2], RecordType(name="R", fields={"x": IntType()}))
-
-    def test_record_missing_field(self) -> None:
-        from agm.agl.runtime.convert import json_to_value as _json_to_value
-
-        with pytest.raises(ValueError, match="Missing field"):
-            _json_to_value({}, RecordType(name="R", fields={"x": IntType()}))
-
-    def test_enum_type_got_non_dict(self) -> None:
-        from agm.agl.runtime.convert import json_to_value as _json_to_value
-
-        with pytest.raises(ValueError, match="object for enum"):
-            _json_to_value("oops", EnumType(name="E", variants={"A": {}}))
-
-    def test_enum_missing_case_tag(self) -> None:
-        from agm.agl.runtime.convert import json_to_value as _json_to_value
-
-        with pytest.raises(ValueError, match=r"\$case"):
-            _json_to_value({}, EnumType(name="E", variants={"A": {}}))
-
-    def test_enum_unknown_variant(self) -> None:
-        from agm.agl.runtime.convert import json_to_value as _json_to_value
-
-        with pytest.raises(ValueError, match="Unknown enum variant"):
-            _json_to_value({"$case": "X"}, EnumType(name="E", variants={"A": {}}))
-
-    def test_enum_missing_payload_field(self) -> None:
-        from agm.agl.runtime.convert import json_to_value as _json_to_value
-
-        with pytest.raises(ValueError, match="missing field"):
-            _json_to_value(
-                {"$case": "B"},
-                EnumType(name="E", variants={"B": {"x": IntType()}}),
+            decode_value(
+                DictDecode(value=ScalarDecode(kind=ScalarKind.TEXT)),
+                {1: "val"},
             )
 
-    def test_exception_type_not_supported(self) -> None:
-        from agm.agl.runtime.convert import json_to_value as _json_to_value
-        from agm.agl.semantics.types import ExceptionType
+    def test_record_type_got_non_dict(self) -> None:
+        from agm.agl.ir.contracts import RecordDecode, ScalarDecode, ScalarKind
+        from agm.agl.ir.ids import NominalId
+        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.runtime.convert import decode_value
 
-        with pytest.raises(ValueError, match="Cannot deserialise"):
-            _json_to_value({}, ExceptionType(name="Boom"))
+        schema = RecordDecode(
+            nominal=NominalId(ENTRY_ID, "R"),
+            display_name="R",
+            fields=(("x", ScalarDecode(kind=ScalarKind.INT)),),
+        )
+        with pytest.raises(ValueError, match="record"):
+            decode_value(schema, [1, 2])
+
+    def test_record_missing_field(self) -> None:
+        from agm.agl.ir.contracts import RecordDecode, ScalarDecode, ScalarKind
+        from agm.agl.ir.ids import NominalId
+        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.runtime.convert import decode_value
+
+        schema = RecordDecode(
+            nominal=NominalId(ENTRY_ID, "R"),
+            display_name="R",
+            fields=(("x", ScalarDecode(kind=ScalarKind.INT)),),
+        )
+        with pytest.raises(ValueError, match="Missing field"):
+            decode_value(schema, {})
+
+    def test_enum_type_got_non_dict(self) -> None:
+        from agm.agl.ir.contracts import EnumDecode, VariantDecode
+        from agm.agl.ir.ids import NominalId
+        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.runtime.convert import decode_value
+
+        schema = EnumDecode(
+            nominal=NominalId(ENTRY_ID, "E"),
+            display_name="E",
+            variants=(VariantDecode(name="A", fields=()),),
+        )
+        with pytest.raises(ValueError, match="object for enum"):
+            decode_value(schema, "oops")
+
+    def test_enum_missing_case_tag(self) -> None:
+        from agm.agl.ir.contracts import EnumDecode, VariantDecode
+        from agm.agl.ir.ids import NominalId
+        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.runtime.convert import decode_value
+
+        schema = EnumDecode(
+            nominal=NominalId(ENTRY_ID, "E"),
+            display_name="E",
+            variants=(VariantDecode(name="A", fields=()),),
+        )
+        with pytest.raises(ValueError, match=r"\$case"):
+            decode_value(schema, {})
+
+    def test_enum_unknown_variant(self) -> None:
+        from agm.agl.ir.contracts import EnumDecode, VariantDecode
+        from agm.agl.ir.ids import NominalId
+        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.runtime.convert import decode_value
+
+        schema = EnumDecode(
+            nominal=NominalId(ENTRY_ID, "E"),
+            display_name="E",
+            variants=(VariantDecode(name="A", fields=()),),
+        )
+        with pytest.raises(ValueError, match="Unknown enum variant"):
+            decode_value(schema, {"$case": "X"})
+
+    def test_enum_missing_payload_field(self) -> None:
+        from agm.agl.ir.contracts import EnumDecode, ScalarDecode, ScalarKind, VariantDecode
+        from agm.agl.ir.ids import NominalId
+        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.runtime.convert import decode_value
+
+        schema = EnumDecode(
+            nominal=NominalId(ENTRY_ID, "E"),
+            display_name="E",
+            variants=(
+                VariantDecode(
+                    name="B",
+                    fields=(("x", ScalarDecode(kind=ScalarKind.INT)),),
+                ),
+            ),
+        )
+        with pytest.raises(ValueError, match="missing field"):
+            decode_value(schema, {"$case": "B"})
 
     def test_integral_decimal_to_int_through_parse(self) -> None:
         """F2: wire ``1.0`` validates and converts to IntValue(1) for an int target.
 
-        Exercised through ``parse()`` (the public path), not the previously-dead
-        ``_json_to_value`` branch: post-parse normalization rewrites integral
-        Decimals to int *before* schema validation, so ``{"type": "integer"}``
-        accepts ``1.0``.
+        Exercised through ``parse()`` (the public path): post-parse normalization
+        rewrites integral Decimals to int *before* schema validation, so
+        ``{"type": "integer"}`` accepts ``1.0``.
         """
         codec = JsonCodec()
         result = codec.parse("1.0", IntType(), strict_json=False)
@@ -1786,7 +1839,7 @@ class TestJsonToValueErrorBranches:
         """F2: ``1.0`` for a decimal target yields a value-exact DecimalValue.
 
         Normalization routes the integral Decimal through int, and the
-        int→decimal widening in ``_json_to_value`` re-widens it: the resulting
+        int→decimal widening in ``decode_value`` re-widens it: the resulting
         value equals ``1`` exactly (design §5.1 — no value/precision loss;
         ``Decimal('1') == Decimal('1.0')``).
         """

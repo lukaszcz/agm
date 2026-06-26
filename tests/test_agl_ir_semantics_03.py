@@ -299,7 +299,7 @@ def test_golden_decimal_to_int_strategy() -> None:
 # ---------------------------------------------------------------------------
 # Unit tests — typeless decode walk (_decode)
 #
-# These error branches mirror runtime.convert.json_to_value but are shadowed by
+# These error branches in runtime.convert.decode_value are shadowed by
 # JSON-Schema validation on the real cast path, so they are exercised directly.
 # ---------------------------------------------------------------------------
 

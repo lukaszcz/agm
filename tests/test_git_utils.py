@@ -652,6 +652,45 @@ class TestWorktreeList:
         assert len(result) == 1
         assert result[0] == WorktreeInfo(path=Path("/repo"), branch="main")
 
+    def test_skips_prunable_worktree(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Worktrees whose directory git reports as prunable (gitdir points to a
+        non-existent location) must be omitted so callers never operate on a
+        missing directory."""
+        porcelain = (
+            "worktree /repo\nbranch refs/heads/main\n\n"
+            "worktree /repo-wt/gone\nbranch refs/heads/gone\n"
+            "prunable gitdir file points to non-existent location\n\n"
+            "worktree /repo-wt/feature\nbranch refs/heads/feature\n\n"
+        )
+        monkeypatch.setattr(
+            "agm.vcs.git.require_capture",
+            lambda cmd, **kwargs: porcelain,
+        )
+        result = worktree_list(tmp_path)
+        assert result == [
+            WorktreeInfo(path=Path("/repo"), branch="main"),
+            WorktreeInfo(path=Path("/repo-wt/feature"), branch="feature"),
+        ]
+
+    def test_skips_prunable_last_worktree_without_trailing_blank_line(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A prunable entry that is the final block (no trailing blank line) must
+        also be dropped rather than flushed by the end-of-output handling."""
+        porcelain = (
+            "worktree /repo\nbranch refs/heads/main\n\n"
+            "worktree /repo-wt/gone\nbranch refs/heads/gone\n"
+            "prunable gitdir file points to non-existent location\n"
+        )
+        monkeypatch.setattr(
+            "agm.vcs.git.require_capture",
+            lambda cmd, **kwargs: porcelain,
+        )
+        result = worktree_list(tmp_path)
+        assert result == [WorktreeInfo(path=Path("/repo"), branch="main")]
+
     def test_passes_porcelain_flag(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:

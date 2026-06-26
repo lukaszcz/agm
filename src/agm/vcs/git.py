@@ -199,19 +199,25 @@ def worktree_list(repo_dir: Path, *, env: dict[str, str] | None = None) -> list[
     worktrees: list[WorktreeInfo] = []
     path: Path | None = None
     branch: str | None = None
+    prunable = False
     for line in output.splitlines():
         if not line:
-            if path is not None:
+            if path is not None and not prunable:
                 worktrees.append(WorktreeInfo(path=path, branch=branch))
             path = None
             branch = None
+            prunable = False
             continue
         if line.startswith("worktree "):
             path = Path(line.removeprefix("worktree "))
         elif line.startswith("branch "):
             ref = line.removeprefix("branch ")
             branch = ref.removeprefix("refs/heads/")
-    if path is not None:
+        elif line.startswith("prunable"):
+            # git flags worktrees whose gitdir is missing/broken; their
+            # directory no longer exists, so skip them rather than operate on it.
+            prunable = True
+    if path is not None and not prunable:
         worktrees.append(WorktreeInfo(path=path, branch=branch))
     return worktrees
 

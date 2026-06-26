@@ -3565,7 +3565,8 @@ class TestDefensiveGuards:
             check(resolved, default_capabilities())
 
     def test_duplicate_named_arg_in_constructor_rejected(self) -> None:
-        # Exercises line 1764: duplicate named arg in _check_constructor_call.
+        # Exercises the duplicate named arg path in
+        # ConstructorChecker._check_constructor_call (typecheck/constructors.py).
         # The parser rejects duplicate named args, so we construct the AST directly.
         from agm.agl.scope.symbols import ConstructorRef
 

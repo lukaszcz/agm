@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from agm.agl.diagnostics import Diagnostic
 
@@ -24,13 +24,12 @@ def _prepare_ir_params(
     executable: "ExecutableProgram", param_values: "Mapping[str, object]"
 ) -> "tuple[dict[SymbolId, Value], list[Diagnostic]]":
     """Validate and typelessly decode external params from IR metadata."""
-    from jsonschema import Draft202012Validator
-
     from agm.agl.runtime.convert import (
         StrictJsonParseError,
         decode_value,
         normalize_integral_decimals,
         parse_json_strict,
+        validator_for_schema,
     )
     from agm.agl.runtime.serialize import dumps_exact
 
@@ -67,8 +66,9 @@ def _prepare_ir_params(
             else:
                 raise ValueError(f"expected a JSON-compatible value, got {type(raw).__name__}")
             normalized = normalize_integral_decimals(obj)
-            schema = cast(object, json.loads(decoder.json_schema))
-            validation_errors = list(Draft202012Validator(schema).iter_errors(normalized))
+            validation_errors = list(
+                validator_for_schema(decoder.json_schema).iter_errors(normalized)
+            )
             if validation_errors:
                 raise ValueError(validation_errors[0].message)
             decoded[param.symbol] = decode_value(decoder.decode, obj)

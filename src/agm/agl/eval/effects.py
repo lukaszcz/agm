@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from typing import Protocol, cast
+from typing import NoReturn, Protocol, cast
 
 from agm.agl.ir.ids import ContractId, Location, NominalId
 from agm.agl.ir.nodes import IrAsk, IrAskRequest, IrExec, IrExpr
@@ -21,6 +21,7 @@ from agm.agl.runtime.codec import ParseResult
 from agm.agl.runtime.contract import OutputContract
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.request import AgentRequest, AgentResponse
+from agm.agl.runtime.request import ValidationError as ReqValidationError
 from agm.agl.runtime.trace import TraceStore
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.exceptions import make_builtin_exception as _make_exc_value
@@ -103,6 +104,55 @@ class EffectHandlers:
                 agent_name, "interrupted", span=node.location
             ) from exc
 
+    @staticmethod
+    def _classify_parse_errors(result: ParseResult) -> tuple[ReqValidationError, ...]:
+        """Reduce a failed parse ``result`` to validation errors for the next retry."""
+        if result.errors:
+            return result.errors
+        if result.error_msg:
+            return (
+                ReqValidationError(
+                    category="invalid_json",
+                    message=result.error_msg,
+                    path="$",
+                    field=None,
+                ),
+            )
+        return ()
+
+    def _raise_agent_parse_error(
+        self,
+        *,
+        message: str,
+        agent_name: str,
+        last_raw: str | None,
+        last_normalized: str | None,
+        last_errors: tuple[ReqValidationError, ...],
+        max_attempts: int,
+        target_type_label: str,
+        json_schema: str | None,
+    ) -> NoReturn:
+        """Raise ``AgentParseError`` once all parse/retry attempts are exhausted."""
+        errors_json: list[object] = [e.to_json_obj() for e in last_errors]
+        normalized_text = last_normalized if last_normalized is not None else (last_raw or "")
+        raise AglRaise(
+            _make_exc_value(
+                "AgentParseError",
+                message,
+                trace_id=self._ctx._trace.new_event_id(),
+                raw=TextValue(last_raw or ""),
+                normalized_raw=TextValue(normalized_text),
+                agent=TextValue(agent_name),
+                attempts=IntValue(max_attempts),
+                target_type=TextValue(target_type_label),
+                expected_schema=JsonValue(
+                    None if json_schema is None else cast(object, json.loads(json_schema))
+                ),
+                validation_errors=JsonValue(errors_json),
+                metadata=JsonValue(None),
+            )
+        )
+
     def eval_ir_ask(
         self,
         _node: IrAsk,
@@ -112,8 +162,6 @@ class EffectHandlers:
         max_attempts: int,
     ) -> Value:
         """Handle IrAsk: dispatch agent and parse output."""
-        from agm.agl.runtime.request import ValidationError as ReqValidationError
-
         agent_val = self._ctx._eval(agent_expr)
         agent_name = agent_val.name if isinstance(agent_val, AgentValue) else "ask"
 
@@ -195,43 +243,21 @@ class EffectHandlers:
 
             last_raw = raw
             last_normalized = result.normalized_raw
-            if result.errors:
-                last_errors = result.errors
-            elif result.error_msg:
-                last_errors = (
-                    ReqValidationError(
-                        category="invalid_json",
-                        message=result.error_msg,
-                        path="$",
-                        field=None,
-                    ),
-                )
-            else:
-                last_errors = ()
+            last_errors = self._classify_parse_errors(result)
 
-        errors_json: list[object] = [e.to_json_obj() for e in last_errors]
-        normalized_text = last_normalized if last_normalized is not None else (last_raw or "")
-        raise AglRaise(
-            _make_exc_value(
-                "AgentParseError",
-                (
-                    f"Agent {agent_name!r} failed to produce a valid "
-                    f"{contract.target_type_label} after {max_attempts} attempt(s). "
-                    f"Last output: {last_raw!r}"
-                ),
-                trace_id=self._ctx._trace.new_event_id(),
-                raw=TextValue(last_raw or ""),
-                normalized_raw=TextValue(normalized_text),
-                agent=TextValue(agent_name),
-                attempts=IntValue(max_attempts),
-                target_type=TextValue(contract.target_type_label),
-                expected_schema=JsonValue(
-                    None if contract.json_schema is None
-                    else cast(object, json.loads(contract.json_schema))
-                ),
-                validation_errors=JsonValue(errors_json),
-                metadata=JsonValue(None),
+        self._raise_agent_parse_error(
+            message=(
+                f"Agent {agent_name!r} failed to produce a valid "
+                f"{contract.target_type_label} after {max_attempts} attempt(s). "
+                f"Last output: {last_raw!r}"
             ),
+            agent_name=agent_name,
+            last_raw=last_raw,
+            last_normalized=last_normalized,
+            last_errors=last_errors,
+            max_attempts=max_attempts,
+            target_type_label=contract.target_type_label,
+            json_schema=contract.json_schema,
         )
 
     def eval_ir_ask_request(
@@ -387,8 +413,6 @@ class EffectHandlers:
         max_attempts: int,
     ) -> Value:
         """Handle IrExec: run shell command and parse output."""
-        from agm.agl.runtime.request import ValidationError as ReqValidationError
-
         # 1. Evaluate command expression
         command_val = self._ctx._eval(command_expr)
         if not isinstance(command_val, TextValue):
@@ -479,40 +503,18 @@ class EffectHandlers:
                 return result.value
 
             last_normalized = result.normalized_raw
-            if result.errors:
-                last_errors = result.errors
-            elif result.error_msg:
-                last_errors = (
-                    ReqValidationError(
-                        category="invalid_json",
-                        message=result.error_msg,
-                        path="$",
-                        field=None,
-                    ),
-                )
-            else:
-                last_errors = ()
+            last_errors = self._classify_parse_errors(result)
 
-        errors_json_list: list[object] = [e.to_json_obj() for e in last_errors]
-        normalized_text = last_normalized if last_normalized is not None else (last_raw or "")
-        raise AglRaise(
-            _make_exc_value(
-                "AgentParseError",
-                (
-                    f"exec output failed to parse as {contract.target_type_label} "
-                    f"after {max_attempts} attempt(s). Last output: {last_raw!r}"
-                ),
-                trace_id=self._ctx._trace.new_event_id(),
-                raw=TextValue(last_raw or ""),
-                normalized_raw=TextValue(normalized_text),
-                agent=TextValue("exec"),
-                attempts=IntValue(max_attempts),
-                target_type=TextValue(contract.target_type_label),
-                expected_schema=JsonValue(
-                    None if contract.json_schema is None
-                    else cast(object, json.loads(contract.json_schema))
-                ),
-                validation_errors=JsonValue(errors_json_list),
-                metadata=JsonValue(None),
-            )
+        self._raise_agent_parse_error(
+            message=(
+                f"exec output failed to parse as {contract.target_type_label} "
+                f"after {max_attempts} attempt(s). Last output: {last_raw!r}"
+            ),
+            agent_name="exec",
+            last_raw=last_raw,
+            last_normalized=last_normalized,
+            last_errors=last_errors,
+            max_attempts=max_attempts,
+            target_type_label=contract.target_type_label,
+            json_schema=contract.json_schema,
         )

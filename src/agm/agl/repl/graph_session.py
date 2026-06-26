@@ -195,12 +195,11 @@ class GraphSession:
         if pre_eval_result is not None:
             return pre_eval_result
 
-        # Materialize contracts.
-        contracts: dict[int, object] = {}
+        # Materialize contracts (validation pass; the IR image rebuilds them below).
         contract_errors: list[Diagnostic] = []
-        for node_id, spec in checked.contract_specs.items():
+        for spec in checked.contract_specs.values():
             try:
-                contracts[node_id] = materialize_contract(spec, host_env.codecs)
+                materialize_contract(spec, host_env.codecs)
             except ValueError as exc:
                 contract_errors.append(Diagnostic(message=f"Contract error: {exc}", line=1))
         if contract_errors:
@@ -212,7 +211,6 @@ class GraphSession:
             checked=checked,
             entry_cm=entry_cm,
             cgraph=cgraph,
-            contracts=contracts,
             host_env=host_env,
             warnings=warnings,
             new_next_id=new_next_id,
@@ -284,7 +282,6 @@ class GraphSession:
         checked: CheckedProgram,
         entry_cm: CheckedModule,
         cgraph: CheckedModuleGraph,
-        contracts: dict[int, object],
         host_env: HostEnvironment,
         warnings: list[Diagnostic],
         new_next_id: int,
@@ -303,7 +300,6 @@ class GraphSession:
         from agm.agl.semantics.exceptions import AglRaise
         from agm.agl.syntax.nodes import ImportDecl
 
-        del contracts
         lowered = lower_repl_graph(
             cgraph, image=self._ctx._link_image, source_text=text, validate=True
         )

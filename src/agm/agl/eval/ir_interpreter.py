@@ -458,7 +458,6 @@ class IrInterpreter:
         self._check_call_depth()
         desc = self._program.functions[fn_id]
         closure_val = self._get_closure_for(fn_id)
-        captures_dict: Frame = dict(closure_val.captures)
 
         bound_values: list[Value] = []
         for param, arg in zip(desc.params, arguments, strict=True):
@@ -466,7 +465,7 @@ class IrInterpreter:
                 assert param.default is not None, (
                     "UseDefault arg but param has no default (lowerer bug)"
                 )
-                self._frames.append(dict(captures_dict))
+                self._frames.append(dict(closure_val.captures))
                 try:
                     val = self._eval(param.default)
                 finally:

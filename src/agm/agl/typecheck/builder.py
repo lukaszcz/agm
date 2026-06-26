@@ -128,35 +128,7 @@ class _TypeBuilder:
         # ----------------------------------------------------------------
         # Phase 1: Register names and empty shells (order-independent).
         # ----------------------------------------------------------------
-        for item in program.body.items:
-            if isinstance(item, RecordDef):
-                self._register_name(item.name, item.span, is_builtin=item.is_builtin)
-                self._env.unregister_name(item.name)
-                self._env.register_type(
-                    item.name, RecordType(name=item.name, fields={}, module_id=self._module_id)
-                )
-                self._record_defs[item.name] = item
-            elif isinstance(item, EnumDef):
-                self._register_name(item.name, item.span, is_builtin=item.is_builtin)
-                self._env.unregister_name(item.name)
-                self._env.register_type(
-                    item.name,
-                    EnumType(name=item.name, variants={}, module_id=self._module_id),
-                )
-                self._enum_defs[item.name] = item
-            elif isinstance(item, ExceptionDef):
-                self._register_name(item.name, item.span, is_builtin=item.is_builtin)
-                self._env.register_type(
-                    item.name,
-                    ExceptionType(name=item.name, fields={}, abstract=item.base is None),
-                )
-                self._exception_defs[item.name] = item
-            elif isinstance(item, TypeAlias):
-                self._register_name(item.name, item.span)
-                self._env.unregister_name(item.name)
-                self._env.register_alias(
-                    item.name, item.type_expr, type_params=item.type_params
-                )
+        self.collect_shells_only(program)
 
         # ----------------------------------------------------------------
         # Phase 2: Resolve all field/variant types with recursion detection.

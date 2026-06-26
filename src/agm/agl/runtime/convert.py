@@ -28,6 +28,7 @@ import re
 from decimal import Decimal
 from typing import assert_never
 
+from jsonschema import Draft202012Validator
 from jsonschema import ValidationError as JsonschemaValidationError
 
 from agm.agl.ir.contracts import (
@@ -71,6 +72,27 @@ class StrictJsonParseError(Exception):
     def __init__(self, message: str) -> None:
         super().__init__(message)
         self.message = message
+
+
+# ---------------------------------------------------------------------------
+# Cached JSON-Schema validators
+# ---------------------------------------------------------------------------
+
+_VALIDATOR_CACHE: dict[str, Draft202012Validator] = {}
+
+
+def validator_for_schema(json_schema: str) -> Draft202012Validator:
+    """Compile (and cache) a JSON-Schema validator from its canonical JSON string.
+
+    Shared by the cast path (``conversions``) and host param decoding
+    (``params``) so identical schemas are compiled once.
+    """
+    validator = _VALIDATOR_CACHE.get(json_schema)
+    if validator is None:
+        schema_obj: object = json.loads(json_schema)
+        validator = Draft202012Validator(schema_obj)
+        _VALIDATOR_CACHE[json_schema] = validator
+    return validator
 
 
 # ---------------------------------------------------------------------------

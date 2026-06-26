@@ -145,70 +145,7 @@ class BuiltinCallChecker:
                 span=node.span,
             )
 
-        named = {na.name: na for na in node.named_args}
-
-        # Reject unknown named args.
-        for arg_name, na in named.items():
-            if arg_name not in self._ASK_ALLOWED_NAMED_ARGS:
-                raise AglTypeError(
-                    f"ask: unknown argument '{arg_name}'.",
-                    span=na.span,
-                )
-
-        # Prompt (first positional arg — reject extra positionals).
-        if not node.args:
-            raise AglTypeError("ask() requires a prompt argument.", span=node.span)
-        if len(node.args) > 1:
-            raise AglTypeError(
-                "ask: too many positional arguments (expected 1).",
-                span=node.span,
-            )
-        prompt_type = self._ctx._check_expr(node.args[0], expected=TextType())
-        self._ctx._assert_assignable(prompt_type, TextType(), node.args[0].span)
-
-        # agent: named arg.
-        if "agent" in named:
-            agent_na = named["agent"]
-            agent_type = self._ctx._check_expr(agent_na.value, expected=None)
-            if not isinstance(agent_type, AgentType):
-                raise AglTypeError(
-                    f"'agent:' argument must be of type agent; got '{agent_type!r}'.",
-                    span=agent_na.span,
-                )
-        else:
-            if not self._ctx._caps.has_default_agent:
-                raise AglTypeError(
-                    "No default agent is configured; the built-in 'ask' call "
-                    "cannot run. Register a default agent, or run via `agm exec`, "
-                    "which provides one.",
-                    span=node.span,
-                )
-
-        if isinstance(target_type, UnitType):
-            self._reject_unit_parse_options(named, callee="ask")
-            codec_name = "none"
-            parse_policy_str = "default"
-        else:
-            codec_name, effective_strict, parse_policy_str = self._resolve_parse_options(
-                node, target_type, named
-            )
-            spec = OutputContractSpec(
-                target_type=target_type,
-                codec_name=codec_name,
-                strict_json=effective_strict,
-            )
-            self._ctx._contract_specs[node.node_id] = spec
-        self._ctx._call_sites.append(
-            CallSiteRecord(
-                node_id=node.node_id,
-                callee="ask",
-                target_type=target_type,
-                codec_name=codec_name,
-                parse_policy=parse_policy_str,
-                line=node.span.start_line,
-                col=node.span.start_col,
-            )
-        )
+        self._finish_ask_like(node, target_type, callee="ask", require_default_agent=True)
         return target_type
 
     # --- ask-request ---
@@ -244,31 +181,47 @@ class BuiltinCallChecker:
                 span=node.span,
             )
 
+        # Build the same output contract spec an ``ask`` call would, so the
+        # materialized contract (and thus the returned request) matches exactly.
+        # ``ask-request`` never dispatches, so a missing ``agent:`` is allowed.
+        self._finish_ask_like(
+            node, target_type, callee="ask-request", require_default_agent=False
+        )
+        return agent_request_type
+
+    def _finish_ask_like(
+        self, node: Call, target_type: Type, *, callee: str, require_default_agent: bool
+    ) -> None:
+        """Shared tail for ``ask`` / ``ask-request``: validate args, record the contract.
+
+        Both builtins accept the same named args, a single prompt positional, and
+        an optional ``agent:`` value, and build an identical output-contract spec +
+        call-site record.  They differ only in ``callee`` (woven into diagnostics)
+        and whether a missing ``agent:`` requires a configured default agent
+        (``ask`` dispatches; ``ask-request`` does not).
+        """
         named = {na.name: na for na in node.named_args}
 
-        # Reject unknown named args (same set as ask, minus none — agent is
-        # accepted even though it only labels the request, never dispatches).
+        # Reject unknown named args.
         for arg_name, na in named.items():
             if arg_name not in self._ASK_ALLOWED_NAMED_ARGS:
                 raise AglTypeError(
-                    f"ask-request: unknown argument '{arg_name}'.",
+                    f"{callee}: unknown argument '{arg_name}'.",
                     span=na.span,
                 )
 
         # Prompt (first positional arg — reject extra positionals).
         if not node.args:
-            raise AglTypeError(
-                "ask-request() requires a prompt argument.", span=node.span
-            )
+            raise AglTypeError(f"{callee}() requires a prompt argument.", span=node.span)
         if len(node.args) > 1:
             raise AglTypeError(
-                "ask-request: too many positional arguments (expected 1).",
+                f"{callee}: too many positional arguments (expected 1).",
                 span=node.span,
             )
         prompt_type = self._ctx._check_expr(node.args[0], expected=TextType())
         self._ctx._assert_assignable(prompt_type, TextType(), node.args[0].span)
 
-        # agent: named arg — same validation as ask (must be an agent value).
+        # agent: named arg.
         if "agent" in named:
             agent_na = named["agent"]
             agent_type = self._ctx._check_expr(agent_na.value, expected=None)
@@ -277,11 +230,16 @@ class BuiltinCallChecker:
                     f"'agent:' argument must be of type agent; got '{agent_type!r}'.",
                     span=agent_na.span,
                 )
+        elif require_default_agent and not self._ctx._caps.has_default_agent:
+            raise AglTypeError(
+                "No default agent is configured; the built-in 'ask' call "
+                "cannot run. Register a default agent, or run via `agm exec`, "
+                "which provides one.",
+                span=node.span,
+            )
 
-        # Build the same output contract spec an ``ask`` call would, so the
-        # materialized contract (and thus the returned request) matches exactly.
         if isinstance(target_type, UnitType):
-            self._reject_unit_parse_options(named, callee="ask-request")
+            self._reject_unit_parse_options(named, callee=callee)
             codec_name = "none"
             parse_policy_str = "default"
         else:
@@ -297,7 +255,7 @@ class BuiltinCallChecker:
         self._ctx._call_sites.append(
             CallSiteRecord(
                 node_id=node.node_id,
-                callee="ask-request",
+                callee=callee,
                 target_type=target_type,
                 codec_name=codec_name,
                 parse_policy=parse_policy_str,
@@ -305,7 +263,6 @@ class BuiltinCallChecker:
                 col=node.span.start_col,
             )
         )
-        return agent_request_type
 
     # --- exec ---
 

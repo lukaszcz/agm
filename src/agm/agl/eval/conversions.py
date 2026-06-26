@@ -17,11 +17,8 @@ contracts + ``agm.agl.runtime`` leaf helpers.  No ``syntax`` / ``scope`` /
 
 from __future__ import annotations
 
-import json
 from decimal import Decimal
 from typing import assert_never
-
-from jsonschema import Draft202012Validator
 
 from agm.agl.ir.contracts import (
     ConversionRecipe,
@@ -33,6 +30,7 @@ from agm.agl.runtime.convert import (
     decode_value,
     normalize_integral_decimals,
     parse_json_strict,
+    validator_for_schema,
 )
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.serialize import value_to_json_obj
@@ -62,19 +60,6 @@ class AglCastConversion(Exception):
         self.source_label = source_label
         self.target_label = target_label
         self.raw = raw
-
-
-_VALIDATOR_CACHE: dict[str, Draft202012Validator] = {}
-
-
-def _validator_for(json_schema: str) -> Draft202012Validator:
-    """Compile (and cache) a JSON-Schema validator from its canonical JSON string."""
-    validator = _VALIDATOR_CACHE.get(json_schema)
-    if validator is None:
-        schema_obj: object = json.loads(json_schema)
-        validator = Draft202012Validator(schema_obj)
-        _VALIDATOR_CACHE[json_schema] = validator
-    return validator
 
 
 def run_recipe(recipe: ConversionRecipe, value: Value) -> Value:
@@ -125,19 +110,18 @@ def run_recipe(recipe: ConversionRecipe, value: Value) -> Value:
 
 def _decode_from_json(recipe: ConversionRecipe, obj: object, value: Value) -> Value:
     """Normalize → JSON-Schema validate → decode."""
-    raw = render_value(value)
     normalized = normalize_integral_decimals(obj)
 
     if recipe.json_schema is None:  # pragma: no cover
         raise AssertionError("decode strategy requires a json_schema")
-    errors = list(_validator_for(recipe.json_schema).iter_errors(normalized))
+    errors = list(validator_for_schema(recipe.json_schema).iter_errors(normalized))
     if errors:
         msgs = "; ".join(_clean_validation_message(e) for e in errors)
         raise AglCastConversion(
             f"Schema validation failed: {msgs}",
             source_label=recipe.source_label,
             target_label=recipe.target_label,
-            raw=raw,
+            raw=render_value(value),
         )
 
     if recipe.decode is None:  # pragma: no cover
@@ -149,5 +133,5 @@ def _decode_from_json(recipe: ConversionRecipe, obj: object, value: Value) -> Va
             f"Value conversion failed: {exc}",
             source_label=recipe.source_label,
             target_label=recipe.target_label,
-            raw=raw,
+            raw=render_value(value),
         ) from exc

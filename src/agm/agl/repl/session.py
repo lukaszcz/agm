@@ -401,11 +401,10 @@ class ReplSession:
         # [5] Materialize output contracts for this entry.
         from agm.agl.runtime.contract import materialize_contract
 
-        contracts: dict[int, object] = {}
         contract_errors: list[Diagnostic] = []
-        for node_id, spec in checked.contract_specs.items():
+        for spec in checked.contract_specs.values():
             try:
-                contracts[node_id] = materialize_contract(spec, host_env.codecs)
+                materialize_contract(spec, host_env.codecs)
             except ValueError as exc:
                 contract_errors.append(Diagnostic(message=f"Contract error: {exc}", line=1))
         if contract_errors:
@@ -416,7 +415,6 @@ class ReplSession:
             text=text,
             orig_program=orig_program,
             checked=checked,
-            contracts=contracts,
             host_env=host_env,
             warnings=warnings,
             next_start_id=next_start_id,
@@ -624,7 +622,6 @@ class ReplSession:
         text: str,
         orig_program: "Program",
         checked: "CheckedProgram",
-        contracts: dict[int, object],
         host_env: "HostEnvironment",
         warnings: list[Diagnostic],
         next_start_id: int,

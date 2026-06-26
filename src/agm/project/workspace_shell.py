@@ -74,16 +74,21 @@ def workspace_shell_dir(session_name: str) -> Path:
 def _real_shell(*, env: dict[str, str] | None) -> str:
     """Return the user's real interactive shell binary path.
 
-    Honors ``$SHELL`` from *env* (or the process environment when *env* is
-    ``None``); falls back to ``/bin/sh``.  When ``$SHELL`` already points at our
-    wrapper (a re-exec scenario), it is reset to ``/bin/sh``.
+    Prefers ``$AGM_REAL_SHELL`` (set by the wrapper, preserving the real shell
+    across nested workspace shells) and falls back to ``$SHELL``; reads from
+    *env* or the process environment when *env* is ``None``.  A candidate that
+    points at our wrapper (a re-exec scenario — e.g. inside a workspace shell
+    ``$SHELL`` is the wrapper) is skipped so we never loop back into ourselves.
+    Falls back to ``/bin/sh`` when nothing usable is found.
     """
 
     source = os.environ if env is None else env
-    candidate = source.get("SHELL") or "/bin/sh"
-    if not candidate or candidate.endswith("/" + WRAPPER_NAME):
-        candidate = "/bin/sh"
-    return candidate
+    wrapper_suffix = "/" + WRAPPER_NAME
+    for name in ("AGM_REAL_SHELL", "SHELL"):
+        candidate = source.get(name)
+        if candidate and not candidate.endswith(wrapper_suffix):
+            return candidate
+    return "/bin/sh"
 
 
 def _zshenv_body() -> str:
@@ -232,6 +237,14 @@ def _wrapper_content(
             "export AGM_REAL_SHELL",
             'case "$(basename "$AGM_REAL_SHELL")" in',
             "  zsh)",
+            # Save the user's real ZDOTDIR once (mirroring AGM_USER_ENV for sh)
+            # before overwriting it, so the generated .zshenv/.zshrc replay the
+            # user's own config dir.  The +set guard keeps the captured value
+            # across nested workspace shells (where ZDOTDIR already points at an
+            # outer workspace dir).
+            '    if [ -z "${AGM_USER_ZDOTDIR+set}" ]; then',
+            '      export AGM_USER_ZDOTDIR="${ZDOTDIR:-$HOME}"',
+            "    fi",
             '    export ZDOTDIR="$AGM_WORKSPACE_SHELL_DIR/zsh"',
             '    exec "$AGM_REAL_SHELL" -i',
             "    ;;",
@@ -286,7 +299,7 @@ def regenerate_workspace_shell(shell_dir: Path) -> None:
 
     if not shell_dir.is_dir():
         raise SystemExit(f"error: not a directory: {shell_dir}")
-    real_shell = os.environ.get("AGM_REAL_SHELL") or _real_shell(env=None)
+    real_shell = _real_shell(env=None)
     wrapper_path = shell_dir / WRAPPER_NAME
     _write_shell_files(
         shell_dir=shell_dir,

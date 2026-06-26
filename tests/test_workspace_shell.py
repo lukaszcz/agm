@@ -84,6 +84,55 @@ class TestEnsureWorkspaceShell:
         text = wrapper.read_text(encoding="utf-8")
         assert "AGM_REAL_SHELL=/bin/sh" in text
 
+    def test_real_shell_prefers_agm_real_shell_when_shell_is_wrapper(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Nested open: inside a workspace shell $SHELL points at our wrapper, but
+        # the real shell is preserved in $AGM_REAL_SHELL.  We must use it rather
+        # than degrading to /bin/sh.
+        shell_dir = self._setup(tmp_path, monkeypatch)
+        env = {
+            "SHELL": str(shell_dir / WRAPPER_NAME),
+            "AGM_REAL_SHELL": "/usr/bin/zsh",
+        }
+        wrapper = ensure_workspace_shell("s", env=env)
+        text = wrapper.read_text(encoding="utf-8")
+        assert "AGM_REAL_SHELL=/usr/bin/zsh" in text
+
+    def test_real_shell_prefers_agm_real_shell_over_plain_shell(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._setup(tmp_path, monkeypatch)
+        env = {"SHELL": "/bin/bash", "AGM_REAL_SHELL": "/usr/bin/zsh"}
+        wrapper = ensure_workspace_shell("s", env=env)
+        text = wrapper.read_text(encoding="utf-8")
+        assert "AGM_REAL_SHELL=/usr/bin/zsh" in text
+
+    def test_real_shell_ignores_agm_real_shell_pointing_at_wrapper(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A corrupt AGM_REAL_SHELL pointing back at the wrapper must not be used;
+        # fall through to $SHELL instead of looping back into ourselves.
+        shell_dir = self._setup(tmp_path, monkeypatch)
+        env = {
+            "SHELL": "/bin/bash",
+            "AGM_REAL_SHELL": str(shell_dir / WRAPPER_NAME),
+        }
+        wrapper = ensure_workspace_shell("s", env=env)
+        text = wrapper.read_text(encoding="utf-8")
+        assert "AGM_REAL_SHELL=/bin/bash" in text
+
+    def test_wrapper_captures_user_zdotdir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The zsh branch must save the user's real ZDOTDIR before overwriting it,
+        # mirroring the sh AGM_USER_ENV capture, so the user's own zsh config dir
+        # is replayed (and preserved across nested opens).
+        self._setup(tmp_path, monkeypatch)
+        wrapper = ensure_workspace_shell("s", env={"SHELL": "/bin/zsh"})
+        text = wrapper.read_text(encoding="utf-8")
+        assert 'export AGM_USER_ZDOTDIR="${ZDOTDIR:-$HOME}"' in text
+
     def test_wrapper_self_heal_heredoc_writes_rc_files(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -226,6 +275,243 @@ class TestShPathDoesNotRecurse:
         assert result.returncode == 0
         # The user's original $ENV file was replayed exactly once.
         assert "ran:1" in result.stdout
+
+
+def _fake_agm(bin_dir: Path) -> None:
+    """Write a fake ``agm`` whose ``config env`` is a no-op."""
+
+    agm = bin_dir / "agm"
+    agm.write_text(
+        "\n".join(
+            [
+                "#!/bin/sh",
+                'if [ "$1" = config ] && [ "$2" = env ]; then',
+                "  exit 0",
+                "fi",
+                "exit 64",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    agm.chmod(0o755)
+
+
+class TestNestedOpen:
+    """A workspace shell opened from within another must load normal config.
+
+    Inside a workspace shell ``$SHELL`` points at our wrapper and the real shell
+    is preserved as ``$AGM_REAL_SHELL``.  A second ``agm open`` must resolve the
+    real shell from ``$AGM_REAL_SHELL`` (not degrade to ``/bin/sh``) so the
+    user's ``~/.bashrc``/``~/.zshrc`` is sourced as usual.
+    """
+
+    def test_inner_wrapper_resolves_real_shell_from_agm_real_shell(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        bash = shutil.which("bash")
+        if bash is None:
+            pytest.skip("bash is required")
+
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+        outer = ensure_workspace_shell("outer", env={"SHELL": bash})
+        # Emulate the environment a workspace bash shell exports: SHELL rewritten
+        # to the wrapper, the real shell preserved in AGM_REAL_SHELL.
+        inner_env = {"SHELL": str(outer), "AGM_REAL_SHELL": bash}
+        inner = ensure_workspace_shell("inner", env=inner_env)
+        text = inner.read_text(encoding="utf-8")
+        assert f"AGM_REAL_SHELL={bash}" in text
+
+    def test_nested_open_sources_user_bashrc(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        bash = shutil.which("bash")
+        if bash is None:
+            pytest.skip("bash is required")
+
+        cache = tmp_path / "cache"
+        home = tmp_path / "home"
+        bin_dir = tmp_path / "bin"
+        monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
+        home.mkdir()
+        bin_dir.mkdir()
+        (home / ".bashrc").write_text('export USERRC_RAN=1\n', encoding="utf-8")
+        _fake_agm(bin_dir)
+
+        outer = ensure_workspace_shell("outer", env={"SHELL": bash})
+        # The inner open runs with the workspace shell's leaked environment.
+        inner_env = {"SHELL": str(outer), "AGM_REAL_SHELL": bash}
+        inner = ensure_workspace_shell("inner", env=inner_env)
+
+        result = subprocess.run(
+            [str(inner)],
+            input='printf "ran:%s\\n" "${USERRC_RAN:-0}"\nexit\n',
+            cwd=tmp_path,
+            env={
+                **os.environ,
+                "HOME": str(home),
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                "SHELL": str(outer),
+                "AGM_REAL_SHELL": bash,
+            },
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+
+        assert result.returncode == 0
+        # The nested shell is a real bash that sourced ~/.bashrc.
+        assert "ran:1" in result.stdout
+
+    def test_nested_open_sources_user_env_for_sh(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sh = shutil.which("sh")
+        if sh is None:
+            pytest.skip("sh is required")
+
+        cache = tmp_path / "cache"
+        home = tmp_path / "home"
+        bin_dir = tmp_path / "bin"
+        monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
+        home.mkdir()
+        bin_dir.mkdir()
+        # The user's original $ENV startup file — the sh "rc".
+        user_env = home / ".userenv"
+        user_env.write_text('export USERENV_RAN=1\n', encoding="utf-8")
+        _fake_agm(bin_dir)
+
+        outer = ensure_workspace_shell("outer", env={"SHELL": sh})
+        outer_shrc = workspace_shell_dir("outer") / "sh" / "shrc"
+        # Emulate the environment a workspace sh shell exports after the outer
+        # open: SHELL -> wrapper, real shell preserved, ENV pointing at the outer
+        # shrc, and the user's original $ENV saved as AGM_USER_ENV.
+        inner_env = {
+            "SHELL": str(outer),
+            "AGM_REAL_SHELL": sh,
+            "ENV": str(outer_shrc),
+            "AGM_USER_ENV": str(user_env),
+        }
+        inner = ensure_workspace_shell("inner", env=inner_env)
+
+        result = subprocess.run(
+            [str(inner)],
+            input='printf "ran:%s\\n" "${USERENV_RAN:-0}"\nexit\n',
+            cwd=tmp_path,
+            env={
+                **os.environ,
+                "HOME": str(home),
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                "SHELL": str(outer),
+                "AGM_REAL_SHELL": sh,
+                "ENV": str(outer_shrc),
+                "AGM_USER_ENV": str(user_env),
+            },
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+
+        assert "Too many open files" not in result.stderr
+        assert result.returncode == 0
+        # The nested sh still replays the user's original $ENV exactly.
+        assert "ran:1" in result.stdout
+
+
+class TestZshCustomZdotdir:
+    """zsh users with a custom ``ZDOTDIR`` must keep their config, even nested."""
+
+    def _setup_home(self, tmp_path: Path) -> tuple[Path, Path, Path]:
+        home = tmp_path / "home"
+        zdot = home / "zdot"
+        bin_dir = tmp_path / "bin"
+        home.mkdir()
+        zdot.mkdir()
+        bin_dir.mkdir()
+        # The real config lives under the custom ZDOTDIR, NOT under $HOME.
+        (zdot / ".zshrc").write_text('export CUSTOMRC_RAN=1\n', encoding="utf-8")
+        (home / ".zshrc").write_text('export HOMERC_RAN=1\n', encoding="utf-8")
+        _fake_agm(bin_dir)
+        return home, zdot, bin_dir
+
+    def test_first_open_sources_custom_zdotdir_zshrc(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        zsh = shutil.which("zsh")
+        if zsh is None:
+            pytest.skip("zsh is required")
+
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+        home, zdot, bin_dir = self._setup_home(tmp_path)
+        wrapper = ensure_workspace_shell("s", env={"SHELL": zsh})
+
+        result = subprocess.run(
+            [str(wrapper)],
+            input='printf "custom:%s home:%s\\n" "${CUSTOMRC_RAN:-0}" "${HOMERC_RAN:-0}"\nexit\n',
+            cwd=tmp_path,
+            env={
+                **os.environ,
+                "HOME": str(home),
+                "ZDOTDIR": str(zdot),
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                "SHELL": zsh,
+            },
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+
+        assert result.returncode == 0
+        # The custom ZDOTDIR's .zshrc ran; the $HOME/.zshrc did not.
+        assert "custom:1 home:0" in result.stdout
+
+    def test_nested_open_preserves_custom_zdotdir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        zsh = shutil.which("zsh")
+        if zsh is None:
+            pytest.skip("zsh is required")
+
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+        home, zdot, bin_dir = self._setup_home(tmp_path)
+        outer = ensure_workspace_shell("outer", env={"SHELL": zsh})
+        outer_zdot = workspace_shell_dir("outer") / "zsh"
+        # Emulate the environment a workspace zsh shell exports after the outer
+        # open: SHELL -> wrapper, real shell + user's ZDOTDIR preserved, and the
+        # live ZDOTDIR pointing at the outer workspace zsh dir.
+        inner_env = {
+            "SHELL": str(outer),
+            "AGM_REAL_SHELL": zsh,
+            "AGM_USER_ZDOTDIR": str(zdot),
+            "ZDOTDIR": str(outer_zdot),
+        }
+        inner = ensure_workspace_shell("inner", env=inner_env)
+
+        result = subprocess.run(
+            [str(inner)],
+            input='printf "custom:%s home:%s\\n" "${CUSTOMRC_RAN:-0}" "${HOMERC_RAN:-0}"\nexit\n',
+            cwd=tmp_path,
+            env={
+                **os.environ,
+                "HOME": str(home),
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                "SHELL": str(outer),
+                "AGM_REAL_SHELL": zsh,
+                "AGM_USER_ZDOTDIR": str(zdot),
+                "ZDOTDIR": str(outer_zdot),
+            },
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+
+        assert result.returncode == 0
+        # The nested zsh still sources the user's custom ZDOTDIR config.
+        assert "custom:1 home:0" in result.stdout
 
 
 class TestSelfHealE2E:

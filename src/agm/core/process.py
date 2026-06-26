@@ -108,6 +108,7 @@ def _run_cleanup_command(
     if cmd is None:
         return
 
+    # core.env imports this module, so it cannot import resolve_env here without a cycle
     subprocess.run(
         cmd,
         cwd=cwd,
@@ -256,6 +257,7 @@ def _start_process_with_readers(
 
     stdin_pipe = subprocess.PIPE if stdin_text is not None else None
 
+    # core.env imports this module, so it cannot import resolve_env here without a cycle
     process: subprocess.Popen[bytes] = subprocess.Popen(
         cmd,
         cwd=cwd,

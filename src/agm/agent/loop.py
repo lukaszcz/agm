@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,14 +18,14 @@ from agm.agent.runner import (
     validate_command,
 )
 from agm.cli_support.args import LoopArgs, LoopSelectArgs
+from agm.config.command_config import load_command_config
 from agm.config.context import current_config_context
-from agm.config.errors import exit_config_command_not_found
 from agm.config.general import (
-    ConfigCommandNotFound,
     LoopConfig,
     load_loop_config,
     resolve_default_prompt_file,
 )
+from agm.core.env import clone_env
 from agm.core.fs import is_file
 
 LoopCommandArgs = LoopArgs | LoopSelectArgs
@@ -47,18 +46,9 @@ def prompt_file(filename: str) -> Path:
 
 
 def configured_loop_settings(command_name: str | None) -> LoopConfig:
-    context = current_config_context()
-    require_command = command_name is not None
-    try:
-        return load_loop_config(
-            home=context.home,
-            proj_dir=context.proj_dir,
-            cwd=context.cwd,
-            command_name=command_name,
-            require_command=require_command,
-        )
-    except ConfigCommandNotFound as error:
-        exit_config_command_not_found(error)
+    return load_command_config(
+        load_loop_config, command_name, require_command=command_name is not None
+    )
 
 
 def selected_task_text(task_file: Path) -> str:
@@ -170,7 +160,7 @@ def extra_selector_prompt_source(args: LoopCommandArgs) -> str | Path | None:
 
 
 def loop_env(tasks_dir: Path, *, task_file: Path | None = None) -> dict[str, str]:
-    env = dict(os.environ)
+    env = clone_env()
     env["TASKS_DIR"] = str(tasks_dir)
     if task_file is not None:
         env["TASK_FILE"] = str(task_file)

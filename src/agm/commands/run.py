@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import shlex
 import shutil
 import sys
@@ -13,6 +12,7 @@ from agm.cli_support.args import RunArgs
 from agm.config.context import current_config_context
 from agm.config.general import load_run_config
 from agm.core import dry_run
+from agm.core.env import clone_env
 from agm.core.process import run_foreground
 from agm.sandbox import srt
 
@@ -112,7 +112,7 @@ def _run_with_optional_resource_limits(
 
 def run(args: RunArgs) -> None:
     current = Path.cwd()
-    resolved_env = dict(os.environ)
+    resolved_env = clone_env()
     context = current_config_context(cwd=current, env=resolved_env)
     run_args = args
     run_command = normalize_run_command(list(run_args.run_command))

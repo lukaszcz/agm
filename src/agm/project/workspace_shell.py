@@ -26,6 +26,7 @@ import re
 from pathlib import Path
 from shlex import quote as shlex_quote
 
+from agm.core.env import resolve_env
 from agm.core.fs import chmod, mkdir, rmtree, write_text
 
 SHELL_SUBDIR = "shell"
@@ -79,7 +80,7 @@ def _real_shell(*, env: dict[str, str] | None) -> str:
     wrapper (a re-exec scenario), it is reset to ``/bin/sh``.
     """
 
-    source = os.environ if env is None else env
+    source = resolve_env(env)
     candidate = source.get("SHELL") or "/bin/sh"
     if not candidate or candidate.endswith("/" + WRAPPER_NAME):
         candidate = "/bin/sh"

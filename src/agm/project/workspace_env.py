@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
-from agm.core.env import load_config_dotenv_files, source_env_file
+from agm.core.env import clone_env, load_config_dotenv_files, source_env_file
 from agm.project.dependency_env import load_dependency_toml_env
 from agm.project.layout import (
     current_workspace,
@@ -24,7 +23,7 @@ def load_config_env(
 ) -> dict[str, str]:
     """Return *env* refreshed from project and workspace config files."""
 
-    resolved_env = dict(os.environ if env is None else env)
+    resolved_env = clone_env(env)
     resolved_env["PROJ_DIR"] = str(project_dir)
     resolved_env["REPO_DIR"] = str(workspace_dir)
     config_dir = project_config_dir(project_dir)

@@ -6,11 +6,23 @@ import os
 import re
 import shutil
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
 
 from dotenv import dotenv_values
 
 from agm.core.process import exit_with_output
+
+
+def resolve_env(env: Mapping[str, str] | None = None) -> Mapping[str, str]:
+    """Return *env*, or the process environment when *env* is None (no copy)."""
+    return os.environ if env is None else env
+
+
+def clone_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Return a fresh mutable copy of *env* (process environment when None)."""
+    return dict(os.environ if env is None else env)
+
 
 _SHELL_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 _SHELL_ENV_ASSIGNMENT_SKIP_NAMES = frozenset(
@@ -69,7 +81,7 @@ def source_env_files(
     side effects still happen while sourcing.
     """
 
-    base_env = dict(os.environ if env is None else env)
+    base_env = clone_env(env)
     existing_paths = [str(path) for path in paths if path.is_file()]
     if not existing_paths:
         return base_env
@@ -123,7 +135,7 @@ def load_dotenv_files(
 ) -> dict[str, str]:
     """Return *env* updated with dotenv values loaded from *paths* in order."""
 
-    resolved_env = dict(os.environ if env is None else env)
+    resolved_env = clone_env(env)
     for path in paths:
         resolved_env.update(load_dotenv_file(path))
     return resolved_env
@@ -135,7 +147,7 @@ def load_config_dotenv_files(
 ) -> dict[str, str]:
     """Return *env* updated from ``.env`` and ``.env.local`` in each config dir."""
 
-    resolved_env = dict(os.environ if env is None else env)
+    resolved_env = clone_env(env)
     for config_dir in config_dirs:
         resolved_env = load_dotenv_files(
             [config_dir / ".env", config_dir / ".env.local"],

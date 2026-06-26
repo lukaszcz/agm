@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -18,7 +19,7 @@ def test_run_delegates_sandbox_execution_to_srt(
     (tmp_path / "home").mkdir()
 
     monkeypatch.setattr(run_command.Path, "cwd", staticmethod(lambda: tmp_path / "work"))
-    monkeypatch.setattr(run_command.os, "environ", env)
+    monkeypatch.setattr(os, "environ", env)
     monkeypatch.setattr(
         run_command,
         "load_run_config",
@@ -116,7 +117,7 @@ def test_run_patches_sandbox_when_project_is_discovered(
     cwd.mkdir(parents=True)
 
     monkeypatch.setattr(run_command.Path, "cwd", staticmethod(lambda: cwd))
-    monkeypatch.setattr(run_command.os, "environ", env)
+    monkeypatch.setattr(os, "environ", env)
     monkeypatch.setattr(
         "agm.config.context.discover_current_project_dir",
         lambda current, env=None: project,
@@ -164,7 +165,7 @@ def test_run_no_memory_limit_omits_memory_max_but_keeps_default_swap_limit(
     (tmp_path / "home").mkdir()
 
     monkeypatch.setattr(run_command.Path, "cwd", staticmethod(lambda: tmp_path / "work"))
-    monkeypatch.setattr(run_command.os, "environ", env)
+    monkeypatch.setattr(os, "environ", env)
     monkeypatch.setattr(
         run_command,
         "load_run_config",
@@ -237,7 +238,7 @@ def test_run_no_memory_and_swap_limit_disable_wrapping(
     (tmp_path / "home").mkdir()
 
     monkeypatch.setattr(run_command.Path, "cwd", staticmethod(lambda: tmp_path / "work"))
-    monkeypatch.setattr(run_command.os, "environ", env)
+    monkeypatch.setattr(os, "environ", env)
     monkeypatch.setattr(
         run_command,
         "load_run_config",
@@ -294,7 +295,7 @@ def test_run_no_swap_limit_omits_memory_swap_max_property(
     (tmp_path / "home").mkdir()
 
     monkeypatch.setattr(run_command.Path, "cwd", staticmethod(lambda: tmp_path / "work"))
-    monkeypatch.setattr(run_command.os, "environ", env)
+    monkeypatch.setattr(os, "environ", env)
     monkeypatch.setattr(
         run_command,
         "load_run_config",
@@ -355,7 +356,7 @@ def test_run_zero_memory_limit_still_wraps(
     (tmp_path / "home").mkdir()
 
     monkeypatch.setattr(run_command.Path, "cwd", staticmethod(lambda: tmp_path / "work"))
-    monkeypatch.setattr(run_command.os, "environ", env)
+    monkeypatch.setattr(os, "environ", env)
     monkeypatch.setattr(
         run_command,
         "load_run_config",
@@ -416,7 +417,7 @@ def test_run_alias_with_flags_splits_into_separate_args_no_sandbox(
     (tmp_path / "home").mkdir()
 
     monkeypatch.setattr(run_command.Path, "cwd", staticmethod(lambda: tmp_path / "work"))
-    monkeypatch.setattr(run_command.os, "environ", env)
+    monkeypatch.setattr(os, "environ", env)
     monkeypatch.setattr(
         run_command,
         "load_run_config",
@@ -468,7 +469,7 @@ def test_run_alias_with_flags_splits_into_separate_args_sandbox(
     (tmp_path / "home").mkdir()
 
     monkeypatch.setattr(run_command.Path, "cwd", staticmethod(lambda: tmp_path / "work"))
-    monkeypatch.setattr(run_command.os, "environ", env)
+    monkeypatch.setattr(os, "environ", env)
     monkeypatch.setattr(
         run_command,
         "load_run_config",
@@ -530,7 +531,7 @@ def test_run_simple_alias_no_flags_no_sandbox(
     (tmp_path / "home").mkdir()
 
     monkeypatch.setattr(run_command.Path, "cwd", staticmethod(lambda: tmp_path / "work"))
-    monkeypatch.setattr(run_command.os, "environ", env)
+    monkeypatch.setattr(os, "environ", env)
     monkeypatch.setattr(
         run_command,
         "load_run_config",

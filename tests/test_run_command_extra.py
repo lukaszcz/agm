@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
@@ -65,7 +66,7 @@ class TestRunEmptyCommand:
         env = {"HOME": str(tmp_path / "home"), "PATH": "/bin"}
         (tmp_path / "home").mkdir()
         monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
-        monkeypatch.setattr(run_module.os, "environ", env)
+        monkeypatch.setattr(os, "environ", env)
         monkeypatch.setattr(
             run_module, "load_run_config", lambda **_: _make_run_config()
         )
@@ -110,7 +111,7 @@ class TestRunDryRun:
         env = {"HOME": str(tmp_path / "home"), "PATH": "/bin"}
         (tmp_path / "home").mkdir()
         monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
-        monkeypatch.setattr(run_module.os, "environ", env)
+        monkeypatch.setattr(os, "environ", env)
         return env
 
     def test_dry_run_no_sandbox_prints_command(
@@ -176,7 +177,7 @@ class TestRunDryRun:
         env = {"HOME": str(tmp_path / "home"), "PATH": "/bin", "PROJ_DIR": str(tmp_path)}
         (tmp_path / "home").mkdir()
         monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
-        monkeypatch.setattr(run_module.os, "environ", env)
+        monkeypatch.setattr(os, "environ", env)
         monkeypatch.setattr(
             run_module, "load_run_config", lambda **_: _make_run_config()
         )
@@ -206,7 +207,7 @@ class TestRunDryRun:
         env = {"HOME": str(tmp_path / "home"), "PATH": "/bin"}
         (tmp_path / "home").mkdir()
         monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
-        monkeypatch.setattr(run_module.os, "environ", env)
+        monkeypatch.setattr(os, "environ", env)
         monkeypatch.setattr(
             run_module, "load_run_config", lambda **_: _make_run_config()
         )
@@ -237,7 +238,7 @@ class TestRunDryRun:
         env = {"HOME": str(tmp_path / "home"), "PATH": "/bin"}
         (tmp_path / "home").mkdir()
         monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
-        monkeypatch.setattr(run_module.os, "environ", env)
+        monkeypatch.setattr(os, "environ", env)
         monkeypatch.setattr(
             run_module, "load_run_config", lambda **_: _make_run_config()
         )
@@ -268,7 +269,7 @@ class TestRunDryRun:
         env = {"HOME": str(tmp_path / "home"), "PATH": "/bin"}
         (tmp_path / "home").mkdir()
         monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
-        monkeypatch.setattr(run_module.os, "environ", env)
+        monkeypatch.setattr(os, "environ", env)
         monkeypatch.setattr(
             run_module, "load_run_config", lambda **_: _make_run_config()
         )
@@ -299,7 +300,7 @@ class TestRunDryRun:
         env = {"HOME": str(tmp_path / "home"), "PATH": "/bin"}
         (tmp_path / "home").mkdir()
         monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
-        monkeypatch.setattr(run_module.os, "environ", env)
+        monkeypatch.setattr(os, "environ", env)
         monkeypatch.setattr(
             run_module, "load_run_config", lambda **_: _make_run_config()
         )
@@ -335,7 +336,7 @@ class TestRunNoSandboxSwapLimit:
         env = {"HOME": str(tmp_path / "home"), "PATH": "/bin"}
         (tmp_path / "home").mkdir()
         monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
-        monkeypatch.setattr(run_module.os, "environ", env)
+        monkeypatch.setattr(os, "environ", env)
         monkeypatch.setattr(
             run_module, "load_run_config", lambda **_: _make_run_config()
         )
@@ -365,7 +366,7 @@ class TestRunNoSandboxSwapLimit:
         env = {"HOME": str(tmp_path / "home"), "PATH": "/bin"}
         (tmp_path / "home").mkdir()
         monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
-        monkeypatch.setattr(run_module.os, "environ", env)
+        monkeypatch.setattr(os, "environ", env)
         monkeypatch.setattr(
             run_module, "load_run_config", lambda **_: _make_run_config()
         )
@@ -416,7 +417,7 @@ class TestRunNoSandboxLive:
         env = {"HOME": str(tmp_path / "home"), "PATH": "/bin"}
         (tmp_path / "home").mkdir()
         monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
-        monkeypatch.setattr(run_module.os, "environ", env)
+        monkeypatch.setattr(os, "environ", env)
         monkeypatch.setattr(
             run_module, "load_run_config", lambda **_: _make_run_config()
         )
@@ -454,7 +455,7 @@ class TestRunNoSandboxLive:
         env = {"HOME": str(tmp_path / "home"), "PATH": "/bin"}
         (tmp_path / "home").mkdir()
         monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
-        monkeypatch.setattr(run_module.os, "environ", env)
+        monkeypatch.setattr(os, "environ", env)
         monkeypatch.setattr(
             run_module, "load_run_config", lambda **_: _make_run_config()
         )
@@ -495,7 +496,7 @@ class TestRunNoSandboxLive:
         env = {"HOME": str(tmp_path / "home"), "PATH": "/bin"}
         (tmp_path / "home").mkdir()
         monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
-        monkeypatch.setattr(run_module.os, "environ", env)
+        monkeypatch.setattr(os, "environ", env)
         monkeypatch.setattr(
             run_module, "load_run_config", lambda **_: _make_run_config()
         )
@@ -524,7 +525,7 @@ class TestRunNoSandboxLive:
         env = {"HOME": str(tmp_path / "home"), "PATH": "/bin", "PROJ_DIR": str(tmp_path)}
         (tmp_path / "home").mkdir()
         monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
-        monkeypatch.setattr(run_module.os, "environ", env)
+        monkeypatch.setattr(os, "environ", env)
         monkeypatch.setattr(
             run_module, "load_run_config", lambda **_: _make_run_config()
         )

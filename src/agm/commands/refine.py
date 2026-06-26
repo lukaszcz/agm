@@ -11,25 +11,15 @@ from agm.agent.response import last_response_line
 from agm.agent.review import review_once, revise_once
 from agm.agent.runner import cleanup_temp_files
 from agm.cli_support.args import RefineArgs, ReviewArgs, ReviseArgs
-from agm.config.context import current_config_context
-from agm.config.errors import exit_config_command_not_found
-from agm.config.general import ConfigCommandNotFound, RefineConfig, load_refine_config
+from agm.config.command_config import load_command_config
+from agm.config.general import RefineConfig, load_refine_config
 from agm.core.log import append_log, prepare_log_file, resolve_log_file
 
 DEFAULT_MAX_STEPS = 20
 
 
 def _refine_config(command_name: str | None) -> RefineConfig:
-    context = current_config_context()
-    try:
-        return load_refine_config(
-            home=context.home,
-            proj_dir=context.proj_dir,
-            cwd=context.cwd,
-            command_name=command_name,
-        )
-    except ConfigCommandNotFound as error:
-        exit_config_command_not_found(error)
+    return load_command_config(load_refine_config, command_name, require_command=True)
 
 
 def _write_review_file(output: str, *, temp_files: list[Path]) -> Path:

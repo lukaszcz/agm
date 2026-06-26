@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -10,7 +9,7 @@ from pathlib import Path
 
 import agm.vcs.git as git_helpers
 from agm.core.dotenv import set_dotenv_value
-from agm.core.env import load_config_dotenv_files
+from agm.core.env import load_config_dotenv_files, resolve_env
 from agm.core.process import require_success
 from agm.core.toml import TomlDict, load_toml_file, toml_dict
 
@@ -94,7 +93,7 @@ def _project_dir_from_workspace(workspace_dir: Path) -> Path | None:
 
 
 def _project_dir_from_env(env: Mapping[str, str] | None = None) -> Path | None:
-    resolved_env = os.environ if env is None else env
+    resolved_env = resolve_env(env)
     raw_project_dir = resolved_env.get("PROJ_DIR")
     if not raw_project_dir:
         return None
@@ -211,7 +210,7 @@ def current_workspace(
     detecting the workspace from *cwd*. Returns ``None`` when *cwd* is not inside
     *project_dir* and no usable ``REPO_DIR`` override is available.
     """
-    resolved_env = env if env is not None else os.environ
+    resolved_env = resolve_env(env)
     resolved_project_dir = project_dir.resolve(strict=False)
     repo_dir = project_repo_dir(project_dir).resolve(strict=False)
 

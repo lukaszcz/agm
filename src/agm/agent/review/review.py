@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from datetime import datetime
 from pathlib import Path
 
@@ -16,15 +15,15 @@ from agm.agent.runner import (
     run_prepared_prompt,
 )
 from agm.cli_support.args import ReviewArgs
+from agm.config.command_config import load_command_config
 from agm.config.context import current_config_context
-from agm.config.errors import exit_config_command_not_found
 from agm.config.general import (
-    ConfigCommandNotFound,
     ReviewConfig,
     load_review_config,
     resolve_default_prompt_file,
 )
 from agm.core import dry_run
+from agm.core.env import clone_env
 from agm.core.fs import mkdir, write_text
 from agm.core.log import default_agent_files_dir
 from agm.core.path import display_path
@@ -36,17 +35,7 @@ REVIEW_FILE_NONE = "none"
 
 
 def _review_config(command_name: str | None, *, require_command: bool) -> ReviewConfig:
-    context = current_config_context()
-    try:
-        return load_review_config(
-            home=context.home,
-            proj_dir=context.proj_dir,
-            cwd=context.cwd,
-            command_name=command_name,
-            require_command=require_command,
-        )
-    except ConfigCommandNotFound as error:
-        exit_config_command_not_found(error)
+    return load_command_config(load_review_config, command_name, require_command=require_command)
 
 
 def _resolved_review_aspects(args: ReviewArgs, config: ReviewConfig) -> str:
@@ -70,7 +59,7 @@ def prepare_review(
     runner = args.runner or config.runner or default_agent_runner()
     scope = args.scope or config.scope or DEFAULT_REVIEW_SCOPE
     aspects = _resolved_review_aspects(args, config)
-    env = dict(os.environ)
+    env = clone_env()
     env["REVIEW_SCOPE"] = scope
     env["REVIEW_ASPECTS"] = aspects
     default_prompt_file = resolve_default_prompt_file("review.md", home=context.home)

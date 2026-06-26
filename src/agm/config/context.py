@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from agm.core.env import resolve_env
 from agm.project.layout import discover_current_project_dir
 
 
@@ -26,7 +26,7 @@ def current_config_context(
 ) -> ConfigContext:
     """Return config-loading paths for the current command invocation."""
 
-    resolved_env = os.environ if env is None else env
+    resolved_env = resolve_env(env)
     resolved_cwd = Path.cwd().resolve() if cwd is None else cwd.resolve()
     home = Path(resolved_env.get("HOME", "~"))
 

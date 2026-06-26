@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import stat
 import subprocess
 from collections.abc import Generator
@@ -273,7 +274,7 @@ class TestConfigEnvRun:
     ) -> None:
         before = {"PATH": "/usr/bin", "OLD_VAR": "x"}
         after = {"PATH": "/usr/local/bin", "NEW_VAR": "y"}
-        monkeypatch.setattr(config_env_cmd.os, "environ", dict(before))
+        monkeypatch.setattr(os, "environ", dict(before))
         monkeypatch.setattr(
             config_env_cmd,
             "load_current_workspace_env",
@@ -288,7 +289,7 @@ class TestConfigEnvRun:
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
         env = {"PATH": "/bin"}
-        monkeypatch.setattr(config_env_cmd.os, "environ", dict(env))
+        monkeypatch.setattr(os, "environ", dict(env))
         monkeypatch.setattr(
             config_env_cmd,
             "load_current_workspace_env",

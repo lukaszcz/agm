@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from agm.agent.config import default_agent_runner
@@ -15,8 +14,8 @@ from agm.agent.runner import (
     run_prepared_prompt,
 )
 from agm.cli_support.args import ReviseArgs
+from agm.config.command_config import load_command_config
 from agm.config.context import current_config_context
-from agm.config.errors import exit_config_command_not_found
 from agm.config.general import (
     ConfigCommandNotFound,
     ReviseConfig,
@@ -24,22 +23,13 @@ from agm.config.general import (
     resolve_default_prompt_file,
 )
 from agm.core import dry_run
+from agm.core.env import clone_env
 from agm.core.path import path_from_cli
 from agm.parser import exit_with_usage_error
 
 
 def _revise_config(command_name: str | None, *, require_command: bool) -> ReviseConfig:
-    context = current_config_context()
-    try:
-        return load_revise_config(
-            home=context.home,
-            proj_dir=context.proj_dir,
-            cwd=context.cwd,
-            command_name=command_name,
-            require_command=require_command,
-        )
-    except ConfigCommandNotFound as error:
-        exit_config_command_not_found(error)
+    return load_command_config(load_revise_config, command_name, require_command=require_command)
 
 
 def _exit_if_lone_revise_command_name(args: ReviseArgs) -> None:
@@ -71,7 +61,7 @@ def prepare_revise(
     context = current_config_context()
     config = _revise_config(args.command_name, require_command=args.require_command_config)
     runner = args.runner or config.runner or default_agent_runner()
-    env = dict(os.environ)
+    env = clone_env()
     review_file = path_from_cli(args.review_file, cwd=context.cwd)
     env["REVIEW_FILE"] = str(review_file)
     default_prompt_file = resolve_default_prompt_file("revise.md", home=context.home)

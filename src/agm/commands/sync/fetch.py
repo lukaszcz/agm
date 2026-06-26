@@ -13,7 +13,7 @@ from agm.project.layout import (
     require_current_project_dir,
 )
 from agm.project.worktree import sync_remote_tracking_branches
-from agm.vcs.git import fetch_prune_all, find_first_git_repo, is_git_repo
+from agm.vcs.git import fetch_prune_all, find_first_git_repo, is_git_repo, worktree_prune
 
 
 def _fetch_repo(project_dir: Path, repo_path: Path) -> None:
@@ -23,6 +23,7 @@ def _fetch_repo(project_dir: Path, repo_path: Path) -> None:
     except ValueError:
         display_path = str(repo_path)
     print(f"Fetching {display_path}", flush=True)
+    worktree_prune(repo_path)
     fetch_prune_all(repo_path)
     sync_remote_tracking_branches(repo_path)
 

@@ -37,6 +37,7 @@ from agm.vcs.git import (
     symbolic_ref,
     worktree_add,
     worktree_list,
+    worktree_prune,
     worktree_remove,
 )
 
@@ -552,6 +553,24 @@ class TestWorktreeRemove:
         _assert_git_repo_command(
             captured[0], tmp_path, "worktree", "remove", "--force", str(tmp_path / "wt")
         )
+
+
+# ---------------------------------------------------------------------------
+# worktree_prune
+# ---------------------------------------------------------------------------
+
+
+class TestWorktreePrune:
+    def test_prune_passes_correct_args(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        captured: list[list[str]] = []
+        monkeypatch.setattr(
+            "agm.vcs.git.require_success",
+            lambda cmd, **kwargs: captured.append(cmd),
+        )
+        worktree_prune(tmp_path)
+        _assert_git_repo_command(captured[0], tmp_path, "worktree", "prune")
 
 
 # ---------------------------------------------------------------------------

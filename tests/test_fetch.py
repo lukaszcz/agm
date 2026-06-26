@@ -21,6 +21,7 @@ class TestFetchRepo:
         fetched: list[Path] = []
         synced: list[Path] = []
 
+        monkeypatch.setattr(fetch_cmd, "worktree_prune", lambda p: None)
         monkeypatch.setattr(fetch_cmd, "fetch_prune_all", lambda p: fetched.append(p))
         monkeypatch.setattr(
             fetch_cmd, "sync_remote_tracking_branches", lambda p: synced.append(p)
@@ -40,6 +41,7 @@ class TestFetchRepo:
         repo_dir = project_dir / "repo"
         repo_dir.mkdir(parents=True)
 
+        monkeypatch.setattr(fetch_cmd, "worktree_prune", lambda p: None)
         monkeypatch.setattr(fetch_cmd, "fetch_prune_all", lambda p: None)
         monkeypatch.setattr(fetch_cmd, "sync_remote_tracking_branches", lambda p: None)
 
@@ -56,6 +58,7 @@ class TestFetchRepo:
         other_dir = tmp_path / "other"
         other_dir.mkdir()
 
+        monkeypatch.setattr(fetch_cmd, "worktree_prune", lambda p: None)
         monkeypatch.setattr(fetch_cmd, "fetch_prune_all", lambda p: None)
         monkeypatch.setattr(fetch_cmd, "sync_remote_tracking_branches", lambda p: None)
 
@@ -74,6 +77,7 @@ class TestFetchRepo:
         fetched: list[Path] = []
         synced: list[Path] = []
 
+        monkeypatch.setattr(fetch_cmd, "worktree_prune", lambda p: None)
         monkeypatch.setattr(fetch_cmd, "fetch_prune_all", lambda p: fetched.append(p))
         monkeypatch.setattr(
             fetch_cmd, "sync_remote_tracking_branches", lambda p: synced.append(p)
@@ -83,6 +87,25 @@ class TestFetchRepo:
 
         assert fetched == [repo_dir]
         assert synced == [repo_dir]
+
+    def test_prunes_stale_worktrees(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """_fetch_repo prunes stale worktree registrations so later steps never
+        operate on a worktree directory git already considers gone."""
+        project_dir = tmp_path / "proj"
+        repo_dir = project_dir / "repo"
+        repo_dir.mkdir(parents=True)
+
+        pruned: list[Path] = []
+
+        monkeypatch.setattr(fetch_cmd, "worktree_prune", lambda p: pruned.append(p))
+        monkeypatch.setattr(fetch_cmd, "fetch_prune_all", lambda p: None)
+        monkeypatch.setattr(fetch_cmd, "sync_remote_tracking_branches", lambda p: None)
+
+        fetch_cmd._fetch_repo(project_dir, repo_dir)
+
+        assert pruned == [repo_dir]
 
 
 class TestFetchProjectRepos:
@@ -177,6 +200,7 @@ class TestFetchRun:
         monkeypatch.setattr(fetch_cmd, "iterdir", lambda p: [])
 
         fetched: list[Path] = []
+        monkeypatch.setattr(fetch_cmd, "worktree_prune", lambda p: None)
         monkeypatch.setattr(fetch_cmd, "fetch_prune_all", lambda p: fetched.append(p))
         monkeypatch.setattr(fetch_cmd, "sync_remote_tracking_branches", lambda p: None)
 
@@ -205,6 +229,7 @@ class TestFetchRun:
         monkeypatch.setattr(fetch_cmd, "find_first_git_repo", lambda p: dep1_repo)
 
         fetched: list[Path] = []
+        monkeypatch.setattr(fetch_cmd, "worktree_prune", lambda p: None)
         monkeypatch.setattr(fetch_cmd, "fetch_prune_all", lambda p: fetched.append(p))
         monkeypatch.setattr(fetch_cmd, "sync_remote_tracking_branches", lambda p: None)
 
@@ -232,6 +257,7 @@ class TestFetchRun:
         monkeypatch.setattr(fetch_cmd, "iterdir", lambda p: [not_a_dir])
 
         fetched: list[Path] = []
+        monkeypatch.setattr(fetch_cmd, "worktree_prune", lambda p: None)
         monkeypatch.setattr(fetch_cmd, "fetch_prune_all", lambda p: fetched.append(p))
         monkeypatch.setattr(fetch_cmd, "sync_remote_tracking_branches", lambda p: None)
 

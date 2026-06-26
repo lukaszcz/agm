@@ -154,8 +154,9 @@ agm workspace setup
 
 ### `agm sync fetch`
 
-Fetch the main repo and all checked-out dependencies, then create local tracking branches for
-remote branches that are not yet merged into the default origin branch.
+Prune stale Git worktree registrations, fetch the main repo and all checked-out dependencies, then
+create local tracking branches for remote branches that are not yet merged into the default origin
+branch.
 
 ```bash
 agm sync fetch

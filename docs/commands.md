@@ -32,7 +32,7 @@ Global options:
 | `agm init [--embedded \| --split] [--no-git-init \| --no-repo-git \| --no-config-git \| --no-notes-git] PROJECT_NAME` | Initialize a child project directory without cloning a repo |
 | `agm init [--embedded \| --split] [-b\|--branch BRANCH] [--no-git-init \| --no-repo-git \| --no-config-git \| --no-notes-git] [PROJECT_NAME] REPO_URL` | Initialize the current directory or named child directory and clone a repo |
 | `agm init --clone [--embedded \| --split] [-b\|--branch BRANCH] [--no-git-init \| --no-repo-git \| --no-config-git \| --no-notes-git] REPO_URL` | Initialize a URL-derived child project directory and clone a repo |
-| `agm sync fetch` | Fetch the main repo and checked-out dependencies, then create missing tracking branches |
+| `agm sync fetch` | Prune stale worktrees, fetch the main repo and checked-out dependencies, then create missing tracking branches |
 | `agm sync pull` | Run `agm sync fetch`, then run `git merge` in every dependency, main workspace, and branch workspace |
 
 An AGM workspace may be the main repo or a linked Git worktree, interpreted with AGM project
@@ -62,9 +62,13 @@ config, workspace config, dependency environment, setup scripts, and tmux sessio
 - closes only branch workspaces
 - `repo` and the main workspace branch cannot be removed with `agm workspace close`
 
+`agm sync fetch` notes:
+
+- prunes stale Git worktree registrations (those whose directories no longer exist) in each repo before fetching
+
 `agm sync pull` notes:
 
-- runs the same fetch and tracking-branch sync as `agm sync fetch` first
+- runs the same prune, fetch, and tracking-branch sync as `agm sync fetch` first
 - runs `git merge` in each dependency checkout/worktree, the main workspace, and each branch workspace
 - relies on each Git worktree's current branch upstream, matching plain `git merge`
 

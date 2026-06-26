@@ -192,6 +192,12 @@ def worktree_remove(
     require_success(args, env=env)
 
 
+def worktree_prune(repo_dir: Path, *, env: dict[str, str] | None = None) -> None:
+    """Prune worktree registrations whose directories no longer exist."""
+
+    require_success([*_git_args(repo_dir), "worktree", "prune"], env=env)
+
+
 def worktree_list(repo_dir: Path, *, env: dict[str, str] | None = None) -> list[WorktreeInfo]:
     """Parse git worktree list --porcelain."""
 

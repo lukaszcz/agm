@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING
 from agm.agl.diagnostics import format_diagnostic
 
 if TYPE_CHECKING:
-    from agm.agl.repl.session import EntryResult
+    from agm.agl.repl.entry import EntryResult
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import Value
 

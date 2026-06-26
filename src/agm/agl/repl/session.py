@@ -17,10 +17,10 @@ rendering, meta-commands, and the prompt_toolkit console are later milestones.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 from agm.agl.diagnostics import AglError, Diagnostic, diagnostic_from_span
+from agm.agl.repl.entry import EntryKind, EntryResult
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -30,7 +30,6 @@ if TYPE_CHECKING:
     from agm.agl.modules.ids import ModuleId
     from agm.agl.modules.loader import LoadedModule
     from agm.agl.modules.roots import RootSet
-    from agm.agl.pipeline import RunError
     from agm.agl.runtime.agents import AgentFn
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.types import HostEnvironment
@@ -42,8 +41,6 @@ if TYPE_CHECKING:
     from agm.agl.typecheck.env import CheckedProgram, TypeEnvironment
     from agm.agl.typecheck.graph import CheckedModule, CheckedModuleGraph
 
-
-EntryKind = Literal["expression", "binding", "declaration", "statement", "type"]
 
 # Layout-only token types that carry no statement to evaluate.
 _TRIVIAL_TOKENS: frozenset[str] = frozenset({"_NEWLINE", "_INDENT", "_DEDENT"})
@@ -72,68 +69,6 @@ def has_runnable_statements(text: str) -> bool:
         return any(token.type not in _TRIVIAL_TOKENS for token in tokenize(text))
     except Exception:  # defensive: lexer errors are treated as runnable
         return True
-
-
-# ---------------------------------------------------------------------------
-# EntryResult — pure data describing the outcome of one entry
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class EntryResult:
-    """Outcome of evaluating one REPL entry (pure data, no styled strings).
-
-    ``kind``
-        Classified by the entry's LAST item: a bare ``Expr`` → ``"expression"``
-        (``value``/``value_type`` set); ``let``/``var`` → ``"binding"``
-        (``name``/``value_type``/``value``); ``record``/``enum``/``type``/
-        ``param``/``def``/``agent`` → ``"declaration"``; ``:=`` or side-
-        effecting expr (``print``, etc.) → ``"statement"``; a REPL-only bare
-        type expression (``int``, a declared type name, ``list[T]``) →
-        ``"type"`` (``value_type`` set, no value, no state change).
-    ``name``
-        The bound/declared name, when meaningful (binding / declaration).
-    ``value``
-        The echoed runtime value (expression value or new binding value); ``None``
-        for declarations, statements, ``check_only`` runs, and failures.
-    ``value_type``
-        The static type of the echoed value; ``None`` when not applicable.
-    ``diagnostics``
-        Pre-execution error diagnostics (parse/scope/typecheck/contract/unset
-        param).  Empty on success.
-    ``warnings``
-        Advisory warnings from the type checker (e.g. non-exhaustive ``case``),
-        surfaced on every non-parse/scope path.
-    ``error``
-        The uncaught AgL exception mapped to a ``RunError`` when the entry raised
-        during evaluation; ``None`` otherwise.
-    ``ok``
-        ``True`` iff there are no error diagnostics AND no runtime error.
-    ``trace_path``
-        Path of the JSONL trace file the entry's records were appended to, or
-        ``None`` when tracing is disabled (no ``--log-file``) or for a
-        ``check_only`` (dry-run) entry, which writes no trace.
-    ``installed``
-        Names installed before a failed entry stopped. Empty for pre-execution
-        failures and successful entries.
-    ``quote_strings``
-        Whether REPL echo should quote a top-level text value. This is normally
-        ``True``. The only exception is a standalone ``ask`` builtin entry,
-        whose response is echoed as display text rather than as an AgL string
-        literal.
-    """
-
-    kind: EntryKind
-    name: str | None
-    value: "Value | None"
-    value_type: "Type | None"
-    diagnostics: list[Diagnostic]
-    warnings: list[Diagnostic]
-    error: "RunError | None"
-    ok: bool
-    trace_path: "Path | None" = None
-    installed: tuple[str, ...] = ()
-    quote_strings: bool = True
 
 
 # ---------------------------------------------------------------------------

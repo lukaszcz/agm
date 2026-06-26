@@ -7,6 +7,7 @@ result rendering, and the confirming agent wrapper.
 
 from __future__ import annotations
 
-from agm.agl.repl.session import EntryResult, ReplSession
+from agm.agl.repl.entry import EntryResult
+from agm.agl.repl.session import ReplSession
 
 __all__ = ["EntryResult", "ReplSession"]

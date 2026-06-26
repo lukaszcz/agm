@@ -20,7 +20,8 @@ from agm.agl.pipeline import RunError
 from agm.agl.repl import meta as meta_mod
 from agm.agl.repl import render as render_mod
 from agm.agl.repl.agentmode import AgentMode
-from agm.agl.repl.session import EntryKind, EntryResult, ReplSession
+from agm.agl.repl.entry import EntryKind, EntryResult
+from agm.agl.repl.session import ReplSession
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.semantics.types import IntType, TextType, Type
 from agm.agl.semantics.values import IntValue, TextValue, Value

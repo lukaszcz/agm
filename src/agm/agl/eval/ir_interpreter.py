@@ -16,9 +16,8 @@ NOT allowed: ``agm.agl.syntax``, ``agm.agl.scope``, ``agm.agl.typecheck``.
 from __future__ import annotations
 
 import decimal
-import json
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, assert_never, cast
+from typing import TYPE_CHECKING, assert_never
 
 from agm.agl.eval._decimal import AGL_DECIMAL_CONTEXT
 from agm.agl.eval.arith import (
@@ -34,10 +33,11 @@ from agm.agl.eval.arith import (
     value_eq,
 )
 from agm.agl.eval.conversions import AglCastConversion, run_recipe
+from agm.agl.eval.effects import EffectHandlers
 from agm.agl.eval.indexing import AglIndexOutOfRange, AglMissingKey, index_get, index_set
 from agm.agl.eval.matching import make_match_error as _make_match_error
 from agm.agl.ir.contracts import ConversionFailureMode
-from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SymbolId
+from agm.agl.ir.ids import ContractId, FunctionId, Location, SymbolId
 from agm.agl.ir.nodes import (
     AutoTraceField,
     IrAgentHandle,
@@ -110,12 +110,11 @@ from agm.agl.ir.operations import (
 )
 from agm.agl.ir.program import ExecutableProgram, FunctionDescriptor
 from agm.agl.ir.validate import InvalidIrError
-from agm.agl.modules.ids import PRELUDE_ID, STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import ModuleId
 from agm.agl.runtime.agents import AgentRegistry
 from agm.agl.runtime.codec import ParseResult, _parse_contract_output
 from agm.agl.runtime.convert import StrictJsonParseError, parse_json_strict
 from agm.agl.runtime.render import render_value
-from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.runtime.serialize import value_to_json_obj
 from agm.agl.runtime.trace import TraceStore, noop_trace
 from agm.agl.semantics.exceptions import AglRaise
@@ -277,7 +276,10 @@ class IrInterpreter:
         )
         self._strict_json: bool = strict_json
         self._shell_exec_timeout: float | None = shell_exec_timeout
-        self._host_contracts = host_contracts if host_contracts is not None else {}
+        self._host_contracts: Mapping[ContractId, OutputContract] = (
+            host_contracts if host_contracts is not None else {}
+        )
+        self._effects = EffectHandlers(self)
 
     def _parse_host_output(
         self, raw: str, contract_id: ContractId, *, effective_strict: bool
@@ -1106,7 +1108,7 @@ class IrInterpreter:
                 max_attempts=max_attempts,
             ):
                 try:
-                    return self._eval_ir_ask(
+                    return self._effects.eval_ir_ask(
                         node, agent_expr, prompt_expr, contract_id, max_attempts
                     )
                 except AglRaise as exc:
@@ -1115,7 +1117,7 @@ class IrInterpreter:
                     raise
 
             case IrAskRequest(agent=agent_expr, prompt=prompt_expr, contract_id=contract_id):
-                return self._eval_ir_ask_request(node, agent_expr, prompt_expr, contract_id)
+                return self._effects.eval_ir_ask_request(node, agent_expr, prompt_expr, contract_id)
 
             case IrExec(
                 command=command_expr,
@@ -1123,7 +1125,7 @@ class IrInterpreter:
                 max_attempts=max_attempts,
             ):
                 try:
-                    return self._eval_ir_exec(node, command_expr, contract_id, max_attempts)
+                    return self._effects.eval_ir_exec(node, command_expr, contract_id, max_attempts)
                 except AglRaise as exc:
                     if exc.span is None:
                         exc.span = node.location
@@ -1131,449 +1133,6 @@ class IrInterpreter:
 
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
-
-    # ------------------------------------------------------------------
-    # Agent call helpers (M6b)
-    # ------------------------------------------------------------------
-
-    def _dispatch_agent(
-        self, agent_name: str, request: AgentRequest, node: IrAsk
-    ) -> "AgentResponse":
-        """Dispatch an agent call, annotating cancellation with the ask span.
-
-        ``AgentCancelled`` (and a bare ``KeyboardInterrupt`` from an unwrapped
-        default agent) propagates out of ``AgentRegistry.dispatch`` without source
-        context. The REPL session needs the cancelled ``ask`` node's location to
-        apply partial-effects promotion by source position (just like ``AglRaise``
-        ), so we attach it here. A raw ``KeyboardInterrupt`` is normalized to
-        ``AgentCancelled(reason="interrupted")`` to match the
-        ``ConfirmingAgent`` conversion and give the session a uniform carrier.
-        """
-        from agm.agl.runtime.request import AgentCancelled
-
-        try:
-            return self._registry.dispatch(agent_name, request)
-        except AgentCancelled as exc:
-            exc.span = node.location
-            raise
-        except KeyboardInterrupt as exc:
-            raise AgentCancelled(
-                agent_name, "interrupted", span=node.location
-            ) from exc
-
-    def _eval_ir_ask(
-        self,
-        _node: IrAsk,
-        agent_expr: IrExpr,
-        prompt_expr: IrExpr,
-        contract_id: ContractId,
-        max_attempts: int,
-    ) -> Value:
-        """Handle IrAsk: dispatch agent and parse output."""
-        from agm.agl.runtime.request import ValidationError as ReqValidationError
-
-        agent_val = self._eval(agent_expr)
-        agent_name = agent_val.name if isinstance(agent_val, AgentValue) else "ask"
-
-        prompt_val = self._eval(prompt_expr)
-        if not isinstance(prompt_val, TextValue):
-            prompt_text = render_value(prompt_val)
-        else:
-            prompt_text = prompt_val.value
-
-        contract = self._program.contracts[contract_id]
-
-        # Unit-typed ask: dispatch once, no output parsing.
-        if contract.is_unit:
-            request = AgentRequest(
-                agent=agent_name,
-                prompt=prompt_text,
-                output_contract=None,
-            )
-            self._dispatch_agent(agent_name, request, _node)
-            return UnitValue()
-
-        effective_strict = (
-            contract.strict_json if contract.strict_json is not None else self._strict_json
-        )
-
-        from agm.agl.runtime.contract import TypelessOutputContract
-
-        output_contract: OutputContract | TypelessOutputContract = self._host_contracts.get(
-            contract_id
-        ) or TypelessOutputContract(
-            target_type=contract.target_type_label,
-            codec_name=contract.codec_name,
-            strict_json=contract.strict_json,
-            format_instructions=contract.format_instructions,
-            json_schema=(
-                None
-                if contract.json_schema is None
-                else cast(object, json.loads(contract.json_schema))
-            ),
-            structured_exec=contract.structured_exec,
-        )
-
-        last_raw: str | None = None
-        last_normalized: str | None = None
-        last_errors: tuple[ReqValidationError, ...] = ()
-
-        for attempt in range(max_attempts):
-            self._trace.agent_call_attempt(
-                agent=agent_name,
-                attempt=attempt,
-                prompt=prompt_text,
-                span=_node.location,
-            )
-            request = AgentRequest(
-                agent=agent_name,
-                prompt=prompt_text,
-                attempt=attempt,
-                previous_invalid_output=last_raw,
-                validation_errors=list(last_errors),
-                output_contract=output_contract,
-            )
-            response = self._dispatch_agent(agent_name, request, _node)
-            raw = response.content
-
-            result = self._parse_host_output(
-                raw, contract_id, effective_strict=effective_strict
-            )
-            self._trace.parse_result(
-                ok=result.ok,
-                raw=raw,
-                normalized_raw=result.normalized_raw or raw,
-                error_summary=result.error_msg
-                or "; ".join(error.message for error in result.errors),
-                span=_node.location,
-            )
-
-            if result.ok and result.value is not None:
-                return result.value
-
-            last_raw = raw
-            last_normalized = result.normalized_raw
-            if result.errors:
-                last_errors = result.errors
-            elif result.error_msg:
-                last_errors = (
-                    ReqValidationError(
-                        category="invalid_json",
-                        message=result.error_msg,
-                        path="$",
-                        field=None,
-                    ),
-                )
-            else:
-                last_errors = ()
-
-        errors_json: list[object] = [e.to_json_obj() for e in last_errors]
-        normalized_text = last_normalized if last_normalized is not None else (last_raw or "")
-        raise AglRaise(
-            _make_exc_value(
-                "AgentParseError",
-                (
-                    f"Agent {agent_name!r} failed to produce a valid "
-                    f"{contract.target_type_label} after {max_attempts} attempt(s). "
-                    f"Last output: {last_raw!r}"
-                ),
-                trace_id=self._trace.new_event_id(),
-                raw=TextValue(last_raw or ""),
-                normalized_raw=TextValue(normalized_text),
-                agent=TextValue(agent_name),
-                attempts=IntValue(max_attempts),
-                target_type=TextValue(contract.target_type_label),
-                expected_schema=JsonValue(
-                    None if contract.json_schema is None
-                    else cast(object, json.loads(contract.json_schema))
-                ),
-                validation_errors=JsonValue(errors_json),
-                metadata=JsonValue(None),
-            ),
-        )
-
-    def _eval_ir_ask_request(
-        self,
-        _node: IrAskRequest,
-        agent_expr: IrExpr,
-        prompt_expr: IrExpr,
-        contract_id: ContractId,
-    ) -> Value:
-        """Handle IrAskRequest: build AgentRequest record without dispatching."""
-        agent_val = self._eval(agent_expr)
-        agent_name = agent_val.name if isinstance(agent_val, AgentValue) else "ask"
-
-        prompt_val = self._eval(prompt_expr)
-        if not isinstance(prompt_val, TextValue):
-            prompt_text = render_value(prompt_val)
-        else:
-            prompt_text = prompt_val.value
-
-        contract = self._program.contracts[contract_id]
-
-        option_nominal = NominalId(STD_CORE_ID, "Option")
-
-        def _none() -> EnumValue:
-            return EnumValue(
-                nominal=option_nominal,
-                display_name="Option",
-                variant="None",
-                fields={},
-            )
-
-        def _some(value: Value) -> EnumValue:
-            return EnumValue(
-                nominal=option_nominal,
-                display_name="Option",
-                variant="Some",
-                fields={"value": value},
-            )
-
-        json_schema_value: Value
-        if contract.json_schema is None:
-            json_schema_value = _none()
-        else:
-            json_schema_value = _some(JsonValue(cast(object, json.loads(contract.json_schema))))
-
-        return RecordValue(
-            nominal=NominalId(PRELUDE_ID, "AgentRequest"),
-            display_name="AgentRequest",
-            fields={
-                "agent": TextValue(agent_name),
-                "prompt": TextValue(prompt_text),
-                "target_type": _none()
-                if contract.is_unit
-                else _some(TextValue(contract.target_type_label)),
-                "format_instructions": _none()
-                if not contract.format_instructions
-                else _some(TextValue(contract.format_instructions)),
-                "json_schema": json_schema_value,
-                "attempt": IntValue(0),
-                "previous_error": _none(),
-                "metadata": JsonValue(
-                    {
-                        "codec_name": contract.codec_name,
-                        "strict_json": contract.strict_json,
-                        "structured_exec": contract.structured_exec,
-                    }
-                ),
-            },
-        )
-
-    # ------------------------------------------------------------------
-    # Exec call helper (M6c)
-    # ------------------------------------------------------------------
-
-    def _run_exec_shell(
-        self, cmd: str, location: Location
-    ) -> tuple[str, str, int | None]:
-        """Run *cmd* via the shell; raise ``ExecError`` on spawn failure or timeout.
-
-        Returns ``(stdout, stderr, returncode)`` — a non-zero exit code is NOT
-        raised here so that the structured-exec path can treat it as data.
-        Mirrors legacy ``_run_shell_capture`` (without the trace event).
-        """
-        from agm.core.process import run_capture_result
-
-        result = run_capture_result(
-            ["sh", "-c", cmd],
-            idle_timeout=self._shell_exec_timeout,
-            isolate_process_group=True,
-        )
-        if result.spawn_error is not None:
-            spawn_error = str(result.spawn_error)
-            trace_id = self._trace.exec_command(
-                command=cmd,
-                exit_code=-1,
-                duration=result.elapsed,
-                stdout=result.stdout,
-                stderr=spawn_error,
-                timed_out=False,
-                span=location,
-            )
-            raise AglRaise(
-                _make_exc_value(
-                    "ExecError",
-                    f"Failed to spawn shell: {spawn_error}",
-                    trace_id=trace_id,
-                    command=TextValue(cmd),
-                    exit_code=IntValue(-1),
-                    stdout=TextValue(""),
-                    stderr=TextValue(spawn_error),
-                    timed_out=BoolValue(False),
-                )
-            )
-        if result.timed_out:
-            exit_code = result.returncode if result.returncode is not None else -1
-            self._trace.exec_command(
-                command=cmd,
-                exit_code=exit_code,
-                duration=result.elapsed,
-                stdout=result.stdout,
-                stderr=result.stderr,
-                timed_out=True,
-                span=location,
-            )
-            raise AglRaise(
-                _make_exc_value(
-                    "ExecError",
-                    f"Shell command timed out (idle timeout exceeded): {cmd!r}",
-                    trace_id=self._trace.new_event_id(),
-                    command=TextValue(cmd),
-                    exit_code=IntValue(exit_code),
-                    stdout=TextValue(result.stdout.rstrip("\n")),
-                    stderr=TextValue(result.stderr.rstrip("\n")),
-                    timed_out=BoolValue(True),
-                )
-            )
-        self._trace.exec_command(
-            command=cmd,
-            exit_code=result.returncode if result.returncode is not None else 0,
-            duration=result.elapsed,
-            stdout=result.stdout,
-            stderr=result.stderr,
-            timed_out=False,
-            span=location,
-        )
-        return result.stdout, result.stderr, result.returncode
-
-    def _eval_ir_exec(
-        self,
-        _node: IrExec,
-        command_expr: IrExpr,
-        contract_id: ContractId,
-        max_attempts: int,
-    ) -> Value:
-        """Handle IrExec: run shell command and parse output."""
-        from agm.agl.runtime.request import ValidationError as ReqValidationError
-
-        # 1. Evaluate command expression
-        command_val = self._eval(command_expr)
-        if not isinstance(command_val, TextValue):
-            cmd = render_value(command_val)
-        else:
-            cmd = command_val.value
-
-        contract = self._program.contracts[contract_id]
-
-        # 2. Run shell once (raises on spawn error or timeout)
-        stdout, stderr, returncode = self._run_exec_shell(cmd, _node.location)
-
-        # 3. Structured exec: return ExecResult regardless of exit code
-        if contract.structured_exec:
-            actual_exit_code = returncode if returncode is not None else 0
-            return RecordValue(
-                nominal=NominalId(PRELUDE_ID, "ExecResult"),
-                display_name="ExecResult",
-                fields={
-                    "stdout": TextValue(stdout.rstrip("\n")),
-                    "exit_code": IntValue(actual_exit_code),
-                    "stderr": TextValue(stderr.rstrip("\n")),
-                    "timed_out": BoolValue(False),
-                },
-            )
-
-        # 4. Non-zero exit raises ExecError (for text/typed execs)
-        if returncode is not None and returncode != 0:
-            raise AglRaise(
-                _make_exc_value(
-                    "ExecError",
-                    f"Shell command exited with code {returncode}: {cmd!r}",
-                    trace_id=self._trace.new_event_id(),
-                    command=TextValue(cmd),
-                    exit_code=IntValue(returncode),
-                    stdout=TextValue(stdout.rstrip("\n")),
-                    stderr=TextValue(stderr.rstrip("\n")),
-                    timed_out=BoolValue(False),
-                )
-            )
-
-        # 5. Text codec: return stdout directly
-        captured = stdout.rstrip("\n")
-        if contract.codec_name == "text":
-            return TextValue(captured)
-
-        # 6. Parse/retry loop for typed exec
-        effective_strict = (
-            contract.strict_json if contract.strict_json is not None else self._strict_json
-        )
-
-        last_raw: str | None = captured
-        last_normalized: str | None = None
-        last_errors: tuple[ReqValidationError, ...] = ()
-
-        for attempt in range(max_attempts):
-            if attempt > 0:
-                # Re-run shell on retry (raises on spawn error / timeout / non-zero exit)
-                stdout2, stderr2, rc2 = self._run_exec_shell(cmd, _node.location)
-                if rc2 is not None and rc2 != 0:
-                    raise AglRaise(
-                        _make_exc_value(
-                            "ExecError",
-                            f"Shell command exited with code {rc2}: {cmd!r}",
-                            trace_id=self._trace.new_event_id(),
-                            command=TextValue(cmd),
-                            exit_code=IntValue(rc2),
-                            stdout=TextValue(stdout2.rstrip("\n")),
-                            stderr=TextValue(stderr2.rstrip("\n")),
-                            timed_out=BoolValue(False),
-                        )
-                    )
-                last_raw = stdout2.rstrip("\n")
-
-            result = self._parse_host_output(
-                last_raw or "", contract_id, effective_strict=effective_strict
-            )
-            self._trace.parse_result(
-                ok=result.ok,
-                raw=last_raw or "",
-                normalized_raw=result.normalized_raw or (last_raw or ""),
-                error_summary=result.error_msg
-                or "; ".join(error.message for error in result.errors),
-                span=_node.location,
-            )
-
-            if result.ok and result.value is not None:
-                return result.value
-
-            last_normalized = result.normalized_raw
-            if result.errors:
-                last_errors = result.errors
-            elif result.error_msg:
-                last_errors = (
-                    ReqValidationError(
-                        category="invalid_json",
-                        message=result.error_msg,
-                        path="$",
-                        field=None,
-                    ),
-                )
-            else:
-                last_errors = ()
-
-        errors_json_list: list[object] = [e.to_json_obj() for e in last_errors]
-        normalized_text = last_normalized if last_normalized is not None else (last_raw or "")
-        raise AglRaise(
-            _make_exc_value(
-                "AgentParseError",
-                (
-                    f"exec output failed to parse as {contract.target_type_label} "
-                    f"after {max_attempts} attempt(s). Last output: {last_raw!r}"
-                ),
-                trace_id=self._trace.new_event_id(),
-                raw=TextValue(last_raw or ""),
-                normalized_raw=TextValue(normalized_text),
-                agent=TextValue("exec"),
-                attempts=IntValue(max_attempts),
-                target_type=TextValue(contract.target_type_label),
-                expected_schema=JsonValue(
-                    None if contract.json_schema is None
-                    else cast(object, json.loads(contract.json_schema))
-                ),
-                validation_errors=JsonValue(errors_json_list),
-                metadata=JsonValue(None),
-            )
-        )
 
     # ------------------------------------------------------------------
     # Pattern matching helper (M3f-B)

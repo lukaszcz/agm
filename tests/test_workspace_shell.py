@@ -154,6 +154,80 @@ class TestShellRegenCommand:
         assert (shell_dir / WRAPPER_NAME).is_file()
 
 
+class TestShPathDoesNotRecurse:
+    def test_shrc_does_not_source_itself(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The sh rc must not source ``$ENV`` (which points back at itself).
+
+        Regression test: the wrapper exports ``ENV`` pointing at the agm ``shrc``
+        before exec'ing ``sh -i``.  If ``shrc`` then sources ``$ENV`` it sources
+        itself recursively, exhausting file descriptors ("Too many open files").
+        """
+
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+        shell_dir = workspace_shell_dir("s")
+        ensure_workspace_shell("s", env={"SHELL": "/bin/sh"})
+        shrc = (shell_dir / "sh" / "shrc").read_text(encoding="utf-8")
+        assert '. "$ENV"' not in shrc
+
+    def test_sh_wrapper_terminates_without_fd_exhaustion(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sh = shutil.which("sh")
+        if sh is None:
+            pytest.skip("sh is required")
+
+        cache = tmp_path / "cache"
+        home = tmp_path / "home"
+        bin_dir = tmp_path / "bin"
+        monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
+        home.mkdir()
+        bin_dir.mkdir()
+        # The user's original $ENV startup file — must be sourced exactly once.
+        user_env = home / ".userenv"
+        user_env.write_text('export USERENV_RAN=1\n', encoding="utf-8")
+        agm = bin_dir / "agm"
+        agm.write_text(
+            "\n".join(
+                [
+                    "#!/bin/sh",
+                    'if [ "$1" = config ] && [ "$2" = env ]; then',
+                    "  exit 0",
+                    "fi",
+                    "exit 64",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        agm.chmod(0o755)
+
+        wrapper = ensure_workspace_shell("s", env={"SHELL": sh})
+
+        result = subprocess.run(
+            [str(wrapper)],
+            input='printf "ran:%s\\n" "${USERENV_RAN:-0}"\nexit\n',
+            cwd=tmp_path,
+            env={
+                **os.environ,
+                "HOME": str(home),
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                "SHELL": sh,
+                "ENV": str(user_env),
+            },
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+
+        assert "Too many open files" not in result.stderr
+        assert result.returncode == 0
+        # The user's original $ENV file was replayed exactly once.
+        assert "ran:1" in result.stdout
+
+
 class TestSelfHealE2E:
     def test_wrapper_recreates_rc_files_after_partial_deletion(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

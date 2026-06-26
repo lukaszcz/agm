@@ -143,11 +143,15 @@ def _bashrc_body() -> str:
 
 
 def _shrc_body() -> str:
+    # Replay the user's original $ENV startup file, captured by the wrapper as
+    # $AGM_USER_ENV before it overwrote $ENV to point at this file.  Sourcing
+    # $ENV here would source this file recursively (it now points at itself),
+    # exhausting file descriptors ("Too many open files"); use the saved path.
     return "\n".join(
         [
             "# agm workspace shell: source the user's sh rc, then apply agm env",
-            'if [ -n "${ENV:-}" ] && [ -f "$ENV" ]; then',
-            '  . "$ENV"',
+            'if [ -n "${AGM_USER_ENV:-}" ] && [ -f "$AGM_USER_ENV" ]; then',
+            '  . "$AGM_USER_ENV"',
             "fi",
             'if [ -f "$HOME/.shrc" ]; then',
             '  . "$HOME/.shrc"',
@@ -235,6 +239,11 @@ def _wrapper_content(
             '    exec "$AGM_REAL_SHELL" --rcfile "$AGM_WORKSPACE_SHELL_DIR/bash/bashrc" -i',
             "    ;;",
             "  *)",
+            # Save the user's original $ENV once (even if empty) so the sh rc can
+            # replay it; without this the rc would source $ENV — itself — forever.
+            '    if [ -z "${AGM_USER_ENV+set}" ]; then',
+            '      export AGM_USER_ENV="${ENV:-}"',
+            "    fi",
             '    export ENV="$AGM_WORKSPACE_SHELL_DIR/sh/shrc"',
             '    exec "$AGM_REAL_SHELL" -i',
             "    ;;",

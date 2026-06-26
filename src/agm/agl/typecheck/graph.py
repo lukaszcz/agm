@@ -43,7 +43,7 @@ Algorithm
    :class:`~agm.agl.typecheck.env.TypeEnvironment` seeded with the module's own
    types (from the graph table), ALL function binding types (from the
    function-signature pre-pass), and the graph table + import env for cross-module
-   lookups, then run the existing :class:`~agm.agl.typecheck.checker._TypeBuilder`
+   lookups, then run the existing :class:`~agm.agl.typecheck.builder._TypeBuilder`
    and :class:`~agm.agl.typecheck.checker._Checker` logic.
 
 Single-module equivalence
@@ -70,7 +70,8 @@ from agm.agl.semantics.types import (
     Type,
 )
 from agm.agl.syntax.nodes import EnumDef, ExceptionDef, FuncDef, Program, RecordDef, TypeAlias
-from agm.agl.typecheck.checker import _Checker, _TypeBuilder
+from agm.agl.typecheck.builder import _TypeBuilder
+from agm.agl.typecheck.checker import _Checker
 from agm.agl.typecheck.env import (
     CallSiteRecord,
     ConstructorSignature,
@@ -162,7 +163,7 @@ class CheckedModuleGraph:
 def _collect_shells_only(builder: _TypeBuilder, program: object) -> None:
     """Run only phase 1 (shell registration) of ``_TypeBuilder.collect``.
 
-    Delegates to :meth:`~agm.agl.typecheck.checker._TypeBuilder.collect_shells_only`,
+    Delegates to :meth:`~agm.agl.typecheck.builder._TypeBuilder.collect_shells_only`,
     the public API added to ``_TypeBuilder`` for this purpose.
     """
     assert isinstance(program, Program)

@@ -99,7 +99,7 @@ from agm.agl.typecheck import (
     UnitType,
     check,
 )
-from agm.agl.typecheck.checker import _TypeBuilder
+from agm.agl.typecheck.builder import _TypeBuilder
 from tests._agl_helpers import all_node_ids
 
 # ---------------------------------------------------------------------------

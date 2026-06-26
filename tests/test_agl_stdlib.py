@@ -22,11 +22,11 @@ from agm.agl.semantics.types import (
     TypeVarType,
 )
 from agm.agl.typecheck import check
+from agm.agl.typecheck.builder import _type_shape_matches
 from agm.agl.typecheck.checker import (
     _builtin_function_signature,
     _builtin_function_signature_alternates,
     _signature_matches,
-    _type_shape_matches,
 )
 from agm.agl.typecheck.env import AglTypeError, FunctionSignature
 from agm.agl.typecheck.graph import check_graph

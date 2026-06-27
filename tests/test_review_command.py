@@ -1664,3 +1664,132 @@ def test_refine_no_max_steps_runs_until_complete(
     )
 
     assert len(revisions) == 25
+
+
+def _minimal_refine_args() -> RefineArgs:
+    return RefineArgs(
+        max_steps=3,
+        no_max_steps=False,
+        runner=None,
+        reviewer=None,
+        reviser=None,
+        scope=None,
+        aspects=None,
+        review_prompt=None,
+        review_prompt_file=None,
+        extra_review_prompt=None,
+        extra_review_prompt_file=None,
+        revise_prompt=None,
+        revise_prompt_file=None,
+        extra_revise_prompt=None,
+        extra_revise_prompt_file=None,
+        no_log=True,
+    )
+
+
+def test_refine_review_once_spawn_failure_propagates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SystemExit(1) from review_once (simulating spawn failure) propagates out of refine."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+
+    def failing_review_once(
+        args: ReviewArgs,
+        *,
+        stdout_callback: Callable[[str], None],
+        stderr_callback: Callable[[str], None],
+    ) -> str:
+        del args, stdout_callback, stderr_callback
+        raise SystemExit(1)
+
+    def unreachable_revise_once(
+        args: ReviseArgs,
+        *,
+        stdout_callback: Callable[[str], None],
+        stderr_callback: Callable[[str], None],
+    ) -> str:
+        del args, stdout_callback, stderr_callback
+        raise AssertionError("revise_once must not be called when review_once fails")
+
+    monkeypatch.setattr("agm.commands.refine.review_once", failing_review_once)
+    monkeypatch.setattr("agm.commands.refine.revise_once", unreachable_revise_once)
+
+    with pytest.raises(SystemExit) as exc_info:
+        refine(_minimal_refine_args())
+
+    assert exc_info.value.code == 1
+
+
+def test_refine_review_once_timeout_propagates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SystemExit(124) from review_once (simulating idle timeout) propagates out of refine."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+
+    def timeout_review_once(
+        args: ReviewArgs,
+        *,
+        stdout_callback: Callable[[str], None],
+        stderr_callback: Callable[[str], None],
+    ) -> str:
+        del args, stdout_callback, stderr_callback
+        raise SystemExit(124)
+
+    def unreachable_revise_once(
+        args: ReviseArgs,
+        *,
+        stdout_callback: Callable[[str], None],
+        stderr_callback: Callable[[str], None],
+    ) -> str:
+        del args, stdout_callback, stderr_callback
+        raise AssertionError("revise_once must not be called when review_once fails")
+
+    monkeypatch.setattr("agm.commands.refine.review_once", timeout_review_once)
+    monkeypatch.setattr("agm.commands.refine.revise_once", unreachable_revise_once)
+
+    with pytest.raises(SystemExit) as exc_info:
+        refine(_minimal_refine_args())
+
+    assert exc_info.value.code == 124
+
+
+def test_refine_revise_once_spawn_failure_propagates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SystemExit(1) from revise_once (after successful review) propagates out of refine."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+
+    def succeeding_review_once(
+        args: ReviewArgs,
+        *,
+        stdout_callback: Callable[[str], None],
+        stderr_callback: Callable[[str], None],
+    ) -> str:
+        del args, stdout_callback, stderr_callback
+        return "review output\n"
+
+    def failing_revise_once(
+        args: ReviseArgs,
+        *,
+        stdout_callback: Callable[[str], None],
+        stderr_callback: Callable[[str], None],
+    ) -> str:
+        del args, stdout_callback, stderr_callback
+        raise SystemExit(1)
+
+    monkeypatch.setattr("agm.commands.refine.review_once", succeeding_review_once)
+    monkeypatch.setattr("agm.commands.refine.revise_once", failing_revise_once)
+
+    with pytest.raises(SystemExit) as exc_info:
+        refine(_minimal_refine_args())
+
+    assert exc_info.value.code == 1

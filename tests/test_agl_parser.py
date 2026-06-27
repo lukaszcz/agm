@@ -1145,6 +1145,34 @@ class TestBinaryOperators:
         with pytest.raises(AglSyntaxError):
             parse("x == y")
 
+    def test_eq_eq_message(self) -> None:
+        """== triggers the 'Use `=` for equality.' friendly diagnostic (design §2.3)."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse("let b = a == b")
+        assert str(exc_info.value) == "Use `=` for equality."
+
+    @pytest.mark.parametrize(
+        "src",
+        [
+            "x = y = z",
+            "1 < 2 < 3",
+            "a <= b != c",
+        ],
+    )
+    def test_chained_comparison_raises(self, src: str) -> None:
+        """Chained comparisons are non-associative in AgL (design §4.3)."""
+        with pytest.raises(AglSyntaxError, match="non-associative"):
+            parse(src)
+
+    def test_chained_comparison_full_message(self) -> None:
+        """Pins the full designed wording for the chained-comparison diagnostic."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse("x = y = z")
+        assert str(exc_info.value) == (
+            "Comparisons are non-associative; parenthesize explicitly, "
+            "e.g. `(x = y) = z`."
+        )
+
 
 # ---------------------------------------------------------------------------
 # Control flow: if_expr

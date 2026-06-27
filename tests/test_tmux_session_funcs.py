@@ -38,18 +38,18 @@ def _enable_dry_run() -> None:
 
 
 # ===========================================================================
-# _filter_env — SKIP_PREFIXES branch (lines 34-36)
+# _filter_env — SKIP_PREFIXES branch
 # ===========================================================================
 
 
 class TestFilterEnvSkipPrefixes:
-    """Ensure lines 34-36 (prefix filtering + append) are exercised."""
+    """Ensure prefix-filtered env vars are excluded and non-prefixed ones appended."""
 
     def test_valid_env_var_with_skip_prefix_is_excluded(self) -> None:
         result = _filter_env({"TMUX_PANE": "%0", "MYVAR": "hello"})
         names = [n for n, _ in result]
-        assert "MYVAR" in names  # line 36: filtered.append
-        assert "TMUX_PANE" not in names  # line 34-35: startswith check + continue
+        assert "MYVAR" in names  # non-prefixed var is appended
+        assert "TMUX_PANE" not in names  # TMUX_ prefix triggers skip
 
     def test_xdg_prefix_excluded(self) -> None:
         result = _filter_env({"XDG_SESSION_ID": "1", "HOME_DIR": "/home"})
@@ -59,12 +59,12 @@ class TestFilterEnvSkipPrefixes:
 
 
 # ===========================================================================
-# create_tmux_session — dry_run with env vars (line 56)
+# create_tmux_session — dry_run with env vars
 # ===========================================================================
 
 
 class TestCreateTmuxSessionWithEnvArgs:
-    """Ensure line 56 (tmux_env_args.extend) is hit."""
+    """Ensure env var args are included in the tmux command (tmux_env_args.extend path)."""
 
     def test_detached_dry_run_with_filtered_env_includes_e_flag(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

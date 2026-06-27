@@ -1,7 +1,7 @@
-"""Tests for the AgL v2 type model (S3a).
+"""Tests for the AgL v2 type model.
 
-Imports ONLY ``agm.agl.semantics.types`` and ``agm.agl.typecheck.env`` —
-both import cleanly without depending on the checker (which is mid-rewrite).
+Covers ``agm.agl.semantics.types`` and ``agm.agl.typecheck.env`` —
+both import cleanly without depending on the rest of the checker.
 
 Coverage:
 - UnitType / AgentType / FunctionType: kind, repr, structural equality.

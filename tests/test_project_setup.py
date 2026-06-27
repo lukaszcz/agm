@@ -535,7 +535,7 @@ class TestRunSetupWithCurrentWorkspaceResult:
     def test_run_setup_branch_none_uses_repo_branch_for_target_name(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """run_setup uses repo_branch for target_name when branch is None (line 100)."""
+        """run_setup uses repo_branch for target_name when branch is None."""
         import agm.project.workspace_setup as setup_module
 
         project_dir = tmp_path / "proj"
@@ -566,7 +566,7 @@ class TestRunSetupWithCurrentWorkspaceResult:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """When setup_path is not relative to workspace_dir or project_dir,
-        the absolute path is used as the label (lines 127-128)."""
+        the absolute path is used as the label."""
         import agm.project.workspace_setup as setup_module
 
         project_dir = tmp_path / "proj"

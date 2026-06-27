@@ -295,7 +295,7 @@ class TestRunDryRun:
     def test_dry_run_no_sandbox_returns_after_printing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """Cover run.py:193 — dry_run no_sandbox path prints command and returns."""
+        """Cover dry_run no_sandbox path: prints command and returns without executing."""
         self._enable_dry_run()
         env = {"HOME": str(tmp_path / "home"), "PATH": "/bin"}
         (tmp_path / "home").mkdir()
@@ -322,7 +322,7 @@ class TestRunDryRun:
 
 
 # ===========================================================================
-# run — no_sandbox swap limit (line 139)
+# run — no_sandbox swap limit
 # ===========================================================================
 
 
@@ -362,7 +362,7 @@ class TestRunNoSandboxSwapLimit:
     def test_no_sandbox_uses_swap_from_args(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Cover run.py:139 — elif no_sandbox: effective_swap_limit = run_args.swap."""
+        """Cover no_sandbox path: effective_swap_limit is taken from run_args.swap."""
         env = {"HOME": str(tmp_path / "home"), "PATH": "/bin"}
         (tmp_path / "home").mkdir()
         monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
@@ -487,11 +487,11 @@ class TestRunNoSandboxLive:
     def test_no_sandbox_return_after_resource_limits(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Cover run.py:193 — unreachable return after _run_with_optional_resource_limits.
+        """Cover the unreachable return after _run_with_optional_resource_limits.
 
         _run_with_optional_resource_limits always raises SystemExit, so the
-        `return` on line 193 is normally unreachable. By monkeypatching it to
-        return normally, we exercise that line.
+        trailing return is normally unreachable. By monkeypatching it to
+        return normally, we exercise that code path.
         """
         env = {"HOME": str(tmp_path / "home"), "PATH": "/bin"}
         (tmp_path / "home").mkdir()
@@ -501,7 +501,7 @@ class TestRunNoSandboxLive:
             run_module, "load_run_config", lambda **_: _make_run_config()
         )
         # Monkeypatch _run_with_optional_resource_limits to return normally
-        # instead of always raising SystemExit, making the `return` on line 193 reachable.
+        # instead of always raising SystemExit, making the trailing return reachable.
         monkeypatch.setattr(run_module, "_run_with_optional_resource_limits", lambda **kw: None)
 
         # Should return normally (no SystemExit) with return value of None

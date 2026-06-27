@@ -1184,10 +1184,10 @@ def test_current_workspace_or_project_root_falls_back_to_git_checkout_root(
 
 
 class TestCurrentProjectDirFallbackPaths:
-    def test_uses_git_common_dir_fallback(
+    def test_simplified_fallback_ignores_git_common_dir(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        """git_common_dir is not used by simplified fallback discovery."""
+        """Simplified fallback discovery returns the worktree itself, not git_common_dir."""
         worktree = tmp_path / "worktree"
         worktree.mkdir()
         subprocess.run(["git", "init", "-b", "main"], cwd=worktree, env=env, check=True)
@@ -1750,8 +1750,8 @@ def test_copy_config_copies_dot_env_directly_when_branch_given(tmp_path: Path) -
 
 
 def test_copy_config_skips_branch_dir_when_not_a_dir(tmp_path: Path) -> None:
-    """When workspace_config_dir is not a directory, the 'if workspace_config_dir.is_dir()'
-    branch on line 422 is False and we skip to _merge_config_dotenv_files."""
+    """When workspace_config_dir is not a directory, the branch-dir copy is skipped
+    and processing continues to _merge_config_dotenv_files."""
     project = tmp_path / "proj"
     config_dir = project / "config"
     config_dir.mkdir(parents=True)

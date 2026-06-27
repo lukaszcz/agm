@@ -578,8 +578,7 @@ class TestPrepareRuntime:
         with pytest.raises(SystemExit) as exc_info:
             prepare_runtime(args)
         assert exc_info.value.code == 1
-        # Improve coverage for the missing implement.md error path (line 165-166)
-        # This also verifies that selector mode requires implement.md when no explicit prompt
+        # Verifies that selector mode requires implement.md when no explicit prompt is given.
 
     def test_prepare_runtime_selector_mode_no_implement_with_inline_prompt(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

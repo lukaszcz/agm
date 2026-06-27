@@ -986,7 +986,7 @@ def test_name_not_in_s_qualified_lookup(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: _check_module_qualified_variant: resolved is not an enum (line 1634)
+# Coverage: _check_module_qualified_variant: resolved is not an enum type.
 # ---------------------------------------------------------------------------
 
 
@@ -1013,7 +1013,7 @@ def test_module_qualified_variant_qualifier_is_not_enum(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: _check_module_qualified_variant: resolve_type_expr raises (line 1627)
+# Coverage: _check_module_qualified_variant: resolve_type_expr raises on unknown type.
 # ---------------------------------------------------------------------------
 
 
@@ -1038,7 +1038,7 @@ def test_module_qualified_variant_unknown_enum_in_pattern(tmp_path: Path) -> Non
 
 
 # ---------------------------------------------------------------------------
-# Coverage: _check_module_qualified_constructor: enum used as constructor (line 1768)
+# Coverage: _check_module_qualified_constructor: enum used as constructor without a variant.
 # ---------------------------------------------------------------------------
 
 
@@ -1061,7 +1061,7 @@ def test_module_qualified_enum_as_constructor_error(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: _check_module_qualified_constructor: unknown name (line 1775)
+# Coverage: _check_module_qualified_constructor: unknown name in qualified access.
 # ---------------------------------------------------------------------------
 
 
@@ -1084,7 +1084,7 @@ def test_module_qualified_unknown_constructor_error(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: env.py get_open_imported_enum_candidates: matching variant (line 562)
+# Coverage: get_open_imported_enum_candidates returns the matching enum for a bare variant.
 # ---------------------------------------------------------------------------
 
 
@@ -1109,7 +1109,7 @@ def test_open_imported_enum_variant_unqualified_bare(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: env.py _resolve_qualified_name_type: ::Name fallback when not in graph table (line 509)
+# Coverage: _resolve_qualified_name_type falls back to built-in type when not in graph table.
 # ---------------------------------------------------------------------------
 
 
@@ -1123,7 +1123,7 @@ def test_self_ref_type_builtin_exception_fallback(tmp_path: Path) -> None:
         ),
         "mylib": (
             # ::Abort references the built-in Abort exception type (not in graph table)
-            # This exercises the fallback at env.py line 509
+            # This exercises the ::Name fallback to the built-in exception type registry.
             "def boom() -> ::Abort = raise Abort(message: \"oops\")"
         ),
     }
@@ -1134,7 +1134,7 @@ def test_self_ref_type_builtin_exception_fallback(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: env.py _resolve_qualified_name_type: qname is None (name not in S) (line 523)
+# Coverage: _resolve_qualified_name_type raises when the qualified name is inaccessible.
 # ---------------------------------------------------------------------------
 
 
@@ -1157,7 +1157,7 @@ def test_qualified_type_not_in_s_error(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: env.py _resolve_name_type: ambiguous open import (line 494)
+# Coverage: _resolve_name_type raises for an ambiguous open import.
 # ---------------------------------------------------------------------------
 
 
@@ -1186,7 +1186,7 @@ def test_ambiguous_open_import_type_error(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: env.py get_open_imported_enum_candidates: non-enum type in loop (566->560)
+# Coverage: get_open_imported_enum_candidates skips non-enum types during variant lookup.
 # ---------------------------------------------------------------------------
 
 
@@ -1224,7 +1224,7 @@ def test_open_import_dedup_in_variant_lookup(tmp_path: Path) -> None:
         "entry": (
             # Two import declarations expose (mylib, "Color") under two unqualified names:
             # "Color" (via using Color) and "C" (via using Color as C).
-            # The seen-set dedup at env.py line 562–563 fires on the second iteration.
+            # The seen-set dedup fires when the same type is open-imported under two names.
             "import mylib using Color\n"
             "import mylib using Color as C\n"
             "let x: Color = Red\n"
@@ -1636,8 +1636,8 @@ def test_type_expr_deps_alias_to_cross_module(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: graph.py _topological_sort_types cycle detection (lines 412-413)
-# and _build_graph_type_table cross-module cycle error (lines 527-537)
+# Coverage: _topological_sort_types cycle detection
+# and _build_graph_type_table cross-module cycle error.
 # This is different from the existing test (which tests same-module recursion)
 # and exercises the cross-module structural cycle path.
 # ---------------------------------------------------------------------------
@@ -1674,7 +1674,7 @@ def test_cross_module_structural_cycle_raises_error(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: types.py RecordType.__repr__ with non-ENTRY_ID module_id (line 179)
+# Coverage: RecordType.__repr__ renders as 'module::Name' for non-entry module types.
 # ---------------------------------------------------------------------------
 
 
@@ -1723,7 +1723,7 @@ def test_type_alias_with_cross_module_dep_creates_dep(tmp_path: Path) -> None:
     """A TypeAlias whose target is a cross-module user type creates a dep entry.
 
     This exercises the 'elif isinstance(item, TypeAlias)' branch in
-    _compute_type_deps (line 347) with a dep that actually appears in
+    _compute_type_deps with a dep that actually appears in
     all_type_keys, and also exercises the branch where in_degree is decremented
     but does not reach 0 (diamond dependency pattern for Kahn's algorithm).
     """
@@ -1755,7 +1755,7 @@ def test_type_alias_with_cross_module_dep_creates_dep(tmp_path: Path) -> None:
 def test_type_expr_deps_func_field(tmp_path: Path) -> None:
     """A field typed with a function type recursing into params and result.
 
-    This exercises the FuncT branch in _collect_type_expr_deps (lines 298-300).
+    This exercises the FuncT branch in _collect_type_expr_deps.
     The function type's param type is a cross-module user type, so the FuncT
     walker must descend into the param to find the dependency.
     """
@@ -1793,7 +1793,7 @@ def test_type_expr_deps_func_field(tmp_path: Path) -> None:
 def test_type_expr_deps_self_ref_to_builtin(tmp_path: Path) -> None:
     """A '::BuiltinType' self-ref in a field creates NO dep (key not in all_type_keys).
 
-    This exercises the 272->exit branch in _collect_type_expr_deps where the
+    This exercises the path in _collect_type_expr_deps where the
     self-ref target is a built-in type (not in all_type_keys), so no dep is added.
     """
     modules = {
@@ -1817,7 +1817,7 @@ def test_type_expr_deps_self_ref_to_builtin(tmp_path: Path) -> None:
 def test_type_expr_deps_open_import_to_builtin_variant(tmp_path: Path) -> None:
     """An unqualified name that's a builtin creates NO dep (key not in all_type_keys).
 
-    This exercises the 292->290 branch in _collect_type_expr_deps where the
+    This exercises the path in _collect_type_expr_deps where the
     candidate key (from open-import unqualified lookup) is not in all_type_keys.
     """
     # When no open-imported name matches a NameT, the loop finds no candidates
@@ -2082,7 +2082,7 @@ def test_cross_file_mutual_recursion_open_import(tmp_path: Path) -> None:
 def test_graph_func_def_with_defaulted_param(tmp_path: Path) -> None:
     """A library function with a defaulted parameter typechecks successfully.
 
-    Covers the ``seen_required = False`` branch (line 652) in
+    Covers the ``seen_required = False`` branch in
     ``_build_graph_func_sig_table``, which is only reached when a FuncDef in a
     non-entry module has at least one defaulted parameter.
     """
@@ -2248,7 +2248,7 @@ def test_two_library_functions_same_name_different_signatures(tmp_path: Path) ->
 
 
 def test_cross_module_constructor_call_positional_args_rejected(tmp_path: Path) -> None:
-    """Coverage: checker.py _check_cross_module_constructor_call line 2639.
+    """Coverage: _check_cross_module_constructor_call rejects positional arguments.
 
     Calling a cross-module record constructor with positional arguments raises AglTypeError.
     """
@@ -2398,10 +2398,10 @@ def test_cross_module_non_generic_constructor_type_args_rejected(tmp_path: Path)
 
 
 def test_cross_module_generic_enum_body_resolved(tmp_path: Path) -> None:
-    """Coverage: graph.py _resolve_body_for_one EnumDef branch with generic enum (t is None).
+    """Coverage: _resolve_body_for_one EnumDef branch with generic enum (t is None).
 
     A cross-module generic enum causes ensure_built_enum to register in _generic_types
-    and unregister from _types, so get_type returns None (205->207 branch in graph.py).
+    and unregister from _types, so get_type returns None.
     The graph_type_table retains the shell (EnumType with module_id set) from Step A.
     """
     lib_id = ModuleId.from_dotted("lib")

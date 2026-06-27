@@ -574,7 +574,7 @@ class TestTypeEnvironment:
         assert env.resolve_named_type("Unknown") is None
 
     def test_resolve_named_type_multiple_candidates_returns_none(self) -> None:
-        # Coverage: env.py resolve_named_type 434->436 — len(type_candidates) != 1.
+        # Coverage: resolve_named_type returns None when multiple candidates exist.
         # Two unqualified imports of the same name → ambiguous → return None.
         from agm.agl.modules.ids import ModuleId
         from agm.agl.scope.imports import ImportEnv
@@ -597,7 +597,7 @@ class TestTypeEnvironment:
         assert result is None
 
     def test_resolve_type_by_module_id_no_graph_table(self) -> None:
-        # Coverage: env.py resolve_type_by_module_id line 800 — single-program mode returns None.
+        # Coverage: resolve_type_by_module_id returns None in single-program mode (no graph table).
         from agm.agl.modules.ids import ModuleId
         env = TypeEnvironment()  # no graph_type_table
         result = env.resolve_type_by_module_id(ModuleId.from_dotted("mymod"), "Color")
@@ -2769,32 +2769,32 @@ class TestMisc:
         assert "duplicate" in str(err).lower() or "key" in str(err).lower()
 
     def test_is_test_with_correct_qualifier(self) -> None:
-        # Exercises line 1323->1325: qualifier check path
+        # Exercises the qualifier check path in is-test expressions.
         r = accept_type("enum E\n  | A\n  | B\nlet e = E.A()\ne is E.A")
         assert r.resolved.program is not None
 
     def test_is_test_qualifier_not_enum_raises(self) -> None:
-        # Exercises line 1337: qualifier resolves to non-enum type
+        # Exercises the error path when the qualifier resolves to a non-enum type.
         err = reject_type("enum A\n  | X\nrecord R\n  x: int\nlet a = A.X()\na is R.X")
         assert "not a known enum" in str(err).lower() or "enum" in str(err).lower()
 
     def test_is_test_unknown_qualifier_raises(self) -> None:
-        # Exercises line 1337 path: qualifier name not registered as enum
+        # Exercises the error path when the qualifier name is not a known enum.
         err = reject_type("enum E\n  | A\nlet e = E.A()\ne is UnknownEnum.A")
         assert "not a known enum" in str(err).lower() or "enum" in str(err).lower()
 
     def test_enum_variant_field_duplicate_raises(self) -> None:
-        # Exercises line 287: duplicate field in enum variant
+        # Exercises the duplicate field check in enum variant declarations.
         err = reject_type("enum E\n  | A(x: int, x: text)\nA(x: 1)")
         assert "duplicate" in str(err).lower() or "field" in str(err).lower()
 
     def test_unqualified_ctor_with_enum_expected_type(self) -> None:
-        # Exercises line 1409-1410: expected EnumType candidate disambiguation
+        # Exercises unqualified constructor disambiguation when an expected EnumType is present.
         r = accept_type("enum E\n  | A\n  | B\nlet x: E = A()\nx")
         assert r.resolved.program is not None
 
     def test_branch_decimal_int_widening(self) -> None:
-        # if true => 2.5 | else => 2 → decimal (exercises 1663: decimal+int)
+        # if true => 2.5 | else => 2 → decimal (decimal+int branch unification widens to decimal)
         r = accept_type("if true => 2.5 | true => 3 | else => 1.0")
         if_node = r.resolved.program.body.items[0]
         assert isinstance(if_node, If)
@@ -2802,7 +2802,7 @@ class TestMisc:
         assert t == DecimalType()
 
     def test_constructor_pattern_with_qualifier(self) -> None:
-        # Exercises line 1586->1588: ctor pattern qualifier check
+        # Exercises the qualifier check in constructor pattern matching.
         r = accept_type(
             "enum E\n  | A(x: int)\nlet e = A(x: 1)\n"
             "case e of | E.A(x: n) => n | _ => 0"
@@ -2810,7 +2810,7 @@ class TestMisc:
         assert r.resolved.program is not None
 
     def test_constructor_pattern_wrong_variant_raises(self) -> None:
-        # Exercises line 1590: ctor pattern variant not found
+        # Exercises the error when a constructor pattern variant is not found in the enum.
         err = reject_type(
             "enum E\n  | A\n  | B\nlet e = A()\n"
             "case e of | E.C() => 1 | _ => 0"
@@ -2839,81 +2839,81 @@ class TestMisc:
         assert result is None
 
     def test_retry_with_non_int_n_raises(self) -> None:
-        # Exercises line 880->879: Retry n_arg not an IntLit
+        # Exercises the error when Retry's n argument is not an integer literal.
         err = reject_type('let n: int = ask("Q", on_parse_error: Retry(n: "bad"))\nn')
         assert "on_parse_error" in str(err).lower() or "Retry" in str(err)
 
     def test_retry_with_wrong_key_raises(self) -> None:
-        # Exercises line 880 -> falls through to raise
+        # Exercises the error when Retry uses a wrong keyword argument.
         err = reject_type('let n: int = ask("Q", on_parse_error: Retry(m: 3))\nn')
         assert "on_parse_error" in str(err).lower() or "Retry" in str(err)
 
     def test_parse_policy_unknown_variant_raises(self) -> None:
-        # Exercises line 877->890: arg.name is neither "Abort" nor "Retry"
+        # Exercises the error when on_parse_error uses an unrecognized policy variant.
         err = reject_type('let n: int = ask("Q", on_parse_error: ParsePolicy.Bad())\nn')
         assert "on_parse_error" in str(err).lower() or "ParsePolicy" in str(err)
 
     def test_exec_strict_json_non_bool_raises(self) -> None:
-        # Exercises line 815: strict_json non-BoolLit in exec
+        # Exercises the error when strict_json is not a boolean literal.
         err = reject_type('let n: int = exec("ls", format: "json", strict_json: "yes")\nn')
         assert "strict_json" in str(err).lower() or "bool" in str(err).lower()
 
     def test_decimal_subtraction_yields_decimal(self) -> None:
-        # Exercises line 1282: _check_numeric_binop returns DecimalType
+        # Exercises _check_numeric_binop returning DecimalType for decimal subtraction.
         r = accept_type("1.5 - 0.5")
         node = r.resolved.program.body.items[0]
         assert r.node_types[node.node_id] == DecimalType()
 
     def test_decimal_multiplication_yields_decimal(self) -> None:
-        # Also exercises line 1282
+        # Also exercises the decimal path in _check_numeric_binop.
         r = accept_type("2.0 * 3.0")
         node = r.resolved.program.body.items[0]
         assert r.node_types[node.node_id] == DecimalType()
 
     def test_list_decimal_then_int_widening(self) -> None:
-        # Exercises line 1550->1547: unified=decimal, t=int, is_assignable(dec,int)=False
-        # but is_assignable(int,decimal)=True so we continue
+        # Exercises list element type unification: decimal followed by int widens to decimal.
+        # is_assignable(decimal,int)=False but is_assignable(int,decimal)=True, so type widens.
         r = accept_type("[2.5, 1]")
         node = r.resolved.program.body.items[0]
         assert r.node_types[node.node_id] == ListType(elem=DecimalType())
 
     def test_alias_field_in_record(self) -> None:
-        # Exercises lines 314-316: alias in _ensure_referenced_type_built
+        # Exercises alias handling in _ensure_referenced_type_built.
         r = accept_type("type N = int\nrecord R\n  x: N\nR(x: 1)")
         assert r.resolved.program is not None
 
     def test_list_field_of_aliased_type(self) -> None:
-        # Exercises line 321: ListT in _ensure_referenced_type_built
+        # Exercises ListT handling in _ensure_referenced_type_built.
         r = accept_type("type N = int\nrecord R\n  xs: list[N]\nR(xs: [])")
         assert r.resolved.program is not None
 
     def test_dict_field_of_aliased_type(self) -> None:
-        # Exercises line 323: DictT in _ensure_referenced_type_built
+        # Exercises DictT handling in _ensure_referenced_type_built.
         r = accept_type("type N = int\nrecord R\n  d: dict[text, N]\nR(d: {})")
         assert r.resolved.program is not None
 
     def test_two_records_same_enum_field(self) -> None:
-        # Exercises line 246: _ensure_built_enum called twice returns early
+        # Exercises _ensure_built_enum early-return when called twice for the same enum.
         r = accept_type("enum E\n  | A\nrecord R1\n  e: E\nrecord R2\n  e: E\nR1(e: A())")
         assert r.resolved.program is not None
 
     def test_template_nested_list_in_list(self) -> None:
-        # Exercises lines 1165-1167: non-empty ListLit as child of template list
+        # Exercises a non-empty ListLit as a child of a template list.
         r = accept_type('"${[1, [2, 3]]}"')
         assert r.resolved.program is not None
 
     def test_template_nested_dict_in_dict(self) -> None:
-        # Exercises lines 1171-1173: non-empty DictLit as child of template dict
+        # Exercises a non-empty DictLit as a child of a template dict.
         r = accept_type('"${{"a": {"b": 1}}}"')
         assert r.resolved.program is not None
 
     def test_is_test_without_qualifier(self) -> None:
-        # Exercises line 1323->1325: qualifier is None, skip qualifier check
+        # Exercises the is-test without a qualifier (no qualifier check is performed).
         r = accept_type("enum E\n  | A\n  | B\nlet e = E.A()\ne is A")
         assert r.resolved.program is not None
 
     def test_constructor_pattern_without_qualifier(self) -> None:
-        # Exercises line 1586->1588: pattern qualifier is None, skip qualifier check
+        # Exercises a constructor pattern without a qualifier.
         r = accept_type(
             "enum E\n  | A(x: int)\nlet e = A(x: 1)\n"
             "case e of | A(x: n) => n | _ => 0"
@@ -2930,14 +2930,13 @@ class TestMisc:
         assert r.resolved.program is not None
 
     def test_funcdef_builtin_type_name_rejected(self) -> None:
-        # Exercises line 367: def named after a built-in type is rejected by the typechecker
+        # Exercises the error when a def is named after a built-in type.
         # (scope does not reject 'text'/'int'/etc. as def names, only print/exec/ask)
         err = reject_type("def text() -> int = 1\ntext()")
         assert "built-in type name" in str(err)
 
     def test_all_bottom_if_branches_yield_bottom(self) -> None:
-        # Exercises line 1655: _unify_branch_types returns BottomType when all branches
-        # are BottomType (i.e. all branches always raise)
+        # Exercises _unify_branch_types returning BottomType when all branches always raise.
         r = accept_type(
             "def f(x: int) -> int =\n"
             "  if x = 0 =>\n"
@@ -3423,7 +3422,7 @@ class TestDefensiveGuards:
         )
 
     def test_empty_block_yields_unit(self) -> None:
-        # Exercises line 424: _check_block returns UnitType() for an empty block.
+        # Exercises _check_block returning UnitType() for an empty block.
         # The grammar never produces an empty block from source, so we construct
         # the AST directly.
         sp = mk_span()
@@ -3434,7 +3433,7 @@ class TestDefensiveGuards:
         assert result is not None
 
     def test_empty_case_branches_fallback(self) -> None:
-        # Exercises line 1067: _check_case returns fallback type when branches is empty.
+        # Exercises _check_case returning fallback type when branches is empty.
         # The grammar requires at least one branch, so we construct directly.
         sp = mk_span()
         subject = IntLit(value=1, span=sp, node_id=_mk_node_id())
@@ -3452,7 +3451,7 @@ class TestDefensiveGuards:
         assert "duplicate" in str(err).lower()
 
     def test_builtin_func_name_def_rejected(self) -> None:
-        # Exercises line 372: _preregister_funcdef raises for names in _BUILTIN_FUNC_NAMES.
+        # Exercises _preregister_funcdef raising for names in _BUILTIN_FUNC_NAMES.
         # The scope pass rejects print/exec/ask before typecheck, so we bypass it
         # by building a FuncDef node with name "print" inside a ResolvedProgram.
         sp = mk_span()
@@ -3480,7 +3479,7 @@ class TestDefensiveGuards:
         assert "a" in str(err).lower()
 
     def test_binding_type_not_set_assertion(self) -> None:
-        # Exercises line 609: _require_binding_type raises AssertionError when a
+        # Exercises _require_binding_type raising AssertionError when a
         # VarRef resolves to a BindingRef whose decl_node_id has no type in the env.
         sp = mk_span()
         decl_nid = _mk_node_id()
@@ -3497,7 +3496,7 @@ class TestDefensiveGuards:
             check(resolved, default_capabilities())
 
     def test_declared_call_sig_none_fallback(self) -> None:
-        # Exercises line 935: _check_declared_name_call falls back to value-call
+        # Exercises _check_declared_name_call falling back to value-call
         # when get_function_signature returns None.  This happens when a FuncDef
         # is in declared_functions but not in the block items (so the pre-pass skips it).
         sp = mk_span()
@@ -3529,7 +3528,7 @@ class TestDefensiveGuards:
             check(resolved, default_capabilities())
 
     def test_duplicate_named_arg_in_declared_call(self) -> None:
-        # Exercises line 970: duplicate named arg check in _check_declared_name_call.
+        # Exercises the duplicate named arg check in _check_declared_name_call.
         # The parser rejects duplicate named args, so we construct directly.
         sp = mk_span()
         p_nid = _mk_node_id()
@@ -3618,7 +3617,7 @@ class TestDefensiveGuards:
             check(resolved, default_capabilities(), seed_env=checked_base.type_env)
 
     def test_type_arg_on_qualified_constructor_rejected(self) -> None:
-        # Exercises line 1732: _check_qualified_constructor_callee_call raises for
+        # Exercises _check_qualified_constructor_callee_call raising for
         # Call.type_args when callee is a qualified constructor FieldAccess.
         # The grammar does not support ::[ after a FieldAccess, so we build the AST.
         from agm.agl.scope.symbols import ResolvedProgram as _RP
@@ -3656,8 +3655,8 @@ class TestDefensiveGuards:
             check(resolved, default_capabilities(), seed_env=seed)
 
     def test_constructor_owner_type_not_found_rejected(self) -> None:
-        # Exercises line 1667: _resolve_constructor_owner raises when the type
-        # environment does not contain the constructor's owner type name.
+        # Exercises _resolve_constructor_owner raising when the type environment
+        # does not contain the constructor's owner type name.
         # This can only happen when the ResolvedProgram is constructed with a
         # ConstructorRef whose owner_name doesn't exist in the type env.
         from agm.agl.scope.symbols import ConstructorRef
@@ -5385,7 +5384,7 @@ class TestGenericCoverageEdgeCases:
         assert r.resolved.program is not None
 
     def test_generic_field_type_references_generic_enum(self) -> None:
-        """AppliedT branch (enum path) in _ensure_referenced_type_built (lines 362-363)."""
+        """AppliedT branch (enum path) in _ensure_referenced_type_built."""
         r = accept_type(
             "enum Option[T]\n"
             "  | none\n"
@@ -5397,13 +5396,13 @@ class TestGenericCoverageEdgeCases:
         assert r.resolved.program is not None
 
     def test_duplicate_field_in_generic_enum_variant_rejected(self) -> None:
-        """Duplicate field check in generic enum variant (line 418)."""
+        """Duplicate field check in generic enum variant."""
         err = reject_type("enum E[T]\n  | A(x: T, x: T)")
         assert "duplicate" in str(err).lower() or "field" in str(err).lower()
 
 
     def test_generic_constructor_as_value_no_context_rejected(self) -> None:
-        """Unsolvable type param error in _check_generic_constructor_as_value (line 860)."""
+        """Unsolvable type param error in _check_generic_constructor_as_value."""
         err = reject_type(
             "enum Option[T]\n"
             "  | none\n"
@@ -5417,11 +5416,11 @@ class TestGenericCoverageEdgeCases:
         )
 
     def test_applied_t_with_unknown_name_in_field(self) -> None:
-        """AppliedT where name is not a record/enum (branch 362->364) triggers resolve error."""
+        """AppliedT where name is not a record/enum triggers a resolve error."""
         # Box[T] is a generic record; Wrapper has a field of type Box[Unknown[int]].
         # When building Wrapper, _ensure_referenced_type_built is called on the field type.
-        # Box is found in record_defs (line 361), then Unknown is not in record_defs or
-        # enum_defs (branch 362->364), and the error surfaces in resolve_type_expr.
+        # Box is found in record_defs but Unknown is not in record_defs or
+        # enum_defs, so the error surfaces in resolve_type_expr.
         err = reject_type(
             "record Box[T]\n"
             "  value: T\n"

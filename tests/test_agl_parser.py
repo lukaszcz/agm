@@ -407,8 +407,8 @@ class TestTypeExpressions:
             parse("let d: dict[list[int], int] = {}")
 
     def test_dict_named_type_key_raises(self) -> None:
-        # dict key type must be text; a named type key triggers _type_expr_spelling
-        # NameT branch (t.name path at line 1580).
+        # dict key type must be text; a named type key triggers the NameT branch
+        # in _type_expr_spelling, which returns its name in the error message.
         from agm.agl.parser.errors import AglSyntaxError
         with pytest.raises(AglSyntaxError, match="Review"):
             parse("let d: dict[Review, int] = {}")
@@ -2093,7 +2093,7 @@ class TestParserErrorCoverage:
 
 
 class TestAglSyntaxErrorSourceSpan:
-    """Covers AglSyntaxError.source_span (lines 71-72)."""
+    """Covers AglSyntaxError.source_span returning a valid SourceSpan."""
 
     def test_source_span_returns_span(self) -> None:
         """source_span returns the same SourceSpan object as .span."""
@@ -2113,10 +2113,9 @@ class TestAglSyntaxErrorSourceSpan:
 
 
 class TestInlineCompoundElseBranch:
-    """Covers _make_inline_compound_error else branch (line 148).
+    """Covers the else branch of the inline-compound error dispatch.
 
-    Line 148 is the else of the ``if stmt_context / elif keyword=='case'``
-    dispatch.  It fires when the unexpected inline-blocked token is NOT
+    The else branch fires when the unexpected inline-blocked token is NOT
     ``case`` AND the parser is in an *expression* context (stmt_context=False),
     i.e. ``if`` appearing as an operand inside an arithmetic or unary
     expression.  The message is identical to the stmt_context=True branch

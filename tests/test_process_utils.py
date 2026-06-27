@@ -1103,7 +1103,7 @@ class TestDeadCodeRemoval:
 
 
 class TestIdleTimeoutRemainingZero:
-    """Cover line 183: the explicit 'raise queue.Empty' when remaining <= 0."""
+    """Cover the explicit 'raise queue.Empty' when remaining <= 0."""
 
     def test_idle_timeout_zero_seconds_triggers_immediately(self) -> None:
         """With idle_timeout=0, the remaining check is <= 0 immediately."""
@@ -1118,7 +1118,7 @@ class TestIdleTimeoutRemainingZero:
 
 
 class TestEmptyDecodedTextContinue:
-    """Cover line 207: 'continue' when decoder.decode returns empty string."""
+    """Cover the 'continue' path when decoder.decode returns empty string."""
 
     def test_multi_byte_char_split_across_chunks(self) -> None:
         """When a UTF-8 multi-byte char is split across pipe chunks,
@@ -1279,8 +1279,7 @@ class TestRunSubprocessFinalDecoderFlush:
 
     def test_final_flush_no_capture_with_nonempty_text(self) -> None:
         """When final decoder flush yields text with capture_output=False,
-        the branch from line 248 to 250 is exercised (if capture_output is
-        False, skip stream_data append and go to callback lookup)."""
+        the stream_data append is skipped and the callback is invoked instead."""
         chunks: list[str] = []
         # Write just the first byte of a 2-byte UTF-8 character (0xc3) and exit.
         # The streaming decoder buffers it; final flush produces the replacement.
@@ -1299,8 +1298,7 @@ class TestRunSubprocessFinalDecoderFlush:
 
     def test_final_flush_captured_with_no_callback(self) -> None:
         """When final decoder flush yields text on a stream with no callback,
-        the branch from line 251 to 244 is exercised (if callback is None,
-        loop continues without calling callback)."""
+        the loop continues without calling the callback."""
         # Write partial UTF-8 to stderr and exit.  capture_output=True creates
         # both pipes.  stderr_callback is None, so the final-flush loop visits
         # stderr with a None callback and continues to the next decoder entry.

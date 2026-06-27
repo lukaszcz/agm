@@ -1275,10 +1275,10 @@ class TestFieldAccessCoverage:
     def test_non_type_exported_name_in_field_access_falls_through(
         self, tmp_path: Path
     ) -> None:
-        """Coverage: resolver.py 1334->1341 and 1369 — non-constructor export in field access.
+        """Coverage: non-constructor export in qualified field access.
 
         ``mylib::compute.value`` where ``compute`` is a function (not a type) exercises
-        the ``kind != constructor_binding`` path at line 1369 in _resolve_cross_module_type_name.
+        the ``kind != constructor_binding`` path in _resolve_cross_module_type_name.
         """
         graph = _make_graph_from_files(tmp_path, {
             "mylib": (

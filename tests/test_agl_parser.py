@@ -21,6 +21,7 @@ NOTE: This file must NOT modify tests/test_agl_e2e.py or tests/agl/.
 
 from __future__ import annotations
 
+import dataclasses
 import decimal
 import importlib.resources
 import logging
@@ -129,6 +130,24 @@ def first(prog: Program) -> object:
     return prog.body.items[0]
 
 
+def _collect_node_ids(obj: object, result: list[int]) -> None:
+    """Recursively collect every node_id into *result*, preserving duplicates.
+
+    Unlike ``all_node_ids`` (which deduplicates into a set), this appends every
+    encountered node_id so that ``len(result) != len(set(result))`` reliably
+    detects collisions.
+    """
+    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+        nid = getattr(obj, "node_id", None)
+        if isinstance(nid, int):
+            result.append(nid)
+        for f in dataclasses.fields(obj):
+            _collect_node_ids(getattr(obj, f.name), result)
+    elif isinstance(obj, (tuple, list)):
+        for item in obj:
+            _collect_node_ids(item, result)
+
+
 # ---------------------------------------------------------------------------
 # Conflict guard — MANDATORY regression
 # ---------------------------------------------------------------------------
@@ -227,9 +246,10 @@ class TestProgramRoot:
         assert len(items(prog)) == 3
 
     def test_node_id_uniqueness(self) -> None:
-        prog = parse("let x = 1\nlet y = 2\nx")
-        ids = [node.node_id for node in [prog, prog.body]]
-        assert len(set(ids)) == len(ids)
+        prog = parse("let x = 1\nlet y = 2\nx + y")
+        id_list: list[int] = []
+        _collect_node_ids(prog, id_list)
+        assert len(id_list) == len(set(id_list)), "duplicate node_ids detected in parsed tree"
 
 
 # ---------------------------------------------------------------------------
@@ -1767,10 +1787,14 @@ class TestReplSeam:
 
     def test_node_ids_globally_unique(self) -> None:
         prog1, next_id1 = parse_program_seeded("let x = 1", start_id=0)
-        prog2, next_id2 = parse_program_seeded("let y = 2", start_id=next_id1)
-        ids1 = {prog1.node_id, prog1.body.node_id}
-        ids2 = {prog2.node_id, prog2.body.node_id}
-        assert not ids1.intersection(ids2)
+        prog2, _next_id2 = parse_program_seeded("let y = 2", start_id=next_id1)
+        ids1: list[int] = []
+        _collect_node_ids(prog1, ids1)
+        ids2: list[int] = []
+        _collect_node_ids(prog2, ids2)
+        assert set(ids1).isdisjoint(set(ids2)), (
+            "node_ids from separate parse_program_seeded calls must not overlap"
+        )
 
     def test_is_incomplete_source_complete(self) -> None:
         assert not is_incomplete_source("let x = 1")

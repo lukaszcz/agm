@@ -1090,18 +1090,6 @@ class TestRunSubprocessIdleTimeoutNonIsolate:
         assert exc_info.value.code == 124
 
 
-class TestDeadCodeRemoval:
-    def test_run_py_unreachable_return_removed(self) -> None:
-        """Verify the unreachable return after _run_with_optional_resource_limits was removed."""
-        import agm.commands.run as run_module
-        assert hasattr(run_module, "run")
-
-    def test_tmux_session_unreachable_elif_removed(self) -> None:
-        """Verify the unreachable elif not detach branch was removed."""
-        import agm.tmux.session as session_module
-        assert hasattr(session_module, "create_tmux_session")
-
-
 class TestIdleTimeoutRemainingZero:
     """Cover the explicit 'raise queue.Empty' when remaining <= 0."""
 

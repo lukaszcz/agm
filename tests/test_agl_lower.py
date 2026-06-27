@@ -339,9 +339,10 @@ class TestCompileCoercion:
 
 
 class TestLowerProgramValidateIr:
-    def test_empty_body_raises(self) -> None:
-        # A program ending in a let/var is a static error; an empty body would
-        # be "()" which is valid. Test a simple constant program validates.
+    def test_unit_program_validates(self) -> None:
+        # Lower a unit-bodied program "()" and confirm validate_ir accepts it
+        # without error.  A program ending in a let/var is a static error, but
+        # "()" is a valid expression that produces a well-formed IR module.
         prog = _lower("()")
         validate_ir(prog)
 
@@ -1195,8 +1196,13 @@ class TestM4bLambdaLowering:
         desc = prog.functions[fn_id]
         assert len(desc.params) == 1, "Lambda with 1 param should have 1 FunctionParam"
 
-    def test_lambda_captures_outer_let(self) -> None:
-        """Lambda that references an outer let captures it in its IrMakeClosure."""
+    def test_module_binding_lambda_resolves_without_capture(self) -> None:
+        """A lambda referencing an outer module-level binding has no captures.
+
+        Module bindings are resolved through the base frame rather than via
+        closure capture, so IrMakeClosure.captures is empty even when the lambda
+        body references a name from an enclosing module initializer.
+        """
         source = (
             "let offset = 10\n"
             "let add_off = fn(x: int) -> int => x + offset\n"
@@ -1211,8 +1217,8 @@ class TestM4bLambdaLowering:
         captures = add_off_bind.value.captures
         assert captures == (), "Module bindings resolve through the base frame"
 
-    def test_lambda_inferred_return_type_lowered(self) -> None:
-        """Lambda with inferred return type still gets body coercion from FunctionType."""
+    def test_lambda_closure_has_non_none_body(self) -> None:
+        """A lambda with inferred return type lowers to a closure with a non-None body."""
         source = "let f = fn(x: int) => x\n()"
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers

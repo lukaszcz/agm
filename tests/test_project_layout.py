@@ -1319,7 +1319,10 @@ class TestCurrentWorkspace:
         )
 
         result = current_workspace(project, cwd=project)
-        assert result is None or result.workspace_dir is not None
+        assert result is not None
+        assert result.workspace_dir == project.resolve(strict=False)
+        assert result.branch is None
+        assert result.is_main is True
 
 
 class TestCurrentProjectDirCommonDirFallback:

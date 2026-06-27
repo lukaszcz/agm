@@ -2558,27 +2558,6 @@ class TestConstructorBindings:
         msg = err.to_diagnostic().message
         assert "some" in msg
 
-    def test_let_shadows_constructor_in_nested_scope_no_error(self) -> None:
-        """In a nested scope, a 'let' binding shadows a constructor from the outer scope."""
-        # In a nested block (if branch), a let can shadow the constructor
-        # without error; no duplicate-binding error is raised because they're
-        # in different scopes.
-        r = parse_and_resolve(
-            "enum Option\n"
-            "  | some\n"
-            "if true =>\n"
-            "  let some = 42\n"
-            "  some\n"
-            "| else =>\n"
-            "  some\n"
-        )
-        inner = _find_varref(r.program, "some", occurrence=0)
-        outer = _find_varref(r.program, "some", occurrence=1)
-        # In the then-branch, "some" is shadowed by the let binding
-        assert r.resolution[inner.node_id].kind == BinderKind.let_binding
-        # In the else-branch, "some" still refers to the constructor
-        assert r.resolution[outer.node_id].kind == BinderKind.constructor_binding
-
     def test_let_shadows_constructor_in_if_branch_no_error(self) -> None:
         """In a branch, a 'let' name can shadow a constructor from the outer scope.
 

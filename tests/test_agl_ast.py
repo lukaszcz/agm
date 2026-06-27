@@ -441,7 +441,7 @@ class TestExpressions:
         ops = {BinOp.EQ, BinOp.NEQ, BinOp.LT, BinOp.LE, BinOp.GT, BinOp.GE,
                BinOp.IN, BinOp.AND, BinOp.OR, BinOp.ADD, BinOp.SUB,
                BinOp.MUL, BinOp.DIV}
-        assert len(ops) == 13
+        assert ops == set(BinOp)
 
     def test_unary_not(self) -> None:
         operand = BoolLit(value=True, span=self._s(), node_id=2)

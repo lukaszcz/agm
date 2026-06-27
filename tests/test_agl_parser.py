@@ -629,6 +629,175 @@ class TestParamKind:
 
 
 # ---------------------------------------------------------------------------
+# Marker syntax — _resolve_params zone assignment
+# ---------------------------------------------------------------------------
+
+
+class TestMarkerParams:
+    """Grammar markers (/ * @pos @std @named) resolve to concrete ParamKinds."""
+
+    # --- def / lambda param_list ---
+
+    def test_slash_def_pos_only_and_std(self) -> None:
+        """def f(x: int, /, y: int) → x pos-only, y standard."""
+        fd = first(parse("def f(x: int, /, y: int) -> int = x"))
+        assert isinstance(fd, FuncDef)
+        assert fd.params[0].kind == ParamKind.POSITIONAL_ONLY
+        assert fd.params[1].kind == ParamKind.STANDARD
+
+    def test_slash_star_def_all_three_zones(self) -> None:
+        """def g(x: int, /, y: int, *, z: int) → pos-only / std / named-only."""
+        fd = first(parse("def g(x: int, /, y: int, *, z: int) -> int = x"))
+        assert isinstance(fd, FuncDef)
+        assert fd.params[0].kind == ParamKind.POSITIONAL_ONLY
+        assert fd.params[1].kind == ParamKind.STANDARD
+        assert fd.params[2].kind == ParamKind.NAMED_ONLY
+
+    def test_at_markers_def_all_three_zones(self) -> None:
+        """@std / @named forms produce the same result as / *."""
+        fd = first(parse("def g(x: int, @std, y: int, @named, z: int) -> int = x"))
+        assert isinstance(fd, FuncDef)
+        assert fd.params[0].kind == ParamKind.POSITIONAL_ONLY
+        assert fd.params[1].kind == ParamKind.STANDARD
+        assert fd.params[2].kind == ParamKind.NAMED_ONLY
+
+    def test_trailing_slash_makes_all_pos_only(self) -> None:
+        """def f(x: int, y: int, /) → both positional-only."""
+        fd = first(parse("def f(x: int, y: int, /) -> int = x"))
+        assert isinstance(fd, FuncDef)
+        assert fd.params[0].kind == ParamKind.POSITIONAL_ONLY
+        assert fd.params[1].kind == ParamKind.POSITIONAL_ONLY
+
+    def test_leading_at_pos_def(self) -> None:
+        """def f(@pos, x: int, y: int) → both positional-only."""
+        fd = first(parse("def f(@pos, x: int, y: int) -> int = x"))
+        assert isinstance(fd, FuncDef)
+        assert fd.params[0].kind == ParamKind.POSITIONAL_ONLY
+        assert fd.params[1].kind == ParamKind.POSITIONAL_ONLY
+
+    def test_star_only_makes_all_named_only(self) -> None:
+        """def f(*, x: int, y: int) → both named-only."""
+        fd = first(parse("def f(*, x: int, y: int) -> int = x"))
+        assert isinstance(fd, FuncDef)
+        assert fd.params[0].kind == ParamKind.NAMED_ONLY
+        assert fd.params[1].kind == ParamKind.NAMED_ONLY
+
+    def test_slash_star_interchangeable_with_at_markers(self) -> None:
+        """/ ≡ @std and * ≡ @named — mix them in one list."""
+        fd = first(parse("def h(a: int, @std, b: int, *, c: int) -> int = a"))
+        assert isinstance(fd, FuncDef)
+        assert fd.params[0].kind == ParamKind.POSITIONAL_ONLY
+        assert fd.params[1].kind == ParamKind.STANDARD
+        assert fd.params[2].kind == ParamKind.NAMED_ONLY
+
+    def test_lambda_markers(self) -> None:
+        """Lambda param markers work the same as def."""
+        ld = first(parse("let g = fn(x: int, /, y: int) => x"))
+        assert isinstance(ld, LetDecl)
+        lam = ld.value
+        assert isinstance(lam, Lambda)
+        assert lam.params[0].kind == ParamKind.POSITIONAL_ONLY
+        assert lam.params[1].kind == ParamKind.STANDARD
+
+    # --- record bodies ---
+
+    def test_record_paren_slash(self) -> None:
+        """record R(x: int, /, y: int) — paren body with /."""
+        rec = first(parse("record R(x: int, /, y: int)"))
+        assert isinstance(rec, RecordDef)
+        assert rec.fields[0].kind == ParamKind.POSITIONAL_ONLY
+        assert rec.fields[1].kind == ParamKind.STANDARD
+
+    def test_record_paren_leading_at_std(self) -> None:
+        """record Pair(@std, fst: int, snd: int) — leading @std makes both standard."""
+        rec = first(parse("record Pair(@std, fst: int, snd: int)"))
+        assert isinstance(rec, RecordDef)
+        assert rec.fields[0].kind == ParamKind.STANDARD
+        assert rec.fields[1].kind == ParamKind.STANDARD
+
+    def test_record_inline_slash(self) -> None:
+        """Inline record body with / marker."""
+        rec = first(parse("record R x: int, /, y: int"))
+        assert isinstance(rec, RecordDef)
+        assert rec.fields[0].kind == ParamKind.POSITIONAL_ONLY
+        assert rec.fields[1].kind == ParamKind.STANDARD
+
+    def test_record_indent_own_line_marker(self) -> None:
+        """Indent body with own-line @std marker."""
+        src = "record R\n  x: int\n  @std\n  y: int"
+        rec = first(parse(src))
+        assert isinstance(rec, RecordDef)
+        assert rec.fields[0].kind == ParamKind.POSITIONAL_ONLY
+        assert rec.fields[1].kind == ParamKind.STANDARD
+
+    def test_record_indent_leading_marker(self) -> None:
+        """Indent body with leading @std marker before block."""
+        src = "record R @std\n  fst: int\n  snd: int"
+        rec = first(parse(src))
+        assert isinstance(rec, RecordDef)
+        assert rec.fields[0].kind == ParamKind.STANDARD
+        assert rec.fields[1].kind == ParamKind.STANDARD
+
+    # --- exception bodies ---
+
+    def test_exception_paren_slash(self) -> None:
+        """exception E(code: int, /, msg: text) — paren body with /."""
+        exc = first(parse("exception E(code: int, /, msg: text)"))
+        assert isinstance(exc, ExceptionDef)
+        assert exc.fields[0].kind == ParamKind.POSITIONAL_ONLY
+        assert exc.fields[1].kind == ParamKind.STANDARD
+
+    def test_exception_indent_own_line_marker(self) -> None:
+        """Indent exception body with own-line marker."""
+        src = "exception E\n  code: int\n  @std\n  msg: text"
+        exc = first(parse(src))
+        assert isinstance(exc, ExceptionDef)
+        assert exc.fields[0].kind == ParamKind.POSITIONAL_ONLY
+        assert exc.fields[1].kind == ParamKind.STANDARD
+
+    # --- enum variant payload ---
+
+    def test_enum_variant_with_at_named(self) -> None:
+        """Single-field variant with @named makes it named-only (overrides default)."""
+        en = first(parse("enum Opt\n  | None\n  | Some(@named, value: int)"))
+        assert isinstance(en, EnumDef)
+        some = en.variants[1]
+        assert some.fields[0].kind == ParamKind.NAMED_ONLY
+
+    def test_enum_variant_with_slash(self) -> None:
+        """Multi-field variant with / — first pos-only, rest standard."""
+        en = first(parse(
+            "enum R\n  | A(x: int, /, y: int)\n  | B"
+        ))
+        assert isinstance(en, EnumDef)
+        a = en.variants[0]
+        assert a.fields[0].kind == ParamKind.POSITIONAL_ONLY
+        assert a.fields[1].kind == ParamKind.STANDARD
+
+    # --- error cases ---
+
+    def test_error_out_of_order_markers(self) -> None:
+        """def f(x: int, *, /, y: int) — * before / is out of order."""
+        with pytest.raises(AglSyntaxError, match="out-of-order"):
+            parse("def f(x: int, *, /, y: int) -> int = x")
+
+    def test_error_duplicate_slash(self) -> None:
+        """def f(x: int, /, /, y: int) — duplicate /."""
+        with pytest.raises(AglSyntaxError, match="duplicate"):
+            parse("def f(x: int, /, /, y: int) -> int = x")
+
+    def test_error_at_pos_not_leading(self) -> None:
+        """def f(x: int, @pos, y: int) — @pos not leading."""
+        with pytest.raises(AglSyntaxError, match="must lead"):
+            parse("def f(x: int, @pos, y: int) -> int = x")
+
+    def test_error_unknown_at_marker(self) -> None:
+        """@foo is not a valid marker."""
+        with pytest.raises(AglSyntaxError, match="unknown"):
+            parse("def f(@foo, x: int) -> int = x")
+
+
+# ---------------------------------------------------------------------------
 # Function declarations (def)
 # ---------------------------------------------------------------------------
 

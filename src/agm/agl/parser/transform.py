@@ -24,8 +24,8 @@ because it covers the full span of multi-token productions.
 
 from __future__ import annotations
 
-import dataclasses
 import decimal
+from dataclasses import dataclass, replace
 from itertools import count
 from typing import TypeAlias, cast
 
@@ -60,6 +60,43 @@ _NamedArgList = list[syntax.NamedArg]
 _ArgLists: TypeAlias = tuple[list[syntax.Expr], list[syntax.NamedArg]]
 _JuxtCall: TypeAlias = tuple[tuple[TypeExpr, ...], _ArgLists]
 _JuxtSuffix: TypeAlias = tuple[str, str] | tuple[str, syntax.Expr] | tuple[str, _JuxtCall]
+
+# ---------------------------------------------------------------------------
+# Transformer-internal marker sentinel (never leaks into the AST)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class _ParamMarker:
+    """Transformer-internal sentinel for a zone-boundary marker in a param/field list.
+
+    Exists only during transformation; the AST never contains these.
+    ``zone`` is the zone the marker *opens*; ``label`` is the source spelling
+    (``"/"``, ``"*"``, ``"@pos"``, etc.) for error messages.
+    """
+
+    zone: syntax.ParamKind
+    label: str
+    span: SourceSpan
+
+
+# Zone ordering for marker validation (strictly increasing).
+_ZONE_ORDER: dict[syntax.ParamKind, int] = {
+    syntax.ParamKind.POSITIONAL_ONLY: 0,
+    syntax.ParamKind.STANDARD: 1,
+    syntax.ParamKind.NAMED_ONLY: 2,
+}
+_ZONE_BY_ORDER: dict[int, syntax.ParamKind] = {v: k for k, v in _ZONE_ORDER.items()}
+
+# Zone opened by each `@`-marker name (validated in marker_at).
+_AT_ZONE: dict[str, syntax.ParamKind] = {
+    "pos": syntax.ParamKind.POSITIONAL_ONLY,
+    "std": syntax.ParamKind.STANDARD,
+    "named": syntax.ParamKind.NAMED_ONLY,
+}
+
+# Interleaved sequence type produced by field_list / param_list.
+_RawEntries: TypeAlias = tuple[syntax.Param | _ParamMarker, ...]
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -302,21 +339,60 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
-    def record_indent_body(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
-        # Grammar: _INDENT field_def (_NEWLINE field_def)* _NEWLINE? _DEDENT
-        # Records are always named-only by default.
-        return _stamp_field_kinds(
-            tuple(a for a in args if isinstance(a, syntax.Param)),
-            syntax.ParamKind.NAMED_ONLY,
+    # ------------------------------------------------------------------
+    # Marker transformer methods (grammar aliases → _ParamMarker sentinels)
+    # ------------------------------------------------------------------
+
+    def marker_slash(self, meta: Meta, args: _Args) -> _ParamMarker:
+        """SLASH → _ParamMarker(STANDARD) — the '/' pos-only→standard boundary."""
+        return _ParamMarker(
+            zone=syntax.ParamKind.STANDARD,
+            label="/",
+            span=self._span_from_meta(meta),
         )
+
+    def marker_star(self, meta: Meta, args: _Args) -> _ParamMarker:
+        """STAR → _ParamMarker(NAMED_ONLY) — the '*' standard→named-only boundary."""
+        return _ParamMarker(
+            zone=syntax.ParamKind.NAMED_ONLY,
+            label="*",
+            span=self._span_from_meta(meta),
+        )
+
+    def marker_at(self, meta: Meta, args: _Args) -> _ParamMarker:
+        """AT NAME → _ParamMarker; NAME must be pos/std/named (else AglSyntaxError)."""
+        name_tok = next(a for a in args if isinstance(a, Token) and a.type == "NAME")
+        label_name = str(name_tok)
+        span = self._span_from_meta(meta)
+        zone = _AT_ZONE.get(label_name)
+        if zone is None:
+            raise AglSyntaxError(
+                f"unknown parameter marker '@{label_name}'; "
+                "valid markers are @pos, @std, @named.",
+                span=span,
+            )
+        return _ParamMarker(zone=zone, label=f"@{label_name}", span=span)
+
+    # ------------------------------------------------------------------
+    # record_def / field_def (continued)
+    # ------------------------------------------------------------------
+
+    def record_indent_body(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
+        # Grammar: param_marker? _INDENT block_entry (_NEWLINE block_entry)* _NEWLINE? _DEDENT
+        # block_entry is ?field_def | ?param_marker — collect all in order, then resolve.
+        # Records are always named-only by default.
+        entries: _RawEntries = tuple(
+            a for a in args if isinstance(a, (syntax.Param, _ParamMarker))
+        )
+        return _resolve_params(entries, default_kind=syntax.ParamKind.NAMED_ONLY)
 
     def record_paren_body(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
         # Grammar: LPAR field_list? RPAR
-        # Records are always named-only by default.
+        # field_list returns _RawEntries; resolve with named-only default.
         for a in args:
             if _is_field_tuple(a):
-                return _stamp_field_kinds(
-                    cast(tuple[syntax.Param, ...], a), syntax.ParamKind.NAMED_ONLY
+                return _resolve_params(
+                    cast(_RawEntries, a), default_kind=syntax.ParamKind.NAMED_ONLY
                 )
         return ()
 
@@ -326,7 +402,7 @@ class AstBuilder(Transformer):
         # Grammar: field_name COLON type_expr
         # Build with a provisional NAMED_ONLY kind; the owner builder
         # (record_indent_body, record_paren_body, variant_payload, exception bodies)
-        # re-stamps the kind via _stamp_field_kinds().
+        # reassigns the kind via _resolve_params().
         name_tok = args[0]
         assert isinstance(name_tok, Token)
         type_expr = _find_type_expr(args[1:])
@@ -386,21 +462,28 @@ class AstBuilder(Transformer):
 
     def variant_payload(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
         # Grammar: LPAR field_list? RPAR
-        # Apply the single-field → STANDARD, multi-field → NAMED_ONLY enum rule.
+        # field_list returns _RawEntries; count only Param entries for the
+        # single-field→STANDARD default; markers don't count as fields.
         for a in args:
-            if isinstance(a, tuple):
-                raw = cast(tuple[syntax.Param, ...], a)
-                kind = (
+            if _is_field_tuple(a):
+                raw = cast(_RawEntries, a)
+                param_count = sum(1 for x in raw if isinstance(x, syntax.Param))
+                default_kind = (
                     syntax.ParamKind.STANDARD
-                    if len(raw) == 1
+                    if param_count == 1
                     else syntax.ParamKind.NAMED_ONLY
                 )
-                return _stamp_field_kinds(raw, kind)
+                return _resolve_params(raw, default_kind=default_kind)
         return ()
 
-    def field_list(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
-        # Grammar: field_inline (COMMA field_inline)* COMMA?
-        return tuple(a for a in args if isinstance(a, syntax.Param))
+    def field_list(self, meta: Meta, args: _Args) -> _RawEntries:
+        # Grammar: field_entry (COMMA field_entry)* COMMA?
+        # ?field_entry is transparent: Param (from field_inline/field_def) and
+        # _ParamMarker (from param_marker) arrive directly as children.
+        # Return the raw interleaving; zone resolution happens in the owning builder.
+        return tuple(
+            a for a in args if isinstance(a, (syntax.Param, _ParamMarker))
+        )
 
     # Grammar: field_name COLON type_expr — identical shape to ``field_def``.
     field_inline = field_def
@@ -497,8 +580,15 @@ class AstBuilder(Transformer):
         )
 
     def param_list(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
-        """param_list: param_def (COMMA param_def)* COMMA?"""
-        return tuple(a for a in args if isinstance(a, syntax.Param))
+        """param_list: param_entry (COMMA param_entry)* COMMA?
+
+        Collects the full marker/param interleaving and resolves zones.
+        def/lambda parameters default to STANDARD when no markers are present.
+        """
+        entries: _RawEntries = tuple(
+            a for a in args if isinstance(a, (syntax.Param, _ParamMarker))
+        )
+        return _resolve_params(entries, default_kind=syntax.ParamKind.STANDARD)
 
     def param_def(self, meta: Meta, args: _Args) -> syntax.Param:
         """param_def: field_name COLON type_expr (EQ or_expr)?"""
@@ -1964,8 +2054,14 @@ def _find_name_token(args: _Args) -> Token:
 
 
 def _is_field_tuple(a: object) -> bool:
+    """True iff *a* is a field-list result (``tuple`` of ``Param | _ParamMarker``).
+
+    An empty tuple is treated as a field tuple (the ``field_list?`` absent case).
+    Markers may appear at position 0 in the raw entries returned by ``field_list``
+    before zone resolution, so ``_ParamMarker`` is accepted here too.
+    """
     return isinstance(a, tuple) and (
-        len(a) == 0 or isinstance(a[0], syntax.Param)
+        len(a) == 0 or isinstance(a[0], (syntax.Param, _ParamMarker))
     )
 
 
@@ -1976,15 +2072,75 @@ def _find_field_tuple(args: _Args) -> tuple[syntax.Param, ...]:
     return cast(tuple[syntax.Param, ...], result)
 
 
-def _stamp_field_kinds(
-    fields: tuple[syntax.Param, ...], kind: syntax.ParamKind
+def _resolve_params(
+    entries: _RawEntries,
+    *,
+    default_kind: syntax.ParamKind,
 ) -> tuple[syntax.Param, ...]:
-    """Return *fields* with every param's kind replaced by *kind*.
+    """Resolve a marker/param interleaving to ``Param``s with concrete ``kind``s.
 
-    Uses ``dataclasses.replace`` to allocate new frozen nodes while preserving
-    the original ``node_id`` and ``span`` (only ``kind`` is overridden).
+    Algorithm (from PLAN_kwargs Step 4 / K3 spec):
+
+    - **No marker** → every ``Param`` gets ``default_kind``.
+    - **≥1 marker** (pure positional reading; ``default_kind`` is ignored):
+      - Markers must be strictly increasing by zone (rejects duplicates and
+        out-of-order); ``@pos`` must be the first entry (no ``Param`` before it).
+      - Zone for params *before* the first marker = one zone below the first
+        marker's zone.
+      - Walk left-to-right: marker → set ``current``; param → assign ``current``.
     """
-    return tuple(dataclasses.replace(p, kind=kind) for p in fields)
+    markers = [e for e in entries if isinstance(e, _ParamMarker)]
+    if not markers:
+        # No marker: apply the per-context default to every param.
+        return tuple(
+            replace(p, kind=default_kind)
+            for p in entries
+            if isinstance(p, syntax.Param)
+        )
+
+    # Validate: markers must be strictly increasing by zone.
+    last_order = -1
+    for m in markers:
+        order = _ZONE_ORDER[m.zone]
+        if order <= last_order:
+            raise AglSyntaxError(
+                f"duplicate / out-of-order parameter marker {m.label!r}.",
+                span=m.span,
+            )
+        last_order = order
+
+    # Validate: @pos must be leading (no Param may precede it in entries).
+    pos_marker = next(
+        (m for m in markers if m.zone == syntax.ParamKind.POSITIONAL_ONLY), None
+    )
+    if pos_marker is not None:
+        # Find the index of pos_marker in entries (by identity).
+        pos_idx = next(i for i, e in enumerate(entries) if e is pos_marker)
+        if any(isinstance(e, syntax.Param) for e in entries[:pos_idx]):
+            raise AglSyntaxError(
+                f"positional-only marker {pos_marker.label!r} must lead "
+                "the parameter list.",
+                span=pos_marker.span,
+            )
+
+    # Determine zone for params that appear before the first marker.
+    first_marker = markers[0]
+    first_order = _ZONE_ORDER[first_marker.zone]
+    # initial_kind is None only when @pos is first (no params allowed before it).
+    initial_kind: syntax.ParamKind | None = (
+        None if first_order == 0 else _ZONE_BY_ORDER[first_order - 1]
+    )
+
+    current = initial_kind
+    result: list[syntax.Param] = []
+    for e in entries:
+        if isinstance(e, _ParamMarker):
+            current = e.zone
+        else:
+            assert current is not None  # guaranteed: @pos check above
+            result.append(replace(e, kind=current))
+
+    return tuple(result)
 
 
 def _is_variant_tuple(a: object) -> bool:

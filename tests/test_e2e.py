@@ -1073,6 +1073,20 @@ class TestConfigEnv:
             f"DEP_SEEN_BY_ENV_SH={expected_dep}/from-env-sh",
         ]
 
+    def test_outputs_shell_statements_via_run_agm(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """run_agm(["config","env"]) exits 0 and outputs export statements."""
+        project = _make_workspace_project(tmp_path, env)
+        # PROJ_DIR is not set in the env fixture (clear_project_env strips it),
+        # so config env always exports it — giving a stable behavioral assertion.
+        result = run_agm(["config", "env"], env=env, cwd=str(project))
+
+        assert result.returncode == 0
+        assert any(
+            line == f"export PROJ_DIR={project}" for line in result.stdout.splitlines()
+        ), f"Expected 'export PROJ_DIR={project}' in output; got:\n{result.stdout}"
+
 
 # ── agm config update ───────────────────────────────────────────────────────
 
@@ -1978,6 +1992,61 @@ class TestClose:
         branches = _git("branch", cwd=str(project), env=env).stdout
         assert "feat/close-embedded" not in branches
         assert "Closed session proj/feat/close-embedded" in result.stdout
+
+
+# ── agm workspace open / agm workspace close ─────────────────────────────────
+
+
+class TestWorkspaceOpenClose:
+    """agm workspace open / agm workspace close: group-scoped open and close.
+
+    These commands are distinct entry points from top-level ``agm open`` /
+    ``agm close`` (same underlying implementation, different command path).
+    Tests here exercise the ``workspace open`` / ``workspace close`` CLI paths
+    end-to-end using the fake-tmux harness, mirroring ``TestOpen``/``TestClose``.
+    """
+
+    def test_workspace_open_creates_tmux_session(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """``agm workspace open BRANCH`` creates a detached tmux session."""
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env, name="myproj")
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+
+        run_agm(["workspace", "open", "repo"], env=env, cwd=str(project))
+
+        log = tmux_log.read_text()
+        assert "new-session" in log
+        assert "-s myproj" in log
+
+    def test_workspace_close_removes_worktree_and_kills_session(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """``agm workspace close BRANCH`` removes the worktree and kills the session."""
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env, name="proj")
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+
+        run_agm(["wt", "new", "feat/wsp-close"], env=env, cwd=str(project / "repo"))
+        worktree = project / "worktrees" / "feat/wsp-close"
+        assert worktree.is_dir()
+        # Open a detached session so a shell wrapper is created and can be torn down.
+        run_agm(["open", "-d", "feat/wsp-close"], env=env, cwd=str(project))
+        wrapper = _workspace_shell_path(env, "proj/feat/wsp-close")
+        assert wrapper.exists()
+
+        result = run_agm(
+            ["workspace", "close", "feat/wsp-close"], env=env, cwd=str(project)
+        )
+
+        assert not worktree.exists()
+        assert not wrapper.exists()
+        assert "Closed session proj/feat/wsp-close" in result.stdout
+        log = tmux_log.read_text()
+        assert "kill-session -t proj/feat/wsp-close" in log
 
 
 # ── agm dep new ─────────────────────────────────────────────────────────────

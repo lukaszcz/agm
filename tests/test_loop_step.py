@@ -816,10 +816,7 @@ class TestExecuteSingleStep:
             "agm.commands.loop.step.run_prompt_command",
             lambda *a, **kw: "COMPLETE",
         )
-        monkeypatch.setattr(
-            "agm.commands.loop.step.selector_result",
-            lambda output, tasks_dir: None,
-        )
+        # Real selector_result: "COMPLETE" on the last line → returns None → done.
         result = execute_single_step(runtime, step_number=1)
         assert result is True
 
@@ -865,13 +862,14 @@ class TestExecuteSingleStep:
             nonlocal call_count
             call_count += 1
             all_targets.append(target)
+            # Selector call: return task filename so real selector_result resolves it.
+            # Runner call: return arbitrary output.
+            if command == ["fake-selector"]:
+                return "task-1.md\n"
             return "task output"
 
         monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        monkeypatch.setattr(
-            "agm.commands.loop.step.selector_result",
-            lambda output, tasks_dir: task_file,
-        )
+        # Real selector_result: "task-1.md" found in tasks_dir → returns Path.
         result = execute_single_step(runtime, step_number=1)
         assert result is False
         # selector + runner calls = 2
@@ -924,13 +922,13 @@ class TestExecuteSingleStep:
         ) -> str:
             all_targets.append(target)
             all_envs.append(env)
+            # Selector call: real selector_result resolves "task-1.md" → task_file.
+            if command == ["fake-selector"]:
+                return "task-1.md\n"
             return "task output"
 
         monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        monkeypatch.setattr(
-            "agm.commands.loop.step.selector_result",
-            lambda output, tasks_dir: task_file,
-        )
+        # Real selector_result: "task-1.md" found in tasks_dir → returns Path.
         execute_single_step(runtime, step_number=1)
 
         # Runner (2nd call) receives preprocessed implement.md with TASK_FILE expanded
@@ -985,13 +983,13 @@ class TestExecuteSingleStep:
         ) -> str:
             all_targets.append(target)
             all_envs.append(env)
+            # Selector call: real selector_result resolves "task-1.md" → task_file.
+            if command == ["fake-selector"]:
+                return "task-1.md\n"
             return "output"
 
         monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        monkeypatch.setattr(
-            "agm.commands.loop.step.selector_result",
-            lambda output, tasks_dir: task_file,
-        )
+        # Real selector_result: "task-1.md" found in tasks_dir → returns Path.
         execute_single_step(runtime, step_number=1)
 
         # Explicit prompt is re-prepared with TASK_FILE env
@@ -1040,13 +1038,13 @@ class TestExecuteSingleStep:
         ) -> str:
             all_targets.append(target)
             all_envs.append(env)
+            # Selector call: real selector_result resolves "task-1.md" → task_file.
+            if command == ["fake-selector"]:
+                return "task-1.md\n"
             return "output"
 
         monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        monkeypatch.setattr(
-            "agm.commands.loop.step.selector_result",
-            lambda output, tasks_dir: task_file,
-        )
+        # Real selector_result: "task-1.md" found in tasks_dir → returns Path.
         execute_single_step(runtime, step_number=1)
 
         # Raw task file is used as runner target (fallback)
@@ -1082,16 +1080,28 @@ class TestExecuteSingleStep:
         )
 
         selector_call_count = 0
-        selector_results: list[Path | None | str] = ["not a path yet", task_file]
 
-        def fake_selector_result(output: str, *, tasks_dir: Path) -> Path | None | str:
+        def fake_run_command(
+            command: list[str],
+            target: Path,
+            *,
+            env: dict[str, str],
+            stdout_callback: object = None,
+            stderr_callback: object = None,
+            idle_timeout: float | None = None,
+        ) -> str:
             nonlocal selector_call_count
-            val = selector_results[selector_call_count]
-            selector_call_count += 1
-            return val
+            if command == ["fake-selector"]:
+                selector_call_count += 1
+                # 1st selector call: return non-resolvable text → real selector_result → str.
+                # 2nd selector call: return task filename → real selector_result → Path.
+                if selector_call_count == 1:
+                    return "not a path yet\n"
+                return "task-1.md\n"
+            return "output"
 
-        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", lambda *a, **kw: "output")
-        monkeypatch.setattr("agm.commands.loop.step.selector_result", fake_selector_result)
+        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
+        # Real selector_result drives the retry: str on 1st call, Path on 2nd.
         execute_single_step(runtime, step_number=1)
         assert selector_call_count == 2
 
@@ -2007,26 +2017,21 @@ class TestExecuteSingleStepSelectorStringResult:
         ) -> str:
             nonlocal call_count
             call_count += 1
-            # Return COMPLETE on second call (the retry)
-            return "COMPLETE"
-
-        # First returns a string (not a path), then None (COMPLETE on retry)
-        selector_results = ["not-a-file-path"]
-        selector_idx = 0
-
-        def fake_selector_result(output: str, *, tasks_dir: Path) -> Path | None | str:
-            nonlocal selector_idx
-            if selector_idx < len(selector_results):
-                val = selector_results[selector_idx]
-                selector_idx += 1
-                return val
-            return None  # COMPLETE on third call
+            # 1st selector call: non-resolvable text → real selector_result → str → retry.
+            # 2nd selector call: COMPLETE → real selector_result → None → done.
+            if call_count == 1:
+                return "not-a-file-path\n"
+            return "COMPLETE\n"
 
         monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        monkeypatch.setattr("agm.commands.loop.step.selector_result", fake_selector_result)
+        # Real selector_result: "not-a-file-path" is not a file → str (retry);
+        # then "COMPLETE" on last line → None (done).
         result = execute_single_step(runtime, step_number=1)
         # After string result, selector retries; eventually COMPLETE returns True
         assert result is True
+        # The str result must have triggered a retry: exactly two selector calls,
+        # never a runner call (this branch never selects a task).
+        assert call_count == 2
 
 
 class TestExecuteSingleStepWithResolvedPrompt:
@@ -2094,12 +2099,13 @@ class TestExecuteSingleStepWithResolvedPrompt:
         ) -> str:
             run_targets.append(target)
             run_envs.append(env)
+            # Selector call: real selector_result resolves "task-1.md" → task_file.
+            if command == ["fake-selector"]:
+                return "task-1.md\n"
             return "output"
 
         monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        monkeypatch.setattr(
-            "agm.commands.loop.step.selector_result", lambda output, tasks_dir: task_file
-        )
+        # Real selector_result: "task-1.md" found in tasks_dir → returns Path.
         result = execute_single_step(runtime, step_number=1)
         assert result is False
         # Prompt is re-prepared from original source with TASK_FILE in env,
@@ -2176,12 +2182,13 @@ class TestExecuteSingleStepExpandsTaskFileInPrompt:
             idle_timeout: float | None = None,
         ) -> str:
             run_targets.append(target)
+            # Selector call: real selector_result resolves "task-1.md" → task_file.
+            if command == ["fake-selector"]:
+                return "task-1.md\n"
             return "output"
 
         monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        monkeypatch.setattr(
-            "agm.commands.loop.step.selector_result", lambda output, tasks_dir: task_file
-        )
+        # Real selector_result: "task-1.md" found in tasks_dir → returns Path.
         result = execute_single_step(runtime, step_number=1)
         assert result is False
         # The runner target should be a new file with TASK_FILE expanded,
@@ -2252,12 +2259,13 @@ class TestExecuteSingleStepExpandsTaskFileInPrompt:
             idle_timeout: float | None = None,
         ) -> str:
             run_targets.append(target)
+            # Selector call: real selector_result resolves "task-1.md" → task_file.
+            if command == ["fake-selector"]:
+                return "task-1.md\n"
             return "output"
 
         monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        monkeypatch.setattr(
-            "agm.commands.loop.step.selector_result", lambda output, tasks_dir: task_file
-        )
+        # Real selector_result: "task-1.md" found in tasks_dir → returns Path.
         result = execute_single_step(runtime, step_number=1)
         assert result is False
         # The runner target content should have TASK_FILE expanded
@@ -2504,13 +2512,13 @@ class TestExecuteSingleStepWithExtraPrompt:
             idle_timeout: float | None = None,
         ) -> str:
             all_targets.append(target)
+            # Selector call: real selector_result resolves "task-1.md" → task_file.
+            if command == ["fake-selector"]:
+                return "task-1.md\n"
             return "output"
 
         monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        monkeypatch.setattr(
-            "agm.commands.loop.step.selector_result",
-            lambda output, tasks_dir: task_file,
-        )
+        # Real selector_result: "task-1.md" found in tasks_dir → returns Path.
         execute_single_step(runtime, step_number=1)
 
         assert len(all_targets) == 2
@@ -2576,13 +2584,13 @@ class TestExecuteSingleStepWithExtraPrompt:
             idle_timeout: float | None = None,
         ) -> str:
             all_targets.append(target)
+            # Selector call: real selector_result resolves "task-1.md" → task_file.
+            if command == ["fake-selector"]:
+                return "task-1.md\n"
             return "output"
 
         monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        monkeypatch.setattr(
-            "agm.commands.loop.step.selector_result",
-            lambda output, tasks_dir: task_file,
-        )
+        # Real selector_result: "task-1.md" found in tasks_dir → returns Path.
         execute_single_step(runtime, step_number=1)
 
         assert len(all_targets) == 2

@@ -26,6 +26,24 @@ from agm.agent.runner import (
     validate_command,
 )
 from agm.cli_support.args import LoopArgs, LoopSelectArgs
+from agm.commands.loop.run import run as loop_run
+
+
+def _setup_home_with_prompts(tmp_path: Path, prompts: list[str] | None = None) -> Path:
+    """Create a minimal HOME directory with the given prompt files under ~/.agm/prompts/."""
+    if prompts is None:
+        prompts = ["loop.md", "select.md", "implement.md"]
+    home = tmp_path / "home"
+    prompt_dir = home / ".agm" / "prompts"
+    prompt_dir.mkdir(parents=True)
+    for name in prompts:
+        (prompt_dir / name).write_text(f"# {name}\n", encoding="utf-8")
+    return home
+
+
+def _which_always_found(name: str) -> str | None:
+    """Stub for shutil.which: always reports the binary as found."""
+    return "/bin/fake"
 
 
 def test_selector_result_accepts_relative_path_from_current_working_directory(
@@ -2295,3 +2313,211 @@ class TestConfiguredLoopSettingsCommandNotFound:
 
         config = configured_loop_settings(None)
         assert config.runner == "claude -p"
+
+
+# ---------------------------------------------------------------------------
+# Multi-iteration loop integration tests
+# ---------------------------------------------------------------------------
+
+
+class TestLoopRunIntegration:
+    """Integration tests: drive run() through real prepare_runtime → execute_single_step
+    → real selector_result, mocking only the agent boundary (run_prompt_command /
+    run_capture).  No real agent is ever invoked.
+    """
+
+    def test_non_selector_two_iterations_ending_complete(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Non-selector mode loops through real steps and completes after 2 iterations.
+
+        Step 1: run_prompt_command returns a non-complete output.
+        Step 2: run_prompt_command returns output with COMPLETE on the last line.
+        Asserts: loop ran exactly 2 steps and returned normally (no SystemExit).
+        """
+        home = _setup_home_with_prompts(tmp_path, ["loop.md", "select.md"])
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", _which_always_found)
+        monkeypatch.chdir(tmp_path)
+
+        tasks_dir_path = tmp_path / ".agent-files" / "tasks"
+        tasks_dir_path.mkdir(parents=True)
+        (tasks_dir_path / "PROGRESS.md").write_text("done\n", encoding="utf-8")
+
+        call_count = 0
+
+        def fake_run_command(
+            command: list[str],
+            target: Path,
+            *,
+            env: dict[str, str],
+            stdout_callback: object = None,
+            stderr_callback: object = None,
+            idle_timeout: float | None = None,
+        ) -> str:
+            nonlocal call_count
+            call_count += 1
+            if call_count < 2:
+                return "still working\n"
+            return "all done\n COMPLETE \n"
+
+        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
+
+        args = LoopArgs(
+            command_name=None,
+            runner="fake-runner",
+            runner_args=[],
+            selector=None,
+            no_selector=True,
+            tasks_dir=None,
+            no_log=True,
+            log_file=None,
+            prompt=None,
+            prompt_file=None,
+            selector_prompt=None,
+            selector_prompt_file=None,
+            extra_prompt=None,
+            extra_prompt_file=None,
+            extra_selector_prompt=None,
+            extra_selector_prompt_file=None,
+            timeout=None,
+        )
+        loop_run(args)  # Must not raise SystemExit
+
+        assert call_count == 2
+
+    def test_selector_mode_two_iterations_real_selector_result_ends_complete(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Selector mode with REAL selector_result: 2 iterations, then COMPLETE.
+
+        The mock returns scripted selector outputs; real selector_result parses them:
+          - Step 1 selector call → "task-1.md" → Path → runner is invoked.
+          - Step 1 returns False (continue).
+          - Step 2 selector call → "COMPLETE" → None → done.
+        Asserts: runner received TASK_FILE env derived from the selected task (wiring proof).
+        """
+        home = _setup_home_with_prompts(tmp_path, ["loop.md", "select.md", "implement.md"])
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", _which_always_found)
+        monkeypatch.chdir(tmp_path)
+
+        tasks_dir_path = tmp_path / ".agent-files" / "tasks"
+        tasks_dir_path.mkdir(parents=True)
+        task_file = tasks_dir_path / "task-1.md"
+        task_file.write_text("do this task\n", encoding="utf-8")
+
+        # Scripted responses consumed in order:
+        # [0] selector (step 1): task filename → real selector_result → Path
+        # [1] runner (step 1): arbitrary → execute_single_step returns False
+        # [2] selector (step 2): COMPLETE → real selector_result → None → done
+        responses = iter(["task-1.md\n", "task done\n", "COMPLETE\n"])
+        runner_targets: list[Path] = []
+        runner_envs: list[dict[str, str]] = []
+
+        def fake_run_command(
+            command: list[str],
+            target: Path,
+            *,
+            env: dict[str, str],
+            stdout_callback: object = None,
+            stderr_callback: object = None,
+            idle_timeout: float | None = None,
+        ) -> str:
+            if command == ["fake-runner"]:
+                runner_targets.append(target)
+                runner_envs.append(dict(env))
+            return next(responses)
+
+        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
+
+        args = LoopArgs(
+            command_name=None,
+            runner="fake-runner",
+            runner_args=[],
+            selector="fake-selector",
+            no_selector=False,
+            tasks_dir=None,
+            no_log=True,
+            log_file=None,
+            prompt=None,
+            prompt_file=None,
+            selector_prompt=None,
+            selector_prompt_file=None,
+            extra_prompt=None,
+            extra_prompt_file=None,
+            extra_selector_prompt=None,
+            extra_selector_prompt_file=None,
+            timeout=None,
+        )
+        loop_run(args)  # Must not raise SystemExit
+
+        # Runner was invoked exactly once (one task selected)
+        assert len(runner_targets) == 1
+        # TASK_FILE env derived from the task selected by real selector_result.
+        # selector_result resolves paths against the cwd, so compare resolved paths
+        # (robust on platforms where the temp root is a symlink, e.g. macOS /tmp).
+        task_file_env = runner_envs[0].get("TASK_FILE")
+        assert task_file_env is not None
+        assert Path(task_file_env).resolve() == task_file.resolve()
+
+    def test_runner_exit_127_aborts_loop_via_real_run_prompt_command(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Exit-127 from the underlying process is a fatal abort.
+
+        Mocking run_capture (the deepest boundary) to return code 127 exercises the
+        real run_prompt_command 127-handling path; the loop must abort with SystemExit(1)
+        and must NOT retry (capture_calls == 1).
+        """
+        home = _setup_home_with_prompts(tmp_path, ["loop.md", "select.md"])
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", _which_always_found)
+        monkeypatch.chdir(tmp_path)
+
+        tasks_dir_path = tmp_path / ".agent-files" / "tasks"
+        tasks_dir_path.mkdir(parents=True)
+        (tasks_dir_path / "PROGRESS.md").write_text("done\n", encoding="utf-8")
+
+        capture_calls = 0
+
+        def fake_run_capture(
+            cmd: list[str],
+            *,
+            env: dict[str, str],
+            stdout_callback: object = None,
+            stderr_callback: object = None,
+            isolate_process_group: bool = False,
+            idle_timeout: float | None = None,
+        ) -> tuple[int, str, str]:
+            nonlocal capture_calls
+            capture_calls += 1
+            return (127, "", "fake-runner: command not found")
+
+        monkeypatch.setattr("agm.agent.runner.run_capture", fake_run_capture)
+
+        args = LoopArgs(
+            command_name=None,
+            runner="fake-runner",
+            runner_args=[],
+            selector=None,
+            no_selector=True,
+            tasks_dir=None,
+            no_log=True,
+            log_file=None,
+            prompt=None,
+            prompt_file=None,
+            selector_prompt=None,
+            selector_prompt_file=None,
+            extra_prompt=None,
+            extra_prompt_file=None,
+            extra_selector_prompt=None,
+            extra_selector_prompt_file=None,
+            timeout=None,
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            loop_run(args)
+
+        assert exc_info.value.code == 1
+        # Loop aborted immediately — did not retry on 127
+        assert capture_calls == 1

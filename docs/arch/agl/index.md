@@ -28,8 +28,16 @@ The lexer and parser are the only Lark-aware code. The AST is the firewall: ever
 
 Two consequences shape the whole codebase:
 
-- **Identifier case is meaningless.** The lexer emits a single `NAME` token for all identifiers; types, constructors, and variables are distinguished by their declaration and binding namespace, never by spelling. No pass branches on capitalization.
+- **Identifier case carries no semantic category.** Identifiers are case-sensitive (distinct spellings are distinct names), but the lexer emits a single `NAME` token for all of them; types, constructors, and variables are distinguished by their declaration and binding namespace, never by capitalization. No pass branches on the case of a name.
 - **Passes never mutate the AST.** Later passes attach their results in *side tables* keyed by a stable per-node id, carried in the resolved/checked program objects rather than written back onto nodes.
+
+## Shared AGM Layers
+
+The firewall is *semantic*, not an I/O boundary: it isolates the static passes from the parser, not AgL from the rest of AGM. AgL reuses AGM's lower layers rather than reimplementing them — the host runtime and pipeline build on the shared primitives, while AgL-only types sit on top:
+
+- **Agent invocation** goes through `agm.agent.runner` (the same prepare/run path as loop/review), with the default runner resolved from the shared `[loop]` config via `agm.agent.config.default_agent_runner`. AgL adds only its own dispatch/typed-request layer (`runtime/agents.py`) over that runner.
+- **Primitives** come from `agm.core`: shell `exec` and agent subprocesses use `core.process`, environments use `core.env`, file and trace I/O use `core.fs`/`core.log` (so AgL participates in dry-run for free), and generic helpers (`util.text`, `util.graph`) are reused for newline normalization, module-cycle SCCs, and type-dependency toposort.
+- **Configuration** is loaded and layered by `agm.config`; the only config logic inside `agl/` is static validation of source `config` pragmas in the scope pass. The `exec`/`repl` commands resolve the CLI > pragma > config precedence using shared helpers (`core.log`).
 
 ## Expression-Oriented Design
 

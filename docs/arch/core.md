@@ -1,6 +1,6 @@
 # Core Primitives
 
-Two foundation packages sit beneath everything else. `core/` holds the OS-facing building blocks shared across every command: process execution, environment handling, filesystem and TOML/dotenv I/O, logging, and a cross-cutting dry-run facility. `util/` holds pure, stdlib-only generic helpers that import nothing from `agm` and are shared by *both* the AGM commands and the AgL subsystem.
+Two foundation packages sit beneath everything else, and *both* are shared by both halves of AGM — the project-management commands and the AgL runtime alike. `core/` holds the OS-facing building blocks: process execution, environment handling, filesystem and TOML/dotenv I/O, logging, and a cross-cutting dry-run facility; AgL's host runtime runs shell commands and agents, clones environments, writes files, and emits trace logs through these same primitives. `util/` holds pure, stdlib-only generic helpers that import nothing from `agm`.
 
 ## Process Execution
 

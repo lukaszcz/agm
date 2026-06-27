@@ -10,34 +10,13 @@ AGM is an Agent Project Management CLI tool.
 
 Use `uv run` for all Python tooling.
 
-## Architecture
+## Architecture and project structure
 
 Read @docs/arch/index.md to understand AGM implementation architecture.
 
 **IMPORTANT**: Update docs/arch/*.md whenever AGM implementation architecture changes – always keep these files up-to-date with the codebase.
 
 The primary purpose of architecture docs in docs/arch/*.md is to provide agents with a quick but comprehensive overview of the system's architecture and the codebase. Treat the docs as an onboarding guide. When updating, do not add brittle implementation details, but do include info on where to find relevant codebase references. Be succinct, not verbose. Provide architectural overview, not mechanism details. Match the existing writing style.
-
-## Project Structure
-
-Production code lives in `src/agm/`, organized by area:
-- `agl/` for the AgL agent workflow DSL (lexer, parser, AST, scope, typecheck, eval, runtime),
-- `commands/` for CLI entrypoints and command implementations; directory structure of `commands/` must reflect the CLI command tree exactly, including nested command groups (`config/`, `dep/`, `loop/`, `tmux/`, `worktree/`, etc.),
-- `config/` for loading and resolving general and sandbox configuration,
-- `core/` for environment and process primitives shared across features,
-- `project/` for project/worktree setup and layout management,
-- `sandbox/` for sandbox runtime/template support,
-- `tmux/` for tmux session and layout logic,
-- `vcs/` for git integration.
-
-CLI arguments/options are defined in `src/agm/cli.py`, parser construction lives in `src/agm/parser.py`, and custom argument-value completions for CLI parameters live in `src/agm/completion.py`.
-
-Tests live in `tests/`. Project notes and command docs are in `docs/`.
-
-Additional directories:
-- `config/` for config templates,
-- `stubs/` for local typing support for third-party modules,
-- `tools/` for repository tooling.
 
 ## Build, Test, and Development Commands
 
@@ -80,7 +59,7 @@ Run the CLI locally with `uv run agm ...` when iterating on a command.
 
 ## Documentation
 
-- Keep docs (README.md and docs/commands.md) and command help texts up to date with implemented command functionality. README.md is a brief description of the AGM program and should not contain overhwelming details, while docs/commands.md and the help texts are comprehensive command references.
+- Keep docs (`README.md` and `docs/commands.md`) and command help texts up to date with implemented command functionality. `README.md` is a brief description of the AGM program and should not contain overhwelming details, while `docs/commands.md` and the help texts are comprehensive command references.
 - ALWAYS keep comments and docstrings up-to-date with the codebase.
 - Avoid references to unversioned files in the docs, comments and docstrings.
 

@@ -4,7 +4,7 @@ AGM's entry point is a Typer application that defines the whole command tree, pa
 
 ## Command Tree
 
-The command tree is defined once as a set of Typer apps — a root app plus one sub-app per command group (`config`, `dep`, `loop`, `sync`, `tmux`, `workspace`, `worktree`) — and several top-level commands (`init`, `exec`, `repl`, `run`, `review`, `revise`, `refine`, plus the `open`/`close` shortcuts for workspace open/close). Group callbacks print help when invoked without a subcommand.
+The command tree is defined once as a set of Typer apps — a root app plus one sub-app per command group — and several top-level commands. Group callbacks print help when invoked without a subcommand.
 
 The structure of `src/agm/commands/` mirrors this tree exactly: a command group is a directory with an `__init__.py` callback and one module per subcommand. Locating the implementation of any command is therefore a direct path lookup from its CLI name.
 

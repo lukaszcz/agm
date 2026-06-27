@@ -207,6 +207,37 @@ def test_ir_semantic_condition_source_slice_complex() -> None:
 
 
 # ---------------------------------------------------------------------------
+# IR semantic: loop-limit boundary — exact limit succeeds / one-short exhausts
+# ---------------------------------------------------------------------------
+
+
+def test_ir_semantic_loop_succeeds_at_exact_limit() -> None:
+    """do[3] until counter>=3 succeeds at exactly the limit (no MaxIterationsExceeded)."""
+    source = (
+        "var counter = 0\n"
+        "do[3]\n"
+        "  counter := counter + 1\n"
+        "until counter >= 3\n"
+        "counter\n"
+    )
+    ir = evaluate_ir(source)
+    assert ir["counter"] == IntValue(3)
+
+
+def test_ir_semantic_loop_exhausts_one_short_of_condition() -> None:
+    """do[2] until counter>=3 needs 3 iterations but the limit is 2 → MaxIterationsExceeded."""
+    exc = evaluate_ir_raises(
+        "var counter = 0\n"
+        "do[2]\n"
+        "  counter := counter + 1\n"
+        "until counter >= 3\n"
+        "counter\n"
+    )
+    assert exc.display_name == "MaxIterationsExceeded"
+    assert exc.fields.get("limit") == IntValue(2)
+
+
+# ---------------------------------------------------------------------------
 # Golden lowering: IrLoop node shape
 # ---------------------------------------------------------------------------
 

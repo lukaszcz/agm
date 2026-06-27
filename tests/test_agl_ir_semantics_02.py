@@ -391,6 +391,18 @@ m["a"] := 7
     assert result.entries["a"] == DecimalValue(decimal.Decimal(7))
 
 
+def test_ir_semantic_empty_list_literal_evaluates_to_empty_list() -> None:
+    """An annotated empty list literal evaluates to an empty ListValue."""
+    ir = evaluate_ir("let xs: list[int] = []\nxs\n")
+    assert ir["xs"] == ListValue(elements=())
+
+
+def test_ir_semantic_empty_dict_literal_evaluates_to_empty_dict() -> None:
+    """An annotated empty dict literal evaluates to an empty DictValue."""
+    ir = evaluate_ir("let d: dict[text, int] = {}\nd\n")
+    assert ir["d"] == DictValue(entries={})
+
+
 def test_indexed_assignment_decimal_leaf_list_of_list_depth2() -> None:
     """Indexed assignment depth 2 into list[list[decimal]] exercises IntToDecimal at the leaf.
 

@@ -223,6 +223,11 @@ def test_not_in_list() -> None:
     ir = evaluate_ir(source)
     assert ir["x"] == BoolValue(False)
 
+def test_ir_semantic_membership_in_empty_list_is_false() -> None:
+    """`x in xs` on an empty list evaluates to false."""
+    ir = evaluate_ir("let xs: list[int] = []\nlet has = 5 in xs\nhas\n")
+    assert ir["has"] == BoolValue(False)
+
 def test_in_dict() -> None:
     source = 'let m: dict[text, int] = {"a": 1}\nlet x: bool = "a" in m\n()'
     ir = evaluate_ir(source)

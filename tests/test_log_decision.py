@@ -70,7 +70,7 @@ class TestResolveLogDecisionDefaults:
             config_log_file=None,
         )
         with pytest.raises((AttributeError, TypeError)):
-            d.enabled = True  # type: ignore[misc]
+            setattr(d, "enabled", True)
 
 
 class TestResolveLogDecisionCliLayer:

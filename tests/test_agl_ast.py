@@ -23,6 +23,7 @@ Covers:
 from __future__ import annotations
 
 import decimal
+import importlib
 from dataclasses import FrozenInstanceError
 
 import pytest
@@ -2009,57 +2010,27 @@ class TestUnionAliases:
 class TestRemovedNodes:
     """Verify that v1-only nodes are no longer part of the public API."""
 
-    def test_agent_call_not_importable(self) -> None:
-        with pytest.raises((ImportError, AttributeError)):
-            from agm.agl.syntax import AgentCall  # type: ignore[attr-defined]  # noqa: F401
-
-    def test_pass_stmt_not_importable(self) -> None:
-        with pytest.raises((ImportError, AttributeError)):
-            from agm.agl.syntax import PassStmt  # type: ignore[attr-defined]  # noqa: F401
-
-    def test_print_stmt_not_importable(self) -> None:
-        with pytest.raises((ImportError, AttributeError)):
-            from agm.agl.syntax import PrintStmt  # type: ignore[attr-defined]  # noqa: F401
-
-    def test_expr_stmt_not_importable(self) -> None:
-        with pytest.raises((ImportError, AttributeError)):
-            from agm.agl.syntax import ExprStmt  # type: ignore[attr-defined]  # noqa: F401
-
-    def test_do_until_not_importable(self) -> None:
-        with pytest.raises((ImportError, AttributeError)):
-            from agm.agl.syntax import DoUntil  # type: ignore[attr-defined]  # noqa: F401
-
-    def test_if_stmt_not_importable(self) -> None:
-        with pytest.raises((ImportError, AttributeError)):
-            from agm.agl.syntax import IfStmt  # type: ignore[attr-defined]  # noqa: F401
-
-    def test_case_stmt_not_importable(self) -> None:
-        with pytest.raises((ImportError, AttributeError)):
-            from agm.agl.syntax import CaseStmt  # type: ignore[attr-defined]  # noqa: F401
-
-    def test_case_expr_not_importable(self) -> None:
-        with pytest.raises((ImportError, AttributeError)):
-            from agm.agl.syntax import CaseExpr  # type: ignore[attr-defined]  # noqa: F401
-
-    def test_if_expr_not_importable(self) -> None:
-        with pytest.raises((ImportError, AttributeError)):
-            from agm.agl.syntax import IfExpr  # type: ignore[attr-defined]  # noqa: F401
-
-    def test_try_catch_not_importable(self) -> None:
-        with pytest.raises((ImportError, AttributeError)):
-            from agm.agl.syntax import TryCatch  # type: ignore[attr-defined]  # noqa: F401
-
-    def test_call_options_not_importable(self) -> None:
-        with pytest.raises((ImportError, AttributeError)):
-            from agm.agl.syntax import CallOptions  # type: ignore[attr-defined]  # noqa: F401
-
-    def test_constructor_not_importable(self) -> None:
-        with pytest.raises((ImportError, AttributeError)):
-            from agm.agl.syntax import Constructor  # type: ignore[attr-defined]  # noqa: F401
-
-    def test_stmt_union_not_importable(self) -> None:
-        with pytest.raises((ImportError, AttributeError)):
-            from agm.agl.syntax import Stmt  # type: ignore[attr-defined]  # noqa: F401
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "AgentCall",
+            "PassStmt",
+            "PrintStmt",
+            "ExprStmt",
+            "DoUntil",
+            "IfStmt",
+            "CaseStmt",
+            "CaseExpr",
+            "IfExpr",
+            "TryCatch",
+            "CallOptions",
+            "Constructor",
+            "Stmt",
+        ],
+    )
+    def test_v1_node_not_exported(self, name: str) -> None:
+        module = importlib.import_module("agm.agl.syntax")
+        assert not hasattr(module, name)
 
 
 # ---------------------------------------------------------------------------
@@ -2109,7 +2080,7 @@ class TestCastNode:
         target = BoolT(span=self._sp(), node_id=1)
         node = Cast(expr=expr, target_type=target, test_only=False, span=self._sp(), node_id=2)
         with pytest.raises((FrozenInstanceError, AttributeError)):
-            node.test_only = True  # type: ignore[misc]
+            setattr(node, "test_only", True)
 
     def test_cast_target_uses_type_expr(self) -> None:
         """target_type accepts any TypeExpr, including generic forms."""
@@ -2168,7 +2139,7 @@ class TestModuleSystemNodes:
         from agm.agl.syntax import Qualifier
         q = Qualifier(segments=("a",), span=self._sp(), node_id=0)
         with pytest.raises((FrozenInstanceError, AttributeError)):
-            q.segments = ("b",)  # type: ignore[misc]
+            setattr(q, "segments", ("b",))
 
     def test_import_item_with_rename(self) -> None:
         from agm.agl.syntax import ImportItem

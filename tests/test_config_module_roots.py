@@ -28,7 +28,7 @@ class TestModuleRootsConfigConstruction:
     def test_frozen(self, tmp_path: Path) -> None:
         cfg = ModuleRootsConfig(lib_root=None, extra=())
         with pytest.raises((AttributeError, TypeError)):
-            cfg.lib_root = ("foo", tmp_path)  # type: ignore[misc]
+            setattr(cfg, "lib_root", ("foo", tmp_path))
 
 
 class TestLoadModuleRootsDefaults:

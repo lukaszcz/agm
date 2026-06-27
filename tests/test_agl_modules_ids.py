@@ -23,7 +23,7 @@ class TestModuleIdConstruction:
     def test_frozen(self) -> None:
         mid = ModuleId.from_dotted("foo")
         with pytest.raises((AttributeError, TypeError)):
-            mid.segments = ("bar",)  # type: ignore[misc]
+            setattr(mid, "segments", ("bar",))
 
     def test_equality_and_hash(self) -> None:
         a = ModuleId.from_dotted("foo.bar")

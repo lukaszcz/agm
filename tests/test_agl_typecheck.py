@@ -31,6 +31,7 @@ from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPE_NAMES,
     BUILTIN_PRELUDE_TYPES,
     EXCEPTION_BASE,
+    TypeVarType,
     comparable_types,
     is_assignable,
     is_json_shaped,
@@ -99,6 +100,7 @@ from agm.agl.typecheck import (
     check,
 )
 from agm.agl.typecheck.builder import _TypeBuilder
+from agm.agl.typecheck.env import ConstructorSignature, GenericTypeDef
 from tests._agl_helpers import all_node_ids
 
 # ---------------------------------------------------------------------------
@@ -222,7 +224,7 @@ class TestBottomType:
     def test_frozen(self) -> None:
         b = BottomType()
         with pytest.raises((AttributeError, TypeError)):
-            b.x = 1  # type: ignore[attr-defined]
+            setattr(b, "x", 1)
 
     def test_equality(self) -> None:
         assert BottomType() == BottomType()
@@ -2537,7 +2539,7 @@ class TestFunctionSignature:
     def test_frozen(self) -> None:
         sig = FunctionSignature(params=(), result=IntType())
         with pytest.raises((AttributeError, TypeError)):
-            sig.params = ()  # type: ignore[misc]
+            setattr(sig, "params", ())
 
 
 # ---------------------------------------------------------------------------
@@ -3660,13 +3662,6 @@ class TestValueCallErrors:
 # ---------------------------------------------------------------------------
 # M2 generics: GenericTypeDef, ConstructorSignature, FunctionSignature.type_params
 # ---------------------------------------------------------------------------
-
-
-from agm.agl.semantics.types import TypeVarType  # noqa: E402
-from agm.agl.typecheck.env import (  # noqa: E402 — module-level import after test classes
-    ConstructorSignature,
-    GenericTypeDef,
-)
 
 
 class TestGenericTypeDef:

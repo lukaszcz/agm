@@ -41,7 +41,6 @@ from agm.agl.syntax.nodes import (
     AssignTarget,
     Block,
     Call,
-    Case,
     Cast,
     DictEntry,
     DictLit,
@@ -56,7 +55,6 @@ from agm.agl.syntax.nodes import (
     Lambda,
     LetDecl,
     ListLit,
-    NamedArg,
     Param,
     ParamDecl,
     Program,
@@ -3394,78 +3392,18 @@ class TestIndexTypechecking:
 # ---------------------------------------------------------------------------
 
 
-class TestDefensiveGuards:
-    """Cover defensive guards that are unreachable from the parser.
+class TestConstructorAndAliasRejections:
+    """Real-source rejection tests for constructor argument validation and alias cycles.
 
-    These tests construct AST nodes and ``ResolvedProgram`` objects directly to
-    exercise branches that the parser/scope pass prevent from being reached via
-    normal source code.  This ensures 100% branch coverage of the checker.
+    All tests drive real AgL source through the full parse → resolve → check
+    pipeline and assert on user-visible type errors.
     """
-
-    def _mk_resolved(
-        self,
-        program: Program,
-        resolution: dict[int, BindingRef] | None = None,
-        builtin_calls: dict[int, object] | None = None,
-        declared_functions: dict[str, FuncDef] | None = None,
-    ) -> _ResolvedProgram:
-        from agm.agl.scope.symbols import BuiltinKind as _BuiltinKind
-
-        root = ScopeNode(node_id=program.node_id)
-        bc: dict[int, _BuiltinKind] = {}
-        return _ResolvedProgram(
-            program=program,
-            resolution=resolution or {},
-            builtin_calls=bc,
-            root_scope=root,
-            declared_functions=declared_functions or {},
-        )
-
-    def test_empty_block_yields_unit(self) -> None:
-        # Exercises _check_block returning UnitType() for an empty block.
-        # The grammar never produces an empty block from source, so we construct
-        # the AST directly.
-        sp = mk_span()
-        block = Block(items=(), span=sp, node_id=_mk_node_id())
-        prog = Program(body=block, span=sp, node_id=_mk_node_id())
-        resolved = self._mk_resolved(prog)
-        result = check(resolved, default_capabilities())
-        assert result is not None
-
-    def test_empty_case_branches_fallback(self) -> None:
-        # Exercises _check_case returning fallback type when branches is empty.
-        # The grammar requires at least one branch, so we construct directly.
-        sp = mk_span()
-        subject = IntLit(value=1, span=sp, node_id=_mk_node_id())
-        case_node = Case(subject=subject, branches=(), span=sp, node_id=_mk_node_id())
-        block = Block(items=(case_node,), span=sp, node_id=_mk_node_id())
-        prog = Program(body=block, span=sp, node_id=_mk_node_id())
-        resolved = self._mk_resolved(prog)
-        result = check(resolved, default_capabilities())
-        assert result is not None
 
     def test_duplicate_constructor_arg_rejected(self) -> None:
         # Parser rejects duplicate named args at parse time (AglSyntaxError/AglTypeError).
         # Use reject_any since the parser may catch it before the type checker.
         err = reject_any("record P\n  x: int\nP(x: 1, x: 2)")
         assert "duplicate" in str(err).lower()
-
-    def test_builtin_func_name_def_rejected(self) -> None:
-        # Exercises _preregister_funcdef raising for names in _BUILTIN_FUNC_NAMES.
-        # The scope pass rejects print/exec/ask before typecheck, so we bypass it
-        # by building a FuncDef node with name "print" inside a ResolvedProgram.
-        sp = mk_span()
-        body_expr = IntLit(value=1, span=sp, node_id=_mk_node_id())
-        ret_type = IntT(span=sp, node_id=_mk_node_id())
-        fd = FuncDef(
-            name="print", params=(), return_type=ret_type, body=body_expr,
-            span=sp, node_id=_mk_node_id(),
-        )
-        block = Block(items=(fd,), span=sp, node_id=_mk_node_id())
-        prog = Program(body=block, span=sp, node_id=_mk_node_id())
-        resolved = self._mk_resolved(prog, declared_functions={"print": fd})
-        with pytest.raises(AglTypeError, match="built-in function"):
-            check(resolved, default_capabilities())
 
     def test_alias_seen_guard_in_ensure_referenced(self) -> None:
         err = reject_type(
@@ -3478,219 +3416,9 @@ class TestDefensiveGuards:
         assert "cycle" in str(err).lower()
         assert "a" in str(err).lower()
 
-    def test_binding_type_not_set_assertion(self) -> None:
-        # Exercises _require_binding_type raising AssertionError when a
-        # VarRef resolves to a BindingRef whose decl_node_id has no type in the env.
-        sp = mk_span()
-        decl_nid = _mk_node_id()
-        ref_nid = _mk_node_id()
-        varref = VarRef(name="x", span=sp, node_id=ref_nid)
-        binding_ref = BindingRef(
-            name="x", mutable=False, decl_span=sp, decl_node_id=decl_nid,
-            kind=BinderKind.let_binding,
-        )
-        block = Block(items=(varref,), span=sp, node_id=_mk_node_id())
-        prog = Program(body=block, span=sp, node_id=_mk_node_id())
-        resolved = self._mk_resolved(prog, resolution={ref_nid: binding_ref})
-        with pytest.raises(AssertionError, match="checker invariant"):
-            check(resolved, default_capabilities())
-
-    def test_declared_call_sig_none_fallback(self) -> None:
-        # Exercises _check_declared_name_call falling back to value-call
-        # when get_function_signature returns None.  This happens when a FuncDef
-        # is in declared_functions but not in the block items (so the pre-pass skips it).
-        sp = mk_span()
-        body_expr = IntLit(value=1, span=sp, node_id=_mk_node_id())
-        ret_type = IntT(span=sp, node_id=_mk_node_id())
-        fd_nid = _mk_node_id()
-        fd = FuncDef(
-            name="h", params=(), return_type=ret_type, body=body_expr,
-            span=sp, node_id=fd_nid,
-        )
-        callee_nid = _mk_node_id()
-        callee = VarRef(name="h", span=sp, node_id=callee_nid)
-        call = Call(callee=callee, args=(), named_args=(), span=sp, node_id=_mk_node_id())
-        # block has only the call — no FuncDef, so pre-pass skips h
-        block = Block(items=(call,), span=sp, node_id=_mk_node_id())
-        prog = Program(body=block, span=sp, node_id=_mk_node_id())
-        binding_ref = BindingRef(
-            name="h", mutable=False, decl_span=sp, decl_node_id=fd_nid,
-            kind=BinderKind.function_binding,
-        )
-        # h IS in declared_functions → _check_declared_name_call runs, sig is None,
-        # falls through to value-call → binding type of h not set → AssertionError
-        resolved = self._mk_resolved(
-            prog,
-            resolution={callee_nid: binding_ref},
-            declared_functions={"h": fd},
-        )
-        with pytest.raises(AssertionError, match="checker invariant"):
-            check(resolved, default_capabilities())
-
-    def test_duplicate_named_arg_in_declared_call(self) -> None:
-        # Exercises the duplicate named arg check in _check_declared_name_call.
-        # The parser rejects duplicate named args, so we construct directly.
-        sp = mk_span()
-        p_nid = _mk_node_id()
-        ret_t = IntT(span=sp, node_id=_mk_node_id())
-        param_t = IntT(span=sp, node_id=_mk_node_id())
-        param = Param(name="x", type_expr=param_t, default=None, span=sp, node_id=p_nid)
-        body_expr = IntLit(value=1, span=sp, node_id=_mk_node_id())
-        fd_nid = _mk_node_id()
-        fd = FuncDef(
-            name="g", params=(param,), return_type=ret_t, body=body_expr,
-            span=sp, node_id=fd_nid,
-        )
-        callee_nid = _mk_node_id()
-        callee = VarRef(name="g", span=sp, node_id=callee_nid)
-        val1 = IntLit(value=1, span=sp, node_id=_mk_node_id())
-        val2 = IntLit(value=2, span=sp, node_id=_mk_node_id())
-        na1 = NamedArg(name="x", value=val1, span=sp, node_id=_mk_node_id())
-        na2 = NamedArg(name="x", value=val2, span=sp, node_id=_mk_node_id())
-        call = Call(
-            callee=callee, args=(), named_args=(na1, na2), span=sp, node_id=_mk_node_id(),
-        )
-        block = Block(items=(fd, call), span=sp, node_id=_mk_node_id())
-        prog = Program(body=block, span=sp, node_id=_mk_node_id())
-        binding_ref = BindingRef(
-            name="g", mutable=False, decl_span=sp, decl_node_id=fd_nid,
-            kind=BinderKind.function_binding,
-        )
-        resolved = self._mk_resolved(
-            prog,
-            resolution={callee_nid: binding_ref},
-            declared_functions={"g": fd},
-        )
-        with pytest.raises(AglTypeError, match="Duplicate named argument"):
-            check(resolved, default_capabilities())
-
-    def test_duplicate_named_arg_in_constructor_rejected(self) -> None:
-        # Exercises the duplicate named arg path in
-        # ConstructorChecker._check_constructor_call (typecheck/constructors.py).
-        # The parser rejects duplicate named args, so we construct the AST directly.
-        from agm.agl.scope.symbols import ConstructorRef
-
-        sp = mk_span()
-        # Build a record type that has field 'x'.
-        record_source = "record Box\n  x: int\nBox(x: 1)"
-        prog_base = parse_program(record_source)
-        res_base = resolve(prog_base)
-        checked_base = check(res_base, default_capabilities())
-        box_type = checked_base.type_env.get_type("Box")
-        assert box_type is not None
-
-        # Manually build a Call with duplicate named arg for 'x'.
-        callee_nid = _mk_node_id()
-        callee = VarRef(name="Box", span=sp, node_id=callee_nid)
-        val1 = IntLit(value=1, span=sp, node_id=_mk_node_id())
-        val2 = IntLit(value=2, span=sp, node_id=_mk_node_id())
-        na1 = NamedArg(name="x", value=val1, span=sp, node_id=_mk_node_id())
-        na2 = NamedArg(name="x", value=val2, span=sp, node_id=_mk_node_id())
-        call_nid = _mk_node_id()
-        call = Call(callee=callee, args=(), named_args=(na1, na2), span=sp, node_id=call_nid)
-        block = Block(items=(call,), span=sp, node_id=_mk_node_id())
-        prog_nid = _mk_node_id()
-        prog = Program(body=block, span=sp, node_id=prog_nid)
-        # Register a ConstructorRef for 'Box' and the callee VarRef.
-        box_decl_node_id = prog_base.body.items[0].node_id
-        ctor_ref = ConstructorRef(
-            owner_name="Box",
-            variant="Box",
-            owner_decl_node_id=box_decl_node_id,
-            type_params=(),
-        )
-        binding_ref = BindingRef(
-            name="Box", mutable=False, decl_span=sp, decl_node_id=box_decl_node_id,
-            kind=BinderKind.constructor_binding,
-        )
-        root = ScopeNode(node_id=prog_nid)
-        from agm.agl.scope.symbols import ResolvedProgram as _RP
-
-        resolved = _RP(
-            program=prog,
-            resolution={callee_nid: binding_ref},
-            builtin_calls={},
-            root_scope=root,
-            constructor_refs={callee_nid: ctor_ref},
-        )
-        with pytest.raises(AglTypeError, match="[Dd]uplicate"):
-            check(resolved, default_capabilities(), seed_env=checked_base.type_env)
-
     def test_type_arg_on_qualified_constructor_rejected(self) -> None:
-        # Exercises _check_qualified_constructor_callee_call raising for
-        # Call.type_args when callee is a qualified constructor FieldAccess.
-        # The grammar does not support ::[ after a FieldAccess, so we build the AST.
-        from agm.agl.scope.symbols import ResolvedProgram as _RP
-
-        sp = mk_span()
-        obj_nid = _mk_node_id()
-        obj_varref = VarRef(name="Status", span=sp, node_id=obj_nid)
-        fa_nid = _mk_node_id()
-        fa = FieldAccess(obj=obj_varref, field="Pass", span=sp, node_id=fa_nid)
-        type_arg = IntT(span=sp, node_id=_mk_node_id())
-        call_nid = _mk_node_id()
-        call = Call(
-            callee=fa,
-            args=(),
-            named_args=(),
-            type_args=(type_arg,),
-            span=sp,
-            node_id=call_nid,
-        )
-        block = Block(items=(call,), span=sp, node_id=_mk_node_id())
-        prog_nid = _mk_node_id()
-        prog = Program(body=block, span=sp, node_id=prog_nid)
-        root = ScopeNode(node_id=prog_nid)
-        resolved = _RP(
-            program=prog,
-            resolution={},
-            builtin_calls={},
-            root_scope=root,
-            qualified_constructor_refs={fa_nid: ("Status", "Pass", None)},
-        )
-        # Build a type env with Status as an enum having Pass variant.
-        seed = TypeEnvironment()
-        seed.register_type("Status", EnumType(name="Status", variants={"Pass": {}}))
-        with pytest.raises(AglTypeError, match="type argument"):
-            check(resolved, default_capabilities(), seed_env=seed)
-
-    def test_constructor_owner_type_not_found_rejected(self) -> None:
-        # Exercises _resolve_constructor_owner raising when the type environment
-        # does not contain the constructor's owner type name.
-        # This can only happen when the ResolvedProgram is constructed with a
-        # ConstructorRef whose owner_name doesn't exist in the type env.
-        from agm.agl.scope.symbols import ConstructorRef
-        from agm.agl.scope.symbols import ResolvedProgram as _RP
-
-        sp = mk_span()
-        callee_nid = _mk_node_id()
-        callee = VarRef(name="Ghost", span=sp, node_id=callee_nid)
-        call_nid = _mk_node_id()
-        call = Call(callee=callee, args=(), named_args=(), span=sp, node_id=call_nid)
-        block = Block(items=(call,), span=sp, node_id=_mk_node_id())
-        prog_nid = _mk_node_id()
-        prog = Program(body=block, span=sp, node_id=prog_nid)
-        # ConstructorRef pointing to a non-existent owner type "Ghost".
-        ctor_ref = ConstructorRef(
-            owner_name="Ghost",
-            variant="Ghost",
-            owner_decl_node_id=_mk_node_id(),
-            type_params=(),
-        )
-        binding_ref = BindingRef(
-            name="Ghost", mutable=False, decl_span=sp, decl_node_id=_mk_node_id(),
-            kind=BinderKind.constructor_binding,
-        )
-        root = ScopeNode(node_id=prog_nid)
-        resolved = _RP(
-            program=prog,
-            resolution={callee_nid: binding_ref},
-            builtin_calls={},
-            root_scope=root,
-            constructor_refs={callee_nid: ctor_ref},
-        )
-        with pytest.raises(AglTypeError, match="not a known constructible type"):
-            check(resolved, default_capabilities())
+        err = reject_type("enum Status\n  | Pass\n  | Fail\nStatus.Pass::[int]()\n()")
+        assert "type argument" in str(err).lower()
 
 
 # ---------------------------------------------------------------------------

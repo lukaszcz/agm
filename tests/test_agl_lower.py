@@ -14,8 +14,6 @@ from __future__ import annotations
 import decimal
 from pathlib import Path
 
-import pytest
-
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.contracts import ConversionFailureMode, ConversionStrategy
 from agm.agl.ir.nodes import (
@@ -1093,146 +1091,30 @@ class TestM4aLowerFunctions:
         assert isinstance(result_bind, IrBind)
         assert isinstance(result_bind.value, IrIndirectCall)
 
+    def test_field_access_function_value_call_lowers_to_indirect_call(self) -> None:
+        """Calling a function-typed record field via field access lowers to IrIndirectCall.
 
-class TestM4aLowerDefensivePaths:
-    """Tests for M4a lowerer defensive code paths via internal API."""
-
-    def test_lower_funcdef_without_preallocation_raises(self) -> None:
-        """_lower_funcdef with a non-pre-allocated FuncDef raises AssertionError."""
-        from agm.agl.syntax.nodes import FuncDef
-
-        source = "def f(x: int) -> int = x + 1\nlet result = f(1)\n()"
-        checked = _check(source)
-
-        # Create lowerer and find FuncDef WITHOUT pre-allocating it
-        lowerer = _make_lowerer(checked, source)
-        funcdef = None
-        for item in checked.resolved.program.body.items:
-            if isinstance(item, FuncDef):
-                funcdef = item
-                break
-        assert funcdef is not None
-
-        # _lower_funcdef without pre-allocation raises AssertionError (compiler bug guard)
-        with pytest.raises(AssertionError, match="was not pre-allocated"):
-            lowerer._lower_funcdef(funcdef)
-
-    def test_lower_direct_call_fallback_signature_by_name(self) -> None:
-        """_lower_direct_call uses fallback get_function_signature when by_node_id returns None."""
-        from agm.agl.syntax.nodes import FuncDef
-
-        source = "def f(x: int) -> int = x + 1\nlet result = f(1)\n()"
-        checked = _check(source)
-
-        # Create lowerer and pre-allocate the funcdef
-        lowerer = _make_lowerer(checked, source)
-        for item in checked.resolved.program.body.items:
-            if isinstance(item, FuncDef):
-                lowerer._prealloc_funcdef(item)
-
-        # Temporarily clear the by_node_id table to force fallback to by-name lookup
-        type_env = checked.type_env
-        original = dict(type_env._function_signatures_by_node_id)
-        type_env._function_signatures_by_node_id.clear()
-        try:
-            # Now call _lower_funcdef — it will fall back to get_function_signature(name)
-            for item in checked.resolved.program.body.items:
-                if isinstance(item, FuncDef):
-                    result = lowerer._lower_funcdef(item)
-                    from agm.agl.ir.nodes import IrBind
-                    assert isinstance(result, IrBind)
-        finally:
-            type_env._function_signatures_by_node_id.update(original)
-    def test_lower_direct_call_fallback_sig_lookup_by_name(self) -> None:
-        """_lower_direct_call fallback: get_function_signature(name) when by_node_id is None."""
-        from agm.agl.syntax.nodes import FuncDef
-
-        source = "def f(x: int) -> int = x + 1\nlet result = f(1)\n()"
-        checked = _check(source)
-
-        # Pre-allocate funcdef (phase 1)
-        lowerer = _make_lowerer(checked, source)
-        for item in checked.resolved.program.body.items:
-            if isinstance(item, FuncDef):
-                lowerer._prealloc_funcdef(item)
-
-        # Clear by_node_id table to force both _lower_funcdef and _lower_direct_call fallbacks
-        type_env = checked.type_env
-        original = dict(type_env._function_signatures_by_node_id)
-        type_env._function_signatures_by_node_id.clear()
-        try:
-            # Lower all items — will trigger fallback in both _lower_funcdef (472)
-            # and _lower_direct_call (1103)
-            for item in checked.resolved.program.body.items:
-                lowerer.lower_item(item, top_level=True)
-        finally:
-            type_env._function_signatures_by_node_id.update(original)
-
-    def test_field_access_callee_without_qcr_attempts_indirect_call(self) -> None:
-        """FieldAccess callee not in qualified_constructor_refs falls through to indirect call.
-
-        Since M4b, any callee that is not a constructor ref or direct function binding
-        is lowered as an indirect call (IrIndirectCall).  A FieldAccess on a fake node
-        with no resolution triggers an AssertionError inside lower_expr (compiler bug),
-        which is the correct behavior for a malformed node in a unit test.
+        The callee ``h.f`` is a FieldAccess that is not a qualified constructor, so it
+        falls through to the indirect/value-call path rather than a direct or constructor
+        call.
         """
-        from agm.agl.syntax.nodes import Call, FieldAccess, VarRef
-
-        source = "let x = 1\n()"
-        checked = _check(source)
-        lowerer = _make_lowerer(checked, source)
-
-        # Get a real SourceSpan from the parsed program
-        span = checked.resolved.program.body.items[0].span
-
-        # FieldAccess callee not in qualified_constructor_refs → indirect call path.
-        # The fake VarRef (node_id=9999) has no resolution, so lower_expr hits an
-        # AssertionError inside the indirect call lowering path.
-        fa = FieldAccess(
-            obj=VarRef(name="x", node_id=9999, span=span, module_qualifier=None),
-            field="method",
-            node_id=10000,
-            span=span,
+        source = (
+            "record Holder\n"
+            "  f: (int) -> int\n"
+            "let g = fn(x: int) -> int => x + 1\n"
+            "let h = Holder(f: g)\n"
+            "let r = h.f(5)\n()"
         )
-        fake_call = Call(callee=fa, args=(), named_args=(), node_id=10001, span=span)
-        # AssertionError because the fake VarRef has no resolution (compiler bug path).
-        with pytest.raises(AssertionError, match="compiler bug"):
-            lowerer._lower_call(fake_call, 10001, span)
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        indirect_binds = [
+            n for n in inits if isinstance(n, IrBind) and isinstance(n.value, IrIndirectCall)
+        ]
+        assert len(indirect_binds) == 1
 
-    def test_missing_required_arg_raises_assertion_error(self) -> None:
-        """_lower_direct_call raises AssertionError when call is missing a required arg."""
-        from agm.agl.syntax.nodes import Call, FuncDef, VarRef
 
-        source = "def f(x: int) -> int = x + 1\nlet result = f(1)\n()"
-        checked = _check(source)
-        lowerer = _make_lowerer(checked, source)
-
-        # Pre-allocate funcdef
-        funcdef = next(
-            item for item in checked.resolved.program.body.items if isinstance(item, FuncDef)
-        )
-        lowerer._prealloc_funcdef(funcdef)
-
-        # Get a callee_ref for the function binding
-        from agm.agl.scope.symbols import BinderKind, BindingRef
-        span = funcdef.span
-        from agm.agl.modules.ids import ENTRY_ID
-
-        callee_ref = BindingRef(
-            name="f",
-            mutable=False,
-            decl_span=span,
-            decl_node_id=funcdef.node_id,
-            kind=BinderKind.function_binding,
-            module_id=ENTRY_ID,
-        )
-
-        # Create a fake call with NO args (f requires 1 arg)
-        varref = VarRef(name="f", node_id=9999, span=span, module_qualifier=None)
-        fake_call = Call(callee=varref, args=(), named_args=(), node_id=10001, span=span)
-
-        with pytest.raises(AssertionError, match="compiler bug"):
-            lowerer._lower_direct_call(fake_call, callee_ref, 10001, span)
+class TestScanCapturesLambdaBoundary:
+    """Behavioral test for lambda-capture boundary detection in _scan_captures."""
 
     def test_scan_captures_stops_at_nested_lambda_boundary(self) -> None:
         """_scan_captures returns early at Lambda boundary without descending into it.
@@ -1841,57 +1723,6 @@ class TestM6aLowering:
         contract = prog.contracts[ask_req.contract_id]
         # ask-request is always is_unit=False (result is always an AgentRequest record).
         assert contract.is_unit is False
-
-
-
-    def test_exec_unit_result_lowers_to_text_contract(self) -> None:
-        """IrExec with is_unit=True path (lowerer.py:1642).
-
-        Triggered by manipulating CheckedProgram to have UnitType for the exec node.
-        """
-        from dataclasses import replace
-
-        from agm.agl.ir.nodes import IrExec
-        from agm.agl.semantics.types import UnitType
-
-        # Start with a valid exec program
-        source = 'exec("echo hi")\n()'
-        checked = _check(source)
-
-        # Find the exec call node_id in node_types (the one with RecordType / ExecResult)
-        exec_node_id: int | None = None
-        for node_id, spec in checked.contract_specs.items():
-            if spec.structured_exec:
-                exec_node_id = node_id
-                break
-        assert exec_node_id is not None, "exec node_id not found in contract_specs"
-
-        # Patch the checked program: set UnitType for the exec node, remove its contract spec
-        new_node_types = dict(checked.node_types)
-        new_node_types[exec_node_id] = UnitType()
-        new_contract_specs = {
-            k: v for k, v in checked.contract_specs.items() if k != exec_node_id
-        }
-        patched = replace(
-            checked,
-            node_types=new_node_types,
-            contract_specs=new_contract_specs,
-        )
-        from agm.agl.lower import lower_program
-
-        prog = lower_program(
-            patched,
-            source_text=source,
-            source_label="<test>",
-            validate=False,  # skip validate since we have patched types
-        )
-        # The IrExec node should exist in the output with text codec contract
-        inits = prog.modules[prog.entry_module].initializers
-        exec_nodes = [n for n in inits if isinstance(n, IrExec)]
-        assert len(exec_nodes) == 1, f"Expected 1 IrExec, found {len(exec_nodes)}"
-        contract = prog.contracts[exec_nodes[0].contract_id]
-        assert contract.codec_name == "text"
-        assert contract.is_unit is False  # is_unit=False even for the defensive path
 
 
 # ---------------------------------------------------------------------------

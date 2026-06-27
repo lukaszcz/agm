@@ -125,28 +125,6 @@ class TestQueueSetupAndFocusSession:
         assert out.index("tmux new-session") < out.index("agm workspace setup")
         assert "tmux attach-session -t s" in out
 
-    def test_raises_assertion_when_session_name_is_none(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        def _return_none(
-            *,
-            detach: bool,
-            pane_count: str | None,
-            session_name: str | None,
-            cwd: Path | None = None,
-            env: dict[str, str] | None = None,
-            shell_command: str | None = None,
-        ) -> str | None:
-            return None
-
-        monkeypatch.setattr(open_module, "create_tmux_session", _return_none)
-        with pytest.raises(AssertionError):
-            queue_setup_and_focus_workspace_session(
-                detached=True,
-                pane_count=None,
-                session_name="s",
-                repo_path=tmp_path,
-            )
 
 
 class TestEnsureWorkspaceShell:

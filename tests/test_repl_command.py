@@ -3,7 +3,7 @@
 Covers:
 - the CLI surface maps each flag onto ``ReplArgs`` (parser-contract style;
   ``repl.run`` is mocked so no real terminal is needed);
-- ``--no-log`` / ``--log-file`` are mutually exclusive (usage error, exit 2);
+- ``--no-log`` / ``--log-file`` are mutually exclusive (usage error, exit 1);
 - ``--input`` option has been REMOVED in M6 (params resolve eagerly from
   config/defaults; there is no pre-seed CLI option);
 - ``repl.run`` resolves ``[exec]`` config, builds a session, and hands off to
@@ -419,6 +419,10 @@ class TestReplParamsConfigLoader:
         # Create an AGM home config with a lib_root pointing to a local dir.
         lib_dir = tmp_path / "mylib"
         lib_dir.mkdir()
+        # Put a minimal module in lib_dir so we can verify it is importable.
+        (lib_dir / "mymod.agl").write_text(
+            'def greet() -> text = "hello"\n', encoding="utf-8"
+        )
         agm_home = home / ".agm"
         agm_home.mkdir(parents=True, exist_ok=True)
         (agm_home / "config.toml").write_text(
@@ -427,8 +431,9 @@ class TestReplParamsConfigLoader:
         repl_command.run(_args())
         session = fake_console[0]["session"]
         assert isinstance(session, ReplSession)
-        # The session's _lib_root should be the resolved absolute lib dir.
-        assert session._lib_root == lib_dir
+        # The lib_root is wired: importing a module from lib_dir succeeds.
+        result = session.eval_entry("import mymod")
+        assert result.ok
 
 
 class TestReplTrace:

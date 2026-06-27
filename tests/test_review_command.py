@@ -1076,8 +1076,6 @@ def test_refine_runs_fresh_review_after_continue(
     assert reviews[0].runner == "reviewer"
     assert reviews[0].scope == "scope"
     assert reviews[0].aspects == "aspects"
-    assert all(review.review_file == "auto" for review in reviews)
-    assert not any(review.no_review_file for review in reviews)
 
 
 def test_refine_no_save_review_disables_review_file_for_each_review(

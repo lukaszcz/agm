@@ -2551,6 +2551,145 @@ class TestDeriveSchema:
 
 
 # ---------------------------------------------------------------------------
+# Coverage: type_schema.py — build_param_decoder and build_format_instructions
+# ---------------------------------------------------------------------------
+
+
+class TestBuildParamDecoder:
+    """Direct tests for build_param_decoder (previously zero direct references)."""
+
+    def test_text_type_is_verbatim(self) -> None:
+        """TextType params are taken verbatim — text_verbatim is True."""
+        from agm.agl.semantics.types import TextType
+        from agm.agl.type_schema import build_param_decoder
+
+        decoder = build_param_decoder(TextType())
+        assert decoder.text_verbatim is True
+
+    def test_text_type_target_label(self) -> None:
+        """target_type_label is repr(TextType())."""
+        from agm.agl.semantics.types import TextType
+        from agm.agl.type_schema import build_param_decoder
+
+        decoder = build_param_decoder(TextType())
+        assert decoder.target_type_label == repr(TextType())
+
+    def test_int_type_not_verbatim(self) -> None:
+        """Non-text types are NOT verbatim."""
+        from agm.agl.semantics.types import IntType
+        from agm.agl.type_schema import build_param_decoder
+
+        decoder = build_param_decoder(IntType())
+        assert decoder.text_verbatim is False
+
+    def test_int_type_json_schema_matches_derive_schema(self) -> None:
+        """json_schema is json.dumps(derive_schema(typ), sort_keys=True)."""
+        import json
+
+        from agm.agl.semantics.types import IntType
+        from agm.agl.type_schema import build_param_decoder, derive_schema
+
+        typ = IntType()
+        decoder = build_param_decoder(typ)
+        expected_schema = json.dumps(derive_schema(typ), sort_keys=True)
+        assert decoder.json_schema == expected_schema
+        # Parses as valid JSON
+        parsed = json.loads(decoder.json_schema)
+        assert parsed == {"type": "integer"}
+
+    def test_record_type_json_schema_matches_derive_schema(self) -> None:
+        """A record type's json_schema embeds the full record schema."""
+        import json
+
+        from agm.agl.semantics.types import RecordType, TextType
+        from agm.agl.type_schema import build_param_decoder, derive_schema
+
+        typ = RecordType(name="Point", fields={"x": TextType()})
+        decoder = build_param_decoder(typ)
+        expected_schema = json.dumps(derive_schema(typ), sort_keys=True)
+        assert decoder.json_schema == expected_schema
+        # Sanity: the schema is valid JSON with expected structure
+        parsed = json.loads(decoder.json_schema)
+        assert parsed["type"] == "object"
+        assert "x" in parsed["required"]
+
+    def test_int_type_target_label_is_repr(self) -> None:
+        """target_type_label is repr(typ) for int."""
+        from agm.agl.semantics.types import IntType
+        from agm.agl.type_schema import build_param_decoder
+
+        typ = IntType()
+        decoder = build_param_decoder(typ)
+        assert decoder.target_type_label == repr(typ)
+
+    def test_undecodable_type_raises_type_error(self) -> None:
+        """Unit/agent/exception types raise TypeError (via derive_schema)."""
+        from agm.agl.semantics.types import UnitType
+        from agm.agl.type_schema import build_param_decoder
+
+        with pytest.raises(TypeError):
+            build_param_decoder(UnitType())
+
+    def test_agent_type_raises_type_error(self) -> None:
+        from agm.agl.semantics.types import AgentType
+        from agm.agl.type_schema import build_param_decoder
+
+        with pytest.raises(TypeError):
+            build_param_decoder(AgentType())
+
+    def test_exception_type_raises_type_error(self) -> None:
+        from agm.agl.semantics.types import ExceptionType
+        from agm.agl.type_schema import build_param_decoder
+
+        with pytest.raises(TypeError):
+            build_param_decoder(ExceptionType(name="MyErr", fields={}))
+
+
+class TestBuildFormatInstructions:
+    """Direct tests for build_format_instructions (previously zero direct references)."""
+
+    def test_empty_schema_returns_no_schema_message(self) -> None:
+        """An empty schema dict produces the 'Return exactly one JSON value.' message."""
+        from agm.agl.type_schema import build_format_instructions
+
+        result = build_format_instructions({})
+        assert "Return exactly one JSON value." in result
+
+    def test_empty_schema_no_code_fence(self) -> None:
+        """Empty schema message must NOT contain a JSON code fence."""
+        from agm.agl.type_schema import build_format_instructions
+
+        result = build_format_instructions({})
+        assert "```json" not in result
+
+    def test_non_empty_schema_embeds_json_fence(self) -> None:
+        """A non-empty schema dict produces output with a ```json code fence."""
+        from agm.agl.type_schema import build_format_instructions
+
+        schema: dict[str, object] = {"type": "object", "required": ["x"]}
+        result = build_format_instructions(schema)
+        assert "```json" in result
+
+    def test_non_empty_schema_embeds_schema_content(self) -> None:
+        """The schema JSON is embedded verbatim in the output."""
+        import json
+
+        from agm.agl.type_schema import build_format_instructions
+
+        schema: dict[str, object] = {"type": "integer"}
+        result = build_format_instructions(schema)
+        schema_text = json.dumps(schema, indent=2, ensure_ascii=False)
+        assert schema_text in result
+
+    def test_non_empty_schema_contains_json_value_instruction(self) -> None:
+        """Non-empty output also says 'Return exactly one JSON value conforming…'."""
+        from agm.agl.type_schema import build_format_instructions
+
+        result = build_format_instructions({"type": "string"})
+        assert "Return exactly one JSON value" in result
+
+
+# ---------------------------------------------------------------------------
 # Coverage: serialize.py — v2 opaque value TypeError branches
 # ---------------------------------------------------------------------------
 

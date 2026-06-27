@@ -60,6 +60,7 @@ from agm.agl.syntax import (
     Do,
     ElseSentinel,
     EnumDef,
+    ExceptionDef,
     Expr,
     FieldAccess,
     FieldDef,
@@ -1016,6 +1017,54 @@ class TestDeclarations:
         assert node.key == "log"
         assert node.value is True
 
+    def test_exception_def_fields(self) -> None:
+        """ExceptionDef stores name, fields, base, and privacy/builtin flags."""
+        t = TextT(span=self._s(), node_id=3)
+        f = FieldDef(name="msg", type_expr=t, span=self._s(), node_id=2)
+        node = ExceptionDef(name="MyErr", fields=(f,), base=None, span=self._s(), node_id=1)
+        assert node.name == "MyErr"
+        assert isinstance(node.fields, tuple)
+        assert len(node.fields) == 1
+        assert node.fields[0].name == "msg"
+        assert node.base is None
+        assert node.is_private is False
+        assert node.is_builtin is False
+
+    def test_exception_def_with_base(self) -> None:
+        node = ExceptionDef(
+            name="DerivedErr", fields=(), base="BaseErr", span=self._s(), node_id=1
+        )
+        assert node.base == "BaseErr"
+
+    def test_exception_def_equality_ignores_span(self) -> None:
+        t = IntT(span=self._s(), node_id=3)
+        f = FieldDef(name="code", type_expr=t, span=self._s(), node_id=2)
+        a = ExceptionDef(name="E", fields=(f,), base=None, span=span(1, 0, 1, 1), node_id=1)
+        b = ExceptionDef(name="E", fields=(f,), base=None, span=span(9, 0, 9, 1), node_id=99)
+        assert a == b
+
+    def test_exception_def_is_declaration(self) -> None:
+        """ExceptionDef is part of the Declaration union."""
+        import typing
+        args = typing.get_args(Declaration)
+        assert ExceptionDef in args
+
+    def test_exception_def_walk_visits_fields(self) -> None:
+        """walk(ExceptionDef) visits the node and each FieldDef in its fields."""
+        from agm.agl.syntax.visitor import walk
+
+        s = self._s()
+        t = IntT(span=s, node_id=3)
+        field = FieldDef(name="code", type_expr=t, span=s, node_id=2)
+        exc = ExceptionDef(name="MyErr", fields=(field,), base=None, span=s, node_id=1)
+
+        visited: list[object] = []
+        walk(exc, visited.append)
+
+        assert exc in visited
+        assert field in visited
+        assert t in visited
+
 
 # ---------------------------------------------------------------------------
 # Pattern nodes
@@ -1158,6 +1207,14 @@ class TestVisitorWalk:
         enum_def = EnumDef(name="Opt", variants=(variant_def,), span=s, node_id=213)
 
         type_alias = TypeAlias(name="Names", type_expr=list_t, span=s, node_id=214)
+        exc_field = FieldDef(name="msg", type_expr=text_t, span=s, node_id=2140)
+        exception_def = ExceptionDef(
+            name="MyErr",
+            fields=(exc_field,),
+            base=None,
+            span=s,
+            node_id=2141,
+        )
         param_decl = ParamDecl(name="spec", annotation=text_t, default=None, span=s, node_id=215)
         agent_decl = AgentDecl(name="reviewer", runner=None, span=s, node_id=216)
         config_pragma = ConfigPragma(key="log", value=True, span=s, node_id=217)
@@ -1307,7 +1364,7 @@ class TestVisitorWalk:
         # Block at the top level
         top_block = Block(
             items=(
-                record_def, enum_def, type_alias, param_decl, input_no_ann,
+                record_def, enum_def, exception_def, type_alias, param_decl, input_no_ann,
                 agent_decl, config_pragma, func_def,
                 let_decl, let_with_type, let_applied, var_decl, var_with_type,
                 assign_stmt, indexed_assign_stmt,
@@ -1353,7 +1410,7 @@ class TestVisitorWalk:
         kinds = {type(n) for n in visited}
 
         decl_kinds = {
-            RecordDef, EnumDef, TypeAlias, ParamDecl, FieldDef, VariantDef,
+            RecordDef, EnumDef, ExceptionDef, TypeAlias, ParamDecl, FieldDef, VariantDef,
             AgentDecl, FuncDef, ConfigPragma,
         }
         for kind in decl_kinds:

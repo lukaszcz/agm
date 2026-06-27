@@ -34,6 +34,7 @@ from agm.agl.parser import (
     is_incomplete_source,
     parse_program,
     parse_program_seeded,
+    parse_type_expr,
 )
 from agm.agl.syntax import (
     AgentDecl,
@@ -54,6 +55,7 @@ from agm.agl.syntax import (
     DictLit,
     Do,
     EnumDef,
+    ExceptionDef,
     FieldAccess,
     FieldDef,
     FuncDef,
@@ -75,6 +77,7 @@ from agm.agl.syntax import (
     ParamDecl,
     PatternField,
     Program,
+    ProgramDecl,
     Raise,
     RecordDef,
     StringLit,
@@ -570,6 +573,223 @@ class TestDeclarations:
         cfg = first(parse('config runner = "claude"'))
         assert isinstance(cfg, ConfigPragma)
         assert cfg.value == "claude"
+
+    def test_exception_def_simple(self) -> None:
+        exc = first(parse("exception MyErr(msg: text)"))
+        assert isinstance(exc, ExceptionDef)
+        assert exc.name == "MyErr"
+        assert len(exc.fields) == 1
+        assert exc.fields[0].name == "msg"
+        assert exc.base is None
+        assert exc.is_private is False
+        assert exc.is_builtin is False
+
+    def test_exception_def_with_base(self) -> None:
+        exc = first(parse("exception DerivedErr extends BaseErr(msg: text)"))
+        assert isinstance(exc, ExceptionDef)
+        assert exc.name == "DerivedErr"
+        assert exc.base == "BaseErr"
+        assert len(exc.fields) == 1
+        assert exc.fields[0].name == "msg"
+
+    def test_exception_def_no_fields(self) -> None:
+        exc = first(parse("exception SimpleErr()"))
+        assert isinstance(exc, ExceptionDef)
+        assert exc.name == "SimpleErr"
+        assert exc.fields == ()
+        assert exc.base is None
+
+    def test_exception_def_indent_body(self) -> None:
+        exc = first(parse("exception MultiErr\n  code: int\n  reason: text"))
+        assert isinstance(exc, ExceptionDef)
+        assert exc.name == "MultiErr"
+        assert len(exc.fields) == 2
+        assert [f.name for f in exc.fields] == ["code", "reason"]
+
+    def test_program_decl(self) -> None:
+        pd = first(parse("program myapp\n()"))
+        assert isinstance(pd, ProgramDecl)
+        assert pd.name == "myapp"
+
+    def test_builtin_func_def(self) -> None:
+        fd = first(parse("builtin def encode(x: text) -> int"))
+        assert isinstance(fd, FuncDef)
+        assert fd.name == "encode"
+        assert fd.is_builtin is True
+        assert fd.body is None
+        assert len(fd.params) == 1
+
+    def test_builtin_record_def(self) -> None:
+        rec = first(parse("builtin record Token(id: int)"))
+        assert isinstance(rec, RecordDef)
+        assert rec.name == "Token"
+        assert rec.is_builtin is True
+        assert len(rec.fields) == 1
+
+    def test_builtin_enum_def(self) -> None:
+        en = first(parse("builtin enum Status = Ok | Err"))
+        assert isinstance(en, EnumDef)
+        assert en.name == "Status"
+        assert en.is_builtin is True
+        assert len(en.variants) == 2
+
+
+# ---------------------------------------------------------------------------
+# parse_type_expr — direct unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestParseTypeExpr:
+    """parse_type_expr(text) parses a single AgL type expression."""
+
+    def test_int(self) -> None:
+        from agm.agl.syntax.types import IntT
+        result = parse_type_expr("int")
+        assert isinstance(result, IntT)
+
+    def test_text(self) -> None:
+        from agm.agl.syntax.types import TextT
+        result = parse_type_expr("text")
+        assert isinstance(result, TextT)
+
+    def test_bool(self) -> None:
+        from agm.agl.syntax.types import BoolT
+        result = parse_type_expr("bool")
+        assert isinstance(result, BoolT)
+
+    def test_decimal(self) -> None:
+        from agm.agl.syntax.types import DecimalT
+        result = parse_type_expr("decimal")
+        assert isinstance(result, DecimalT)
+
+    def test_list_int(self) -> None:
+        from agm.agl.syntax.types import IntT, ListT
+        result = parse_type_expr("list[int]")
+        assert isinstance(result, ListT)
+        assert isinstance(result.elem, IntT)
+
+    def test_dict_text_int(self) -> None:
+        from agm.agl.syntax.types import DictT, IntT
+        result = parse_type_expr("dict[text, int]")
+        assert isinstance(result, DictT)
+        assert isinstance(result.value, IntT)
+
+    def test_named_type(self) -> None:
+        from agm.agl.syntax.types import NameT
+        result = parse_type_expr("MyRecord")
+        assert isinstance(result, NameT)
+        assert result.name == "MyRecord"
+
+    def test_applied_generic(self) -> None:
+        from agm.agl.syntax.types import AppliedT, IntT
+        result = parse_type_expr("Option[int]")
+        assert isinstance(result, AppliedT)
+        assert result.name == "Option"
+        assert len(result.args) == 1
+        assert isinstance(result.args[0], IntT)
+
+    def test_func_type(self) -> None:
+        from agm.agl.syntax.types import FuncT, IntT, TextT
+        result = parse_type_expr("(int) -> text")
+        assert isinstance(result, FuncT)
+        assert len(result.params) == 1
+        assert isinstance(result.params[0], IntT)
+        assert isinstance(result.result, TextT)
+
+    def test_unit_type(self) -> None:
+        from agm.agl.syntax.types import UnitT
+        result = parse_type_expr("unit")
+        assert isinstance(result, UnitT)
+
+    def test_agent_type(self) -> None:
+        from agm.agl.syntax.types import AgentT
+        result = parse_type_expr("agent")
+        assert isinstance(result, AgentT)
+
+    def test_qualified_named_type(self) -> None:
+        from agm.agl.syntax.types import AppliedT
+        # mod::Box[int] — qualified applied type
+        result = parse_type_expr("mymod::Box[int]")
+        assert isinstance(result, AppliedT)
+        assert result.name == "Box"
+        assert result.module_qualifier is not None
+        assert result.module_qualifier.segments == ("mymod",)
+
+    def test_invalid_raises_syntax_error(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse_type_expr("let x = 1")
+
+    def test_empty_raises_syntax_error(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse_type_expr("")
+
+    def test_start_id_is_honoured(self) -> None:
+        """start_id offsets the first assigned node_id."""
+        result = parse_type_expr("int", start_id=100)
+        from agm.agl.syntax.types import IntT
+        assert isinstance(result, IntT)
+        # Node id is ≥ start_id (offset applied)
+        assert result.node_id >= 100
+
+
+# ---------------------------------------------------------------------------
+# program NAME declaration — side-table assertions via scope resolve
+# ---------------------------------------------------------------------------
+
+
+class TestProgramDeclScopeSideTables:
+    """Parse a 'program NAME' source and assert the side tables on ResolvedProgram."""
+
+    def _parse_and_resolve(self, source: str) -> object:
+        from agm.agl.scope import resolve
+        return resolve(parse_program(source))
+
+    def test_program_name_set_in_resolved_program(self) -> None:
+        """Parsing 'program myapp' sets program_name on ResolvedProgram."""
+        r = self._parse_and_resolve("program myapp\n()")
+        from agm.agl.scope.symbols import ResolvedProgram
+        assert isinstance(r, ResolvedProgram)
+        assert r.program_name == "myapp"
+
+    def test_no_program_decl_gives_none(self) -> None:
+        """No 'program' declaration → program_name is None."""
+        r = self._parse_and_resolve("()")
+        from agm.agl.scope.symbols import ResolvedProgram
+        assert isinstance(r, ResolvedProgram)
+        assert r.program_name is None
+
+    def test_builtin_calls_populated_for_print(self) -> None:
+        """A 'print' call is classified in builtin_calls."""
+        r = self._parse_and_resolve('print "hello"')
+        from agm.agl.scope import BuiltinKind
+        from agm.agl.scope.symbols import ResolvedProgram
+        assert isinstance(r, ResolvedProgram)
+        assert BuiltinKind.PRINT in r.builtin_calls.values()
+
+    def test_builtin_calls_populated_for_exec(self) -> None:
+        """An 'exec' call is classified in builtin_calls."""
+        r = self._parse_and_resolve('let x = exec "ls"\nx')
+        from agm.agl.scope import BuiltinKind
+        from agm.agl.scope.symbols import ResolvedProgram
+        assert isinstance(r, ResolvedProgram)
+        assert BuiltinKind.EXEC in r.builtin_calls.values()
+
+    def test_bare_variant_patterns_populated(self) -> None:
+        """A bare name in a case pattern that names a constructor is in bare_variant_patterns."""
+        source = (
+            "enum Status\n"
+            "  | Ok\n"
+            "  | Fail\n"
+            "let s = Ok()\n"
+            "case s of\n"
+            "  | Ok => 1\n"
+            "  | Fail => 0\n"
+        )
+        r = self._parse_and_resolve(source)
+        from agm.agl.scope.symbols import ResolvedProgram
+        assert isinstance(r, ResolvedProgram)
+        # At least one VarPattern node_id was recognised as a bare-variant constructor.
+        assert len(r.bare_variant_patterns) >= 1
 
 
 # ---------------------------------------------------------------------------

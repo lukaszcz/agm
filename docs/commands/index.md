@@ -1,8 +1,8 @@
 # AGM commands reference
 
 AGM is an Agent Project Management CLI. A single `agm` executable manages
-agent-oriented project directories — workspaces, git worktrees, dependencies,
-sandboxes, and tmux sessions — and runs agent review/revise/refine and loop
+agent-oriented project directories — workspaces, dependencies, git worktrees
+sandboxing, and tmux sessions — and runs agent review/revise/refine and loop
 workflows on them, including programs written in the AgL workflow DSL.
 
 This reference describes each command's behavior and options from an end-user

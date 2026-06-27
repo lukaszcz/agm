@@ -19,19 +19,27 @@ block      ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
 
 item       ::= import_decl                  (* header position only *)
              | config_pragma                (* header position only *)
-             | "private"? record_def        (* root only *)
-             | "private"? enum_def          (* root only *)
-             | "private"? type_alias        (* root only *)
+             | modifier? record_def         (* root only *)
+             | modifier? enum_def           (* root only *)
+             | modifier? type_alias         (* root only; "builtin" not allowed *)
              | param_decl                   (* root only *)
              | program_decl                 (* root only *)
              | agent_decl                   (* root only *)
-             | "private"? func_def          (* root only *)
+             | modifier? func_def           (* root only *)
              | let_decl | var_decl
              | expr
+
+modifier   ::= ("private" | "builtin") NEWLINE?
 ```
 
 A block's value is its last item. A `let_decl` or `var_decl` as the final
 item (with no continuation) is a static error.
+
+`"private"` and `"builtin"` are **declaration modifiers** that behave like
+decorators: a modifier may sit on the same line as the declaration it adorns
+(`builtin enum …`) or on the line directly above it (`builtin` then `enum …`)
+— the newline after the modifier is insignificant. `"builtin"` is not allowed
+on a `type_alias`.
 
 ## Import declarations
 

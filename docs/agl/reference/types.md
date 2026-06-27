@@ -282,6 +282,11 @@ tag) in [Agent calls](agent-calls.md).
 `builtin enum` similarly declares a host-recognized nominal enum type. Its
 variant names and payload fields must match the built-in shape exactly.
 
+The `builtin` and `private` modifiers behave like decorators on a type
+declaration: a modifier may sit on the same line as the `record`/`enum` keyword
+or on the line directly above it (the newline after the modifier is
+insignificant).
+
 ## Module-qualified type identity
 
 Record types and enum types are identified by **both their name and their

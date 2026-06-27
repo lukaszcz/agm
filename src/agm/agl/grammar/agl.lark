@@ -233,11 +233,14 @@ pragma_value: "true"     -> pragma_true
 func_def: "def" name type_params? LPAR param_list? RPAR THIN_ARROW type_expr EQ func_body
 
 // Host-implemented builtin function declaration. It has a signature but no body.
-builtin_func_def: "builtin" "def" name type_params? LPAR param_list? RPAR THIN_ARROW type_expr
+// `builtin` is a decorator-style modifier: the `_NEWLINE?` makes the newline
+// after it insignificant, so the modifier may sit on its own line above the
+// declaration (`builtin\nenum …`) or on the same line (`builtin enum …`).
+builtin_func_def: "builtin" _NEWLINE? "def" name type_params? LPAR param_list? RPAR THIN_ARROW type_expr
 
-builtin_record_def: "builtin" record_def
-builtin_enum_def: "builtin" enum_def
-builtin_exception_def: "builtin" exception_def
+builtin_record_def: "builtin" _NEWLINE? record_def
+builtin_enum_def: "builtin" _NEWLINE? enum_def
+builtin_exception_def: "builtin" _NEWLINE? exception_def
 
 param_list: param_def (COMMA param_def)* COMMA?
 
@@ -646,12 +649,14 @@ import_clause : USING import_item (COMMA import_item)*  -> import_clause_using
 import_item : name "as" name    -> import_item_rename
             | name               -> import_item_plain
 
-// Private declaration wrappers
-private_record_def  : PRIVATE record_def
-private_enum_def    : PRIVATE enum_def
-private_exception_def : PRIVATE exception_def
-private_type_alias  : PRIVATE type_alias
-private_func_def    : PRIVATE func_def
+// Private declaration wrappers.  `private` is a decorator-style modifier: the
+// `_NEWLINE?` makes the newline after it insignificant, so the modifier may sit
+// on its own line above the declaration (`private\nenum …`) or on the same line.
+private_record_def  : PRIVATE _NEWLINE? record_def
+private_enum_def    : PRIVATE _NEWLINE? enum_def
+private_exception_def : PRIVATE _NEWLINE? exception_def
+private_type_alias  : PRIVATE _NEWLINE? type_alias
+private_func_def    : PRIVATE _NEWLINE? func_def
 
 // ---------------------------------------------------------------------------
 // Qualified references in expressions, types, and patterns

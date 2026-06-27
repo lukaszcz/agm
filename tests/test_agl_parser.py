@@ -2840,3 +2840,82 @@ class TestPrivateDecls:
         assert it[0].is_private is False
         assert isinstance(it[1], FuncDef)
         assert it[1].is_private is True
+
+
+class TestModifierDecoratorNewline:
+    """`builtin` and `private` act as decorators: a newline may follow them.
+
+    The modifier and the declaration it adorns may sit on the same line or on
+    consecutive lines; the newline after the modifier is insignificant.
+    """
+
+    def test_builtin_enum_separate_line(self) -> None:
+        prog = parse("builtin\nenum Option[T]\n  | Some(elem: T)\n  | None")
+        (decl,) = items(prog)
+        assert isinstance(decl, EnumDef)
+        assert decl.is_builtin is True
+        assert decl.name == "Option"
+
+    def test_builtin_record_separate_line(self) -> None:
+        prog = parse("builtin\nrecord Point\n  x: int\n  y: int")
+        (decl,) = items(prog)
+        assert isinstance(decl, RecordDef)
+        assert decl.is_builtin is True
+        assert decl.name == "Point"
+
+    def test_builtin_exception_separate_line(self) -> None:
+        prog = parse("builtin\nexception Boom\n  reason: text")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ExceptionDef)
+        assert decl.is_builtin is True
+        assert decl.name == "Boom"
+
+    def test_builtin_func_separate_line(self) -> None:
+        prog = parse("builtin\ndef identity[T](x: T) -> T")
+        (decl,) = items(prog)
+        assert isinstance(decl, FuncDef)
+        assert decl.is_builtin is True
+        assert decl.name == "identity"
+
+    def test_private_enum_separate_line(self) -> None:
+        prog = parse("private\nenum Color | Red | Green | Blue")
+        (decl,) = items(prog)
+        assert isinstance(decl, EnumDef)
+        assert decl.is_private is True
+        assert decl.name == "Color"
+
+    def test_private_record_separate_line(self) -> None:
+        prog = parse("private\nrecord Foo\n    bar: text")
+        (decl,) = items(prog)
+        assert isinstance(decl, RecordDef)
+        assert decl.is_private is True
+        assert decl.name == "Foo"
+
+    def test_private_func_separate_line(self) -> None:
+        prog = parse('private\ndef f() -> text = "hi"')
+        (decl,) = items(prog)
+        assert isinstance(decl, FuncDef)
+        assert decl.is_private is True
+        assert decl.name == "f"
+
+    def test_private_type_alias_separate_line(self) -> None:
+        prog = parse("private\ntype Alias = text")
+        (decl,) = items(prog)
+        assert isinstance(decl, TypeAlias)
+        assert decl.is_private is True
+        assert decl.name == "Alias"
+
+    def test_modifier_same_line_still_parses(self) -> None:
+        """The same-line form remains valid (newline is optional, not required)."""
+        prog = parse("builtin enum Option[T] | Some(elem: T) | None")
+        (decl,) = items(prog)
+        assert isinstance(decl, EnumDef)
+        assert decl.is_builtin is True
+
+    def test_decorator_decl_among_other_items(self) -> None:
+        """A decorator-style declaration coexists with surrounding items."""
+        prog = parse('def pub() -> text = "a"\nprivate\nenum E | A | B')
+        it = items(prog)
+        assert isinstance(it[0], FuncDef)
+        assert isinstance(it[1], EnumDef)
+        assert it[1].is_private is True

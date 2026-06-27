@@ -42,6 +42,7 @@ from agm.agl.syntax.nodes import (
     Block,
     Call,
     Case,
+    Cast,
     DictEntry,
     DictLit,
     Do,
@@ -5648,37 +5649,52 @@ class TestCast:
     def test_int_as_text_total_render(self) -> None:
         """int as text yields text."""
         r = accept_type("let s: text = 1 as text\ns")
-        assert r  # no exception
+        decl = r.resolved.program.body.items[0]
+        assert isinstance(decl, LetDecl)
+        assert r.node_types[decl.value.node_id] == TextType()
 
     def test_text_as_json_total_json(self) -> None:
         """text as json yields json."""
         r = accept_type('let j: json = "hello" as json\nj')
-        assert r
+        decl = r.resolved.program.body.items[0]
+        assert isinstance(decl, LetDecl)
+        assert r.node_types[decl.value.node_id] == JsonType()
 
     def test_text_as_int_fallible_yields_int(self) -> None:
         """text as int yields int type."""
         r = accept_type('let x: int = "42" as int\nx')
-        assert r
+        decl = r.resolved.program.body.items[0]
+        assert isinstance(decl, LetDecl)
+        assert r.node_types[decl.value.node_id] == IntType()
 
     def test_decimal_as_int_fallible(self) -> None:
         """decimal as int is fallible, yields int."""
         r = accept_type("let d = 3.5\nlet x: int = d as int\nx")
-        assert r
+        decl = r.resolved.program.body.items[1]
+        assert isinstance(decl, LetDecl)
+        assert isinstance(decl.value, Cast)
+        assert r.node_types[decl.value.node_id] == IntType()
 
     def test_int_as_decimal_noop(self) -> None:
         """int as decimal is a no-op widen."""
         r = accept_type("let d: decimal = 1 as decimal\nd")
-        assert r
+        decl = r.resolved.program.body.items[0]
+        assert isinstance(decl, LetDecl)
+        assert r.node_types[decl.value.node_id] == DecimalType()
 
     def test_as_question_yields_bool(self) -> None:
         """as? always yields bool."""
         r = accept_type('let b: bool = "42" as? int\nb')
-        assert r
+        decl = r.resolved.program.body.items[0]
+        assert isinstance(decl, LetDecl)
+        assert r.node_types[decl.value.node_id] == BoolType()
 
     def test_as_question_on_total_cast_yields_bool(self) -> None:
         """as? on a total cast also yields bool."""
         r = accept_type("let b: bool = 1 as? text\nb")
-        assert r
+        decl = r.resolved.program.body.items[0]
+        assert isinstance(decl, LetDecl)
+        assert r.node_types[decl.value.node_id] == BoolType()
 
     def test_bool_to_int_rejected(self) -> None:
         """bool as int is a static error."""
@@ -5716,22 +5732,33 @@ class TestCast:
     def test_json_to_text_render(self) -> None:
         """json as text yields text (TOTAL_RENDER — D1 completeness)."""
         r = accept_type('let j: json = 42\nlet s: text = j as text\ns')
-        assert r
+        decl = r.resolved.program.body.items[1]
+        assert isinstance(decl, LetDecl)
+        assert isinstance(decl.value, Cast)
+        assert r.node_types[decl.value.node_id] == TextType()
 
     def test_json_as_text_let_binding(self) -> None:
         """json as text typechecks: let s: text = (1 as json) as text."""
         r = accept_type("let s: text = (1 as json) as text\ns")
-        assert r
+        decl = r.resolved.program.body.items[0]
+        assert isinstance(decl, LetDecl)
+        assert r.node_types[decl.value.node_id] == TextType()
 
     def test_chained_cast_int_to_json_to_text(self) -> None:
         """Chained x as json as text resolves to text (D5 example)."""
         r = accept_type("let x: int = 1\nlet s: text = x as json as text\ns")
-        assert r
+        decl = r.resolved.program.body.items[1]
+        assert isinstance(decl, LetDecl)
+        assert isinstance(decl.value, Cast)
+        assert r.node_types[decl.value.node_id] == TextType()
 
     def test_json_to_list_fallible(self) -> None:
         """json as list[int] yields list[int]."""
         r = accept_type("let j: json = 42\nlet xs: list[int] = j as list[int]\nxs")
-        assert r
+        decl = r.resolved.program.body.items[1]
+        assert isinstance(decl, LetDecl)
+        assert isinstance(decl.value, Cast)
+        assert r.node_types[decl.value.node_id] == ListType(elem=IntType())
 
     def test_cast_spec_stored(self) -> None:
         """CastSpec is stored in CheckedProgram.cast_specs."""
@@ -5752,7 +5779,9 @@ class TestCast:
     def test_raise_operand_can_be_cast(self) -> None:
         """A cast preserves the universal assignability of bottom."""
         r = accept_type('(raise Abort(message: "x")) as text')
-        assert r
+        cast = r.resolved.program.body.items[0]
+        assert isinstance(cast, Cast)
+        assert r.node_types[cast.node_id] == TextType()
 
 
 class TestCastClassificationTable:

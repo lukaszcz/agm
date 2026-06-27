@@ -28,11 +28,13 @@ from agm.agl.ir.nodes import (
     IrConstJsonNull,
     IrConstText,
     IrConstUnit,
+    IrDirectCall,
     IrIndirectCall,
     IrLoad,
     IrMakeClosure,
     IrMakeDict,
     IrMakeList,
+    IrTry,
 )
 from agm.agl.ir.operations import (
     IntToDecimal,
@@ -795,6 +797,15 @@ class TestUnsupportedNodes:
         prog = _lower("def f() -> int = 1\nlet result = f()\n()")
         # Verify the program has a function in the functions table
         assert len(prog.functions) == 1
+        # Verify the let result = f() binding lowered to an IrDirectCall targeting f
+        inits = prog.modules[prog.entry_module].initializers
+        result_bind = next(
+            (n for n in inits if isinstance(n, IrBind) and isinstance(n.value, IrDirectCall)),
+            None,
+        )
+        assert result_bind is not None, "let result = f() did not lower to an IrDirectCall bind"
+        assert isinstance(result_bind.value, IrDirectCall)
+        assert result_bind.value.function_id in prog.functions
 
     def test_iife_lambda_call_lowers_to_indirect_call(self) -> None:
         """Calling an immediately-invoked lambda (non-VarRef, non-FieldAccess callee).
@@ -1011,6 +1022,20 @@ class TestM4aLowerFunctions:
         )
         prog = _lower(source)
         assert len(prog.functions) == 1
+        # Verify the function body lowered to an IrTry with a bound handler
+        fn_desc = next(iter(prog.functions.values()))
+        body = fn_desc.body
+        if isinstance(body, IrBlock):
+            ir_try = next(
+                (item for item in body.items if isinstance(item, IrTry)), None
+            )
+            assert ir_try is not None, "Expected an IrTry node in function body IrBlock"
+        else:
+            assert isinstance(body, IrTry), f"Expected IrTry body, got {type(body).__name__}"
+            ir_try = body
+        assert any(h.symbol is not None for h in ir_try.handlers), (
+            "Expected at least one handler with a bound symbol (catch ... as e)"
+        )
 
     def test_builtin_print_in_function_body_lowers_to_ir_print(self) -> None:
         """print() inside a function body lowers to IrPrint (M6a implemented)."""

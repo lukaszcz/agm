@@ -1132,7 +1132,7 @@ class TestAskRequest:
 
     def test_unknown_type_in_type_arg_raises(self) -> None:
         err = reject_type('ask-request::[NoSuchType]("Q")')
-        assert "NoSuchType" in str(err) or "type" in str(err).lower()
+        assert "unknown type" in str(err).lower()
 
     def test_does_not_require_default_agent(self) -> None:
         # ask-request never dispatches, so it works without a default agent.
@@ -1906,7 +1906,7 @@ class TestFieldAccess:
 
     def test_record_unknown_field_raises(self) -> None:
         err = reject_type("record Point\n  x: int\nlet p = Point(x: 1)\np.z")
-        assert "field" in str(err).lower() or "z" in str(err)
+        assert "field" in str(err).lower()
 
     def test_exception_field_access(self) -> None:
         # catch Abort and access its message field
@@ -1949,7 +1949,7 @@ class TestIsTest:
         err = reject_type(
             "enum Status\n  | Pass\n  | Fail\nlet s = Pass()\ns is Status.Gone"
         )
-        assert "variant" in str(err).lower() or "Gone" in str(err)
+        assert "variant" in str(err).lower()
 
     def test_is_test_wrong_qualifier_raises(self) -> None:
         err = reject_type(
@@ -1979,7 +1979,7 @@ class TestConstructors:
     def test_record_duplicate_arg_raises(self) -> None:
         # Parser catches duplicate field args
         err = reject_any("record Point\n  x: int\nPoint(x: 1, x: 2)")
-        assert "duplicate" in str(err).lower() or "x" in str(err)
+        assert "duplicate" in str(err).lower()
 
     def test_record_field_type_mismatch(self) -> None:
         err = reject_type('record Point\n  x: int\nPoint(x: "hello")')
@@ -1996,11 +1996,11 @@ class TestConstructors:
     def test_enum_variant_ambiguous_raises(self) -> None:
         # Ambiguity is now detected at scope-resolution time (AglScopeError).
         err = reject_any("enum A\n  | Pass\nenum B\n  | Pass\nPass()")
-        assert "ambiguous" in str(err).lower() or "Pass" in str(err)
+        assert "ambiguous" in str(err).lower()
 
     def test_enum_variant_unknown_raises(self) -> None:
         err = reject_type("enum Status\n  | Pass\nStatus.Gone()")
-        assert "variant" in str(err).lower() or "Gone" in str(err)
+        assert "variant" in str(err).lower()
 
     def test_exception_constructor(self) -> None:
         r = accept_type('Abort(message: "error")')
@@ -2024,11 +2024,11 @@ class TestConstructors:
 
     def test_qualified_constructor_wrong_enum_raises(self) -> None:
         err = reject_type("enum A\n  | X\nenum B\n  | Y\nA.Y()")
-        assert "variant" in str(err).lower() or "Y" in str(err)
+        assert "variant" in str(err).lower()
 
     def test_qualified_constructor_not_enum_raises(self) -> None:
         err = reject_type("record R\n  x: int\nR.Something()")
-        assert "enum" in str(err).lower() or "R" in str(err)
+        assert "enum" in str(err).lower()
 
 
 # ---------------------------------------------------------------------------
@@ -2078,11 +2078,11 @@ class TestConstructorRefDispatch:
 
     def test_qualified_variant_not_found_errors(self) -> None:
         err = reject_type("enum Status\n  | Pass\n  | Fail\nStatus.Missing()")
-        assert "variant" in str(err).lower() or "Missing" in str(err)
+        assert "variant" in str(err).lower()
 
     def test_qualified_non_enum_errors(self) -> None:
         err = reject_type("record R\n  x: int\nR.Something()")
-        assert "enum" in str(err).lower() or "R" in str(err)
+        assert "enum" in str(err).lower()
 
     def test_exception_constructor_via_new_dispatch(self) -> None:
         # Exception constructors go through the new unqualified path
@@ -2685,7 +2685,7 @@ class TestMisc:
             "enum E\n  | A(x: int)\nlet e = A(x: 1)\n"
             "case e of | E.A(z: n) => n | _ => 0"
         )
-        assert "no field" in str(err).lower() or "z" in str(err)
+        assert "no field" in str(err).lower()
 
     def test_variant_qualifier_wrong_raises(self) -> None:
         err = reject_type(
@@ -2695,11 +2695,11 @@ class TestMisc:
 
     def test_qualified_constructor_wrong_enum_raises(self) -> None:
         err = reject_type("enum A\n  | X\nenum B\n  | Y\nA.Y()")
-        assert "variant" in str(err).lower() or "Y" in str(err)
+        assert "variant" in str(err).lower()
 
     def test_qualified_constructor_not_enum_raises(self) -> None:
         err = reject_type("record R\n  x: int\nR.Something()")
-        assert "enum" in str(err).lower() or "R" in str(err)
+        assert "enum" in str(err).lower()
 
     def test_enum_variant_with_fields(self) -> None:
         r = accept_type(
@@ -2815,7 +2815,7 @@ class TestMisc:
             "enum E\n  | A\n  | B\nlet e = A()\n"
             "case e of | E.C() => 1 | _ => 0"
         )
-        assert "variant" in str(err).lower() or "C" in str(err)
+        assert "variant" in str(err).lower()
 
     def test_env_resolve_named_type_via_alias(self) -> None:
         # Exercises get_alias_target_expr and resolve_named_type alias chain
@@ -3449,7 +3449,7 @@ class TestDefensiveGuards:
         # Parser rejects duplicate named args at parse time (AglSyntaxError/AglTypeError).
         # Use reject_any since the parser may catch it before the type checker.
         err = reject_any("record P\n  x: int\nP(x: 1, x: 2)")
-        assert "duplicate" in str(err).lower() or "x" in str(err)
+        assert "duplicate" in str(err).lower()
 
     def test_builtin_func_name_def_rejected(self) -> None:
         # Exercises line 372: _preregister_funcdef raises for names in _BUILTIN_FUNC_NAMES.
@@ -4370,7 +4370,7 @@ class TestGenerics:
 
     def test_explicit_type_args_arity_error(self) -> None:
         err = reject_type("def id[T](x: T) -> T = x\nid::[int, text](1)")
-        assert "type argument" in str(err).lower() or "arity" in str(err).lower() or "1" in str(err)
+        assert "type argument" in str(err).lower() or "arity" in str(err).lower()
 
     def test_inconsistent_binding_error(self) -> None:
         # pair[T](a: T, b: T) — T=int from first arg, T must be text from second
@@ -4498,11 +4498,7 @@ class TestGenerics:
 
     def test_d3_ask_explicit_too_many_args_error(self) -> None:
         err = reject_type('ask::[int, text]("Q")')
-        assert (
-            "type argument" in str(err).lower()
-            or "one" in str(err).lower()
-            or "2" in str(err)
-        )
+        assert "type argument" in str(err).lower()
 
     def test_d3_exec_with_type_var_rejected(self) -> None:
         err = reject_type('def run[T](cmd: text) -> T = exec::[T](cmd)')
@@ -4514,11 +4510,7 @@ class TestGenerics:
 
     def test_d3_exec_too_many_type_args_error(self) -> None:
         err = reject_type('exec::[text, int]("ls")')
-        assert (
-            "type argument" in str(err).lower()
-            or "one" in str(err).lower()
-            or "2" in str(err)
-        )
+        assert "type argument" in str(err).lower()
 
     def test_d3_ask_request_with_type_var_rejected(self) -> None:
         err = reject_type('def req[T](p: text) -> AgentRequest = ask-request::[T](p)')
@@ -4793,7 +4785,7 @@ class TestGenericTypeDecl:
             "  value: T\n"
             "let b: Box = Box(value: 1)\nb"
         )
-        assert "type argument" in str(err).lower() or "requires" in str(err).lower()
+        assert "type argument" in str(err).lower()
 
     def test_generic_record_duplicate_field_rejected(self) -> None:
         err = reject_type(
@@ -4959,11 +4951,7 @@ class TestGenericConstructorExplicit:
             "  value: T\n"
             "Box::[int, text](value: 42)"
         )
-        assert (
-            "type argument" in str(err).lower()
-            or "requires" in str(err).lower()
-            or "1" in str(err)
-        )
+        assert "type argument" in str(err).lower()
 
     def test_nullary_variant_explicit_type_arg(self) -> None:
         r = accept_type(
@@ -5828,7 +5816,7 @@ class TestParseJsonCall:
     def test_parse_json_wrong_arity_rejected(self) -> None:
         """parse_json() with wrong arity is rejected."""
         err = reject_type('parse_json("a", "b")')
-        assert "parse_json" in str(err).lower() or "one" in str(err).lower()
+        assert "parse_json" in str(err).lower()
 
     def test_parse_json_no_args_rejected(self) -> None:
         """parse_json() with no args is rejected."""

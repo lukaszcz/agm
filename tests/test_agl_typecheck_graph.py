@@ -436,8 +436,7 @@ def test_unqualified_type_clash_on_use(tmp_path: Path) -> None:
             "  | Yellow"
         ),
     }
-    # Should raise either AglScopeError (ambiguous at scope) or AglTypeError
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglTypeError, match="Ambiguous type"):
         _check_graph(tmp_path, modules)
 
 
@@ -464,7 +463,7 @@ def test_qualified_access_bounded_by_s(tmp_path: Path) -> None:
             "def mkRect() -> Rect = Rect(w: 10, h: 5)"
         ),
     }
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglScopeError, match="not in the imported set"):
         _check_graph(tmp_path, modules)
 
 
@@ -488,7 +487,7 @@ def test_private_type_not_importable(tmp_path: Path) -> None:
             "def mkHidden() -> Hidden = Hidden(x: 1)"
         ),
     }
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglTypeError, match="Unknown type"):
         _check_graph(tmp_path, modules)
 
 
@@ -809,7 +808,7 @@ def test_qualified_ref_to_function_is_type_error(tmp_path: Path) -> None:
         ),
         "mylib": "def getValue() -> int = 42",
     }
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglTypeError, match="does not name a type"):
         _check_graph(tmp_path, modules)
 
 
@@ -832,7 +831,7 @@ def test_unknown_module_qualifier_error(tmp_path: Path) -> None:
             "def mkPoint() -> Point = Point(x: 1)"
         ),
     }
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglTypeError, match="Unknown module qualifier"):
         _check_graph(tmp_path, modules)
 
 
@@ -854,7 +853,7 @@ def test_module_qualified_constructor_not_enum_error(tmp_path: Path) -> None:
             "  x: int"
         ),
     }
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglTypeError, match="not a known enum type"):
         _check_graph(tmp_path, modules)
 
 
@@ -877,7 +876,7 @@ def test_module_qualified_constructor_missing_variant_error(tmp_path: Path) -> N
             "  | Blue"
         ),
     }
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglTypeError, match="does not exist in enum"):
         _check_graph(tmp_path, modules)
 
 
@@ -957,7 +956,7 @@ def test_module_qualified_variant_qualifier_mismatch(tmp_path: Path) -> None:
             "  | Blue"
         ),
     }
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglTypeError, match="resolves to enum"):
         _check_graph(tmp_path, modules)
 
 
@@ -982,7 +981,7 @@ def test_name_not_in_s_qualified_lookup(tmp_path: Path) -> None:
             "def mkPoint() -> Point = Point(x: 1)"
         ),
     }
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglScopeError, match="not in the imported set"):
         _check_graph(tmp_path, modules)
 
 
@@ -1009,7 +1008,7 @@ def test_module_qualified_variant_qualifier_is_not_enum(tmp_path: Path) -> None:
             "  | Blue"
         ),
     }
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglTypeError, match="not a known enum type"):
         _check_graph(tmp_path, modules)
 
 
@@ -1034,7 +1033,7 @@ def test_module_qualified_variant_unknown_enum_in_pattern(tmp_path: Path) -> Non
             "  | Blue"
         ),
     }
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglTypeError, match="not a known enum type"):
         _check_graph(tmp_path, modules)
 
 
@@ -1057,7 +1056,7 @@ def test_module_qualified_enum_as_constructor_error(tmp_path: Path) -> None:
             "  | Blue"
         ),
     }
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglTypeError, match="is a type name, not a value"):
         _check_graph(tmp_path, modules)
 
 
@@ -1080,7 +1079,7 @@ def test_module_qualified_unknown_constructor_error(tmp_path: Path) -> None:
             "  | Blue"
         ),
     }
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglScopeError, match="not in the imported set"):
         _check_graph(tmp_path, modules)
 
 
@@ -1153,7 +1152,7 @@ def test_qualified_type_not_in_s_error(tmp_path: Path) -> None:
             "def pub() -> int = 1"
         ),
     }
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglTypeError, match="not accessible via qualifier"):
         _check_graph(tmp_path, modules)
 
 
@@ -1182,7 +1181,7 @@ def test_ambiguous_open_import_type_error(tmp_path: Path) -> None:
             "  | Yellow"
         ),
     }
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglTypeError, match="Ambiguous type"):
         _check_graph(tmp_path, modules)
 
 

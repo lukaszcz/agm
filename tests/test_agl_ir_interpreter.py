@@ -1136,8 +1136,9 @@ class TestIrAssignPathErrors:
             ),
             {sym: desc},
         )
-        with pytest.raises(AglRaise):
+        with pytest.raises(AglRaise) as exc:
             IrInterpreter(prog).run()
+        assert exc.value.exc.display_name == "IndexError"
 
     def test_assign_path_intermediate_dict_missing_key_raises(self) -> None:
         """IrAssign: intermediate step with missing dict key raises AglRaise."""
@@ -1164,8 +1165,9 @@ class TestIrAssignPathErrors:
             ),
             {sym: desc},
         )
-        with pytest.raises(AglRaise):
+        with pytest.raises(AglRaise) as exc:
             IrInterpreter(prog).run()
+        assert exc.value.exc.display_name == "KeyError"
 
     def test_assign_path_final_list_oob_raises(self) -> None:
         """IrAssign: final step with out-of-bounds list index raises AglRaise."""
@@ -1186,8 +1188,9 @@ class TestIrAssignPathErrors:
             ),
             {sym: desc},
         )
-        with pytest.raises(AglRaise):
+        with pytest.raises(AglRaise) as exc:
             IrInterpreter(prog).run()
+        assert exc.value.exc.display_name == "IndexError"
 
     def test_assign_path_final_dict_missing_key_raises(self) -> None:
         """IrAssign: final step with missing dict key raises AglRaise."""
@@ -1216,8 +1219,9 @@ class TestIrAssignPathErrors:
             ),
             {sym: desc},
         )
-        with pytest.raises(AglRaise):
+        with pytest.raises(AglRaise) as exc:
             IrInterpreter(prog).run()
+        assert exc.value.exc.display_name == "KeyError"
 
 
 # ---------------------------------------------------------------------------
@@ -1694,8 +1698,9 @@ class TestM4bInterpreterDefensivePaths:
             symbols=symbols,
             functions={fn2_id: fn2_desc},
         )
-        with pytest.raises(AglRaise):
+        with pytest.raises(AglRaise) as exc:
             IrInterpreter(prog, max_call_depth=1).run()
+        assert exc.value.exc.display_name == "RecursionError"
 
     def test_indirect_call_uses_param_default_when_arg_omitted(self) -> None:
         """IrIndirectCall falls back to param.default when fewer args than params."""

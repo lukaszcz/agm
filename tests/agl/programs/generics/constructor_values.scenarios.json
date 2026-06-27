@@ -6,7 +6,7 @@
       "expect": {
         "stdout_contains": [
           "3,4\n",
-          "Signal.On(label: \"go\")",
+          "Signal.On(label = \"go\")",
           "40\nheld 7\nblank\nsignal on: fire\n"
         ],
         "stdout_not_contains": ["signal off"],
@@ -19,7 +19,7 @@
       "expect": {
         "stdout_contains": [
           "3,4\n",
-          "Signal.On(label: \"go\")",
+          "Signal.On(label = \"go\")",
           "40\nheld 7\nblank\nsignal off\n"
         ],
         "stdout_not_contains": ["signal on: "],

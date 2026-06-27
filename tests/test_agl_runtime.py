@@ -1215,7 +1215,7 @@ class TestRenderValue:
             display_name="Issue",
             fields={"title": TextValue("Missing tests"), "severity": IntValue(3)},
         )
-        assert render_value(v) == 'Issue(title: "Missing tests", severity: 3)'
+        assert render_value(v) == 'Issue(title = "Missing tests", severity = 3)'
 
     def test_record_empty(self) -> None:
         """A record with no fields renders as ``TypeName()``."""
@@ -1241,7 +1241,7 @@ class TestRenderValue:
             fields={"title": TextValue("Missing tests"), "author": author},
         )
         out = render_value(issue)
-        assert out == 'Issue(title: "Missing tests", author: Author(name: "Ada", active: true))'
+        assert out == 'Issue(title = "Missing tests", author = Author(name = "Ada", active = true))'
 
     def test_record_with_list_field(self) -> None:
         """Record with a list field renders correctly (list inline)."""
@@ -1258,14 +1258,14 @@ class TestRenderValue:
             },
         )
         out = render_value(v)
-        assert out == 'Issue(title: "Missing tests", severity: 3, tags: ["tests", "coverage"])'
+        assert out == 'Issue(title = "Missing tests", severity = 3, tags = ["tests", "coverage"])'
 
     # ------------------------------------------------------------------
     # enum: qualified form, nullary variant
     # ------------------------------------------------------------------
 
     def test_enum_with_payload(self) -> None:
-        """Enum with payload renders as ``TypeName.Variant(field: value)``."""
+        """Enum with payload renders as ``TypeName.Variant(field = value)``."""
         from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import EnumValue, IntValue
 
@@ -1273,7 +1273,7 @@ class TestRenderValue:
             nominal=NominalId(ENTRY_ID, "Outcome"), display_name="Outcome",
             variant="Partial", fields={"left": IntValue(2)},
         )
-        assert render_value(v) == "Outcome.Partial(left: 2)"
+        assert render_value(v) == "Outcome.Partial(left = 2)"
 
     def test_enum_nullary_variant(self) -> None:
         """Nullary enum variant renders as ``TypeName.Variant`` (no parens)."""
@@ -1297,7 +1297,7 @@ class TestRenderValue:
             variant="V",
             fields={"a": IntValue(1), "b": IntValue(2), "c": IntValue(3)},
         )
-        assert render_value(v) == "E.V(a: 1, b: 2, c: 3)"
+        assert render_value(v) == "E.V(a = 1, b = 2, c = 3)"
 
     # ------------------------------------------------------------------
     # exception: record-style with all fields incl. trace_id
@@ -1321,8 +1321,8 @@ class TestRenderValue:
         )
         out = render_value(v)
         expected = (
-            'CastError(message: "cannot parse \\"x\\" as int", trace_id: "evt-7", '
-            'source_type: "text", target_type: "int", raw: "x")'
+            'CastError(message = "cannot parse \\"x\\" as int", trace_id = "evt-7", '
+            'source_type = "text", target_type = "int", raw = "x")'
         )
         assert out == expected
 
@@ -1340,7 +1340,7 @@ class TestRenderValue:
             },
         )
         out = render_value(v)
-        assert out == 'Abort(message: "fatal", trace_id: "abc123")'
+        assert out == 'Abort(message = "fatal", trace_id = "abc123")'
         assert "<dsl-value" not in out
 
     # ------------------------------------------------------------------
@@ -1413,7 +1413,7 @@ class TestRenderValue:
         out = render_value(v)
         # The json field must be compact (no newlines) so the record stays single-line.
         assert "\n" not in out
-        assert out == 'R(data: {"a": 1, "b": 2})'
+        assert out == 'R(data = {"a": 1, "b": 2})'
 
     def test_list_pretty(self) -> None:
         """Pretty lists render over multiple indented lines."""
@@ -1443,7 +1443,7 @@ class TestRenderValue:
         )
         assert (
             render_value(v, pretty=True)
-            == 'Issue(\n  title: "Missing tests",\n  severity: 3\n)'
+            == 'Issue(\n  title = "Missing tests",\n  severity = 3\n)'
         )
 
     def test_pretty_nested_indentation(self) -> None:
@@ -1461,7 +1461,7 @@ class TestRenderValue:
         )
         assert (
             render_value(v, pretty=True)
-            == 'Issue(\n  title: "Missing tests",\n  scores: [\n    1,\n    2\n  ]\n)'
+            == 'Issue(\n  title = "Missing tests",\n  scores = [\n    1,\n    2\n  ]\n)'
         )
 
     # ------------------------------------------------------------------

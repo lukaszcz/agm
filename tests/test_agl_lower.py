@@ -17,26 +17,47 @@ from pathlib import Path
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
+from agm.agl.ir.contracts import ConversionFailureMode, ConversionStrategy
 from agm.agl.ir.nodes import (
+    AutoTraceField,
+    IrArith,
     IrAssign,
     IrBind,
+    IrBindPlan,
     IrBlock,
+    IrCapture,
+    IrCase,
     IrCoerce,
+    IrCompare,
     IrConstBool,
     IrConstDecimal,
     IrConstInt,
     IrConstJsonNull,
     IrConstText,
     IrConstUnit,
+    IrContains,
+    IrConvert,
     IrDirectCall,
     IrIndirectCall,
     IrLoad,
     IrMakeClosure,
     IrMakeDict,
+    IrMakeException,
     IrMakeList,
+    IrRaise,
+    IrRenderTemplate,
+    IrSequence,
+    IrTemplateText,
+    IrTemplateValue,
     IrTry,
+    IrVariantPlan,
 )
 from agm.agl.ir.operations import (
+    ArithKind,
+    ArithOp,
+    CmpOp,
+    CompareKind,
+    ContainsKind,
     IntToDecimal,
     MapDictValues,
     MapEnumFields,
@@ -1871,3 +1892,525 @@ class TestM6aLowering:
         contract = prog.contracts[exec_nodes[0].contract_id]
         assert contract.codec_name == "text"
         assert contract.is_unit is False  # is_unit=False even for the defensive path
+
+
+# ---------------------------------------------------------------------------
+# Structural lowering: lambda capture positive path (non-empty captures)
+# ---------------------------------------------------------------------------
+
+
+class TestLambdaCapturePositive:
+    """Structural tests for the lambda capture positive path.
+
+    The negative (empty-captures) path for module-level bindings is already
+    covered in TestM4bLambdaLowering.  These tests assert the non-empty
+    capture shape when a lambda references function-local bindings, and verify
+    by_cell for both param (let-like) and var captures.
+    """
+
+    def test_lambda_captures_param_with_by_cell_false(self) -> None:
+        """Lambda capturing a function parameter produces by_cell=False.
+
+        A param is declared with mutable=False; IrCapture.by_cell must be False
+        (snapshot-value semantics, not cell-sharing).  Asserts captures is
+        non-empty and the single entry has by_cell=False matching the symbol.
+        """
+        source = (
+            "def make_fn(n: int) -> unit =\n"
+            "  let _g = fn(x: int) -> int => n + x\n"
+            "  ()\n"
+            "()\n"
+        )
+        prog = _lower(source)
+        make_fn_desc = next(
+            d for d in prog.functions.values()
+            if prog.symbols[d.function_symbol].public_name == "make_fn"
+        )
+        body = make_fn_desc.body
+        assert isinstance(body, IrBlock)
+        # Find the IrMakeClosure in the function body (the nested lambda)
+        lambda_closure: IrMakeClosure | None = None
+        for item in body.items:
+            if isinstance(item, IrBind) and isinstance(item.value, IrMakeClosure):
+                lambda_closure = item.value
+                break
+        assert lambda_closure is not None, "Expected IrMakeClosure in make_fn body"
+        # The lambda captures n (param) — captures must be non-empty
+        captures = lambda_closure.captures
+        assert len(captures) == 1, f"Expected 1 capture, got {captures!r}"
+        cap = captures[0]
+        assert isinstance(cap, IrCapture)
+        # param is immutable → by_cell=False
+        assert cap.by_cell is False, "param capture must have by_cell=False"
+        assert not prog.symbols[cap.symbol].mutable
+
+    def test_lambda_captures_var_with_by_cell_true(self) -> None:
+        """Lambda capturing a function-local var produces by_cell=True.
+
+        A var binding is mutable=True; IrCapture.by_cell must be True
+        (cell-sharing so the lambda sees mutations).  Asserts captures is
+        non-empty and the single entry has by_cell=True matching the symbol.
+        """
+        source = (
+            "def make_fn() -> unit =\n"
+            "  var count: int = 0\n"
+            "  let _g = fn() -> int => count\n"
+            "  ()\n"
+            "()\n"
+        )
+        prog = _lower(source)
+        make_fn_desc = next(
+            d for d in prog.functions.values()
+            if prog.symbols[d.function_symbol].public_name == "make_fn"
+        )
+        body = make_fn_desc.body
+        assert isinstance(body, IrBlock)
+        lambda_closure = None
+        for item in body.items:
+            if isinstance(item, IrBind) and isinstance(item.value, IrMakeClosure):
+                lambda_closure = item.value
+                break
+        assert lambda_closure is not None, "Expected IrMakeClosure in make_fn body"
+        captures = lambda_closure.captures
+        assert len(captures) == 1, f"Expected 1 capture, got {captures!r}"
+        cap = captures[0]
+        assert isinstance(cap, IrCapture)
+        # var is mutable → by_cell=True
+        assert cap.by_cell is True, "var capture must have by_cell=True"
+        assert prog.symbols[cap.symbol].mutable
+
+    def test_lambda_captures_both_param_and_var_with_correct_by_cell(self) -> None:
+        """Lambda capturing both a param (by_cell=False) and a var (by_cell=True).
+
+        Asserts a two-entry captures tuple where each by_cell value matches
+        the symbol's mutable flag, covering both False and True in one test.
+        A wrong by_cell in the lowerer causes this test to fail.
+        """
+        source = (
+            "def make_fn(n: int) -> unit =\n"
+            "  var count: int = 0\n"
+            "  let _g = fn() -> int => n + count\n"
+            "  ()\n"
+            "()\n"
+        )
+        prog = _lower(source)
+        make_fn_desc = next(
+            d for d in prog.functions.values()
+            if prog.symbols[d.function_symbol].public_name == "make_fn"
+        )
+        body = make_fn_desc.body
+        assert isinstance(body, IrBlock)
+        lambda_closure = None
+        for item in body.items:
+            if isinstance(item, IrBind) and isinstance(item.value, IrMakeClosure):
+                lambda_closure = item.value
+                break
+        assert lambda_closure is not None, "Expected IrMakeClosure in make_fn body"
+        captures = lambda_closure.captures
+        # Both n (param) and count (var) must be captured — non-empty
+        assert len(captures) == 2, f"Expected 2 captures (n + count), got {captures!r}"
+        # Each capture's by_cell must match the symbol's mutable flag
+        for cap in captures:
+            assert isinstance(cap, IrCapture)
+            assert cap.by_cell == prog.symbols[cap.symbol].mutable, (
+                f"by_cell={cap.by_cell} must equal symbol.mutable="
+                f"{prog.symbols[cap.symbol].mutable} for cap {cap!r}"
+            )
+        # Exactly one by_cell=False entry (the param n)
+        false_caps = [c for c in captures if not c.by_cell]
+        assert len(false_caps) == 1
+        assert not prog.symbols[false_caps[0].symbol].mutable
+        # Exactly one by_cell=True entry (the var count)
+        true_caps = [c for c in captures if c.by_cell]
+        assert len(true_caps) == 1
+        assert prog.symbols[true_caps[0].symbol].mutable
+
+
+# ---------------------------------------------------------------------------
+# Structural lowering: binary-op kind selection
+# ---------------------------------------------------------------------------
+
+
+class TestBinaryOpKindSelection:
+    """Structural tests for _lower_binary_op: node type and kind/op fields.
+
+    Each test lowers a single binary-expression and asserts the exact IR node
+    type plus its decision-bearing fields.  A wrong kind selection in the
+    lowerer causes the test to fail.
+    """
+
+    def test_int_add_lowers_to_arith_add_int(self) -> None:
+        """+ on two ints → IrArith with op=ADD and kind=INT."""
+        prog = _lower("let r = 1 + 2\n()")
+        bind = prog.modules[prog.entry_module].initializers[0]
+        assert isinstance(bind, IrBind)
+        arith = bind.value
+        assert isinstance(arith, IrArith)
+        assert arith.op is ArithOp.ADD
+        assert arith.kind is ArithKind.INT
+
+    def test_div_always_lowers_to_arith_div_decimal(self) -> None:
+        """/ always produces IrArith with op=DIV and kind=DECIMAL.
+
+        _lower_div coerces both operands to decimal regardless of input types;
+        kind=DECIMAL is the decision-bearing field.
+        """
+        prog = _lower("let r = 3 / 2\n()")
+        bind = prog.modules[prog.entry_module].initializers[0]
+        assert isinstance(bind, IrBind)
+        arith = bind.value
+        assert isinstance(arith, IrArith)
+        assert arith.op is ArithOp.DIV
+        assert arith.kind is ArithKind.DECIMAL
+
+    def test_int_ordering_lowers_to_compare_lt_int(self) -> None:
+        """< on two ints → IrCompare with op=LT and kind=INT."""
+        prog = _lower("let r = 1 < 2\n()")
+        bind = prog.modules[prog.entry_module].initializers[0]
+        assert isinstance(bind, IrBind)
+        cmp = bind.value
+        assert isinstance(cmp, IrCompare)
+        assert cmp.op is CmpOp.LT
+        assert cmp.kind is CompareKind.INT
+
+    def test_decimal_widening_in_ordering_lowers_to_compare_decimal(self) -> None:
+        """< with one decimal operand widens to kind=DECIMAL.
+
+        _lower_ordering selects CompareKind.DECIMAL when either side is decimal;
+        this asserts the widening decision that would be missed by an INT-only test.
+        """
+        prog = _lower("let r = 1.0 < 2\n()")
+        bind = prog.modules[prog.entry_module].initializers[0]
+        assert isinstance(bind, IrBind)
+        cmp = bind.value
+        assert isinstance(cmp, IrCompare)
+        assert cmp.op is CmpOp.LT
+        assert cmp.kind is CompareKind.DECIMAL
+
+    def test_equality_lowers_to_compare_eq_structural(self) -> None:
+        """= on ints → IrCompare with op=EQ and kind=STRUCTURAL.
+
+        _lower_equality always uses STRUCTURAL (wider than INT/DECIMAL) because
+        equality is defined over any comparable type, not just numerics.
+        """
+        prog = _lower("let r = 1 = 1\n()")
+        bind = prog.modules[prog.entry_module].initializers[0]
+        assert isinstance(bind, IrBind)
+        cmp = bind.value
+        assert isinstance(cmp, IrCompare)
+        assert cmp.op is CmpOp.EQ
+        assert cmp.kind is CompareKind.STRUCTURAL
+
+    def test_in_list_lowers_to_contains_list(self) -> None:
+        """'in' on a list → IrContains with kind=LIST."""
+        prog = _lower("let r = 1 in [1, 2, 3]\n()")
+        bind = prog.modules[prog.entry_module].initializers[0]
+        assert isinstance(bind, IrBind)
+        contains = bind.value
+        assert isinstance(contains, IrContains)
+        assert contains.kind is ContainsKind.LIST
+
+    def test_in_dict_lowers_to_contains_dict(self) -> None:
+        """'in' (key lookup) on a dict → IrContains with kind=DICT."""
+        prog = _lower('let r = "a" in {"a": 1}\n()')
+        bind = prog.modules[prog.entry_module].initializers[0]
+        assert isinstance(bind, IrBind)
+        contains = bind.value
+        assert isinstance(contains, IrContains)
+        assert contains.kind is ContainsKind.DICT
+
+
+# ---------------------------------------------------------------------------
+# Structural lowering: pattern plan kinds including bare_variant_patterns
+# ---------------------------------------------------------------------------
+
+
+class TestPatternPlanLowering:
+    """Structural tests for _compile_plan: IrVariantPlan vs IrBindPlan.
+
+    A bare NAME in a case pattern that names an in-scope nullary constructor
+    compiles to IrVariantPlan (not IrBindPlan), per the
+    bare_variant_patterns scope-directed rule.  A name that does NOT name
+    a constructor compiles to IrBindPlan.
+    """
+
+    def test_bare_variant_pattern_lowers_to_ir_variant_plan(self) -> None:
+        """Bare nullary-constructor pattern → IrVariantPlan(variant=...).
+
+        'Active' is in bare_variant_patterns (it names a nullary enum variant).
+        _compile_plan must emit IrVariantPlan, NOT IrBindPlan.
+        """
+        source = (
+            "enum Status\n"
+            "  | Active\n"
+            "  | Inactive\n"
+            "\n"
+            "let s = Status.Active\n"
+            "let r = case s of\n"
+            "  | Active => 1\n"
+            "  | _ => 0\n"
+            "()\n"
+        )
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        case_bind: IrBind | None = None
+        for node in inits:
+            if isinstance(node, IrBind) and isinstance(node.value, IrCase):
+                case_bind = node
+                break
+        assert case_bind is not None, "Expected IrBind(IrCase) in initializers"
+        assert isinstance(case_bind.value, IrCase)
+        arm0 = case_bind.value.arms[0]
+        assert isinstance(arm0.plan, IrVariantPlan), (
+            f"bare 'Active' pattern must be IrVariantPlan, got {type(arm0.plan).__name__}"
+        )
+        assert arm0.plan.variant == "Active"
+
+    def test_binder_pattern_lowers_to_ir_bind_plan(self) -> None:
+        """A non-constructor name pattern → IrBindPlan (binder), not IrVariantPlan."""
+        source = (
+            "enum Status\n"
+            "  | Active\n"
+            "  | Inactive\n"
+            "\n"
+            "let s = Status.Active\n"
+            "let r = case s of\n"
+            "  | Active => 1\n"
+            "  | x => 0\n"
+            "()\n"
+        )
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        case_bind = None
+        for node in inits:
+            if isinstance(node, IrBind) and isinstance(node.value, IrCase):
+                case_bind = node
+                break
+        assert case_bind is not None, "Expected IrBind(IrCase) in initializers"
+        assert isinstance(case_bind.value, IrCase)
+        arm1 = case_bind.value.arms[1]
+        assert isinstance(arm1.plan, IrBindPlan), (
+            f"binder 'x' must be IrBindPlan, got {type(arm1.plan).__name__}"
+        )
+
+    def test_bare_variant_and_binder_in_same_case_are_distinct(self) -> None:
+        """Bare-variant and binder patterns in the same case compile to distinct plans.
+
+        arm[0] → IrVariantPlan (nullary Active constructor);
+        arm[1] → IrBindPlan (fresh binder x).
+        Together they confirm the scope-directed dispatch in _compile_plan.
+        """
+        source = (
+            "enum Status\n"
+            "  | Active\n"
+            "  | Inactive\n"
+            "\n"
+            "let s = Status.Inactive\n"
+            "let r = case s of\n"
+            "  | Active => 1\n"
+            "  | x => 2\n"
+            "()\n"
+        )
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        case_bind = None
+        for node in inits:
+            if isinstance(node, IrBind) and isinstance(node.value, IrCase):
+                case_bind = node
+                break
+        assert case_bind is not None, "Expected IrBind(IrCase) in initializers"
+        assert isinstance(case_bind.value, IrCase)
+        assert isinstance(case_bind.value.arms[0].plan, IrVariantPlan)
+        assert isinstance(case_bind.value.arms[1].plan, IrBindPlan)
+
+
+# ---------------------------------------------------------------------------
+# Structural lowering: IrConvert / total-cast as? failure modes
+# ---------------------------------------------------------------------------
+
+
+class TestIrConvertLowering:
+    """Structural tests for Cast lowering: IrConvert node and recipe selection.
+
+    The lowerer emits IrConvert for 'as' (always) and fallible 'as?'; for
+    total 'as?' it emits IrSequence instead.  These tests pin the
+    decision-bearing fields so a wrong failure_mode or strategy selection
+    fails the test.
+    """
+
+    def test_total_as_lowers_to_ir_convert_raise_cast_error(self) -> None:
+        """'as' always emits IrConvert with failure_mode=RAISE_CAST_ERROR.
+
+        int as decimal: total noop cast → strategy=WIDEN_INT_TO_DECIMAL,
+        failure_mode=RAISE_CAST_ERROR.
+        """
+        prog = _lower("let r = 1 as decimal\n()")
+        bind = prog.modules[prog.entry_module].initializers[0]
+        assert isinstance(bind, IrBind)
+        conv = bind.value
+        assert isinstance(conv, IrConvert)
+        assert conv.failure_mode is ConversionFailureMode.RAISE_CAST_ERROR
+        assert conv.recipe.strategy is ConversionStrategy.WIDEN_INT_TO_DECIMAL
+
+    def test_fallible_as_test_lowers_to_ir_convert_return_bool(self) -> None:
+        """Fallible 'as?' emits IrConvert with failure_mode=RETURN_BOOL.
+
+        decimal as? int: fallible cast → strategy=NARROW_DECIMAL_TO_INT,
+        failure_mode=RETURN_BOOL.
+        """
+        prog = _lower("let r = 1.5 as? int\n()")
+        bind = prog.modules[prog.entry_module].initializers[0]
+        assert isinstance(bind, IrBind)
+        conv = bind.value
+        assert isinstance(conv, IrConvert)
+        assert conv.failure_mode is ConversionFailureMode.RETURN_BOOL
+        assert conv.recipe.strategy is ConversionStrategy.NARROW_DECIMAL_TO_INT
+
+    def test_total_as_test_lowers_to_ir_sequence_not_ir_convert(self) -> None:
+        """Total 'as?' emits IrSequence((source, IrConstBool(True))), NOT IrConvert.
+
+        int as? decimal is a total noop; the lowerer sequences the source
+        expression for side-effects and then yields True — no IrConvert.
+        """
+        prog = _lower("let r = 1 as? decimal\n()")
+        bind = prog.modules[prog.entry_module].initializers[0]
+        assert isinstance(bind, IrBind)
+        seq = bind.value
+        assert isinstance(seq, IrSequence), (
+            f"Total 'as?' must emit IrSequence, not {type(seq).__name__}"
+        )
+        assert len(seq.items) == 2
+        last = seq.items[1]
+        assert isinstance(last, IrConstBool)
+        assert last.value is True
+
+    def test_render_to_text_as_lowers_to_ir_convert_render_strategy(self) -> None:
+        """'as text' (total render cast) → IrConvert with strategy=RENDER_TO_TEXT."""
+        prog = _lower("let r = 42 as text\n()")
+        bind = prog.modules[prog.entry_module].initializers[0]
+        assert isinstance(bind, IrBind)
+        conv = bind.value
+        assert isinstance(conv, IrConvert)
+        assert conv.failure_mode is ConversionFailureMode.RAISE_CAST_ERROR
+        assert conv.recipe.strategy is ConversionStrategy.RENDER_TO_TEXT
+
+
+# ---------------------------------------------------------------------------
+# Structural lowering: template string lowering
+# ---------------------------------------------------------------------------
+
+
+class TestTemplateLowering:
+    """Structural tests for Template → IrRenderTemplate lowering.
+
+    Asserts the segment tuple shape so a wrong template representation fails.
+    """
+
+    def test_interpolated_template_lowers_to_ir_render_template_with_segments(self) -> None:
+        """A template with one text segment and one interpolated expression.
+
+        "hello ${name}" lowers to IrRenderTemplate with segments:
+          (IrTemplateText("hello "), IrTemplateValue(IrLoad(name_sym)))
+        """
+        source = 'let name = "world"\nlet msg = "hello ${name}"\n()\n'
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        # inits[0] = IrBind(name, IrConstText("world"))
+        # inits[1] = IrBind(msg, IrRenderTemplate(...))
+        msg_bind = inits[1]
+        assert isinstance(msg_bind, IrBind)
+        template = msg_bind.value
+        assert isinstance(template, IrRenderTemplate)
+        segs = template.segments
+        assert len(segs) == 2
+        # First segment: static text prefix
+        assert isinstance(segs[0], IrTemplateText)
+        assert segs[0].text == "hello "
+        # Second segment: interpolated expression → IrLoad of name's symbol
+        assert isinstance(segs[1], IrTemplateValue)
+        assert isinstance(segs[1].value, IrLoad)
+
+
+# ---------------------------------------------------------------------------
+# Structural lowering: IrMakeException / AutoTraceField
+# ---------------------------------------------------------------------------
+
+
+class TestIrMakeExceptionLowering:
+    """Structural tests for exception construction lowering.
+
+    IrMakeException.fields contains IrExpr for explicitly provided fields and
+    AutoTraceField sentinels for declared-but-omitted fields.  These tests pin
+    the exact slot shape so a wrong AutoTraceField placement fails.
+    """
+
+    def _get_raise_in_fn(self, source: str) -> IrRaise:
+        """Lower source and return the IrRaise from the 'stop_fn' function body."""
+        prog = _lower(source)
+        stop_desc = next(
+            d for d in prog.functions.values()
+            if prog.symbols[d.function_symbol].public_name == "stop_fn"
+        )
+        body = stop_desc.body
+        # Indented function body is wrapped in an IrBlock; unwrap if needed.
+        if isinstance(body, IrBlock):
+            for item in body.items:
+                if isinstance(item, IrRaise):
+                    return item
+            raise AssertionError("Expected IrRaise in function body IrBlock")
+        assert isinstance(body, IrRaise)
+        return body
+
+    def test_exception_construction_emits_ir_make_exception(self) -> None:
+        """raise Abort(message: ...) → IrRaise(exc=IrMakeException(display_name='Abort'))."""
+        source = (
+            'def stop_fn() -> unit =\n'
+            '  raise Abort(message: "stop")\n'
+            'stop_fn()\n'
+        )
+        raise_node = self._get_raise_in_fn(source)
+        exc = raise_node.exc
+        assert isinstance(exc, IrMakeException)
+        assert exc.display_name == "Abort"
+
+    def test_provided_field_is_ir_expr_not_auto_trace_field(self) -> None:
+        """Explicitly provided 'message' field → IrConstText, not AutoTraceField."""
+        source = (
+            'def stop_fn() -> unit =\n'
+            '  raise Abort(message: "stop")\n'
+            'stop_fn()\n'
+        )
+        raise_node = self._get_raise_in_fn(source)
+        exc = raise_node.exc
+        assert isinstance(exc, IrMakeException)
+        fields_dict = dict(exc.fields)
+        msg_slot = fields_dict["message"]
+        assert isinstance(msg_slot, IrConstText), (
+            f"explicitly provided 'message' must be IrConstText, got {type(msg_slot).__name__}"
+        )
+        assert msg_slot.value == "stop"
+
+    def test_unprovided_trace_id_field_is_auto_trace_field(self) -> None:
+        """Undeclared 'trace_id' field → AutoTraceField sentinel, not an IrExpr.
+
+        When a caller omits a declared exception field, the lowerer places an
+        AutoTraceField sentinel; the evaluator fills in a fresh trace id at
+        construction time.  This test pins that exactly one AutoTraceField
+        is present for the omitted trace_id.
+        """
+        source = (
+            'def stop_fn() -> unit =\n'
+            '  raise Abort(message: "stop")\n'
+            'stop_fn()\n'
+        )
+        raise_node = self._get_raise_in_fn(source)
+        exc = raise_node.exc
+        assert isinstance(exc, IrMakeException)
+        fields_dict = dict(exc.fields)
+        trace_slot = fields_dict["trace_id"]
+        assert isinstance(trace_slot, AutoTraceField), (
+            f"omitted 'trace_id' must be AutoTraceField, got {type(trace_slot).__name__}"
+        )
+        # Only the omitted field gets an AutoTraceField; the provided 'message' does not.
+        auto_fields = [v for _, v in exc.fields if isinstance(v, AutoTraceField)]
+        assert len(auto_fields) == 1

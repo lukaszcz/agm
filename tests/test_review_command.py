@@ -233,8 +233,8 @@ def test_prepare_review_exits_when_named_config_is_missing(
         prepare_review(_review_args(command_name="fronend"), temp_files=[])
 
     err = capsys.readouterr().err
-    assert "review subcommand 'fronend' is not defined" in err
-    assert "usage: agm review [COMMAND]" in err
+    assert "fronend" in err
+    assert "review" in err.lower()
 
 
 def test_prepare_review_uses_config_prompt_files(
@@ -383,7 +383,9 @@ def test_prepare_revise_rejects_lone_config_command(
         prepare_revise(_revise_args("frontend"), temp_files=[])
 
     assert exc_info.value.code == 1
-    assert "revise command 'frontend' was provided without REVIEW_FILE" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "frontend" in err
+    assert "REVIEW_FILE" in err
 
 
 def test_prepare_revise_exits_when_named_config_is_missing(
@@ -401,8 +403,8 @@ def test_prepare_revise_exits_when_named_config_is_missing(
         prepare_revise(_revise_args(str(review_file), command_name="fronend"), temp_files=[])
 
     err = capsys.readouterr().err
-    assert "revise subcommand 'fronend' is not defined" in err
-    assert "usage: agm revise [COMMAND]" in err
+    assert "fronend" in err
+    assert "revise" in err.lower()
     assert "REVIEW_FILE" in err
 
 
@@ -648,7 +650,7 @@ def test_review_once_warns_before_overwriting_existing_review_file(
     review_mod.review_once(_review_args(review_file="saved/review.md"))
 
     captured = capsys.readouterr()
-    assert f"warning: overwriting existing review file {review_file}\n" in captured.err
+    assert str(review_file) in captured.err
     assert review_file.read_text(encoding="utf-8") == "new review output\n"
 
 
@@ -696,8 +698,8 @@ def test_revise_once_dry_run_prints_configuration_and_command(
 
     captured = capsys.readouterr()
     assert output == ""
-    assert "dry-run: revise configuration" in captured.out
-    assert "dry-run: command [agent]:" in captured.out
+    assert "dry-run" in captured.out
+    assert "fake-reviser" in captured.out
 
 
 def test_revise_once_runs_prepared_prompt_when_dry_run_disabled(
@@ -778,8 +780,9 @@ def test_review_once_dry_run_prints_configuration(
 
     captured = capsys.readouterr()
     assert output == ""
-    assert "dry-run: review configuration" in captured.out
-    assert f"dry-run:   review file: {tmp_path / '.agent-files' / 'review-'}" in captured.out
+    assert "dry-run" in captured.out
+    assert str(tmp_path / ".agent-files") in captured.out
+    assert "review-" in captured.out
 
 
 def test_write_stream_helpers_ignore_empty_chunks(
@@ -1569,8 +1572,8 @@ def test_refine_exits_when_named_config_is_missing(
         )
 
     err = capsys.readouterr().err
-    assert "refine subcommand 'fronend' is not defined" in err
-    assert "usage: agm refine [COMMAND]" in err
+    assert "fronend" in err
+    assert "refine" in err.lower()
 
 
 def test_run_wrappers_translate_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:

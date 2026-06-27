@@ -31,6 +31,70 @@ from agm.core.process import (
     run_foreground,
     run_subprocess,
 )
+
+
+class _FakeProcess:
+    returncode: int | None = None
+
+    def __init__(self, *, interrupt_on_wait: bool = False) -> None:
+        self._interrupt_on_wait = interrupt_on_wait
+
+    def wait(self, timeout: float | None = None) -> int:
+        if self._interrupt_on_wait:
+            raise KeyboardInterrupt
+        return 0
+
+
+class _JoinedReader(threading.Thread):
+    def join(self, timeout: float | None = None) -> None:
+        return None
+
+
+class _InterruptingQueue(queue.Queue[tuple[str, bytes | None]]):
+    def get(
+        self,
+        block: bool = True,
+        timeout: float | None = None,
+    ) -> tuple[str, bytes | None]:
+        raise KeyboardInterrupt
+
+
+def _patch_start_process(
+    monkeypatch: pytest.MonkeyPatch,
+    process_module: Any,
+    *,
+    process: subprocess.Popen[bytes],
+    readers: list[threading.Thread] | None = None,
+    stream_queue: queue.Queue[tuple[str, bytes | None]] | None = None,
+) -> None:
+    def fake_start_process_with_readers(
+        cmd: list[str],
+        *,
+        cwd: Path | None,
+        env: dict[str, str] | None,
+        capture_output: bool,
+        stdout_callback: object,
+        stderr_callback: object,
+        isolate_process_group: bool,
+        stdin_text: str | None,
+    ) -> tuple[
+        subprocess.Popen[bytes],
+        list[threading.Thread],
+        queue.Queue[tuple[str, bytes | None]],
+        threading.Thread | None,
+    ]:
+        return (
+            process,
+            [] if readers is None else readers,
+            queue.Queue() if stream_queue is None else stream_queue,
+            None,
+        )
+
+    monkeypatch.setattr(
+        process_module, "_start_process_with_readers", fake_start_process_with_readers
+    )
+
+
 # ---------------------------------------------------------------------------
 # _write_stream
 # ---------------------------------------------------------------------------
@@ -625,12 +689,6 @@ class TestRunSubprocess:
         cleanup_calls: list[tuple[list[str] | None, Path | None, dict[str, str] | None]] = []
         terminated: list[object] = []
 
-        class InterruptingProcess:
-            returncode = None
-
-            def wait(self) -> int:
-                raise KeyboardInterrupt
-
         def tracking_cleanup(
             cmd: list[str] | None,
             *,
@@ -642,33 +700,12 @@ class TestRunSubprocess:
         def tracking_terminate(proc: subprocess.Popen[bytes]) -> None:
             terminated.append(proc)
 
-        def fake_start_process_with_readers(
-            cmd: list[str],
-            *,
-            cwd: Path | None,
-            env: dict[str, str] | None,
-            capture_output: bool,
-            stdout_callback: object,
-            stderr_callback: object,
-            isolate_process_group: bool,
-            stdin_text: str | None,
-        ) -> tuple[
-            subprocess.Popen[bytes],
-            list[threading.Thread],
-            queue.Queue[tuple[str, bytes | None]],
-            threading.Thread | None,
-        ]:
-            return (
-                cast(subprocess.Popen[bytes], InterruptingProcess()),
-                [],
-                queue.Queue(),
-                None,
-            )
-
         monkeypatch.setattr(process_module, "_run_cleanup_command", tracking_cleanup)
         monkeypatch.setattr(process_module, "_terminate_process", tracking_terminate)
-        monkeypatch.setattr(
-            process_module, "_start_process_with_readers", fake_start_process_with_readers
+        _patch_start_process(
+            monkeypatch,
+            process_module,
+            process=cast(subprocess.Popen[bytes], _FakeProcess(interrupt_on_wait=True)),
         )
 
         cleanup_cmd = ["echo", "cleanup"]
@@ -1284,12 +1321,13 @@ class TestRunSubprocessBaseExceptionWithCapture:
     """Exercise _drain_process_streams' except BaseException path."""
 
     def test_interrupt_cleanup_cmd_with_capture_output(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, default_sigint: None
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         """BaseException raised while draining captured streams still runs cleanup."""
         import agm.core.process as process_module
 
         cleanup_calls: list[tuple[list[str] | None, Path | None, dict[str, str] | None]] = []
+        terminated: list[object] = []
 
         def tracking_cleanup(
             cmd: list[str] | None,
@@ -1299,52 +1337,61 @@ class TestRunSubprocessBaseExceptionWithCapture:
         ) -> None:
             cleanup_calls.append((cmd, cwd, env))
 
+        def tracking_terminate(proc: subprocess.Popen[bytes]) -> None:
+            terminated.append(proc)
+
         monkeypatch.setattr(process_module, "_run_cleanup_command", tracking_cleanup)
+        monkeypatch.setattr(process_module, "_terminate_process", tracking_terminate)
+        _patch_start_process(
+            monkeypatch,
+            process_module,
+            process=cast(subprocess.Popen[bytes], _FakeProcess()),
+            readers=[_JoinedReader()],
+            stream_queue=_InterruptingQueue(),
+        )
 
         cleanup_cmd = ["echo", "cleanup"]
 
-        ready_file = tmp_path / "ready"
-        interrupter = interrupt_self_when_ready(ready_file)
-
         with pytest.raises(KeyboardInterrupt):
             run_subprocess(
-                ready_then_sleep_command(ready_file),
+                ["sleeper"],
+                cwd=tmp_path,
                 capture_output=True,
                 interrupt_cleanup_cmd=cleanup_cmd,
             )
 
-        interrupter.join(timeout=10)
-
+        assert terminated, "process must be terminated on KeyboardInterrupt"
         assert cleanup_calls, "cleanup command must be invoked on KeyboardInterrupt"
         called_cmd, _, _ = cleanup_calls[0]
         assert called_cmd == cleanup_cmd
 
     def test_interrupt_with_isolate_process_group_and_capture(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, default_sigint: None
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """BaseException path in _drain_process_streams calls _kill_process_group when isolated."""
         import agm.core.process as process_module
 
         killed: list[bool] = []
-        original_kill = process_module._kill_process_group
 
         def tracking_kill(proc: subprocess.Popen[bytes]) -> None:
             killed.append(True)
-            original_kill(proc)
 
         monkeypatch.setattr(process_module, "_kill_process_group", tracking_kill)
-
-        ready_file = tmp_path / "ready"
-        interrupter = interrupt_self_when_ready(ready_file)
+        _patch_start_process(
+            monkeypatch,
+            process_module,
+            process=cast(subprocess.Popen[bytes], _FakeProcess()),
+            readers=[_JoinedReader()],
+            stream_queue=_InterruptingQueue(),
+        )
 
         with pytest.raises(KeyboardInterrupt):
             run_subprocess(
-                ready_then_sleep_command(ready_file),
+                ["sleeper"],
                 capture_output=True,
                 isolate_process_group=True,
             )
 
-        interrupter.join(timeout=10)
         assert killed, "_kill_process_group must be called"
 
 
@@ -1352,30 +1399,26 @@ class TestRunSubprocessBaseExceptionIsolatedNoCapture:
     """Exercise run_subprocess no-readers BaseException path with isolate_process_group."""
 
     def test_interrupt_with_isolated_process_group_no_capture(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, default_sigint: None
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """BaseException in no-capture mode with isolate_process_group calls _kill_process_group."""
         import agm.core.process as process_module
 
         killed: list[bool] = []
 
-        original_kill = process_module._kill_process_group
-
         def tracking_kill(proc: subprocess.Popen[bytes]) -> None:
             killed.append(True)
-            original_kill(proc)
 
         monkeypatch.setattr(process_module, "_kill_process_group", tracking_kill)
-
-        ready_file = tmp_path / "ready"
-        interrupter = interrupt_self_when_ready(ready_file)
+        _patch_start_process(
+            monkeypatch,
+            process_module,
+            process=cast(subprocess.Popen[bytes], _FakeProcess(interrupt_on_wait=True)),
+        )
 
         with pytest.raises(KeyboardInterrupt):
-            run_subprocess(
-                ready_then_sleep_command(ready_file), isolate_process_group=True
-            )
+            run_subprocess(["sleeper"], isolate_process_group=True)
 
-        interrupter.join(timeout=10)
         assert killed, "_kill_process_group must be called with isolate_process_group"
 
 

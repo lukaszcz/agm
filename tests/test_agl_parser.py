@@ -54,8 +54,8 @@ from agm.agl.syntax import (
     DictLit,
     Do,
     EnumDef,
+    ExceptionDef,
     FieldAccess,
-    FieldDef,
     FuncDef,
     If,
     IfBranch,
@@ -73,6 +73,7 @@ from agm.agl.syntax import (
     NullLit,
     Param,
     ParamDecl,
+    ParamKind,
     PatternField,
     Program,
     Raise,
@@ -468,7 +469,7 @@ class TestDeclarations:
         assert isinstance(rec, RecordDef)
         assert rec.name == "Issue"
         assert len(rec.fields) == 2
-        assert isinstance(rec.fields[0], FieldDef)
+        assert isinstance(rec.fields[0], Param)
         assert rec.fields[0].name == "title"
         assert isinstance(rec.fields[0].type_expr, TextT)
 
@@ -525,7 +526,7 @@ class TestDeclarations:
         ok = en.variants[0]
         assert ok.name == "Ok"
         assert len(ok.fields) == 1
-        assert isinstance(ok.fields[0], FieldDef)
+        assert isinstance(ok.fields[0], Param)
 
     def test_type_alias(self) -> None:
         ta = first(parse("type Name = text"))
@@ -570,6 +571,61 @@ class TestDeclarations:
         cfg = first(parse('config runner = "claude"'))
         assert isinstance(cfg, ConfigPragma)
         assert cfg.value == "claude"
+
+
+# ---------------------------------------------------------------------------
+# ParamKind — per-context default kind assignment
+# ---------------------------------------------------------------------------
+
+
+class TestParamKind:
+    """Transformer assigns the correct default ParamKind to each Param."""
+
+    def test_def_param_is_standard(self) -> None:
+        fd = first(parse("def f(x: int) -> int = x"))
+        assert isinstance(fd, FuncDef)
+        assert fd.params[0].kind == ParamKind.STANDARD
+
+    def test_lambda_param_is_standard(self) -> None:
+        prog = parse("let g = fn(x: int) => x")
+        ld = first(prog)
+        assert isinstance(ld, LetDecl)
+        lam = ld.value
+        assert isinstance(lam, Lambda)
+        assert lam.params[0].kind == ParamKind.STANDARD
+
+    def test_record_fields_are_named_only(self) -> None:
+        rec = first(parse("record Point(x: int, y: int)"))
+        assert isinstance(rec, RecordDef)
+        assert all(f.kind == ParamKind.NAMED_ONLY for f in rec.fields)
+
+    def test_record_indent_fields_are_named_only(self) -> None:
+        rec = first(parse("record Issue\n  title: text\n  severity: int"))
+        assert isinstance(rec, RecordDef)
+        assert all(f.kind == ParamKind.NAMED_ONLY for f in rec.fields)
+
+    def test_exception_fields_are_named_only(self) -> None:
+        exc = first(parse("exception MyErr(code: int, msg: text)"))
+        assert isinstance(exc, ExceptionDef)
+        assert all(f.kind == ParamKind.NAMED_ONLY for f in exc.fields)
+
+    def test_single_field_enum_variant_is_standard(self) -> None:
+        en = first(parse("enum Opt\n  | None\n  | Some(value: int)"))
+        assert isinstance(en, EnumDef)
+        some = en.variants[1]
+        assert len(some.fields) == 1
+        assert some.fields[0].kind == ParamKind.STANDARD
+
+    def test_multi_field_enum_variant_is_named_only(self) -> None:
+        en = first(parse("enum Result\n  | Ok(value: int, tag: text)\n  | Err(msg: text)"))
+        assert isinstance(en, EnumDef)
+        ok = en.variants[0]
+        assert len(ok.fields) == 2
+        assert all(f.kind == ParamKind.NAMED_ONLY for f in ok.fields)
+        # Err has one field → STANDARD
+        err = en.variants[1]
+        assert len(err.fields) == 1
+        assert err.fields[0].kind == ParamKind.STANDARD
 
 
 # ---------------------------------------------------------------------------

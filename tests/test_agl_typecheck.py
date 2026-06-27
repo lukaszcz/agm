@@ -58,6 +58,7 @@ from agm.agl.syntax.nodes import (
     NamedArg,
     Param,
     ParamDecl,
+    ParamKind,
     Program,
     Raise,
     StringLit,
@@ -3292,6 +3293,7 @@ class TestIndexTypechecking:
                 span=sp,
                 node_id=_mk_node_id(),
             ),
+            kind=ParamKind.STANDARD,
             default=None,
             span=sp,
             node_id=_mk_node_id(),
@@ -3534,7 +3536,10 @@ class TestDefensiveGuards:
         p_nid = _mk_node_id()
         ret_t = IntT(span=sp, node_id=_mk_node_id())
         param_t = IntT(span=sp, node_id=_mk_node_id())
-        param = Param(name="x", type_expr=param_t, default=None, span=sp, node_id=p_nid)
+        param = Param(
+            name="x", type_expr=param_t, kind=ParamKind.STANDARD, default=None,
+            span=sp, node_id=p_nid
+        )
         body_expr = IntLit(value=1, span=sp, node_id=_mk_node_id())
         fd_nid = _mk_node_id()
         fd = FuncDef(

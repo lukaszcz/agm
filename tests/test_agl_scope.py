@@ -45,6 +45,7 @@ from agm.agl.syntax.nodes import (
     LetDecl,
     NameTarget,
     Param,
+    ParamKind,
     PatternField,
     Program,
     RecordDef,
@@ -370,7 +371,10 @@ class TestAssignErrors:
 
         sp = _sp()
         int_t = IntTNode(span=sp, node_id=_nid())
-        param = Param(name="n", type_expr=int_t, default=None, span=sp, node_id=_nid())
+        param = Param(
+            name="n", type_expr=int_t, kind=ParamKind.STANDARD, default=None,
+            span=sp, node_id=_nid()
+        )
         assign_n = _make_assign("n", _make_intlit(2))
         funcdef = FuncDef(
             name="f",
@@ -1733,7 +1737,10 @@ class TestDirectASTConstruction:
         """FuncDef body sees its own param; param is not visible outside."""
         sp = _sp()
         int_t = IntT(span=sp, node_id=_nid())
-        param = Param(name="x", type_expr=int_t, default=None, span=sp, node_id=_nid())
+        param = Param(
+            name="x", type_expr=int_t, kind=ParamKind.STANDARD, default=None,
+            span=sp, node_id=_nid()
+        )
         funcdef = FuncDef(
             name="g",
             params=(param,),
@@ -1748,7 +1755,10 @@ class TestDirectASTConstruction:
     def test_funcdef_param_not_visible_outside_body(self) -> None:
         sp = _sp()
         int_t = IntT(span=sp, node_id=_nid())
-        param = Param(name="p", type_expr=int_t, default=None, span=sp, node_id=_nid())
+        param = Param(
+            name="p", type_expr=int_t, kind=ParamKind.STANDARD, default=None,
+            span=sp, node_id=_nid()
+        )
         funcdef = FuncDef(
             name="g",
             params=(param,),
@@ -1766,7 +1776,10 @@ class TestDirectASTConstruction:
     def test_lambda_resolved(self) -> None:
         sp = _sp()
         int_t = IntT(span=sp, node_id=_nid())
-        param = Param(name="x", type_expr=int_t, default=None, span=sp, node_id=_nid())
+        param = Param(
+            name="x", type_expr=int_t, kind=ParamKind.STANDARD, default=None,
+            span=sp, node_id=_nid()
+        )
         lam = Lambda(
             params=(param,),
             return_type=None,
@@ -1782,7 +1795,10 @@ class TestDirectASTConstruction:
         """A lambda body that references its own let-binding name fails."""
         sp = _sp()
         int_t = IntT(span=sp, node_id=_nid())
-        param = Param(name="x", type_expr=int_t, default=None, span=sp, node_id=_nid())
+        param = Param(
+            name="x", type_expr=int_t, kind=ParamKind.STANDARD, default=None,
+            span=sp, node_id=_nid()
+        )
         lam = Lambda(
             params=(param,),
             return_type=None,
@@ -1970,8 +1986,14 @@ class TestLambdaDuplicateParam:
         from agm.agl.syntax.types import IntT as IntTNode
 
         int_t = IntTNode(span=sp, node_id=_nid())
-        p1 = Param(name="x", type_expr=int_t, default=None, span=sp, node_id=_nid())
-        p2 = Param(name="x", type_expr=int_t, default=None, span=_sp(2), node_id=_nid())
+        p1 = Param(
+            name="x", type_expr=int_t, kind=ParamKind.STANDARD, default=None,
+            span=sp, node_id=_nid()
+        )
+        p2 = Param(
+            name="x", type_expr=int_t, kind=ParamKind.STANDARD, default=None,
+            span=_sp(2), node_id=_nid()
+        )
         lam = Lambda(
             params=(p1, p2),
             return_type=None,
@@ -1992,12 +2014,19 @@ class TestLambdaDuplicateParam:
 def _make_record(
     name: str, *, type_params: tuple[str, ...] = (), line: int = 1
 ) -> RecordDef:
-    from agm.agl.syntax.nodes import FieldDef
+    from agm.agl.syntax.nodes import Param, ParamKind
     from agm.agl.syntax.types import IntT as IntTNode
 
     sp = _sp(line)
     field_t = IntTNode(span=sp, node_id=_nid())
-    fd = FieldDef(name="value", type_expr=field_t, span=sp, node_id=_nid())
+    fd = Param(
+        name="value",
+        type_expr=field_t,
+        kind=ParamKind.NAMED_ONLY,
+        default=None,
+        span=sp,
+        node_id=_nid(),
+    )
     return RecordDef(
         name=name, fields=(fd,), type_params=type_params, span=sp, node_id=_nid()
     )

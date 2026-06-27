@@ -33,7 +33,7 @@ from agm.agl.semantics.types import (
 from agm.agl.syntax.nodes import (
     EnumDef,
     ExceptionDef,
-    FieldDef,
+    Param,
     Program,
     RecordDef,
     TypeAlias,
@@ -366,7 +366,7 @@ class _TypeBuilder:
             )
 
     def _resolve_field_type(
-        self, fd: FieldDef, owner: str, type_vars: frozenset[str] = frozenset()
+        self, fd: Param, owner: str, type_vars: frozenset[str] = frozenset()
     ) -> Type:
         """Resolve a field's TypeExpr to a semantic Type."""
         self._ensure_referenced_type_built(fd.type_expr)

@@ -24,6 +24,7 @@ because it covers the full span of multi-token productions.
 
 from __future__ import annotations
 
+import dataclasses
 import decimal
 from itertools import count
 from typing import TypeAlias, cast
@@ -301,27 +302,39 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
-    def record_indent_body(self, meta: Meta, args: _Args) -> tuple[syntax.FieldDef, ...]:
+    def record_indent_body(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
         # Grammar: _INDENT field_def (_NEWLINE field_def)* _NEWLINE? _DEDENT
-        return tuple(a for a in args if isinstance(a, syntax.FieldDef))
+        # Records are always named-only by default.
+        return _stamp_field_kinds(
+            tuple(a for a in args if isinstance(a, syntax.Param)),
+            syntax.ParamKind.NAMED_ONLY,
+        )
 
-    def record_paren_body(self, meta: Meta, args: _Args) -> tuple[syntax.FieldDef, ...]:
+    def record_paren_body(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
         # Grammar: LPAR field_list? RPAR
+        # Records are always named-only by default.
         for a in args:
             if _is_field_tuple(a):
-                return cast(tuple[syntax.FieldDef, ...], a)
+                return _stamp_field_kinds(
+                    cast(tuple[syntax.Param, ...], a), syntax.ParamKind.NAMED_ONLY
+                )
         return ()
 
     record_inline_body = record_paren_body
 
-    def field_def(self, meta: Meta, args: _Args) -> syntax.FieldDef:
+    def field_def(self, meta: Meta, args: _Args) -> syntax.Param:
         # Grammar: field_name COLON type_expr
+        # Build with a provisional NAMED_ONLY kind; the owner builder
+        # (record_indent_body, record_paren_body, variant_payload, exception bodies)
+        # re-stamps the kind via _stamp_field_kinds().
         name_tok = args[0]
         assert isinstance(name_tok, Token)
         type_expr = _find_type_expr(args[1:])
-        return syntax.FieldDef(
+        return syntax.Param(
             name=str(name_tok),
             type_expr=type_expr,
+            kind=syntax.ParamKind.NAMED_ONLY,
+            default=None,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
@@ -359,10 +372,10 @@ class AstBuilder(Transformer):
             None,
         )
         assert name_tok is not None, "variant_def: no name token"
-        fields: tuple[syntax.FieldDef, ...] = ()
+        fields: tuple[syntax.Param, ...] = ()
         for a in args:
-            if isinstance(a, tuple) and (len(a) == 0 or isinstance(a[0], syntax.FieldDef)):
-                fields = cast(tuple[syntax.FieldDef, ...], a)
+            if isinstance(a, tuple) and (len(a) == 0 or isinstance(a[0], syntax.Param)):
+                fields = cast(tuple[syntax.Param, ...], a)
                 break
         return syntax.VariantDef(
             name=str(name_tok),
@@ -371,16 +384,23 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
-    def variant_payload(self, meta: Meta, args: _Args) -> tuple[syntax.FieldDef, ...]:
+    def variant_payload(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
         # Grammar: LPAR field_list? RPAR
+        # Apply the single-field → STANDARD, multi-field → NAMED_ONLY enum rule.
         for a in args:
             if isinstance(a, tuple):
-                return cast(tuple[syntax.FieldDef, ...], a)
+                raw = cast(tuple[syntax.Param, ...], a)
+                kind = (
+                    syntax.ParamKind.STANDARD
+                    if len(raw) == 1
+                    else syntax.ParamKind.NAMED_ONLY
+                )
+                return _stamp_field_kinds(raw, kind)
         return ()
 
-    def field_list(self, meta: Meta, args: _Args) -> tuple[syntax.FieldDef, ...]:
+    def field_list(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
         # Grammar: field_inline (COMMA field_inline)* COMMA?
-        return tuple(a for a in args if isinstance(a, syntax.FieldDef))
+        return tuple(a for a in args if isinstance(a, syntax.Param))
 
     # Grammar: field_name COLON type_expr — identical shape to ``field_def``.
     field_inline = field_def
@@ -498,6 +518,7 @@ class AstBuilder(Transformer):
         return syntax.Param(
             name=str(name_tok),
             type_expr=type_expr,
+            kind=syntax.ParamKind.STANDARD,
             default=default,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
@@ -1944,15 +1965,26 @@ def _find_name_token(args: _Args) -> Token:
 
 def _is_field_tuple(a: object) -> bool:
     return isinstance(a, tuple) and (
-        len(a) == 0 or isinstance(a[0], syntax.FieldDef)
+        len(a) == 0 or isinstance(a[0], syntax.Param)
     )
 
 
-def _find_field_tuple(args: _Args) -> tuple[syntax.FieldDef, ...]:
+def _find_field_tuple(args: _Args) -> tuple[syntax.Param, ...]:
     result = next((a for a in args if _is_field_tuple(a)), None)
     if result is None:  # pragma: no cover
         raise AssertionError(f"_find_field_tuple: no field tuple found in {args!r}")
-    return cast(tuple[syntax.FieldDef, ...], result)
+    return cast(tuple[syntax.Param, ...], result)
+
+
+def _stamp_field_kinds(
+    fields: tuple[syntax.Param, ...], kind: syntax.ParamKind
+) -> tuple[syntax.Param, ...]:
+    """Return *fields* with every param's kind replaced by *kind*.
+
+    Uses ``dataclasses.replace`` to allocate new frozen nodes while preserving
+    the original ``node_id`` and ``span`` (only ``kind`` is overridden).
+    """
+    return tuple(dataclasses.replace(p, kind=kind) for p in fields)
 
 
 def _is_variant_tuple(a: object) -> bool:

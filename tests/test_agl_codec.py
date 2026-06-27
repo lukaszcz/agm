@@ -276,15 +276,22 @@ def _text_ty() -> tast.TextT:
     return tast.TextT(span=_sp(), node_id=_nid())
 
 
-def _field_def(name: str, type_expr: tast.TypeExpr) -> ast.FieldDef:
-    return ast.FieldDef(name=name, type_expr=type_expr, span=_sp(), node_id=_nid())
+def _field_def(name: str, type_expr: tast.TypeExpr) -> ast.Param:
+    return ast.Param(
+        name=name,
+        type_expr=type_expr,
+        kind=ast.ParamKind.NAMED_ONLY,
+        default=None,
+        span=_sp(),
+        node_id=_nid(),
+    )
 
 
-def _record_def(name: str, *fields: ast.FieldDef) -> ast.RecordDef:
+def _record_def(name: str, *fields: ast.Param) -> ast.RecordDef:
     return ast.RecordDef(name=name, fields=tuple(fields), span=_sp(), node_id=_nid())
 
 
-def _variant_def(name: str, *fields: ast.FieldDef) -> ast.VariantDef:
+def _variant_def(name: str, *fields: ast.Param) -> ast.VariantDef:
     return ast.VariantDef(name=name, fields=tuple(fields), span=_sp(), node_id=_nid())
 
 

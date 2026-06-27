@@ -1164,7 +1164,7 @@ class TestTasksDirRelativePath:
 
 
 # ---------------------------------------------------------------------------
-# commands/loop/common.py – line 126: validate_command error when not in PATH
+# commands/loop/common.py – validate_command error when not in PATH
 # ---------------------------------------------------------------------------
 
 
@@ -1535,7 +1535,7 @@ class TestSelectorResultAdditionalEdgeCases:
 
 
 # ---------------------------------------------------------------------------
-# commands/loop/step.py – line 235: print_dry_run with bootstrap_prompt
+# commands/loop/step.py – print_dry_run with bootstrap_prompt
 # ---------------------------------------------------------------------------
 
 
@@ -1575,7 +1575,7 @@ class TestRunCommandStderrCallback:
 
 
 # ---------------------------------------------------------------------------
-# commands/loop/common.py – line 101: resolved_timeout when args.timeout is not None
+# commands/loop/common.py – resolved_timeout when args.timeout is not None
 # ---------------------------------------------------------------------------
 
 
@@ -1614,7 +1614,7 @@ class TestResolvedTimeoutFromArgs:
 
 
 # ---------------------------------------------------------------------------
-# commands/loop/common.py – line 126: tasks_dir with relative path
+# commands/loop/common.py – tasks_dir with relative path
 # ---------------------------------------------------------------------------
 
 

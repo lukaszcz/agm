@@ -1562,7 +1562,7 @@ def test_ir_ask_request_non_text_prompt() -> None:
 
 
 def test_lower_on_parse_error_abort_gives_one_attempt() -> None:
-    """_extract_max_attempts: Abort policy → 1 attempt (lowerer line 1640)."""
+    """_extract_max_attempts: Abort policy → 1 attempt."""
     source = """\
 agent a
 let n: int = ask("?", agent: a, on_parse_error: Abort)
@@ -1729,7 +1729,7 @@ target
 
 
 def test_ir_ask_no_errors_when_failed_covers_else_branch() -> None:
-    """IrAsk retry loop: parse fails with no errors/error_msg → last_errors=() (line 1056)."""
+    """IrAsk retry loop: parse fails with no errors/error_msg → last_errors=()."""
     # Build a contract with text codec — but trick it: use json schema so parse
     # can fail with neither errors nor error_msg. The simplest: use a valid
     # json schema but make parse_agent_output return ok=False with empty errors and msg.
@@ -1938,7 +1938,7 @@ def _extract_max_attempts_for_test(
 
 
 def test_lower_extract_max_attempts_field_access_retry() -> None:
-    """_extract_max_attempts: FieldAccess callee → callee.field = 'Retry' (lines 1628-1629)."""
+    """_extract_max_attempts: FieldAccess callee → callee.field = 'Retry'."""
     from agm.agl.syntax.nodes import Call, FieldAccess, IntLit, NamedArg, VarRef
 
     span = _make_span()
@@ -1999,7 +1999,7 @@ def test_lower_extract_max_attempts_unknown_callee() -> None:
 
 
 def test_lower_extract_max_attempts_field_access_non_retry() -> None:
-    """_extract_max_attempts: FieldAccess callee with non-Retry field → 1 attempt (1632->1640)."""
+    """_extract_max_attempts: FieldAccess callee with non-Retry field → 1 attempt."""
     from agm.agl.syntax.nodes import Call, FieldAccess, NamedArg, VarRef
 
     span = _make_span()

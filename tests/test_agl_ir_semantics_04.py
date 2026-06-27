@@ -1017,16 +1017,16 @@ def test_validate_check_enum_variant_skips_when_nominal_not_in_table() -> None:
     We check it via deep=True but with no descriptor in the table — deep checks
     the nominal first (and raises), but if we test _check_enum_variant in isolation
     we can call it directly.  Instead we rely on the IrMakeConstructor path to
-    exercise line 177: variant=not-None, nominal not in table, deep=True.
+    exercise the absent-nominal early return: variant=not-None, nominal not in table, deep=True.
     The _check_nominal_in_table call raises first; but _check_enum_variant is called
     after that in IrMakeConstructor when variant is not None.  So we test via
     IrMakeConstructor with variant=None to take the line-403 path (skip variant check)
     and IrMakeConstructor with variant='X' + nominal absent.
-    The absent-nominal early-return in _check_enum_variant (line 177) is reached:
+    The absent-nominal early-return in _check_enum_variant is reached:
     IrMakeConstructor deep with nominal absent AND variant present triggers both
     _check_nominal_in_table (which raises) and then is NOT reached for _check_enum_variant.
-    To reach line 177 purely, we need to call validate when variant is 'X' but table
-    has the nominal — with a non-ENUM kind.
+    To reach the absent-nominal early-return purely, we need to call validate
+    when variant is 'X' but the table has the nominal — with a non-ENUM kind.
     """
     from agm.agl.ir.ids import Location, SourceId
     from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
@@ -1035,7 +1035,7 @@ def test_validate_check_enum_variant_skips_when_nominal_not_in_table() -> None:
     sid = SourceId(0)
     loc = Location(source_id=sid, start_offset=0, end_offset=1, start_line=1, start_col=0)
     nominal_id = NominalId(ENTRY_ID, "Pt")
-    # Register nominal as RECORD (kind != ENUM) — variant check is skipped (line 179)
+    # Register nominal as RECORD (kind != ENUM) — variant check is skipped
     desc = NominalDescriptor(
         nominal=nominal_id,
         display_name="Pt",
@@ -1058,5 +1058,5 @@ def test_validate_check_enum_variant_skips_when_nominal_not_in_table() -> None:
         sources={sid: SourceFile(display_name="<test>", normalized_text=" ")},
     )
     # deep=True: _check_nominal_in_table passes (nominal is registered),
-    # _check_enum_variant is called but returns early at line 179 (kind != ENUM).
+    # _check_enum_variant is called but returns early (kind != ENUM).
     validate_ir(prog, deep=True)  # must not raise

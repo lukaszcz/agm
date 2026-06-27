@@ -282,13 +282,13 @@ def test_t10_golden_lowering() -> None:
 
 
 # ---------------------------------------------------------------------------
-# T11: Defensive fallback — parse_agent_output returns empty failure (line 1334)
+# T11: Defensive fallback — parse_agent_output returns empty failure
 # ---------------------------------------------------------------------------
 
 
 def test_t11_exec_empty_parse_failure_raises_agent_parse_error() -> None:
     """IrInterpreter defensive fallback: if parse_agent_output returns ok=False
-    with neither errors nor error_msg, AgentParseError still raises (line 1334)."""
+    with neither errors nor error_msg, AgentParseError still raises."""
     import unittest.mock
 
     from agm.agl.eval.ir_interpreter import IrInterpreter

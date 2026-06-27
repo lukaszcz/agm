@@ -1883,7 +1883,7 @@ class TestM6cIrExec:
         )
 
     def test_ir_exec_non_text_command_renders_via_render_value(self) -> None:
-        """IrExec with a non-TextValue command renders via render_value (line 1178)."""
+        """IrExec with a non-TextValue command renders via render_value."""
         import unittest.mock
 
         from agm.core.process import ProcessCaptureResult
@@ -1910,7 +1910,7 @@ class TestM6cIrExec:
         assert result == {}  # no named bindings
 
     def test_ir_exec_retry_spawn_error_raises_exec_error(self) -> None:
-        """On retry, spawn_error in subsequent shell call raises ExecError (line 1275)."""
+        """On retry, spawn_error in subsequent shell call raises ExecError."""
         import unittest.mock
 
         from agm.agl.semantics.exceptions import AglRaise
@@ -2048,7 +2048,7 @@ class TestM6cIrExec:
         assert exc_info.value.span == command_loc
 
     def test_ir_exec_retry_timeout_raises_exec_error(self) -> None:
-        """On retry, timeout in subsequent shell call raises ExecError (lines 1288-1289)."""
+        """On retry, timeout in subsequent shell call raises ExecError."""
         import json
         import unittest.mock
 
@@ -2125,7 +2125,7 @@ class TestM6cIrExec:
         assert exc_info.value.exc.fields["timed_out"] == BoolValue(True)
 
     def test_ir_exec_retry_nonzero_exit_raises_exec_error(self) -> None:
-        """On retry, non-zero exit in subsequent shell call raises ExecError (line 1302)."""
+        """On retry, non-zero exit in subsequent shell call raises ExecError."""
         import json
         import unittest.mock
 
@@ -2200,7 +2200,7 @@ class TestM6cIrExec:
         assert exc_info.value.exc.display_name == "ExecError"
 
     def test_ir_exec_structured_parse_errors_path(self) -> None:
-        """IrExec JSON parse with structured errors populates last_errors (line 1323)."""
+        """IrExec JSON parse with structured errors populates last_errors."""
         import json
         import unittest.mock
 

@@ -1397,7 +1397,7 @@ class TestParentScopeSeam:
     def test_type_name_shadowed_by_param_resolves_as_field_access(self) -> None:
         """When a type name is shadowed by a function parameter, a field
         access on it resolves as an ordinary value field access (not qualified
-        constructor access).  Covers the 1046->1053 branch in _resolve_field_access."""
+        constructor access).  Covers the constructor-access branch in _resolve_field_access."""
         # 'Box' is a type name AND a parameter name inside f.
         # Inside f, Box.x is a regular field access on the parameter, not a
         # qualified constructor reference.
@@ -2110,7 +2110,7 @@ class TestAmbientAgentBindingEdgeCases:
 
 
 # ---------------------------------------------------------------------------
-# Lambda duplicate param (covers line 885)
+# Lambda duplicate param
 # ---------------------------------------------------------------------------
 
 

@@ -2053,7 +2053,7 @@ class TestRuntimeErrorPaths:
 
     def test_is_json_shaped_dict_with_non_str_key_is_false(self) -> None:
         """_is_json_shaped: a dict with non-str keys is not JSON-shaped (covers
-        the dict branch of _is_json_shaped, line 790).
+        the dict branch of _is_json_shaped).
         """
         from agm.agl.runtime.params import _is_json_shaped
 

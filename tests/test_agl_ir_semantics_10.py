@@ -493,7 +493,7 @@ def test_recursion_depth_limit() -> None:
 
 
 def test_case_wildcard_and_literal_patterns_in_function_body() -> None:
-    """_pattern_binding_ids covers WildcardPattern and LiteralPattern arms (lines 323-324).
+    """_pattern_binding_ids covers WildcardPattern and LiteralPattern arms.
 
     A function body with case branches using ``_`` (wildcard) and a literal
     exercises the WildcardPattern/LiteralPattern arm that calls `pass`.
@@ -516,10 +516,10 @@ def test_case_wildcard_and_literal_patterns_in_function_body() -> None:
 
 
 def test_bare_variant_pattern_in_function_body() -> None:
-    """_pattern_binding_ids covers VarPattern-as-bare-constructor branch (line 318->exit).
+    """_pattern_binding_ids covers VarPattern-as-bare-constructor branch.
 
     A bare name in a case pattern (e.g. ``| On => ...``) is a VarPattern whose
-    node_id appears in ``bare_variant_patterns``.  The ``if`` on line 318 is False
+    node_id appears in ``bare_variant_patterns``.  The bare-constructor branch is not taken
     so the node_id is NOT added to local_ids (correct: it is not a binder).
     """
     source = (

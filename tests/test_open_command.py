@@ -58,7 +58,7 @@ class TestValidatePaneCount:
     def test_re_raises_when_exit_code_is_not_one(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Cover line 35: raise when exc.code != 1."""
+        """Cover the re-raise when exc.code != 1."""
 
         def _raise_exit_2(cmd: list[str], pane_count: str | None) -> int:
             raise SystemExit(2)

@@ -31,8 +31,6 @@ from agm.core.process import (
     run_foreground,
     run_subprocess,
 )
-from tests._proc_helpers import interrupt_self_when_ready, ready_then_sleep_command
-
 # ---------------------------------------------------------------------------
 # _write_stream
 # ---------------------------------------------------------------------------
@@ -615,18 +613,23 @@ class TestRunSubprocess:
         assert popen_kwargs.get("start_new_session") is not True
 
     def test_interrupt_cleanup_cmd_is_run_on_keyboard_interrupt(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, default_sigint: None
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         """Verify that interrupt_cleanup_cmd is invoked when a BaseException is raised.
 
-        We monkeypatch _run_cleanup_command at the module level to track calls without
-        executing a real subprocess, and send SIGINT to the main process once the child
-        signals readiness — guaranteeing the interrupt lands inside run_subprocess'
-        BaseException path even when the machine is heavily loaded.
+        The process wait raises KeyboardInterrupt directly so this test covers the
+        cleanup path without relying on OS signal timing.
         """
         import agm.core.process as process_module
 
         cleanup_calls: list[tuple[list[str] | None, Path | None, dict[str, str] | None]] = []
+        terminated: list[object] = []
+
+        class InterruptingProcess:
+            returncode = None
+
+            def wait(self) -> int:
+                raise KeyboardInterrupt
 
         def tracking_cleanup(
             cmd: list[str] | None,
@@ -636,20 +639,44 @@ class TestRunSubprocess:
         ) -> None:
             cleanup_calls.append((cmd, cwd, env))
 
+        def tracking_terminate(proc: subprocess.Popen[bytes]) -> None:
+            terminated.append(proc)
+
+        def fake_start_process_with_readers(
+            cmd: list[str],
+            *,
+            cwd: Path | None,
+            env: dict[str, str] | None,
+            capture_output: bool,
+            stdout_callback: object,
+            stderr_callback: object,
+            isolate_process_group: bool,
+            stdin_text: str | None,
+        ) -> tuple[
+            subprocess.Popen[bytes],
+            list[threading.Thread],
+            queue.Queue[tuple[str, bytes | None]],
+            threading.Thread | None,
+        ]:
+            return (
+                cast(subprocess.Popen[bytes], InterruptingProcess()),
+                [],
+                queue.Queue(),
+                None,
+            )
+
         monkeypatch.setattr(process_module, "_run_cleanup_command", tracking_cleanup)
+        monkeypatch.setattr(process_module, "_terminate_process", tracking_terminate)
+        monkeypatch.setattr(
+            process_module, "_start_process_with_readers", fake_start_process_with_readers
+        )
 
         cleanup_cmd = ["echo", "cleanup"]
 
-        ready_file = tmp_path / "ready"
-        interrupter = interrupt_self_when_ready(ready_file)
-
         with pytest.raises(KeyboardInterrupt):
-            run_subprocess(
-                ready_then_sleep_command(ready_file), interrupt_cleanup_cmd=cleanup_cmd
-            )
+            run_subprocess(["sleeper"], cwd=tmp_path, interrupt_cleanup_cmd=cleanup_cmd)
 
-        interrupter.join(timeout=10)
-
+        assert terminated, "process must be terminated on KeyboardInterrupt"
         assert cleanup_calls, "cleanup command must be invoked on KeyboardInterrupt"
         called_cmd, _, _ = cleanup_calls[0]
         assert called_cmd == cleanup_cmd

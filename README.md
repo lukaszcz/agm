@@ -211,7 +211,7 @@ agm repl --confirm-agents       # confirm each agent call; params from config/de
 agl> let n = 21 * 2             # bindings persist across entries → "n : int = 42"
 ```
 
-See `agm help repl` and [docs/commands.md](docs/commands.md) for the full reference, and the
+See `agm help repl` and [docs/commands/index.md](docs/commands/index.md) for the full reference, and the
 [AgL language reference](docs/agl/reference/index.md) for the language.
 
 ### `agm review`

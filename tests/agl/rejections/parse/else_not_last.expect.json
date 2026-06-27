@@ -1,1 +1,1 @@
-{"diagnostic": {"message_contains": ["|"]}}
+{"diagnostic": {"message_contains": ["Unexpected"], "line": 4}}

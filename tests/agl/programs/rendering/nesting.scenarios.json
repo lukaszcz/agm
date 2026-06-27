@@ -1,4 +1,5 @@
 {
+  "note": "This program has no param declarations and no agent calls, so exactly one execution path exists. The single scenario exhaustively exercises native rendering of nested records, enums, lists, dicts, json fields, declaration-order normalization, and as-json opt-in.",
   "scenarios": [
     {
       "name": "full_rendering",

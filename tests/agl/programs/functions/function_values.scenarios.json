@@ -1,4 +1,5 @@
 {
+  "note": "This program has no param declarations and no agent calls, so exactly one execution path exists. The single scenario exhaustively exercises all function-value forms (named def bound to typed let, higher-order application, lambdas with explicit and inferred return types).",
   "scenarios": [
     {
       "name": "all_function_value_forms",

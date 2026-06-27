@@ -1,1 +1,1 @@
-{"diagnostic": {"message_contains": ["Node"]}}
+{"diagnostic": {"message_contains": ["recursive"], "line": 1}}

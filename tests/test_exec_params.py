@@ -56,15 +56,6 @@ class TestCheckParamCollisions:
         params = (_make_param("msg"), _make_param("count"), _make_param("verbose", BoolType()))
         assert check_param_collisions(params) == []
 
-    def test_exact_collision_with_max_iters(self) -> None:
-        from agm.cli_support.exec_params import check_param_collisions
-
-        # exact: --max-iters is reserved; param name max_iters normalizes to --max-iters
-        params = (_make_param("max_iters"),)
-        errors = check_param_collisions(params)
-        assert len(errors) == 1
-        assert "max_iters" in errors[0]
-
     def test_exact_collision_with_command(self) -> None:
         from agm.cli_support.exec_params import check_param_collisions
 
@@ -118,7 +109,7 @@ class TestCheckParamCollisions:
     def test_multiple_collisions_reported(self) -> None:
         from agm.cli_support.exec_params import check_param_collisions
 
-        params = (_make_param("runner"), _make_param("max_iters"))
+        params = (_make_param("runner"), _make_param("command"))
         errors = check_param_collisions(params)
         assert len(errors) == 2
 

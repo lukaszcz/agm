@@ -64,7 +64,6 @@ class TestReplArgsParsing:
         assert result.exit_code == 0
         args = recorded_runs[0]
         assert getattr(args, "strict_json") is None
-        assert getattr(args, "max_iters") is None
         assert getattr(args, "runner") is None
         assert getattr(args, "confirm_agents") is False
         assert getattr(args, "quiet") is False
@@ -89,12 +88,6 @@ class TestReplArgsParsing:
     ) -> None:
         assert invoke(runner, ["repl", "--no-strict-json"]).exit_code == 0
         assert getattr(recorded_runs[0], "strict_json") is False
-
-    def test_max_iters_flag(
-        self, runner: CliRunner, recorded_runs: list[object]
-    ) -> None:
-        assert invoke(runner, ["repl", "--max-iters", "9"]).exit_code == 0
-        assert getattr(recorded_runs[0], "max_iters") == 9
 
     def test_runner_flag(
         self, runner: CliRunner, recorded_runs: list[object]
@@ -193,7 +186,6 @@ def _isolated_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 def _args(
     *,
     strict_json: bool | None = None,
-    max_iters: int | None = None,
     runner: str | None = "echo agent",
     confirm_agents: bool = False,
     quiet: bool = False,
@@ -203,7 +195,6 @@ def _args(
     """Build ``ReplArgs`` with sensible defaults, overriding named fields."""
     return ReplArgs(
         strict_json=strict_json,
-        max_iters=max_iters,
         runner=runner,
         confirm_agents=confirm_agents,
         quiet=quiet,
@@ -222,7 +213,6 @@ class TestReplRun:
         home = _isolated_home(monkeypatch, tmp_path)
         args = ReplArgs(
             strict_json=None,
-            max_iters=None,
             runner="echo agent",
             confirm_agents=False,
             quiet=False,
@@ -252,7 +242,6 @@ class TestReplRun:
         monkeypatch.setattr(dry_run, "enabled", lambda: True)
         args = ReplArgs(
             strict_json=None,
-            max_iters=None,
             runner="echo agent",
             confirm_agents=False,
             quiet=False,
@@ -271,7 +260,6 @@ class TestReplRun:
         _isolated_home(monkeypatch, tmp_path)
         args = ReplArgs(
             strict_json=None,
-            max_iters=None,
             runner="echo agent",
             confirm_agents=False,
             quiet=True,
@@ -290,7 +278,6 @@ class TestReplRun:
         _isolated_home(monkeypatch, tmp_path)
         args = ReplArgs(
             strict_json=None,
-            max_iters=None,
             runner='broken "quote',  # unbalanced quote → split_command raises
             confirm_agents=False,
             quiet=False,
@@ -316,7 +303,6 @@ class TestReplRun:
         monkeypatch.setattr(repl_command, "load_exec_config", boom)
         args = ReplArgs(
             strict_json=None,
-            max_iters=None,
             runner=None,
             confirm_agents=False,
             quiet=False,

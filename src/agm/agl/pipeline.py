@@ -295,8 +295,6 @@ class PipelineDriver:
 
     Constructor parameters
     ----------------------
-    default_loop_limit : int
-        Default iteration bound for ``do[N]`` loops (design §2.11).
     default_strict_json : bool
         When ``True`` the JSON codec defaults to strict parsing (only a bare
         JSON value with surrounding whitespace is accepted).  The default
@@ -310,26 +308,29 @@ class PipelineDriver:
         §4.12, §11.13).  ``None`` means no timeout (the shell command may run
         indefinitely).  This is the ``[exec] timeout`` config value, threaded
         in from the CLI (plan §10.3).
-    default_call_depth_limit : int
+    default_call_depth_limit : int or None
         Maximum call depth for recursive functions (design §D8).  Exceeding
-        this limit raises a ``RecursionError`` in the AgL program.  Default
-        is 256.
+        this limit raises a ``RecursionError`` in the AgL program.  ``None``
+        applies the canonical default (``IrInterpreter.DEFAULT_MAX_CALL_DEPTH``);
+        the ``max_call_depth`` config pragma feeds this value from source.
     """
 
     def __init__(
         self,
         *,
-        default_loop_limit: int = 5,
         default_strict_json: bool = False,
         default_agent: AgentFn | None = None,
         shell_exec_timeout: float | None = None,
-        default_call_depth_limit: int = 256,
+        default_call_depth_limit: int | None = None,
     ) -> None:
-        self._default_loop_limit = default_loop_limit
         self._default_strict_json = default_strict_json
         self._default_agent = default_agent
         self._shell_exec_timeout = shell_exec_timeout
-        self._default_call_depth_limit = default_call_depth_limit
+        self._default_call_depth_limit = (
+            default_call_depth_limit
+            if default_call_depth_limit is not None
+            else IrInterpreter.DEFAULT_MAX_CALL_DEPTH
+        )
         self._agents: dict[str, AgentFn] = {}
         # Extra codecs registered by the host (beyond the built-ins).
         self._extra_codecs: dict[str, "OutputCodec"] = {}
@@ -744,7 +745,6 @@ class PipelineDriver:
         interp = IrInterpreter(
             executable,
             registry=registry,
-            loop_limit=self._default_loop_limit,
             strict_json=self._default_strict_json,
             shell_exec_timeout=self._shell_exec_timeout,
             trace=trace,
@@ -1057,11 +1057,6 @@ class PipelineDriver:
             log_file=log_file,
             warnings=warnings,
         )
-
-    @property
-    def default_loop_limit(self) -> int:
-        """Default iteration bound for ``do[N]`` loops."""
-        return self._default_loop_limit
 
     @property
     def default_strict_json(self) -> bool:

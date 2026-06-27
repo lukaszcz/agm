@@ -1,0 +1,9 @@
+# Recursion that stays within the configured call-depth limit returns normally;
+# recursion that exceeds it raises RecursionError. The limit is host-configured
+# (the `max_call_depth` config pragma in source, or the runtime default).
+param n: int
+
+def countdown(x: int) -> int =
+  if x <= 0 => 0 else => countdown(x - 1)
+
+print(countdown(n))

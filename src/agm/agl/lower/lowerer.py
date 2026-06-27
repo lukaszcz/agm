@@ -946,11 +946,16 @@ class _Lowerer:
             # ----------------------------------------------------------
             # do…until loop → IrLoop (M3f-C)
             # ----------------------------------------------------------
-            case Do(limit=loop_limit, body=body_expr, condition=cond_expr, span=span):
+            case Do(limit=limit_expr, body=body_expr, condition=cond_expr, span=span):
                 condition_source = self._source_slice(cond_expr.span)
+                limit_ir = (
+                    self.lower_coerced(limit_expr, IntType())
+                    if limit_expr is not None
+                    else None
+                )
                 return IrLoop(
                     location=self._loc(span),
-                    limit=loop_limit,
+                    limit=limit_ir,
                     body=self.lower_expr(body_expr),
                     condition=self.lower_expr(cond_expr),
                     condition_source=condition_source,

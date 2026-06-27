@@ -188,7 +188,7 @@ searches the entry file's directory, the installed stdlib root (`~/.agm/stdlib`)
 
 ```bash
 agm exec workflow.agl
-agm exec --name Alice --max-iters 10 workflow.agl   # --<param> per declared param
+agm exec --name Alice workflow.agl   # --<param> per declared param
 agm exec -c 'print "hello"'       # run inline program text instead of a file
 agm exec --dry-run workflow.agl   # static check only — no agent calls
 ```

@@ -1,0 +1,14 @@
+{
+  "scenarios": [
+    {
+      "name": "runs_far_beyond_any_small_bound",
+      "params": {"target": 50},
+      "expect": {"stdout": "50\n"}
+    },
+    {
+      "name": "single_iteration",
+      "params": {"target": 1},
+      "expect": {"stdout": "1\n"}
+    }
+  ]
+}

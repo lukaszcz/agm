@@ -5,7 +5,6 @@ Usage::
     from agm.agl import PipelineDriver
 
     driver = PipelineDriver(
-        default_loop_limit=5,
         default_strict_json=False,
         default_agent=my_agent_fn,
     )

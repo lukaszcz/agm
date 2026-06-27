@@ -108,10 +108,10 @@ class TestParserPragmaValues:
 
     def test_pragma_int(self) -> None:
         """config KEY = N parses to ConfigPragma with int value."""
-        prog = parse_program("config max_iters = 10")
+        prog = parse_program("config max_call_depth = 10")
         stmt = prog.body.items[0]
         assert isinstance(stmt, ConfigPragma)
-        assert stmt.key == "max_iters"
+        assert stmt.key == "max_call_depth"
         assert stmt.value == 10
         assert isinstance(stmt.value, int)
         assert not isinstance(stmt.value, bool)
@@ -138,13 +138,13 @@ class TestParserPragmaValues:
         """Multiple pragmas are each parsed as separate ConfigPragma nodes."""
         prog = parse_program(
             "config log = true\n"
-            "config max_iters = 5\n"
+            "config max_call_depth = 5\n"
             'config runner = "local"\n'
         )
         assert len(prog.body.items) == 3
         assert all(isinstance(s, ConfigPragma) for s in prog.body.items)
         keys = [s.key for s in prog.body.items if isinstance(s, ConfigPragma)]
-        assert keys == ["log", "max_iters", "runner"]
+        assert keys == ["log", "max_call_depth", "runner"]
 
     def test_pragma_then_statement(self) -> None:
         """Pragmas followed by a non-pragma expression parse correctly."""
@@ -184,8 +184,8 @@ class TestScopeHeaderOnly:
 
     def test_pragma_only_program_ok(self) -> None:
         """A program consisting only of pragmas is accepted."""
-        r = parse_and_resolve("config log = true\nconfig max_iters = 3")
-        assert r.config_pragmas == {"log": True, "max_iters": 3}
+        r = parse_and_resolve("config log = true\nconfig max_call_depth = 3")
+        assert r.config_pragmas == {"log": True, "max_call_depth": 3}
 
     def test_pragma_after_let_rejected(self) -> None:
         """A pragma that follows a let statement is a scope error."""
@@ -259,24 +259,24 @@ class TestScopeValueKindValidation:
         assert "strict_json" in msg
         assert "bool" in msg
 
-    def test_max_iters_requires_positive_int(self) -> None:
-        """config max_iters requires a positive int (> 0)."""
-        err = reject_scope("config max_iters = 0")
+    def test_max_call_depth_requires_positive_int(self) -> None:
+        """config max_call_depth requires a positive int (> 0)."""
+        err = reject_scope("config max_call_depth = 0")
         _, msg = diag(err)
-        assert "max_iters" in msg
+        assert "max_call_depth" in msg
 
-    def test_max_iters_negative_rejected(self) -> None:
-        """config max_iters rejects a negative int."""
+    def test_max_call_depth_negative_rejected(self) -> None:
+        """config max_call_depth rejects a negative int."""
         # Negative ints cannot be parsed as a pragma_value (INT token is unsigned);
         # this will be a parse error rather than a scope error.
         with pytest.raises((AglSyntaxError, AglScopeError)):
-            parse_and_resolve("config max_iters = -1")
+            parse_and_resolve("config max_call_depth = -1")
 
-    def test_max_iters_bool_rejected(self) -> None:
-        """config max_iters rejects a bool (which is a subtype of int)."""
-        err = reject_scope("config max_iters = true")
+    def test_max_call_depth_bool_rejected(self) -> None:
+        """config max_call_depth rejects a bool (which is a subtype of int)."""
+        err = reject_scope("config max_call_depth = true")
         _, msg = diag(err)
-        assert "max_iters" in msg
+        assert "max_call_depth" in msg
 
     def test_runner_requires_nonempty_str(self) -> None:
         """config runner requires a non-empty string."""
@@ -335,10 +335,10 @@ class TestScopeValueKindValidation:
         r = parse_and_resolve("config strict_json = true")
         assert r.config_pragmas["strict_json"] is True
 
-    def test_max_iters_positive_accepted(self) -> None:
-        """config max_iters = 5 is accepted."""
-        r = parse_and_resolve("config max_iters = 5")
-        assert r.config_pragmas["max_iters"] == 5
+    def test_max_call_depth_positive_accepted(self) -> None:
+        """config max_call_depth = 5 is accepted."""
+        r = parse_and_resolve("config max_call_depth = 5")
+        assert r.config_pragmas["max_call_depth"] == 5
 
     def test_runner_nonempty_accepted(self) -> None:
         """config runner = "claude" is accepted."""
@@ -362,7 +362,7 @@ class TestScopeCollectedPragmas:
         r = parse_and_resolve(
             "config log = true\n"
             "config strict_json = false\n"
-            "config max_iters = 10\n"
+            "config max_call_depth = 10\n"
             'config runner = "local"\n'
             'config log_file = "trace.jsonl"\n'
             'config timeout = "30s"\n'
@@ -370,7 +370,7 @@ class TestScopeCollectedPragmas:
         assert r.config_pragmas == {
             "log": True,
             "strict_json": False,
-            "max_iters": 10,
+            "max_call_depth": 10,
             "runner": "local",
             "log_file": "trace.jsonl",
             "timeout": "30s",
@@ -392,9 +392,9 @@ class TestPreparedProgramExposure:
         """PreparedProgram.config_pragmas is populated from scope pass."""
         prepared = PipelineDriver.prepare(
             "config log = true\n"
-            "config max_iters = 3\n"
+            "config max_call_depth = 3\n"
         )
-        assert prepared.config_pragmas == {"log": True, "max_iters": 3}
+        assert prepared.config_pragmas == {"log": True, "max_call_depth": 3}
 
     def test_config_pragmas_empty_on_scope_failure(self) -> None:
         """config_pragmas is empty when the scope pass failed."""
@@ -436,7 +436,7 @@ class TestInterpreterNoOp:
         rt = PipelineDriver()
         result = rt.run(
             "config log = true\n"
-            "config max_iters = 5\n"
+            "config max_call_depth = 5\n"
             "print 1\n"
         )
         assert result.ok

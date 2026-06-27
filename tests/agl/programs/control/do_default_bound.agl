@@ -1,7 +1,0 @@
-# `do` without a bound uses the runtime default loop limit; it never means
-# unbounded.
-var n: int = 0
-do
-  n := n + 1
-until n >= 4
-print n

@@ -123,18 +123,6 @@ class TestExecArgsParsing:
         args = recorded_runs[0]
         assert getattr(args, "strict_json") is False
 
-    def test_exec_max_iters_flag(
-        self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
-    ) -> None:
-        agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\n")
-
-        result = invoke(runner, ["exec", "--max-iters", "10", str(agl_file)])
-        assert result.exit_code == 0
-
-        args = recorded_runs[0]
-        assert getattr(args, "max_iters") == 10
-
     def test_exec_runner_flag(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
@@ -248,7 +236,6 @@ class TestExecCommandInline:
             command=command,
             param_tokens=param_tokens or [],
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=True,
             log_file=None,
@@ -284,7 +271,6 @@ class TestExecCommandInline:
             command=None,
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=True,
             log_file=None,
@@ -350,7 +336,6 @@ class TestExecCommandBehavior:
             file=str(tmp_path / "nonexistent.agl"),
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=False,
             log_file=None,
@@ -368,7 +353,6 @@ class TestExecCommandBehavior:
             file=str(tmp_path / "nonexistent.agl"),
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=False,
             log_file=None,
@@ -391,7 +375,6 @@ class TestExecCommandBehavior:
             file=str(a_dir),
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=False,
             log_file=None,
@@ -416,7 +399,6 @@ class TestExecCommandBehavior:
             file=str(agl_file),
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=False,
             log_file=None,
@@ -437,7 +419,6 @@ class TestExecCommandBehavior:
             file=str(agl_file),
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=False,
             log_file=None,
@@ -457,7 +438,6 @@ def _exec_args(
         file=str(agl_file),
         param_tokens=param_tokens or [],
         strict_json=None,
-        max_iters=None,
         runner=None,
         no_log=False,
         log_file=log_file,
@@ -692,7 +672,6 @@ class TestExecCommandWarnings:
             command="let x = undefined_name\n",
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=False,
             log_file=None,
@@ -856,7 +835,6 @@ class TestExecCommandM1:
             file=str(agl_file),
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=False,
             log_file=None,
@@ -873,7 +851,6 @@ class TestExecCommandM1:
             file=str(agl_file),
             param_tokens=["--msg", "hello"],
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=False,
             log_file=None,
@@ -890,7 +867,6 @@ class TestExecCommandM1:
             file=str(agl_file),
             param_tokens=[],  # missing 'msg'
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=False,
             log_file=None,
@@ -903,7 +879,7 @@ class TestExecCommandM1:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("param max_iters: int = 1\nprint max_iters\n")
+        agl_file.write_text('param runner: text = "x"\nprint runner\n')
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args(agl_file))
@@ -954,7 +930,6 @@ class TestExecCommandM1:
             file=str(agl_file),
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=True,
             log_file=None,
@@ -990,7 +965,6 @@ class TestExecCommandM1:
             file=str(agl_file),
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=False,
             log_file=None,
@@ -1015,7 +989,6 @@ class TestExecCommandM1:
             file=str(agl_file),
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=False,
             log_file=None,
@@ -1033,7 +1006,6 @@ class TestExecCommandM1:
             file=str(agl_file),
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=False,
             log_file=None,
@@ -1056,18 +1028,18 @@ def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
         def __init__(
             self,
             *,
-            default_loop_limit: int = 5,
             default_strict_json: bool = False,
             default_agent: object | None = None,
             shell_exec_timeout: float | None = None,
+            default_call_depth_limit: int | None = None,
         ) -> None:
-            captured["default_loop_limit"] = default_loop_limit
             captured["default_strict_json"] = default_strict_json
             captured["shell_exec_timeout"] = shell_exec_timeout
+            captured["default_call_depth_limit"] = default_call_depth_limit
             super().__init__(
-                default_loop_limit=default_loop_limit,
                 default_strict_json=default_strict_json,
                 shell_exec_timeout=shell_exec_timeout,
+                default_call_depth_limit=default_call_depth_limit,
             )
 
     monkeypatch.setattr(exec_command, "PipelineDriver", RecordingRuntime)
@@ -1075,13 +1047,13 @@ def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
 
 
 class TestExecConfigWiring:
-    """F12: [exec] config (strict_json/default_loop_limit) flows into the runtime."""
+    """F12: [exec] config (strict_json) flows into the runtime."""
 
     def _config_home(self, tmp_path: Path) -> Path:
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
         (home / ".agm" / "config.toml").write_text(
-            "[exec]\nstrict_json = true\ndefault_loop_limit = 9\n"
+            "[exec]\nstrict_json = true\n"
         )
         return home
 
@@ -1107,14 +1079,15 @@ class TestExecConfigWiring:
             file=str(agl_file),
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=False,
             log_file=None,
         )
         assert exec_command.run(args) is None
         assert captured["default_strict_json"] is True
-        assert captured["default_loop_limit"] == 9
+        # No max_call_depth pragma: the command passes None so the driver
+        # applies its own canonical default.
+        assert captured["default_call_depth_limit"] is None
 
     def test_cli_strict_json_overrides_config(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1138,14 +1111,42 @@ class TestExecConfigWiring:
             file=str(agl_file),
             param_tokens=[],
             strict_json=False,  # CLI --no-strict-json overrides config true
-            max_iters=7,  # CLI --max-iters overrides config 9
             runner=None,
             no_log=False,
             log_file=None,
         )
         assert exec_command.run(args) is None
         assert captured["default_strict_json"] is False
-        assert captured["default_loop_limit"] == 7
+
+    def test_max_call_depth_pragma_flows_to_runtime(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``config max_call_depth = N`` in source flows to default_call_depth_limit."""
+        from agm.cli_support.args import ExecArgs
+        from agm.config.context import ConfigContext
+
+        home = self._config_home(tmp_path)
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("config max_call_depth = 42\nlet x = 1\nx\n")
+
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        captured = _spy_runtime(monkeypatch)
+
+        args = ExecArgs(
+            file=str(agl_file),
+            param_tokens=[],
+            strict_json=None,
+            runner=None,
+            no_log=False,
+            log_file=None,
+        )
+        assert exec_command.run(args) is None
+        assert captured["default_call_depth_limit"] == 42
 
     def test_timeout_config_flows_to_shell_exec_timeout(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1173,7 +1174,6 @@ class TestExecConfigWiring:
             file=str(agl_file),
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=False,
             log_file=None,
@@ -1207,7 +1207,6 @@ class TestExecConfigWiring:
                     file=str(agl_file),
                     param_tokens=[],
                     strict_json=None,
-                    max_iters=None,
                     runner=None,
                     no_log=True,
                     log_file=None,
@@ -1237,16 +1236,16 @@ def _exec_args_with_fallback_runtime(
         def __init__(
             self,
             *,
-            default_loop_limit: int = 5,
             default_strict_json: bool = False,
             default_agent: AgentFn | None = None,
             shell_exec_timeout: float | None = None,
+            default_call_depth_limit: int | None = None,
         ) -> None:
             super().__init__(
-                default_loop_limit=default_loop_limit,
                 default_strict_json=default_strict_json,
                 default_agent=stub_agent,
                 shell_exec_timeout=shell_exec_timeout,
+                default_call_depth_limit=default_call_depth_limit,
             )
 
     monkeypatch.setattr(exec_command, "PipelineDriver", FallbackRuntime)
@@ -1384,16 +1383,16 @@ class TestDryRunInventory:
             def __init__(
                 self,
                 *,
-                default_loop_limit: int = 5,
                 default_strict_json: bool = False,
                 default_agent: AgentFn | None = None,
                 shell_exec_timeout: float | None = None,
+                default_call_depth_limit: int | None = None,
             ) -> None:
                 super().__init__(
-                    default_loop_limit=default_loop_limit,
                     default_strict_json=default_strict_json,
                     default_agent=spy_agent,
                     shell_exec_timeout=shell_exec_timeout,
+                    default_call_depth_limit=default_call_depth_limit,
                 )
 
         monkeypatch.setattr(exec_command, "PipelineDriver", SpyRuntime)
@@ -1422,7 +1421,6 @@ class TestJsonParamsCLI:
             file=str(agl_file),
             param_tokens=['--pt={"x": 1, "y": 2}'],
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=False,
             log_file=None,
@@ -1453,7 +1451,6 @@ class TestJsonParamsCLI:
             file=str(agl_file),
             param_tokens=["--price", "1.5"],
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=False,
             log_file=None,
@@ -1484,7 +1481,6 @@ class TestJsonParamsCLI:
             file=str(agl_file),
             param_tokens=['--tags=["a", "b"]'],
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=False,
             log_file=None,
@@ -1518,7 +1514,6 @@ class TestJsonParamsCLI:
             file=str(agl_file),
             param_tokens=["--pt", "not_json"],
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=False,
             log_file=None,
@@ -1548,7 +1543,6 @@ class TestUncaughtExceptionOutputFormat:
             file=str(agl_file),
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=True,
             log_file=None,
@@ -1583,7 +1577,6 @@ class TestUncaughtExceptionOutputFormat:
             file=str(agl_file),
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=False,
             log_file=str(log_file),
@@ -1659,7 +1652,6 @@ class TestExecBinaryFileError:
             file=str(binary_file),
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=True,
             log_file=None,
@@ -1684,7 +1676,6 @@ class TestExecBinaryFileError:
             file=str(binary_file),
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=True,
             log_file=None,
@@ -1715,7 +1706,6 @@ class TestExecWhitespaceRunner:
             file=str(agl_file),
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner="   ",  # whitespace-only
             no_log=True,
             log_file=None,
@@ -1735,7 +1725,6 @@ class TestExecWhitespaceRunner:
             file=str(agl_file),
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner="   ",
             no_log=True,
             log_file=None,
@@ -1757,7 +1746,6 @@ class TestExecWhitespaceRunner:
             file=str(agl_file),
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner="   ",
             no_log=True,
             log_file=None,
@@ -1779,7 +1767,6 @@ class TestExecPerAgentRunnerValidation:
             file=file,
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner="claude -p",  # valid default; the per-agent hint is the offender
             no_log=True,
             log_file=None,
@@ -1823,7 +1810,6 @@ class TestExecPerAgentRunnerValidation:
         bad_config = ExecConfig(
             runner="claude -p",
             strict_json=False,
-            default_loop_limit=5,
             timeout=None,
             agents={"ghost": "bad 'quote"},  # malformed, but for an undeclared agent
             log=False,
@@ -1863,7 +1849,6 @@ class TestExecMalformedQuotingRunner:
             file=str(agl_file),
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner='"foo',  # unclosed quote
             no_log=True,
             log_file=None,
@@ -1883,7 +1868,6 @@ class TestExecMalformedQuotingRunner:
             file=str(agl_file),
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner='"foo',
             no_log=True,
             log_file=None,
@@ -1906,7 +1890,6 @@ class TestExecMalformedQuotingRunner:
             file=str(agl_file),
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner='"foo',
             no_log=True,
             log_file=None,
@@ -2221,7 +2204,6 @@ def _exec_args_no_log(
     agl_file: Path,
     *,
     strict_json: bool | None = None,
-    max_iters: int | None = None,
     runner: str | None = None,
     no_log: bool = True,
     log_file: str | None = None,
@@ -2232,7 +2214,6 @@ def _exec_args_no_log(
         file=str(agl_file),
         param_tokens=[],
         strict_json=strict_json,
-        max_iters=max_iters,
         runner=runner,
         no_log=no_log,
         log_file=log_file,
@@ -2248,99 +2229,45 @@ class TestExecPragmaPrecedence:
     """
 
     # ------------------------------------------------------------------
-    # max_iters pragma
+    # max_call_depth pragma
     # ------------------------------------------------------------------
 
-    def test_pragma_max_iters_caps_loop_at_pragma_value(
+    def test_pragma_max_call_depth_caps_recursion(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """``config max_iters = 3`` in source caps the do loop at 3 iterations.
+        """``config max_call_depth = 5`` caps recursion depth.
 
-        The loop ``until n >= 100`` cannot complete in 3 iterations (n starts at
-        0 and increments by 1), so the runtime raises a LoopLimitExceeded and
-        the command exits 2.
+        The infinitely recursive ``inf`` exceeds depth 5, so the runtime raises
+        an uncaught RecursionError and the command exits 2.
         """
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            "config max_iters = 3\n"
-            "var n = 0\n"
-            "do\n"
-            "  n := n + 1\n"
-            "until n >= 100\n"
+            "config max_call_depth = 5\n"
+            "def inf(n: int) -> int =\n"
+            "  inf(n + 1)\n"
+            "inf(0)\n"
         )
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args_no_log(agl_file))
         assert exc_info.value.code == 2
 
-    def test_pragma_max_iters_allows_completion_when_sufficient(
+    def test_pragma_max_call_depth_allows_completion_when_sufficient(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """``config max_iters = 100`` allows a do loop that needs exactly 100 iterations."""
+        """``config max_call_depth = 100`` allows a recursion that stays within it."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            "config max_iters = 100\n"
-            "var n = 0\n"
-            "do\n"
-            "  n := n + 1\n"
-            "until n >= 100\n"
+            "config max_call_depth = 100\n"
+            "def countdown(n: int) -> int =\n"
+            "  if n <= 0 =>\n"
+            "    0\n"
+            "  | else =>\n"
+            "    countdown(n - 1)\n"
+            "let _ = countdown(10)\n"
             'print "done"\n'
         )
         result = exec_command.run(_exec_args_no_log(agl_file))
         assert result is None  # exit 0
-        assert capsys.readouterr().out == "done\n"
-
-    def test_cli_max_iters_overrides_pragma_max_iters(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """CLI ``--max-iters 100`` overrides ``config max_iters = 3`` in source.
-
-        With --max-iters 100 the loop completes in 100 iterations (exits 0);
-        with pragma max_iters=3 it would fail (exit 2).
-        """
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            "config max_iters = 3\n"
-            "var n = 0\n"
-            "do\n"
-            "  n := n + 1\n"
-            "until n >= 100\n"
-            'print "done"\n'
-        )
-        result = exec_command.run(_exec_args_no_log(agl_file, max_iters=100))
-        assert result is None  # exit 0 — CLI 100 overrides pragma 3
-        assert capsys.readouterr().out == "done\n"
-
-    def test_pragma_max_iters_overrides_config_max_iters(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """Source pragma ``config max_iters = 100`` overrides ``[exec] default_loop_limit = 3``.
-
-        Config says 3 (loop would fail); pragma says 100 (loop completes).
-        """
-        from agm.config.general import ExecConfig
-
-        low_limit_config = ExecConfig(
-            runner=None,
-            strict_json=False,
-            default_loop_limit=3,
-            timeout=None,
-            agents={},
-            log=False,
-            log_file=None,
-        )
-        monkeypatch.setattr(exec_command, "load_exec_config", lambda **_: low_limit_config)
-
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            "config max_iters = 100\n"
-            "var n = 0\n"
-            "do\n"
-            "  n := n + 1\n"
-            "until n >= 100\n"
-            'print "done"\n'
-        )
-        result = exec_command.run(_exec_args_no_log(agl_file))
-        assert result is None  # exit 0 — pragma 100 overrides config 3
         assert capsys.readouterr().out == "done\n"
 
     # ------------------------------------------------------------------
@@ -2381,7 +2308,6 @@ class TestExecPragmaPrecedence:
         strict_config = ExecConfig(
             runner=None,
             strict_json=True,
-            default_loop_limit=5,
             timeout=None,
             agents={},
             log=False,
@@ -2434,7 +2360,6 @@ class TestExecPragmaPrecedence:
         config_with_timeout = ExecConfig(
             runner=None,
             strict_json=False,
-            default_loop_limit=5,
             timeout=999.0,
             agents={},
             log=False,
@@ -2524,7 +2449,6 @@ class TestExecPragmaPrecedence:
                     file=str(agl_file),
                     param_tokens=[],
                     strict_json=None,
-                    max_iters=None,
                     runner=None,
                     no_log=False,
                     log_file=None,
@@ -2548,7 +2472,6 @@ class TestExecPragmaPrecedence:
                 file=str(agl_file),
                 param_tokens=[],
                 strict_json=None,
-                max_iters=None,
                 runner=None,
                 no_log=False,
                 log_file=None,
@@ -2589,7 +2512,6 @@ class TestExecPragmaPrecedence:
         no_log_config = ExecConfig(
             runner=None,
             strict_json=False,
-            default_loop_limit=5,
             timeout=None,
             agents={},
             log=False,
@@ -2602,7 +2524,6 @@ class TestExecPragmaPrecedence:
                 file=str(agl_file),
                 param_tokens=[],
                 strict_json=None,
-                max_iters=None,
                 runner=None,
                 no_log=False,
                 log_file=None,
@@ -2690,7 +2611,6 @@ def _exec_args_inline_no_log(
     command: str,
     *,
     strict_json: bool | None = None,
-    max_iters: int | None = None,
     runner: str | None = None,
 ) -> ExecArgs:
     """Build a minimal ExecArgs for -c inline exec tests."""
@@ -2699,7 +2619,6 @@ def _exec_args_inline_no_log(
         command=command,
         param_tokens=[],
         strict_json=strict_json,
-        max_iters=max_iters,
         runner=runner,
         no_log=True,
         log_file=None,
@@ -2978,7 +2897,6 @@ class TestExecCliModulePaths:
             command=None,
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=True,
             log_file=None,
@@ -3013,7 +2931,6 @@ class TestExecCliModulePaths:
             command=None,
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=True,
             log_file=None,
@@ -3042,7 +2959,6 @@ class TestExecCliModulePaths:
             command=None,
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=True,
             log_file=None,
@@ -3083,7 +2999,6 @@ class TestExecCliModulePaths:
             command="import util\nlet r = greet()\nprint r\n",
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=True,
             log_file=None,

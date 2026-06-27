@@ -111,7 +111,7 @@ _IDENT_WORD: re.Pattern[str] = re.compile(r"[A-Za-z0-9_-]+")
 _STRING_TOKENS: frozenset[str] = frozenset(
     {"TEMPLATE_START", "STRING_FRAGMENT", "TEMPLATE_END", "INTERP_START", "INTERP_END"}
 )
-_NUMBER_TOKENS: frozenset[str] = frozenset({"INT", "DECIMAL", "LOOP_BOUND"})
+_NUMBER_TOKENS: frozenset[str] = frozenset({"INT", "DECIMAL"})
 _OPERATOR_TOKENS: frozenset[str] = frozenset(
     {
         "ARROW", "EQ", "NEQ", "LE", "GE", "LT", "GT", "PLUS", "MINUS", "STAR",

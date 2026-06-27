@@ -40,6 +40,7 @@ from agm.agl.lexer.scanner import _Scanner
 from agm.agl.lexer.tokens import (
     CALL_LBRACE,
     DCOLON,
+    DO_LSQB,
     DOT,
     GRAMMAR_TOKEN_REMAP,
     HIDING,
@@ -47,7 +48,6 @@ from agm.agl.lexer.tokens import (
     INDEX_LSQB,
     INT,
     LBRACE,
-    LOOP_BOUND,
     LSQB,
     MODPATH,
     MODQUAL,
@@ -100,14 +100,7 @@ def tab_warning_collector() -> Iterator[list[Diagnostic]]:
 
 
 def _remap(tokens: Iterator[Token]) -> Iterator[Token]:
-    """Remap lowercase keyword token types to the uppercase names the grammar expects.
-
-    Also applies the ``do[N]`` merge: a ``DO LSQB INT RSQB`` sequence is
-    collapsed into ``DO LOOP_BOUND(N)`` so the grammar can use a single terminal
-    ``LOOP_BOUND`` in the ``loop_bound`` rule and avoid the LALR(1) conflict with
-    ``lit_list`` (which also matches ``LSQB INT RSQB``).
-    """
-    buf: list[Token] = []
+    """Remap lowercase keyword token types to the uppercase names the grammar expects."""
     for tok in tokens:
         mapped = GRAMMAR_TOKEN_REMAP.get(tok.type)
         if mapped is not None:
@@ -121,40 +114,7 @@ def _remap(tokens: Iterator[Token]) -> Iterator[Token]:
                 end_column=tok.end_column,
                 end_pos=tok.end_pos,
             )
-        buf.append(tok)
-        # Check for the LOOP_BOUND merge pattern: DO LSQB INT RSQB.
-        # We need 4 tokens in the buffer to detect this.
-        if len(buf) >= 4:
-            t0, t1, t2, t3 = buf[-4], buf[-3], buf[-2], buf[-1]
-            if (
-                t0.type == "DO"
-                and t1.type == LSQB
-                and t2.type == INT
-                and t3.type == RSQB
-            ):
-                # Merge LSQB INT RSQB → LOOP_BOUND, flush DO + LOOP_BOUND
-                lb_tok = Token(
-                    LOOP_BOUND,
-                    str(t2),  # value is the integer string
-                    start_pos=t1.start_pos,
-                    line=t1.line,
-                    column=t1.column,
-                    end_line=t3.end_line,
-                    end_column=t3.end_column,
-                    end_pos=t3.end_pos,
-                )
-                buf[-3:] = [lb_tok]
-                # Flush all but the newly added LOOP_BOUND — it'll flush in
-                # subsequent iterations. Actually flush up to len-1.
-                while len(buf) > 1:
-                    yield buf.pop(0)
-                continue
-        # Flush tokens that can no longer be part of a loop-bound merge.
-        # Keep up to 3 tokens in the buffer (we need 4 to detect the pattern).
-        while len(buf) > 3:
-            yield buf.pop(0)
-    # Flush remaining buffer
-    yield from buf
+        yield tok
 
 
 _ITEM_START_TYPES = frozenset({"_NEWLINE", "_INDENT", "_DEDENT", "SEMICOLON"})
@@ -338,11 +298,26 @@ def apply_module_passes(tokens: list[Token]) -> list[Token]:
 
 
 def _remap_adjacent_brackets(tokens: list[Token]) -> list[Token]:
-    """Turn adjacent expression brackets/braces into parser-only suffix tokens."""
+    """Turn adjacent expression brackets/braces into parser-only suffix tokens.
+
+    A ``[`` immediately following the ``do`` keyword opens a loop bound; it is
+    retagged ``DO_LSQB`` so the LALR grammar can tell ``do[expr]`` (the bound)
+    apart from a ``do`` body that starts with a list literal — without that
+    distinct terminal the optional ``loop_bound`` and a list-literal body both
+    begin with ``LSQB``, which is the conflict this resolves.  Whitespace
+    between ``do`` and ``[`` is allowed (``do [n]`` works); a newline is not,
+    because layout inserts a token between them.
+    """
     result: list[Token] = []
     previous: Token | None = None
     for tok in tokens:
         if (
+            tok.type == LSQB
+            and previous is not None
+            and previous.type == "DO"
+        ):
+            tok = _retype(tok, DO_LSQB)
+        elif (
             tok.type == LSQB
             and previous is not None
             and previous.type in _INDEX_PREDECESSORS

@@ -106,11 +106,11 @@ let next_prompt: text = case action of
 ## `do … until` loops
 
 ```ebnf
-do_until   ::= "do" ("[" INT "]")? block "until" or_expr
+do_until   ::= "do" ("[" expr "]")? block "until" or_expr
 ```
 
-The only loop in AgL is a **bounded, post-test** loop. The bound is written
-immediately after `do`:
+AgL's loop is a **post-test** loop. An optional bound is written immediately
+after `do`:
 
 ```agl
 do[5]
@@ -134,27 +134,54 @@ do[5] let r: Review = ask("Review ${a}", agent: reviewer) until r is Pass
 
 Semantics:
 
-1. Execute the body in a **fresh iteration scope**.
-2. Evaluate the `until` condition *in that same iteration scope* — it sees
+1. If a bound `[expr]` is present, evaluate `expr` (an `int`-typed expression)
+   **once in the enclosing scope** to obtain the bound `N`. A bound `N ≤ 0`
+   runs the body **zero times** and the loop completes normally (yields `unit`).
+2. Execute the body in a **fresh iteration scope**.
+3. Evaluate the `until` condition *in that same iteration scope* — it sees
    the body's bindings for that iteration. The condition must be `bool`.
-3. If the condition is true, the loop ends.
-4. Otherwise discard the iteration scope and repeat.
-5. If the body has executed `N` times and the condition is still false, raise
-   **`MaxIterationsExceeded`**.
+4. If the condition is true, the loop ends.
+5. Otherwise discard the iteration scope and repeat.
+6. If a bound `N ≥ 1` was given and the body has executed `N` times with the
+   condition still false, raise **`MaxIterationsExceeded`**. An unbounded loop
+   (`do` without `[…]`) never raises `MaxIterationsExceeded`.
 
 The `do … until` loop always has type **`unit`**: it runs for effect and
 produces no value.
 
 The bound:
 
-- must be a positive integer literal;
+- is an arbitrary `int`-typed expression — it may reference params, `let`s,
+  `var`s, arithmetic, or calls. It is evaluated **once at loop entry, in the
+  enclosing scope**: it cannot see the body's bindings, and mutating a `var`
+  the bound references from inside the body does not change the already-fixed
+  bound;
 - counts **body executions**, not agent calls — retries inside the body do
   not consume loop iterations;
-- when omitted, the host's default bound applies (portable default: **5**).
-  `do` without a bound does *not* mean unbounded — unbounded loops do not
-  exist in v1.
+- when omitted, the loop is **unbounded** — it runs until the `until`
+  condition holds and never raises `MaxIterationsExceeded`.
 
-Because the condition is post-tested, the body always executes at least once.
+A bound ≤ 0 runs the body zero times and completes normally. For a positive
+bound or an omitted bound, the body always executes at least once.
+
+### Expression bound example
+
+```agl
+param max_rounds: int
+
+var artifact: text = ask("Implement ${spec}", agent: impl)
+
+do[max_rounds]
+  let r: Review = ask("Review ${artifact}", agent: reviewer)
+  case r of
+    | Fail(issues) =>
+        artifact := ask("Fix ${issues}", agent: impl)
+    | Pass => ()
+until r is Pass
+```
+
+The bound `max_rounds` is a param, resolved before the loop begins. Arithmetic
+is equally valid: `do[rounds + 1]`, `do[base * 2]`.
 
 ### Loop state
 

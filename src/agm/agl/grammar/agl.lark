@@ -93,7 +93,7 @@
 %declare PLUS MINUS STAR SLASH
 %declare ARROW THIN_ARROW
 %declare LPAR RPAR LSQB INDEX_LSQB RSQB LBRACE CALL_LBRACE RBRACE COLON DCOLON COMMA SEMICOLON PIPE DOT
-%declare LOOP_BOUND
+%declare DO_LSQB
 
 // Note: EQ_EQ (==) is declared by the lexer but not used in any grammar rule.
 // When the lexer emits it, Lark raises UnexpectedToken; the parser error
@@ -362,12 +362,13 @@ first_case_branch: PIPE? case_branch
 case_branch: pattern ARROW branch_body
 
 // do-until loop expression.
-// LOOP_BOUND is a single token for [N] emitted by the lexer (avoids S/R).
-// do body: suite_expr (indented block) or inline sequence.
+// The bound's opening "[" is lexed as DO_LSQB (the first "[" after `do`), so
+// the optional loop_bound is unambiguous against a list-literal body (avoids
+// S/R). do body: suite_expr (indented block) or inline sequence.
 do_expr: "do" loop_bound? do_body "until" or_expr
 
-// loop_bound: [N] as a single LOOP_BOUND token.
-loop_bound: LOOP_BOUND
+// loop_bound: [expr] — an arbitrary int-typed expression as the iteration bound.
+loop_bound: DO_LSQB or_expr RSQB
 
 // do body: suite (indented block) or inline sequence of or_expr/binder items.
 do_body: suite_expr | inline_seq

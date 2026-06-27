@@ -91,7 +91,6 @@ class ReplSession:
     def __init__(
         self,
         *,
-        default_loop_limit: int = 5,
         default_strict_json: bool = False,
         default_agent: "AgentFn | None" = None,
         shell_exec_timeout: float | None = None,
@@ -111,7 +110,6 @@ class ReplSession:
         from agm.agl.typecheck.env import TypeEnvironment
         from agm.config.module_roots import resolve_stdlib_root
 
-        self._default_loop_limit = default_loop_limit
         self._default_strict_json = default_strict_json
         self._shell_exec_timeout = shell_exec_timeout
         # Trace destination: when set, each evaluated entry opens a fresh
@@ -124,7 +122,6 @@ class ReplSession:
 
         # Internal runtime owns the registrations + host-environment assembly.
         self._runtime = PipelineDriver(
-            default_loop_limit=default_loop_limit,
             default_strict_json=default_strict_json,
             default_agent=default_agent,
             shell_exec_timeout=shell_exec_timeout,
@@ -671,7 +668,6 @@ class ReplSession:
         interp = IrInterpreter(
             lowered.program,
             registry=host_env.registry,
-            loop_limit=self._default_loop_limit,
             strict_json=self._default_strict_json,
             shell_exec_timeout=self._shell_exec_timeout,
             trace=trace,

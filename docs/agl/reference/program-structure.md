@@ -90,13 +90,13 @@ Each key may appear at most once; duplicate keys are an error.
 | `log` | `bool` | Enable/disable trace logging. |
 | `log_file` | non-empty string | Path to the trace log file. |
 | `strict_json` | `bool` | Parse agent JSON output strictly. |
-| `max_iters` | positive integer | Maximum iterations for `do` loops. |
+| `max_call_depth` | positive integer | Maximum recursion call depth before `RecursionError`. |
 | `runner` | non-empty string | Default agent runner command. |
 | `timeout` | string or positive integer | Shell execution timeout. |
 
 ```agl
 config log = true
-config max_iters = 10
+config max_call_depth = 512
 config runner = "claude -p"
 param spec
 let result = ask "Process ${spec}"

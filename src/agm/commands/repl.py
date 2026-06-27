@@ -53,7 +53,6 @@ def run(args: ReplArgs) -> None:
     repl_config = load_repl_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
 
     strict_json = args.strict_json if args.strict_json is not None else config.strict_json
-    loop_limit = args.max_iters if args.max_iters is not None else config.default_loop_limit
 
     # Resolve the runner command: CLI flag > [exec] config > shared default,
     # exactly as ``agm exec`` does (the REPL shares the exec agent backing).
@@ -97,7 +96,6 @@ def run(args: ReplArgs) -> None:
     lib_root = resolve_lib_root(mod_roots_cfg)
 
     session = ReplSession(
-        default_loop_limit=loop_limit,
         default_strict_json=strict_json,
         default_agent=confirming_agent,
         shell_exec_timeout=config.timeout,

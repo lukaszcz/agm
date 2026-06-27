@@ -1161,9 +1161,9 @@ class TestConfigPragma:
         _, msg = diag(err)
         assert "bool" in msg.lower()
 
-    def test_config_max_iters_accepted(self) -> None:
-        r = parse_and_resolve("config max_iters = 10\n()")
-        assert r.config_pragmas == {"max_iters": 10}
+    def test_config_max_call_depth_accepted(self) -> None:
+        r = parse_and_resolve("config max_call_depth = 10\n()")
+        assert r.config_pragmas == {"max_call_depth": 10}
 
 
 # ---------------------------------------------------------------------------
@@ -1385,7 +1385,7 @@ class TestDirectASTConstruction:
         assign_n = _make_assign("n", _make_varref("probe"))
         body = _make_block(let_probe, assign_n)
         do_node = Do(
-            limit=5,
+            limit=_make_intlit(5),
             body=body,
             condition=_make_varref("probe"),
             span=_sp(),
@@ -1397,7 +1397,7 @@ class TestDirectASTConstruction:
     def test_do_body_single_expr_resolved(self) -> None:
         var_n = _make_var("n", _make_intlit(0))
         do_node = Do(
-            limit=5,
+            limit=_make_intlit(5),
             body=_make_varref("n"),
             condition=_make_boollit(True),
             span=_sp(),
@@ -1832,8 +1832,8 @@ class TestDeclaredFunctions:
 
 class TestConfigPragmaValueValidation:
     def test_int_pos_zero_rejected(self) -> None:
-        """config max_iters = 0 is rejected (must be > 0)."""
-        err = reject_scope("config max_iters = 0\n()")
+        """config max_call_depth = 0 is rejected (must be > 0)."""
+        err = reject_scope("config max_call_depth = 0\n()")
         _, msg = diag(err)
         assert "positive" in msg.lower() or "greater" in msg.lower() or "> 0" in msg
 

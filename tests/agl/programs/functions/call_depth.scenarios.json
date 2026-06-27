@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "within_call_depth_limit",
+      "params": {"n": 5},
+      "runtime": {"default_call_depth_limit": 20},
+      "expect": {"stdout": "0\n"}
+    },
+    {
+      "name": "exceeds_call_depth_limit",
+      "params": {"n": 100},
+      "runtime": {"default_call_depth_limit": 10},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "RecursionError", "fields": {"limit": 10}}
+      }
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+# The bound expression is evaluated exactly once, at loop entry: mutating a var
+# it references from inside the body does not extend the loop. The bound is
+# fixed at 3, so the loop exhausts even though `budget` grows each iteration.
+var budget: int = 3
+var rounds: int = 0
+
+do[budget]
+  rounds := rounds + 1
+  budget := budget + 100
+until rounds >= 100
+print rounds

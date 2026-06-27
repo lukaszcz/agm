@@ -1147,7 +1147,6 @@ class TestPipelineDriverRunnerWiring:
         fake_config = ExecConfig(
             runner="my-test-runner",
             strict_json=False,
-            default_loop_limit=5,
             timeout=None,
             agents={},
             log=False,
@@ -1180,7 +1179,6 @@ class TestPipelineDriverRunnerWiring:
                 file=str(agl_file),
                 param_tokens=[],
                 strict_json=None,
-                max_iters=None,
                 runner=None,
                 no_log=True,
                 log_file=None,

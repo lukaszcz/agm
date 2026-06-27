@@ -380,13 +380,15 @@ class Case:
 
 @dataclass(frozen=True, slots=True)
 class Do:
-    """``do[limit] body until condition`` — bounded loop expression.
+    """``do[limit] body until condition`` — loop expression.
 
-    Yields ``unit``.  ``limit`` is the optional iteration bound (``None``
-    means no static bound is enforced).  ``body`` is typically a ``Block``.
+    Yields ``unit``.  ``limit`` is the optional iteration bound: an arbitrary
+    ``int``-typed expression evaluated once at loop entry, or ``None`` when the
+    loop is written without ``[...]`` (an unbounded loop).  ``body`` is
+    typically a ``Block``.
     """
 
-    limit: int | None
+    limit: Expr | None
     body: Expr
     condition: Expr
     span: SourceSpan = dc_field(compare=False)
@@ -817,7 +819,7 @@ class ConfigPragma:
     Must appear before any non-pragma item at the program root.
     Enforced by the scope pass; grammatically it is a top-level item.
 
-    ``key``    — the pragma name (e.g. ``"log"``, ``"max_iters"``).
+    ``key``    — the pragma name (e.g. ``"log"``, ``"max_call_depth"``).
     ``value``  — a statically-known scalar: ``bool``, ``int``,
                  ``Decimal``, or ``str``.
     """

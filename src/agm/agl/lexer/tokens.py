@@ -180,11 +180,12 @@ SEMICOLON = "SEMICOLON"  # ;
 # Error token emitted for "==" so the parser can emit a friendly diagnostic.
 EQ_EQ = "EQ_EQ"  # ==
 
-# Synthetic token emitted by the lexer when it sees do[N].
-# The lexer merges LSQB INT RSQB → LOOP_BOUND right after DO, so the grammar
-# can use a single token instead of a three-token sequence, eliminating the
-# LALR(1) conflict with lit_list (which also matches LSQB INT RSQB).
-LOOP_BOUND = "LOOP_BOUND"  # [N] immediately after do — value is the integer string
+# Synthetic token: the "[" that opens a loop bound, i.e. the first "[" after the
+# "do" keyword.  Retagging it ``DO_LSQB`` lets the grammar distinguish the
+# ``do[expr]`` bound from a ``do`` body that starts with a list literal —
+# without it, the optional ``loop_bound`` and a list-literal body both begin
+# with ``LSQB`` (the LALR(1) conflict this resolves).
+DO_LSQB = "DO_LSQB"  # [ opening a do-loop bound
 
 # ---------------------------------------------------------------------------
 # Module system tokens (contextual / synthetic — %declare in grammar)

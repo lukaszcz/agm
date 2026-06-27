@@ -19,7 +19,6 @@ class TestExecConfig:
         cfg = ExecConfig(
             runner=None,
             strict_json=False,
-            default_loop_limit=5,
             timeout=None,
             agents={},
             log=False,
@@ -27,7 +26,6 @@ class TestExecConfig:
         )
         assert cfg.runner is None
         assert cfg.strict_json is False
-        assert cfg.default_loop_limit == 5
         assert cfg.timeout is None
         assert cfg.agents == {}
         assert cfg.log is False
@@ -37,7 +35,6 @@ class TestExecConfig:
         cfg = ExecConfig(
             runner=None,
             strict_json=False,
-            default_loop_limit=5,
             timeout=None,
             agents={},
             log=False,
@@ -54,7 +51,6 @@ class TestLoadExecConfig:
         cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
         assert cfg.runner is None
         assert cfg.strict_json is False
-        assert cfg.default_loop_limit == 5
         assert cfg.timeout is None
         assert cfg.agents == {}
         assert cfg.log is False
@@ -71,7 +67,6 @@ class TestLoadExecConfig:
                     "[exec]",
                     'runner = "claude -p"',
                     "strict_json = true",
-                    "default_loop_limit = 10",
                     'timeout = "30m"',
                     "",
                     "[exec.agents]",
@@ -84,7 +79,6 @@ class TestLoadExecConfig:
         cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
         assert cfg.runner == "claude -p"
         assert cfg.strict_json is True
-        assert cfg.default_loop_limit == 10
         assert cfg.timeout == pytest.approx(1800.0)
         assert cfg.agents == {"reviewer": "claude -p", "impl": "codex exec"}
 
@@ -97,7 +91,7 @@ class TestLoadExecConfig:
                 [
                     "[exec]",
                     'runner = "home-runner"',
-                    "default_loop_limit = 3",
+                    "strict_json = true",
                 ]
             )
         )
@@ -115,8 +109,8 @@ class TestLoadExecConfig:
 
         cfg = load_exec_config(home=home, proj_dir=proj_dir, cwd=tmp_path)
         assert cfg.runner == "proj-runner"
-        # default_loop_limit comes from home config since project doesn't override
-        assert cfg.default_loop_limit == 3
+        # strict_json comes from home config since project doesn't override it
+        assert cfg.strict_json is True
 
     def test_command_name_selects_sub_table(self, tmp_path: Path) -> None:
         home = tmp_path / "home"

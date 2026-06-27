@@ -342,6 +342,11 @@ until review is Pass
 
 `review` is visible to `until` but does not exist after the loop.
 
+When a bound expression `[expr]` is present, it is evaluated **once in the
+enclosing scope**, before the first iteration. It cannot see any binding
+introduced by the body, and mutating a `var` the bound references from inside
+the body does not affect the already-fixed bound.
+
 ### Pattern and catch variables
 
 Pattern variables and `catch` binders are immutable and scoped to their

@@ -261,8 +261,11 @@ language.
 
 Multi-character operators are matched greedily.
 
-The loop bound `[N]` immediately after `do` is lexed as a single unit so it
-never conflicts with a list literal.
+A `[` that immediately follows `do` — with or without intervening whitespace
+(`do[n]` and `do [n]` are equivalent) — opens the loop bound `[expr]`. This
+is what distinguishes the bound from a list literal that could otherwise begin
+the loop body. As a consequence, a `do` body cannot itself *begin* with a bare
+list literal; parenthesize it (`do ([item1, item2]) until …`) if needed.
 
 An adjacent `[` after an expression-ending token starts indexing. Whitespace
 keeps the bracket as a list literal, so `xs[0]` indexes while `f [0]` is the

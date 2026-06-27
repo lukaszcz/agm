@@ -757,14 +757,19 @@ class IrLoop:
 
     Evaluates ``body`` then ``condition`` up to ``limit`` times.  When
     ``condition`` evaluates to ``BoolValue(True)`` the loop exits and yields
-    ``UnitValue``.  When ``limit`` iterations elapse without the condition
-    becoming ``True``, raises ``AglRaise`` with a ``MaxIterationsExceeded``
-    exception with the language-defined diagnostic fields.
+    ``UnitValue``.
 
-    ``limit=None`` means "use the evaluator's configured default loop limit"
-    (mirrors ``Do.limit is None`` → ``self._loop_limit`` in the legacy
-    interpreter).  Do NOT bake the default into the IR — it is a runtime /
-    configuration concern.
+    ``limit`` is the loop bound:
+
+    - ``limit=None`` means the loop is unbounded (written without ``[...]``):
+      it iterates until ``condition`` becomes ``True`` and never raises
+      ``MaxIterationsExceeded``.
+    - otherwise ``limit`` is an ``int``-typed ``IrExpr`` evaluated ONCE at loop
+      entry to an integer ``n``.  A non-positive ``n`` runs the body zero times
+      and yields ``UnitValue``.  A positive ``n`` runs the body up to ``n``
+      times; if ``condition`` is still ``False`` after the ``n``-th execution,
+      raises ``AglRaise`` with a ``MaxIterationsExceeded`` exception carrying
+      the language-defined diagnostic fields.
 
     ``condition_source`` is the pre-sliced source-text of the condition
     expression (mirrors ``_source_slice(expr.condition.span)`` in the legacy
@@ -778,7 +783,7 @@ class IrLoop:
     """
 
     location: Location
-    limit: "int | None"
+    limit: "IrExpr | None"
     body: "IrExpr"
     condition: "IrExpr"
     condition_source: str

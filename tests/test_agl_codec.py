@@ -201,7 +201,6 @@ def _run_with_json_codec(
     interp = IrInterpreter(
         executable,
         registry=registry,
-        loop_limit=3,
         strict_json=strict_json,
         host_contracts=contracts,
     )

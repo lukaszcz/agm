@@ -46,7 +46,6 @@ class GraphSessionCtx(Protocol):
     _session_scope: ScopeNode
     _type_env: TypeEnvironment
     _trace_path: Path | None
-    _default_loop_limit: int
     _default_strict_json: bool
     _shell_exec_timeout: float | None
 
@@ -314,7 +313,6 @@ class GraphSession:
         interp = IrInterpreter(
             lowered.program,
             registry=host_env.registry,
-            loop_limit=self._ctx._default_loop_limit,
             strict_json=self._ctx._default_strict_json,
             shell_exec_timeout=self._ctx._shell_exec_timeout,
             trace=trace,

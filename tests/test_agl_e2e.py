@@ -12,7 +12,6 @@ Public contract exercised here (notes/PLAN_DSL.md §9, notes/dsl_design.md §7.6
     from agm.agl import PipelineDriver
 
     runtime = PipelineDriver(
-        default_loop_limit=5,       # `do` bound default (design §2.11)
         default_strict_json=False,  # lenient JSON recovery is the default (design §2.8)
         default_agent=fn,           # the built-in `ask` agent (a host callable;
                                     # `ask` cannot be registered by name)
@@ -97,8 +96,8 @@ def _run_program(source: str, scenario: dict[str, Any]) -> tuple[Any, dict[str, 
     }
     kwargs: dict[str, Any] = {}
     runtime_cfg = scenario.get("runtime", {})
-    if "default_loop_limit" in runtime_cfg:
-        kwargs["default_loop_limit"] = runtime_cfg["default_loop_limit"]
+    if "default_call_depth_limit" in runtime_cfg:
+        kwargs["default_call_depth_limit"] = runtime_cfg["default_call_depth_limit"]
     if "default_strict_json" in runtime_cfg:
         kwargs["default_strict_json"] = runtime_cfg["default_strict_json"]
     if "ask" in agents:

@@ -581,10 +581,8 @@ def _validate_expr(node: IrExpr, ctx: _Context) -> None:
 
         case IrLoop(limit=limit, body=body, condition=condition):
             _validate_location(node.location, ctx)
-            if limit is not None and limit < 0:
-                raise InvalidIrError(
-                    f"IrLoop has limit={limit!r} which is negative (must be >= 0 or None)"
-                )
+            if limit is not None:
+                _validate_expr(limit, ctx)
             _validate_expr(body, ctx)
             _validate_expr(condition, ctx)
 

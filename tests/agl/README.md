@@ -48,7 +48,7 @@ Layout:
         "reviewer": ["first response", "second response"],
         "impl": {"responses": ["fix"], "repeat_last": true}
       },
-      "runtime": {"default_loop_limit": 3, "default_strict_json": true},
+      "runtime": {"default_call_depth_limit": 20, "default_strict_json": true},
       "expect": {
         "stdout": "exact full stdout",
         "stdout_contains": ["fragment"],
@@ -79,7 +79,7 @@ Field notes:
   `ask` scripts the built-in default agent (passed as the runtime's
   `default_agent`, since `ask` cannot be registered by name).
 - `runtime` — optional `PipelineDriver` constructor overrides
-  (`default_loop_limit`, `default_strict_json`).
+  (`default_call_depth_limit`, `default_strict_json`).
 - `module_roots` — optional paths relative to `tests/agl/`. When present, the
   program runs through the multi-file module graph with these library roots.
 - `expect.calls` — exact number of calls per listed agent (retries count as calls).

@@ -1099,6 +1099,13 @@ class _Checker:
     # --- do ---
 
     def _check_do(self, node: Do) -> Type:
+        if node.limit is not None:
+            limit_type = self._check_expr(node.limit, expected=None)
+            if not isinstance(limit_type, IntType):
+                raise AglTypeError(
+                    f"do-loop bound must be int; got '{limit_type!r}'.",
+                    span=node.limit.span,
+                )
         self._check_expr(node.body, expected=None)
         cond_type = self._check_expr(node.condition, expected=None)
         self._require_bool_condition(cond_type, node.condition.span, "do-until")

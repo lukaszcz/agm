@@ -111,7 +111,7 @@ includes external-decoder metadata for every declared param.
 
 | Setting | Portable default | Used when |
 | ------- | ---------------- | --------- |
-| Default loop bound | `5` | `do` without an explicit `[N]` |
+| Default call-depth limit | `256` | recursion depth before `RecursionError` (set via `max_call_depth`) |
 | Default parse policy | `abort` | call without `on_parse_error` |
 | Default JSON parsing mode | lenient recovery | JSON-codec call without `strict_json` |
 | Shell `exec` timeout | none | every `exec` call |

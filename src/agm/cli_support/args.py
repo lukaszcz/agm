@@ -212,7 +212,6 @@ class TmuxLayoutArgs:
 class ExecArgs:
     file: str | None
     strict_json: bool | None
-    max_iters: int | None
     runner: str | None
     no_log: bool
     log_file: str | None
@@ -226,7 +225,6 @@ class ExecArgs:
 @dataclass(slots=True)
 class ReplArgs:
     strict_json: bool | None
-    max_iters: int | None
     runner: str | None
     confirm_agents: bool
     quiet: bool

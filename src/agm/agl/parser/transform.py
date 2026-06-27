@@ -1243,17 +1243,14 @@ class AstBuilder(Transformer):
     # Control flow: do_expr
     # ------------------------------------------------------------------
 
-    def loop_bound(self, meta: Meta, args: _Args) -> int:
-        """Extract N from a LOOP_BOUND token and validate it is positive."""
-        tok = args[0]
-        assert isinstance(tok, Token)
-        n = int(str(tok))
-        if n <= 0:
-            raise AglSyntaxError(
-                f"Loop bound must be a positive integer; got {n}.",
-                span=self._span_from_meta(meta),
-            )
-        return n
+    def loop_bound(self, meta: Meta, args: _Args) -> syntax.Expr:
+        """loop_bound: DO_LSQB or_expr RSQB — return the bound expression.
+
+        The value is validated (must be a non-negative ``int``) at runtime, not
+        here: the bound is an arbitrary expression and its value is unknown
+        until the loop is reached.
+        """
+        return cast(syntax.Expr, _find_non_token(args))
 
     def do_body(self, meta: Meta, args: _Args) -> syntax.Expr:
         """do_body: suite_expr | inline_seq — pass through the inner expr."""
@@ -1282,18 +1279,19 @@ class AstBuilder(Transformer):
         return cast(syntax.Item, inner)
 
     def do_expr(self, meta: Meta, args: _Args) -> syntax.Do:
-        """do_expr: "do" loop_bound? do_body "until" or_expr"""
-        # Grammar children (post-transform): int? (loop_bound), Expr (do_body),
-        # Expr (until condition) — no Token or None placeholders.
-        limit: int | None = None
-        exprs: list[syntax.Expr] = []
-        for a in args:
-            if isinstance(a, int):
-                limit = a
-            else:
-                exprs.append(cast(syntax.Expr, a))
-        assert len(exprs) == 2, "do_expr: expected body and condition"
-        body, condition = exprs[0], exprs[1]
+        """do_expr: "do" loop_bound? do_body "until" or_expr
+
+        Children are all transformed expressions and the grammar fixes their
+        order: ``[bound,] body, condition``.  A 3-element list carries an
+        explicit bound; a 2-element list is an unbounded loop (``limit=None``).
+        """
+        exprs = [cast(syntax.Expr, a) for a in args if not isinstance(a, Token)]
+        if len(exprs) == 3:
+            limit: syntax.Expr | None = exprs[0]
+            body, condition = exprs[1], exprs[2]
+        else:
+            assert len(exprs) == 2, "do_expr: expected optional bound, body, condition"
+            limit, body, condition = None, exprs[0], exprs[1]
         return syntax.Do(
             limit=limit, body=body, condition=condition,
             span=self._span_from_meta(meta), node_id=self._next_id(),

@@ -1719,7 +1719,7 @@ class TestReplConfigPragmaRejection:
 
     def test_config_pragma_rejection_message_mentions_cli(self) -> None:
         s = ReplSession()
-        r = s.eval_entry("config max_iters = 10")
+        r = s.eval_entry("config max_call_depth = 10")
         assert not r.ok
         # The error should mention how to set options (CLI flags / config file).
         msg = r.diagnostics[0].message
@@ -1752,7 +1752,7 @@ class TestReplConfigPragmaRejection:
         s = ReplSession()
         for pragma in [
             "config log = true",
-            "config max_iters = 5",
+            "config max_call_depth = 5",
             "config runner = \"echo\"",
             "config strict_json = false",
             "config timeout = \"30s\"",

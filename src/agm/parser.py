@@ -476,7 +476,7 @@ _HELP_TEXTS: dict[str, str] = {
               Create the session with PANES panes.
     """),
     "exec": textwrap.dedent("""\
-        agm exec [--strict-json|--no-strict-json] [--max-iters N] [--runner COMMAND]
+        agm exec [--strict-json|--no-strict-json] [--runner COMMAND]
                  [--log|--log-file PATH|--no-log] [--no-stdlib] [-I DIR]...
                  (FILE | -c COMMAND) [--PARAM VALUE]...
 
@@ -496,7 +496,6 @@ _HELP_TEXTS: dict[str, str] = {
           -c, --command COMMAND  Execute the program given as COMMAND instead of FILE.
           --strict-json         Require bare JSON output from agents (no recovery).
           --no-strict-json      Use lenient JSON recovery (default).
-          --max-iters N         Override the default do-loop iteration limit.
           --runner COMMAND      Override the default agent runner command.
           --log                 Enable trace logging (auto timestamped path).
           --log-file PATH       Write trace log to PATH.
@@ -519,7 +518,7 @@ _HELP_TEXTS: dict[str, str] = {
     """),
     "repl": textwrap.dedent("""\
         agm repl [--strict-json|--no-strict-json]
-                 [--max-iters N] [--runner COMMAND] [--confirm-agents]
+                 [--runner COMMAND] [--confirm-agents]
                  [--quiet] [--log|--log-file PATH|--no-log]
 
         Start an interactive read-eval-print loop for AgL.  Each entry is
@@ -541,7 +540,6 @@ _HELP_TEXTS: dict[str, str] = {
         Options:
           --strict-json         Require bare JSON output from agents (no recovery).
           --no-strict-json      Use lenient JSON recovery (default).
-          --max-iters N         Override the default do-loop iteration limit.
           --runner COMMAND      Override the default agent runner command.
           --confirm-agents     Confirm each agent call before dispatching it
                                 (default: fire agent calls without confirming).

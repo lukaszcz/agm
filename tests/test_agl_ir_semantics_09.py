@@ -9,6 +9,7 @@ Covers:
   trace_id).
 - Golden lowering: IrLoop.limit (present + None) and condition_source.
 - Defensive evaluator test: IrLoop with a non-bool condition → InvalidIrError.
+- Defensive evaluator test: IrLoop with a non-int bound expression → InvalidIrError.
 """
 
 from __future__ import annotations
@@ -27,7 +28,6 @@ from agm.agl.ir.program import (
 )
 from agm.agl.ir.validate import InvalidIrError, validate_ir
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
-from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import BoolValue, IntValue, JsonValue, TextValue
 from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises
 
@@ -138,12 +138,12 @@ def test_ir_semantic_loop_body_bindings_visible_to_condition() -> None:
 
 
 # ---------------------------------------------------------------------------
-# IR semantic: loop terminates without explicit limit (uses evaluator default)
+# IR semantic: bound-less loop terminates via until (unbounded)
 # ---------------------------------------------------------------------------
 
 
 def test_ir_semantic_loop_no_explicit_limit_terminates() -> None:
-    """do body until cond (no explicit limit) — terminates before the default 100."""
+    """do body until cond (no explicit limit) — unbounded, terminates via until."""
     source = (
         "var n = 0\n"
         "do\n"
@@ -235,7 +235,8 @@ def test_golden_lowering_irloop_explicit_limit() -> None:
     ]
     assert len(ir_loops) == 1, f"expected 1 IrLoop, found {len(ir_loops)}"
     loop = ir_loops[0]
-    assert loop.limit == 7, f"expected limit=7, got {loop.limit!r}"
+    assert isinstance(loop.limit, IrConstInt), f"expected IrConstInt, got {loop.limit!r}"
+    assert loop.limit.value == 7, f"expected limit value 7, got {loop.limit.value!r}"
     assert loop.condition_source.strip() == "x >= 3", (
         f"condition_source mismatch: {loop.condition_source!r}"
     )
@@ -268,7 +269,7 @@ def test_defensive_irloop_non_bool_condition() -> None:
         (
             IrLoop(
                 location=_DUMMY_LOC,
-                limit=1,
+                limit=IrConstInt(location=_DUMMY_LOC, value=1),
                 body=IrConstUnit(location=_DUMMY_LOC),
                 condition=IrConstInt(location=_DUMMY_LOC, value=42),
                 condition_source="42",
@@ -282,40 +283,21 @@ def test_defensive_irloop_non_bool_condition() -> None:
 
 
 # ---------------------------------------------------------------------------
-# validate_ir: IrLoop with negative limit raises InvalidIrError
-# ---------------------------------------------------------------------------
-
-
-def test_validate_ir_irloop_negative_limit() -> None:
-    """validate_ir rejects IrLoop with limit < 0."""
-    prog = _make_minimal_program(
-        (
-            IrLoop(
-                location=_DUMMY_LOC,
-                limit=-1,
-                body=IrConstUnit(location=_DUMMY_LOC),
-                condition=IrConstBool(location=_DUMMY_LOC, value=True),
-                condition_source="true",
-            ),
-        ),
-        source_text="",
-    )
-    with pytest.raises(InvalidIrError, match="IrLoop.*limit"):
-        validate_ir(prog)
-
-
-# ---------------------------------------------------------------------------
-# validate_ir: IrLoop with limit=0 is allowed (exhausts immediately)
+# validate_ir: IrLoop with a zero limit expression is allowed
 # ---------------------------------------------------------------------------
 
 
 def test_validate_ir_irloop_zero_limit() -> None:
-    """validate_ir accepts IrLoop with limit=0 (valid — exhausts immediately)."""
+    """validate_ir accepts IrLoop with a limit expression of 0.
+
+    A non-positive bound is valid: at runtime it runs the body zero times and
+    yields unit (validation no longer rejects it).
+    """
     prog = _make_minimal_program(
         (
             IrLoop(
                 location=_DUMMY_LOC,
-                limit=0,
+                limit=IrConstInt(location=_DUMMY_LOC, value=0),
                 body=IrConstUnit(location=_DUMMY_LOC),
                 condition=IrConstBool(location=_DUMMY_LOC, value=True),
                 condition_source="true",
@@ -350,22 +332,20 @@ def test_validate_ir_irloop_none_limit() -> None:
 
 
 # ---------------------------------------------------------------------------
-# IrInterpreter.loop_limit: explicit kwarg overrides default
+# IrLoop with limit=None is unbounded: loops until the condition holds
 # ---------------------------------------------------------------------------
 
 
-def test_irinterpreter_custom_loop_limit() -> None:
-    """IrInterpreter(loop_limit=2) uses 2 as default when IrLoop.limit is None."""
-    source = "var x = 0\ndo\n  x := x + 1\nuntil x >= 99\n"
-    executable = _lower(source)
+def test_ir_semantic_unbounded_loop_runs_to_completion() -> None:
+    """A bound-less do loop (IrLoop.limit is None) is unbounded.
 
-    interp = IrInterpreter(executable, loop_limit=2)
-    with pytest.raises(AglRaise) as exc_info:
-        interp.run()
-
-    raised = exc_info.value.exc
-    assert raised.display_name == "MaxIterationsExceeded"
-    assert raised.fields.get("limit") == IntValue(2)
+    It iterates until the until-condition holds, never raising
+    MaxIterationsExceeded, even for a large number of iterations.
+    """
+    source = "var x = 0\ndo\n  x := x + 1\nuntil x >= 1000\nx\n"
+    ir_reference, ir = evaluate_ir(source)
+    assert ir["x"] == IntValue(1000)
+    assert ir_reference["x"] == IntValue(1000)
 
 
 # ---------------------------------------------------------------------------
@@ -397,3 +377,28 @@ def test_crlf_condition_source_is_normalized() -> None:
     assert ir_reference_exc.display_name == "MaxIterationsExceeded"
     assert ir_exc.fields.get("condition") == TextValue("i > 100")
     assert ir_reference_exc.fields.get("condition") == TextValue("i > 100")
+
+
+# ---------------------------------------------------------------------------
+# Defensive evaluator: IrLoop with non-int bound → InvalidIrError
+# ---------------------------------------------------------------------------
+
+
+def test_defensive_irloop_non_int_bound() -> None:
+    """IrLoop whose bound expression evaluates to non-IntValue raises InvalidIrError."""
+    # Build a hand-crafted program: do[true] () until true  (bool bound, not int)
+    prog = _make_minimal_program(
+        (
+            IrLoop(
+                location=_DUMMY_LOC,
+                limit=IrConstBool(location=_DUMMY_LOC, value=True),
+                body=IrConstUnit(location=_DUMMY_LOC),
+                condition=IrConstBool(location=_DUMMY_LOC, value=True),
+                condition_source="true",
+            ),
+        ),
+        source_text="",
+    )
+    interp = IrInterpreter(prog)
+    with pytest.raises(InvalidIrError, match="IrLoop"):
+        interp.run()

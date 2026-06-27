@@ -1018,11 +1018,6 @@ def exec_cmd(
         "--strict-json/--no-strict-json",
         help="Require agents to return exactly one bare JSON value; default is lenient recovery.",
     ),
-    max_iters: int | None = typer.Option(
-        None,
-        "--max-iters",
-        help="Override the default do-loop iteration limit.",
-    ),
     runner: str | None = typer.Option(
         None,
         "--runner",
@@ -1116,7 +1111,6 @@ def exec_cmd(
             command=command,
             param_tokens=param_tokens,
             strict_json=strict_json,
-            max_iters=max_iters,
             runner=runner,
             no_log=no_log,
             log_file=log_file,
@@ -1133,11 +1127,6 @@ def repl_cmd(
         None,
         "--strict-json/--no-strict-json",
         help="Require agents to return exactly one bare JSON value; default is lenient recovery.",
-    ),
-    max_iters: int | None = typer.Option(
-        None,
-        "--max-iters",
-        help="Override the default do-loop iteration limit.",
     ),
     runner: str | None = typer.Option(
         None,
@@ -1187,7 +1176,6 @@ def repl_cmd(
     repl_command.run(
         ReplArgs(
             strict_json=strict_json,
-            max_iters=max_iters,
             runner=runner,
             confirm_agents=confirm_agents,
             quiet=quiet,

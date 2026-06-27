@@ -38,12 +38,7 @@ class TestPipelineDriverConstructor:
     def test_default_constructor_uses_documented_defaults(self) -> None:
         rt = PipelineDriver()
         # Documented constructor defaults (design §2.8/§2.11).
-        assert rt.default_loop_limit == 5
         assert rt.default_strict_json is False
-
-    def test_default_loop_limit_kwarg_is_observable(self) -> None:
-        rt = PipelineDriver(default_loop_limit=10)
-        assert rt.default_loop_limit == 10
 
     def test_default_strict_json_kwarg_is_observable(self) -> None:
         rt = PipelineDriver(default_strict_json=True)
@@ -434,7 +429,6 @@ class TestUncaughtAgentCallErrorSpan:
             file=str(agl_file),
             param_tokens=[],
             strict_json=None,
-            max_iters=None,
             runner=None,
             no_log=True,
             log_file=None,
@@ -678,10 +672,6 @@ class TestTokenConstants:
 
 
 class TestPipelineDriverProperties:
-    def test_default_loop_limit_property(self) -> None:
-        rt = PipelineDriver(default_loop_limit=7)
-        assert rt.default_loop_limit == 7
-
     def test_default_strict_json_property(self) -> None:
         rt = PipelineDriver(default_strict_json=True)
         assert rt.default_strict_json is True
@@ -2937,12 +2927,12 @@ class TestPrepareProgram:
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = PipelineDriver.prepare_program(
-            "config max_iters = 7\nlet x = 1\nx",
+            "config max_call_depth = 7\nlet x = 1\nx",
             entry_path=None,
             roots=roots,
         )
         assert prepared.resolved_graph is not None
-        assert prepared.config_pragmas.get("max_iters") == 7
+        assert prepared.config_pragmas.get("max_call_depth") == 7
 
     def test_prepare_program_failure_returns_empty_declared_agents(
         self, tmp_path: pathlib.Path

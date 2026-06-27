@@ -798,8 +798,9 @@ class TestDoNode:
     def test_do_with_limit(self) -> None:
         body = UnitLit(span=self._s(), node_id=2)
         cond = BoolLit(value=False, span=self._s(), node_id=3)
-        node = Do(limit=10, body=body, condition=cond, span=self._s(), node_id=1)
-        assert node.limit == 10
+        limit = IntLit(value=10, span=self._s(), node_id=4)
+        node = Do(limit=limit, body=body, condition=cond, span=self._s(), node_id=1)
+        assert node.limit is limit
 
     def test_do_body_is_expr(self) -> None:
         # body is a single Expr (not a tuple of stmts)
@@ -811,8 +812,9 @@ class TestDoNode:
     def test_do_equality_ignores_span_node_id(self) -> None:
         body = UnitLit(span=span(1, 0, 1, 2), node_id=5)
         cond = BoolLit(value=True, span=span(1, 0, 1, 4), node_id=6)
-        a = Do(limit=5, body=body, condition=cond, span=span(1, 0, 1, 20), node_id=1)
-        b = Do(limit=5, body=body, condition=cond, span=span(9, 0, 9, 20), node_id=99)
+        limit = IntLit(value=5, span=span(1, 0, 1, 1), node_id=7)
+        a = Do(limit=limit, body=body, condition=cond, span=span(1, 0, 1, 20), node_id=1)
+        b = Do(limit=limit, body=body, condition=cond, span=span(9, 0, 9, 20), node_id=99)
         assert a == b
 
     def test_do_frozen(self) -> None:
@@ -1275,7 +1277,8 @@ class TestVisitorWalk:
 
         # Do loop
         do_body = Block(items=(unit_lit,), span=s, node_id=512)
-        do_node = Do(limit=5, body=do_body, condition=bool_lit, span=s, node_id=513)
+        do_limit = IntLit(value=5, span=s, node_id=5120)
+        do_node = Do(limit=do_limit, body=do_body, condition=bool_lit, span=s, node_id=513)
 
         # Try/catch
         catch_body = unit_lit
@@ -1586,6 +1589,24 @@ class TestVisitorWalk:
         assert visited[0] is node
         assert visited[1] is body
         assert visited[2] is cond
+
+    def test_walk_do_with_limit_visits_limit_expr(self) -> None:
+        """walk(Do) with non-None limit visits the limit expression before body."""
+        from agm.agl.syntax.visitor import walk
+
+        s = self._s()
+        limit = IntLit(value=5, span=s, node_id=4)
+        body = UnitLit(span=s, node_id=2)
+        cond = BoolLit(value=True, span=s, node_id=3)
+        node = Do(limit=limit, body=body, condition=cond, span=s, node_id=1)
+
+        visited: list[object] = []
+        walk(node, visited.append)
+
+        assert visited[0] is node
+        assert visited[1] is limit
+        assert visited[2] is body
+        assert visited[3] is cond
 
     def test_walk_try_visits_body_then_handlers(self) -> None:
         """walk(Try) visits body, then each CatchClause (which visits its body)."""

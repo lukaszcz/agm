@@ -135,7 +135,7 @@ _RESERVED_NAMES: frozenset[str] = frozenset(_BUILTIN_CALL_NAMES)
 _PRAGMA_KEY_KINDS: dict[str, str] = {
     "log": "bool",
     "strict_json": "bool",
-    "max_iters": "int_pos",
+    "max_call_depth": "int_pos",
     "runner": "str_nonempty",
     "log_file": "str_nonempty",
     "timeout": "str_or_int",
@@ -1444,12 +1444,16 @@ class _Resolver:
     def _resolve_do(self, node: Do) -> None:
         """Resolve a ``do[limit] body until condition`` loop.
 
-        Opens ONE child scope; if the body is a ``Block``, resolves its items
-        DIRECTLY in that scope (no nested block scope) so bindings defined in
-        the body are visible to the ``until`` condition.  A non-Block body is
-        resolved directly in the child scope.  The condition is resolved in the
-        same child scope.
+        The bound expression (if any) is resolved in the ENCLOSING scope — it is
+        evaluated at loop entry, before any body bindings exist, so it cannot
+        see them.  Then opens ONE child scope; if the body is a ``Block``,
+        resolves its items DIRECTLY in that scope (no nested block scope) so
+        bindings defined in the body are visible to the ``until`` condition.  A
+        non-Block body is resolved directly in the child scope.  The condition
+        is resolved in the same child scope.
         """
+        if node.limit is not None:
+            self._resolve_expr(node.limit)
         with self._child_scope(node.node_id):
             if isinstance(node.body, Block):
                 # Inline block items directly — no extra block scope.

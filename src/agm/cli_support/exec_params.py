@@ -30,7 +30,6 @@ RESERVED_FLAGS: frozenset[str] = frozenset(
         "--no-log",
         "--strict-json",
         "--no-strict-json",  # negation of --strict-json; both are real built-ins
-        "--max-iters",
         "--module-path",
         "-I",
         "--help",

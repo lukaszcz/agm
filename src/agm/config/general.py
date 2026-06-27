@@ -447,13 +447,6 @@ def _optional_bool(table: TomlDict, key: str, *, default: bool = False) -> bool:
     return value if isinstance(value, bool) else default
 
 
-def _optional_positive_int(table: TomlDict, key: str, *, default: int) -> int:
-    value = table.get(key)
-    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
-        return value
-    return default
-
-
 def _optional_timeout(table: TomlDict, key: str) -> float | None:
     value = table.get(key)
     if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
@@ -538,7 +531,6 @@ class ExecConfig:
 
     runner: str | None
     strict_json: bool
-    default_loop_limit: int
     timeout: float | None
     agents: dict[str, str]
     log: bool
@@ -589,7 +581,6 @@ def exec_config_from_merged(
 
     resolved_runner = _optional_str(exec_table, "runner")
     resolved_strict_json = _optional_bool(exec_table, "strict_json")
-    resolved_loop_limit = _optional_positive_int(exec_table, "default_loop_limit", default=5)
 
     resolved_timeout = _optional_timeout(exec_table, "timeout")
 
@@ -606,7 +597,6 @@ def exec_config_from_merged(
     return ExecConfig(
         runner=resolved_runner,
         strict_json=resolved_strict_json,
-        default_loop_limit=resolved_loop_limit,
         timeout=resolved_timeout,
         agents=resolved_agents,
         log=resolved_log,

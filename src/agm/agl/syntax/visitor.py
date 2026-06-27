@@ -558,6 +558,8 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
             walk(case_branch, callback)
 
     elif isinstance(node, Do):
+        if node.limit is not None:
+            walk(node.limit, callback)
         walk(node.body, callback)
         walk(node.condition, callback)
 

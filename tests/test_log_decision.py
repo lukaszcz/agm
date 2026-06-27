@@ -538,7 +538,6 @@ def _exec_args(
         command=command,
         param_tokens=[],
         strict_json=None,
-        max_iters=None,
         runner=None,
         log=log,
         no_log=no_log,

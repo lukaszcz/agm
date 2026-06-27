@@ -241,9 +241,6 @@ class IrInterpreter:
     ``public_name`` and is owned by the entry module.
     """
 
-    #: Default loop iteration limit.
-    DEFAULT_LOOP_LIMIT: int = 100
-
     DEFAULT_MAX_CALL_DEPTH: int = 256
 
     def __init__(
@@ -251,7 +248,6 @@ class IrInterpreter:
         program: ExecutableProgram,
         *,
         trace: TraceStore | None = None,
-        loop_limit: int = DEFAULT_LOOP_LIMIT,
         max_call_depth: int = DEFAULT_MAX_CALL_DEPTH,
         param_values: Mapping[SymbolId, Value] | None = None,
         registry: AgentRegistry | None = None,
@@ -266,7 +262,6 @@ class IrInterpreter:
         self.module_initializer_values: dict[ModuleId, list[Value]] = {}
         self._call_depth: int = 0
         self._trace: TraceStore = trace if trace is not None else noop_trace()
-        self._loop_limit: int = loop_limit
         self._max_call_depth: int = max_call_depth
         self._param_values: Mapping[SymbolId, Value] = (
             param_values if param_values is not None else {}
@@ -443,6 +438,16 @@ class IrInterpreter:
                     limit=IntValue(self._max_call_depth),
                 )
             )
+
+    def _eval_loop_condition(self, cond_expr: "IrExpr") -> bool:
+        """Evaluate a do…until condition, requiring a ``BoolValue`` result."""
+        cond_val = self._eval(cond_expr)
+        if not isinstance(cond_val, BoolValue):
+            raise InvalidIrError(
+                f"IrLoop: condition evaluated to"
+                f" {type(cond_val).__name__}, expected BoolValue"
+            )
+        return cond_val.value
 
     def _execute_direct_call(
         self,
@@ -987,20 +992,31 @@ class IrInterpreter:
                     _make_match_error(subject_val, trace_id=self._trace.new_event_id())
                 )
 
-            case IrLoop(limit=loop_limit_opt, body=body_expr, condition=cond_expr):
-                limit = loop_limit_opt if loop_limit_opt is not None else self._loop_limit
+            case IrLoop(limit=limit_expr, body=body_expr, condition=cond_expr):
+                # No bound → unbounded loop: iterate until the condition holds,
+                # never raising MaxIterationsExceeded.
+                if limit_expr is None:
+                    while True:
+                        self._eval(body_expr)
+                        if self._eval_loop_condition(cond_expr):
+                            return UnitValue()
+                # Bounded loop: evaluate the bound once at entry.
+                limit_val = self._eval(limit_expr)
+                if not isinstance(limit_val, IntValue):
+                    raise InvalidIrError(
+                        f"IrLoop: bound evaluated to"
+                        f" {type(limit_val).__name__}, expected IntValue"
+                    )
+                limit = limit_val.value
+                # A non-positive bound runs the body zero times.
                 last_cond = False
                 for _iteration in range(limit):
                     self._eval(body_expr)
-                    cond_val = self._eval(cond_expr)
-                    if not isinstance(cond_val, BoolValue):
-                        raise InvalidIrError(
-                            f"IrLoop: condition evaluated to"
-                            f" {type(cond_val).__name__}, expected BoolValue"
-                        )
-                    last_cond = cond_val.value
+                    last_cond = self._eval_loop_condition(cond_expr)
                     if last_cond:
                         return UnitValue()
+                if limit <= 0:
+                    return UnitValue()
                 raise AglRaise(
                     _make_exc_value(
                         "MaxIterationsExceeded",

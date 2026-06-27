@@ -322,8 +322,8 @@ programs through `print`, interpolation, `as text`, or JSON conversion.
 
 Top-level `def`s may call themselves and each other without restriction
 at the language level. The runtime enforces a **call-depth limit** (default
-256, host-configurable). Exceeding it raises `RecursionError`
-([Exceptions](exceptions.md)):
+256, configurable via the `max_call_depth` config pragma). Exceeding it raises
+`RecursionError` ([Exceptions](exceptions.md)):
 
 ```agl
 def fact(n: int) -> int =

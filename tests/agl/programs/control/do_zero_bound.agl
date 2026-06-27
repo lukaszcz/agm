@@ -1,0 +1,10 @@
+# A non-positive bound runs the body zero times and completes normally (no
+# MaxIterationsExceeded), even though a positive-bound loop is post-test and
+# always runs at least once.
+param k: int
+var rounds: int = 0
+
+do[k]
+  rounds := rounds + 1
+until rounds >= 1
+print rounds

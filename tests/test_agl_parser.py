@@ -562,7 +562,7 @@ class TestDeclarations:
         assert cfg.value is True
 
     def test_config_pragma_int(self) -> None:
-        cfg = first(parse("config max_iters = 10"))
+        cfg = first(parse("config max_call_depth = 10"))
         assert isinstance(cfg, ConfigPragma)
         assert cfg.value == 10
 
@@ -1298,11 +1298,14 @@ class TestDoExpr:
     def test_do_with_bound(self) -> None:
         e = first(parse("do[10] x := 1 until x > 5"))
         assert isinstance(e, Do)
-        assert e.limit == 10
+        assert isinstance(e.limit, IntLit)
+        assert e.limit.value == 10
 
-    def test_do_zero_bound_raises(self) -> None:
-        with pytest.raises(AglSyntaxError, match="positive"):
-            parse("do[0] x until true")
+    def test_do_expression_bound(self) -> None:
+        # The bound is an arbitrary int-typed expression, not just a literal.
+        e = first(parse("do[n + 1] x := 1 until x > 5"))
+        assert isinstance(e, Do)
+        assert isinstance(e.limit, BinaryOp)
 
     def test_do_suite_body(self) -> None:
         src = "do\n  x := 1\n  y := 2\nuntil x > 5"

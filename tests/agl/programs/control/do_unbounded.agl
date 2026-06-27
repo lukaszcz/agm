@@ -1,0 +1,9 @@
+# A `do` without a bound is unbounded: it never raises MaxIterationsExceeded and
+# runs as many iterations as the condition requires (well beyond any small bound).
+param target: int
+var n: int = 0
+
+do
+  n := n + 1
+until n >= target
+print n

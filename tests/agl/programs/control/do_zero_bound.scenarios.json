@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "zero_runs_body_zero_times",
+      "params": {"k": 0},
+      "expect": {"stdout": "0\n"}
+    },
+    {
+      "name": "negative_runs_body_zero_times",
+      "params": {"k": -5},
+      "expect": {"stdout": "0\n"}
+    },
+    {
+      "name": "one_runs_body_once",
+      "params": {"k": 1},
+      "expect": {"stdout": "1\n"}
+    }
+  ]
+}

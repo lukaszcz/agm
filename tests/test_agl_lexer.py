@@ -369,10 +369,12 @@ class TestIndexBracketRemap:
             ("RSQB", "]"),
         ]
 
-    def test_do_loop_bound_merge_still_wins_over_index_lsqb(self) -> None:
+    def test_do_bound_lsqb_is_do_lsqb_not_index_lsqb(self) -> None:
         assert lark_tok("do[3] tick until done") == [
             ("DO", "do"),
-            ("LOOP_BOUND", "3"),
+            ("DO_LSQB", "["),
+            ("INT", "3"),
+            ("RSQB", "]"),
             ("NAME", "tick"),
             ("UNTIL", "until"),
             ("NAME", "done"),
@@ -2037,52 +2039,62 @@ class TestV2ThinArrow:
         assert result == [("THIN_ARROW", "->"), ("ARROW", "=>")]
 
 
-class TestV2LoopBoundPreserved:
-    """Verify the do[N] LOOP_BOUND merge is fully preserved after v2 changes.
+class TestV2DoLsqb:
+    """Verify the do[N] opening bracket is lexed as DO_LSQB after v2 changes.
 
-    Note: the LOOP_BOUND merge (DO LSQB INT RSQB → DO LOOP_BOUND) is performed
-    by ``_remap()`` inside ``AglLexer.lex()`` — the Lark-parser-facing interface.
-    The plain ``tokenize()`` / ``tok()`` helper does NOT perform this merge (it
-    bypasses ``_remap``).  Tests here use ``AglLexer.lex()`` directly so they
-    test the actual merge path.
+    Note: the DO_LSQB remap (the first ``[`` immediately following a ``do``
+    keyword becomes ``DO_LSQB``) is performed by ``_remap()`` inside
+    ``AglLexer.lex()`` — the Lark-parser-facing interface.  The plain
+    ``tokenize()`` / ``tok()`` helper does NOT perform this remap (it bypasses
+    ``_remap``).  Tests here use ``AglLexer.lex()`` directly so they test the
+    actual remap path.
     """
 
     def _lex(self, source: str) -> list[tuple[str, str]]:
-        """Lex via AglLexer (Lark interface) which applies LOOP_BOUND merge."""
+        """Lex via AglLexer (Lark interface) which applies DO_LSQB remap."""
         lexer = AglLexer(None)
         state = LexerState(source)
         return [(t.type, str(t)) for t in lexer.lex(state, None)]
 
     def test_do_loop_bound_merge_preserved(self) -> None:
-        # do[5] — the LSQB INT RSQB must still merge into LOOP_BOUND
+        # do[5] — the first [ after do becomes DO_LSQB; INT and RSQB follow.
         result = self._lex("do[5]")
         types = [t for t, _ in result]
-        assert "DO" in types  # uppercase after remap
-        assert "LOOP_BOUND" in types
+        assert "DO" in types
+        assert "DO_LSQB" in types
+        assert "INT" in types
+        assert "RSQB" in types
+        # The bound's [ must NOT be a plain LSQB.
         assert "LSQB" not in types
-        assert "RSQB" not in types
 
     def test_loop_bound_value_is_integer_string(self) -> None:
+        # The bound value is carried by the INT token, not a merged token.
         result = self._lex("do[10]")
-        lb = next(v for t, v in result if t == "LOOP_BOUND")
-        assert lb == "10"
+        int_val = next(v for t, v in result if t == "INT")
+        assert int_val == "10"
 
     def test_loop_bound_not_confused_with_list_literal(self) -> None:
-        # [5] alone (not after do) must NOT become LOOP_BOUND even via AglLexer.
+        # [5] alone (not after do) must NOT become DO_LSQB.
         result = self._lex("[5]")
         types = [t for t, _ in result]
         assert "LSQB" in types
         assert "INT" in types
         assert "RSQB" in types
-        assert "LOOP_BOUND" not in types
+        assert "DO_LSQB" not in types
 
     def test_do_with_body_and_thin_arrow_no_conflict(self) -> None:
-        # Ensure the thin-arrow addition doesn't interfere with the do[N] merge
-        # when both appear in the same token stream.
+        # DO_LSQB must appear and THIN_ARROW must also appear without conflict.
         result = self._lex("do[3] x -> y")
         types = [t for t, _ in result]
-        assert "LOOP_BOUND" in types
+        assert "DO_LSQB" in types
         assert "THIN_ARROW" in types
+
+    def test_do_lsqb_with_space_between_do_and_bracket(self) -> None:
+        # Whitespace between do and [ is allowed; the [ still becomes DO_LSQB.
+        result = self._lex("do [5]")
+        types = [t for t, _ in result]
+        assert "DO_LSQB" in types
+        assert "LSQB" not in types
 
 
 # ---------------------------------------------------------------------------

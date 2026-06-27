@@ -65,7 +65,7 @@ def _run_ir(
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         result = IrInterpreter(
-            executable, registry=registry, param_values=params, loop_limit=100
+            executable, registry=registry, param_values=params
         ).run()
     return result, output.getvalue()
 

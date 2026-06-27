@@ -30,8 +30,6 @@ import pytest
 from agm.project.workspace_shell import _sanitize_session_key
 from tests._proc_helpers import wait_for_path
 
-HAS_ZSH = shutil.which("zsh") is not None
-
 
 def _workspace_shell_path(env: dict[str, str], session_name: str) -> Path:
     """Return the per-session wrapper path the real agm writes under *env*.
@@ -46,7 +44,7 @@ def _workspace_shell_path(env: dict[str, str], session_name: str) -> Path:
     else:
         base = Path(env["HOME"]) / ".cache"
     return base / "agm" / "shell" / _sanitize_session_key(session_name) / "shell"
-needs_zsh = pytest.mark.skipif(not HAS_ZSH, reason="zsh is required")
+
 
 # A fake ``tmux`` binary used by tests for agm open, tmux.sh and
 # tmux-apply-layout.sh.  It logs every invocation and returns canned
@@ -6151,7 +6149,6 @@ class TestLoop:
 # ── agm open ────────────────────────────────────────────────────────────────
 
 
-@needs_zsh
 class TestOpen:
     """agm open: workspace management."""
 
@@ -6649,7 +6646,6 @@ class TestOpen:
 # ── agm tmux open/close ─────────────────────────────────────────────────────
 
 
-@needs_zsh
 class TestTmuxOpenSession:
     """agm tmux open: create tmux sessions with tiled pane layout."""
 
@@ -6773,7 +6769,6 @@ class TestTmuxOpenSession:
         assert "Detached" in result.stdout
 
 
-@needs_zsh
 class TestTmuxCloseSession:
     """agm tmux close: kill tmux sessions by name."""
 
@@ -6790,7 +6785,6 @@ class TestTmuxCloseSession:
         assert "kill-session -t my-session" in log
 
 
-@needs_zsh
 class TestTmuxOpenErrors:
     """agm tmux open: argument validation."""
 
@@ -6828,7 +6822,6 @@ class TestTmuxOpenErrors:
 # ── agm tmux layout ────────────────────────────────────────────────────────
 
 
-@needs_zsh
 class TestTmuxLayout:
     """agm tmux layout: apply tiled pane layout."""
 
@@ -7278,7 +7271,6 @@ class TestEdgeCases:
         ).stdout.strip()
         assert head == "release/v2.1.0"
 
-    @needs_zsh
     def test_pane_count_zero(self, tmp_path: Path, env: dict[str, str]) -> None:
         """Pane count of 0 should be rejected."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
@@ -7295,7 +7287,6 @@ class TestEdgeCases:
         assert result.returncode != 0
         assert "pane count must be a positive integer" in result.stderr
 
-    @needs_zsh
     def test_negative_pane_count(self, tmp_path: Path, env: dict[str, str]) -> None:
         """Negative pane count should be rejected."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
@@ -7370,7 +7361,6 @@ class TestEdgeCases:
 
         assert (tmp_path / "my-cool-project" / "repo").is_dir()
 
-    @needs_zsh
     def test_large_pane_count(self, tmp_path: Path, env: dict[str, str]) -> None:
         """A larger pane count (16) should work without error."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
@@ -7472,7 +7462,6 @@ class TestWorkflows:
         assert (wt / ".env").read_text() == "DB_HOST=localhost"
         assert (wt / ".mcp.json").read_text() == '{"key": "value"}'
 
-    @needs_zsh
     def test_init_then_open_then_new_sessions(self, tmp_path: Path, env: dict[str, str]) -> None:
         """init → open repo → open feature branch → verify both."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
@@ -7816,7 +7805,7 @@ class TestExecCommand:
         result = run_agm(["exec", str(program)], env=env, cwd=str(work))
 
         assert result.returncode == 0
-        assert "pong" in result.stdout
+        assert result.stdout.strip() == "pong"
 
     def test_exec_runs_multi_agent_review_fix_workflow(
         self, tmp_path: Path, env: dict[str, str]
@@ -7968,8 +7957,8 @@ class TestReplCommand:
         )
 
         assert result.returncode == 0
-        # The evaluated expression yields 3 in the output.
-        assert "3" in result.stdout
+        # The evaluated expression yields exactly 3 on a standalone output line.
+        assert any(line.split()[-1:] == ["3"] for line in result.stdout.splitlines())
 
     def test_repl_help_lists_meta_commands(
         self, tmp_path: Path, env: dict[str, str]
@@ -7998,9 +7987,9 @@ class TestReplCommand:
         )
 
         assert result.returncode == 0
-        # The first binding evaluates to 21, the second expression reuses it.
-        assert "21" in result.stdout
-        assert "42" in result.stdout
+        # The first binding evaluates to 21; the second expression evaluates to exactly 42.
+        assert any(line.split()[-1:] == ["21"] for line in result.stdout.splitlines())
+        assert any(line.split()[-1:] == ["42"] for line in result.stdout.splitlines())
 
     def test_repl_persistent_ir_supports_mutation_and_functions(
         self, tmp_path: Path, env: dict[str, str]
@@ -8021,7 +8010,7 @@ class TestReplCommand:
         )
 
         assert result.returncode == 0
-        assert "10" in result.stdout
+        assert any(line.split()[-1:] == ["10"] for line in result.stdout.splitlines())
 
     def test_repl_with_configured_lib_root(
         self, tmp_path: Path, env: dict[str, str]
@@ -8047,7 +8036,7 @@ class TestReplCommand:
             input="import math\ndouble(21)\n:quit\n",
         )
         assert result.returncode == 0
-        assert "42" in result.stdout
+        assert any(line.split()[-1:] == ["42"] for line in result.stdout.splitlines())
 
 
 class TestReviewCommand:

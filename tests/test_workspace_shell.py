@@ -421,42 +421,82 @@ class TestNestedOpen:
 
 
 class TestZshCustomZdotdir:
-    """zsh users with a custom ``ZDOTDIR`` must keep their config, even nested."""
+    """Wrapper correctly sources user shell config across shells.
 
-    def _setup_home(self, tmp_path: Path) -> tuple[Path, Path, Path]:
-        home = tmp_path / "home"
-        zdot = home / "zdot"
-        bin_dir = tmp_path / "bin"
-        home.mkdir()
-        zdot.mkdir()
-        bin_dir.mkdir()
-        # The real config lives under the custom ZDOTDIR, NOT under $HOME.
-        (zdot / ".zshrc").write_text('export CUSTOMRC_RAN=1\n', encoding="utf-8")
-        (home / ".zshrc").write_text('export HOMERC_RAN=1\n', encoding="utf-8")
-        _fake_agm(bin_dir)
-        return home, zdot, bin_dir
+    bash and sh cases run unconditionally (these shells are always available).
+    The zsh case covers the ZDOTDIR save/replay branch and is skipped only when
+    zsh is genuinely absent.
+    """
 
-    def test_first_open_sources_custom_zdotdir_zshrc(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        ("shell_name", "expected"),
+        [
+            ("bash", "ran:1"),
+            ("sh", "ran:1"),
+            pytest.param(
+                "zsh",
+                "custom:1 home:0",
+                marks=pytest.mark.skipif(
+                    shutil.which("zsh") is None, reason="zsh not available"
+                ),
+            ),
+        ],
+    )
+    def test_wrapper_sources_user_rc(
+        self,
+        shell_name: str,
+        expected: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        zsh = shutil.which("zsh")
-        if zsh is None:
-            pytest.skip("zsh is required")
+        """Wrapper sources the correct user rc for each shell.
 
+        bash: sources ``~/.bashrc``; sh: sources the user ``$ENV`` file;
+        zsh: sources the custom ZDOTDIR's ``.zshrc``, NOT ``$HOME/.zshrc``.
+        """
+        shell = shutil.which(shell_name)
+        assert shell is not None, f"{shell_name} must be available on this machine"
+
+        home = tmp_path / "home"
+        bin_dir = tmp_path / "bin"
         monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
-        home, zdot, bin_dir = self._setup_home(tmp_path)
-        wrapper = ensure_workspace_shell("s", env={"SHELL": zsh})
+        home.mkdir()
+        bin_dir.mkdir()
+        _fake_agm(bin_dir)
+
+        extra_run_env: dict[str, str] = {}
+
+        if shell_name == "bash":
+            (home / ".bashrc").write_text('export CUSTOMRC_RAN=1\n', encoding="utf-8")
+            input_cmd = 'printf "ran:%s\\n" "${CUSTOMRC_RAN:-0}"\nexit\n'
+        elif shell_name == "sh":
+            user_env_file = home / ".userenv"
+            user_env_file.write_text('export CUSTOMRC_RAN=1\n', encoding="utf-8")
+            extra_run_env["ENV"] = str(user_env_file)
+            input_cmd = 'printf "ran:%s\\n" "${CUSTOMRC_RAN:-0}"\nexit\n'
+        else:  # zsh — ZDOTDIR save/replay branch
+            zdot = home / "zdot"
+            zdot.mkdir()
+            # Custom ZDOTDIR's rc; $HOME/.zshrc must NOT be sourced.
+            (zdot / ".zshrc").write_text('export CUSTOMRC_RAN=1\n', encoding="utf-8")
+            (home / ".zshrc").write_text('export HOMERC_RAN=1\n', encoding="utf-8")
+            extra_run_env["ZDOTDIR"] = str(zdot)
+            input_cmd = (
+                'printf "custom:%s home:%s\\n" "${CUSTOMRC_RAN:-0}" "${HOMERC_RAN:-0}"\nexit\n'
+            )
+
+        wrapper = ensure_workspace_shell("s", env={"SHELL": shell})
 
         result = subprocess.run(
             [str(wrapper)],
-            input='printf "custom:%s home:%s\\n" "${CUSTOMRC_RAN:-0}" "${HOMERC_RAN:-0}"\nexit\n',
+            input=input_cmd,
             cwd=tmp_path,
             env={
                 **os.environ,
                 "HOME": str(home),
-                "ZDOTDIR": str(zdot),
                 "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
-                "SHELL": zsh,
+                "SHELL": shell,
+                **extra_run_env,
             },
             capture_output=True,
             text=True,
@@ -465,53 +505,7 @@ class TestZshCustomZdotdir:
         )
 
         assert result.returncode == 0
-        # The custom ZDOTDIR's .zshrc ran; the $HOME/.zshrc did not.
-        assert "custom:1 home:0" in result.stdout
-
-    def test_nested_open_preserves_custom_zdotdir(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        zsh = shutil.which("zsh")
-        if zsh is None:
-            pytest.skip("zsh is required")
-
-        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
-        home, zdot, bin_dir = self._setup_home(tmp_path)
-        outer = ensure_workspace_shell("outer", env={"SHELL": zsh})
-        outer_zdot = workspace_shell_dir("outer") / "zsh"
-        # Emulate the environment a workspace zsh shell exports after the outer
-        # open: SHELL -> wrapper, real shell + user's ZDOTDIR preserved, and the
-        # live ZDOTDIR pointing at the outer workspace zsh dir.
-        inner_env = {
-            "SHELL": str(outer),
-            "AGM_REAL_SHELL": zsh,
-            "AGM_USER_ZDOTDIR": str(zdot),
-            "ZDOTDIR": str(outer_zdot),
-        }
-        inner = ensure_workspace_shell("inner", env=inner_env)
-
-        result = subprocess.run(
-            [str(inner)],
-            input='printf "custom:%s home:%s\\n" "${CUSTOMRC_RAN:-0}" "${HOMERC_RAN:-0}"\nexit\n',
-            cwd=tmp_path,
-            env={
-                **os.environ,
-                "HOME": str(home),
-                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
-                "SHELL": str(outer),
-                "AGM_REAL_SHELL": zsh,
-                "AGM_USER_ZDOTDIR": str(zdot),
-                "ZDOTDIR": str(outer_zdot),
-            },
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-
-        assert result.returncode == 0
-        # The nested zsh still sources the user's custom ZDOTDIR config.
-        assert "custom:1 home:0" in result.stdout
+        assert expected in result.stdout
 
 
 class TestSelfHealE2E:

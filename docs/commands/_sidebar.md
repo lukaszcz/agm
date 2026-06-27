@@ -8,4 +8,3 @@
 - [Sandboxed command execution](run.md)
 - [Worktrees](worktrees.md)
 - [tmux sessions](tmux.md)
-- [Help and aliases](aliases.md)

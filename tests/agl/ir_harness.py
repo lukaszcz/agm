@@ -77,6 +77,12 @@ def evaluate_ir(
     return result
 
 
+def evaluate_ir_output(source: str, param_values: dict[str, Value] | None = None) -> str:
+    """Run the program through the IR pipeline and return its captured stdout."""
+    _, output = _run_ir(source, param_values)
+    return output
+
+
 def evaluate_ir_raises(
     source: str, param_values: dict[str, Value] | None = None
 ) -> ExceptionValue:

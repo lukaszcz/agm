@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from agm.agl.semantics.values import BoolValue, EnumValue, IntValue, RecordValue, TextValue
 from tests.agl.ir_harness import evaluate_ir_graph, evaluate_ir_graph_raises
 
 
@@ -22,7 +23,9 @@ let result = lib::add(3, 4)
 let x = 10
 ()
 """
-    evaluate_ir_graph(entry_source, {"lib": lib_source}, tmp_path)
+    r = evaluate_ir_graph(entry_source, {"lib": lib_source}, tmp_path)
+    assert r["result"] == IntValue(7)
+    assert r["x"] == IntValue(10)
 
 
 def test_cross_module_mutual_recursion(tmp_path: Path) -> None:
@@ -45,9 +48,11 @@ let r1 = even::is_even(4)
 let r2 = even::is_even(3)
 ()
 """
-    evaluate_ir_graph(
+    r = evaluate_ir_graph(
         entry_source, {"even": even_source, "odd": odd_source}, tmp_path
     )
+    assert r["r1"] == BoolValue(True)
+    assert r["r2"] == BoolValue(False)
 
 
 def test_imported_record_and_enum(tmp_path: Path) -> None:
@@ -71,7 +76,16 @@ let is_red = case c of
     | _ => false
 ()
 """
-    evaluate_ir_graph(entry_source, {"shapes": shapes_source}, tmp_path)
+    r = evaluate_ir_graph(entry_source, {"shapes": shapes_source}, tmp_path)
+    assert r["px"] == IntValue(1)
+    assert r["is_red"] == BoolValue(True)
+    p = r["p"]
+    assert isinstance(p, RecordValue)
+    assert p.fields["x"] == IntValue(1)
+    assert p.fields["y"] == IntValue(2)
+    c = r["c"]
+    assert isinstance(c, EnumValue)
+    assert c.variant == "Red"
 
 
 def test_same_named_types_in_two_modules(tmp_path: Path) -> None:
@@ -99,9 +113,11 @@ let v1 = mod_a::get_first(p1)
 let v2 = mod_b::get_first(p2)
 ()
 """
-    evaluate_ir_graph(
+    r = evaluate_ir_graph(
         entry_source, {"mod_a": mod_a_source, "mod_b": mod_b_source}, tmp_path
     )
+    assert r["v1"] == IntValue(1)
+    assert r["v2"] == TextValue("hello")
 
 
 def test_runtime_failure_inside_library_function(tmp_path: Path) -> None:
@@ -115,7 +131,8 @@ import mathlib
 let result = mathlib::safe_div(10, 0)
 ()
 """
-    evaluate_ir_graph_raises(entry_source, {"mathlib": mathlib_source}, tmp_path)
+    exc = evaluate_ir_graph_raises(entry_source, {"mathlib": mathlib_source}, tmp_path)
+    assert exc.display_name == "ArithmeticError"
 
 
 def test_open_imported_nullary_enum_as_value(tmp_path: Path) -> None:
@@ -133,4 +150,8 @@ let is_running = case s of
     | Done => false
 ()
 """
-    evaluate_ir_graph(entry_source, {"status": status_source}, tmp_path)
+    r = evaluate_ir_graph(entry_source, {"status": status_source}, tmp_path)
+    assert r["is_running"] == BoolValue(True)
+    s = r["s"]
+    assert isinstance(s, EnumValue)
+    assert s.variant == "Running"

@@ -18,6 +18,7 @@ from agm.agl.semantics.values import (
 )
 from tests.agl.ir_harness import (
     evaluate_ir,
+    evaluate_ir_output,
     evaluate_ir_raises,
 )
 
@@ -31,42 +32,50 @@ def test_print_int() -> None:
     source = "let x = 1\nprint(x)\n()"
     ir = evaluate_ir(source)
     assert ir["x"] == IntValue(1)
+    out = evaluate_ir_output(source)
+    assert out == "1\n"
 
 
 def test_print_decimal() -> None:
     """print(decimal) — rendered as decimal string."""
     source = "let d: decimal = 3.14\nprint(d)\n()"
-    evaluate_ir(source)
+    out = evaluate_ir_output(source)
+    assert out == "3.14\n"
 
 
 def test_print_text() -> None:
     """print(text) — rendered as raw text."""
     source = 'let x = "hello world"\nprint(x)\n()'
-    evaluate_ir(source)
+    out = evaluate_ir_output(source)
+    assert out == "hello world\n"
 
 
 def test_print_bool_true() -> None:
     """print(bool) — true rendered as 'true'."""
     source = "let x = true\nprint(x)\n()"
-    evaluate_ir(source)
+    out = evaluate_ir_output(source)
+    assert out == "true\n"
 
 
 def test_print_bool_false() -> None:
     """print(bool) — false rendered as 'false'."""
     source = "let x = false\nprint(x)\n()"
-    evaluate_ir(source)
+    out = evaluate_ir_output(source)
+    assert out == "false\n"
 
 
 def test_print_list() -> None:
     """print(list) — IR pipeline renders list correctly."""
     source = "let x = [1, 2, 3]\nprint(x)\n()"
-    evaluate_ir(source)
+    out = evaluate_ir_output(source)
+    assert out == "[1, 2, 3]\n"
 
 
 def test_print_dict() -> None:
     """print(dict) — IR pipeline renders dict correctly."""
     source = 'let x = {"a": 1, "b": 2}\nprint(x)\n()'
-    evaluate_ir(source)
+    out = evaluate_ir_output(source)
+    assert out == '{"a": 1, "b": 2}\n'
 
 
 def test_print_record() -> None:
@@ -79,7 +88,8 @@ def test_print_record() -> None:
         print(p)
         ()
     """)
-    evaluate_ir(source)
+    out = evaluate_ir_output(source)
+    assert out == "Point(x: 10, y: 20)\n"
 
 
 def test_print_enum_variant() -> None:
@@ -93,7 +103,8 @@ def test_print_enum_variant() -> None:
         print(c)
         ()
     """)
-    evaluate_ir(source)
+    out = evaluate_ir_output(source)
+    assert out == "Color.Green\n"
 
 
 def test_print_multiple_calls() -> None:
@@ -105,7 +116,8 @@ def test_print_multiple_calls() -> None:
         print(true)
         ()
     """)
-    evaluate_ir(source)
+    out = evaluate_ir_output(source)
+    assert out == "line1\n10\ntrue\n"
 
 
 # ===========================================================================
@@ -123,7 +135,8 @@ def test_print_inside_if() -> None:
           ()
         ()
     """)
-    evaluate_ir(source)
+    out = evaluate_ir_output(source)
+    assert out == "yes\n"
 
 
 def test_print_inside_function() -> None:
@@ -134,7 +147,8 @@ def test_print_inside_function() -> None:
         greet("Alice")
         ()
     """)
-    evaluate_ir(source)
+    out = evaluate_ir_output(source)
+    assert out == "Alice\n"
 
 
 def test_print_inside_loop() -> None:
@@ -147,7 +161,8 @@ def test_print_inside_loop() -> None:
         until i >= 3
         ()
     """)
-    evaluate_ir(source)
+    out = evaluate_ir_output(source)
+    assert out == "0\n1\n2\n"
 
 
 # ===========================================================================
@@ -322,3 +337,5 @@ def test_param_with_print() -> None:
     """)
     ir = evaluate_ir(source, param_values={"msg": TextValue("hi")})
     assert ir["x"] == IntValue(1)
+    out = evaluate_ir_output(source, param_values={"msg": TextValue("hi")})
+    assert out == "hi\n"

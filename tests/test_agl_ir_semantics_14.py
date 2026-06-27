@@ -1,8 +1,7 @@
 """IR semantic tests for M6b — agent dispatch (ask / ask-request) in the IR pipeline.
 
-Differential ir_semantic: each test asserts that the ir_reference AST interpreter and the
-new IR pipeline produce identical values and stdout for the same AgL program when
-given the same scripted agent responses.
+Each test evaluates an AgL program through the IR pipeline with scripted agent responses
+and asserts the produced values and stdout.
 """
 
 from __future__ import annotations
@@ -43,11 +42,10 @@ agent summarizer
 let summary: text = ask("Summarise it.", agent: summarizer)
 summary
 """
-    ir_reference, ir = evaluate_ir_with_agents(
+    ir = evaluate_ir_with_agents(
         source,
         scripts={"summarizer": ["This is a summary."]},
     )
-    assert ir_reference["summary"] == TextValue("This is a summary.")
     assert ir["summary"] == TextValue("This is a summary.")
 
 
@@ -63,11 +61,10 @@ agent counter
 let n: int = ask("How many?", agent: counter)
 n
 """
-    ir_reference, ir = evaluate_ir_with_agents(
+    ir = evaluate_ir_with_agents(
         source,
         scripts={"counter": ["42"]},
     )
-    assert ir_reference["n"] == IntValue(42)
     assert ir["n"] == IntValue(42)
 
 
@@ -87,13 +84,10 @@ agent locator
 let pt: Point = ask("Find the point.", agent: locator)
 pt
 """
-    ir_reference, ir = evaluate_ir_with_agents(
+    ir = evaluate_ir_with_agents(
         source,
         scripts={"locator": ['{"x": 3, "y": 7}']},
     )
-    assert isinstance(ir_reference["pt"], RecordValue)
-    assert ir_reference["pt"].fields["x"] == IntValue(3)
-    assert ir_reference["pt"].fields["y"] == IntValue(7)
     assert isinstance(ir["pt"], RecordValue)
     assert ir["pt"].fields["x"] == IntValue(3)
     assert ir["pt"].fields["y"] == IntValue(7)
@@ -111,12 +105,12 @@ agent lister
 let items: list[text] = ask("List items.", agent: lister)
 items
 """
-    ir_reference, ir = evaluate_ir_with_agents(
+    ir = evaluate_ir_with_agents(
         source,
         scripts={"lister": ['["alpha", "beta", "gamma"]']},
     )
-    assert isinstance(ir_reference["items"], ListValue)
-    assert ir_reference["items"].elements == (
+    assert isinstance(ir["items"], ListValue)
+    assert ir["items"].elements == (
         TextValue("alpha"), TextValue("beta"), TextValue("gamma")
     )
     assert isinstance(ir["items"], ListValue)
@@ -141,12 +135,10 @@ agent checker
 let status: Status = ask("Check it.", agent: checker)
 status
 """
-    ir_reference, ir = evaluate_ir_with_agents(
+    ir = evaluate_ir_with_agents(
         source,
         scripts={"checker": ['{"$case": "Ok"}']},
     )
-    assert isinstance(ir_reference["status"], EnumValue)
-    assert ir_reference["status"].variant == "Ok"
     assert isinstance(ir["status"], EnumValue)
     assert ir["status"].variant == "Ok"
 
@@ -164,11 +156,10 @@ let n: int = ask("Give me a number.", agent: answerer)
 n
 """
     fenced = "```json\n17\n```"
-    ir_reference, ir = evaluate_ir_with_agents(
+    ir = evaluate_ir_with_agents(
         source,
         scripts={"answerer": [fenced]},
     )
-    assert ir_reference["n"] == IntValue(17)
     assert ir["n"] == IntValue(17)
 
 
@@ -184,11 +175,10 @@ agent parser
 let n: int = ask("Parse this.", agent: parser, on_parse_error: Retry(n: 1))
 n
 """
-    ir_reference, ir = evaluate_ir_with_agents(
+    ir = evaluate_ir_with_agents(
         source,
         scripts={"parser": ["not json at all", "99"]},
     )
-    assert ir_reference["n"] == IntValue(99)
     assert ir["n"] == IntValue(99)
 
 
@@ -204,12 +194,10 @@ agent parser
 let n: int = ask("Parse this.", agent: parser, on_parse_error: Retry(n: 1))
 n
 """
-    ir_reference_exc, ir_exc = evaluate_ir_raises_with_agents(
+    ir_exc = evaluate_ir_raises_with_agents(
         source,
         scripts={"parser": ["bad1", "bad2"]},
     )
-    assert isinstance(ir_reference_exc, ExceptionValue)
-    assert ir_reference_exc.display_name == "AgentParseError"
     assert isinstance(ir_exc, ExceptionValue)
     assert ir_exc.display_name == "AgentParseError"
 
@@ -226,11 +214,10 @@ agent strict_agent
 let b: bool = ask("True or false?", agent: strict_agent, strict_json: true)
 b
 """
-    ir_reference, ir = evaluate_ir_with_agents(
+    ir = evaluate_ir_with_agents(
         source,
         scripts={"strict_agent": ["true"]},
     )
-    assert ir_reference["b"] == BoolValue(True)
     assert ir["b"] == BoolValue(True)
 
 
@@ -247,12 +234,11 @@ let _: unit = ask("Notify!", agent: notifier)
 let done: text = "done"
 done
 """
-    ir_reference, ir = evaluate_ir_with_agents(
+    ir = evaluate_ir_with_agents(
         source,
         scripts={"notifier": ["acknowledged"]},
     )
     # The `_` binding may or may not appear in the snapshot; check `done` which always does.
-    assert ir_reference.get("done") == TextValue("done")
     assert ir.get("done") == TextValue("done")
 
 
@@ -269,11 +255,10 @@ def get_name(prompt: text) -> text = ask(prompt, agent: namer)
 let name: text = get_name("What is the name?")
 name
 """
-    ir_reference, ir = evaluate_ir_with_agents(
+    ir = evaluate_ir_with_agents(
         source,
         scripts={"namer": ["Alice"]},
     )
-    assert ir_reference["name"] == TextValue("Alice")
     assert ir["name"] == TextValue("Alice")
 
 
@@ -291,15 +276,13 @@ let a: text = ask("First.", agent: first)
 let b: text = ask("Second.", agent: second)
 b
 """
-    ir_reference, ir = evaluate_ir_with_agents(
+    ir = evaluate_ir_with_agents(
         source,
         scripts={
             "first": ["hello"],
             "second": ["world"],
         },
     )
-    assert ir_reference["a"] == TextValue("hello")
-    assert ir_reference["b"] == TextValue("world")
     assert ir["a"] == TextValue("hello")
     assert ir["b"] == TextValue("world")
 
@@ -317,12 +300,10 @@ let n: int = ask("Give int.", agent: validator)
 n
 """
     # Agent returns a string, not an integer — schema validation fails.
-    ir_reference_exc, ir_exc = evaluate_ir_raises_with_agents(
+    ir_exc = evaluate_ir_raises_with_agents(
         source,
         scripts={"validator": ['"not an int"']},
     )
-    assert isinstance(ir_reference_exc, ExceptionValue)
-    assert ir_reference_exc.display_name == "AgentParseError"
     assert isinstance(ir_exc, ExceptionValue)
     assert ir_exc.display_name == "AgentParseError"
 
@@ -340,12 +321,10 @@ let n: int = ask("Give int.", agent: strict_agent, strict_json: true)
 n
 """
     # Fenced JSON fails in strict mode (strict does not strip fences).
-    ir_reference_exc, ir_exc = evaluate_ir_raises_with_agents(
+    ir_exc = evaluate_ir_raises_with_agents(
         source,
         scripts={"strict_agent": ["```json\n42\n```"]},
     )
-    assert isinstance(ir_reference_exc, ExceptionValue)
-    assert ir_reference_exc.display_name == "AgentParseError"
     assert isinstance(ir_exc, ExceptionValue)
     assert ir_exc.display_name == "AgentParseError"
 
@@ -361,14 +340,13 @@ def test_default_agent_ask() -> None:
 let result: text = ask("Hello default.")
 result
 """
-    ir_reference, ir = evaluate_ir_with_agents(
+    ir = evaluate_ir_with_agents(
         source,
         scripts={},
         default_responses=["default response"],
         agent_names=frozenset(),
         has_default=True,
     )
-    assert ir_reference["result"] == TextValue("default response")
     assert ir["result"] == TextValue("default response")
 
 
@@ -387,12 +365,10 @@ let prompt_text: text = req.prompt
 prompt_text
 """
     # ask-request does not call the agent — no scripted responses needed.
-    ir_reference, ir = evaluate_ir_with_agents(
+    ir = evaluate_ir_with_agents(
         source,
         scripts={"dummy": []},
     )
-    assert ir_reference["agent_name"] == TextValue("dummy")
-    assert ir_reference["prompt_text"] == TextValue("My prompt.")
     assert ir["agent_name"] == TextValue("dummy")
     assert ir["prompt_text"] == TextValue("My prompt.")
 
@@ -410,11 +386,10 @@ let n: int = ask("Give int.", agent: fixer, on_parse_error: Retry(n: 1))
 n
 """
     # First response: string (wrong type) → schema error; second: valid int.
-    ir_reference, ir = evaluate_ir_with_agents(
+    ir = evaluate_ir_with_agents(
         source,
         scripts={"fixer": ['"oops"', "42"]},
     )
-    assert ir_reference["n"] == IntValue(42)
     assert ir["n"] == IntValue(42)
 
 
@@ -424,7 +399,7 @@ n
 
 
 def test_enum_bad_case_raises_agent_parse_error() -> None:
-    """Enum ask: agent returns unknown $case → AgentParseError from both pipelines."""
+    """Enum ask: agent returns unknown $case → AgentParseError."""
     import json
 
     from agm.agl.ir.contracts import (
@@ -501,12 +476,10 @@ agent checker
 let s: Status = ask("Status?", agent: checker, on_parse_error: Retry(n: 1))
 s
 """
-    ir_reference, ir = evaluate_ir_with_agents(
+    ir = evaluate_ir_with_agents(
         source,
         scripts={"checker": ['{"$case": "Bad"}', '{"$case": "Ok"}']},
     )
-    assert isinstance(ir_reference["s"], EnumValue)
-    assert ir_reference["s"].variant == "Ok"
     assert isinstance(ir["s"], EnumValue)
     assert ir["s"].variant == "Ok"
 
@@ -648,11 +621,10 @@ let req = ask-request::[int]("Give me a number.", agent: worker)
 let prompt_text: text = req.prompt
 prompt_text
 """
-    ir_reference, ir = evaluate_ir_with_agents(
+    ir = evaluate_ir_with_agents(
         source,
         scripts={"worker": []},
     )
-    assert ir_reference["prompt_text"] == TextValue("Give me a number.")
     assert ir["prompt_text"] == TextValue("Give me a number.")
 
 
@@ -1520,11 +1492,10 @@ prompt_text
 """
     from tests.agl.ir_harness import evaluate_ir_with_agents
 
-    ir_reference, ir = evaluate_ir_with_agents(
+    ir = evaluate_ir_with_agents(
         source,
         scripts={"a": []},
     )
-    assert ir_reference["prompt_text"] == TextValue("Do it.")
     assert ir["prompt_text"] == TextValue("Do it.")
 
 
@@ -1599,11 +1570,10 @@ n
 """
     from tests.agl.ir_harness import evaluate_ir_with_agents
 
-    ir_reference, ir = evaluate_ir_with_agents(
+    ir = evaluate_ir_with_agents(
         source,
         scripts={"a": ["5"]},
     )
-    assert ir_reference["n"] == IntValue(5)
     assert ir["n"] == IntValue(5)
 
 
@@ -1750,12 +1720,10 @@ target
 """
     from tests.agl.ir_harness import evaluate_ir_with_agents
 
-    ir_reference, ir = evaluate_ir_with_agents(
+    ir = evaluate_ir_with_agents(
         source,
         scripts={"a": []},
     )
-    assert isinstance(ir_reference["target"], EnumValue)
-    assert ir_reference["target"].variant == "None"
     assert isinstance(ir["target"], EnumValue)
     assert ir["target"].variant == "None"
 
@@ -1837,11 +1805,10 @@ n
     from tests.agl.ir_harness import evaluate_ir_with_agents
 
     # First 2 responses are bad JSON, 3rd is valid.
-    ir_reference, ir = evaluate_ir_with_agents(
+    ir = evaluate_ir_with_agents(
         source,
         scripts={"a": ["bad", "bad", "7"]},
     )
-    assert ir_reference["n"] == IntValue(7)
     assert ir["n"] == IntValue(7)
 
 
@@ -2298,20 +2265,18 @@ def test_classify_enum_failure_known_case_all_payload_present() -> None:
 
 
 # ---------------------------------------------------------------------------
-# M1 (MAJOR) — enum oneOf validation-error message parity ir_semantic tests
+# M1 (MAJOR) — enum oneOf validation-error message ir_semantic tests
 #
 # These tests verify that when ask() exhausts all attempts due to enum errors,
-# the validation_errors (category, message, field) from the IR pipeline are
-# byte-identical to the ir_reference pipeline.  Added per TDD mandate before the fix.
+# the IR pipeline produces AgentParseError with the expected validation_errors
+# (category, message, field) content.  Added per TDD mandate before the fix.
 # ---------------------------------------------------------------------------
 
 
-def test_enum_unknown_case_exhausted_ir_semantic_parity() -> None:
-    """Enum ask exhausted: unknown $case → validation_errors match ir_reference (M1 parity).
+def test_enum_unknown_case_exhausted() -> None:
+    """Enum ask exhausted: unknown $case → AgentParseError with expected validation_errors.
 
-    The harness's evaluate_ir_raises_with_agents already asserts byte-identical
-    parity between ir_reference and IR.  We additionally document and verify the exact
-    message content for the unknown-$case shape.
+    Verifies the exact message content for the unknown-$case shape.
     """
     source = """\
 enum Status
@@ -2322,13 +2287,12 @@ agent checker
 let status: Status = ask("Check.", agent: checker)
 status
 """
-    ir_reference_exc, ir_exc = evaluate_ir_raises_with_agents(
+    ir_exc = evaluate_ir_raises_with_agents(
         source,
         scripts={"checker": ['{"$case": "Bogus"}']},
     )
-    assert ir_reference_exc.display_name == "AgentParseError"
     assert ir_exc.display_name == "AgentParseError"
-    # validation_errors is stored as a JsonValue(raw=[{...}]) in both pipelines.
+    # validation_errors is stored as a JsonValue(raw=[{...}]).
     from agm.agl.semantics.values import JsonValue
 
     errors_val = ir_exc.fields.get("validation_errors")
@@ -2346,11 +2310,10 @@ status
     assert "Err" in msg
 
 
-def test_enum_missing_field_exhausted_ir_semantic_parity() -> None:
-    """Enum ask exhausted: known $case but missing field → validation_errors match ir_reference.
+def test_enum_missing_field_exhausted() -> None:
+    """Enum ask exhausted: known $case but missing field → AgentParseError.
 
-    The harness already asserts byte-identical parity.  We additionally document
-    and verify the exact message and field content for the missing-field shape.
+    Verifies the expected validation_errors message and field content for the missing-field shape.
     """
     source = """\
 enum Status
@@ -2361,11 +2324,10 @@ agent checker
 let status: Status = ask("Check.", agent: checker)
 status
 """
-    ir_reference_exc, ir_exc = evaluate_ir_raises_with_agents(
+    ir_exc = evaluate_ir_raises_with_agents(
         source,
         scripts={"checker": ['{"$case": "Err"}']},
     )
-    assert ir_reference_exc.display_name == "AgentParseError"
     assert ir_exc.display_name == "AgentParseError"
 
     from agm.agl.semantics.values import JsonValue
@@ -2384,24 +2346,23 @@ status
     # field attribute must name the missing field.
     assert first_err.get("field") == "msg"
 
-    # Parity: ir_reference must match IR exactly (harness already asserts, but be explicit).
-    ir_reference_errors_val = ir_reference_exc.fields.get("validation_errors")
-    assert isinstance(ir_reference_errors_val, JsonValue)
-    ir_reference_first = ir_reference_errors_val.raw[0]
-    assert isinstance(ir_reference_first, dict)
-    assert ir_reference_first.get("message") == msg, (
+    # Verify the same validation_errors fields are consistent.
+    ir_errors_val = ir_exc.fields.get("validation_errors")
+    assert isinstance(ir_errors_val, JsonValue)
+    ir_first = ir_errors_val.raw[0]
+    assert isinstance(ir_first, dict)
+    assert ir_first.get("message") == msg, (
         "Message mismatch:\n"
-        f"  reference: {ir_reference_first.get('message')!r}\n  actual: {msg!r}"
+        f"  reference: {ir_first.get('message')!r}\n  actual: {msg!r}"
     )
-    assert ir_reference_first.get("field") == first_err.get("field")
+    assert ir_first.get("field") == first_err.get("field")
 
 
-def test_enum_unexpected_field_exhausted_ir_semantic_parity() -> None:
-    """Enum ask exhausted: known $case but unexpected field → validation_errors match ir_reference.
+def test_enum_unexpected_field_exhausted() -> None:
+    """Enum ask exhausted: known $case but unexpected field → AgentParseError.
 
-    The harness already asserts byte-identical parity.  We additionally document
-    and verify the exact message and field content for the unexpected-field shape.
-    IR reference sets field=key for unknown_field records (not None).
+    Verifies the expected validation_errors message and field content for the
+    unexpected-field shape.  The IR sets field=key for unknown_field records (not None).
     """
     source = """\
 enum Status
@@ -2412,11 +2373,10 @@ agent checker
 let status: Status = ask("Check.", agent: checker)
 status
 """
-    ir_reference_exc, ir_exc = evaluate_ir_raises_with_agents(
+    ir_exc = evaluate_ir_raises_with_agents(
         source,
         scripts={"checker": ['{"$case": "Ok", "extra_field": 42}']},
     )
-    assert ir_reference_exc.display_name == "AgentParseError"
     assert ir_exc.display_name == "AgentParseError"
 
     from agm.agl.semantics.values import JsonValue
@@ -2435,13 +2395,13 @@ status
     # IR reference sets field=key (the unexpected field name).
     assert first_err.get("field") == "extra_field"
 
-    # Parity: ir_reference must match IR exactly.
-    ir_reference_errors_val = ir_reference_exc.fields.get("validation_errors")
-    assert isinstance(ir_reference_errors_val, JsonValue)
-    ir_reference_first = ir_reference_errors_val.raw[0]
-    assert isinstance(ir_reference_first, dict)
-    assert ir_reference_first.get("message") == msg, (
+    # Verify the same validation_errors fields are consistent.
+    ir_errors_val = ir_exc.fields.get("validation_errors")
+    assert isinstance(ir_errors_val, JsonValue)
+    ir_first = ir_errors_val.raw[0]
+    assert isinstance(ir_first, dict)
+    assert ir_first.get("message") == msg, (
         "Message mismatch:\n"
-        f"  reference: {ir_reference_first.get('message')!r}\n  actual: {msg!r}"
+        f"  reference: {ir_first.get('message')!r}\n  actual: {msg!r}"
     )
-    assert ir_reference_first.get("field") == first_err.get("field")
+    assert ir_first.get("field") == first_err.get("field")

@@ -1,8 +1,8 @@
-"""M3e-2 differential ir_semantic — casts (`as` / `as?`) via IrConvert + ConversionRecipe.
+"""M3e-2 ir_semantic — casts (`as` / `as?`) via IrConvert + ConversionRecipe.
 
-interpreter across the full conversion matrix.  Golden lowering tests pin the resolved
-recipe/strategy shapes.  Unit tests exercise the typeless decode walk directly (its error
-branches are shadowed by JSON-Schema validation on the real cast path).
+Exercises the IR pipeline across the full conversion matrix.  Golden lowering tests pin
+the resolved recipe/strategy shapes.  Unit tests exercise the typeless decode walk directly
+(its error branches are shadowed by JSON-Schema validation on the real cast path).
 """
 
 from __future__ import annotations
@@ -170,8 +170,7 @@ let x = j as int
     ],
 )
 def test_cast_raises_cast_error(source: str) -> None:
-    ir_reference_exc, ir_exc = evaluate_ir_raises(source)
-    assert ir_reference_exc.display_name == "CastError"
+    ir_exc = evaluate_ir_raises(source)
     assert ir_exc.display_name == "CastError"
 
 
@@ -188,8 +187,7 @@ let x = "{\\"$case\\": \\"Purple\\"}" as Color
 ()
 """
     for src in (missing, unknown):
-        ir_reference_exc, ir_exc = evaluate_ir_raises(src)
-        assert ir_reference_exc.display_name == "CastError"
+        ir_exc = evaluate_ir_raises(src)
         assert ir_exc.display_name == "CastError"
 
 
@@ -211,8 +209,7 @@ let x = "{\\"$case\\": \\"Purple\\"}" as Color
     ],
 )
 def test_as_optional_booleans_agree(source: str, expected: bool) -> None:
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["r"] == BoolValue(expected)
+    ir = evaluate_ir(source)
     assert ir["r"] == BoolValue(expected)
 
 
@@ -223,8 +220,7 @@ let x = 5
 let r = x as? text
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["r"] == BoolValue(True)
+    ir = evaluate_ir(source)
     assert ir["r"] == BoolValue(True)
     assert ir["x"] == IntValue(5)
 
@@ -509,5 +505,4 @@ def test_recipe_is_hashable() -> None:
         json_schema='{"type": "integer"}',
         decode=ScalarDecode(ScalarKind.INT),
     )
-    assert hash(recipe) == hash(recipe)
     assert len({recipe, recipe}) == 1

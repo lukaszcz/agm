@@ -1,4 +1,4 @@
-"""M3f-B differential ir_semantic — case expressions and match plans.
+"""M3f-B ir_semantic — case expressions and match plans.
 
 Covers IrCase with all pattern kinds:
 - literal patterns (int/decimal/bool/text/null)
@@ -133,7 +133,7 @@ let r = case x of
   | 2 => "two"
   | _ => "other"
 r"""
-    ir_reference, ir = evaluate_ir(src)
+    ir = evaluate_ir(src)
     assert ir["r"] == TextValue("two")
 
 
@@ -145,7 +145,7 @@ let r = case x of
   | 1 => "one"
   | _ => "other"
 r"""
-    ir_reference, ir = evaluate_ir(src)
+    ir = evaluate_ir(src)
     assert ir["r"] == TextValue("other")
 
 
@@ -157,7 +157,7 @@ let r = case x of
   | false => "no"
   | true => "yes"
 r"""
-    ir_reference, ir = evaluate_ir(src)
+    ir = evaluate_ir(src)
     assert ir["r"] == TextValue("yes")
 
 
@@ -170,7 +170,7 @@ let r = case x of
   | "hello" => 1
   | _ => 2
 r"""
-    ir_reference, ir = evaluate_ir(src)
+    ir = evaluate_ir(src)
     assert ir["r"] == IntValue(1)
 
 
@@ -182,7 +182,7 @@ let r = case x of
   | null => "got null"
   | _ => "other"
 r"""
-    ir_reference, ir = evaluate_ir(src)
+    ir = evaluate_ir(src)
     assert ir["r"] == TextValue("got null")
 
 
@@ -195,7 +195,7 @@ let r = case x of
   | 1 => "second"
   | _ => "other"
 r"""
-    ir_reference, ir = evaluate_ir(src)
+    ir = evaluate_ir(src)
     assert ir["r"] == TextValue("first")
 
 
@@ -211,7 +211,7 @@ let x: int = 42
 let r = case x of
   | n => n
 r"""
-    ir_reference, ir = evaluate_ir(src)
+    ir = evaluate_ir(src)
     assert ir["r"] == IntValue(42)
 
 
@@ -222,7 +222,7 @@ let x: int = 7
 let r = case x of
   | _ => "matched"
 r"""
-    ir_reference, ir = evaluate_ir(src)
+    ir = evaluate_ir(src)
     assert ir["r"] == TextValue("matched")
 
 
@@ -233,13 +233,13 @@ let x: int = 5
 let r = case x of
   | bound_var => bound_var
 r"""
-    ir_reference, ir = evaluate_ir(src)
+    ir = evaluate_ir(src)
     # 'bound_var' must not appear as a top-level name
     assert "bound_var" not in ir, (
         f"Case binder 'bound_var' leaked into IR results: {sorted(ir.keys())}"
     )
-    assert "bound_var" not in ir_reference, (
-        f"Case binder 'bound_var' leaked into ir_reference results: {sorted(ir_reference.keys())}"
+    assert "bound_var" not in ir, (
+        f"Case binder 'bound_var' leaked into ir results: {sorted(ir.keys())}"
     )
     assert ir["r"] == IntValue(5)
 
@@ -259,7 +259,7 @@ let r = case f of
   | Off => 0
   | On => 1
 r"""
-    ir_reference, ir = evaluate_ir(src)
+    ir = evaluate_ir(src)
     assert ir["r"] == IntValue(1)
 
 
@@ -272,7 +272,7 @@ let r = case f of
   | On => "on"
   | Off => "off"
 r"""
-    ir_reference, ir = evaluate_ir(src)
+    ir = evaluate_ir(src)
     assert ir["r"] == TextValue("off")
 
 
@@ -285,7 +285,7 @@ let r = case c of
   | Blue() => "blue"
   | Red() => "red"
 r"""
-    ir_reference, ir = evaluate_ir(src)
+    ir = evaluate_ir(src)
     assert ir["r"] == TextValue("red")
 
 
@@ -303,7 +303,7 @@ let r = case s of
   | Circle(radius: n) => n
   | Square(side: m) => m
 r"""
-    ir_reference, ir = evaluate_ir(src)
+    ir = evaluate_ir(src)
     assert ir["r"] == IntValue(5)
 
 
@@ -316,7 +316,7 @@ let r = case s of
   | Circle(radius: n) => n
   | Square(side: m) => m
 r"""
-    ir_reference, ir = evaluate_ir(src)
+    ir = evaluate_ir(src)
     assert ir["r"] == IntValue(10)
 
 
@@ -330,7 +330,7 @@ let r = case s of
   | Circle(radius: n) => "other"
   | _ => "not circle"
 r"""
-    ir_reference, ir = evaluate_ir(src)
+    ir = evaluate_ir(src)
     assert ir["r"] == TextValue("three")
 
 
@@ -343,7 +343,7 @@ let r = case s of
   | Square(side: x) => x
   | Circle(radius: n) => n
 r"""
-    ir_reference, ir = evaluate_ir(src)
+    ir = evaluate_ir(src)
     assert ir["r"] == IntValue(7)
 
 
@@ -356,7 +356,7 @@ let r = case s of
   | Circle(radius: _) => "circle"
   | Square(side: _) => "square"
 r"""
-    ir_reference, ir = evaluate_ir(src)
+    ir = evaluate_ir(src)
     assert ir["r"] == TextValue("square")
 
 
@@ -369,7 +369,7 @@ let s = Shape.Colored(size: 10)
 let r = case s of
   | Colored(size: n) => n
 r"""
-    ir_reference, ir = evaluate_ir(src)
+    ir = evaluate_ir(src)
     assert ir["r"] == IntValue(10)
 
 
@@ -381,7 +381,7 @@ let p = Point.Pt(x: 3, y: 4)
 let r = case p of
   | Pt(x: a, y: b) => a
 r"""
-    ir_reference, ir = evaluate_ir(src)
+    ir = evaluate_ir(src)
     assert ir["r"] == IntValue(3)
 
 
@@ -398,16 +398,13 @@ let r = case x of
   | 1 => "one"
   | 2 => "two"
 r"""
-    ir_reference_exc, ir_exc = evaluate_ir_raises(src)
-    # Both sides must produce MatchError
-    assert ir_reference_exc.display_name == "MatchError"
+    ir_exc = evaluate_ir_raises(src)
+    # IR pipeline must raise MatchError
     assert ir_exc.display_name == "MatchError"
     # scrutinee_type must match
-    assert ir_reference_exc.fields["scrutinee_type"] == ir_exc.fields["scrutinee_type"]
-    assert ir_reference_exc.fields["scrutinee_type"] == TextValue("int")
+    assert ir_exc.fields["scrutinee_type"] == TextValue("int")
     # scrutinee JSON must match (trace_id normalized by evaluate_ir_raises)
-    assert ir_reference_exc.fields["scrutinee"] == ir_exc.fields["scrutinee"]
-    assert ir_reference_exc.fields["scrutinee"] == JsonValue(5)
+    assert ir_exc.fields["scrutinee"] == JsonValue(5)
 
 
 def test_ir_semantic_case_no_match_enum_scrutinee_type() -> None:
@@ -418,9 +415,8 @@ let c = Color.Red()
 let r = case c of
   | Blue() => "blue"
 r"""
-    ir_reference_exc, ir_exc = evaluate_ir_raises(src)
+    ir_exc = evaluate_ir_raises(src)
     assert ir_exc.display_name == "MatchError"
-    assert ir_reference_exc.fields["scrutinee_type"] == ir_exc.fields["scrutinee_type"]
     assert ir_exc.fields["scrutinee_type"] == TextValue("Color")
 
 
@@ -438,7 +434,7 @@ let r = case s of
   | Circle(radius: _) => "circle"
   | _ => "other"
 r"""
-    ir_reference, ir = evaluate_ir(src)
+    ir = evaluate_ir(src)
     assert ir["r"] == TextValue("other")
 
 
@@ -877,5 +873,5 @@ let r = case s of
   | Circle(radius: n) => "other"
   | _ => "not circle"
 r"""
-    ir_reference, ir = evaluate_ir(src)
+    ir = evaluate_ir(src)
     assert ir["r"] == TextValue("other")

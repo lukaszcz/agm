@@ -1,7 +1,7 @@
-"""M6a differential ir_semantic — print, parse_json, and entry params.
+"""M6a ir_semantic — print, parse_json, and entry params.
 
-Each test runs both the ir_reference AST interpreter and the new IR pipeline
-and asserts they produce identical results (bindings + stdout).
+Each test evaluates a program through the IR pipeline and asserts
+the produced bindings and stdout.
 
 """
 
@@ -27,10 +27,9 @@ from tests.agl.ir_harness import (
 
 
 def test_print_int() -> None:
-    """print(int) — ir_semantic agrees on stdout and bindings."""
+    """print(int) — IR pipeline produces correct stdout and bindings."""
     source = "let x = 1\nprint(x)\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == IntValue(1)
+    ir = evaluate_ir(source)
     assert ir["x"] == IntValue(1)
 
 
@@ -59,19 +58,19 @@ def test_print_bool_false() -> None:
 
 
 def test_print_list() -> None:
-    """print(list) — ir_semantic agrees."""
+    """print(list) — IR pipeline renders list correctly."""
     source = "let x = [1, 2, 3]\nprint(x)\n()"
     evaluate_ir(source)
 
 
 def test_print_dict() -> None:
-    """print(dict) — ir_semantic agrees."""
+    """print(dict) — IR pipeline renders dict correctly."""
     source = 'let x = {"a": 1, "b": 2}\nprint(x)\n()'
     evaluate_ir(source)
 
 
 def test_print_record() -> None:
-    """print(record) — ir_semantic agrees."""
+    """print(record) — IR pipeline renders record correctly."""
     source = textwrap.dedent("""\
         record Point
           x: int
@@ -84,7 +83,7 @@ def test_print_record() -> None:
 
 
 def test_print_enum_variant() -> None:
-    """print(enum variant) — ir_semantic agrees."""
+    """print(enum variant) — IR pipeline renders enum variant correctly."""
     source = textwrap.dedent("""\
         enum Color
           | Red
@@ -98,7 +97,7 @@ def test_print_enum_variant() -> None:
 
 
 def test_print_multiple_calls() -> None:
-    """Multiple print calls — all output matches."""
+    """Multiple print calls — all produce output correctly."""
     source = textwrap.dedent("""\
         let x = 10
         print("line1")
@@ -115,7 +114,7 @@ def test_print_multiple_calls() -> None:
 
 
 def test_print_inside_if() -> None:
-    """print inside an if branch — ir_semantic agrees."""
+    """print inside an if branch — IR pipeline produces expected output."""
     source = textwrap.dedent("""\
         let cond = true
         if cond =>
@@ -128,7 +127,7 @@ def test_print_inside_if() -> None:
 
 
 def test_print_inside_function() -> None:
-    """print inside a function body — ir_semantic agrees."""
+    """print inside a function body — IR pipeline produces expected output."""
     source = textwrap.dedent("""\
         def greet(name: text) -> unit =
           print(name)
@@ -139,7 +138,7 @@ def test_print_inside_function() -> None:
 
 
 def test_print_inside_loop() -> None:
-    """print inside a do…until loop — ir_semantic agrees."""
+    """print inside a do…until loop — IR pipeline produces expected output."""
     source = textwrap.dedent("""\
         var i = 0
         do[10]
@@ -159,40 +158,35 @@ def test_print_inside_loop() -> None:
 def test_parse_json_success_object() -> None:
     """parse_json succeeds for a JSON object."""
     source = "let j = parse_json('{\"key\": 42}')\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert isinstance(ir_reference["j"], JsonValue)
+    ir = evaluate_ir(source)
     assert isinstance(ir["j"], JsonValue)
 
 
 def test_parse_json_success_array() -> None:
     """parse_json succeeds for a JSON array."""
     source = "let j = parse_json('[1, 2, 3]')\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert isinstance(ir_reference["j"], JsonValue)
+    ir = evaluate_ir(source)
     assert isinstance(ir["j"], JsonValue)
 
 
 def test_parse_json_success_string() -> None:
     """parse_json succeeds for a JSON string."""
     source = 'let j = parse_json(\'\"hello\"\')\n()'
-    ir_reference, ir = evaluate_ir(source)
-    assert isinstance(ir_reference["j"], JsonValue)
+    ir = evaluate_ir(source)
     assert isinstance(ir["j"], JsonValue)
 
 
 def test_parse_json_success_number() -> None:
     """parse_json succeeds for a JSON number."""
     source = "let j = parse_json('123')\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert isinstance(ir_reference["j"], JsonValue)
+    ir = evaluate_ir(source)
     assert isinstance(ir["j"], JsonValue)
 
 
 def test_parse_json_success_null() -> None:
     """parse_json('null') returns JsonValue(None)."""
     source = "let j = parse_json('null')\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["j"] == JsonValue(None)
+    ir = evaluate_ir(source)
     assert ir["j"] == JsonValue(None)
 
 
@@ -215,7 +209,7 @@ def test_parse_json_failure_trailing_garbage() -> None:
 
 
 def test_parse_json_caught_by_try() -> None:
-    """parse_json error caught in try — ir_semantic agrees on caught exception handling."""
+    """parse_json error caught in try — IR pipeline handles caught exception correctly."""
     source = textwrap.dedent("""\
         var result: text = "default"
         try
@@ -225,8 +219,7 @@ def test_parse_json_caught_by_try() -> None:
           result := "caught"
         ()
     """)
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["result"] == TextValue("caught")
+    ir = evaluate_ir(source)
     assert ir["result"] == TextValue("caught")
 
 
@@ -242,8 +235,7 @@ def test_param_provided_value() -> None:
         let greeting = "Hello, " + name
         ()
     """)
-    ir_reference, ir = evaluate_ir(source, param_values={"name": TextValue("World")})
-    assert ir_reference["greeting"] == TextValue("Hello, World")
+    ir = evaluate_ir(source, param_values={"name": TextValue("World")})
     assert ir["greeting"] == TextValue("Hello, World")
 
 
@@ -254,8 +246,7 @@ def test_param_provided_int_value() -> None:
         let doubled = count * 2
         ()
     """)
-    ir_reference, ir = evaluate_ir(source, param_values={"count": IntValue(5)})
-    assert ir_reference["doubled"] == IntValue(10)
+    ir = evaluate_ir(source, param_values={"count": IntValue(5)})
     assert ir["doubled"] == IntValue(10)
 
 
@@ -266,8 +257,7 @@ def test_param_default_used_when_no_value() -> None:
         let result = n + 1
         ()
     """)
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["result"] == IntValue(8)
+    ir = evaluate_ir(source)
     assert ir["result"] == IntValue(8)
 
 
@@ -278,8 +268,7 @@ def test_param_default_int_to_decimal_coercion() -> None:
         let result = d + 1.5
         ()
     """)
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["result"] == DecimalValue(decimal.Decimal("6.5"))
+    ir = evaluate_ir(source)
     assert ir["result"] == DecimalValue(decimal.Decimal("6.5"))
 
 
@@ -290,13 +279,12 @@ def test_param_provided_value_overrides_default() -> None:
         let result = n + 1
         ()
     """)
-    ir_reference, ir = evaluate_ir(source, param_values={"n": IntValue(20)})
-    assert ir_reference["result"] == IntValue(21)
+    ir = evaluate_ir(source, param_values={"n": IntValue(20)})
     assert ir["result"] == IntValue(21)
 
 
 def test_param_referenced_in_expression() -> None:
-    """param referenced in an expression — ir_semantic agrees."""
+    """param referenced in an expression — IR pipeline produces correct result."""
     source = textwrap.dedent("""\
         param x: int
         param y: int
@@ -304,17 +292,15 @@ def test_param_referenced_in_expression() -> None:
         let product = x * y
         ()
     """)
-    ir_reference, ir = evaluate_ir(
+    ir = evaluate_ir(
         source, param_values={"x": IntValue(3), "y": IntValue(4)}
     )
-    assert ir_reference["sum"] == IntValue(7)
     assert ir["sum"] == IntValue(7)
-    assert ir_reference["product"] == IntValue(12)
     assert ir["product"] == IntValue(12)
 
 
 def test_param_referenced_inside_function() -> None:
-    """param referenced inside a function body — ir_semantic agrees."""
+    """param referenced inside a function body — IR pipeline produces correct result."""
     source = textwrap.dedent("""\
         param base: int
         def double() -> int =
@@ -322,19 +308,17 @@ def test_param_referenced_inside_function() -> None:
         let result = double()
         ()
     """)
-    ir_reference, ir = evaluate_ir(source, param_values={"base": IntValue(5)})
-    assert ir_reference["result"] == IntValue(10)
+    ir = evaluate_ir(source, param_values={"base": IntValue(5)})
     assert ir["result"] == IntValue(10)
 
 
 def test_param_with_print() -> None:
-    """param used in a print call — ir_semantic agrees on stdout and bindings."""
+    """param used in a print call — IR pipeline produces correct stdout and bindings."""
     source = textwrap.dedent("""\
         param msg: text
         print(msg)
         let x = 1
         ()
     """)
-    ir_reference, ir = evaluate_ir(source, param_values={"msg": TextValue("hi")})
-    assert ir_reference["x"] == IntValue(1)
+    ir = evaluate_ir(source, param_values={"msg": TextValue("hi")})
     assert ir["x"] == IntValue(1)

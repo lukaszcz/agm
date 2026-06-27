@@ -1,8 +1,7 @@
-"""M2 differential ir_semantic — coercion round-trip proof corpus.
+"""M2 ir_semantic — coercion round-trip proof corpus.
 
-Each test runs both the ir_reference AST interpreter and the new IR pipeline
-(lower_program → IrInterpreter) on a source program from the M2 node subset
-and asserts they produce identical final binding snapshots.
+Each test evaluates a source program from the M2 node subset through the IR pipeline
+(lower_program → IrInterpreter) and asserts the final binding snapshots.
 
 Where noted, a test also structurally asserts that the lowered IR contains
 the expected ``IrCoerce``/``Coercion`` node (complementing the M2-A golden
@@ -70,10 +69,9 @@ def _lower(source: str) -> ExecutableProgram:
 
 
 def test_identity_int_let() -> None:
-    """let x: int = 5  — no coercion, both evaluators return IntValue(5)."""
+    """let x: int = 5  — no coercion, IR pipeline returns IntValue(5)."""
     source = "let x: int = 5\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == IntValue(5)
+    ir = evaluate_ir(source)
     assert ir["x"] == IntValue(5)
 
     # Structural: the IR bind value is a plain IrConstInt (no IrCoerce).
@@ -87,16 +85,14 @@ def test_identity_int_let() -> None:
 def test_identity_text_let() -> None:
     """let s: text = \"hello\"  — no coercion."""
     source = 'let s: text = "hello"\n()'
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["s"] == TextValue("hello")
+    ir = evaluate_ir(source)
     assert ir["s"] == TextValue("hello")
 
 
 def test_identity_list_int() -> None:
     """let xs: list[int] = [1, 2, 3]  — no coercion at element or list level."""
     source = "let xs: list[int] = [1, 2, 3]\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["xs"] == ListValue((IntValue(1), IntValue(2), IntValue(3)))
+    ir = evaluate_ir(source)
     assert ir["xs"] == ListValue((IntValue(1), IntValue(2), IntValue(3)))
 
     # Structural: no IrCoerce around the IrMakeList.
@@ -112,8 +108,7 @@ def test_identity_list_int() -> None:
 def test_identity_dict_text_int() -> None:
     """let d: dict[text, int] = {\"a\": 1}  — no coercion."""
     source = 'let d: dict[text, int] = {"a": 1}\n()'
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["d"] == DictValue({"a": IntValue(1)})
+    ir = evaluate_ir(source)
     assert ir["d"] == DictValue({"a": IntValue(1)})
 
 
@@ -125,8 +120,7 @@ def test_identity_dict_text_int() -> None:
 def test_int_to_decimal_scalar() -> None:
     """let d: decimal = 1  — scalar IntToDecimal coercion at the binding level."""
     source = "let d: decimal = 1\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["d"] == DecimalValue(decimal.Decimal(1))
+    ir = evaluate_ir(source)
     assert ir["d"] == DecimalValue(decimal.Decimal(1))
 
     # Structural: the bind value is IrCoerce(IrConstInt, IntToDecimal).
@@ -142,7 +136,7 @@ def test_int_to_decimal_scalar() -> None:
 def test_int_to_decimal_zero() -> None:
     """let z: decimal = 0  — widening of zero."""
     source = "let z: decimal = 0\n()"
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     assert ir["z"] == DecimalValue(decimal.Decimal(0))
 
 
@@ -154,7 +148,7 @@ def test_int_to_decimal_zero() -> None:
 def test_list_decimal_element_coercion() -> None:
     """let xs: list[decimal] = [1, 2, 3]  — each element gets IntToDecimal."""
     source = "let xs: list[decimal] = [1, 2, 3]\n()"
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     expected: Value = ListValue(
         (
             DecimalValue(decimal.Decimal(1)),
@@ -162,7 +156,6 @@ def test_list_decimal_element_coercion() -> None:
             DecimalValue(decimal.Decimal(3)),
         )
     )
-    assert ir_reference["xs"] == expected
     assert ir["xs"] == expected
 
     # Structural: elements inside IrMakeList are wrapped in IrCoerce(IntToDecimal).
@@ -198,10 +191,8 @@ def test_list_decimal_element_coercion() -> None:
 def test_list_ref_identity_no_coercion() -> None:
     """let a: list[int] = [1, 2]; let b: list[int] = a  — exact type, no coercion."""
     source = "let a: list[int] = [1, 2]\nlet b: list[int] = a\n()"
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     expected: Value = ListValue((IntValue(1), IntValue(2)))
-    assert ir_reference["a"] == expected
-    assert ir_reference["b"] == expected
     assert ir["a"] == expected
     assert ir["b"] == expected
 
@@ -218,9 +209,8 @@ def test_list_ref_identity_no_coercion() -> None:
 def test_dict_ref_identity_no_coercion() -> None:
     """let a: dict[text, int] = {\"x\": 1}; let b: dict[text, int] = a  — no coercion."""
     source = 'let a: dict[text, int] = {"x": 1}\nlet b: dict[text, int] = a\n()'
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     expected: Value = DictValue({"x": IntValue(1)})
-    assert ir_reference["b"] == expected
     assert ir["b"] == expected
 
 
@@ -234,8 +224,7 @@ def test_dict_ref_identity_no_coercion() -> None:
 def test_list_int_ref_to_json() -> None:
     """let a: list[int] = [1, 2]; let j: json = a  — whole list coerced via ToJson."""
     source = "let a: list[int] = [1, 2]\nlet j: json = a\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["j"] == JsonValue([1, 2])
+    ir = evaluate_ir(source)
     assert ir["j"] == JsonValue([1, 2])
 
     # Structural: IrBind for j wraps IrLoad(a) in IrCoerce(ToJson).
@@ -259,24 +248,21 @@ def test_list_int_ref_to_json() -> None:
 def test_to_json_scalar_int() -> None:
     """let j: json = 42  — scalar int wrapped in JsonValue."""
     source = "let j: json = 42\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["j"] == JsonValue(42)
+    ir = evaluate_ir(source)
     assert ir["j"] == JsonValue(42)
 
 
 def test_to_json_scalar_text() -> None:
     """let j: json = \"hello\"  — scalar text wrapped in JsonValue."""
     source = 'let j: json = "hello"\n()'
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["j"] == JsonValue("hello")
+    ir = evaluate_ir(source)
     assert ir["j"] == JsonValue("hello")
 
 
 def test_to_json_null() -> None:
     """let j: json = null  — null is already JSON; no coercion needed."""
     source = "let j: json = null\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["j"] == JsonValue(None)
+    ir = evaluate_ir(source)
     assert ir["j"] == JsonValue(None)
 
 
@@ -288,8 +274,7 @@ def test_to_json_null() -> None:
 def test_to_json_list_literal() -> None:
     """let j: json = [1, 2]  — list[int] literal coerced to JsonValue."""
     source = "let j: json = [1, 2]\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["j"] == JsonValue([1, 2])
+    ir = evaluate_ir(source)
     assert ir["j"] == JsonValue([1, 2])
 
     # Structural: the whole IrMakeList is wrapped in IrCoerce(ToJson).
@@ -311,8 +296,7 @@ def test_to_json_list_literal() -> None:
 def test_dict_text_json_from_int_values() -> None:
     """let m: dict[text, json] = {\"a\": 1}  — dict values coerced to JSON."""
     source = 'let m: dict[text, json] = {"a": 1}\n()'
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["m"] == DictValue({"a": JsonValue(1)})
+    ir = evaluate_ir(source)
     assert ir["m"] == DictValue({"a": JsonValue(1)})
 
     # Structural: the IrMakeDict entry VALUE nodes are wrapped in IrCoerce(ToJson).
@@ -335,8 +319,7 @@ def test_dict_text_json_from_int_values() -> None:
 def test_to_json_dict_literal_as_json() -> None:
     """let r: json = {\"x\": 1}  — dict literal coerced to JsonValue."""
     source = 'let r: json = {"x": 1}\n()'
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["r"] == JsonValue({"x": 1})
+    ir = evaluate_ir(source)
     assert ir["r"] == JsonValue({"x": 1})
 
 
@@ -352,8 +335,7 @@ def test_to_json_dict_literal_as_json() -> None:
 def test_dict_int_ref_to_json() -> None:
     """let a: dict[text, int] = {\"k\": 5}; let j: json = a  — whole dict coerced via ToJson."""
     source = 'let a: dict[text, int] = {"k": 5}\nlet j: json = a\n()'
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["j"] == JsonValue({"k": 5})
+    ir = evaluate_ir(source)
     assert ir["j"] == JsonValue({"k": 5})
 
     # Structural: IrCoerce(ToJson) around the IrLoad(a).
@@ -381,18 +363,16 @@ def test_nested_list_dict_decimal() -> None:
     each dict element of the outer list.
     """
     source = 'let n: list[dict[text, decimal]] = [{"a": 1}]\n()'
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     expected: Value = ListValue((DictValue({"a": DecimalValue(decimal.Decimal(1))}),))
-    assert ir_reference["n"] == expected
     assert ir["n"] == expected
 
 
 def test_nested_list_dict_json() -> None:
     """let n: list[dict[text, json]] = [{\"a\": 1, \"b\": true}]."""
     source = 'let n: list[dict[text, json]] = [{"a": 1, "b": true}]\n()'
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     expected: Value = ListValue((DictValue({"a": JsonValue(1), "b": JsonValue(True)}),))
-    assert ir_reference["n"] == expected
     assert ir["n"] == expected
 
 
@@ -404,24 +384,21 @@ def test_nested_list_dict_json() -> None:
 def test_var_assign_int_to_decimal() -> None:
     """var x: decimal = 0; x := 5  — coercion on both initial binding and assignment."""
     source = "var x: decimal = 0\nx := 5\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == DecimalValue(decimal.Decimal(5))
+    ir = evaluate_ir(source)
     assert ir["x"] == DecimalValue(decimal.Decimal(5))
 
 
 def test_var_assign_preserves_type() -> None:
     """var x: decimal = 1.5; x := 2  — init is decimal literal, assign coerces int."""
     source = "var x: decimal = 1.5\nx := 2\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == DecimalValue(decimal.Decimal(2))
+    ir = evaluate_ir(source)
     assert ir["x"] == DecimalValue(decimal.Decimal(2))
 
 
 def test_var_assign_multiple_coercions() -> None:
     """var x: decimal = 0; x := 1; x := 2  — repeated coerced assignments."""
     source = "var x: decimal = 0\nx := 1\nx := 2\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == DecimalValue(decimal.Decimal(2))
+    ir = evaluate_ir(source)
     assert ir["x"] == DecimalValue(decimal.Decimal(2))
 
 
@@ -431,7 +408,7 @@ def test_var_assign_multiple_coercions() -> None:
 
 
 def test_multiple_coercions_in_one_program() -> None:
-    """Program with several binding coercions; all must agree."""
+    """Program with several binding coercions; each is applied correctly."""
     source = (
         "let a: decimal = 1\n"
         "let b: list[decimal] = [2, 3]\n"
@@ -439,7 +416,7 @@ def test_multiple_coercions_in_one_program() -> None:
         'let d: dict[text, json] = {"x": 5}\n'
         "()"
     )
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     assert ir["a"] == DecimalValue(decimal.Decimal(1))
     assert ir["b"] == ListValue(
         (DecimalValue(decimal.Decimal(2)), DecimalValue(decimal.Decimal(3)))
@@ -456,8 +433,7 @@ def test_multiple_coercions_in_one_program() -> None:
 def test_var_binding_no_assign() -> None:
     """var x: int = 7  — mutable binding, no reassignment, both return 7."""
     source = "var x: int = 7\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == IntValue(7)
+    ir = evaluate_ir(source)
     assert ir["x"] == IntValue(7)
 
 
@@ -469,16 +445,14 @@ def test_var_binding_no_assign() -> None:
 def test_empty_list() -> None:
     """let xs: list[int] = []  — empty list; no coercions."""
     source = "let xs: list[int] = []\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["xs"] == ListValue(())
+    ir = evaluate_ir(source)
     assert ir["xs"] == ListValue(())
 
 
 def test_empty_dict() -> None:
     """let d: dict[text, int] = {}  — empty dict; no coercions."""
     source = "let d: dict[text, int] = {}\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["d"] == DictValue({})
+    ir = evaluate_ir(source)
     assert ir["d"] == DictValue({})
 
 
@@ -492,12 +466,11 @@ def test_coercion_evaluates_operand_once() -> None:
 
     In M2 all expressions are pure (no side effects), so the strong version
     of this property (observable side effects fired exactly once) cannot be
-    violated.  Both evaluators produce the same value, proving the coercion
-    path is correct.  The stronger test (with counters/exec side-effects) is
-    deferred to M7 when the ir_semantic gains trace comparison.
+    violated.  The IR pipeline produces the correct coercion result.  The stronger
+    test (with counters/exec side-effects) is deferred to M7.
 
     We exercise this with a multi-step program where each binding's RHS is a
-    constant; both evaluators must agree on all values.
+    constant; the IR pipeline must produce the correct value for each binding.
     """
     source = (
         "let a: decimal = 10\n"
@@ -505,7 +478,7 @@ def test_coercion_evaluates_operand_once() -> None:
         "let c: list[decimal] = [a, b]\n"
         "()"
     )
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     assert ir["a"] == DecimalValue(decimal.Decimal(10))
     assert ir["b"] == DecimalValue(decimal.Decimal(20))
     assert ir["c"] == ListValue(
@@ -521,6 +494,5 @@ def test_coercion_evaluates_operand_once() -> None:
 def test_list_text_to_list_json_element_coercion() -> None:
     """let xs: list[json] = [\"a\", \"b\"]  — element-level ToJson."""
     source = 'let xs: list[json] = ["a", "b"]\n()'
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["xs"] == ListValue((JsonValue("a"), JsonValue("b")))
+    ir = evaluate_ir(source)
     assert ir["xs"] == ListValue((JsonValue("a"), JsonValue("b")))

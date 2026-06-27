@@ -58,22 +58,30 @@ static error.
 
 ```ebnf
 constructor ::= NAME ("." NAME)? type_args? constructor_args?
-constructor_args ::= "(" named_args? ")"
+constructor_args ::= "(" (ctor_arg ("," ctor_arg)* ","?)? ")"
 type_args   ::= "::" "[" type_expr ("," type_expr)* "]"
-named_args  ::= NAME ":" expr ("," NAME ":" expr)* ","?
+ctor_arg    ::= NAME "=" expr     (* named field *)
+              | NAME              (* shorthand for NAME = NAME *)
 ```
 
 A record constructor or enum variant, when invoked **directly** by name, takes
-**named** arguments only — never positional. (A constructor escaped through a
-variable becomes a positional callable value; see
-[Constructors as values](#constructors-as-values).) The optional `::[…]`
-pins the type arguments of a generic constructor (see
+**named** arguments only — never positional. Each field is supplied as
+`field = value`. (A constructor escaped through a variable becomes a positional
+callable value; see [Constructors as values](#constructors-as-values).) The
+optional `::[…]` pins the type arguments of a generic constructor (see
 [Generic constructors](#generic-constructors)).
+
+**Bare-name shorthand.** In a constructor call a bare field name `x` is
+shorthand for `x = x` — it binds the field `x` to the in-scope value of the
+same name. So `R(x, y)` means `R(x = x, y = y)`, and shorthand and explicit
+forms may be mixed: `B(x, r = R(x = x + 1, y = x + 2))`. This shorthand is a
+constructor-only convenience; ordinary `def` calls keep positional arguments
+and have no bare-name shorthand (see [Functions](functions.md)).
 
 ### Record construction
 
 ```agl
-Issue(title: "Bug", severity: 2, description: "...")
+Issue(title = "Bug", severity = 2, description = "...")
 ```
 
 Every declared field must be supplied; unknown and duplicate fields are
@@ -85,7 +93,7 @@ Qualified or unqualified:
 
 ```agl
 Review.Pass
-Review.Fail(issues: ["missing tests"])
+Review.Fail(issues = ["missing tests"])
 
 let review: Review = Pass           # resolved by expected type
 ```
@@ -110,7 +118,7 @@ enum Holder[T]
 enum Other
   | tagged(name: text)
 
-let h: Holder[int] = Holder.tagged(by: 7)   # qualified; unqualified 'tagged' is an error
+let h: Holder[int] = Holder.tagged(by = 7)   # qualified; unqualified 'tagged' is an error
 ```
 
 A nearer binding (a `let`/`var`/parameter of the same name) **shadows** a
@@ -127,15 +135,15 @@ arguments, the expected type, or both:
 record Box[T]
   value: T
 
-let bi: Box[int] = Box(value: 5)        # T = int, inferred from the payload
-let bt: Box[text] = Box(value: "hi")    # same definition, T = text
+let bi: Box[int] = Box(value = 5)        # T = int, inferred from the payload
+let bt: Box[text] = Box(value = "hi")    # same definition, T = text
 ```
 
 Pin the instantiation explicitly with `::[…]` when inference cannot (or
 should not) determine it:
 
 ```agl
-let be = Box::[int](value: 99)
+let be = Box::[int](value = 99)
 ```
 
 Nullary variants of a generic enum carry no payload to infer from, so they
@@ -147,8 +155,8 @@ enum Option[T]
   | some(value: T)
 
 let e: Option[int] = none          # T = int, fixed by the annotation
-let s = some::[int](value: 1)      # T pinned explicitly
-let q = Option.some::[int](value: 2) # qualification disambiguates the owner
+let s = some::[int](value = 1)      # T pinned explicitly
+let q = Option.some::[int](value = 2) # qualification disambiguates the owner
 ```
 
 ### Constructors as values
@@ -190,7 +198,7 @@ let n: Option[int] = none           # the nullary variant as a value
 Built-in exception types are constructed like records:
 
 ```agl
-raise Abort(message: "Cannot continue.")
+raise Abort(message = "Cannot continue.")
 ```
 
 ## Field access
@@ -245,7 +253,7 @@ call_expr ::= postfix_expr type_args? "(" arg_list? ")"
 type_args ::= "::" "[" type_expr ("," type_expr)* "]"
 arg_list  ::= arg ("," arg)* ","?
 arg       ::= expr                  (* positional *)
-            | NAME ":" expr         (* named *)
+            | NAME "=" expr         (* named *)
 ```
 
 **Single-argument sugar.** When there is exactly one positional argument and
@@ -256,7 +264,7 @@ print review          # equivalent to print(review)
 ask "Hello?"          # equivalent to ask("Hello?")
 print res.stdout      # field-access path is valid sugar argument
 print classify(x)     # equivalent to print(classify(x))
-f Opt.Some(x: 1)      # equivalent to f(Opt.Some(x: 1))
+f Opt.Some(x = 1)      # equivalent to f(Opt.Some(x = 1))
 ```
 
 Application binds **tighter than all operators**:
@@ -273,7 +281,7 @@ For details on named arguments, defaults, and function types, see
 
 `print` is a built-in function that accepts one argument of any type, writes
 its rendered value (followed by a newline) to the host's standard output, and
-returns `unit`. It renders with `pretty: false` and `quote_strings: false`:
+returns `unit`. It renders with `pretty = false` and `quote_strings = false`:
 
 ```agl
 print "Review round failed; retrying."
@@ -300,9 +308,9 @@ argument; when it is `false`, rendering text is identity.
 
 ```agl
 render("hi")                         # "\"hi\""
-render("hi", quote_strings: false)   # "hi"
+render("hi", quote_strings = false)  # "hi"
 render([1, 2])                       # "[\n  1,\n  2\n]"
-render([1, 2], pretty: false)        # "[1, 2]"
+render([1, 2], pretty = false)       # "[1, 2]"
 ```
 
 `render` cannot be bound as a function value (`let f = render` is a static
@@ -352,10 +360,11 @@ static error, because `parse_json`'s type is not yet fully expressible in v1).
 
 ## Operators
 
-### Equality: `=` and `!=`
+### Equality: `==` and `!=`
 
-A single `=` is **equality**, not assignment. Both operands must have the
-same type after `int → decimal` widening. Equality is full value equality
+`==` is **equality** (a single `=` is never a comparison — it is a
+binder/named-argument separator). Both operands must have the same type after
+`int → decimal` widening. Equality is full value equality
 ([Types](types.md)).
 
 Operands whose type is, or transitively contains, a function, agent, or
@@ -363,7 +372,7 @@ Operands whose type is, or transitively contains, a function, agent, or
 containers (`list`, `dict`), records, enums, or exceptions that hold such
 a type at any depth.
 
-`=` is non-associative; `x = y = z` is a parse error.
+`==` is non-associative; `x == y == z` is a parse error.
 
 ### Ordering: `<` `<=` `>` `>=`
 
@@ -543,12 +552,12 @@ expression position, including as the initializer of a `let`/`var` or as the
 body of a branch suite:
 
 ```agl
-let x: int = raise Abort(message: "Cannot continue.")
+let x: int = raise Abort(message = "Cannot continue.")
 
 case status of
   | Ok => ()
   | Error(reason) =>
-      raise Abort(message: reason)
+      raise Abort(message = reason)
 ```
 
 ## `try` as an expression

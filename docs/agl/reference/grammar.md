@@ -207,8 +207,8 @@ pattern        ::= "_"
 constructor_pattern      ::= NAME ("." NAME)? ("(" pattern_fields? ")")?
 qual_constructor_pattern ::= qual_prefix NAME ("." NAME)? ("(" pattern_fields? ")")?
 pattern_fields ::= pattern_field ("," pattern_field)* ","?
-pattern_field  ::= NAME
-                 | NAME ":" pattern
+pattern_field  ::= NAME                 (* shorthand: NAME bound to NAME *)
+                 | NAME "=" pattern
 ```
 
 A `constructor_pattern` with the `NAME "." NAME` form is a **qualified**
@@ -231,7 +231,7 @@ comparison ::= additive comparison_tail?
 comparison_tail
            ::= "is" "not"? qualified_constructor
             | cmp_op additive
-cmp_op     ::= "=" | "!=" | "<" | "<=" | ">" | ">=" | "in"
+cmp_op     ::= "==" | "!=" | "<" | "<=" | ">" | ">=" | "in"
               (* at most one comparison per expression: non-associative *)
 
 additive       ::= multiplicative (("+" | "-") multiplicative)*
@@ -289,7 +289,7 @@ A bare `NAME` atom is resolved by scope and position: it may name a variable,
 an agent, a record constructor, an enum variant, or a generic `def`/constructor
 used as a first-class value. The typed postfix form carries explicit type
 arguments to a generic `def` or constructor (`id::[int](5)`,
-`some::[int](value: 1)`, `Option.some::[int](value: 1)`,
+`some::[int](value = 1)`, `Option.some::[int](value = 1)`,
 `apply::[int, int](…)`); see [Generics](generics.md).
 A `postfix "." NAME` is either a field access or a variant qualification,
 disambiguated by the resolved type of the left operand.
@@ -308,11 +308,13 @@ the body. Parameter types are always required.
 ```ebnf
 arg_list  ::= arg ("," arg)* ","?
 arg       ::= expr                  (* positional *)
-            | NAME ":" expr         (* named *)
+            | NAME "=" expr         (* named *)
 ```
 
 Named arguments are available at declared-name call sites (`def`s and
 built-ins). A function value is called with positional arguments only.
+Constructor calls additionally accept a bare `NAME` as shorthand for
+`NAME = NAME`; ordinary `def` calls do not.
 
 ## Literals
 
@@ -345,7 +347,8 @@ config_value  ::= "true" | "false" | INT | DECIMAL | STRING
 
 ## Deterministic-parse notes
 
-- `==` is not in the grammar; it is rejected with *"Use `=` for equality."*
+- `==` is the equality operator; a single `=` is reserved for bindings, named
+  arguments, and declarations, and is not an expression operator.
 - Chained comparisons are unparseable by construction (one optional
   comparison tail) and rejected with a non-associativity message.
 - The `[N]` after `do` is a single lexical unit, so it never conflicts with

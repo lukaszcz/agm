@@ -42,7 +42,7 @@ including all fields (`message`, `trace_id`, and any type-specific fields)
 in declaration order — for example:
 
 ```
-CastError(message: "cannot parse \"x\" as int", trace_id: "evt-7", source_type: "text", target_type: "int", raw: "x")
+CastError(message = "cannot parse \"x\" as int", trace_id = "evt-7", source_type = "text", target_type = "int", raw = "x")
 ```
 
 See [Strings and interpolation](strings-and-interpolation.md) for the uniform
@@ -66,11 +66,11 @@ catch_pattern ::= NAME ("as" NAME)?
 try
   let review: Review = ask(
     "Review ${artifact}",
-    agent: reviewer,
-    on_parse_error: Retry(n: 2)
+    agent = reviewer,
+    on_parse_error = Retry(n = 2)
   )
 catch AgentParseError as e =>
-  let report = ask("Explain invalid output:\n${e.raw}", agent: critic)
+  let report = ask("Explain invalid output:\n${e.raw}", agent = critic)
   raise e
 catch _ as e =>
   print "unexpected: ${e.message}"
@@ -108,8 +108,8 @@ The operand must be an exception value (statically checked). `raise`
 assignable to any expected type:
 
 ```agl
-let x: int = if condition => 1 else => raise Abort(message: "!")
-raise Abort(message: "Cannot continue without repository access.")
+let x: int = if condition => 1 else => raise Abort(message = "!")
+raise Abort(message = "Cannot continue without repository access.")
 ```
 
 Any concrete built-in exception type is constructible with named arguments

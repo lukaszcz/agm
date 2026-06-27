@@ -8,8 +8,8 @@ agent invocations use the built-in `ask` function:
 
 ```agl
 ask "Summarize ${topic}"
-ask("Review this artifact:\n${artifact}", agent: reviewer)
-ask("Review ${artifact}", agent: reviewer, on_parse_error: Retry(n: 2))
+ask("Review this artifact:\n${artifact}", agent = reviewer)
+ask("Review ${artifact}", agent = reviewer, on_parse_error = Retry(n = 2))
 ```
 
 ## `ask` — the agent call function
@@ -43,7 +43,7 @@ let s = ask "Hello?"          # equivalent to ask("Hello?")
 With named arguments, parentheses are required:
 
 ```agl
-let r: Review = ask("Review ${artifact}", agent: reviewer)
+let r: Review = ask("Review ${artifact}", agent = reviewer)
 ```
 
 ## Agents as values
@@ -63,12 +63,12 @@ are ordinary value bindings:
 let agents: list[agent] = [reviewer, planner]
 
 def call_first(agents: list[agent], prompt: text) -> text =
-  ask(prompt, agent: reviewer)
+  ask(prompt, agent = reviewer)
 ```
 
 The `agent` type is **opaque**: no field access, no equality, no JSON encoding.
 Agent values can be rendered as opaque handles such as `<agent reviewer>`, but
-cannot be passed to `ask` except via the `agent:` parameter.
+cannot be passed to `ask` except via the `agent` parameter.
 
 ### Agent declarations
 
@@ -87,9 +87,9 @@ agent name, is a static error.
 
 ### The default agent
 
-When `agent:` is omitted, `ask` uses the host's configured default agent.
+When `agent` is omitted, `ask` uses the host's configured default agent.
 There is no surface name for the default agent — it is implicit. A call
-that omits `agent:` requires the host to have a default agent configured; if
+that omits `agent` requires the host to have a default agent configured; if
 none is configured the host reports an invocation error before the program
 runs.
 
@@ -106,9 +106,9 @@ expected types propagate ([Expressions](expressions.md)):
 
 ```agl
 let x = ask "A"                          # target: text
-let review: Review = ask("…", agent: reviewer)   # target: Review
-var proposal: Turn = ask("…", agent: researcher)
-proposal := ask("Revise.", agent: researcher)  # target: Turn
+let review: Review = ask("…", agent = reviewer)   # target: Review
+var proposal: Turn = ask("…", agent = researcher)
+proposal := ask("Revise.", agent = researcher)  # target: Turn
 let _: unit = ask("Perform this task")          # response ignored
 ```
 
@@ -157,21 +157,21 @@ enum Option[T]
   | none
   | some(value: T)
 
-let n: Option[int] = ask("Pick a number, or nothing.", agent: picker)
+let n: Option[int] = ask("Pick a number, or nothing.", agent = picker)
 ```
 
 ## Named parameters
 
-### `agent:`
+### `agent`
 
 Selects the agent. The value must have type `agent`. When omitted, the host
 default applies:
 
 ```agl
-ask("Plan the next step.", agent: planner)
+ask("Plan the next step.", agent = planner)
 ```
 
-### `format:`
+### `format`
 
 Selects the output codec by name, as a `text` value. Normally unnecessary:
 the codec is auto-selected from the target type — `text` targets use the
@@ -180,10 +180,10 @@ types use the `json` codec. An explicit `format` must name a registered codec
 that supports the call's target type; both are checked statically.
 
 ```agl
-let r: Review = ask("Review ${a}", agent: reviewer, format: "json")
+let r: Review = ask("Review ${a}", agent = reviewer, format = "json")
 ```
 
-### `strict_json:`
+### `strict_json`
 
 Opts a JSON-codec call into **strict** parsing (a `bool`). With `true`,
 the response must be exactly one bare JSON value with nothing but surrounding
@@ -192,7 +192,7 @@ explicitly selects lenient parsing, overriding a host default. It is a
 static error unless the selected codec is `json`. When omitted, the host
 default applies; the portable default is **lenient recovery** (see below).
 
-### `on_parse_error:`
+### `on_parse_error`
 
 The parse policy for invalid structured output. The value is a `ParsePolicy`
 — one of two variants from the standard core enum:
@@ -210,8 +210,8 @@ enum ParsePolicy
 ```agl
 let r: Review = ask(
   "Review ${artifact}",
-  agent: reviewer,
-  on_parse_error: Retry(n: 2)
+  agent = reviewer,
+  on_parse_error = Retry(n = 2)
 )
 ```
 
@@ -329,12 +329,12 @@ as ambiguous. Schema validation is always strict regardless of lenient mode.
 
 ### Strict parsing
 
-With `strict_json: true` (or a host default of strict), the response must be
+With `strict_json = true` (or a host default of strict), the response must be
 exactly one bare JSON value with nothing but surrounding whitespace.
 
 ## Parse policies and retries
 
-For a call with `on_parse_error: Retry(n: N)`:
+For a call with `on_parse_error = Retry(n = N)`:
 
 1. The agent is called with the rendered prompt and the output contract.
 2. The raw output is parsed and validated.
@@ -383,7 +383,7 @@ request value.
 
 ```agl
 let r = ask-request("Summarize ${topic}")
-let r = ask-request::[Review]("Review ${artifact}", agent: reviewer)
+let r = ask-request::[Review]("Review ${artifact}", agent = reviewer)
 ```
 
 ### Target type
@@ -406,7 +406,7 @@ let r = ask-request("Anything goes")   # target type is text
 The target type drives the output contract exactly as it would for `ask`:
 a `Review` target selects the JSON codec, derives a JSON Schema, and produces
 format instructions; a `text` target selects the text codec. The returned
-`AgentRequest.target_type` is `Some(value: "...")` for parsed response types
+`AgentRequest.target_type` is `Some(value = "...")` for parsed response types
 and `None` for `unit`, because a `unit` response is ignored:
 
 ```agl
@@ -419,7 +419,7 @@ because there is no response to parse.
 ### Typed-call syntax
 
 `callee::[Type](args)` is a general typed-call form. The typed suffix follows a
-postfix callee, so qualified constructors such as `Option.some::[int](value: 1)`
+postfix callee, so qualified constructors such as `Option.some::[int](value = 1)`
 are valid as well. The type argument is delimited by square brackets because
 AgL identifiers may contain `<` and `>`, so `Review>` would otherwise scan as
 one token.
@@ -427,7 +427,7 @@ one token.
 ### Arguments
 
 `ask-request` accepts the same named arguments as `ask` (`agent`, `format`,
-`strict_json`, `on_parse_error`). `agent:` labels the request's `agent` field
+`strict_json`, `on_parse_error`). `agent` labels the request's `agent` field
 but never dispatches; `on_parse_error` is accepted (it shapes the contract's
 parse policy) but has no runtime effect since no call is made.
 

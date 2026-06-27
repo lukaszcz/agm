@@ -8,7 +8,7 @@ agent outcomes.
 AgL is not a general-purpose programming language. It is a typed, expression-
 oriented orchestration language whose core ideas are:
 
-- **Agent calls are first-class expressions.** `ask("Review ${artifact}", agent: reviewer)`
+- **Agent calls are first-class expressions.** `ask("Review ${artifact}", agent = reviewer)`
   calls a host-provided agent with a rendered prompt template; the result is
   a typed value usable in any expression position.
 - **Types are contracts at the LLM boundary.** Annotating an `ask` call's
@@ -25,7 +25,8 @@ oriented orchestration language whose core ideas are:
   lambdas produce values of function type `(A, B) -> C`; they may be stored,
   passed, and returned.
 - **Mutability is explicit.** `let` binds immutably, `var` binds mutably,
-  `:=` updates; a single `=` is the equality operator, never assignment.
+  `:=` updates; equality is `==`, while a single `=` is a binder and
+  named-argument separator, never assignment.
 - **Failures are exceptions.** Parse failures, cast failures, loop exhaustion,
   match failures, recursion depth, and shell errors are typed, catchable exceptions.
 - **Blocks use indentation**, with deterministic inline forms for one-liner
@@ -46,21 +47,21 @@ agent impl
 def review_and_fix(artifact: text, retries: int = 2) -> text =
   let r: Review = ask(
     "Review the artifact for correctness:\n${artifact}",
-    agent: reviewer,
-    on_parse_error: Retry(n: retries)
+    agent = reviewer,
+    on_parse_error = Retry(n = retries)
   )
   case r of
     | Pass => artifact
     | Fail(issues) => ask(
         "Fix these issues:\n${issues}\n\nCurrent:\n${artifact}",
-        agent: impl
+        agent = impl
       )
 
-var artifact: text = ask("Implement ${spec}", agent: impl)
+var artifact: text = ask("Implement ${spec}", agent = impl)
 
 do[5]
   artifact := review_and_fix(artifact)
-  let final: Review = ask("Final review:\n${artifact}", agent: reviewer)
+  let final: Review = ask("Final review:\n${artifact}", agent = reviewer)
 until final is Pass
 ```
 

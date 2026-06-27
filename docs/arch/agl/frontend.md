@@ -33,6 +33,7 @@ The pass selects concrete behavior that the evaluator later relies on:
 - **Built-in typing rules** are dispatched from the resolver's built-in classification — for example `print` accepts anything and yields unit; `exec` chooses between returning a structured result and parsing stdout into a target type; `ask` takes its result type from context.
 - **Casts** are validated against a table of permitted source/target pairs, each classified as total or fallible; `as?` always types as a boolean.
 - **Generics** use rank-1 parametric polymorphism. A generic definition is checked with its type parameters as rigid, opaque variables (enforcing parametricity), and a small one-sided matching solver infers type arguments for both explicit and inferred calls. Type arguments exist only during checking — they are erased before execution.
+- **Constructor named arguments** — record and enum-variant calls take named fields (`field = value`). The bare-name shorthand `R(x)` ≡ `R(x = x)` is resolved here, not in the grammar: a positional `VarRef` argument to a constructor is reinterpreted as `name = name`, and any other positional argument is rejected. Because constructors share the one call production with `def` calls, keeping the shorthand in the checker is what makes it constructor-only — ordinary `def` calls keep their positional arguments.
 
 Output contracts (the schema and format metadata that agent/`exec` calls need) are computed here while types are available, then compiled into the typeless execution layer described in [execution.md](execution.md).
 

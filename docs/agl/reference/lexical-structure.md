@@ -45,11 +45,11 @@ The layout rules:
    ```agl
    if
      | status is Complete => ()
-     | status is Blocked => let report = ask("Explain ${status}", agent: critic)
+     | status is Blocked => let report = ask("Explain ${status}", agent = critic)
      | else => ()
 
    do[5]
-     let r: Review = ask("Review ${artifact}", agent: reviewer)
+     let r: Review = ask("Review ${artifact}", agent = reviewer)
    until r is Pass
    ```
 
@@ -196,6 +196,7 @@ characters that break an identifier scan.
 | `a.b` | `NAME "a"`, `DOT "."`, `NAME "b"` | `.` is a delimiter, always an operator |
 | `a -> b` | `NAME "a"`, `THIN_ARROW "->"`, `NAME "b"` | arrow operator, whitespace-delimited |
 | `a->b` | `NAME "a->b"` | one identifier (no spaces) |
+| `x == 3` | `NAME "x"`, `EQ_EQ "=="`, `INT "3"` | equality operator, whitespace-delimited |
 | `x != 3` | `NAME "x"`, `NEQ "!="`, `INT "3"` | not-equal operator, whitespace-delimited |
 | `x!=3` | `NAME "x!=3"` | one identifier (no spaces) |
 | `a+b` | `NAME "a+b"` | one identifier (`+` is not a delimiter) |
@@ -235,7 +236,7 @@ semantics are covered in [Strings and interpolation](strings-and-interpolation.m
 ## Operators and punctuation
 
 ```text
-=>   ->   =   !=   <   <=   >   >=
+=>   ->   =   ==   !=   <   <=   >   >=
 ::   +   -   *   /
 (   )   [   ]   {   }
 :   ,   .   |   ;
@@ -252,12 +253,13 @@ separates a branch condition or pattern from its body.
 introducer** `callee::[Type](args)` (e.g. `ask-request::[Review](…)`). It is
 a maximal-munch token distinct from two `:` delimiters. The two uses are
 disambiguated by context: a `::` immediately preceded by a name or dotted path
-is the qualifier form; a `::` following a `VAR_NAME` and immediately followed
+is the qualifier form; a `::` following a `NAME` and immediately followed
 by `[` is the typed-call form.
 
-`==` is recognized as a distinct token solely so it can be rejected with
-the targeted error **"Use `=` for equality."** — it is not part of the
-language.
+`==` is the **equality operator** (with `!=` for inequality). A single `=` is
+never a comparison: it separates a binder or named argument from its value
+(`let x = …`, `f(name = …)`, `R(field = …)`), and `:=` is destructive
+assignment.
 
 Multi-character operators are matched greedily.
 
@@ -277,7 +279,7 @@ From loosest to tightest binding (the bottom binds tightest):
 | 1 | `or` | left |
 | 2 | `and` | left |
 | 3 | `not` (prefix) | — |
-| 4 | `=` `!=` `<` `<=` `>` `>=` `in` `is` `is not` | **non-associative** |
+| 4 | `==` `!=` `<` `<=` `>` `>=` `in` `is` `is not` | **non-associative** |
 | 5 | `+` `-` | left |
 | 6 | `*` `/` | left |
 | 7 | `as` `as?` (cast / convertibility test) | left |
@@ -306,5 +308,5 @@ supported, but syntactically the grammar allows it for future use).
 expression forms. In positions where a following `|` would be ambiguous
 (branch bodies, `if`/`until` conditions) they must be parenthesized.
 
-All comparison operators are non-associative: `x = y = z`, `1 < 2 < 3`, and
+All comparison operators are non-associative: `x == y == z`, `1 < 2 < 3`, and
 `a <= b != c` are parse errors with a targeted diagnostic.

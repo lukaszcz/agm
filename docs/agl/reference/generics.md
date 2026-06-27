@@ -59,9 +59,9 @@ enum Outcome[T, E]
   | ok(value: T)
   | err(error: E)
 
-let bi: Box[int] = Box(value: 1)
-let bt: Box[text] = Box(value: "hi")
-let nested: Box[Box[int]] = Box(value: Box(value: 7))
+let bi: Box[int] = Box(value = 1)
+let bt: Box[text] = Box(value = "hi")
+let nested: Box[Box[int]] = Box(value = Box(value = 7))
 print nested.value.value
 ```
 
@@ -73,8 +73,8 @@ print nested.value.value
 import containers
 
 def unwrap(box: Box[int]) -> int = box.value
-let open_box: Box[int] = Box(value: 1)
-let qualified_box: containers::Box[int] = containers::Box(value: 2)
+let open_box: Box[int] = Box(value = 1)
+let qualified_box: containers::Box[int] = containers::Box(value = 2)
 ```
 
 ## Inference and the explicit `::[…]` override
@@ -89,7 +89,7 @@ record Box[T]
 
 print(id(5))                       # T inferred = int
 print(id("hi"))                    # T inferred = text
-let bi: Box[int] = Box(value: 5)   # T inferred from the payload
+let bi: Box[int] = Box(value = 5)   # T inferred from the payload
 ```
 
 When inference cannot determine the arguments, or to pin them explicitly, pass
@@ -105,9 +105,9 @@ enum Option[T]
   | some(value: T)
 
 print(id::[int](9))
-let be = Box::[int](value: 99)
-let s = some::[int](value: 8)
-let qs = Option.some::[int](value: 13)
+let be = Box::[int](value = 99)
+let s = some::[int](value = 8)
+let qs = Option.some::[int](value = 13)
 let _r = apply::[int, int](10, fn(n: int) -> int => n + 1)
 print be.value
 ```
@@ -131,7 +131,7 @@ function value, called **positionally** in declaration field order:
 ```agl
 record Box[T]
   value: T
-let direct: Box[int] = Box(value: 1)   # named, at the construction site
+let direct: Box[int] = Box(value = 1)   # named, at the construction site
 let mk: (int) -> Box[int] = Box        # the constructor as a value
 let one = mk(1)                         # called positionally
 print one.value
@@ -172,13 +172,13 @@ generic body knows nothing about it beyond that it exists. You may only
 **pass it, return it, and store it**. Every operation that would inspect its
 contents is a static error. You cannot:
 
-- compare it with `=`, `!=`, `<`, … (`x = x` on a `T` is rejected),
+- compare it with `==`, `!=`, `<`, … (`x == x` on a `T` is rejected),
 - do arithmetic on it,
 - access a field (`x.foo`) or index (`x[0]`) of it,
 - test it with `is` / `is not`.
 
 ```agl
-def bad[T](x: T) -> bool = x = x     # static error: '=' not permitted on 'T'
+def bad[T](x: T) -> bool = x == x     # static error: '==' not permitted on 'T'
 ```
 
 This guarantees a generic definition behaves uniformly at every instantiation:
@@ -219,13 +219,13 @@ def describe_option(o: Option[int]) -> text =
     | Option.none => "missing"
     | Option.some(value) => "found ${value}"
 
-let d: Option[int] = Option.some(value: 11)
+let d: Option[int] = Option.some(value = 11)
 let line = describe_option(d)
 print line
 ```
 
 Qualification works in expression, pattern, and `is`-test positions
-(`Option.some(value: 1)`, `case … | Option.none => …`,
+(`Option.some(value = 1)`, `case … | Option.none => …`,
 `probe is Option.some`). A nearer ordinary binding (a `let`, `var`, or
 function parameter) **shadows** a constructor or overload set, exactly like
 any other shadowing (see [Bindings and scope](bindings-and-scope.md)).

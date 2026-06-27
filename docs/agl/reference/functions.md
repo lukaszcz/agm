@@ -66,10 +66,10 @@ recursion among top-level `def`s is therefore unrestricted:
 
 ```agl
 def is_even(n: int) -> bool =
-  if n = 0 => true else => is_odd(n - 1)
+  if n == 0 => true else => is_odd(n - 1)
 
 def is_odd(n: int) -> bool =
-  if n = 0 => false else => is_even(n - 1)
+  if n == 0 => false else => is_even(n - 1)
 ```
 
 `def` is **not** a valid declaration inside a block (`do` body, `if`
@@ -200,7 +200,7 @@ returned, or stored. It may **not** be:
 - tested with `is` / `is not`.
 
 ```agl
-def bad[T](x: T, y: T) -> bool = x = y   # static error: '=' on type variable T
+def bad[T](x: T, y: T) -> bool = x == y   # static error: '==' on type variable T
 ```
 
 Each of these is a static error. This *parametricity* guarantee means a
@@ -218,7 +218,7 @@ call_expr ::= postfix_expr type_args? "(" arg_list? ")"
 type_args ::= "::" "[" type_expr ("," type_expr)* "]"
 arg_list  ::= arg ("," arg)* ","?
 arg       ::= expr                   (* positional *)
-            | NAME ":" expr          (* named *)
+            | NAME "=" expr          (* named *)
 ```
 
 **Single-argument sugar.** When there is exactly one positional argument
@@ -230,7 +230,7 @@ print review          # equivalent to print(review)
 ask "Hello?"          # equivalent to ask("Hello?")
 print res.stdout      # field-access path is a valid sugar argument
 print classify(x)     # equivalent to print(classify(x))
-f Opt.Some(x: 1)      # equivalent to f(Opt.Some(x: 1))
+f Opt.Some(x = 1)      # equivalent to f(Opt.Some(x = 1))
 ```
 
 Application binds **tighter than all operators**:
@@ -259,7 +259,7 @@ def format_msg(text: text, prefix: text = "[INFO]") -> text =
   "${prefix} ${text}"
 
 format_msg("Done.")              # prefix uses its default
-format_msg("Done.", prefix: "!") # prefix supplied by name
+format_msg("Done.", prefix = "!") # prefix supplied by name
 ```
 
 Named arguments may be given in any order after all required positional
@@ -345,7 +345,7 @@ can be stored in bindings and passed to functions:
 
 ```agl
 def make_policy(retries: int) -> ParsePolicy =
-  if retries = 0 => ParsePolicy.Abort else => Retry(n: retries)
+  if retries == 0 => ParsePolicy.Abort else => Retry(n = retries)
 ```
 
 ## Complete example
@@ -365,11 +365,11 @@ def summarize_issues(issues: list[text]) -> text =
   "Issues found:\n${issues}"
 
 def review_artifact(artifact: text, max_retries: int = 2) -> Review =
-  let policy = if max_retries > 0 => Retry(n: max_retries) else => Abort
+  let policy = if max_retries > 0 => Retry(n = max_retries) else => Abort
   let r: Review = ask(
     "Review this artifact:\n${artifact}",
-    agent: reviewer,
-    on_parse_error: policy
+    agent = reviewer,
+    on_parse_error = policy
   )
   r
 

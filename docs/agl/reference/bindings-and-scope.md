@@ -4,9 +4,9 @@
 
 AgL has two value binders (`let` and `var`), destructive assignment, a param declaration, an
 agent declaration, and a function declaration (`def`). There is no bare
-assignment: `x = e` as an item is a static error with the guidance to use
-`let`, `var`, or `:=`. A single `=` in expression position is the equality
-operator ([Expressions](expressions.md)).
+assignment: `x = e` as an item is a syntax error — use `let`/`var` to bind or
+`:=` to reassign. The equality operator is `==`
+([Expressions](expressions.md)).
 
 ## `let` — immutable binding
 
@@ -22,8 +22,8 @@ self-contained; a block ending in a bare `let` is a static error:
 ```agl
 let review: Review = ask(
   "Review ${artifact}",
-  agent: reviewer,
-  on_parse_error: Retry(n: 2)
+  agent = reviewer,
+  on_parse_error = Retry(n = 2)
 )
 let count = 3
 ```
@@ -38,7 +38,7 @@ Identical to `let` except the binding is **mutable** — it may later be
 updated with `:=`:
 
 ```agl
-var artifact: text = ask("Implement ${spec}", agent: impl)
+var artifact: text = ask("Implement ${spec}", agent = impl)
 ```
 
 ## `:=` — destructive assignment
@@ -53,8 +53,8 @@ never creates a binding. The expected type of the right-hand side is the
 declared type of the binding being updated:
 
 ```agl
-var proposal: Turn = ask("Initial proposal.", agent: researcher)
-proposal := ask("Revise proposal.", agent: researcher)   # target type: Turn
+var proposal: Turn = ask("Initial proposal.", agent = researcher)
+proposal := ask("Revise proposal.", agent = researcher)   # target type: Turn
 ```
 
 `:=` can also update an element of a mutable list or an existing key of a
@@ -106,10 +106,10 @@ scoping within the same module.
 
 ```agl
 def is_even(n: int) -> bool =
-  if n = 0 => true else => is_odd(n - 1)
+  if n == 0 => true else => is_odd(n - 1)
 
 def is_odd(n: int) -> bool =
-  if n = 0 => false else => is_even(n - 1)
+  if n == 0 => false else => is_even(n - 1)
 ```
 
 A `def` may be **generic** — it can declare type parameters in a bracketed
@@ -189,10 +189,10 @@ let agents: list[agent] = [reviewer, impl]
 ```
 
 A declared agent is a first-class value. It is passed to `ask` via the
-`agent:` parameter:
+`agent` parameter:
 
 ```agl
-let r: Review = ask("Review ${artifact}", agent: reviewer)
+let r: Review = ask("Review ${artifact}", agent = reviewer)
 ```
 
 Rules:
@@ -224,7 +224,7 @@ record Box[T]
   value: T
 # 'Box' the type lives in the type namespace;
 # 'Box' the constructor lives in the value namespace.
-let b: Box[int] = Box(value: 1)
+let b: Box[int] = Box(value = 1)
 ```
 
 ### Constructors are ordinary value bindings
@@ -237,8 +237,8 @@ let mk: (int) -> Box[int] = Box   # the constructor as a first-class value
 let one = mk(1)                    # called positionally, in field order
 ```
 
-Direct construction uses **named** arguments (`Box(value: 1)`,
-`some(value: x)`); a constructor reached **through a variable** is an ordinary
+Direct construction uses **named** arguments (`Box(value = 1)`,
+`some(value = x)`); a constructor reached **through a variable** is an ordinary
 function value invoked **positionally**, in declaration order. Nullary enum
 variants are ordinary values (`let e: Option[int] = none`). See
 [Generics](generics.md) for the full constructor-value story (including when a
@@ -259,7 +259,7 @@ enum Holder[T]
 enum Other
   | tagged(label: text)      # same unqualified name 'tagged'
 
-let h: Holder[int] = Holder.tagged(by: 7)   # qualified — unambiguous
+let h: Holder[int] = Holder.tagged(by = 7)   # qualified — unambiguous
 ```
 
 A **nearer ordinary binding shadows** a constructor (or an overload set): an
@@ -320,11 +320,11 @@ ask "Uses ${x}"      # outer
 `:=` reaches *through* scopes to the nearest visible mutable binding:
 
 ```agl
-var artifact: text = ask("Implement ${spec}", agent: impl)
+var artifact: text = ask("Implement ${spec}", agent = impl)
 
 case review of
   | Fail(issues) =>
-      artifact := ask("Fix ${issues} in ${artifact}", agent: impl)
+      artifact := ask("Fix ${issues} in ${artifact}", agent = impl)
   | Pass => ()
 ```
 
@@ -336,7 +336,7 @@ made by the body:
 
 ```agl
 do[5]
-  let review: Review = ask("Review ${artifact}", agent: reviewer)
+  let review: Review = ask("Review ${artifact}", agent = reviewer)
 until review is Pass
 ```
 

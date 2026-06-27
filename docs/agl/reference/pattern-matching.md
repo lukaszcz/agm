@@ -23,8 +23,8 @@ qual_prefix    ::= NAME ("." NAME)* "::"   (* module-qualified prefix *)
                | "::"                      (* current-module prefix *)
 
 pattern_fields ::= pattern_field ("," pattern_field)* ","?
-pattern_field  ::= NAME                                   (* shorthand *)
-                 | NAME ":" pattern                       (* field: subpattern *)
+pattern_field  ::= NAME                                   (* shorthand: NAME bound to NAME *)
+                 | NAME "=" pattern                       (* field = subpattern *)
 ```
 
 ### Wildcard `_`
@@ -50,7 +50,7 @@ constructor, never by its spelling: capitalization carries no meaning
 
 ```agl
 case result of
-  | Blocked(reason) => raise Abort(message: reason)
+  | Blocked(reason) => raise Abort(message = reason)
   | other => print other            # 'other' names no constructor → binder
 ```
 
@@ -62,7 +62,7 @@ the constructor would otherwise claim is again a plain binder.
 ### Literal patterns
 
 An `int`, `decimal`, `bool`, `null`, or string literal matches by value
-equality (the same `=` semantics, including `int`/`decimal` numeric
+equality (the same `==` semantics, including `int`/`decimal` numeric
 equivalence — the pattern `1` matches the value `1.0`):
 
 ```agl
@@ -95,8 +95,8 @@ Pass                       # nullary variant — bare name that names a construc
 Pass()                     # nullary variant, explicit call form
 Review.Pass                # nullary variant, qualified (aliases resolve transparently)
 Fail(issues)               # shorthand: binds field 'issues' to name 'issues'
-Fail(issues: xs)           # binds field 'issues' to name 'xs'
-Fail(issues: ["stuck"])    # nested literal pattern on a field
+Fail(issues = xs)          # binds field 'issues' to name 'xs'
+Fail(issues = ["stuck"])   # nested literal pattern on a field
 ```
 
 A **bare** constructor name matches **nullary** variants only. A bare name for a
@@ -125,8 +125,8 @@ qualification always disambiguates.
 
 Payload patterns are **field-based, not positional**. `Fail(x)` is valid
 only if the variant actually has a field named `x`; to bind field `issues`
-to another name, write `Fail(issues: x)`. The general form
-`field: pattern` nests arbitrarily — the sub-pattern may itself be a
+to another name, write `Fail(issues = x)`. The general form
+`field = pattern` nests arbitrarily — the sub-pattern may itself be a
 wildcard, literal, binder, or (where the field is enum-typed) another
 constructor pattern.
 
@@ -198,7 +198,7 @@ when you need the payload:
 until review is Pass
 
 case review of
-  | Fail(issues) => artifact := ask("Fix ${issues}", agent: impl)
+  | Fail(issues) => artifact := ask("Fix ${issues}", agent = impl)
   | Pass => ()
 ```
 
@@ -206,7 +206,7 @@ case review of
 same way as in a pattern:
 
 ```agl
-let probe: Option[int] = some(value: 99)
+let probe: Option[int] = some(value = 99)
 if probe is Option.some => print "probe is some"
 if probe is not Option.none => print "probe is not none"
 ```

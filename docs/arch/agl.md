@@ -271,8 +271,12 @@ Host calls are keyed by `ContractId`. `ContractRequest` carries codec selection,
 format instructions, canonical JSON schema, and a typeless decode walk; it is also
 converted to the agent-facing contract carrier so model-backed agents receive
 format/schema metadata. `IrParam.external_decoder` performs host parameter decoding
-without consulting checker binding types. Dry-run output is copied from the linked
-program's inventory rather than reconstructed from checker call-site tables.
+without consulting checker binding types. The compiled-IR param boundary and the
+REPL/config `convert_param_value` boundary share one decoder: `build_param_decoder`
+(in `agm.agl.type_schema`) builds the `ParamDecoder`, and `decode_param_value` (in
+`agm.agl.runtime.params`) is the single decode path both run. Dry-run output is
+copied from the linked program's inventory rather than reconstructed from checker
+call-site tables.
 
 The package boundaries are enforced by `tests/test_agl_dependencies.py`:
 

@@ -32,7 +32,7 @@ import json
 from dataclasses import dataclass, field
 from typing import assert_never
 
-from agm.agl.ir.contracts import ContractRequest, ConversionFailureMode, ParamDecoder
+from agm.agl.ir.contracts import ContractRequest, ConversionFailureMode
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import (
     AutoTraceField,
@@ -199,7 +199,12 @@ from agm.agl.syntax.nodes import (
     WildcardPattern,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.type_schema import build_decode_schema, build_format_instructions, derive_schema
+from agm.agl.type_schema import (
+    build_decode_schema,
+    build_format_instructions,
+    build_param_decoder,
+    derive_schema,
+)
 from agm.agl.typecheck.env import CheckedProgram
 from agm.agl.typecheck.graph import CheckedModule
 from agm.util.text import normalize_newlines
@@ -1879,12 +1884,7 @@ class _Lowerer:
             required=(param.default is None),
             default=default_ir,
             location=self._loc(param.span),
-            external_decoder=ParamDecoder(
-                target_type_label=repr(binding_type),
-                json_schema=json.dumps(derive_schema(binding_type), sort_keys=True),
-                decode=build_decode_schema(binding_type),
-                text_verbatim=isinstance(binding_type, TextType),
-            ),
+            external_decoder=build_param_decoder(binding_type),
         )
         self._params.append(ir_param)
 

@@ -1622,7 +1622,7 @@ issue
         """
         from agm.agl.runtime.params import convert_param_value
 
-        with pytest.raises(ValueError, match="valid JSON value"):
+        with pytest.raises(ValueError, match="JSON parse error"):
             convert_param_value(
                 "issue",
                 '{"title": "Bug", "severity": 5,}',  # trailing comma typo
@@ -1633,7 +1633,7 @@ issue
         """F7: a Markdown-fenced --param value is not stripped (strict parsing)."""
         from agm.agl.runtime.params import convert_param_value
 
-        with pytest.raises(ValueError, match="valid JSON value"):
+        with pytest.raises(ValueError, match="JSON parse error"):
             convert_param_value(
                 "tags",
                 "```json\n[1, 2]\n```",

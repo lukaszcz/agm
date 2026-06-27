@@ -1789,7 +1789,7 @@ class TestRuntimeErrorPaths:
         from agm.agl.runtime.params import convert_param_value
         from agm.agl.semantics.types import IntType
 
-        with pytest.raises(ValueError, match="expected an integer"):
+        with pytest.raises(ValueError, match="not of type 'integer'"):
             convert_param_value("n", "1.5", IntType())
 
     def test_decimal_param_from_int(self) -> None:
@@ -1809,7 +1809,7 @@ class TestRuntimeErrorPaths:
         from agm.agl.runtime.params import convert_param_value
         from agm.agl.semantics.types import DecimalType
 
-        with pytest.raises(ValueError, match="expected a decimal"):
+        with pytest.raises(ValueError, match="not of type 'number'"):
             convert_param_value("d", "true", DecimalType())
 
     def test_bool_param_invalid_type_fails(self) -> None:
@@ -1817,7 +1817,7 @@ class TestRuntimeErrorPaths:
         from agm.agl.runtime.params import convert_param_value
         from agm.agl.semantics.types import BoolType
 
-        with pytest.raises(ValueError, match="expected a bool"):
+        with pytest.raises(ValueError, match="not of type 'boolean'"):
             convert_param_value("b", "1", BoolType())
 
     def test_bool_param_true_succeeds(self) -> None:

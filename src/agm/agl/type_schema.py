@@ -38,6 +38,7 @@ from agm.agl.ir.contracts import (
     DictDecode,
     EnumDecode,
     ListDecode,
+    ParamDecoder,
     RecordDecode,
     ScalarDecode,
     ScalarKind,
@@ -203,6 +204,28 @@ def build_decode_schema(typ: Type) -> DecodeSchema:
     # decodable from JSON and are rejected by the checker before lowering.
     raise AssertionError(  # pragma: no cover
         f"build_decode_schema: undecodable type {typ!r}"
+    )
+
+
+def build_param_decoder(typ: Type) -> ParamDecoder:
+    """Compile a checker ``Type`` into the typeless ``ParamDecoder`` used to
+    decode one host-supplied entry parameter.
+
+    Single source of the param-decoder shape, shared by the lowerer (which
+    embeds it in each ``IrParam.external_decoder``) and the REPL/config path
+    (:func:`agm.agl.runtime.params.convert_param_value`).  ``text`` params are
+    taken verbatim; every other type round-trips through the canonical JSON
+    boundary (``derive_schema`` for validation, ``build_decode_schema`` for the
+    typeless decode walk).
+
+    :raises TypeError: if *typ* has no wire schema (unit/agent/exception/…);
+        :func:`derive_schema` rejects such types.
+    """
+    return ParamDecoder(
+        target_type_label=repr(typ),
+        json_schema=json.dumps(derive_schema(typ), sort_keys=True),
+        decode=build_decode_schema(typ),
+        text_verbatim=isinstance(typ, TextType),
     )
 
 

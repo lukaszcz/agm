@@ -1,6 +1,6 @@
 # Core Primitives
 
-`core/` holds the low-level building blocks shared across every command: process execution, environment handling, filesystem and TOML/dotenv I/O, logging, and a cross-cutting dry-run facility. These modules have minimal coupling to AGM concepts and are the layer that actually touches the operating system.
+Two foundation packages sit beneath everything else. `core/` holds the OS-facing building blocks shared across every command: process execution, environment handling, filesystem and TOML/dotenv I/O, logging, and a cross-cutting dry-run facility. `util/` holds pure, stdlib-only generic helpers that import nothing from `agm` and are shared by *both* the AGM commands and the AgL subsystem.
 
 ## Process Execution
 
@@ -18,6 +18,10 @@ Filesystem mutations (mkdir, write, chmod, remove, glob) and TOML/dotenv reads a
 
 Dry-run is a global, cross-cutting mode set from the `--dry-run` CLI flag. The primitives consult it: when enabled, process and filesystem operations print the action they *would* take instead of performing it. Because the check lives in the primitives, every command inherits dry-run support without implementing it individually.
 
+## Generic Utilities
+
+`util/` is a dependency-free leaf: pure algorithms and string helpers with zero `agm` imports, deliberately usable from any layer without creating a cycle. It provides generic graph algorithms (Tarjan strongly-connected components and Kahn topological sort), used by AgL module loading and the graph-aware passes for deterministic dependency ordering ([agl/modules.md](agl/modules.md)), and universal-newline normalization shared by the AgL lexer and runtime diagnostics so both index source text identically.
+
 ## Code Entry Points
 
 - `src/agm/core/process.py` — foreground/capture execution, success requirements, process-group termination.
@@ -26,3 +30,4 @@ Dry-run is a global, cross-cutting mode set from the `--dry-run` CLI flag. The p
 - `src/agm/core/toml.py` and `src/agm/core/dotenv.py` — round-trip TOML and dotenv read/write helpers.
 - `src/agm/core/dry_run.py` — global dry-run state and planned-command printing.
 - `src/agm/core/log.py` — logging setup, including JSON trace logs used by AgL execution.
+- `src/agm/util/graph.py` — generic Tarjan SCC and Kahn toposort; `src/agm/util/text.py` — newline normalization. Both are pure and `agm`-import-free.

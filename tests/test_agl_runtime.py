@@ -75,7 +75,7 @@ class TestRegisterAgent:
 
         rt.register_agent("my_agent", my_agent)
         result = rt.run(
-            'agent my_agent\nlet answer = ask("meaningful prompt", agent: my_agent)\n'
+            'agent my_agent\nlet answer = ask("meaningful prompt", agent = my_agent)\n'
             "print answer"
         )
 
@@ -197,7 +197,7 @@ class TestFallbackAgent:
     def test_named_agent_registered_accepted(self) -> None:
         rt = PipelineDriver()
         rt.register_agent("impl", lambda req: "output")
-        result = rt.run('agent impl\nask("do it", agent: impl)')
+        result = rt.run('agent impl\nask("do it", agent = impl)')
         assert result.ok is True
 
     def test_undeclared_named_agent_is_static_error(self) -> None:
@@ -211,7 +211,7 @@ class TestFallbackAgent:
     def test_default_agent_backs_declared_name(self) -> None:
         rt = PipelineDriver(default_agent=lambda req: "ok")
         # A default_agent backs any declared name without a dedicated registration.
-        result = rt.run('agent any_agent_name\nask("hi", agent: any_agent_name)')
+        result = rt.run('agent any_agent_name\nask("hi", agent = any_agent_name)')
         assert result.ok is True
 
     def test_declared_but_uncalled_agent_surfaces_warning(self) -> None:
@@ -344,7 +344,7 @@ class TestAgentRequest:
 
         rt = PipelineDriver()
         rt.register_agent("reviewer", reviewer)
-        rt.run('agent reviewer\nask("Review this", agent: reviewer)')
+        rt.run('agent reviewer\nask("Review this", agent = reviewer)')
         assert received[0].agent == "reviewer"
 
 
@@ -2029,9 +2029,9 @@ class TestRuntimeErrorPaths:
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         result = PipelineDriver().run(
-            'print(render("hello", quote_strings: false))\n'
-            "print(render([1, 2], pretty: false))\n"
-            'print(render({"a": 1} as json, pretty: false))\n'
+            'print(render("hello", quote_strings = false))\n'
+            "print(render([1, 2], pretty = false))\n"
+            'print(render({"a": 1} as json, pretty = false))\n'
         )
 
         assert result.ok is True
@@ -2432,14 +2432,14 @@ class TestAgentReconciliation:
 
         rt = PipelineDriver()
         rt.register_agent("impl", agent)
-        result = rt.run('agent impl\nask("do it", agent: impl)')
+        result = rt.run('agent impl\nask("do it", agent = impl)')
         assert result.ok is True
         assert calls == ["do it"]
 
     def test_declared_with_default_agent_runs(self) -> None:
         # No dedicated registration, but a default agent backs the declared name.
         rt = PipelineDriver(default_agent=lambda req: "ok")
-        result = rt.run('agent any_name\nask("hi", agent: any_name)')
+        result = rt.run('agent any_name\nask("hi", agent = any_name)')
         assert result.ok is True
 
     def test_both_error_categories_reported_together(self) -> None:
@@ -2839,7 +2839,7 @@ class TestV2AskWithAgentValue:
 
         rt = PipelineDriver()
         rt.register_agent("helper", agent)
-        result = rt.run('agent helper\nask("question", agent: helper)\n')
+        result = rt.run('agent helper\nask("question", agent = helper)\n')
         assert result.ok is True
         assert received == ["question"]
 
@@ -2922,7 +2922,7 @@ class TestPrepareProgram:
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = PipelineDriver.prepare_program(
-            'agent reviewer\nask("q", agent: reviewer)',
+            'agent reviewer\nask("q", agent = reviewer)',
             entry_path=None,
             roots=roots,
         )

@@ -83,6 +83,46 @@ class ConstructorCheckCtx(Protocol):
 
 
 # ---------------------------------------------------------------------------
+# Shared constructor-argument helper
+# ---------------------------------------------------------------------------
+
+
+def merge_constructor_args(
+    args: tuple[Expr, ...], named_args: tuple[NamedArg, ...]
+) -> tuple[NamedArg, ...]:
+    """Merge positional shorthand args with explicit named args for a ctor call.
+
+    Constructor calls do not accept arbitrary positional arguments, but a bare
+    field name may be passed positionally as shorthand for ``name = name``: a
+    positional ``VarRef`` ``x`` is reinterpreted as the named binding ``x = x``.
+    Any other positional expression (e.g. ``R(1)``, ``R(x + 1)``, ``R(f())``) is
+    rejected.  Shorthand bindings are accepted in any position.
+
+    Duplicate-name detection is deferred to ``_check_constructor_call``, so a
+    field supplied both via shorthand and explicitly is reported there as a
+    duplicate.
+    """
+    shorthand: list[NamedArg] = []
+    for arg in args:
+        if not isinstance(arg, VarRef):
+            raise AglTypeError(
+                "Constructor arguments must be named; only a bare field name may be "
+                "passed positionally as shorthand for `name = name`.",
+                span=arg.span,
+            )
+        # The wrapping NamedArg is synthesized, not a real source node: it
+        # carries the codebase's synthetic-node sentinel id (-1, as in
+        # checker.py / resolver.py) rather than reusing the VarRef's real id,
+        # which would place two distinct nodes under one id.  No pass keys a
+        # NamedArg by node_id, so the sentinel is never looked up; the inner
+        # VarRef keeps its own id.
+        shorthand.append(
+            NamedArg(name=arg.name, value=arg, span=arg.span, node_id=-1)
+        )
+    return (*shorthand, *named_args)
+
+
+# ---------------------------------------------------------------------------
 # Collaborator class
 # ---------------------------------------------------------------------------
 
@@ -477,13 +517,9 @@ class ConstructorChecker:
         resolved to a ``constructor_binding`` in a non-entry module.
         """
         assert isinstance(node.callee, VarRef)
-        if node.args:
-            raise AglTypeError(
-                "Constructor arguments must be named; positional arguments are not allowed.",
-                span=node.span,
-            )
-        # Cross-module generic constructor — both explicit (lib::Box[int](v:1)) and
-        # inferred (lib::Box(value:1)) routes go here.
+        named_args = merge_constructor_args(node.args, node.named_args)
+        # Cross-module generic constructor — both explicit (lib::Box[int](v = 1)) and
+        # inferred (lib::Box(value = 1)) routes go here.
         gdef = self._ctx._env.get_generic_type_from_module(callee_ref.module_id, callee_ref.name)
         if gdef is not None:
             ctor_sig = self._ctx._env.get_ctor_sig_from_module(
@@ -502,7 +538,7 @@ class ConstructorChecker:
             return self._check_generic_constructor_call(
                 node_type_args=node.type_args,
                 ctor_ref=ctor_ref,
-                named_args=node.named_args,
+                named_args=named_args,
                 span=node.span,
                 expected=expected,
                 sig=ctor_sig,
@@ -522,7 +558,7 @@ class ConstructorChecker:
             f"'{callee_ref.module_id.dotted()}' resolved to {type(owner_type).__name__}"
         )
         return self._check_constructor_call(
-            owner=owner_type, variant=None, args=node.named_args, span=node.span
+            owner=owner_type, variant=None, args=named_args, span=node.span
         )
 
     # --- Unqualified constructor callee call (public entry point) ---
@@ -531,11 +567,7 @@ class ConstructorChecker:
         """Handle a Call whose callee is an unqualified constructor VarRef."""
         assert isinstance(node.callee, VarRef)
         ctor_ref = self._ctx._resolved.constructor_refs[node.callee.node_id]
-        if node.args:
-            raise AglTypeError(
-                "Constructor arguments must be named; positional arguments are not allowed.",
-                span=node.span,
-            )
+        named_args = merge_constructor_args(node.args, node.named_args)
         if ctor_ref.type_params:
             # Generic constructor: route to generic call handler.
             gdef = None
@@ -553,7 +585,7 @@ class ConstructorChecker:
             return self._check_generic_constructor_call(
                 node_type_args=node.type_args,
                 ctor_ref=ctor_ref,
-                named_args=node.named_args,
+                named_args=named_args,
                 span=node.span,
                 expected=expected,
                 sig=sig,
@@ -573,7 +605,7 @@ class ConstructorChecker:
                 span=node.span,
             )
         return self._check_constructor_call(
-            owner=owner, variant=ctor_ref.variant, args=node.named_args, span=node.span
+            owner=owner, variant=ctor_ref.variant, args=named_args, span=node.span
         )
 
     # --- Qualified constructor callee call (public entry point) ---
@@ -586,14 +618,10 @@ class ConstructorChecker:
         owner_name, variant, owner_module_id = (
             self._ctx._resolved.qualified_constructor_refs[node.callee.node_id]
         )
-        if node.args:
-            raise AglTypeError(
-                "Constructor arguments must be named; positional arguments are not allowed.",
-                span=node.span,
-            )
+        named_args = merge_constructor_args(node.args, node.named_args)
         return self._resolve_qualified_constructor_and_call(
             owner_name=owner_name, variant=variant, owner_module_id=owner_module_id,
-            args=node.named_args, span=node.span, expected=expected, type_args=node.type_args,
+            args=named_args, span=node.span, expected=expected, type_args=node.type_args,
         )
 
     # --- Constructor call validation (private helper) ---

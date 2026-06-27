@@ -9,7 +9,7 @@ if true =>
   Header line:
     keep two spaces
   A "quoted" tail.
-  """, agent: critic)
+  """, agent = critic)
   print "block sent"
 else =>
   ()
@@ -18,5 +18,5 @@ let mixed = ask("""
 Wrap:
 ${body}
 End.
-""", agent: critic)
+""", agent = critic)
 print "mixed sent"

@@ -19,7 +19,7 @@ def describe_option(o: Option[int]) -> text =
     | Option.some(value) => "found ${value}"
 
 # Inference from the payload argument.
-let a: Option[int] = some(value: 3)
+let a: Option[int] = some(value = 3)
 print(describe_option(a))
 
 # Nullary inference from the expected type.
@@ -27,22 +27,22 @@ let b: Option[int] = none
 print(describe_option(b))
 
 # Explicit type-argument override on a type-qualified generic constructor.
-let c = Option.some::[int](value: 8)
+let c = Option.some::[int](value = 8)
 print(describe_option(c))
 
 # Qualified constructor expressions select the owning enum.
-let d: Option[int] = Option.some(value: 11)
+let d: Option[int] = Option.some(value = 11)
 print(describe_option(d))
 let e: Option[int] = Option.none
 print(describe_option(e))
 
 # Qualified `is` / `is not` tests on a generic enum variant.
-let probe: Option[int] = some(value: 99)
+let probe: Option[int] = some(value = 99)
 if probe is Option.some => print "probe is some"
 if probe is not Option.none => print "probe is not none"
 
 # An Option flowing in from an agent response, destructured by unqualified `case`.
-let fetched: Option[int] = ask("Pick a number, or nothing.", agent: picker)
+let fetched: Option[int] = ask("Pick a number, or nothing.", agent = picker)
 case fetched of
   | none() => print "agent: nothing"
   | some(value) => print "agent: ${value}"

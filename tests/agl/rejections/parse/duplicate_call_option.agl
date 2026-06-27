@@ -1,2 +1,2 @@
-let x: json = ask("Question.", strict_json: true, strict_json: true)
+let x: json = ask("Question.", strict_json = true, strict_json = true)
 x

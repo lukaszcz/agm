@@ -1,0 +1,4 @@
+record R
+  x: int
+let r = R(x: 0)
+print r.x

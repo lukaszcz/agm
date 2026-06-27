@@ -334,7 +334,7 @@ class TestBinders:
         assert isinstance(s.value, StringLit)
 
     def test_legacy_set_syntax_is_not_assignment(self) -> None:
-        assert not isinstance(first(parse("set x = 10")), AssignStmt)
+        assert not isinstance(first(parse("set x == 10")), AssignStmt)
 
     def test_assignment_target_must_have_variable_root(self) -> None:
         with pytest.raises(AglSyntaxError, match="assignment target"):
@@ -708,7 +708,7 @@ class TestCalls:
         assert len(call.args) == 3
 
     def test_paren_call_named_arg(self) -> None:
-        call = first(parse("ask(x, agent: reviewer)"))
+        call = first(parse("ask(x, agent = reviewer)"))
         assert isinstance(call, Call)
         assert len(call.args) == 1
         assert len(call.named_args) == 1
@@ -717,7 +717,7 @@ class TestCalls:
         assert na.name == "agent"
 
     def test_paren_call_multiple_named(self) -> None:
-        call = first(parse("ask(x, agent: rev, format: json)"))
+        call = first(parse("ask(x, agent = rev, format = json)"))
         assert isinstance(call, Call)
         assert len(call.named_args) == 2
 
@@ -819,8 +819,8 @@ class TestCalls:
         assert inner.callee.name == "classify"
 
     def test_juxt_call_with_qualified_constructor_call_argument(self) -> None:
-        """f Opt.Some(x: 1) desugars to f(Opt.Some(x: 1))."""
-        call = first(parse("f Opt.Some(x: 1)"))
+        """f Opt.Some(x = 1) desugars to f(Opt.Some(x = 1))."""
+        call = first(parse("f Opt.Some(x = 1)"))
         assert isinstance(call, Call)
         assert isinstance(call.callee, VarRef)
         assert call.callee.name == "f"
@@ -868,7 +868,7 @@ class TestCalls:
 
     def test_duplicate_named_arg_raises(self) -> None:
         with pytest.raises(AglSyntaxError, match="duplicate"):
-            parse("f(a: 1, a: 2)")
+            parse("f(a = 1, a = 2)")
 
 
 class TestTypedCalls:
@@ -928,7 +928,7 @@ class TestTypedCalls:
         assert call.type_args[0].value.name == "Review"
 
     def test_typed_call_with_named_args(self) -> None:
-        call = first(parse('ask-request::[Review]("p", agent: reviewer)'))
+        call = first(parse('ask-request::[Review]("p", agent = reviewer)'))
         assert isinstance(call, Call)
         assert len(call.named_args) == 1
         assert call.named_args[0].name == "agent"
@@ -1018,7 +1018,7 @@ class TestFieldAccessAndConstructors:
         assert c.name == "Pass"
 
     def test_constructor_with_args(self) -> None:
-        c = first(parse("Issue(title: x, severity: 1)"))
+        c = first(parse("Issue(title = x, severity = 1)"))
         assert isinstance(c, Call)
         assert isinstance(c.callee, VarRef)
         assert c.callee.name == "Issue"
@@ -1101,7 +1101,7 @@ class TestBinaryOperators:
         assert e.op == BinOp.GT
 
     def test_equality(self) -> None:
-        e = first(parse("x = y"))
+        e = first(parse("x == y"))
         assert isinstance(e, BinaryOp)
         assert e.op == BinOp.EQ
 
@@ -1140,10 +1140,11 @@ class TestBinaryOperators:
         assert isinstance(e, BinaryOp)
         assert e.op == BinOp.IN
 
-    def test_eq_eq_raises(self) -> None:
-        """== is not valid AgL; lexer emits EQ_EQ which triggers a parse error."""
+    def test_bare_eq_is_not_equality(self) -> None:
+        """`=` is no longer the equality operator (it binds/names); a bare
+        `x = y` expression is a parse error. Equality is spelled `==`."""
         with pytest.raises(AglSyntaxError):
-            parse("x == y")
+            parse("x = y")
 
 
 # ---------------------------------------------------------------------------
@@ -1373,7 +1374,7 @@ class TestRaiseExpr:
         assert isinstance(e.exc, VarRef)
 
     def test_raise_constructor(self) -> None:
-        e = first(parse("raise Error(msg: m)"))
+        e = first(parse("raise Error(msg = m)"))
         assert isinstance(e, Raise)
         assert isinstance(e.exc, Call)
 
@@ -1390,7 +1391,7 @@ class TestPatterns:
         assert isinstance(e.branches[0].pattern, LiteralPattern)
 
     def test_constructor_pattern_with_fields(self) -> None:
-        src = "case r of | Issue(title: t, severity: s) => ok"
+        src = "case r of | Issue(title = t, severity = s) => ok"
         e = first(parse(src))
         assert isinstance(e, Case)
         pat = e.branches[0].pattern
@@ -1551,18 +1552,18 @@ class TestNegativeCases:
         with pytest.raises(AglSyntaxError):
             parse("f a b")
 
-    def test_bare_assignment_is_equality(self) -> None:
-        """In v2, n = 2 is a BinaryOp(EQ) expression (not a mutation).
-        Mutation uses `n := 2`. The parser accepts n = 2 as an expression.
+    def test_double_eq_is_equality(self) -> None:
+        """In v2, n == 2 is a BinaryOp(EQ) expression (not a mutation).
+        Mutation uses `n := 2`. The parser accepts n == 2 as an expression.
         The scope pass would verify mutation intent.
         """
-        e = first(parse("n = 2"))
+        e = first(parse("n == 2"))
         assert isinstance(e, BinaryOp)
         assert e.op == BinOp.EQ
 
     def test_duplicate_constructor_arg_raises(self) -> None:
         with pytest.raises(AglSyntaxError, match="duplicate"):
-            parse("Issue(title: a, title: b)")
+            parse("Issue(title = a, title = b)")
 
     def test_braced_constructor_arg_raises(self) -> None:
         with pytest.raises(AglSyntaxError):
@@ -1620,7 +1621,7 @@ class TestFullPrograms:
             "agent reviewer\n"
             "agent planner\n"
             'let s = ask "Hello?"\n'
-            'let r = ask("Review", agent: reviewer)\n'
+            'let r = ask("Review", agent = reviewer)\n'
             'print r'
         )
         prog = parse(src)
@@ -1850,7 +1851,7 @@ class TestAglSyntaxErrorSourceSpan:
     def test_source_span_returns_span(self) -> None:
         """source_span returns the same SourceSpan object as .span."""
         with pytest.raises(AglSyntaxError) as exc_info:
-            parse_program("x == y")
+            parse_program("x = y")
         err = exc_info.value
         assert err.span is not None
         assert err.source_span is err.span
@@ -1858,7 +1859,7 @@ class TestAglSyntaxErrorSourceSpan:
     def test_source_span_is_1based(self) -> None:
         """source_span on a parse error has a valid 1-based line and column."""
         with pytest.raises(AglSyntaxError) as exc_info:
-            parse_program("x == y")
+            parse_program("x = y")
         span = exc_info.value.source_span
         assert span.start_line >= 1
         assert span.start_col >= 1
@@ -2121,8 +2122,8 @@ class TestCaseNeutralNamesParser:
         assert ref.name == "none"
 
     def test_constructor_call_becomes_call(self) -> None:
-        # some(value: 1) -> Call(callee=VarRef("some"), named_args=(...))
-        prog = parse("some(value: 1)")
+        # some(value = 1) -> Call(callee=VarRef("some"), named_args=(...))
+        prog = parse("some(value = 1)")
         c = first(prog)
         assert isinstance(c, Call)
         assert isinstance(c.callee, VarRef)
@@ -2131,7 +2132,7 @@ class TestCaseNeutralNamesParser:
         assert c.named_args[0].name == "value"
 
     def test_uppercase_constructor_call_becomes_call(self) -> None:
-        prog = parse("Some(value: 1)")
+        prog = parse("Some(value = 1)")
         c = first(prog)
         assert isinstance(c, Call)
         assert isinstance(c.callee, VarRef)
@@ -2147,8 +2148,8 @@ class TestCaseNeutralNamesParser:
         assert fa.field == "some"
 
     def test_qualified_call_becomes_call_with_field_access(self) -> None:
-        # Option.some(value: 1) -> Call(callee=FieldAccess(VarRef("Option"), "some"), ...)
-        prog = parse("Option.some(value: 1)")
+        # Option.some(value = 1) -> Call(callee=FieldAccess(VarRef("Option"), "some"), ...)
+        prog = parse("Option.some(value = 1)")
         c = first(prog)
         assert isinstance(c, Call)
         assert isinstance(c.callee, FieldAccess)
@@ -2210,7 +2211,7 @@ class TestCaseNeutralPatterns:
         assert pat.name == "none"
 
     def test_constructor_pattern_with_fields(self) -> None:
-        prog = parse("case x of | some(value: v) => v")
+        prog = parse("case x of | some(value = v) => v")
         case = first(prog)
         assert isinstance(case, Case)
         pat = case.branches[0].pattern
@@ -2633,8 +2634,8 @@ class TestQualifiedRefs:
         assert expr.module_qualifier.segments == ()
 
     def test_qual_constructor_with_payload(self) -> None:
-        # m::Color(r: 1) → Call(VarRef("Color", mq=...), named_args=[NamedArg("r", 1)])
-        prog = parse("m::Color(r: 1)")
+        # m::Color(r = 1) → Call(VarRef("Color", mq=...), named_args=[NamedArg("r", 1)])
+        prog = parse("m::Color(r = 1)")
         (call,) = items(prog)
         assert isinstance(call, syntax.Call)
         callee = call.callee
@@ -2701,7 +2702,7 @@ class TestQualifiedTypeRefs:
         assert decl.type_ann.module_qualifier.segments == ("m",)
 
     def test_qualified_enum_constructor_with_type_args(self) -> None:
-        prog = parse("Option.some::[int](value: 1)")
+        prog = parse("Option.some::[int](value = 1)")
         (call,) = items(prog)
         assert isinstance(call, syntax.Call)
         assert isinstance(call.callee, syntax.FieldAccess)
@@ -2764,7 +2765,7 @@ class TestQualifiedTypeRefs:
 
     def test_qual_pattern_constructor_with_fields(self) -> None:
         # Qualified constructor pattern with payload fields
-        prog = parse("case x of | m::Foo(y: z) => 1")
+        prog = parse("case x of | m::Foo(y = z) => 1")
         (expr,) = items(prog)
         assert isinstance(expr, Case)
         pat = expr.branches[0].pattern
@@ -2840,3 +2841,108 @@ class TestPrivateDecls:
         assert it[0].is_private is False
         assert isinstance(it[1], FuncDef)
         assert it[1].is_private is True
+
+
+# ---------------------------------------------------------------------------
+# Field-assignment syntax change: '=' named args, '==' equality, shorthand.
+# These specify the TARGET grammar and are expected to fail until the grammar
+# is updated (named args switch ':' -> '=', equality switches '=' -> '==').
+# ---------------------------------------------------------------------------
+
+
+class TestFieldAssignmentSyntax:
+    def test_paren_call_named_arg_eq(self) -> None:
+        """Named args use '=' (was ':')."""
+        call = first(parse("ask(x, agent = reviewer)"))
+        assert isinstance(call, Call)
+        assert len(call.args) == 1
+        assert len(call.named_args) == 1
+        na = call.named_args[0]
+        assert isinstance(na, NamedArg)
+        assert na.name == "agent"
+
+    def test_paren_call_multiple_named_eq(self) -> None:
+        call = first(parse("ask(x, agent = rev, format = json)"))
+        assert isinstance(call, Call)
+        assert len(call.named_args) == 2
+        assert {na.name for na in call.named_args} == {"agent", "format"}
+
+    def test_constructor_call_named_arg_eq(self) -> None:
+        """Constructor construction uses '=' for its named fields."""
+        call = first(parse("Some(value = 1)"))
+        assert isinstance(call, Call)
+        assert isinstance(call.callee, VarRef)
+        assert call.callee.name == "Some"
+        assert len(call.named_args) == 1
+        assert call.named_args[0].name == "value"
+
+    def test_constructor_call_shorthand_is_positional_varref(self) -> None:
+        """A bare-name constructor arg parses as a positional VarRef; the
+        constructor type checker reinterprets it as 'name = name' shorthand."""
+        call = first(parse("R(x, y = 1)"))
+        assert isinstance(call, Call)
+        assert len(call.args) == 1
+        assert isinstance(call.args[0], VarRef)
+        assert call.args[0].name == "x"
+        assert len(call.named_args) == 1
+        assert call.named_args[0].name == "y"
+
+    def test_constructor_call_shorthand_after_named_arg(self) -> None:
+        """A bare-name shorthand may follow a named arg (PLAN §3 default):
+        it still parses as a trailing positional VarRef."""
+        call = first(parse("B(r = 1, x)"))
+        assert isinstance(call, Call)
+        assert len(call.named_args) == 1
+        assert call.named_args[0].name == "r"
+        assert len(call.args) == 1
+        assert isinstance(call.args[0], VarRef)
+        assert call.args[0].name == "x"
+
+    def test_pattern_field_full_form_eq(self) -> None:
+        """Full-form pattern fields use '=' (was ':')."""
+        src = "case r of | Issue(title = t) => ok"
+        e = first(parse(src))
+        assert isinstance(e, Case)
+        pat = e.branches[0].pattern
+        assert isinstance(pat, ConstructorPattern)
+        assert pat.name == "Issue"
+        assert len(pat.fields) == 1
+        field0 = pat.fields[0]
+        assert isinstance(field0, PatternField)
+        assert field0.name == "title"
+        assert isinstance(field0.pattern, VarPattern)
+        assert field0.pattern.name == "t"
+
+    def test_pattern_field_shorthand_binds_field_name(self) -> None:
+        """Shorthand pattern field A(x) binds field 'x' to local 'x'."""
+        src = "case r of | Issue(title) => ok"
+        e = first(parse(src))
+        assert isinstance(e, Case)
+        pat = e.branches[0].pattern
+        assert isinstance(pat, ConstructorPattern)
+        assert pat.fields[0].name == "title"
+        assert isinstance(pat.fields[0].pattern, VarPattern)
+        assert pat.fields[0].pattern.name == "title"
+
+    def test_pattern_field_full_form_nested(self) -> None:
+        src = "case r of | Box(at = Pt(x = px)) => ok"
+        e = first(parse(src))
+        assert isinstance(e, Case)
+        outer = e.branches[0].pattern
+        assert isinstance(outer, ConstructorPattern)
+        inner = outer.fields[0].pattern
+        assert isinstance(inner, ConstructorPattern)
+        assert inner.name == "Pt"
+        assert inner.fields[0].name == "x"
+
+    def test_equality_parses_to_bin_eq(self) -> None:
+        """'==' is the equality operator, mapping to BinOp.EQ."""
+        e = first(parse("x == y"))
+        assert isinstance(e, BinaryOp)
+        assert e.op == BinOp.EQ
+
+    def test_single_eq_is_not_equality_in_paren(self) -> None:
+        """A single '=' is no longer an expression operator; '(x = 3)' as a
+        parenthesized expression is a syntax error."""
+        with pytest.raises(AglSyntaxError):
+            parse("let same = (x = 3)")

@@ -781,7 +781,7 @@ class TestExecParsesSourceOnce:
         agl_file = tmp_path / "prog.agl"
         # A declared+called agent: exec must read the inventory AND run the
         # static pipeline, the exact scenario that previously parsed twice.
-        agl_file.write_text('agent impl\nask("do it", agent: impl)\n')
+        agl_file.write_text('agent impl\nask("do it", agent = impl)\n')
 
         real_load = loader_mod.load_graph
         real_resolve_graph = scope_graph_mod.resolve_graph
@@ -1294,7 +1294,7 @@ class TestDryRunInventory:
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('agent reviewer\nask("Review this", agent: reviewer)\n')
+        agl_file.write_text('agent reviewer\nask("Review this", agent = reviewer)\n')
 
         args = _exec_args_with_fallback_runtime(agl_file, monkeypatch)
         assert exec_command.run(args) is None
@@ -1315,7 +1315,7 @@ class TestDryRunInventory:
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('ask("Hello", on_parse_error: Abort)\n')
+        agl_file.write_text('ask("Hello", on_parse_error = Abort)\n')
 
         args = _exec_args_with_fallback_runtime(agl_file, monkeypatch)
         assert exec_command.run(args) is None
@@ -2024,7 +2024,7 @@ class TestExecAgentPrecedence:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
             'agent impl = "source-runner %{PROMPT_FILE}"\n'
-            'let x = ask("do it", agent: impl)\n'
+            'let x = ask("do it", agent = impl)\n'
             "print x\n"
         )
 
@@ -2049,7 +2049,7 @@ class TestExecAgentPrecedence:
 
         agl_file = tmp_path / "prog.agl"
         # ``impl`` is declared BARE (no ``= "runner"`` hint).
-        agl_file.write_text('agent impl\nlet x = ask("do it", agent: impl)\nprint x\n')
+        agl_file.write_text('agent impl\nlet x = ask("do it", agent = impl)\nprint x\n')
 
         config_dir = tmp_path / ".agm"
         config_dir.mkdir()
@@ -2077,9 +2077,9 @@ class TestExecAgentPrecedence:
             'agent a = "source-a %{PROMPT_FILE}"\n'  # config override → CONFIG-A
             'agent b = "source-b %{PROMPT_FILE}"\n'  # no config entry → SOURCE-B
             "agent c\n"  # bare, no config entry → DEFAULT
-            'let ra = ask("first", agent: a)\n'
-            'let rb = ask("second", agent: b)\n'
-            'let rc = ask("third", agent: c)\n'
+            'let ra = ask("first", agent = a)\n'
+            'let rb = ask("second", agent = b)\n'
+            'let rc = ask("third", agent = c)\n'
             "print ra\n"
             "print rb\n"
             "print rc\n"
@@ -2109,7 +2109,7 @@ class TestExecAgentPrecedence:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
             'agent impl = "source-runner %{PROMPT_FILE}"\n'
-            'let x = ask("do it", agent: impl)\n'
+            'let x = ask("do it", agent = impl)\n'
             "print x\n"
         )
 
@@ -2128,7 +2128,7 @@ class TestExecAgentPrecedence:
         _install_marker_runner(tmp_path / "bin", env, name="default-runner", marker="FROM-DEFAULT")
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('agent impl\nlet x = ask("do it", agent: impl)\nprint x\n')
+        agl_file.write_text('agent impl\nlet x = ask("do it", agent = impl)\nprint x\n')
 
         config_dir = tmp_path / ".agm"
         config_dir.mkdir()
@@ -2151,7 +2151,7 @@ class TestExecAgentPrecedence:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
             'agent impl = "source-runner --file=%{PROMPT_FILE}"\n'
-            'let x = ask("do it", agent: impl)\n'
+            'let x = ask("do it", agent = impl)\n'
             "print x\n"
         )
 
@@ -2179,7 +2179,7 @@ class TestExecAgentPrecedence:
         agl_file.write_text(
             "agent impl\n"
             'let a = ask "first"\n'
-            'let b = ask("second", agent: impl)\n'
+            'let b = ask("second", agent = impl)\n'
             "print a\n"
             "print b\n"
         )
@@ -2916,7 +2916,7 @@ class TestExecModuleRoots:
 
         (tmp_path / "greeter.agl").write_text(
             "def greet(prompt: text, bot: agent) -> text =\n"
-            "  ask(prompt, agent: bot)\n"
+            "  ask(prompt, agent = bot)\n"
         )
         entry = tmp_path / "entry.agl"
         entry.write_text(

@@ -190,7 +190,7 @@ def test_t7_retry_success() -> None:
             return _ok("not_a_number\n")
         return _ok("99\n")
 
-    source = "let n: int = exec(\"cmd\", on_parse_error: Retry(n: 1))\nn"
+    source = "let n: int = exec(\"cmd\", on_parse_error = Retry(n = 1))\nn"
     from tests.agl.ir_harness import _run_ir_exec
 
     caps = m6c_caps()
@@ -217,7 +217,7 @@ def test_t8_retry_exhaustion() -> None:
     Routes through evaluate_ir_raises_with_shell so the full exception value
     (including message fields) is compared between ir_reference and IR.
     """
-    source = "let n: int = exec(\"cmd\", on_parse_error: Retry(n: 2))\nn"
+    source = "let n: int = exec(\"cmd\", on_parse_error = Retry(n = 2))\nn"
     commands = {"cmd": _ok("not_a_number\n")}
     ir_reference_exc, ir_exc = evaluate_ir_raises_with_shell(source, commands)
     assert ir_exc.display_name == "AgentParseError"
@@ -392,7 +392,7 @@ def test_t12_retry_then_nonzero_exit() -> None:
             return _ok("not_a_number\n")
         return _fail(1, stdout="", stderr="retry failed")
 
-    source = "let n: int = exec(\"cmd\", on_parse_error: Retry(n: 1))\nn"
+    source = "let n: int = exec(\"cmd\", on_parse_error = Retry(n = 1))\nn"
     from agm.agl.semantics.exceptions import AglRaise
     from tests.agl.ir_harness import _normalize_exception, _run_ir_exec
 

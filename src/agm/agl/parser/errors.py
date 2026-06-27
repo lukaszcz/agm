@@ -4,9 +4,7 @@ This module maps Lark ``UnexpectedInput`` family and lexer ``LexError`` to
 ``AglSyntaxError`` carrying a ``SourceSpan`` and a user-facing message.
 
 Special cases:
-- If the unexpected token is ``EQ_EQ`` (``==``), the message is
-  ``'Use `=` for equality.'`` per design §2.3.
-- If the unexpected token is any comparison operator (``=``, ``!=``, ``<``,
+- If the unexpected token is any comparison operator (``==``, ``!=``, ``<``,
   ``<=``, ``>``, ``>=``) and that operator is NOT in the expected set, the
   parser has already consumed one complete comparison expression and a second
   one was chained, which is non-associative in AgL (design §4.3).  A targeted
@@ -21,10 +19,9 @@ import re
 from agm.agl.diagnostics import AglError
 from agm.agl.syntax.spans import SourceSpan
 
-# Token type for the "==" error token (mirrors tokens.EQ_EQ).
-_EQ_EQ = "EQ_EQ"
-# All comparison operator token types (mirrors tokens.py).
-_CMP_OPS: frozenset[str] = frozenset({"EQ", "NEQ", "LT", "LE", "GT", "GE"})
+# All comparison operator token types (mirrors tokens.py).  Equality is ``==``
+# (``EQ_EQ``); ``=`` (``EQ``) is a binder / named-arg separator, not a comparison.
+_CMP_OPS: frozenset[str] = frozenset({"EQ_EQ", "NEQ", "LT", "LE", "GT", "GE"})
 
 # Compound forms (``if`` / ``case`` / ``try``) whose statement spelling is only
 # valid in an indented block (a *suite*), never inline after ``=>``, ``until``,
@@ -102,15 +99,11 @@ def _span_from_token(
     )
 
 
-def _make_eq_eq_error(span: SourceSpan) -> AglSyntaxError:
-    return AglSyntaxError("Use `=` for equality.", span=span)
-
-
 def _make_chained_comparison_error(span: SourceSpan) -> AglSyntaxError:
     """Targeted diagnostic for chained comparisons (design §4.3).
 
-    All comparison operators (``=``, ``!=``, ``<``, ``<=``, ``>``, ``>=``) are
-    non-associative in AgL: ``x = y = z``, ``1 < 2 < 3``, ``a <= b != c`` are
+    All comparison operators (``==``, ``!=``, ``<``, ``<=``, ``>``, ``>=``) are
+    non-associative in AgL: ``x == y == z``, ``1 < 2 < 3``, ``a <= b != c`` are
     all parse errors.  When the parser sees a comparison operator as the
     *unexpected* token AND that operator is absent from the *expected* set, a
     full comparison expression was already consumed and a second was chained —
@@ -118,7 +111,7 @@ def _make_chained_comparison_error(span: SourceSpan) -> AglSyntaxError:
     """
     return AglSyntaxError(
         "Comparisons are non-associative; parenthesize explicitly, "
-        "e.g. `(x = y) = z`.",
+        "e.g. `(x == y) == z`.",
         span=span,
     )
 
@@ -204,14 +197,12 @@ def syntax_error_from_lark(
             source_text=source_text, token_pos=pos, expected=set(exc.expected)
         ):
             return _make_missing_else_arrow_error(span)
-        if tok.type == _EQ_EQ:
-            return _make_eq_eq_error(span)
         # Chained comparison detection (design §4.3): the unexpected token is
         # a comparison operator AND that operator is NOT in the expected set.
         # When the operator IS expected, we are still before the first comparison
-        # (valid start of, e.g., ``x = y``); when it is absent, a full comparison
+        # (valid start of, e.g., ``x == y``); when it is absent, a full comparison
         # expression was already consumed and the parser cannot continue — the
-        # user chained comparisons such as ``x = y = z``, ``1 < 2 < 3``, or
+        # user chained comparisons such as ``x == y == z``, ``1 < 2 < 3``, or
         # ``a <= b != c``.
         if tok.type in _CMP_OPS and tok.type not in exc.expected:
             return _make_chained_comparison_error(span)

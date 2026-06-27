@@ -3,5 +3,5 @@ enum R
   | Pass
 let r: R = Pass
 case r of
-  | Fail(issues: a, issues: b) => ()
+  | Fail(issues = a, issues = b) => ()
   | Pass => ()

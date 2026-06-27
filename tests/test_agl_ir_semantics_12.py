@@ -30,13 +30,13 @@ def test_cross_module_mutual_recursion(tmp_path: Path) -> None:
     even_source = """
 import odd
 def is_even(n: int) -> bool =
-    if n = 0 => true
+    if n == 0 => true
     | else => odd::is_odd(n - 1)
 """
     odd_source = """
 import even
 def is_odd(n: int) -> bool =
-    if n = 0 => false
+    if n == 0 => false
     | else => even::is_even(n - 1)
 """
     entry_source = """
@@ -63,7 +63,7 @@ enum Color
 """
     entry_source = """
 import shapes
-let p = shapes::Point(x: 1, y: 2)
+let p = shapes::Point(x = 1, y = 2)
 let c = shapes::Color.Red
 let px = p.x
 let is_red = case c of
@@ -93,8 +93,8 @@ def get_first(p: Pair) -> text =
     entry_source = """
 import mod_a
 import mod_b
-let p1 = mod_a::Pair(a: 1, b: 2)
-let p2 = mod_b::Pair(x: "hello", y: "world")
+let p1 = mod_a::Pair(a = 1, b = 2)
+let p2 = mod_b::Pair(x = "hello", y = "world")
 let v1 = mod_a::get_first(p1)
 let v2 = mod_b::get_first(p2)
 ()

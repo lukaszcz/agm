@@ -769,7 +769,7 @@ class TestNominalRenderingEcho:
         # emit field values in the DECLARED order (y first).
         s = ReplSession()
         s.eval_entry("record Point\n  y: int\n  x: int")
-        r = s.eval_entry("let p = Point(x: 1, y: 2)")
+        r = s.eval_entry("let p = Point(x = 1, y = 2)")
         assert r.ok
         assert r.value is not None
         from agm.agl.repl.render import format_typed_value
@@ -786,7 +786,7 @@ class TestNominalRenderingEcho:
 
         s = ReplSession()
         s.eval_entry("record Author\n  name: text\n  active: bool")
-        r = s.eval_entry('let a = Author(name: "Ada", active: true)')
+        r = s.eval_entry('let a = Author(name = "Ada", active = true)')
         assert r.ok
         rendered = render_entry_result(r, echo=True)
         assert rendered == 'a : Author = Author(\n  name: "Ada",\n  active: true\n)'
@@ -796,7 +796,7 @@ class TestNominalRenderingEcho:
 
         s = ReplSession()
         s.eval_entry("enum Outcome\n  | Partial(left: int)\n  | Done")
-        r = s.eval_entry("let o = Outcome.Partial(left: 7)")
+        r = s.eval_entry("let o = Outcome.Partial(left = 7)")
         assert r.ok
         rendered = render_entry_result(r, echo=True)
         assert rendered == "o : Outcome = Outcome.Partial(\n  left: 7\n)"
@@ -839,7 +839,7 @@ class TestNominalRenderingEcho:
         # :bindings must render a record binding in AgL form (not JSON).
         s = ReplSession()
         s.eval_entry("record Point\n  y: int\n  x: int")
-        s.eval_entry("let p = Point(x: 3, y: 5)")
+        s.eval_entry("let p = Point(x = 3, y = 5)")
         outcome = meta_mod.dispatch_meta(":bindings", _session_ctx(s))
         assert outcome.text is not None
         assert "Point(\n  y: 5,\n  x: 3\n)" in outcome.text
@@ -848,7 +848,7 @@ class TestNominalRenderingEcho:
         # :params must render a record param in AgL form (not JSON).
         s = ReplSession()
         s.eval_entry("record Cfg\n  retries: int\n  timeout: int")
-        s.eval_entry("param cfg: Cfg = Cfg(retries: 3, timeout: 30)")
+        s.eval_entry("param cfg: Cfg = Cfg(retries = 3, timeout = 30)")
         outcome = meta_mod.dispatch_meta(":params", _session_ctx(s))
         assert outcome.text is not None
         assert "Cfg(\n  retries: 3,\n  timeout: 30\n)" in outcome.text
@@ -857,7 +857,7 @@ class TestNominalRenderingEcho:
         # :load must render record bindings in AgL form (type_lookup threaded).
         src = tmp_path / "rec.agl"
         src.write_text(
-            "record Point\n  y: int\n  x: int\nlet p = Point(x: 1, y: 2)\n"
+            "record Point\n  y: int\n  x: int\nlet p = Point(x = 1, y = 2)\n"
         )
         s = ReplSession()
         outcome = meta_mod.dispatch_meta(f":load {src}", _session_ctx(s))

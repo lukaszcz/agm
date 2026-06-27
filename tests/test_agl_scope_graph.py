@@ -1194,7 +1194,7 @@ class TestFieldAccessCoverage:
             "mylib": (
                 "record Result\n"
                 "  value: int\n"
-                "def compute(n: int) -> Result = Result(value: n)"
+                "def compute(n: int) -> Result = Result(value = n)"
             ),
             "entry": (
                 "import mylib qualified\n"

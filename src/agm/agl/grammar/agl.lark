@@ -89,15 +89,11 @@
 // for the `agent` keyword.
 %declare AGENT
 %declare INT DECIMAL
-%declare ASSIGN EQ NEQ LT LE GT GE
+%declare ASSIGN EQ EQ_EQ NEQ LT LE GT GE
 %declare PLUS MINUS STAR SLASH
 %declare ARROW THIN_ARROW
 %declare LPAR RPAR LSQB INDEX_LSQB RSQB LBRACE CALL_LBRACE RBRACE COLON DCOLON COMMA SEMICOLON PIPE DOT
 %declare LOOP_BOUND
-
-// Note: EQ_EQ (==) is declared by the lexer but not used in any grammar rule.
-// When the lexer emits it, Lark raises UnexpectedToken; the parser error
-// handler checks for EQ_EQ and converts it to a friendly AglSyntaxError.
 
 // ---------------------------------------------------------------------------
 // Program root
@@ -431,7 +427,7 @@ suite_expr: _INDENT block _DEDENT
            | additive "is" name DOT name                        -> is_test_qualified
            | additive "is" name                                 -> is_test_simple
            | additive "in" additive                             -> bin_in
-           | additive EQ additive                               -> bin_eq
+           | additive EQ_EQ additive                            -> bin_eq
            | additive NEQ additive                              -> bin_neq
            | additive LT additive                               -> bin_lt
            | additive LE additive                               -> bin_le
@@ -557,7 +553,7 @@ arg_list: arg (COMMA arg)* COMMA?
 
 pos_arg: expr
 
-named_arg: field_name COLON expr
+named_arg: field_name EQ expr
 
 // ---------------------------------------------------------------------------
 // Literal nodes
@@ -621,7 +617,7 @@ pattern: name DOT name (LPAR pattern_fields? RPAR)?         -> pat_qualified_con
 
 pattern_fields: pattern_field (COMMA pattern_field)* COMMA?
 
-pattern_field: name COLON pattern   -> pat_field_full
+pattern_field: name EQ pattern   -> pat_field_full
              | name                 -> pat_field_shorthand
 
 // ---------------------------------------------------------------------------

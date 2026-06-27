@@ -639,7 +639,7 @@ class TestBuiltinCallClassification:
         assert r.builtin_calls[let_node.value.node_id] == BuiltinKind.ASK
 
     def test_ask_with_agent_arg_classified(self) -> None:
-        r = parse_and_resolve('agent reviewer\nlet x = ask("Q", agent: reviewer)\nx')
+        r = parse_and_resolve('agent reviewer\nlet x = ask("Q", agent = reviewer)\nx')
         let_node = r.program.body.items[1]
         assert isinstance(let_node, LetDecl)
         assert isinstance(let_node.value, Call)
@@ -730,7 +730,7 @@ class TestCallResolution:
         """Named-arg values in a call are resolved."""
         r = parse_and_resolve(
             "agent reviewer\n"
-            'let x = ask("Q", agent: reviewer)\n'
+            'let x = ask("Q", agent = reviewer)\n'
             "x"
         )
         let_node = r.program.body.items[1]
@@ -784,8 +784,8 @@ class TestFuncDefMutualRecursion:
     def test_def_mutual_recursion(self) -> None:
         """Two top-level defs can reference each other."""
         r = parse_and_resolve(
-            "def even(n: int) -> bool = if n = 0 => true | else => odd(n - 1)\n"
-            "def odd(n: int) -> bool = if n = 0 => false | else => even(n - 1)\n"
+            "def even(n: int) -> bool = if n == 0 => true | else => odd(n - 1)\n"
+            "def odd(n: int) -> bool = if n == 0 => false | else => even(n - 1)\n"
             "even(4)"
         )
         assert r.program is not None
@@ -920,7 +920,7 @@ class TestAgentValueBindings:
         """An agent name used as a VarRef in ask(agent:) resolves to the binding."""
         r = parse_and_resolve(
             "agent reviewer\n"
-            'let x = ask("Q", agent: reviewer)\n'
+            'let x = ask("Q", agent = reviewer)\n'
             "x"
         )
         let_node = r.program.body.items[1]
@@ -1049,7 +1049,7 @@ class TestIfScoping:
         assert "inner" in msg
 
     def test_if_no_else_accepted(self) -> None:
-        r = parse_and_resolve("let x = 1\nif x = 1 => print 1\n")
+        r = parse_and_resolve("let x = 1\nif x == 1 => print 1\n")
         assert r.program is not None
 
 
@@ -1216,7 +1216,7 @@ class TestParentScopeSeam:
     def test_ambient_agents(self) -> None:
         """An ambient agent resolves without an in-source declaration."""
         r = resolve(
-            parse_program('let x = ask("Q", agent: session_bot)\nx'),
+            parse_program('let x = ask("Q", agent = session_bot)\nx'),
             ambient_agents=frozenset({"session_bot"}),
         )
         let_node = r.program.body.items[0]
@@ -1278,7 +1278,7 @@ class TestParentScopeSeam:
         # 'Box' is a type name AND a parameter name inside f.
         # Inside f, Box.x is a regular field access on the parameter, not a
         # qualified constructor reference.
-        source = "record Box\n  x: int\ndef f(Box: Box) -> int = Box.x\nf(Box(x: 1))"
+        source = "record Box\n  x: int\ndef f(Box: Box) -> int = Box.x\nf(Box(x = 1))"
         entry = parse_and_resolve(source)
         from agm.agl.syntax.nodes import FieldAccess as _FA
         from agm.agl.syntax.nodes import FuncDef as _FD
@@ -2034,7 +2034,7 @@ class TestConstructorBindings:
         r = parse_and_resolve(
             "record Box\n"
             "  value: int\n"
-            "let b = Box(value: 1)\n"
+            "let b = Box(value = 1)\n"
             "b\n"
         )
         assert r.program is not None
@@ -2051,7 +2051,7 @@ class TestConstructorBindings:
         r = parse_and_resolve(
             "record box\n"
             "  value: int\n"
-            "let b = box(value: 1)\n"
+            "let b = box(value = 1)\n"
             "b\n"
         )
         assert "box" in r.constructor_candidates
@@ -2111,7 +2111,7 @@ class TestConstructorBindings:
         r = parse_and_resolve(
             "record Box\n"
             "  value: int\n"
-            "let b = Box(value: 1)\n"
+            "let b = Box(value = 1)\n"
             "b\n"
         )
         let_decl = r.program.body.items[1]
@@ -2132,7 +2132,7 @@ class TestConstructorBindings:
         r = parse_and_resolve(
             "record Box[T]\n"
             "  value: int\n"
-            "let b = Box(value: 1)\n"
+            "let b = Box(value = 1)\n"
             "b\n"
         )
         assert r.constructor_candidates["Box"][0].type_params == ("T",)
@@ -2237,7 +2237,7 @@ class TestConstructorBindings:
             "enum Other[T]\n"
             "  | nope\n"
             "  | some(value: T)\n"
-            "some(value: 1)\n"
+            "some(value = 1)\n"
         )
         msg = err.to_diagnostic().message
         assert "ambiguous" in msg.lower()
@@ -2247,7 +2247,7 @@ class TestConstructorBindings:
     def test_ambiguous_explicit_type_args_still_raises(self) -> None:
         """Explicit type arguments do NOT disambiguate two enums sharing a variant name.
 
-        D7 guarantees that ``some::[int](value: 1)`` is still ambiguous when both
+        D7 guarantees that ``some::[int](value = 1)`` is still ambiguous when both
         ``Option`` and ``Other`` declare a ``some`` variant.  Both candidate enums
         must be named in the error message.
         """
@@ -2258,7 +2258,7 @@ class TestConstructorBindings:
             "enum Other[T]\n"
             "  | nope\n"
             "  | some(value: T)\n"
-            "some::[int](value: 1)\n"
+            "some::[int](value = 1)\n"
         )
         msg = err.to_diagnostic().message
         assert "ambiguous" in msg.lower()
@@ -2268,7 +2268,7 @@ class TestConstructorBindings:
     def test_ambiguous_contextual_type_still_raises(self) -> None:
         """A contextual expected type does NOT disambiguate an ambiguous variant.
 
-        D7 guarantees that ``let x: Option[int] = some(value: 1)`` is still
+        D7 guarantees that ``let x: Option[int] = some(value = 1)`` is still
         ambiguous when both ``Option`` and ``Other`` declare a ``some`` variant.
         Both candidate enums must be named in the error message.
         """
@@ -2279,7 +2279,7 @@ class TestConstructorBindings:
             "enum Other[T]\n"
             "  | nope\n"
             "  | some(value: T)\n"
-            "let x: Option[int] = some(value: 1)\n"
+            "let x: Option[int] = some(value = 1)\n"
             "x\n"
         )
         msg = err.to_diagnostic().message
@@ -2290,7 +2290,7 @@ class TestConstructorBindings:
     def test_qualified_payload_variant_resolves_without_error(self) -> None:
         """Qualification is the only valid disambiguation for shared variant names.
 
-        D7 requires that ``Option.some(value: 1)`` resolves without error even
+        D7 requires that ``Option.some(value = 1)`` resolves without error even
         when ``Other`` also declares a ``some`` variant.
         """
         r = parse_and_resolve(
@@ -2300,7 +2300,7 @@ class TestConstructorBindings:
             "enum Other[T]\n"
             "  | nope\n"
             "  | some(value: T)\n"
-            "Option.some(value: 1)\n"
+            "Option.some(value = 1)\n"
         )
         assert r.program is not None
 

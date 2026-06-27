@@ -1039,7 +1039,7 @@ class AstBuilder(Transformer):
         return _find_expr(args)
 
     def named_arg(self, meta: Meta, args: _Args) -> syntax.NamedArg:
-        """named_arg: field_name COLON expr"""
+        """named_arg: field_name EQ expr"""
         name_tok = _find_name_token(args)
         val_expr = _find_expr(args[1:])
         return syntax.NamedArg(

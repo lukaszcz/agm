@@ -1,0 +1,2 @@
+def f(a: int) -> int = a
+print(f(a: 1))

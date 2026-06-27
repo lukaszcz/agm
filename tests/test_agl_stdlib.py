@@ -42,12 +42,12 @@ def _check(source: str, *, default_stdlib: bool = True) -> None:
 
 
 def test_core_stdlib_is_opened_unqualified_by_default() -> None:
-    _check("let x: Option[int] = Some(value: 1)\nprint(x)\n")
+    _check("let x: Option[int] = Some(value = 1)\nprint(x)\n")
 
 
 def test_no_stdlib_disables_default_open_import() -> None:
     graph = load_graph(
-        "let x: Option[int] = Some(value: 1)\nx\n",
+        "let x: Option[int] = Some(value = 1)\nx\n",
         entry_path=None,
         roots=_ROOTS,
         default_stdlib=False,
@@ -58,7 +58,7 @@ def test_no_stdlib_disables_default_open_import() -> None:
 
 def test_no_stdlib_still_allows_explicit_std_core_import() -> None:
     _check(
-        "import std.core\nlet x: Option[int] = Some(value: 1)\nx\n",
+        "import std.core\nlet x: Option[int] = Some(value = 1)\nx\n",
         default_stdlib=False,
     )
 
@@ -179,7 +179,7 @@ def test_exception_in_field_type_is_built_before_record() -> None:
         "  code: int\n"
         "record Wrapper\n"
         "  err: Local\n"
-        "Wrapper(err: Local(message: \"m\", code: 1))\n"
+        "Wrapper(err = Local(message = \"m\", code = 1))\n"
     )
 
 
@@ -237,4 +237,4 @@ def test_builtin_named_value_call_is_not_classified_as_builtin() -> None:
 
 
 def test_source_defined_exception_extends_base_and_trace_id_is_optional() -> None:
-    _check('raise Abort(message: "stop")\n')
+    _check('raise Abort(message = "stop")\n')

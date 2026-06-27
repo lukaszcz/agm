@@ -76,7 +76,7 @@ def test_print_record() -> None:
         record Point
           x: int
           y: int
-        let p = Point(x: 10, y: 20)
+        let p = Point(x = 10, y = 20)
         print(p)
         ()
     """)

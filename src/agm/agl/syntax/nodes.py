@@ -62,7 +62,7 @@ ELSE: ElseSentinel = ElseSentinel()
 class BinOp(enum.Enum):
     """Closed set of binary operators recognised by AgL."""
 
-    EQ = "="
+    EQ = "=="
     NEQ = "!="
     LT = "<"
     LE = "<="
@@ -183,7 +183,7 @@ class Template:
 
 @dataclass(frozen=True, slots=True)
 class NamedArg:
-    """A named argument in a constructor or call expression: ``name: value``."""
+    """A named argument in a constructor or call expression: ``name = value``."""
 
     name: str
     value: Expr

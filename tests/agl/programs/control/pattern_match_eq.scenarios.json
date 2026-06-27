@@ -1,0 +1,36 @@
+{
+  "scenarios": [
+    {
+      "name": "empty_variant",
+      "agents": {"picker": ["{\"$case\": \"Empty\"}"]},
+      "expect": {
+        "stdout": "empty\nstill empty\n",
+        "calls": {"picker": 1}
+      }
+    },
+    {
+      "name": "holds_dot_variant",
+      "agents": {"picker": ["{\"$case\": \"Holds\", \"shape\": {\"$case\": \"Dot\"}}"]},
+      "expect": {
+        "stdout": "dot\nstill dot\n",
+        "calls": {"picker": 1}
+      }
+    },
+    {
+      "name": "holds_line_variant_shorthand",
+      "agents": {"picker": ["{\"$case\": \"Holds\", \"shape\": {\"$case\": \"Line\", \"len\": 5}}"]},
+      "expect": {
+        "stdout": "line 5\nbumped line 6\n",
+        "calls": {"picker": 1}
+      }
+    },
+    {
+      "name": "holds_box_variant_nested",
+      "agents": {"picker": ["{\"$case\": \"Holds\", \"shape\": {\"$case\": \"Box\", \"at\": {\"x\": 2, \"y\": 3}, \"len\": 4}}"]},
+      "expect": {
+        "stdout": "box at 2,3 size 4\nbumped box 3 4\n",
+        "calls": {"picker": 1}
+      }
+    }
+  ]
+}

@@ -26,7 +26,7 @@ catch JsonParseError as e =>
 
 # An agent supplies JSON text; the imported helper validates it to a record.
 try
-  let raw: text = ask("Return a point as JSON.", agent: source)
+  let raw: text = ask("Return a point as JSON.", agent = source)
   let pt = p::parse_point(raw)
   print "agent point ${pt.x},${pt.y}"
 catch CastError as e =>

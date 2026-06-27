@@ -177,7 +177,7 @@ DOT = "DOT"  # .
 PIPE = "PIPE"  # |
 SEMICOLON = "SEMICOLON"  # ;
 
-# Error token emitted for "==" so the parser can emit a friendly diagnostic.
+# Equality operator token for "==".
 EQ_EQ = "EQ_EQ"  # ==
 
 # Synthetic token emitted by the lexer when it sees do[N].

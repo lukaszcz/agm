@@ -4,7 +4,7 @@ Enums are derived directly from the operator sets supported by AgL:
 - ``ArithOp``: binary arithmetic operators (``+``, ``-``, ``*``, ``/``).
   Derived from ``BinOp.ADD/SUB/MUL/DIV`` in ``agm.agl.syntax.nodes``.
   Note: there is no modulo operator in AgL v2 (the ``BinOp`` enum has no MOD).
-- ``CmpOp``: comparison operators (``=``, ``!=``, ``<``, ``<=``, ``>``, ``>=``).
+- ``CmpOp``: comparison operators (``==``, ``!=``, ``<``, ``<=``, ``>``, ``>=``).
   Derived from ``BinOp.EQ/NEQ/LT/LE/GT/GE`` in ``agm.agl.syntax.nodes``.
   The ``in`` operator is lowered to ``IrContains`` (not a CmpOp).
   ``and``/``or`` are lowered to ``IrAnd``/``IrOr``.
@@ -69,11 +69,11 @@ class CmpOp(enum.Enum):
     """Closed set of comparison operators in AgL.
 
     Derived from the equality/ordering branches of ``BinOp`` in
-    ``agm.agl.syntax.nodes``: EQ(=), NEQ(!=), LT(<), LE(<=), GT(>), GE(>=).
+    ``agm.agl.syntax.nodes``: EQ(==), NEQ(!=), LT(<), LE(<=), GT(>), GE(>=).
     The ``in`` operator is a separate ``IrContains`` node (see M3).
     """
 
-    EQ = "="
+    EQ = "=="
     NEQ = "!="
     LT = "<"
     LE = "<="

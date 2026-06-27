@@ -281,7 +281,7 @@ class TestAgentValueCrossModule:
         lib_dir = tmp_path / "lib"
         lib_dir.mkdir()
         (lib_dir / "helper.agl").write_text(
-            "def ask_with_agent(prompt: text, a: agent) -> text = ask(prompt, agent: a)\n"
+            "def ask_with_agent(prompt: text, a: agent) -> text = ask(prompt, agent = a)\n"
         )
 
         source = (

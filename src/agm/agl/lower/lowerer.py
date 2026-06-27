@@ -205,6 +205,7 @@ from agm.agl.type_schema import (
     build_param_decoder,
     derive_schema,
 )
+from agm.agl.typecheck.constructors import merge_constructor_args
 from agm.agl.typecheck.env import CheckedProgram
 from agm.agl.typecheck.graph import CheckedModule
 from agm.util.text import normalize_newlines
@@ -1248,7 +1249,11 @@ class _Lowerer:
             cref = self._checked.resolved.constructor_refs.get(callee.node_id)
             if cref is not None:
                 return self._lower_named_constructor_call(
-                    nid, cref.owner_name, cref.variant, call_node.named_args, span
+                    nid,
+                    cref.owner_name,
+                    cref.variant,
+                    merge_constructor_args(call_node.args, call_node.named_args),
+                    span,
                 )
             # (b) VarRef callee resolving via BinderKind.constructor_binding (M5).
             callee_ref = self._checked.resolved.resolution.get(callee.node_id)
@@ -1257,7 +1262,11 @@ class _Lowerer:
                 and callee_ref.kind is BinderKind.constructor_binding
             ):
                 return self._lower_named_constructor_call(
-                    nid, callee.name, None, call_node.named_args, span
+                    nid,
+                    callee.name,
+                    None,
+                    merge_constructor_args(call_node.args, call_node.named_args),
+                    span,
                 )
             # (c) Direct user function call
             if (
@@ -1271,7 +1280,11 @@ class _Lowerer:
             if qcr is not None:
                 owner_name, variant_name, _qcr_mid = qcr
                 return self._lower_named_constructor_call(
-                    nid, owner_name, variant_name, call_node.named_args, span
+                    nid,
+                    owner_name,
+                    variant_name,
+                    merge_constructor_args(call_node.args, call_node.named_args),
+                    span,
                 )
 
         # Indirect/value call (M4b): callee is an arbitrary expression (lambda, let-bound

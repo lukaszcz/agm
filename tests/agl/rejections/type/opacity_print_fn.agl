@@ -1,1 +1,1 @@
-render(1, pretty: "yes")
+render(1, pretty = "yes")

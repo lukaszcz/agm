@@ -10,12 +10,12 @@ agent reviewer
 
 try
   if
-    | mode = "abort" =>
-      raise Abort(message: "stop now")
-    | mode = "parse" =>
-      let r: Review = ask("Judge it.", agent: reviewer)
+    | mode == "abort" =>
+      raise Abort(message = "stop now")
+    | mode == "parse" =>
+      let r: Review = ask("Judge it.", agent = reviewer)
       print "parsed ${r is Pass}"
-    | mode = "match" =>
+    | mode == "match" =>
       case mode of
         | "never" => ()
     | else =>

@@ -1,4 +1,4 @@
 record P
   n: int
-let p = P(n: 1, extra: 2)
+let p = P(n = 1, extra = 2)
 p

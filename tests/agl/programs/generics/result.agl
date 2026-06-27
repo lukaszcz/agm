@@ -22,14 +22,14 @@ def describe[T, E](o: Outcome[T, E]) -> text =
     | ok(value) => "ok"
     | err(error) => "err"
 
-let good: Outcome[Pt, Fault] = ok(value: Pt(x: 1, y: 2))
-let bad: Outcome[Pt, Fault] = err(error: Fault(code: 404, detail: "missing"))
+let good: Outcome[Pt, Fault] = ok(value = Pt(x = 1, y = 2))
+let bad: Outcome[Pt, Fault] = err(error = Fault(code = 404, detail = "missing"))
 
 print(describe(good))
 print(describe(bad))
 
 # Explicit two-argument override on a generic constructor.
-let pinned = ok::[int, text](value: 5)
+let pinned = ok::[int, text](value = 5)
 print pinned
 
 # Branch chosen by the host param; field access on the destructured payload.

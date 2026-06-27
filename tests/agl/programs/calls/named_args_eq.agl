@@ -1,0 +1,25 @@
+# Function calls with named args using '=' (was ':'). Positional still works,
+# named args may be reordered, and positional + named may be mixed. There is NO
+# bare-name shorthand for def calls — only constructors get that. A param-driven
+# branch makes each scenario take a genuinely different path (and exercise a
+# different named-arg call form).
+param msg: text
+param level: int
+
+def add3(a: int, b: int, c: int) -> int = a + b + c
+
+def tag(text_val: text, prefix: text = "INFO", suffix: text = "") -> text =
+  "[" + prefix + "] " + text_val + suffix
+
+# Positional, all-named with '=', reordered named, and mixed positional+named
+# all agree.
+print(add3(1, 2, 3))
+print(add3(a = 1, b = 2, c = 3))
+print(add3(c = 3, a = 1, b = 2))
+print(add3(1, c = 3, b = 2))
+
+# The severity level selects a different named-arg call path per scenario.
+if
+  | level >= 2 => print(tag(msg, prefix = "ERR", suffix = "!"))
+  | level == 1 => print(tag(msg, prefix = "WARN"))
+  | else => print(tag(msg))

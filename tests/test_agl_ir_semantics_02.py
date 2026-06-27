@@ -141,7 +141,7 @@ def test_record_field_access() -> None:
 record Point
   x: int
   y: int
-let p = Point(x: 3, y: 4)
+let p = Point(x = 3, y = 4)
 let px = p.x
 ()
 """
@@ -237,7 +237,7 @@ def test_template_with_record_interpolation() -> None:
 record Point
   x: int
   y: int
-let p = Point(x: 1, y: 2)
+let p = Point(x = 1, y = 2)
 let s: text = "point: ${p}"
 ()
 """
@@ -458,7 +458,7 @@ def test_golden_field_access_lowers_to_ir_field() -> None:
 record Point
   x: int
   y: int
-let p = Point(x: 3, y: 4)
+let p = Point(x = 3, y = 4)
 let px = p.x
 ()
 """

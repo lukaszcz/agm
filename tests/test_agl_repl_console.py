@@ -234,7 +234,7 @@ class TestMultiline:
 class TestIsIncomplete:
     @pytest.mark.parametrize(
         "source",
-        ["record R", "enum E", "case x of", "try", "do agent", "if x = 1 =>", "1 +"],
+        ["record R", "enum E", "case x of", "try", "do agent", "if x == 1 =>", "1 +"],
     )
     def test_incomplete_sources(self, source: str) -> None:
         assert is_incomplete(source) is True

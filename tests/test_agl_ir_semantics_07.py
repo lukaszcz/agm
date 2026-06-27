@@ -21,7 +21,7 @@ AgL syntax notes used in test programs:
 - Nullary constructor (pattern, ConstructorPattern): ``| Variant() => body``
 - Bare-variant pattern (VarPattern, bare_variant_patterns): ``| Variant => body``
   (bare name that resolves to a constructor in scope)
-- Constructor with fields (pattern): ``| Variant(field: binder) => body``
+- Constructor with fields (pattern): ``| Variant(field = binder) => body``
 - Program must end with an expression (not a let/var decl).
 """
 
@@ -298,10 +298,10 @@ def test_ir_semantic_case_constructor_field_destructure() -> None:
     """ConstructorPattern destructures enum variant fields."""
     src = """\
 enum Shape | Circle(radius: int) | Square(side: int)
-let s = Shape.Circle(radius: 5)
+let s = Shape.Circle(radius = 5)
 let r = case s of
-  | Circle(radius: n) => n
-  | Square(side: m) => m
+  | Circle(radius = n) => n
+  | Square(side = m) => m
 r"""
     ir_reference, ir = evaluate_ir(src)
     assert ir["r"] == IntValue(5)
@@ -311,10 +311,10 @@ def test_ir_semantic_case_constructor_field_no_match_fallback() -> None:
     """Constructor pattern on wrong variant falls through to next arm."""
     src = """\
 enum Shape | Circle(radius: int) | Square(side: int)
-let s = Shape.Square(side: 10)
+let s = Shape.Square(side = 10)
 let r = case s of
-  | Circle(radius: n) => n
-  | Square(side: m) => m
+  | Circle(radius = n) => n
+  | Square(side = m) => m
 r"""
     ir_reference, ir = evaluate_ir(src)
     assert ir["r"] == IntValue(10)
@@ -324,10 +324,10 @@ def test_ir_semantic_case_constructor_nested_literal() -> None:
     """Constructor pattern with nested literal sub-pattern."""
     src = """\
 enum Shape | Circle(radius: int) | Square(side: int)
-let s = Shape.Circle(radius: 3)
+let s = Shape.Circle(radius = 3)
 let r = case s of
-  | Circle(radius: 3) => "three"
-  | Circle(radius: n) => "other"
+  | Circle(radius = 3) => "three"
+  | Circle(radius = n) => "other"
   | _ => "not circle"
 r"""
     ir_reference, ir = evaluate_ir(src)
@@ -338,10 +338,10 @@ def test_ir_semantic_case_constructor_nested_binder() -> None:
     """Constructor pattern with nested binder sub-pattern captures field."""
     src = """\
 enum Shape | Circle(radius: int) | Square(side: int)
-let s = Shape.Circle(radius: 7)
+let s = Shape.Circle(radius = 7)
 let r = case s of
-  | Square(side: x) => x
-  | Circle(radius: n) => n
+  | Square(side = x) => x
+  | Circle(radius = n) => n
 r"""
     ir_reference, ir = evaluate_ir(src)
     assert ir["r"] == IntValue(7)
@@ -351,10 +351,10 @@ def test_ir_semantic_case_constructor_nested_wildcard() -> None:
     """Constructor pattern with nested wildcard sub-pattern."""
     src = """\
 enum Shape | Circle(radius: int) | Square(side: int)
-let s = Shape.Square(side: 99)
+let s = Shape.Square(side = 99)
 let r = case s of
-  | Circle(radius: _) => "circle"
-  | Square(side: _) => "square"
+  | Circle(radius = _) => "circle"
+  | Square(side = _) => "square"
 r"""
     ir_reference, ir = evaluate_ir(src)
     assert ir["r"] == TextValue("square")
@@ -365,9 +365,9 @@ def test_ir_semantic_case_constructor_nested_constructor() -> None:
     src = """\
 enum Color | Red | Blue
 enum Shape | Colored(size: int)
-let s = Shape.Colored(size: 10)
+let s = Shape.Colored(size = 10)
 let r = case s of
-  | Colored(size: n) => n
+  | Colored(size = n) => n
 r"""
     ir_reference, ir = evaluate_ir(src)
     assert ir["r"] == IntValue(10)
@@ -377,9 +377,9 @@ def test_ir_semantic_case_constructor_multi_field() -> None:
     """Constructor pattern matching multiple fields, first field returned."""
     src = """\
 enum Point | Pt(x: int, y: int)
-let p = Point.Pt(x: 3, y: 4)
+let p = Point.Pt(x = 3, y = 4)
 let r = case p of
-  | Pt(x: a, y: b) => a
+  | Pt(x = a, y = b) => a
 r"""
     ir_reference, ir = evaluate_ir(src)
     assert ir["r"] == IntValue(3)
@@ -433,9 +433,9 @@ def test_ir_semantic_case_first_match_constructor_then_wildcard() -> None:
     """Constructor arm first, then wildcard catches all others."""
     src = """\
 enum Shape | Circle(radius: int) | Square(side: int)
-let s = Shape.Square(side: 3)
+let s = Shape.Square(side = 3)
 let r = case s of
-  | Circle(radius: _) => "circle"
+  | Circle(radius = _) => "circle"
   | _ => "other"
 r"""
     ir_reference, ir = evaluate_ir(src)
@@ -562,9 +562,9 @@ def test_golden_lowering_constructor_plan() -> None:
     """IrConstructorPlan is emitted for a ConstructorPattern."""
     src = """\
 enum Shape | Circle(radius: int)
-let s = Shape.Circle(radius: 5)
+let s = Shape.Circle(radius = 5)
 let r = case s of
-  | Circle(radius: n) => n
+  | Circle(radius = n) => n
 r"""
     executable = _lower(src)
     r_bind = _find_r_bind(executable)
@@ -867,14 +867,14 @@ def test_validate_ircase_bind_plan_shallow_ok() -> None:
 
 def test_ir_semantic_case_constructor_nested_literal_no_match_fallback() -> None:
     """Constructor arm matched but nested literal sub-plan fails; falls to next arm."""
-    # s = Circle(radius: 7); arm 0: Circle(radius: 3) — variant matches, literal fails
-    # arm 1: Circle(radius: n) — catches
+    # s = Circle(radius = 7); arm 0: Circle(radius = 3) — variant matches, literal fails
+    # arm 1: Circle(radius = n) — catches
     src = """\
 enum Shape | Circle(radius: int) | Square(side: int)
-let s = Shape.Circle(radius: 7)
+let s = Shape.Circle(radius = 7)
 let r = case s of
-  | Circle(radius: 3) => "three"
-  | Circle(radius: n) => "other"
+  | Circle(radius = 3) => "three"
+  | Circle(radius = n) => "other"
   | _ => "not circle"
 r"""
     ir_reference, ir = evaluate_ir(src)

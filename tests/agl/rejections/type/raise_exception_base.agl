@@ -1,1 +1,1 @@
-raise Exception(message: "x")
+raise Exception(message = "x")

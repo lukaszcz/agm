@@ -230,7 +230,7 @@ def _ask_call(
 ) -> ast.Call:
     """Build a v2 ``ask(text)`` call expression using the default agent.
 
-    ``strict_json=True`` adds ``strict_json: true`` as a named argument.
+    ``strict_json=True`` adds ``strict_json = true`` as a named argument.
     The caller supplies the agent function as ``default_agent`` when running.
     """
     named_args: list[ast.NamedArg] = []
@@ -2282,7 +2282,7 @@ class TestRegisterCodec:
 
         rt.register_codec(AltTextCodec())
         result = rt.run(
-            'let answer: text = ask("question", format: "alt_text")\nprint answer',
+            'let answer: text = ask("question", format = "alt_text")\nprint answer',
             param_values={},
         )
 
@@ -2388,7 +2388,7 @@ class TestRegisterCodec:
         rt = PipelineDriver(default_agent=agent)
         rt.register_codec(TagCodec())
         # v2: format: arg takes the codec name as a string; let needs a continuation.
-        result = rt.run('let y: text = ask("Q", format: "tagcodec")\ny')
+        result = rt.run('let y: text = ask("Q", format = "tagcodec")\ny')
         assert result.ok is True
         # parse() ran: the binding carries the codec's distinctive prefix.
         assert result.bindings["y"] == TextValue("PARSED::hello")
@@ -2416,7 +2416,7 @@ class TestRuntimeBuildsCodecKinds:
                 return frozenset({"text"})
 
         # v2: format: arg takes the codec name as a string; let needs a continuation.
-        src = 'let x: text = ask("Q", format: "altcodec")\nx'
+        src = 'let x: text = ask("Q", format = "altcodec")\nx'
 
         rt_unreg = PipelineDriver(default_agent=lambda req: "ok")
         unreg = rt_unreg.run(src)

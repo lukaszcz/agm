@@ -3,9 +3,9 @@
 param k: int
 
 if
-  | k = 1 =>
+  | k == 1 =>
     print "one"
-  | k = 2 =>
+  | k == 2 =>
     print "two indented body"
   | else =>
     print "other"

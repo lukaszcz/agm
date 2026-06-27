@@ -1,1 +1,1 @@
-def ask_with_agent(prompt: text, a: agent) -> text = ask(prompt, agent: a)
+def ask_with_agent(prompt: text, a: agent) -> text = ask(prompt, agent = a)

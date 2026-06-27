@@ -755,7 +755,7 @@ class TestNominalsEmpty:
             "\n"
             "type ColorAlias = Color\n"
             "\n"
-            "let p = Point(x: 1, y: 2)\n"
+            "let p = Point(x = 1, y = 2)\n"
             "let c = Color.Red\n"
             "()\n"
         )
@@ -1442,7 +1442,7 @@ class TestLowerGraph:
             "  y: int\n"
             "\n"
             "def make_point(a: int, b: int) -> LibPoint =\n"
-            "    LibPoint(x: a, y: b)\n"
+            "    LibPoint(x = a, y = b)\n"
         )
         entry_source = (
             "import lib\n"
@@ -1450,7 +1450,7 @@ class TestLowerGraph:
             "  width: int\n"
             "\n"
             "let result = lib::make_point(1, 2)\n"
-            "let box = EntryBox(width: 10)\n"
+            "let box = EntryBox(width = 10)\n"
             "()\n"
         )
 
@@ -1555,7 +1555,7 @@ class TestLowerGraph:
             "type ColorAlias = Color\n"
             "\n"
             "def origin() -> Point =\n"
-            "    Point(x: 0, y: 0)\n"
+            "    Point(x = 0, y = 0)\n"
         )
         entry_source = (
             "import lib\n"
@@ -1663,7 +1663,7 @@ class TestM6aLowering:
         """render(x, pretty:, quote_strings:) lowers to IrRenderValue."""
         from agm.agl.ir.nodes import IrBind, IrRenderValue
 
-        source = 'let s = render("x", pretty: false, quote_strings: false)\n()'
+        source = 'let s = render("x", pretty = false, quote_strings = false)\n()'
         prog = _lower(source)
         entry = prog.modules[list(prog.modules.keys())[-1]]
         ir_bind = next(
@@ -1736,7 +1736,7 @@ class TestM6aLowering:
         """ask() now lowers to IrAsk (M6b implemented)."""
         from agm.agl.ir.nodes import IrAsk, IrBind
 
-        source = "agent impl\nlet r: text = ask(\"prompt\", agent: impl)\n()"
+        source = "agent impl\nlet r: text = ask(\"prompt\", agent = impl)\n()"
         prog = _lower(source)
         # The initializers contain IrBind(IrAgentHandle) for `impl` then IrBind(IrAsk) for `r`.
         inits = prog.modules[prog.entry_module].initializers
@@ -1775,7 +1775,7 @@ class TestM6aLowering:
         """ask-request lowers to IrAskRequest + ContractRequest in program.contracts (M6b)."""
         from agm.agl.ir.nodes import IrAskRequest, IrBind
 
-        source = "agent worker\nlet req = ask-request(\"my prompt\", agent: worker)\n()"
+        source = "agent worker\nlet req = ask-request(\"my prompt\", agent = worker)\n()"
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
         # The ask-request binding lowers to IrBind(symbol, IrAskRequest(...)).

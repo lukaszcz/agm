@@ -1,4 +1,4 @@
-# Sandboxed command execution
+# Sandboxing
 
 | Command | Description |
 |---|---|

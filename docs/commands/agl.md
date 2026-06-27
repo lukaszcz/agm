@@ -5,7 +5,11 @@
 | `agm exec [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--log\|--log-file PATH\|--no-log] [--no-stdlib] [-I DIR]... (FILE \| -c COMMAND) [--PARAM VALUE]...` | Execute an AgL workflow program |
 | `agm repl [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--confirm-agents] [--quiet] [--log\|--log-file PATH\|--no-log]` | Start an interactive AgL REPL |
 
-## `agm exec (FILE | -c COMMAND)`
+## Program execution
+
+```
+agm exec (FILE | -c COMMAND)
+```
 
 Execute an AgL (Agent Language) workflow program, either from a source `FILE` or from inline
 program text given with `-c`/`--command`. The AgL language is documented in the
@@ -170,7 +174,11 @@ The REPL does **not** apply config pragmas entered at the prompt; entering a
 `config ...` line in the REPL is a static error. Set session options via CLI flags
 (`--log`, `--strict-json`, `--max-iters`, `--runner`) or `[exec]` config.
 
-## `agm repl`
+## AgL REPL
+
+```
+agm repl
+```
 
 Start an interactive read-eval-print loop (REPL) for AgL. Unlike `agm exec`,
 which runs a whole program from a fresh environment, the REPL keeps a

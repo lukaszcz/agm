@@ -1,4 +1,4 @@
-# Agent commands
+# Agent workflows
 
 | Command | Description |
 |---|---|

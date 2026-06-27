@@ -5,7 +5,7 @@
 - [AgL workflow DSL](agl.md)
 - [Configuration](config.md)
 - [Dependencies](dependencies.md)
-- [Worktrees](worktrees.md)
 - [Sandboxed command execution](run.md)
+- [Worktrees](worktrees.md)
 - [tmux sessions](tmux.md)
 - [Help and aliases](aliases.md)

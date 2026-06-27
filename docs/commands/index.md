@@ -30,7 +30,7 @@ Global options:
 | [AgL workflow DSL](agl.md) | `agm exec`, `agm repl` |
 | [Configuration](config.md) | `agm config` copy/env/update |
 | [Dependencies](dependencies.md) | `agm dep` |
-| [Worktrees](worktrees.md) | `agm worktree`/`wt` |
 | [Sandboxed command execution](run.md) | `agm run` |
+| [Worktrees](worktrees.md) | `agm worktree`/`wt` |
 | [tmux sessions](tmux.md) | `agm tmux` |
 | [Help and aliases](aliases.md) | Command aliases and the `agm help` overview |

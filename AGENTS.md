@@ -59,9 +59,9 @@ Run the CLI locally with `uv run agm ...` when iterating on a command.
 
 ## Documentation
 
-- Keep docs (`README.md` and `docs/commands.md`) and command help texts up to date with implemented command functionality. `README.md` is a brief description of the AGM program and should not contain overhwelming details, while `docs/commands.md` and the help texts are comprehensive command references.
+- Keep docs (`README.md` and `docs/commands/*.md`) and command help texts up to date with implemented command functionality. `README.md` is a brief description of the AGM program and should not contain overhwelming details, while `docs/commands/*.md` and the help texts are comprehensive command references.
 - ALWAYS keep comments and docstrings up-to-date with the codebase.
-- Avoid references to unversioned files in the docs, comments and docstrings.
+- Avoid references to plans or unversioned files in the docs, comments and docstrings.
 
 ## Instructions
 

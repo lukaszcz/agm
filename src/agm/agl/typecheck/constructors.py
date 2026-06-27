@@ -110,12 +110,9 @@ def merge_constructor_args(
                 "passed positionally as shorthand for `name = name`.",
                 span=arg.span,
             )
-        # The wrapping NamedArg is synthesized, not a real source node: it
-        # carries the codebase's synthetic-node sentinel id (-1, as in
-        # checker.py / resolver.py) rather than reusing the VarRef's real id,
-        # which would place two distinct nodes under one id.  No pass keys a
-        # NamedArg by node_id, so the sentinel is never looked up; the inner
-        # VarRef keeps its own id.
+        # The wrapping NamedArg is synthetic, so it gets the codebase's
+        # synthetic-node sentinel id (-1, as in checker.py / resolver.py)
+        # rather than reusing the VarRef's id; the inner VarRef keeps its own.
         shorthand.append(
             NamedArg(name=arg.name, value=arg, span=arg.span, node_id=-1)
         )

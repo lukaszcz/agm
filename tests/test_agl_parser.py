@@ -47,7 +47,7 @@ from agm.agl.syntax import (
     CaseBranch,
     Cast,
     CatchClause,
-    ConfigPragma,
+    ConfigDecl,
     ConstructorPattern,
     DecimalLit,
     DictEntry,
@@ -557,19 +557,22 @@ class TestDeclarations:
 
     def test_config_pragma_bool(self) -> None:
         cfg = first(parse("config log = true"))
-        assert isinstance(cfg, ConfigPragma)
-        assert cfg.key == "log"
-        assert cfg.value is True
+        assert isinstance(cfg, ConfigDecl)
+        assert cfg.name == "log"
+        assert isinstance(cfg.value, BoolLit)
+        assert cfg.value.value is True
 
     def test_config_pragma_int(self) -> None:
         cfg = first(parse("config max_iters = 10"))
-        assert isinstance(cfg, ConfigPragma)
-        assert cfg.value == 10
+        assert isinstance(cfg, ConfigDecl)
+        assert isinstance(cfg.value, IntLit)
+        assert cfg.value.value == 10
 
     def test_config_pragma_string(self) -> None:
         cfg = first(parse('config runner = "claude"'))
-        assert isinstance(cfg, ConfigPragma)
-        assert cfg.value == "claude"
+        assert isinstance(cfg, ConfigDecl)
+        assert isinstance(cfg.value, StringLit)
+        assert cfg.value.value == "claude"
 
 
 # ---------------------------------------------------------------------------
@@ -1746,19 +1749,21 @@ class TestLiteralPatternsCoverage:
 
 
 class TestDeclarationsCoverage:
-    """Covers config pragma values not yet tested: false and decimal."""
+    """Covers config decl values not yet tested: false and decimal."""
 
     def test_config_pragma_false(self) -> None:
         cfg = first(parse("config log = false"))
-        assert isinstance(cfg, ConfigPragma)
-        assert cfg.key == "log"
-        assert cfg.value is False
+        assert isinstance(cfg, ConfigDecl)
+        assert cfg.name == "log"
+        assert isinstance(cfg.value, BoolLit)
+        assert cfg.value.value is False
 
     def test_config_pragma_decimal(self) -> None:
         cfg = first(parse("config rate = 1.5"))
-        assert isinstance(cfg, ConfigPragma)
-        assert cfg.key == "rate"
-        assert cfg.value == decimal.Decimal("1.5")
+        assert isinstance(cfg, ConfigDecl)
+        assert cfg.name == "rate"
+        assert isinstance(cfg.value, DecimalLit)
+        assert cfg.value.value == decimal.Decimal("1.5")
 
 
 class TestTypeExprCoverage:

@@ -39,7 +39,7 @@ from agm.agl.syntax.nodes import (
     CaseBranch,
     Cast,
     CatchClause,
-    ConfigPragma,
+    ConfigDecl,
     ConstructorPattern,
     DecimalLit,
     DictEntry,
@@ -173,7 +173,7 @@ class Visitor:
     def visit_ProgramDecl(self, node: ProgramDecl) -> None: ...
     def visit_AgentDecl(self, node: AgentDecl) -> None: ...
     def visit_FuncDef(self, node: FuncDef) -> None: ...
-    def visit_ConfigPragma(self, node: ConfigPragma) -> None: ...
+    def visit_ConfigDecl(self, node: ConfigDecl) -> None: ...
 
     # Binder nodes
     def visit_LetDecl(self, node: LetDecl) -> None: ...
@@ -270,7 +270,7 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         ProgramDecl,
         AgentDecl,
         FuncDef,
-        ConfigPragma,
+        ConfigDecl,
         # binder nodes
         LetDecl,
         VarDecl,
@@ -431,8 +431,9 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
         if node.body is not None:
             walk(node.body, callback)
 
-    elif isinstance(node, ConfigPragma):
-        pass  # leaf — key and value are plain scalars
+    elif isinstance(node, ConfigDecl):
+        if node.value is not None:
+            walk(node.value, callback)
 
     # --- Binder nodes ---
     elif isinstance(node, LetDecl):

@@ -130,7 +130,7 @@ _sep: _NEWLINE | SEMICOLON
             | param_decl
             | program_decl
             | agent_decl
-            | config_pragma
+            | config_decl
             | func_def
             | builtin_record_def
             | builtin_enum_def
@@ -211,15 +211,10 @@ program_decl: "program" name
 // The optional runner string must be a static literal (checked in transformer).
 agent_decl: AGENT name (EQ template)?
 
-// config_pragma: "config" KEY = VALUE (header-only; enforced in scope pass).
-// pragma_value covers bool, int, decimal, and static string literals.
-config_pragma: "config" name EQ pragma_value
-
-pragma_value: "true"     -> pragma_true
-            | "false"    -> pragma_false
-            | INT        -> pragma_int
-            | DECIMAL    -> pragma_decimal
-            | template   -> pragma_str
+// config_decl: "config" NAME [= expr] (header-only; enforced in scope pass).
+// The optional value is a general expression; the scope pass validates it is
+// a literal scalar (transitional bridge until full readable-binding support).
+config_decl: "config" name (EQ expr)?
 
 // ---------------------------------------------------------------------------
 // Function definition

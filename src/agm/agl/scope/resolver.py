@@ -71,7 +71,7 @@ from agm.agl.syntax.nodes import (
     Case,
     Cast,
     CatchClause,
-    ConfigPragma,
+    ConfigDecl,
     ConstructorPattern,
     DecimalLit,
     DictLit,
@@ -710,34 +710,79 @@ class _Resolver:
     # Config pragmas
     # ------------------------------------------------------------------
 
-    def _resolve_config_pragma(self, node: ConfigPragma) -> None:
-        """Validate a ``config`` pragma and collect it."""
+    def _resolve_config(self, node: ConfigDecl) -> None:
+        """Validate a ``config`` declaration and collect it.
+
+        Bridge: the value is a general ``Expr`` in the AST, but this task only
+        allows literal scalar values (transitional restriction — runtime
+        evaluation comes in a later task).  Non-literal or absent values are
+        rejected with a clear error.
+        """
         if not self._at_root:
             raise AglScopeError(
-                f"'config' pragmas are only allowed at the program root, "
-                f"not inside a nested block (found 'config {node.key}' here).",
+                f"'config' declarations are only allowed at the program root, "
+                f"not inside a nested block (found 'config {node.name}' here).",
                 span=node.span,
             )
         if self._seen_non_pragma:
             raise AglScopeError(
-                f"'config' pragmas must appear before any other statements "
-                f"(found 'config {node.key}' after a non-pragma statement).",
+                f"'config' declarations must appear before any other statements "
+                f"(found 'config {node.name}' after a non-config statement).",
                 span=node.span,
             )
-        if node.key not in _ALLOWED_PRAGMA_KEYS:
+        if node.name not in _ALLOWED_PRAGMA_KEYS:
             allowed = ", ".join(sorted(_ALLOWED_PRAGMA_KEYS))
             raise AglScopeError(
-                f"Unknown config pragma key '{node.key}'. "
+                f"Unknown config key '{node.name}'. "
                 f"Allowed keys: {allowed}.",
                 span=node.span,
             )
-        if node.key in self._config_pragmas:
+        if node.name in self._config_pragmas:
             raise AglScopeError(
-                f"Duplicate config pragma '{node.key}'.",
+                f"Duplicate config declaration '{node.name}'.",
                 span=node.span,
             )
-        _validate_pragma_value(node.key, node.value, node.span)
-        self._config_pragmas[node.key] = node.value
+        # Bridge: extract a literal Python scalar from the value expression.
+        # Missing value and non-literal expressions are rejected here
+        # (transitional restriction until config becomes a runtime binding).
+        value: PragmaValue = self._extract_config_literal(node)
+        _validate_pragma_value(node.name, value, node.span)
+        self._config_pragmas[node.name] = value
+
+    def _extract_config_literal(self, node: ConfigDecl) -> PragmaValue:
+        """Extract a ``PragmaValue`` literal from ``node.value``.
+
+        Accepted literal AST node types:
+        - ``BoolLit``    → ``bool``
+        - ``IntLit``     → ``int``
+        - ``DecimalLit`` → ``decimal.Decimal``
+        - ``StringLit``  → ``str`` (plain, non-interpolated string)
+
+        A ``Template`` node (string with interpolation) and any other
+        expression are rejected.  A missing value (``None``) is also
+        rejected.  Both restrictions will be lifted in a later task
+        when config declarations become runtime-evaluated bindings.
+        """
+        val = node.value
+        if val is None:
+            raise AglScopeError(
+                f"'config {node.name}' requires a value (e.g. 'config {node.name} = true').",
+                span=node.span,
+            )
+        if isinstance(val, BoolLit):
+            return val.value
+        if isinstance(val, IntLit):
+            return val.value
+        if isinstance(val, DecimalLit):
+            return val.value
+        if isinstance(val, StringLit):
+            return val.value
+        # Template with interpolation, or any other non-literal expression.
+        raise AglScopeError(
+            f"'config {node.name}' value must be a literal (true/false, integer, "
+            f"decimal, or plain string with no interpolation).",
+            span=node.span,
+        )
 
     # ------------------------------------------------------------------
     # Scope helpers
@@ -827,16 +872,16 @@ class _Resolver:
         is_non_entry_root = is_graph_mode and not self._is_entry and self._at_root
 
         for item in items:
-            if isinstance(item, ConfigPragma):
+            if isinstance(item, ConfigDecl):
                 if is_non_entry_root:
-                    # config pragmas are not allowed in non-entry modules.
+                    # config declarations are not allowed in non-entry modules.
                     raise AglScopeError(
-                        f"'config' pragmas are only allowed in the entry module, "
-                        f"not inside a library module (found 'config {item.key}' here).",
+                        f"'config' declarations are only allowed in the entry module, "
+                        f"not inside a library module (found 'config {item.name}' here).",
                         span=item.span,
                     )
-                self._resolve_config_pragma(item)
-                # A pragma is not a non-pragma item.
+                self._resolve_config(item)
+                # A config declaration is not a non-config item.
                 continue
             if isinstance(item, ImportDecl):
                 if is_non_entry_root and self._seen_non_import_item:

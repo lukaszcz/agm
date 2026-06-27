@@ -1860,28 +1860,43 @@ class TestConfigPragmaValueValidation:
     def test_timeout_empty_string_rejected(self) -> None:
         """An empty string for timeout is rejected."""
         # We need to test via AST since the parser may not emit an empty string
-        # in a config pragma; use direct AST construction.
-        from agm.agl.syntax.nodes import ConfigPragma
+        # in a config declaration; use direct AST construction.
+        from agm.agl.syntax.nodes import ConfigDecl
 
-        pragma = ConfigPragma(key="timeout", value="", span=_sp(), node_id=_nid())
-        err = reject_program(pragma)
+        decl = ConfigDecl(
+            name="timeout",
+            value=StringLit(value="", span=_sp(), node_id=_nid()),
+            span=_sp(),
+            node_id=_nid(),
+        )
+        err = reject_program(decl)
         _, msg = diag(err)
         assert "non-empty" in msg.lower() or "timeout" in msg.lower()
 
     def test_runner_valid_string_accepted(self) -> None:
         """config runner = 'claude' is accepted (covers str_nonempty valid branch)."""
-        from agm.agl.syntax.nodes import ConfigPragma
+        from agm.agl.syntax.nodes import ConfigDecl
 
-        pragma = ConfigPragma(key="runner", value="claude", span=_sp(), node_id=_nid())
-        r = resolve_program(pragma)
+        decl = ConfigDecl(
+            name="runner",
+            value=StringLit(value="claude", span=_sp(), node_id=_nid()),
+            span=_sp(),
+            node_id=_nid(),
+        )
+        r = resolve_program(decl)
         assert r.config_pragmas.get("runner") == "claude"
 
     def test_timeout_valid_string_accepted(self) -> None:
         """config timeout = '30s' is accepted (covers str_or_int valid string branch)."""
-        from agm.agl.syntax.nodes import ConfigPragma
+        from agm.agl.syntax.nodes import ConfigDecl
 
-        pragma = ConfigPragma(key="timeout", value="30s", span=_sp(), node_id=_nid())
-        r = resolve_program(pragma)
+        decl = ConfigDecl(
+            name="timeout",
+            value=StringLit(value="30s", span=_sp(), node_id=_nid()),
+            span=_sp(),
+            node_id=_nid(),
+        )
+        r = resolve_program(decl)
         assert r.config_pragmas.get("timeout") == "30s"
 
 

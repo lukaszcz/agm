@@ -1,15 +1,16 @@
-"""Tests for AgL config pragmas (Milestone 2 — language support only).
+"""Tests for AgL config declarations (Milestone 2 — language support only).
 
 Covers:
 - Lexer: ``config`` lexes as a keyword, not VAR_NAME.
-- Parser: each pragma_value variant; multiple pragmas; interpolated-template
-  value rejected; LALR conflict guard regression (already in test_agl_parser;
-  re-verified here for completeness).
-- Scope: header-only OK; pragma after a non-pragma statement → error; nested
-  pragma → error; unknown key → error; duplicate key → error; bad value kind
-  per key → error; valid pragmas collected into ResolvedProgram.config_pragmas.
+- Parser: each literal value variant; multiple declarations; interpolated-template
+  value accepted by parser but rejected at scope; LALR conflict guard regression
+  (already in test_agl_parser; re-verified here for completeness).
+- Scope: header-only OK; declaration after a non-config statement → error; nested
+  declaration → error; unknown key → error; duplicate key → error; bad value kind
+  per key → error; valid declarations collected into ResolvedProgram.config_pragmas;
+  non-literal value expression → error; missing value → error.
 - PreparedProgram.config_pragmas exposure (empty on scope failure).
-- Interpreter / typecheck no-op: a program that is only pragmas + a print runs
+- Interpreter / typecheck no-op: a program that is only config decls + a print runs
   fine end-to-end.
 
 NOTE: No static-analysis suppression comments in this file.
@@ -22,11 +23,18 @@ import decimal
 import pytest
 
 from agm.agl.lexer import tokenize
-from agm.agl.parser import AglSyntaxError, parse_program
+from agm.agl.parser import parse_program
 from agm.agl.pipeline import PipelineDriver
 from agm.agl.scope import AglScopeError, resolve
 from agm.agl.scope.symbols import ResolvedProgram
-from agm.agl.syntax.nodes import Call, ConfigPragma
+from agm.agl.syntax.nodes import (
+    BoolLit,
+    Call,
+    ConfigDecl,
+    DecimalLit,
+    IntLit,
+    StringLit,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -83,89 +91,110 @@ class TestLexerConfigKeyword:
 
 
 # ---------------------------------------------------------------------------
-# Parser: pragma_value variants
+# Parser: ConfigDecl node shape and value variants
 # ---------------------------------------------------------------------------
 
 
-class TestParserPragmaValues:
-    def test_pragma_true(self) -> None:
-        """config KEY = true parses to ConfigPragma with bool True."""
+class TestParserConfigDecl:
+    def test_config_decl_bool_true(self) -> None:
+        """config KEY = true parses to ConfigDecl with BoolLit(True) value."""
         prog = parse_program("config log = true")
         assert len(prog.body.items) == 1
         stmt = prog.body.items[0]
-        assert isinstance(stmt, ConfigPragma)
-        assert stmt.key == "log"
-        assert stmt.value is True
-        assert isinstance(stmt.value, bool)
+        assert isinstance(stmt, ConfigDecl)
+        assert stmt.name == "log"
+        assert isinstance(stmt.value, BoolLit)
+        assert stmt.value.value is True
 
-    def test_pragma_false(self) -> None:
-        """config KEY = false parses to ConfigPragma with bool False."""
+    def test_config_decl_bool_false(self) -> None:
+        """config KEY = false parses to ConfigDecl with BoolLit(False) value."""
         prog = parse_program("config log = false")
         stmt = prog.body.items[0]
-        assert isinstance(stmt, ConfigPragma)
-        assert stmt.value is False
-        assert isinstance(stmt.value, bool)
+        assert isinstance(stmt, ConfigDecl)
+        assert stmt.name == "log"
+        assert isinstance(stmt.value, BoolLit)
+        assert stmt.value.value is False
 
-    def test_pragma_int(self) -> None:
-        """config KEY = N parses to ConfigPragma with int value."""
+    def test_config_decl_int(self) -> None:
+        """config KEY = N parses to ConfigDecl with IntLit value."""
         prog = parse_program("config max_iters = 10")
         stmt = prog.body.items[0]
-        assert isinstance(stmt, ConfigPragma)
-        assert stmt.key == "max_iters"
-        assert stmt.value == 10
-        assert isinstance(stmt.value, int)
-        assert not isinstance(stmt.value, bool)
+        assert isinstance(stmt, ConfigDecl)
+        assert stmt.name == "max_iters"
+        assert isinstance(stmt.value, IntLit)
+        assert stmt.value.value == 10
 
-    def test_pragma_decimal(self) -> None:
-        """config KEY = D parses to ConfigPragma with Decimal value."""
+    def test_config_decl_decimal(self) -> None:
+        """config KEY = D parses to ConfigDecl with DecimalLit value."""
         prog = parse_program("config timeout = 30.5")
         stmt = prog.body.items[0]
-        assert isinstance(stmt, ConfigPragma)
-        assert stmt.key == "timeout"
-        assert stmt.value == decimal.Decimal("30.5")
-        assert isinstance(stmt.value, decimal.Decimal)
+        assert isinstance(stmt, ConfigDecl)
+        assert stmt.name == "timeout"
+        assert isinstance(stmt.value, DecimalLit)
+        assert stmt.value.value == decimal.Decimal("30.5")
 
-    def test_pragma_string(self) -> None:
-        """config KEY = "str" parses to ConfigPragma with str value."""
+    def test_config_decl_string(self) -> None:
+        """config KEY = "str" parses to ConfigDecl with StringLit value."""
         prog = parse_program('config runner = "claude"')
         stmt = prog.body.items[0]
-        assert isinstance(stmt, ConfigPragma)
-        assert stmt.key == "runner"
-        assert stmt.value == "claude"
-        assert isinstance(stmt.value, str)
+        assert isinstance(stmt, ConfigDecl)
+        assert stmt.name == "runner"
+        assert isinstance(stmt.value, StringLit)
+        assert stmt.value.value == "claude"
 
-    def test_multiple_pragmas(self) -> None:
-        """Multiple pragmas are each parsed as separate ConfigPragma nodes."""
+    def test_config_decl_timeout_string(self) -> None:
+        """config timeout = "30s" parses to ConfigDecl with StringLit value."""
+        prog = parse_program('config timeout = "30s"')
+        stmt = prog.body.items[0]
+        assert isinstance(stmt, ConfigDecl)
+        assert stmt.name == "timeout"
+        assert isinstance(stmt.value, StringLit)
+        assert stmt.value.value == "30s"
+
+    def test_config_decl_no_value(self) -> None:
+        """config KEY (no = expr) parses to ConfigDecl with None value."""
+        prog = parse_program("config log")
+        stmt = prog.body.items[0]
+        assert isinstance(stmt, ConfigDecl)
+        assert stmt.name == "log"
+        assert stmt.value is None
+
+    def test_multiple_config_decls(self) -> None:
+        """Multiple config decls are each parsed as separate ConfigDecl nodes."""
         prog = parse_program(
             "config log = true\n"
             "config max_iters = 5\n"
             'config runner = "local"\n'
         )
         assert len(prog.body.items) == 3
-        assert all(isinstance(s, ConfigPragma) for s in prog.body.items)
-        keys = [s.key for s in prog.body.items if isinstance(s, ConfigPragma)]
-        assert keys == ["log", "max_iters", "runner"]
+        assert all(isinstance(s, ConfigDecl) for s in prog.body.items)
+        names = [s.name for s in prog.body.items if isinstance(s, ConfigDecl)]
+        assert names == ["log", "max_iters", "runner"]
 
-    def test_pragma_then_statement(self) -> None:
-        """Pragmas followed by a non-pragma expression parse correctly."""
+    def test_config_decl_then_statement(self) -> None:
+        """Config decls followed by a non-config expression parse correctly."""
         prog = parse_program("config log = true\nprint 1")
         assert len(prog.body.items) == 2
-        assert isinstance(prog.body.items[0], ConfigPragma)
+        assert isinstance(prog.body.items[0], ConfigDecl)
         # In v2, ``print 1`` is a Call expression (not a PrintStmt).
         assert isinstance(prog.body.items[1], Call)
 
-    def test_interpolated_template_pragma_value_rejected(self) -> None:
-        """An interpolated template as a pragma value is a syntax error."""
-        with pytest.raises(AglSyntaxError) as exc_info:
-            parse_program('config runner = "run ${mode}"')
-        msg = str(exc_info.value)
-        assert "interpolation" in msg or "literal" in msg
+    def test_interpolated_template_parses_but_scope_rejects(self) -> None:
+        """An interpolated template as a config value passes the parser but is
+        rejected at scope as a non-literal expression."""
+        # Parse succeeds: the grammar accepts any expr as the value.
+        prog = parse_program('config runner = "run ${mode}"')
+        stmt = prog.body.items[0]
+        assert isinstance(stmt, ConfigDecl)
+        # Scope rejects it: Template is not a literal.
+        with pytest.raises(AglScopeError):
+            resolve(prog)
 
-    def test_config_pragma_spans_recorded(self) -> None:
-        """ConfigPragma nodes carry non-trivial source spans."""
+    def test_config_decl_spans_recorded(self) -> None:
+        """ConfigDecl nodes carry non-trivial source spans."""
         prog = parse_program("config log = true")
         stmt = prog.body.items[0]
-        assert isinstance(stmt, ConfigPragma)
+        assert isinstance(stmt, ConfigDecl)
         assert stmt.span.start_line == 1
         assert stmt.span.start_col == 1
 
@@ -176,38 +205,38 @@ class TestParserPragmaValues:
 
 
 class TestScopeHeaderOnly:
-    def test_pragma_at_root_top_ok(self) -> None:
-        """A pragma before any other statement at root is accepted."""
+    def test_config_at_root_top_ok(self) -> None:
+        """A config decl before any other statement at root is accepted."""
         r = parse_and_resolve("config log = true\nprint 1")
         assert "log" in r.config_pragmas
         assert r.config_pragmas["log"] is True
 
-    def test_pragma_only_program_ok(self) -> None:
-        """A program consisting only of pragmas is accepted."""
+    def test_config_only_program_ok(self) -> None:
+        """A program consisting only of config decls is accepted."""
         r = parse_and_resolve("config log = true\nconfig max_iters = 3")
         assert r.config_pragmas == {"log": True, "max_iters": 3}
 
-    def test_pragma_after_let_rejected(self) -> None:
-        """A pragma that follows a let statement is a scope error."""
+    def test_config_after_let_rejected(self) -> None:
+        """A config decl that follows a let statement is a scope error."""
         err = reject_scope('let x = 1\nconfig log = true')
         _, msg = diag(err)
         assert "config" in msg
-        assert "before" in msg or "header" in msg or "non-pragma" in msg
+        assert "before" in msg or "header" in msg or "non-config" in msg
 
-    def test_pragma_after_print_rejected(self) -> None:
-        """A pragma that follows a print statement is a scope error."""
+    def test_config_after_print_rejected(self) -> None:
+        """A config decl that follows a print statement is a scope error."""
         err = reject_scope('print 1\nconfig log = true')
         _, msg = diag(err)
         assert "config" in msg
 
-    def test_pragma_after_unit_expr_rejected(self) -> None:
-        """A pragma that follows a unit expression (()) is a scope error."""
+    def test_config_after_unit_expr_rejected(self) -> None:
+        """A config decl that follows a unit expression (()) is a scope error."""
         err = reject_scope('()\nconfig log = true')
         _, msg = diag(err)
         assert "config" in msg
 
-    def test_pragma_nested_in_block_rejected(self) -> None:
-        """A pragma inside a nested block (e.g. do body) is a scope error."""
+    def test_config_nested_in_block_rejected(self) -> None:
+        """A config decl inside a nested block (e.g. do body) is a scope error."""
         err = reject_scope(
             "do\n"
             "  config log = true\n"
@@ -225,18 +254,50 @@ class TestScopeHeaderOnly:
 
 class TestScopeKeyValidation:
     def test_unknown_key_rejected(self) -> None:
-        """An unknown pragma key is a scope error listing allowed keys."""
+        """An unknown config key is a scope error listing allowed keys."""
         err = reject_scope("config bogus_key = true")
         _, msg = diag(err)
         assert "bogus_key" in msg
         assert "Allowed" in msg or "allowed" in msg
 
     def test_duplicate_key_rejected(self) -> None:
-        """A duplicate pragma key is a scope error."""
+        """A duplicate config key is a scope error."""
         err = reject_scope("config log = true\nconfig log = false")
         _, msg = diag(err)
         assert "log" in msg
         assert "duplicate" in msg.lower() or "Duplicate" in msg
+
+
+# ---------------------------------------------------------------------------
+# Scope: literal bridge — non-literal and missing value rejection
+# ---------------------------------------------------------------------------
+
+
+class TestScopeLiteralBridge:
+    def test_non_literal_var_ref_rejected(self) -> None:
+        """A VarRef as the config value is rejected (non-literal)."""
+        # Place config at the header so it isn't rejected for header-order reasons.
+        err = reject_scope("config log = some_undefined")
+        _, msg = diag(err)
+        assert "literal" in msg or "config" in msg
+
+    def test_non_literal_expression_rejected(self) -> None:
+        """An arithmetic expression as config value is rejected (non-literal)."""
+        err = reject_scope("config max_iters = 1 + 2")
+        _, msg = diag(err)
+        assert "literal" in msg or "config" in msg
+
+    def test_interpolated_string_rejected_at_scope(self) -> None:
+        """An interpolated template as config value is rejected at scope."""
+        err = reject_scope('config runner = "run ${mode}"')
+        _, msg = diag(err)
+        assert "literal" in msg or "interpolation" in msg
+
+    def test_missing_value_rejected(self) -> None:
+        """config KEY with no value is rejected at scope."""
+        err = reject_scope("config log")
+        _, msg = diag(err)
+        assert "log" in msg
 
 
 # ---------------------------------------------------------------------------
@@ -266,10 +327,9 @@ class TestScopeValueKindValidation:
         assert "max_iters" in msg
 
     def test_max_iters_negative_rejected(self) -> None:
-        """config max_iters rejects a negative int."""
-        # Negative ints cannot be parsed as a pragma_value (INT token is unsigned);
-        # this will be a parse error rather than a scope error.
-        with pytest.raises((AglSyntaxError, AglScopeError)):
+        """config max_iters rejects a negative value (non-literal unary_neg expression)."""
+        # -1 is UnaryNeg(IntLit(1)), a non-literal expression → scope error.
+        with pytest.raises(AglScopeError):
             parse_and_resolve("config max_iters = -1")
 
     def test_max_iters_bool_rejected(self) -> None:
@@ -352,13 +412,13 @@ class TestScopeValueKindValidation:
 
 
 # ---------------------------------------------------------------------------
-# Scope: all pragmas collected into config_pragmas
+# Scope: all config decls collected into config_pragmas
 # ---------------------------------------------------------------------------
 
 
 class TestScopeCollectedPragmas:
     def test_all_valid_keys_collected(self) -> None:
-        """All valid pragma keys are collected into config_pragmas."""
+        """All valid config keys are collected into config_pragmas."""
         r = parse_and_resolve(
             "config log = true\n"
             "config strict_json = false\n"
@@ -376,8 +436,8 @@ class TestScopeCollectedPragmas:
             "timeout": "30s",
         }
 
-    def test_no_pragmas_empty_dict(self) -> None:
-        """A program with no pragmas has an empty config_pragmas dict."""
+    def test_no_config_decls_empty_dict(self) -> None:
+        """A program with no config decls has an empty config_pragmas dict."""
         r = parse_and_resolve("print 1")
         assert r.config_pragmas == {}
 
@@ -431,8 +491,8 @@ class TestPreparedProgramExposure:
 
 
 class TestInterpreterNoOp:
-    def test_pragmas_plus_print_runs_fine(self) -> None:
-        """A program of pragmas + a print executes without error."""
+    def test_config_plus_print_runs_fine(self) -> None:
+        """A program of config decls + a print executes without error."""
         rt = PipelineDriver()
         result = rt.run(
             "config log = true\n"
@@ -442,14 +502,14 @@ class TestInterpreterNoOp:
         assert result.ok
         assert not result.diagnostics
 
-    def test_pragmas_only_program_runs_fine(self) -> None:
-        """A program consisting only of pragmas executes without error."""
+    def test_config_only_program_runs_fine(self) -> None:
+        """A program consisting only of config decls executes without error."""
         rt = PipelineDriver()
         result = rt.run("config log = false\nconfig strict_json = true")
         assert result.ok
 
-    def test_pragmas_do_not_produce_trace_events(self) -> None:
-        """Pragmas produce no eval-level side effects (no crash, no events)."""
+    def test_config_do_not_produce_trace_events(self) -> None:
+        """Config decls produce no eval-level side effects (no crash, no events)."""
         import tempfile
         from pathlib import Path
 

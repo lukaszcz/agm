@@ -17,7 +17,7 @@ M2 supported AST nodes
     LetDecl, VarDecl, AssignStmt (simple name target only)
     Declarations that have no runtime action:
       RecordDef, EnumDef, TypeAlias, FuncDef, AgentDecl, ParamDecl,
-      ProgramDecl, ConfigPragma, ImportDecl
+      ProgramDecl, ConfigDecl, ImportDecl
 
 Any AST node outside this set raises ``NotImplementedError`` with a clear
 message.  A missing checker side-table entry is a compiler bug and raises
@@ -152,7 +152,7 @@ from agm.agl.syntax.nodes import (
     CaseBranch,
     Cast,
     CatchClause,
-    ConfigPragma,
+    ConfigDecl,
     ConstructorPattern,
     DecimalLit,
     DictLit,
@@ -384,7 +384,7 @@ class _Lowerer:
                 self._record_capture(node.node_id, local_ids, captured)
             # Boundaries + declarations introduce no value captures for THIS function:
             case (Lambda() | FuncDef() | RecordDef() | EnumDef() | ExceptionDef() | TypeAlias()
-                  | ParamDecl() | ProgramDecl() | AgentDecl() | ConfigPragma() | ImportDecl()):
+                  | ParamDecl() | ProgramDecl() | AgentDecl() | ConfigDecl() | ImportDecl()):
                 return
             case LetDecl() | VarDecl():
                 local_ids.add(node.node_id)
@@ -1846,7 +1846,7 @@ class _Lowerer:
                 | ExceptionDef()
                 | TypeAlias()
                 | ProgramDecl()
-                | ConfigPragma()
+                | ConfigDecl()
                 | ImportDecl()
             ):
                 return None

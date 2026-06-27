@@ -477,10 +477,10 @@ class ReplSession:
         is rejected with a clear message; the entry has no effect on session
         state.
         """
-        from agm.agl.syntax.nodes import ConfigPragma
+        from agm.agl.syntax.nodes import ConfigDecl
 
         for item in program.body.items:
-            if isinstance(item, ConfigPragma):
+            if isinstance(item, ConfigDecl):
                 return diagnostic_from_span(
                     (
                         "config pragmas are not supported in the REPL; "
@@ -934,7 +934,7 @@ class ReplSession:
         # AssignStmt → "statement"
         if isinstance(last, AssignStmt):
             return "statement", None
-        # Remaining Declaration kinds (ConfigPragma is rejected earlier, but handle
+        # Remaining Declaration kinds (ConfigDecl is rejected earlier, but handle
         # defensively).
         return "statement", None  # pragma: no cover
 

@@ -87,7 +87,7 @@ from agm.agl.syntax.nodes import (
     Case,
     Cast,
     CatchClause,
-    ConfigPragma,
+    ConfigDecl,
     ConstructorPattern,
     DecimalLit,
     DictLit,
@@ -379,7 +379,7 @@ class _Checker:
             # Signature already registered in pre-pass; check body now.
             self._check_funcdef_body(item)
             return UnitType()
-        if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias, ConfigPragma)):
+        if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias, ConfigDecl)):
             return UnitType()
         if isinstance(item, AgentDecl):
             self._env.set_binding_type(item.node_id, AgentType())

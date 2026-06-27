@@ -26,7 +26,7 @@ from agm.agl.syntax.nodes import (
     CaseBranch,
     Cast,
     CatchClause,
-    ConfigPragma,
+    ConfigDecl,
     ConstructorPattern,
     DecimalLit,
     Declaration,
@@ -138,7 +138,7 @@ __all__ = [
     "AgentDecl",
     "FieldDef",
     "VariantDef",
-    "ConfigPragma",
+    "ConfigDecl",
     "PragmaValue",
     # binders
     "LetDecl",

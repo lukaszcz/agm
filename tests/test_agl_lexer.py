@@ -1079,9 +1079,9 @@ class TestLexErrorSpan:
         assert exc_info.value.span is not None
 
     def test_unknown_character_raises_lex_error(self) -> None:
-        # Characters that are not valid in AgL code
+        # Characters that are not valid in AgL code (~ is not a valid AgL token)
         with pytest.raises(LexError) as exc_info:
-            tok("@")
+            tok("~")
         assert exc_info.value.span is not None
 
     def test_triple_quoted_with_escape(self) -> None:
@@ -2297,3 +2297,80 @@ class TestModuleSystemLexer:
         # After remap, 'import' at item-start becomes IMPORT in the parser stream
         result = lark_tok("import foo")
         assert result[0] == ("IMPORT", "import")
+
+
+# ---------------------------------------------------------------------------
+# AT token (@) — parameter-marker prefix for @pos / @std / @named
+# ---------------------------------------------------------------------------
+
+
+class TestAtToken:
+    """Tests for the standalone AT token (``@``).
+
+    ``@`` lexes as a single ``AT`` token.  A following identifier is emitted
+    as a separate ``NAME`` token, so ``@pos``, ``@std``, and ``@named`` each
+    produce two tokens: ``AT`` then ``NAME``.  ``pos``, ``std``, and ``named``
+    without a leading ``@`` remain ordinary ``NAME`` tokens.
+    """
+
+    def test_at_alone_is_at_token(self) -> None:
+        assert tok("@") == [("AT", "@")]
+
+    def test_at_pos_is_at_name(self) -> None:
+        assert tok("@pos") == [("AT", "@"), ("NAME", "pos")]
+
+    def test_at_std_is_at_name(self) -> None:
+        assert tok("@std") == [("AT", "@"), ("NAME", "std")]
+
+    def test_at_named_is_at_name(self) -> None:
+        assert tok("@named") == [("AT", "@"), ("NAME", "named")]
+
+    def test_pos_without_at_is_name(self) -> None:
+        # `pos` is not a keyword — it must remain a plain identifier everywhere.
+        assert tok("pos") == [("NAME", "pos")]
+
+    def test_std_without_at_is_name(self) -> None:
+        assert tok("std") == [("NAME", "std")]
+
+    def test_named_without_at_is_name(self) -> None:
+        assert tok("named") == [("NAME", "named")]
+
+    def test_at_adjacent_to_punctuation(self) -> None:
+        # (@named, x) → LPAR AT NAME("named") COMMA NAME("x") RPAR
+        assert tok("(@named, x)") == [
+            ("LPAR", "("),
+            ("AT", "@"),
+            ("NAME", "named"),
+            ("COMMA", ","),
+            ("NAME", "x"),
+            ("RPAR", ")"),
+        ]
+
+    def test_at_adjacent_to_operators(self) -> None:
+        # Spaced @std between other tokens
+        assert tok("/ @std *") == [
+            ("SLASH", "/"),
+            ("AT", "@"),
+            ("NAME", "std"),
+            ("STAR", "*"),
+        ]
+
+    def test_at_breaks_preceding_identifier(self) -> None:
+        # `@` is in _IDENT_STOP, so it terminates a preceding identifier scan.
+        assert tok("x@pos") == [("NAME", "x"), ("AT", "@"), ("NAME", "pos")]
+
+    def test_at_with_space_before_name(self) -> None:
+        # A space between @ and the name still yields exactly AT then NAME.
+        assert tok("@ pos") == [("AT", "@"), ("NAME", "pos")]
+
+    def test_at_token_position(self) -> None:
+        # Verify the AT token carries correct position information.
+        tokens = list(tokenize("@pos"))
+        at_tok = tokens[0]
+        assert at_tok.type == "AT"
+        assert at_tok.line == 1
+        assert at_tok.column == 1
+        name_tok = tokens[1]
+        assert name_tok.type == "NAME"
+        assert str(name_tok) == "pos"
+        assert name_tok.column == 2  # `pos` starts immediately after `@`

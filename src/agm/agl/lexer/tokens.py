@@ -162,6 +162,7 @@ PLUS = "PLUS"  # +
 MINUS = "MINUS"  # -
 STAR = "STAR"  # *
 SLASH = "SLASH"  # /
+AT = "AT"  # @
 LPAR = "LPAR"  # (
 RPAR = "RPAR"  # )
 LSQB = "LSQB"  # [

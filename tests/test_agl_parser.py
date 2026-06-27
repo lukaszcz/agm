@@ -1827,8 +1827,8 @@ class TestReplSeamCoverage:
         assert result1 is True  # dangling '=' is incomplete
 
     def test_is_incomplete_source_lex_error(self) -> None:
-        """An param that causes a LexError returns False (real error, not incomplete)."""
-        assert not is_incomplete_source("@@@")
+        """Input that causes a LexError returns False (real error, not incomplete)."""
+        assert not is_incomplete_source("~~~")
 
 
 class TestParserErrorCoverage:

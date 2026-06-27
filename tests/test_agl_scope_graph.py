@@ -28,7 +28,7 @@ from pathlib import Path
 import pytest
 
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
-from agm.agl.modules.loader import load_graph
+from agm.agl.modules.loader import ModuleGraph, load_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.scope import resolve
 from agm.agl.scope.graph import ResolvedModule, ResolvedModuleGraph, resolve_graph
@@ -54,7 +54,7 @@ def _write_module(root: Path, dotted: str, source: str) -> Path:
     return p
 
 
-def _make_graph_from_files(tmp_path: Path, modules: dict[str, str]) -> object:
+def _make_graph_from_files(tmp_path: Path, modules: dict[str, str]) -> ModuleGraph:
     """Build a ModuleGraph via load_graph from {dotted_name_or_entry: source} dict.
 
     The key 'entry' is used as the entry source.
@@ -280,8 +280,7 @@ class TestOpenImport:
         result = resolve_graph(graph)
         entry_resolved = result.modules[ENTRY_ID].resolved
         # Find the VarRef for 'foo' in the entry
-        from agm.agl.modules.loader import ModuleGraph
-        assert isinstance(graph, ModuleGraph)
+
         entry_program = graph.modules[ENTRY_ID].program
         var = _find_varref(entry_program, "foo")
         assert var is not None
@@ -295,8 +294,7 @@ class TestOpenImport:
             "mylib": "def foo() -> int = 1\ndef bar() -> int = 2",
         })
         result = resolve_graph(graph)
-        from agm.agl.modules.loader import ModuleGraph
-        assert isinstance(graph, ModuleGraph)
+
         entry_program = graph.modules[ENTRY_ID].program
         var = _find_varref(entry_program, "bar")
         assert var is not None
@@ -319,8 +317,7 @@ class TestOpenImport:
             "mylib": "def foo() -> int = 1\ndef bar() -> int = 2",
         })
         result = resolve_graph(graph)
-        from agm.agl.modules.loader import ModuleGraph
-        assert isinstance(graph, ModuleGraph)
+
         entry_program = graph.modules[ENTRY_ID].program
         var = _find_varref(entry_program, "bar")
         assert var is not None
@@ -348,8 +345,7 @@ class TestOpenImport:
             "mylib": "def foo() -> int = 42",
         })
         result = resolve_graph(graph)
-        from agm.agl.modules.loader import ModuleGraph
-        assert isinstance(graph, ModuleGraph)
+
         entry_program = graph.modules[ENTRY_ID].program
         var = _find_varref(entry_program, "baz")
         assert var is not None
@@ -375,6 +371,13 @@ class TestOpenImport:
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
 
+        entry_program = graph.modules[ENTRY_ID].program
+        var = _find_varref(entry_program, "foo")
+        assert var is not None
+        ref = result.modules[ENTRY_ID].resolved.resolution[var.node_id]
+        assert ref.name == "foo"
+        assert ref.module_id == ModuleId.from_dotted("mylib")
+
     def test_as_alias(self, tmp_path: Path) -> None:
         """'import mylib as M' — 'M::foo()' resolves."""
         graph = _make_graph_from_files(tmp_path, {
@@ -384,6 +387,13 @@ class TestOpenImport:
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
 
+        entry_program = graph.modules[ENTRY_ID].program
+        var = _find_varref(entry_program, "foo")
+        assert var is not None
+        ref = result.modules[ENTRY_ID].resolved.resolution[var.node_id]
+        assert ref.name == "foo"
+        assert ref.module_id == ModuleId.from_dotted("mylib")
+
     def test_as_alias_unqualified_still_exposed(self, tmp_path: Path) -> None:
         """'import mylib as M' without 'qualified' exposes bare names too."""
         graph = _make_graph_from_files(tmp_path, {
@@ -391,8 +401,7 @@ class TestOpenImport:
             "mylib": "def foo() -> int = 42",
         })
         result = resolve_graph(graph)
-        from agm.agl.modules.loader import ModuleGraph
-        assert isinstance(graph, ModuleGraph)
+
         entry_program = graph.modules[ENTRY_ID].program
         var = _find_varref(entry_program, "foo")
         assert var is not None
@@ -423,6 +432,13 @@ class TestQualifiedAccess:
         })
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
+
+        entry_program = graph.modules[ENTRY_ID].program
+        var = _find_varref(entry_program, "foo")
+        assert var is not None
+        ref = result.modules[ENTRY_ID].resolved.resolution[var.node_id]
+        assert ref.name == "foo"
+        assert ref.module_id == ModuleId.from_dotted("mylib")
 
     def test_unknown_qualifier_handle_errors(self, tmp_path: Path) -> None:
         """'nomodule::foo' when no such module is imported errors."""
@@ -471,6 +487,12 @@ class TestClashDeferred:
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
 
+        entry_program = graph.modules[ENTRY_ID].program
+        var = _find_varref(entry_program, "foo")
+        assert var is not None
+        ref = result.modules[ENTRY_ID].resolved.resolution[var.node_id]
+        assert ref.module_id == ModuleId.from_dotted("mylib")
+
 
 # ---------------------------------------------------------------------------
 # Test: multiple imports merge
@@ -486,6 +508,15 @@ class TestMultipleImportsMerge:
         })
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
+
+        entry_program = graph.modules[ENTRY_ID].program
+        mylib_id = ModuleId.from_dotted("mylib")
+        foo_var = _find_varref(entry_program, "foo")
+        assert foo_var is not None
+        assert result.modules[ENTRY_ID].resolved.resolution[foo_var.node_id].module_id == mylib_id
+        bar_var = _find_varref(entry_program, "bar")
+        assert bar_var is not None
+        assert result.modules[ENTRY_ID].resolved.resolution[bar_var.node_id].module_id == mylib_id
 
 
 # ---------------------------------------------------------------------------
@@ -527,8 +558,7 @@ class TestSelfReference:
             "entry": "def foo() -> int = 1\nlet x = ::foo()",
         })
         result = resolve_graph(graph)
-        from agm.agl.modules.loader import ModuleGraph
-        assert isinstance(graph, ModuleGraph)
+
         entry_program = graph.modules[ENTRY_ID].program
         var = _find_varref(entry_program, "foo")
         assert var is not None
@@ -543,8 +573,7 @@ class TestSelfReference:
         })
         result = resolve_graph(graph)
         mylib_id = ModuleId.from_dotted("mylib")
-        from agm.agl.modules.loader import ModuleGraph
-        assert isinstance(graph, ModuleGraph)
+
         mylib_program = graph.modules[mylib_id].program
         var = _find_varref(mylib_program, "bar")
         assert var is not None
@@ -569,9 +598,8 @@ class TestSelfReference:
             "entry": "def foo() -> int = 1\ndef g(foo: int) -> int = ::foo()",
         })
         result = resolve_graph(graph)
-        from agm.agl.modules.loader import ModuleGraph
         from agm.agl.scope.symbols import BinderKind
-        assert isinstance(graph, ModuleGraph)
+
         entry_program = graph.modules[ENTRY_ID].program
         # Find the ::foo VarRef inside g's body — it should resolve to the
         # top-level function foo, NOT to the parameter foo.
@@ -740,6 +768,8 @@ class TestDeclarationOnly:
         })
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
+        mylib_id = ModuleId.from_dotted("mylib")
+        assert "foo" in result.modules[mylib_id].exports
 
 
 # ---------------------------------------------------------------------------
@@ -809,6 +839,8 @@ class TestHeaderOnlyImports:
         })
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
+        mylib_id = ModuleId.from_dotted("mylib")
+        assert "foo" in result.modules[mylib_id].exports
 
     def test_import_in_entry_works(self, tmp_path: Path) -> None:
         """Entry module works fine with import followed by def."""
@@ -818,6 +850,12 @@ class TestHeaderOnlyImports:
         })
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
+
+        entry_program = graph.modules[ENTRY_ID].program
+        var = _find_varref(entry_program, "foo")
+        assert var is not None
+        ref = result.modules[ENTRY_ID].resolved.resolution[var.node_id]
+        assert ref.module_id == ModuleId.from_dotted("mylib")
 
 
 # ---------------------------------------------------------------------------
@@ -836,6 +874,12 @@ class TestWildcardImports:
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
 
+        entry_program = graph.modules[ENTRY_ID].program
+        alpha_var = _find_varref(entry_program, "alpha")
+        assert alpha_var is not None
+        ref = result.modules[ENTRY_ID].resolved.resolution[alpha_var.node_id]
+        assert ref.module_id == ModuleId.from_dotted("foo.alpha")
+
     def test_wildcard_as_reroots_qualifier(self, tmp_path: Path) -> None:
         """'import foo.* as F' makes 'F.alpha::alpha()' accessible via qualifier."""
         graph = _make_graph_from_files(tmp_path, {
@@ -845,6 +889,12 @@ class TestWildcardImports:
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
 
+        entry_program = graph.modules[ENTRY_ID].program
+        alpha_var = _find_varref(entry_program, "alpha")
+        assert alpha_var is not None
+        ref = result.modules[ENTRY_ID].resolved.resolution[alpha_var.node_id]
+        assert ref.module_id == ModuleId.from_dotted("foo.alpha")
+
     def test_wildcard_compatible_overlap_idempotent(self, tmp_path: Path) -> None:
         """Two wildcards that expose same QName from same module are idempotent (no error)."""
         graph = _make_graph_from_files(tmp_path, {
@@ -853,6 +903,12 @@ class TestWildcardImports:
         })
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
+
+        entry_program = graph.modules[ENTRY_ID].program
+        alpha_var = _find_varref(entry_program, "alpha")
+        assert alpha_var is not None
+        ref = result.modules[ENTRY_ID].resolved.resolution[alpha_var.node_id]
+        assert ref.module_id == ModuleId.from_dotted("foo.alpha")
 
     def test_wildcard_conflicting_overlap_clashes_on_use(self, tmp_path: Path) -> None:
         """Two wildcards expose same bare name from different modules → clash on use."""
@@ -881,6 +937,20 @@ class TestCrossFileMutualRecursion:
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
 
+        # entry sees callA from modA
+        entry_program = graph.modules[ENTRY_ID].program
+        calla_var = _find_varref(entry_program, "callA")
+        assert calla_var is not None
+        ref = result.modules[ENTRY_ID].resolved.resolution[calla_var.node_id]
+        assert ref.module_id == ModuleId.from_dotted("modA")
+        # modA sees callB from modB
+        moda_id = ModuleId.from_dotted("modA")
+        moda_program = graph.modules[moda_id].program
+        callb_var = _find_varref(moda_program, "callB")
+        assert callb_var is not None
+        ref2 = result.modules[moda_id].resolved.resolution[callb_var.node_id]
+        assert ref2.module_id == ModuleId.from_dotted("modB")
+
     def test_mutual_recursion_across_modules(self, tmp_path: Path) -> None:
         """A's def calls B's def and B's def calls A's def — both resolve."""
         graph = _make_graph_from_files(tmp_path, {
@@ -889,10 +959,15 @@ class TestCrossFileMutualRecursion:
             "modB": "import modA\ndef funcB() -> int = funcA()",
         })
         result = resolve_graph(graph)
-        # All three should be resolved
-        assert ENTRY_ID in result.modules
-        assert ModuleId.from_dotted("modA") in result.modules
-        assert ModuleId.from_dotted("modB") in result.modules
+        mod_a = ModuleId.from_dotted("modA")
+        mod_b = ModuleId.from_dotted("modB")
+        # funcA's body call to funcB must resolve into modB, and vice-versa.
+        call_b = _find_varref(graph.modules[mod_a].program, "funcB")
+        assert call_b is not None
+        assert result.modules[mod_a].resolved.resolution[call_b.node_id].module_id == mod_b
+        call_a = _find_varref(graph.modules[mod_b].program, "funcA")
+        assert call_a is not None
+        assert result.modules[mod_b].resolved.resolution[call_a.node_id].module_id == mod_a
 
 
 # ---------------------------------------------------------------------------
@@ -907,8 +982,7 @@ class TestBindingRefModuleId:
             "entry": "let x = 1\nx",
         })
         result = resolve_graph(graph)
-        from agm.agl.modules.loader import ModuleGraph
-        assert isinstance(graph, ModuleGraph)
+
         entry_program = graph.modules[ENTRY_ID].program
         var = _find_varref(entry_program, "x")
         assert var is not None
@@ -922,8 +996,7 @@ class TestBindingRefModuleId:
             "mylib": "def foo() -> int = 1",
         })
         result = resolve_graph(graph)
-        from agm.agl.modules.loader import ModuleGraph
-        assert isinstance(graph, ModuleGraph)
+
         entry_program = graph.modules[ENTRY_ID].program
         var = _find_varref(entry_program, "foo")
         assert var is not None
@@ -939,8 +1012,7 @@ class TestBindingRefModuleId:
         })
         result = resolve_graph(graph)
         mylib_id = ModuleId.from_dotted("mylib")
-        from agm.agl.modules.loader import ModuleGraph
-        assert isinstance(graph, ModuleGraph)
+
         mylib_program = graph.modules[mylib_id].program
         var = _find_varref(mylib_program, "foo")
         assert var is not None
@@ -1005,6 +1077,12 @@ class TestAssignStmtModuleId:
         result = resolve_graph(graph)
         # Should not raise
         assert ENTRY_ID in result.modules
+        # var "x" is declared in entry and is mutable
+        entry_resolved = result.modules[ENTRY_ID].resolved
+        binding = entry_resolved.root_scope.lookup("x")
+        assert binding is not None
+        assert binding.module_id == ENTRY_ID
+        assert binding.mutable is True
 
     def test_assign_stmt_in_non_entry_errors(self, tmp_path: Path) -> None:
         """An assignment statement in a non-entry module is an error."""
@@ -1129,6 +1207,13 @@ class TestModuleQualifiedCall:
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
 
+        entry_program = graph.modules[ENTRY_ID].program
+        var = _find_varref(entry_program, "callA")
+        assert var is not None
+        ref = result.modules[ENTRY_ID].resolved.resolution[var.node_id]
+        assert ref.name == "callA"
+        assert ref.module_id == ModuleId.from_dotted("modA")
+
 
 # ---------------------------------------------------------------------------
 # Coverage: resolver.py _resolve_field_access and _resolve_cross_module_type_name
@@ -1153,6 +1238,10 @@ class TestFieldAccessCoverage:
         })
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
+        # The self-ref ::Color.Red within mylib is in mylib's qualified_constructor_refs
+        mylib_id = ModuleId.from_dotted("mylib")
+        mylib_resolved = result.modules[mylib_id].resolved
+        assert len(mylib_resolved.qualified_constructor_refs) > 0
 
     def test_unrecognized_qualifier_in_field_access_errors(self, tmp_path: Path) -> None:
         """Coverage: resolver.py 1360 — qual_map is None for unrecognized qualifier.
@@ -1204,6 +1293,14 @@ class TestFieldAccessCoverage:
         })
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
+
+        entry_program = graph.modules[ENTRY_ID].program
+        # "compute" is a function binding from mylib
+        var = _find_varref(entry_program, "compute")
+        assert var is not None
+        ref = result.modules[ENTRY_ID].resolved.resolution[var.node_id]
+        assert ref.name == "compute"
+        assert ref.module_id == ModuleId.from_dotted("mylib")
 
     def test_self_ref_field_access_unknown_type_errors(self, tmp_path: Path) -> None:
         """Coverage: resolver.py 1356 — ::Name.Variant where Name not in declared type names.

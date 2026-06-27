@@ -40,11 +40,11 @@ AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-c
 - `src/agm/commands/` contains the command implementations, one subtree per command group.
 - `src/agm/cli_support/` holds the typed argument containers that bridge the CLI layer and command implementations.
 - `src/agm/core/` contains the cross-cutting process, environment, filesystem, and TOML primitives plus the dry-run facility; `src/agm/util/` holds pure, `agm`-import-free generic helpers (graph algorithms, text normalization).
-- `src/agm/config/` is the domain package for loading and resolving general and sandbox configuration.
-- `src/agm/project/` is the domain package for project/worktree setup and layout management.
-- `src/agm/sandbox/` is the domain package for sandbox runtime/template support.
-- `src/agm/tmux/` is the domain package for tmux session and layout logic.
-- `src/agm/vcs/` is the domain package for git integration.
+- `src/agm/config/` implements loading and resolving general and sandbox configuration.
+- `src/agm/project/` implements project/worktree setup and layout management.
+- `src/agm/sandbox/` implements sandbox runtime/template support.
+- `src/agm/tmux/` implements tmux session and layout logic.
+- `src/agm/vcs/` implements git integration.
 - `src/agm/agl/` is the AgL language implementation and host runtime.
 
 ### Additional directories

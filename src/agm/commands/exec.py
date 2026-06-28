@@ -40,6 +40,7 @@ Flag notes:
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar
 
@@ -53,6 +54,7 @@ from agm.agl.pipeline import static_config_values
 from agm.agl.runtime.agents import runner_backed_agent_factory
 from agm.agl.runtime.params import convert_config_value
 from agm.agl.semantics.engine_keys import get_engine_key_type
+from agm.agl.semantics.types import Type
 from agm.agl.semantics.values import BoolValue, IntValue, TextValue, Value
 from agm.cli_support.args import ExecArgs
 from agm.cli_support.exec_params import (
@@ -70,9 +72,12 @@ from agm.config.module_roots import load_module_roots, resolve_lib_root, resolve
 from agm.core import dry_run
 from agm.core.fs import read_text_arg
 from agm.core.log import prepare_trace_log_from_layers
+from agm.core.parse import parse_timeout
 from agm.parser import exit_with_usage_error
 
 _T = TypeVar("_T")
+_S = TypeVar("_S")
+_V = TypeVar("_V", bound=Value)
 
 
 def _first(*values: _T | None) -> _T | None:
@@ -84,6 +89,47 @@ def _typed_const(consts: dict[str, bool | int | str], key: str, typ: type[_T]) -
     """Return the static config constant for *key* if present and of type *typ*."""
     value = consts.get(key)
     return value if isinstance(value, typ) else None
+
+
+# ---------------------------------------------------------------------------
+# Centralized config_cli projection helpers
+# ---------------------------------------------------------------------------
+# Each helper returns a ``Value`` when the CLI flag was supplied, or ``None``
+# when it was absent (the key should not appear in ``config_cli``).
+
+
+def _project_scalar(x: _S | None, ctor: Callable[[_S], _V]) -> _V | None:
+    """Project an optional scalar flag to a Value or None using *ctor* to wrap it."""
+    return None if x is None else ctor(x)
+
+
+def _project_bool_pair(positive: bool, negative: bool) -> Value | None:
+    """Project a pair of exclusive bool flags (--X / --no-X) to a BoolValue or None.
+
+    Returns ``BoolValue(True)`` when *positive* is set, ``BoolValue(False)`` when
+    *negative* is set, and ``None`` when neither is set (absent from ``config_cli``).
+    """
+    if positive:
+        return BoolValue(True)
+    if negative:
+        return BoolValue(False)
+    return None
+
+
+def _project_option_text(
+    value: str | None, *, no_flag: bool, key_name: str, key_type: Type
+) -> Value | None:
+    """Project an Option[text] CLI flag pair to an EnumValue or None.
+
+    - *value* is set: ``some(value)`` via :func:`convert_config_value`.
+    - *no_flag* is ``True``: ``none`` via :func:`convert_config_value`.
+    - Both absent: returns ``None`` (key absent from ``config_cli``).
+    """
+    if value is not None:
+        return convert_config_value(key_name, value, key_type)
+    if no_flag:
+        return convert_config_value(key_name, None, key_type)
+    return None
 
 
 
@@ -174,9 +220,19 @@ def run(args: ExecArgs) -> None:
     assert loop_limit is not None
     resolved_loop_limit: int = loop_limit
 
-    # Resolve timeout: config only (no CLI flag; source config timeout = VALUE
-    # is applied at runtime by the D6 effect).
-    resolved_timeout: float | None = config.timeout
+    # Resolve timeout: CLI > [exec] config.  Source config timeout = VALUE is
+    # applied at runtime by the D6 effect (effect-at-binding).
+    # ``--timeout VALUE`` overrides the config; ``--no-timeout`` clears it (None).
+    if args.timeout is not None:
+        try:
+            resolved_timeout: float | None = parse_timeout(args.timeout)
+        except ValueError as exc:
+            print(f"Error: invalid --timeout value: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
+    elif args.no_timeout:
+        resolved_timeout = None
+    else:
+        resolved_timeout = config.timeout
 
     # Resolve + validate the trace log file up front (F2a/F6).  --dry-run is
     # side-effect-free: no trace is written regardless of --log-file (plan §10.1).
@@ -327,25 +383,52 @@ def run(args: ExecArgs) -> None:
     # (``timeout``/``log-file``) bind ``some(value)`` when the [exec] config
     # supplies a value, else ``none`` (the engine default).
     #
-    # ``log``/``log-file`` CLI→binding (and the tri-state ``--no-X`` → none
-    # projection) are intentionally deferred to Task 4, which owns the
-    # always-on flag projection.  Their binding falls to the config_base floor.
-    # ``timeout`` has no exec CLI flag; its absence from config_cli is correct.
-    config_cli: dict[str, Value] = {}
-    if args.strict_json is not None:
-        config_cli["strict-json"] = BoolValue(args.strict_json)
-    if args.max_iters is not None:
-        config_cli["max-iters"] = IntValue(args.max_iters)
-    if args.runner is not None:
-        config_cli["runner"] = TextValue(args.runner)
-
-    # For ``timeout``: config.timeout is pre-parsed to float seconds; the exact
-    # original raw string (e.g. "30s") is lost.  str(float) is used here as an
-    # acceptable approximation — round-trip fidelity is a Task 5 concern.
+    # Projection helpers (_project_*) return None when the CLI flag was absent,
+    # meaning the key stays out of config_cli and falls through to source/base.
     _timeout_type = get_engine_key_type("timeout")
     assert _timeout_type is not None  # always a valid engine key
     _log_file_type = get_engine_key_type("log-file")
     assert _log_file_type is not None  # always a valid engine key
+
+    config_cli: dict[str, Value] = {}
+    # strict-json: tri-state bool (None = absent)
+    if (bv := _project_scalar(args.strict_json, BoolValue)) is not None:
+        config_cli["strict-json"] = bv
+    # max-iters: optional int (None = absent)
+    if (iv := _project_scalar(args.max_iters, IntValue)) is not None:
+        config_cli["max-iters"] = iv
+    # runner: optional text (None = absent)
+    if (tv := _project_scalar(args.runner, TextValue)) is not None:
+        config_cli["runner"] = tv
+    # log: --log/--no-log pair (both False = absent)
+    if (v := _project_bool_pair(args.log, args.no_log)) is not None:
+        config_cli["log"] = v
+    # log-file: Option[text] (None + not no_log_file = absent)
+    if (
+        v := _project_option_text(
+            args.log_file,
+            no_flag=args.no_log_file,
+            key_name="log-file",
+            key_type=_log_file_type,
+        )
+    ) is not None:
+        config_cli["log-file"] = v
+    # timeout: Option[text] — use the RAW CLI string, not the pre-parsed float,
+    # so the binding holds "30s" rather than "30.0".  If no CLI flag was given,
+    # fall through to config_base (which uses str(config.timeout), see below).
+    if (
+        v := _project_option_text(
+            args.timeout,
+            no_flag=args.no_timeout,
+            key_name="timeout",
+            key_type=_timeout_type,
+        )
+    ) is not None:
+        config_cli["timeout"] = v
+
+    # For ``timeout`` in config_base: config.timeout is a pre-parsed float (seconds);
+    # the exact original raw string (e.g. "30s") is lost.  str(float) is an acceptable
+    # approximation — round-trip fidelity is a Task 5 concern.
     config_base: dict[str, Value] = {
         "strict-json": BoolValue(config.strict_json),
         "max-iters": IntValue(config.default_loop_limit),

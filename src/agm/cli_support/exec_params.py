@@ -8,6 +8,12 @@ help/completion machinery.
 It also provides ``resolve_param_values`` for merging config-file values with
 CLI values (CLI wins) and detecting undeclared config keys.  This helper is
 reusable by M6 (REPL config resolution).
+
+Collision detection is **verbatim**: a param whose name is ``foo`` produces the
+flag ``--foo``; that exact string is checked against ``RESERVED_FLAGS``.  There
+is no underscore↔hyphen normalisation — the engine keys all use kebab-case, so
+a param named ``timeout`` (the exact engine key name) collides, but one named
+``timeout_val`` does not.
 """
 
 from __future__ import annotations
@@ -19,29 +25,47 @@ from agm.agl.runtime.request import AgentResponse
 from agm.agl.runtime.types import ParamDeclInfo
 from agm.agl.semantics.types import BoolType
 
-# Reserved built-in flag strings for the ``agm exec`` command.
-RESERVED_FLAGS: frozenset[str] = frozenset(
-    {
-        "--command",
-        "-c",
-        "--runner",
-        "--log",
-        "--log-file",
-        "--no-log",
-        "--strict-json",
-        "--no-strict-json",  # negation of --strict-json; both are real built-ins
-        "--max-iters",
-        "--module-path",
-        "-I",
-        "--help",
-        "-h",
-        "--dry-run",
-    }
-)
+
+def _build_engine_key_flags() -> frozenset[str]:
+    """Derive the set of reserved CLI flag strings from the engine-key registry.
+
+    For each engine key:
+    - Always adds ``--<name>`` (positive flag).
+    - Adds ``--no-<name>`` for bool-typed keys and Option-typed keys (which have
+      an explicit ``--no-<name>`` negation to set the binding to ``none``).
+
+    Derived at import time from ``ENGINE_KEY_NAMES`` + ``get_engine_key_type``
+    so that adding a new engine key automatically appears here.
+    """
+    from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES, get_engine_key_type
+    from agm.agl.semantics.types import EnumType
+
+    flags: set[str] = set()
+    for name in ENGINE_KEY_NAMES:
+        flags.add(f"--{name}")
+        key_type = get_engine_key_type(name)
+        # Both bool keys and Option[T] keys have a ``--no-<name>`` counterpart.
+        if key_type is not None and isinstance(key_type, (BoolType, EnumType)):
+            flags.add(f"--no-{name}")
+    return frozenset(flags)
+
+
+# Non-engine built-in flags that are always reserved on ``agm exec``.
+_BUILTIN_EXEC_FLAGS: frozenset[str] = frozenset({
+    "--command", "-c",
+    "--module-path", "-I",
+    "--help", "-h",
+    "--dry-run",
+    "--no-stdlib",
+})
+
+# Reserved flag strings: non-engine built-ins UNION engine-key flags (both polarities).
+# Collision check is verbatim — no underscore↔hyphen normalisation.
+RESERVED_FLAGS: frozenset[str] = _BUILTIN_EXEC_FLAGS | _build_engine_key_flags()
 
 
 def param_flag(name: str) -> str:
-    """Return the CLI flag for a param name (verbatim underscores preserved)."""
+    """Return the CLI flag for a param name (verbatim spelling preserved)."""
     return f"--{name}"
 
 
@@ -68,14 +92,6 @@ def discover_params_from_source(source: str) -> tuple[ParamDeclInfo, ...]:
         return ()
 
 
-def _normalize_flag(flag: str) -> str:
-    """Normalize a flag by replacing underscores with hyphens for collision detection."""
-    return flag.replace("_", "-")
-
-
-_NORMALIZED_RESERVED: frozenset[str] = frozenset(_normalize_flag(f) for f in RESERVED_FLAGS)
-
-
 def _format_param_collision(
     param: ParamDeclInfo, flag: str, *, source_name: str | None
 ) -> str:
@@ -98,20 +114,19 @@ def check_param_collisions(
 ) -> list[str]:
     """Check for collisions between param-generated flags and reserved built-in flags.
 
-    Returns a list of error messages (empty = no collisions).  A collision is
-    either an exact match against ``RESERVED_FLAGS`` or a normalized
-    (underscore → hyphen) match.  For bool params, ``--no-<name>`` is also checked.
+    Returns a list of error messages (empty = no collisions).  Collision is
+    verbatim: the flag string ``--<param.name>`` must appear in ``RESERVED_FLAGS``
+    exactly as written.  There is no underscore↔hyphen normalisation.
+    For bool params, ``--no-<name>`` is also checked against the reserved set.
     """
     errors: list[str] = []
     for param in params:
         flag = param_flag(param.name)
-        norm_flag = _normalize_flag(flag)
-        if flag in RESERVED_FLAGS or norm_flag in _NORMALIZED_RESERVED:
+        if flag in RESERVED_FLAGS:
             errors.append(_format_param_collision(param, flag, source_name=source_name))
         if isinstance(param.type, BoolType):
             no_flag = negative_param_flag(param.name)
-            norm_no_flag = _normalize_flag(no_flag)
-            if no_flag in RESERVED_FLAGS or norm_no_flag in _NORMALIZED_RESERVED:
+            if no_flag in RESERVED_FLAGS:
                 errors.append(
                     _format_param_collision(param, no_flag, source_name=source_name)
                 )

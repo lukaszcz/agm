@@ -1065,6 +1065,33 @@ def exec_cmd(
         "--no-stdlib",
         help="Do not automatically open the core AgL standard library in the entry module.",
     ),
+    timeout: str | None = typer.Option(
+        None,
+        "--timeout",
+        help=(
+            "Override the shell-exec timeout (e.g. '30s', '5m', '120').  "
+            "Also sets the in-program 'config timeout' binding to some(VALUE).  "
+            "Mutually exclusive with --no-timeout."
+        ),
+    ),
+    no_timeout: bool = typer.Option(
+        False,
+        "--no-timeout",
+        help=(
+            "Remove any configured timeout (no shell-exec timeout).  "
+            "Also sets the in-program 'config timeout' binding to none.  "
+            "Mutually exclusive with --timeout."
+        ),
+    ),
+    no_log_file: bool = typer.Option(
+        False,
+        "--no-log-file",
+        help=(
+            "Clears only the in-program log-file binding; a log-file path set in "
+            "config or auto-assigned by --log still applies.  Use --no-log to disable "
+            "tracing entirely.  Mutually exclusive with --log-file."
+        ),
+    ),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
     # ``_RUN_CONTEXT_SETTINGS`` disables Click's built-in ``--help`` interception
@@ -1106,6 +1133,14 @@ def exec_cmd(
             ["exec"], "error: one of the arguments FILE -c/--command is required"
         )
     _check_log_flags_exclusive("exec", no_log=no_log, log=log, log_file=log_file)
+    if log_file is not None and no_log_file:
+        exit_with_usage_error(
+            ["exec"], "error: --log-file and --no-log-file are mutually exclusive"
+        )
+    if timeout is not None and no_timeout:
+        exit_with_usage_error(
+            ["exec"], "error: --timeout and --no-timeout are mutually exclusive"
+        )
     # Imported lazily: pulls in the AgL DSL (runtime, codec, jsonschema), which
     # would otherwise slow every non-AgL ``agm`` invocation's startup.
     import agm.commands.exec as exec_command
@@ -1123,6 +1158,9 @@ def exec_cmd(
             log=log,
             module_paths=module_paths,
             no_stdlib=no_stdlib,
+            timeout=timeout,
+            no_timeout=no_timeout,
+            no_log_file=no_log_file,
         )
     )
 

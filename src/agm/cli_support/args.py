@@ -221,6 +221,10 @@ class ExecArgs:
     command: str | None = None
     module_paths: list[str] = field(default_factory=list)
     no_stdlib: bool = False
+    # New engine flags (Task 4)
+    timeout: str | None = None      # --timeout VALUE (raw string; parsed to float in exec.py)
+    no_timeout: bool = False         # --no-timeout → sets timeout binding to none
+    no_log_file: bool = False        # --no-log-file → sets log-file binding to none
 
 
 @dataclass(slots=True)

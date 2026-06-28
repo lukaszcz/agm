@@ -902,8 +902,9 @@ class TestExecCommandM1:
     def test_param_flag_collision_exits_1(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
+        # 'timeout' is an engine key name (kebab); param timeout → --timeout collides.
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("param max_iters: int = 1\nprint max_iters\n")
+        agl_file.write_text('param timeout: text = "30s"\nprint timeout\n')
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args(agl_file))

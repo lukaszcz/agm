@@ -1719,7 +1719,7 @@ class TestReplConfigPragmaRejection:
 
     def test_config_pragma_rejection_message_mentions_cli(self) -> None:
         s = ReplSession()
-        r = s.eval_entry("config max_iters = 10")
+        r = s.eval_entry("config max-iters = 10")
         assert not r.ok
         # The error should mention how to set options (CLI flags / config file).
         msg = r.diagnostics[0].message
@@ -1732,7 +1732,7 @@ class TestReplConfigPragmaRejection:
         snapshot_before = _snapshot(s)
 
         # Entering a pragma must not change session bindings.
-        r = s.eval_entry("config strict_json = true")
+        r = s.eval_entry("config strict-json = true")
         assert not r.ok
         assert _snapshot(s) == snapshot_before
 
@@ -1752,9 +1752,9 @@ class TestReplConfigPragmaRejection:
         s = ReplSession()
         for pragma in [
             "config log = true",
-            "config max_iters = 5",
+            "config max-iters = 5",
             "config runner = \"echo\"",
-            "config strict_json = false",
+            "config strict-json = false",
             "config timeout = \"30s\"",
         ]:
             r = s.eval_entry(pragma)

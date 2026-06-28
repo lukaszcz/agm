@@ -97,8 +97,8 @@ class BinderKind(enum.Enum):
         A top-level ``def`` declaration (immutable value binding).
     ``agent_binding``
         An ``agent`` declaration (immutable value binding of type ``agent``).
-    ``param_binding``
-        A function/lambda parameter binding (immutable, function-local).
+    ``config_binding``
+        A ``config`` declaration (immutable engine-setting binding).
     ``constructor_binding``
         A record constructor or enum variant binding (immutable value binding).
     """
@@ -110,6 +110,7 @@ class BinderKind(enum.Enum):
     function_binding = "function_binding"
     agent_binding = "agent_binding"
     param_binding = "param_binding"
+    config_binding = "config_binding"
     constructor_binding = "constructor_binding"
 
 

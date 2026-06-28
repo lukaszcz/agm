@@ -2937,12 +2937,12 @@ class TestPrepareProgram:
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = PipelineDriver.prepare_program(
-            "config max_iters = 7\nlet x = 1\nx",
+            "config max-iters = 7\nlet x = 1\nx",
             entry_path=None,
             roots=roots,
         )
         assert prepared.resolved_graph is not None
-        assert prepared.config_pragmas.get("max_iters") == 7
+        assert prepared.config_pragmas.get("max-iters") == 7
 
     def test_prepare_program_failure_returns_empty_declared_agents(
         self, tmp_path: pathlib.Path

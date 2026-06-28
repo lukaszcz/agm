@@ -5947,3 +5947,42 @@ class TestGenericNominalModuleId:
             f"Template module_id must be ENTRY_ID in single-module mode, "
             f"got {gdef.template.module_id!r}."
         )
+
+
+# ---------------------------------------------------------------------------
+# Config declarations — typecheck (Task 2)
+# ---------------------------------------------------------------------------
+
+
+class TestConfigDecl:
+    def test_config_log_true_ok(self) -> None:
+        r = accept_type("config log = true\nprint 1")
+        assert r.resolved.program is not None
+
+    def test_config_log_wrong_type_errors(self) -> None:
+        reject_any('config log = "yes"\nprint 1')
+
+    def test_config_max_iters_ok(self) -> None:
+        r = accept_type("config max-iters = 5\nprint 1")
+        assert r.resolved.program is not None
+
+    def test_config_max_iters_wrong_type_errors(self) -> None:
+        reject_any('config max-iters = "x"\nprint 1')
+
+    def test_config_strict_json_ok(self) -> None:
+        r = accept_type("config strict-json = false\nprint 1")
+        assert r.resolved.program is not None
+
+    def test_config_runner_ok(self) -> None:
+        r = accept_type('config runner = "claude"\nprint 1')
+        assert r.resolved.program is not None
+
+    def test_config_binding_type_recorded(self) -> None:
+        from agm.agl.syntax.nodes import ConfigDecl
+        r = accept_type("config log = true\nprint 1")
+        prog = r.resolved.program
+        assert prog is not None
+        config_decl = prog.body.items[0]
+        assert isinstance(config_decl, ConfigDecl)
+        binding_type = r.type_env.get_binding_type(config_decl.node_id)
+        assert binding_type == BoolType()

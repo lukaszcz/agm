@@ -30,9 +30,9 @@ Flag notes:
       logging; CLI flags override pragmas (CLI > pragma > config).
     - ``--runner COMMAND`` overrides the default agent runner command from config.
       When set, it is used as the default runner for all unnamed agents.
-    - Source ``config KEY = VALUE`` pragmas (header-only) override config-file
-      settings for ``strict_json``, ``max_iters``, ``runner``, ``timeout``,
-      ``log``, and ``log_file``.  CLI flags always take precedence.
+    - Source ``config KEY = VALUE`` declarations override config-file settings for
+      ``strict-json``, ``max-iters``, ``runner``, ``timeout``, ``log``, and
+      ``log-file``.  CLI flags always take precedence.
     - ``--dry-run`` (global flag) runs only the static pipeline + contract
       materialization and never writes a trace (side-effect-free).
 """
@@ -150,7 +150,7 @@ def run(args: ExecArgs) -> None:
     # Resolve strict_json: CLI > pragma > config.
     strict_json = _first(
         args.strict_json,
-        _typed_pragma(pragmas, "strict_json", bool),
+        _typed_pragma(pragmas, "strict-json", bool),
         config.strict_json,
     )
     # config.strict_json is always a bool, so _first always returns a bool here.
@@ -160,7 +160,7 @@ def run(args: ExecArgs) -> None:
     # Resolve loop limit: CLI > pragma > config.
     loop_limit = _first(
         args.max_iters,
-        _typed_pragma(pragmas, "max_iters", int),
+        _typed_pragma(pragmas, "max-iters", int),
         config.default_loop_limit,
     )
     assert loop_limit is not None
@@ -189,7 +189,7 @@ def run(args: ExecArgs) -> None:
             cli_log=args.log,
             cli_log_file=args.log_file,
             pragma_log=_typed_pragma(pragmas, "log", bool),
-            pragma_log_file=_typed_pragma(pragmas, "log_file", str),
+            pragma_log_file=_typed_pragma(pragmas, "log-file", str),
             config_log=config.log,
             config_log_file=config.log_file,
         )

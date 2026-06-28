@@ -79,24 +79,23 @@ config_pragma ::= "config" KEY "=" VALUE
 VALUE         ::= "true" | "false" | INT | DECIMAL | string_literal
 ```
 
-Pragmas must appear **before every other item** at the program root (the
-*header* position). A pragma after any non-pragma item is a static error.
-Pragmas nested inside a block are also static errors.
+Config declarations may appear **anywhere at the program root** — before or
+after other items. Nesting inside a block is a static error.
 
 Each key may appear at most once; duplicate keys are an error.
 
 | Key | Value type | Meaning |
 |-----|------------|---------|
 | `log` | `bool` | Enable/disable trace logging. |
-| `log_file` | non-empty string | Path to the trace log file. |
-| `strict_json` | `bool` | Parse agent JSON output strictly. |
-| `max_iters` | positive integer | Maximum iterations for `do` loops. |
+| `log-file` | non-empty string | Path to the trace log file. |
+| `strict-json` | `bool` | Parse agent JSON output strictly. |
+| `max-iters` | positive integer | Maximum iterations for `do` loops. |
 | `runner` | non-empty string | Default agent runner command. |
 | `timeout` | string or positive integer | Shell execution timeout. |
 
 ```agl
 config log = true
-config max_iters = 10
+config max-iters = 10
 config runner = "claude -p"
 param spec
 let result = ask "Process ${spec}"

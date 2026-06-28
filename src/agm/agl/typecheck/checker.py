@@ -379,7 +379,10 @@ class _Checker:
             # Signature already registered in pre-pass; check body now.
             self._check_funcdef_body(item)
             return UnitType()
-        if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias, ConfigDecl)):
+        if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
+            return UnitType()
+        if isinstance(item, ConfigDecl):
+            self._check_config(item)
             return UnitType()
         if isinstance(item, AgentDecl):
             self._env.set_binding_type(item.node_id, AgentType())
@@ -454,6 +457,25 @@ class _Checker:
                 declared_type = val_type
         else:
             declared_type = ann_type if ann_type is not None else TextType()
+        self._env.set_binding_type(stmt.node_id, declared_type)
+
+    def _check_config(self, stmt: ConfigDecl) -> None:
+        """Check a ``config`` declaration against the engine-key registry.
+
+        For keys whose AgL type is ``EnumType`` (``log-file``, ``timeout``),
+        value-type checking is deferred to the runtime bridge (Task 3), since
+        existing callers may pass plain string literals via the pragma bridge.
+        For all other keys the value expression, if present, is type-checked
+        against the registry type and the result is recorded in the type env.
+        """
+        from agm.agl.semantics.engine_keys import get_engine_key_type
+
+        declared_type = get_engine_key_type(stmt.name)
+        if declared_type is None:
+            return  # pragma: no cover — unknown keys rejected earlier by scope
+        if stmt.value is not None and not isinstance(declared_type, EnumType):
+            val_type = self._check_expr(stmt.value, expected=declared_type)
+            self._assert_assignable(val_type, declared_type, stmt.span)
         self._env.set_binding_type(stmt.node_id, declared_type)
 
     def _check_binding(self, stmt: LetDecl | VarDecl) -> None:

@@ -816,10 +816,10 @@ PragmaValue = bool | int | Decimal | str
 class ConfigDecl:
     """``config NAME [= expr]`` declaration (engine-setting key).
 
-    Must appear before any non-config item at the program root.
+    May appear anywhere at the program root (not inside a nested block).
     Enforced by the scope pass; grammatically it is a top-level item.
 
-    ``name``   — the declared engine key (e.g. ``"log"``, ``"max_iters"``).
+    ``name``   — the declared engine key in kebab-case (e.g. ``"log"``, ``"max-iters"``).
     ``value``  — the optional value expression; ``None`` when omitted.
                  The scope pass currently requires a literal scalar value
                  (transitional restriction; runtime evaluation comes later).

@@ -563,7 +563,7 @@ class TestDeclarations:
         assert cfg.value.value is True
 
     def test_config_pragma_int(self) -> None:
-        cfg = first(parse("config max_iters = 10"))
+        cfg = first(parse("config max-iters = 10"))
         assert isinstance(cfg, ConfigDecl)
         assert isinstance(cfg.value, IntLit)
         assert cfg.value.value == 10

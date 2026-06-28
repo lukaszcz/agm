@@ -1135,11 +1135,9 @@ class TestConfigPragma:
         r = parse_and_resolve("config log = true\n()")
         assert r.config_pragmas == {"log": True}
 
-    def test_config_after_non_pragma_rejected(self) -> None:
-        err = reject_scope("let x = 1\nconfig log = true\nx")
-        _, msg = diag(err)
-        assert "config" in msg.lower()
-        assert "before" in msg.lower() or "after" in msg.lower()
+    def test_config_after_statement_accepted(self) -> None:
+        r = parse_and_resolve("let x = 1\nconfig log = true\nx")
+        assert r.config_pragmas == {"log": True}
 
     def test_config_nested_rejected(self) -> None:
         err = reject_scope("if true =>\n  config log = true\n| else =>\n  ()\n")
@@ -1162,8 +1160,17 @@ class TestConfigPragma:
         assert "bool" in msg.lower()
 
     def test_config_max_iters_accepted(self) -> None:
-        r = parse_and_resolve("config max_iters = 10\n()")
-        assert r.config_pragmas == {"max_iters": 10}
+        r = parse_and_resolve("config max-iters = 10\n()")
+        assert r.config_pragmas == {"max-iters": 10}
+
+    def test_config_creates_readable_binding(self) -> None:
+        r = parse_and_resolve("config log = true\nlog")
+        assert r.config_pragmas == {"log": True}
+
+    def test_config_binding_assign_rejected(self) -> None:
+        err = reject_scope("config log = true\nlog := false")
+        _, msg = diag(err)
+        assert "config" in msg.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -1832,8 +1839,8 @@ class TestDeclaredFunctions:
 
 class TestConfigPragmaValueValidation:
     def test_int_pos_zero_rejected(self) -> None:
-        """config max_iters = 0 is rejected (must be > 0)."""
-        err = reject_scope("config max_iters = 0\n()")
+        """config max-iters = 0 is rejected (must be > 0)."""
+        err = reject_scope("config max-iters = 0\n()")
         _, msg = diag(err)
         assert "positive" in msg.lower() or "greater" in msg.lower() or "> 0" in msg
 
@@ -2743,3 +2750,24 @@ class TestImportDeclScope:
     def test_import_hiding_does_not_raise(self) -> None:
         r = parse_and_resolve("import foo hiding secret\n1")
         assert r
+
+
+# ---------------------------------------------------------------------------
+# Reserved program names (Task 2)
+# ---------------------------------------------------------------------------
+
+
+class TestReservedProgramNames:
+    def test_reserved_exec_rejected(self) -> None:
+        err = reject_scope("program exec\n()")
+        _, msg = diag(err)
+        assert "exec" in msg
+
+    def test_reserved_loop_rejected(self) -> None:
+        err = reject_scope("program loop\n()")
+        _, msg = diag(err)
+        assert "loop" in msg
+
+    def test_unreserved_program_name_ok(self) -> None:
+        r = parse_and_resolve("program myapp\n()")
+        assert r.program_name == "myapp"

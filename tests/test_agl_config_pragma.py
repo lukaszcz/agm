@@ -1,14 +1,15 @@
-"""Tests for AgL config declarations (Milestone 2 — language support only).
+"""Tests for AgL config declarations (Task 2 — kebab keys + binding + reserved names).
 
 Covers:
 - Lexer: ``config`` lexes as a keyword, not VAR_NAME.
 - Parser: each literal value variant; multiple declarations; interpolated-template
   value accepted by parser but rejected at scope; LALR conflict guard regression
   (already in test_agl_parser; re-verified here for completeness).
-- Scope: header-only OK; declaration after a non-config statement → error; nested
+- Scope: config accepted anywhere at program root (header-only removed); nested
   declaration → error; unknown key → error; duplicate key → error; bad value kind
   per key → error; valid declarations collected into ResolvedProgram.config_pragmas;
-  non-literal value expression → error; missing value → error.
+  non-literal value expression → error; missing value → error; config creates an
+  immutable scope binding; reserved program names rejected.
 - PreparedProgram.config_pragmas exposure (empty on scope failure).
 - Interpreter / typecheck no-op: a program that is only config decls + a print runs
   fine end-to-end.
@@ -117,10 +118,10 @@ class TestParserConfigDecl:
 
     def test_config_decl_int(self) -> None:
         """config KEY = N parses to ConfigDecl with IntLit value."""
-        prog = parse_program("config max_iters = 10")
+        prog = parse_program("config max-iters = 10")
         stmt = prog.body.items[0]
         assert isinstance(stmt, ConfigDecl)
-        assert stmt.name == "max_iters"
+        assert stmt.name == "max-iters"
         assert isinstance(stmt.value, IntLit)
         assert stmt.value.value == 10
 
@@ -163,13 +164,13 @@ class TestParserConfigDecl:
         """Multiple config decls are each parsed as separate ConfigDecl nodes."""
         prog = parse_program(
             "config log = true\n"
-            "config max_iters = 5\n"
+            "config max-iters = 5\n"
             'config runner = "local"\n'
         )
         assert len(prog.body.items) == 3
         assert all(isinstance(s, ConfigDecl) for s in prog.body.items)
         names = [s.name for s in prog.body.items if isinstance(s, ConfigDecl)]
-        assert names == ["log", "max_iters", "runner"]
+        assert names == ["log", "max-iters", "runner"]
 
     def test_config_decl_then_statement(self) -> None:
         """Config decls followed by a non-config expression parse correctly."""
@@ -213,27 +214,18 @@ class TestScopeHeaderOnly:
 
     def test_config_only_program_ok(self) -> None:
         """A program consisting only of config decls is accepted."""
-        r = parse_and_resolve("config log = true\nconfig max_iters = 3")
-        assert r.config_pragmas == {"log": True, "max_iters": 3}
+        r = parse_and_resolve("config log = true\nconfig max-iters = 3")
+        assert r.config_pragmas == {"log": True, "max-iters": 3}
 
-    def test_config_after_let_rejected(self) -> None:
-        """A config decl that follows a let statement is a scope error."""
-        err = reject_scope('let x = 1\nconfig log = true')
-        _, msg = diag(err)
-        assert "config" in msg
-        assert "before" in msg or "header" in msg or "non-config" in msg
+    def test_config_after_let_accepted(self) -> None:
+        """A config decl after a let statement is now accepted (header-only removed)."""
+        r = parse_and_resolve("let x = 1\nconfig log = true")
+        assert r.config_pragmas["log"] is True
 
-    def test_config_after_print_rejected(self) -> None:
-        """A config decl that follows a print statement is a scope error."""
-        err = reject_scope('print 1\nconfig log = true')
-        _, msg = diag(err)
-        assert "config" in msg
-
-    def test_config_after_unit_expr_rejected(self) -> None:
-        """A config decl that follows a unit expression (()) is a scope error."""
-        err = reject_scope('()\nconfig log = true')
-        _, msg = diag(err)
-        assert "config" in msg
+    def test_config_after_print_accepted(self) -> None:
+        """A config decl after a print statement is now accepted."""
+        r = parse_and_resolve("print 1\nconfig log = true")
+        assert r.config_pragmas["log"] is True
 
     def test_config_nested_in_block_rejected(self) -> None:
         """A config decl inside a nested block (e.g. do body) is a scope error."""
@@ -283,7 +275,7 @@ class TestScopeLiteralBridge:
 
     def test_non_literal_expression_rejected(self) -> None:
         """An arithmetic expression as config value is rejected (non-literal)."""
-        err = reject_scope("config max_iters = 1 + 2")
+        err = reject_scope("config max-iters = 1 + 2")
         _, msg = diag(err)
         assert "literal" in msg or "config" in msg
 
@@ -314,29 +306,29 @@ class TestScopeValueKindValidation:
         assert "bool" in msg
 
     def test_strict_json_requires_bool(self) -> None:
-        """config strict_json requires a bool value."""
-        err = reject_scope("config strict_json = 1")
+        """config strict-json requires a bool value."""
+        err = reject_scope("config strict-json = 1")
         _, msg = diag(err)
-        assert "strict_json" in msg
+        assert "strict-json" in msg
         assert "bool" in msg
 
     def test_max_iters_requires_positive_int(self) -> None:
-        """config max_iters requires a positive int (> 0)."""
-        err = reject_scope("config max_iters = 0")
+        """config max-iters requires a positive int (> 0)."""
+        err = reject_scope("config max-iters = 0")
         _, msg = diag(err)
-        assert "max_iters" in msg
+        assert "max-iters" in msg
 
     def test_max_iters_negative_rejected(self) -> None:
-        """config max_iters rejects a negative value (non-literal unary_neg expression)."""
+        """config max-iters rejects a negative value (non-literal unary_neg expression)."""
         # -1 is UnaryNeg(IntLit(1)), a non-literal expression → scope error.
         with pytest.raises(AglScopeError):
-            parse_and_resolve("config max_iters = -1")
+            parse_and_resolve("config max-iters = -1")
 
     def test_max_iters_bool_rejected(self) -> None:
-        """config max_iters rejects a bool (which is a subtype of int)."""
-        err = reject_scope("config max_iters = true")
+        """config max-iters rejects a bool (which is a subtype of int)."""
+        err = reject_scope("config max-iters = true")
         _, msg = diag(err)
-        assert "max_iters" in msg
+        assert "max-iters" in msg
 
     def test_runner_requires_nonempty_str(self) -> None:
         """config runner requires a non-empty string."""
@@ -346,10 +338,10 @@ class TestScopeValueKindValidation:
         assert "string" in msg
 
     def test_log_file_requires_nonempty_str(self) -> None:
-        """config log_file requires a non-empty string."""
-        err = reject_scope("config log_file = true")
+        """config log-file requires a non-empty string."""
+        err = reject_scope("config log-file = true")
         _, msg = diag(err)
-        assert "log_file" in msg
+        assert "log-file" in msg
         assert "string" in msg
 
     def test_timeout_accepts_string(self) -> None:
@@ -391,14 +383,14 @@ class TestScopeValueKindValidation:
         assert r.config_pragmas["log"] is False
 
     def test_strict_json_true_accepted(self) -> None:
-        """config strict_json = true is accepted."""
-        r = parse_and_resolve("config strict_json = true")
-        assert r.config_pragmas["strict_json"] is True
+        """config strict-json = true is accepted."""
+        r = parse_and_resolve("config strict-json = true")
+        assert r.config_pragmas["strict-json"] is True
 
     def test_max_iters_positive_accepted(self) -> None:
-        """config max_iters = 5 is accepted."""
-        r = parse_and_resolve("config max_iters = 5")
-        assert r.config_pragmas["max_iters"] == 5
+        """config max-iters = 5 is accepted."""
+        r = parse_and_resolve("config max-iters = 5")
+        assert r.config_pragmas["max-iters"] == 5
 
     def test_runner_nonempty_accepted(self) -> None:
         """config runner = "claude" is accepted."""
@@ -406,9 +398,9 @@ class TestScopeValueKindValidation:
         assert r.config_pragmas["runner"] == "claude"
 
     def test_log_file_nonempty_accepted(self) -> None:
-        """config log_file = "out.jsonl" is accepted."""
-        r = parse_and_resolve('config log_file = "out.jsonl"')
-        assert r.config_pragmas["log_file"] == "out.jsonl"
+        """config log-file = "out.jsonl" is accepted."""
+        r = parse_and_resolve('config log-file = "out.jsonl"')
+        assert r.config_pragmas["log-file"] == "out.jsonl"
 
 
 # ---------------------------------------------------------------------------
@@ -421,18 +413,18 @@ class TestScopeCollectedPragmas:
         """All valid config keys are collected into config_pragmas."""
         r = parse_and_resolve(
             "config log = true\n"
-            "config strict_json = false\n"
-            "config max_iters = 10\n"
+            "config strict-json = false\n"
+            "config max-iters = 10\n"
             'config runner = "local"\n'
-            'config log_file = "trace.jsonl"\n'
+            'config log-file = "trace.jsonl"\n'
             'config timeout = "30s"\n'
         )
         assert r.config_pragmas == {
             "log": True,
-            "strict_json": False,
-            "max_iters": 10,
+            "strict-json": False,
+            "max-iters": 10,
             "runner": "local",
-            "log_file": "trace.jsonl",
+            "log-file": "trace.jsonl",
             "timeout": "30s",
         }
 
@@ -452,9 +444,9 @@ class TestPreparedProgramExposure:
         """PreparedProgram.config_pragmas is populated from scope pass."""
         prepared = PipelineDriver.prepare(
             "config log = true\n"
-            "config max_iters = 3\n"
+            "config max-iters = 3\n"
         )
-        assert prepared.config_pragmas == {"log": True, "max_iters": 3}
+        assert prepared.config_pragmas == {"log": True, "max-iters": 3}
 
     def test_config_pragmas_empty_on_scope_failure(self) -> None:
         """config_pragmas is empty when the scope pass failed."""
@@ -496,7 +488,7 @@ class TestInterpreterNoOp:
         rt = PipelineDriver()
         result = rt.run(
             "config log = true\n"
-            "config max_iters = 5\n"
+            "config max-iters = 5\n"
             "print 1\n"
         )
         assert result.ok
@@ -505,7 +497,7 @@ class TestInterpreterNoOp:
     def test_config_only_program_runs_fine(self) -> None:
         """A program consisting only of config decls executes without error."""
         rt = PipelineDriver()
-        result = rt.run("config log = false\nconfig strict_json = true")
+        result = rt.run("config log = false\nconfig strict-json = true")
         assert result.ok
 
     def test_config_do_not_produce_trace_events(self) -> None:
@@ -523,3 +515,103 @@ class TestInterpreterNoOp:
             )
         assert result.ok
         # No crash is the key assertion; trace content is not checked here.
+
+
+# ---------------------------------------------------------------------------
+# Scope: config no longer header-only (Task 2)
+# ---------------------------------------------------------------------------
+
+
+class TestScopeNoLongerHeaderOnly:
+    def test_config_after_statement_accepted(self) -> None:
+        """Config decls are now accepted anywhere at root, not just in header."""
+        r = parse_and_resolve("let x = 1\nconfig log = true")
+        assert r.config_pragmas["log"] is True
+
+    def test_config_after_expression_accepted(self) -> None:
+        """Config after a bare expression is now accepted."""
+        r = parse_and_resolve("()\nconfig log = true")
+        assert r.config_pragmas["log"] is True
+
+
+# ---------------------------------------------------------------------------
+# Scope: config creates an immutable binding (Task 2)
+# ---------------------------------------------------------------------------
+
+
+class TestScopeConfigBinding:
+    def test_config_creates_immutable_binding(self) -> None:
+        """Config creates a scope binding that can be read."""
+        r = parse_and_resolve("config log = true\nlog")
+        assert r.config_pragmas["log"] is True
+
+    def test_config_binding_assign_rejected(self) -> None:
+        """Assigning to a config binding is a scope error mentioning 'config binding'."""
+        err = reject_scope("config log = true\nlog := false")
+        _, msg = diag(err)
+        assert "config" in msg.lower()
+
+    def test_config_duplicate_still_rejected(self) -> None:
+        """Duplicate config key is still rejected."""
+        err = reject_scope("config log = true\nconfig log = false")
+        _, msg = diag(err)
+        assert "log" in msg
+
+
+# ---------------------------------------------------------------------------
+# Scope: reserved program names (Task 2)
+# ---------------------------------------------------------------------------
+
+
+class TestScopeReservedProgramNames:
+    def test_reserved_exec_rejected(self) -> None:
+        """program exec is rejected (reserved AGM command name)."""
+        err = reject_scope("program exec\n()")
+        _, msg = diag(err)
+        assert "exec" in msg
+
+    def test_reserved_loop_rejected(self) -> None:
+        """program loop is rejected (reserved AGM command name)."""
+        err = reject_scope("program loop\n()")
+        _, msg = diag(err)
+        assert "loop" in msg
+
+    def test_reserved_repl_rejected(self) -> None:
+        """program repl is rejected (reserved AGM command name)."""
+        err = reject_scope("program repl\n()")
+        _, msg = diag(err)
+        assert "repl" in msg
+
+    def test_unreserved_program_name_ok(self) -> None:
+        """program myapp is accepted (not a reserved name)."""
+        r = parse_and_resolve("program myapp\n()")
+        assert r.program_name == "myapp"
+
+
+# ---------------------------------------------------------------------------
+# engine_keys module — direct unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestEngineKeys:
+    def test_get_engine_key_type_known(self) -> None:
+        from agm.agl.semantics.engine_keys import get_engine_key_type
+        from agm.agl.semantics.types import BoolType
+        assert get_engine_key_type("log") == BoolType()
+
+    def test_get_engine_key_type_unknown_returns_none(self) -> None:
+        from agm.agl.semantics.engine_keys import get_engine_key_type
+        assert get_engine_key_type("__no_such_key__") is None
+
+    def test_engine_key_names_frozenset(self) -> None:
+        from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES
+        assert "log" in ENGINE_KEY_NAMES
+        assert "max-iters" in ENGINE_KEY_NAMES
+        assert "strict-json" in ENGINE_KEY_NAMES
+
+    def test_reserved_program_names_covers_all_commands(self) -> None:
+        """Guard against drift: every agm command name must be in RESERVED_PROGRAM_NAMES."""
+        from agm import parser
+        from agm.agl.semantics.engine_keys import RESERVED_PROGRAM_NAMES
+        command_names = {name for name, _ in parser._COMMAND_OVERVIEW}
+        assert command_names <= RESERVED_PROGRAM_NAMES

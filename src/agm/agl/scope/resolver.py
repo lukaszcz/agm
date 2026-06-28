@@ -51,6 +51,7 @@ from agm.agl.scope.symbols import (
     ResolvedProgram,
     ScopeNode,
 )
+from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES, RESERVED_PROGRAM_NAMES
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPES,
@@ -131,16 +132,17 @@ _BUILTIN_CONSTRUCTOR_NODE_ID = -1
 # The set of names that may NOT be used as any kind of binding.
 _RESERVED_NAMES: frozenset[str] = frozenset(_BUILTIN_CALL_NAMES)
 
-# Allowed config pragma keys and their expected value kinds.
+# Config pragma bridge: key → expected literal-value kind (used by
+# ``_validate_pragma_value`` to enforce literal constraints during the
+# bridge period; kebab-case to match ENGINE_KEY_NAMES).
 _PRAGMA_KEY_KINDS: dict[str, str] = {
     "log": "bool",
-    "strict_json": "bool",
-    "max_iters": "int_pos",
+    "strict-json": "bool",
+    "max-iters": "int_pos",
     "runner": "str_nonempty",
-    "log_file": "str_nonempty",
+    "log-file": "str_nonempty",
     "timeout": "str_or_int",
 }
-_ALLOWED_PRAGMA_KEYS: frozenset[str] = frozenset(_PRAGMA_KEY_KINDS)
 
 # Per-binder phrasing for the ``:=``-on-immutable rejection.
 _IMMUTABLE_BINDER_PHRASES: dict[BinderKind, str] = {
@@ -150,6 +152,7 @@ _IMMUTABLE_BINDER_PHRASES: dict[BinderKind, str] = {
     BinderKind.function_binding: "it is a function (def) binding",
     BinderKind.agent_binding: "it is an agent binding",
     BinderKind.param_binding: "it is a parameter binding",
+    BinderKind.config_binding: "it is a config binding",
     BinderKind.constructor_binding: "it is a constructor binding",
 }
 
@@ -277,8 +280,6 @@ class _Resolver:
         self._referenced_agents: set[str] = set()
         # Validated config pragmas.
         self._config_pragmas: dict[str, PragmaValue] = {}
-        # Header-only tracking for config pragmas.
-        self._seen_non_pragma: bool = False
         # Header-only tracking for imports in non-entry modules (graph mode).
         self._seen_non_import_item: bool = False
         # Source-declared program name.
@@ -724,14 +725,8 @@ class _Resolver:
                 f"not inside a nested block (found 'config {node.name}' here).",
                 span=node.span,
             )
-        if self._seen_non_pragma:
-            raise AglScopeError(
-                f"'config' declarations must appear before any other statements "
-                f"(found 'config {node.name}' after a non-config statement).",
-                span=node.span,
-            )
-        if node.name not in _ALLOWED_PRAGMA_KEYS:
-            allowed = ", ".join(sorted(_ALLOWED_PRAGMA_KEYS))
+        if node.name not in ENGINE_KEY_NAMES:
+            allowed = ", ".join(sorted(ENGINE_KEY_NAMES))
             raise AglScopeError(
                 f"Unknown config key '{node.name}'. "
                 f"Allowed keys: {allowed}.",
@@ -748,6 +743,18 @@ class _Resolver:
         value: PragmaValue = self._extract_config_literal(node)
         _validate_pragma_value(node.name, value, node.span)
         self._config_pragmas[node.name] = value
+        # Define an immutable readable binding so the config key is visible in
+        # the surrounding scope (Task 3 will add runtime evaluation; for now the
+        # binding exists statically but has no runtime value).
+        ref = BindingRef(
+            name=node.name,
+            mutable=False,
+            decl_span=node.span,
+            decl_node_id=node.node_id,
+            kind=BinderKind.config_binding,
+            module_id=self._module_id,
+        )
+        self._define(node.name, ref)
 
     def _extract_config_literal(self, node: ConfigDecl) -> PragmaValue:
         """Extract a ``PragmaValue`` literal from ``node.value``.
@@ -962,9 +969,6 @@ class _Resolver:
                         span=item.span,
                     )
                 self._resolve_expr(item)
-            # Track that we've seen a non-pragma item.
-            if self._at_root:
-                self._seen_non_pragma = True
 
     # ------------------------------------------------------------------
     # Declaration handlers
@@ -1105,6 +1109,12 @@ class _Resolver:
             raise AglScopeError(
                 f"'program' declarations are only allowed at the program root, "
                 f"not inside a nested block (found 'program {node.name}' here).",
+                span=node.span,
+            )
+        if node.name in RESERVED_PROGRAM_NAMES:
+            raise AglScopeError(
+                f"'program {node.name}' is not allowed: '{node.name}' is a reserved AGM "
+                f"command or config-section name.",
                 span=node.span,
             )
         if self._program_name is not None:

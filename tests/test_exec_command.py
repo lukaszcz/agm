@@ -2254,7 +2254,7 @@ class TestExecPragmaPrecedence:
     def test_pragma_max_iters_caps_loop_at_pragma_value(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """``config max_iters = 3`` in source caps the do loop at 3 iterations.
+        """``config max-iters = 3`` in source caps the do loop at 3 iterations.
 
         The loop ``until n >= 100`` cannot complete in 3 iterations (n starts at
         0 and increments by 1), so the runtime raises a LoopLimitExceeded and
@@ -2262,7 +2262,7 @@ class TestExecPragmaPrecedence:
         """
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            "config max_iters = 3\n"
+            "config max-iters = 3\n"
             "var n = 0\n"
             "do\n"
             "  n := n + 1\n"
@@ -2275,10 +2275,10 @@ class TestExecPragmaPrecedence:
     def test_pragma_max_iters_allows_completion_when_sufficient(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """``config max_iters = 100`` allows a do loop that needs exactly 100 iterations."""
+        """``config max-iters = 100`` allows a do loop that needs exactly 100 iterations."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            "config max_iters = 100\n"
+            "config max-iters = 100\n"
             "var n = 0\n"
             "do\n"
             "  n := n + 1\n"
@@ -2292,14 +2292,14 @@ class TestExecPragmaPrecedence:
     def test_cli_max_iters_overrides_pragma_max_iters(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """CLI ``--max-iters 100`` overrides ``config max_iters = 3`` in source.
+        """CLI ``--max-iters 100`` overrides ``config max-iters = 3`` in source.
 
         With --max-iters 100 the loop completes in 100 iterations (exits 0);
         with pragma max_iters=3 it would fail (exit 2).
         """
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            "config max_iters = 3\n"
+            "config max-iters = 3\n"
             "var n = 0\n"
             "do\n"
             "  n := n + 1\n"
@@ -2313,7 +2313,7 @@ class TestExecPragmaPrecedence:
     def test_pragma_max_iters_overrides_config_max_iters(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """Source pragma ``config max_iters = 100`` overrides ``[exec] default_loop_limit = 3``.
+        """Source pragma ``config max-iters = 100`` overrides ``[exec] default_loop_limit = 3``.
 
         Config says 3 (loop would fail); pragma says 100 (loop completes).
         """
@@ -2332,7 +2332,7 @@ class TestExecPragmaPrecedence:
 
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            "config max_iters = 100\n"
+            "config max-iters = 100\n"
             "var n = 0\n"
             "do\n"
             "  n := n + 1\n"
@@ -2350,10 +2350,10 @@ class TestExecPragmaPrecedence:
     def test_pragma_strict_json_flows_into_runtime(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``config strict_json = true`` in source sets ``default_strict_json=True``
+        """``config strict-json = true`` in source sets ``default_strict_json=True``
         on the PipelineDriver (observable via the spy pattern)."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("config strict_json = true\nlet x = 1\nx\n")
+        agl_file.write_text("config strict-json = true\nlet x = 1\nx\n")
 
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
@@ -2363,9 +2363,9 @@ class TestExecPragmaPrecedence:
     def test_cli_strict_json_overrides_pragma_strict_json(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """CLI ``--no-strict-json`` (strict_json=False) overrides ``config strict_json = true``."""
+        """CLI ``--no-strict-json`` (strict_json=False) overrides ``config strict-json = true``."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("config strict_json = true\nlet x = 1\nx\n")
+        agl_file.write_text("config strict-json = true\nlet x = 1\nx\n")
 
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file, strict_json=False))
@@ -2375,7 +2375,7 @@ class TestExecPragmaPrecedence:
     def test_pragma_strict_json_overrides_config_strict_json(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Source pragma ``config strict_json = false`` overrides ``[exec] strict_json = true``."""
+        """Source pragma ``config strict-json = false`` overrides ``[exec] strict_json = true``."""
         from agm.config.general import ExecConfig
 
         strict_config = ExecConfig(
@@ -2390,7 +2390,7 @@ class TestExecPragmaPrecedence:
         monkeypatch.setattr(exec_command, "load_exec_config", lambda **_: strict_config)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("config strict_json = false\nlet x = 1\nx\n")
+        agl_file.write_text("config strict-json = false\nlet x = 1\nx\n")
 
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
@@ -2538,10 +2538,10 @@ class TestExecPragmaPrecedence:
         assert log_files, "Expected a trace log file to be created by config log = true"
 
     def test_pragma_log_file_writes_to_specified_path(self, tmp_path: Path) -> None:
-        """``config log_file = "path"`` in source writes the trace to that path."""
+        """``config log-file = "path"`` in source writes the trace to that path."""
         log_path = tmp_path / "trace.log"
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(f'config log_file = "{log_path}"\nprint "hi"\n')
+        agl_file.write_text(f'config log-file = "{log_path}"\nprint "hi"\n')
 
         exec_command.run(
             ExecArgs(
@@ -2579,10 +2579,10 @@ class TestExecPragmaPrecedence:
     def test_pragma_log_file_overrides_config_log(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``config log_file`` pragma overrides ``[exec] log = false`` in config."""
+        """``config log-file`` pragma overrides ``[exec] log = false`` in config."""
         log_path = tmp_path / "pragma_trace.log"
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(f'config log_file = "{log_path}"\nprint "hi"\n')
+        agl_file.write_text(f'config log-file = "{log_path}"\nprint "hi"\n')
 
         from agm.config.general import ExecConfig
 

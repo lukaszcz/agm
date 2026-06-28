@@ -77,31 +77,48 @@ suite ::= NEWLINE INDENT block DEDENT
 ## Type declarations
 
 ```ebnf
-record_def      ::= "record" NAME type_params? record_body
-record_body     ::= NEWLINE INDENT field_def (NEWLINE field_def)* NEWLINE? DEDENT
-                  | "{" field_list? "}"
-                  | field_list
-field_def       ::= NAME ":" type_expr
+record_def       ::= "record" NAME type_params? record_body
+record_body      ::= param_marker? NEWLINE INDENT block_entry (NEWLINE block_entry)* NEWLINE? DEDENT
+                   | "(" field_list? ")"
+                   | field_list
+block_entry      ::= field_def | param_marker
+field_def        ::= NAME ":" type_expr
 
-enum_def        ::= "enum" NAME type_params? "="? enum_body
-enum_body       ::= enum_variant_seq
-                  | NEWLINE INDENT enum_variant_seq NEWLINE? DEDENT
+enum_def         ::= "enum" NAME type_params? "="? enum_body
+enum_body        ::= enum_variant_seq
+                   | NEWLINE INDENT enum_variant_seq NEWLINE? DEDENT
 enum_variant_seq ::= first_variant_def ("|" variant_def)*
 first_variant_def ::= "|"? NAME variant_payload?
-variant_def     ::= NAME variant_payload?
-variant_payload ::= "(" field_list? ")"
-field_list      ::= field_inline ("," field_inline)* ","?
-field_inline    ::= NAME ":" type_expr
+variant_def      ::= NAME variant_payload?
+variant_payload  ::= "(" field_list? ")"
+field_list       ::= field_entry ("," field_entry)* ","?
+field_entry      ::= field_inline | param_marker
+field_inline     ::= NAME ":" type_expr
 
-type_alias      ::= "type" NAME type_params? "=" type_expr
+exception_def    ::= "exception" NAME exception_base? exception_body
+exception_base   ::= "extends" NAME
+exception_body   ::= param_marker? NEWLINE INDENT block_entry (NEWLINE block_entry)* NEWLINE? DEDENT
+                   | "(" field_list? ")"
+                   | field_list
 
-type_params     ::= "[" NAME ("," NAME)* "]"
+type_alias       ::= "type" NAME type_params? "=" type_expr
 
-param_decl      ::= "param" NAME (":" type_expr)? ("=" expr)?
-program_decl    ::= "program" NAME
+type_params      ::= "[" NAME ("," NAME)* "]"
 
-agent_decl      ::= "agent" NAME ("=" STRING)?
+param_marker     ::= "/" | "*" | "@" NAME    (* NAME must be pos, std, or named *)
+
+param_decl       ::= "param" NAME (":" type_expr)? ("=" expr)?
+program_decl     ::= "program" NAME
+
+agent_decl       ::= "agent" NAME ("=" STRING)?
 ```
+
+A `param_marker` splits a parameter or field list into **zones**: `/` (≡ `@std`)
+ends the positional-only zone and begins standard; `*` (≡ `@named`) ends the
+standard zone and begins named-only; `@pos` opens the positional-only zone and
+must be the first entry. In the indented block form, a marker may appear as the
+optional leading entry on the header line and/or on its own line between field
+definitions.
 
 A `type_params` list declares the declaration's type parameters; each is an
 ordinary `NAME` in scope as a type throughout the declaration's body. See
@@ -134,15 +151,18 @@ concrete type arguments (`Box[int]`, `Outcome[int, text]`). The built-in
 ## Function declarations
 
 ```ebnf
-func_def   ::= "def" NAME type_params? "(" params? ")" "->" type_expr "=" expr
-params     ::= param ("," param)* ","?
-param      ::= NAME ":" type_expr ("=" expr)?
+func_def     ::= "def" NAME type_params? "(" param_list? ")" "->" type_expr "=" expr
+param_list   ::= param_entry ("," param_entry)* ","?
+param_entry  ::= param | param_marker
+param        ::= NAME ":" type_expr ("=" expr)?
 ```
 
-The `def` body is a single expression (which may be a `block`). Defaulted
-parameters must follow all required parameters. An optional `type_params` list
-after the function name makes the `def` generic (e.g. `def id[T](x: T) -> T`);
-see [Generics](generics.md).
+The `def` body is a single expression (which may be a `block`). Zone markers
+(`/`, `*`, `@pos`, `@std`, `@named`) may appear as `param_entry` items between
+parameters; see [Functions](functions.md) for full zone semantics. No required
+positional-fillable (pos-only/standard) parameter may follow a defaulted one in
+the same zone. An optional `type_params` list after the function name makes the
+`def` generic (e.g. `def id[T](x: T) -> T`); see [Generics](generics.md).
 
 ## Bindings and mutation
 
@@ -207,14 +227,19 @@ pattern        ::= "_"
 constructor_pattern      ::= NAME ("." NAME)? ("(" pattern_fields? ")")?
 qual_constructor_pattern ::= qual_prefix NAME ("." NAME)? ("(" pattern_fields? ")")?
 pattern_fields ::= pattern_field ("," pattern_field)* ","?
-pattern_field  ::= NAME                 (* shorthand: NAME bound to NAME *)
-                 | NAME "=" pattern
+pattern_field  ::= pattern              (* positional sub-pattern *)
+                 | NAME "=" pattern     (* named sub-pattern: field = subpattern *)
 ```
 
 A `constructor_pattern` with the `NAME "." NAME` form is a **qualified**
 variant pattern (`Option.some(value)`), naming the owning enum and the variant;
 it is required when an unqualified variant name is ambiguous across enums
 ([Generics](generics.md), [Pattern matching](pattern-matching.md)).
+
+In a constructor pattern, **positional sub-patterns** (`pattern` without a
+`NAME "="` prefix) fill positional-capable (pos-only/standard) constructor fields
+left to right. Named sub-patterns follow. A bare `NAME` positional sub-pattern
+that lands on a named-only field is reinterpreted as the shorthand `NAME = NAME`.
 
 A `STRING` pattern may not contain interpolation.
 
@@ -313,8 +338,10 @@ arg       ::= expr                  (* positional *)
 
 Named arguments are available at declared-name call sites (`def`s and
 built-ins). A function value is called with positional arguments only.
-Constructor calls additionally accept a bare `NAME` as shorthand for
-`NAME = NAME`; ordinary `def` calls do not.
+A bare `NAME` in positional position that lands on a **named-only** parameter
+(after all positional-capable slots are filled) is reinterpreted as the named
+argument `NAME = NAME` — this shorthand works in any call context (functions,
+constructors) and is triggered solely by the parameter's zone.
 
 ## Literals
 

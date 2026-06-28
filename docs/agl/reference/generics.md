@@ -125,8 +125,10 @@ let e: Option[int] = none          # T inferred from the annotation
 
 Record constructors and enum variants are **ordinary value bindings** (see
 [Bindings and scope](bindings-and-scope.md)). Direct construction uses
-**named** arguments; a constructor reached through a variable is a normal
-function value, called **positionally** in declaration field order:
+positional-greedy binding — positional arguments fill positional-capable slots
+left to right, then named arguments follow. A constructor reached through a
+variable is a normal function value, called **positionally** in declaration
+field order:
 
 ```agl
 record Box[T]

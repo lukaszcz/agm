@@ -237,7 +237,7 @@ semantics are covered in [Strings and interpolation](strings-and-interpolation.m
 
 ```text
 =>   ->   =   ==   !=   <   <=   >   >=
-::   +   -   *   /
+::   +   -   *   /   @
 (   )   [   ]   {   }
 :   ,   .   |   ;
 ```
@@ -269,6 +269,28 @@ never conflicts with a list literal.
 An adjacent `[` after an expression-ending token starts indexing. Whitespace
 keeps the bracket as a list literal, so `xs[0]` indexes while `f [0]` is the
 single-argument call sugar `f([0])`.
+
+## Zone markers
+
+`@` is a token used exclusively in **zone markers** inside parameter and field lists.
+The three markers are:
+
+| Marker | Equivalent | Zone opened |
+|--------|-----------|------------|
+| `@pos` | (none) | Positional-only (must be first in the list) |
+| `@std` | `/` | Standard (positional-or-named) |
+| `@named` | `*` | Named-only |
+
+`pos`, `std`, and `named` are **ordinary identifiers** everywhere except
+immediately after `@` inside a parameter or field list. An unrecognized name
+after `@` (e.g. `@foo`) is a static error.
+
+```agl
+def f(x: int, @std, y: int) -> int = x + y   # @std same as /
+def g(a: int, /, b: int, @named, c: int) -> int = ...  # mixing / and @named
+```
+
+See [Functions](functions.md) and [Types](types.md) for the full zone semantics.
 
 ## Operator precedence
 

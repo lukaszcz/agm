@@ -237,12 +237,14 @@ let mk: (int) -> Box[int] = Box   # the constructor as a first-class value
 let one = mk(1)                    # called positionally, in field order
 ```
 
-Direct construction uses **named** arguments (`Box(value = 1)`,
-`some(value = x)`); a constructor reached **through a variable** is an ordinary
-function value invoked **positionally**, in declaration order. Nullary enum
-variants are ordinary values (`let e: Option[int] = none`). See
-[Generics](generics.md) for the full constructor-value story (including when a
-generic constructor needs an expected-type annotation).
+Direct construction uses positional-greedy binding — positional arguments fill
+positional-capable fields first, then named arguments follow (`Box(value = 1)`,
+`some(value = x)`, or `Ok(42)` for a single-standard-field variant). A
+constructor reached **through a variable** is an ordinary function value invoked
+**positionally**, in declaration order. Nullary enum variants are ordinary
+values (`let e: Option[int] = none`). See [Generics](generics.md) for the full
+constructor-value story (including when a generic constructor needs an
+expected-type annotation).
 
 ### Overload sets, shadowing, and ambiguity
 

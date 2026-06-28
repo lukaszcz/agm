@@ -60,23 +60,28 @@ static error.
 constructor ::= NAME ("." NAME)? type_args? constructor_args?
 constructor_args ::= "(" (ctor_arg ("," ctor_arg)* ","?)? ")"
 type_args   ::= "::" "[" type_expr ("," type_expr)* "]"
-ctor_arg    ::= NAME "=" expr     (* named field *)
-              | NAME              (* shorthand for NAME = NAME *)
+ctor_arg    ::= expr              (* positional *)
+              | NAME "=" expr     (* named: field = value *)
 ```
 
-A record constructor or enum variant, when invoked **directly** by name, takes
-**named** arguments only — never positional. Each field is supplied as
-`field = value`. (A constructor escaped through a variable becomes a positional
-callable value; see [Constructors as values](#constructors-as-values).) The
-optional `::[…]` pins the type arguments of a generic constructor (see
+Constructor arguments follow the same **positional-greedy** binding as function
+calls — positional arguments fill positional-capable (pos-only/standard) field
+slots left to right; named arguments (`field = value`) follow. The optional
+`::[…]` pins the type arguments of a generic constructor (see
 [Generic constructors](#generic-constructors)).
 
-**Bare-name shorthand.** In a constructor call a bare field name `x` is
-shorthand for `x = x` — it binds the field `x` to the in-scope value of the
-same name. So `R(x, y)` means `R(x = x, y = y)`, and shorthand and explicit
-forms may be mixed: `B(x, r = R(x = x + 1, y = x + 2))`. This shorthand is a
-constructor-only convenience; ordinary `def` calls keep positional arguments
-and have no bare-name shorthand (see [Functions](functions.md)).
+**Per-type field zones.** The zone of each field depends on the declaration:
+- **Records** default to **named-only**. Markers (`/`, `*`, `@std`, etc.) opt
+  fields into the standard or positional-only zone.
+- **Enum variants**: a variant with exactly **one field** has that field in the
+  **standard** zone (positional or named); a variant with two or more fields has
+  all fields **named-only** by default. Markers can override the defaults.
+- **Exceptions** default to **named-only**; markers are available.
+
+**Bare-name shorthand.** A bare name `x` in a positional slot that lands on a
+**named-only** field (where positional binding is impossible) is reinterpreted as
+`x = x`. This shorthand applies in any call context — functions and constructors
+alike — whenever a named-only parameter is in play.
 
 ### Record construction
 
@@ -100,8 +105,20 @@ let review: Review = Pass           # resolved by expected type
 
 An unqualified variant name resolves when the expected type is an enum
 containing it, or when exactly one declared enum has a variant of that name.
-A nullary variant is constructed by writing its name alone (no parentheses);
-its payload variants take named arguments.
+A nullary variant is constructed by writing its name alone (no parentheses).
+Payload variants use positional-greedy binding: a variant with one field has
+it in the standard zone (positional or named); a variant with two or more
+fields has all fields named-only by default.
+
+```agl
+enum Result
+  | Ok(value: int)           # single field → standard
+  | Err(reason: text, fatal: bool)  # two fields → named-only by default
+
+let ok = Ok(42)              # positional (standard zone)
+let ok2 = Ok(value = 42)     # named form also valid
+let err = Err(reason = "bad", fatal = false)  # named-only
+```
 
 ### Unqualified variant ambiguity
 

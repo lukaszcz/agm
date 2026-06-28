@@ -112,6 +112,12 @@ let x: int = if condition => 1 else => raise Abort(message = "!")
 raise Abort(message = "Cannot continue without repository access.")
 ```
 
+Exception fields are **named-only by default** — each is supplied as
+`field = value` or via the bare-name shorthand. Zone markers (`/`, `*`,
+`@pos`, `@std`, `@named`) may opt an exception's own fields into the standard
+or positional-only zone, but the inherited `message` field is always
+named-only, so exceptions are in practice constructed by name (or shorthand).
+
 Any concrete built-in exception type is constructible with named arguments
 for its fields; `trace_id` is injected by the runtime and is not written
 in source when omitted. The same construction rule applies to user-declared

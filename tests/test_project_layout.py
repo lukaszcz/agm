@@ -1067,7 +1067,7 @@ def test_copy_config_detects_current_workspace_branch_when_branch_not_given(
 
 
 def test_current_project_dir_from_nested_subdir_of_embedded_project(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, env: dict[str, str]
 ) -> None:
     project = tmp_path / "proj"
     project.mkdir()
@@ -1075,18 +1075,16 @@ def test_current_project_dir_from_nested_subdir_of_embedded_project(
     agm_dir.mkdir()
     deep = project / "src" / "pkg" / "module"
     deep.mkdir(parents=True)
-    monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", lambda _path: True)
+    subprocess.run(["git", "init", "-b", "main"], cwd=project, env=env, check=True)
 
     assert discover_current_project_dir(deep) == agm_dir
 
 
 def test_current_project_root_candidate_falls_back_when_no_markers_and_not_git(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     plain = tmp_path / "plain"
     plain.mkdir()
-
-    monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", lambda _path: False)
 
     assert discover_current_project_dir(plain) is None
     assert current_workspace_or_project_root(plain) == plain
@@ -1174,72 +1172,36 @@ def test_discover_current_project_dir_uses_proj_dir_env_with_agm_dir(
 
 
 def test_current_workspace_or_project_root_falls_back_to_git_checkout_root(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, env: dict[str, str]
 ) -> None:
-    project = tmp_path / "proj"
-    project.mkdir()
-    (project / ".agm").mkdir()
-    checkout = project / "subdir"
+    checkout = tmp_path / "checkout"
     checkout.mkdir()
-    cwd = tmp_path / "cwd"
+    cwd = checkout / "sub"
     cwd.mkdir()
-
-    monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", lambda _path: True)
-    monkeypatch.setattr(
-        layout_module.git_helpers,
-        "checkout_root",
-        lambda _cwd=None: checkout,
-    )
+    subprocess.run(["git", "init", "-b", "main"], cwd=checkout, env=env, check=True)
 
     assert current_workspace_or_project_root(cwd) == checkout
 
 
 class TestCurrentProjectDirFallbackPaths:
-    def test_uses_git_common_dir_fallback(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    def test_simplified_fallback_ignores_git_common_dir(
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        """git_common_dir is not used by simplified fallback discovery."""
-        project = tmp_path / "myproject"
-        repo = project / "repo"
-        repo.mkdir(parents=True)
-        (project / "worktrees").mkdir()
-
+        """Simplified fallback discovery returns the worktree itself, not git_common_dir."""
         worktree = tmp_path / "worktree"
         worktree.mkdir()
-
-        monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", lambda p: True)
-        monkeypatch.setattr(
-            layout_module.git_helpers,
-            "checkout_root",
-            lambda cwd=None, env=None: worktree,
-        )
-        monkeypatch.setattr(
-            layout_module.git_helpers,
-            "git_common_dir",
-            lambda cwd=None, env=None: repo / ".git",
-        )
+        subprocess.run(["git", "init", "-b", "main"], cwd=worktree, env=env, check=True)
 
         result = current_workspace_or_project_root(worktree)
         assert result == worktree
 
     def test_falls_back_to_workspace_dir_when_no_project_markers(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        """When no project markers exist, falls back to workspace_dir."""
+        """When no project markers exist, falls back to checkout_root result."""
         plain_dir = tmp_path / "plain"
         plain_dir.mkdir()
-
-        monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", lambda p: True)
-        monkeypatch.setattr(
-            layout_module.git_helpers,
-            "checkout_root",
-            lambda cwd=None, env=None: plain_dir,
-        )
-        monkeypatch.setattr(
-            layout_module.git_helpers,
-            "git_common_dir",
-            lambda cwd=None, env=None: (_ for _ in ()).throw(SystemExit(1)),
-        )
+        subprocess.run(["git", "init", "-b", "main"], cwd=plain_dir, env=env, check=True)
 
         result = current_workspace_or_project_root(plain_dir)
         assert result == plain_dir
@@ -1251,6 +1213,8 @@ class TestCurrentProjectDirFallbackPaths:
         plain_dir = tmp_path / "plain"
         plain_dir.mkdir()
 
+        # Contradictory git state (is_git_repo True but checkout_root raises) is
+        # only reachable via stub — a real git repo always has a valid toplevel.
         monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", lambda p: True)
         monkeypatch.setattr(
             layout_module.git_helpers,
@@ -1264,41 +1228,24 @@ class TestCurrentProjectDirFallbackPaths:
 
 class TestCurrentWorkspace:
     def test_returns_none_when_cwd_not_in_project(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, tmp_path: Path
     ) -> None:
         project = tmp_path / "proj"
         (project / "repo").mkdir(parents=True)
         other = tmp_path / "other"
         other.mkdir()
 
-        monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", lambda p: False)
         result = current_workspace(project, cwd=other)
         assert result is None
 
     def test_falls_back_to_repo_when_cwd_not_git_repo(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         """When cwd is the project dir but not a git repo, uses the repo_dir."""
         project = tmp_path / "proj"
         repo = project / "repo"
         repo.mkdir(parents=True)
-
-        def fake_is_git_repo(p: Path) -> bool:
-            return p == repo
-
-        def fake_project_dir(
-            cwd: Path | None = None, *, env: dict[str, str] | None = None
-        ) -> Path:
-            del env
-            return project
-
-        monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", fake_is_git_repo)
-        monkeypatch.setattr(layout_module, "discover_current_project_dir", fake_project_dir)
-        monkeypatch.setattr(
-            layout_module.git_helpers,
-            "current_branch",
-            lambda p, env=None: "main",
-        )
+        subprocess.run(["git", "init", "-b", "main"], cwd=repo, env=env, check=True)
 
         result = current_workspace(project, cwd=project)
         assert result is not None
@@ -1321,6 +1268,8 @@ class TestCurrentWorkspace:
             del env
             return project
 
+        # Contradictory git state (is_git_repo True but checkout_root raises) is
+        # only reachable via stub — a real git repo always has a valid toplevel.
         monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", fake_is_git_repo)
         monkeypatch.setattr(layout_module, "discover_current_project_dir", fake_project_dir)
         monkeypatch.setattr(
@@ -1354,6 +1303,8 @@ class TestCurrentWorkspace:
             del env
             return project
 
+        # Contradictory git state (is_git_repo True but checkout_root raises) is
+        # only reachable via stub — a real git repo always has a valid toplevel.
         monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", fake_is_git_repo)
         monkeypatch.setattr(layout_module, "discover_current_project_dir", fake_project_dir)
         monkeypatch.setattr(
@@ -1368,57 +1319,32 @@ class TestCurrentWorkspace:
         )
 
         result = current_workspace(project, cwd=project)
-        assert result is None or result.workspace_dir is not None
+        assert result is not None
+        assert result.workspace_dir == project.resolve(strict=False)
+        assert result.branch is None
+        assert result.is_main is True
 
 
 class TestCurrentProjectDirCommonDirFallback:
     def test_returns_workspace_dir_when_in_parents(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        """When workspace_dir is a parent of current, return workspace_dir."""
+        """When cwd is inside a git repo whose root has no project markers,
+        returns the checkout root."""
         plain_dir = tmp_path / "plain"
         plain_dir.mkdir()
-
-        parent_dir = tmp_path
-
-        monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", lambda p: True)
-        monkeypatch.setattr(
-            layout_module.git_helpers,
-            "checkout_root",
-            lambda cwd=None, env=None: parent_dir,
-        )
-        monkeypatch.setattr(
-            layout_module.git_helpers,
-            "git_common_dir",
-            lambda cwd=None, env=None: (_ for _ in ()).throw(SystemExit(1)),
-        )
+        subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, env=env, check=True)
 
         result = current_workspace_or_project_root(plain_dir)
-        assert result == parent_dir
+        assert result == tmp_path
 
     def test_checkout_root_succeeds_but_no_project_markers_uses_common_dir(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        """When checkout_root succeeds, git_common_dir is not consulted."""
-        project = tmp_path / "myproject"
-        repo = project / "repo"
-        repo.mkdir(parents=True)
-        (project / "worktrees").mkdir()
-
+        """When checkout_root succeeds and finds no project markers, returns checkout root."""
         worktree = tmp_path / "somewhere"
         worktree.mkdir()
-
-        monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", lambda p: True)
-        monkeypatch.setattr(
-            layout_module.git_helpers,
-            "checkout_root",
-            lambda cwd=None, env=None: worktree,
-        )
-        monkeypatch.setattr(
-            layout_module.git_helpers,
-            "git_common_dir",
-            lambda cwd=None, env=None: repo / ".git",
-        )
+        subprocess.run(["git", "init", "-b", "main"], cwd=worktree, env=env, check=True)
 
         result = current_workspace_or_project_root(worktree)
         assert result == worktree
@@ -1436,6 +1362,8 @@ class TestCurrentWorkspaceSystemExitPaths:
         def fake_is_git_repo(p: Path) -> bool:
             return p == repo or p == project
 
+        # Contradictory git state (is_git_repo True but checkout_root raises) is
+        # only reachable via stub — a real git repo always has a valid toplevel.
         monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", fake_is_git_repo)
         monkeypatch.setattr(
             layout_module,
@@ -1468,6 +1396,8 @@ class TestCurrentWorkspaceSystemExitPaths:
         def fake_is_git_repo(p: Path) -> bool:
             return True  # is_git_repo returns True for project
 
+        # Contradictory git state (is_git_repo True but checkout_root raises) is
+        # only reachable via stub — a real git repo always has a valid toplevel.
         monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", fake_is_git_repo)
         monkeypatch.setattr(
             layout_module,
@@ -1498,6 +1428,8 @@ class TestCurrentProjectDirCheckoutRootRaisesThenCommonDirRaises:
         plain_dir = tmp_path / "plain"
         plain_dir.mkdir()
 
+        # Contradictory git state (is_git_repo True but checkout_root raises) is
+        # only reachable via stub — a real git repo always has a valid toplevel.
         monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", lambda p: True)
         monkeypatch.setattr(
             layout_module.git_helpers,
@@ -1516,24 +1448,13 @@ class TestCurrentProjectDirCheckoutRootRaisesThenCommonDirRaises:
 
 class TestCurrentWorkspaceEdgeCases:
     def test_workspace_dir_equals_repo_dir_returns_main_checkout(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         """When workspace_dir equals repo_dir, returns main workspace with branch=None."""
         project = tmp_path / "proj"
         repo = project / "repo"
         repo.mkdir(parents=True)
-
-        monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", lambda p: True)
-        monkeypatch.setattr(
-            layout_module,
-            "discover_current_project_dir",
-            lambda cwd=None, env=None: project.resolve(strict=False),
-        )
-        monkeypatch.setattr(
-            layout_module.git_helpers,
-            "checkout_root",
-            lambda cwd=None, env=None: repo.resolve(strict=False),
-        )
+        subprocess.run(["git", "init", "-b", "main"], cwd=repo, env=env, check=True)
 
         result = current_workspace(project, cwd=repo)
         assert result is not None
@@ -1542,25 +1463,14 @@ class TestCurrentWorkspaceEdgeCases:
         assert result.is_main is True
 
     def test_workspace_dir_current_returns_main_when_same_as_repo_dir(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         """When cwd is 'current' and checkout_root returns current, returns main."""
         project = tmp_path / "proj"
         repo = project / "repo"
         repo.mkdir(parents=True)
         (project / "worktrees").mkdir()
-
-        monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", lambda p: True)
-        monkeypatch.setattr(
-            layout_module,
-            "discover_current_project_dir",
-            lambda cwd=None, env=None: project.resolve(strict=False),
-        )
-        monkeypatch.setattr(
-            layout_module.git_helpers,
-            "checkout_root",
-            lambda cwd=None, env=None: repo.resolve(strict=False),
-        )
+        subprocess.run(["git", "init", "-b", "main"], cwd=repo, env=env, check=True)
 
         result = current_workspace(project, cwd=repo)
         assert result is not None
@@ -1569,7 +1479,7 @@ class TestCurrentWorkspaceEdgeCases:
 
 class TestCurrentWorkspaceWithRepoDirEnv:
     def test_repo_dir_env_var_points_inside_project(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, env: dict[str, str]
     ) -> None:
         """When REPO_DIR env var points to a git repo inside project."""
         project = tmp_path / "proj"
@@ -1579,38 +1489,32 @@ class TestCurrentWorkspaceWithRepoDirEnv:
 
         worktree_dir = project / "worktrees" / "feat"
         worktree_dir.mkdir(parents=True)
+        subprocess.run(["git", "init", "-b", "main"], cwd=worktree_dir, env=env, check=True)
 
-        monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", lambda p: True)
+        # current_branch is called with the REPO_DIR-only env dict, so stub to avoid
+        # git subprocess running with an incomplete environment.
         monkeypatch.setattr(
             layout_module.git_helpers,
             "current_branch",
             lambda p, env=None: "feat",
         )
 
-        env = {"REPO_DIR": str(worktree_dir)}
-        result = current_workspace(project, env=env)
+        result = current_workspace(project, env={"REPO_DIR": str(worktree_dir)})
         assert result is not None
         assert result.workspace_dir == worktree_dir.resolve(strict=False)
         assert result.branch == "feat"
         assert result.is_main is False
 
     def test_repo_dir_env_var_points_to_repo_dir(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         """When REPO_DIR points to the main repo_dir, checkout is main."""
         project = tmp_path / "proj"
         repo = project / "repo"
         repo.mkdir(parents=True)
+        subprocess.run(["git", "init", "-b", "main"], cwd=repo, env=env, check=True)
 
-        monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", lambda p: True)
-        monkeypatch.setattr(
-            layout_module.git_helpers,
-            "current_branch",
-            lambda p, env=None: "main",
-        )
-
-        env = {"REPO_DIR": str(repo)}
-        result = current_workspace(project, env=env)
+        result = current_workspace(project, env={"REPO_DIR": str(repo)})
         assert result is not None
         assert result.is_main is True
         assert result.branch is None
@@ -1618,52 +1522,24 @@ class TestCurrentWorkspaceWithRepoDirEnv:
 
 class TestCurrentProjectDirGitCommonDirFindsProject:
     def test_git_common_dir_parent_has_project_markers(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         """When checkout_root succeeds, that root is the fallback."""
-        project = tmp_path / "myproject"
-        repo = project / "repo"
-        repo.mkdir(parents=True)
-        (project / "worktrees").mkdir()
-
         worktree = tmp_path / "somewhere"
         worktree.mkdir()
-
-        monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", lambda p: True)
-        monkeypatch.setattr(
-            layout_module.git_helpers,
-            "checkout_root",
-            lambda cwd=None, env=None: worktree,
-        )
-        monkeypatch.setattr(
-            layout_module.git_helpers,
-            "git_common_dir",
-            lambda cwd=None, env=None: repo / ".git",
-        )
+        subprocess.run(["git", "init", "-b", "main"], cwd=worktree, env=env, check=True)
 
         result = current_workspace_or_project_root(worktree)
         assert result == worktree
 
     def test_falls_back_to_current_when_nothing_matches(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         """When checkout_root succeeds, returns that checkout root."""
-        isolated = tmp_path / "isolated"
+        other = tmp_path
+        isolated = other / "isolated"
         isolated.mkdir()
-        other = tmp_path / "other"
-        other.mkdir()
-
-        monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", lambda p: True)
-        monkeypatch.setattr(
-            layout_module.git_helpers,
-            "checkout_root",
-            lambda cwd=None, env=None: other,
-        )
-        monkeypatch.setattr(
-            layout_module.git_helpers,
-            "git_common_dir",
-            lambda cwd=None, env=None: (_ for _ in ()).throw(SystemExit(1)),
-        )
+        subprocess.run(["git", "init", "-b", "main"], cwd=other, env=env, check=True)
 
         result = current_workspace_or_project_root(isolated)
         assert result == other
@@ -1671,20 +1547,13 @@ class TestCurrentProjectDirGitCommonDirFindsProject:
 
 class TestCurrentWorkspaceCwdNotInProject:
     def test_returns_none_when_cwd_not_in_project(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, tmp_path: Path
     ) -> None:
         """current_workspace returns None when cwd is not inside project."""
         project = tmp_path / "proj"
         (project / "repo").mkdir(parents=True)
         other = tmp_path / "other"
         other.mkdir()
-
-        monkeypatch.setattr(
-            layout_module,
-            "discover_current_project_dir",
-            lambda cwd=None, env=None: other.resolve(strict=False),
-        )
-        monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", lambda p: False)
 
         result = current_workspace(project, cwd=other)
         assert result is None
@@ -1697,6 +1566,8 @@ class TestCurrentWorkspaceCwdNotInProject:
         project = tmp_path / "proj"
         (project / "repo").mkdir(parents=True)
 
+        # Contradictory git state (is_git_repo True but checkout_root raises) is
+        # only reachable via stub — a real git repo always has a valid toplevel.
         monkeypatch.setattr(
             layout_module.git_helpers,
             "is_git_repo",
@@ -1727,120 +1598,58 @@ class TestCurrentWorkspaceCwdNotInProject:
 
 class TestCurrentWorkspaceReturnsNoneWhenCwdNotInProject:
     def test_cwd_not_at_project_root_and_not_git_repo(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         """current_workspace returns None when cwd is inside the project but
         is not a git repo and not at the project root."""
         project = tmp_path / "proj"
-        (project / "repo").mkdir(parents=True)
+        repo = project / "repo"
+        repo.mkdir(parents=True)
         sub_dir = project / "subdir"
         sub_dir.mkdir()
-
-        monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", lambda p: False)
-        monkeypatch.setattr(
-            layout_module,
-            "discover_current_project_dir",
-            lambda cwd=None, env=None: project.resolve(strict=False),
-        )
+        subprocess.run(["git", "init", "-b", "main"], cwd=repo, env=env, check=True)
 
         result = current_workspace(project, cwd=sub_dir)
         assert result is None
 
 
 class TestCurrentProjectDirGitCommonDirTry:
-    """Cover line 98: the try: block for git_helpers.git_common_dir(current)."""
+    """Cover checkout_root fallback in current_workspace_or_project_root."""
 
     def test_git_common_dir_search_after_checkout_root_finds_no_project(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         """When checkout_root returns a dir without project markers, it is the fallback."""
-        project = tmp_path / "proj"
-        repo = project / "repo"
-        repo.mkdir(parents=True)
-        (project / "worktrees").mkdir()
-
-        cwd = tmp_path / "cwd"
-        cwd.mkdir()
-
         checkout = tmp_path / "checkout"
         checkout.mkdir()
-
-        git_dir = repo / ".git"
-
-        monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", lambda p: True)
-        monkeypatch.setattr(
-            layout_module.git_helpers,
-            "checkout_root",
-            lambda cwd=None, env=None: checkout,
-        )
-        monkeypatch.setattr(
-            layout_module.git_helpers,
-            "git_common_dir",
-            lambda cwd=None, env=None: git_dir,
-        )
+        cwd = checkout / "sub"
+        cwd.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=checkout, env=env, check=True)
 
         assert current_workspace_or_project_root(cwd) == checkout
 
     def test_git_common_dir_finds_workspace_project(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        """When checkout_root succeeds, git_common_dir is not searched."""
-        project = tmp_path / "proj"
-        repo = project / "repo"
-        repo.mkdir(parents=True)
-        (project / "worktrees").mkdir()  # workspace project marker
-
-        cwd = tmp_path / "cwd"
-        cwd.mkdir()
-
+        """When checkout_root succeeds, the checkout root is returned as fallback."""
         checkout = tmp_path / "checkout"
         checkout.mkdir()
-
-        git_dir = repo / ".git"
-
-        monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", lambda p: True)
-        monkeypatch.setattr(
-            layout_module.git_helpers,
-            "checkout_root",
-            lambda cwd=None, env=None: checkout,
-        )
-        monkeypatch.setattr(
-            layout_module.git_helpers,
-            "git_common_dir",
-            lambda cwd=None, env=None: git_dir,
-        )
+        cwd = checkout / "sub"
+        cwd.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=checkout, env=env, check=True)
 
         result = current_workspace_or_project_root(cwd)
         assert result == checkout
 
     def test_git_common_dir_finds_embedded_project_via_parent_walk(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         """When checkout_root succeeds, fallback stays at checkout root."""
-        project = tmp_path / "proj"
-        project.mkdir()
-        (project / ".agm").mkdir()  # embedded project marker
-
-        git_subdir = project / "sub" / ".git"
-        git_subdir.mkdir(parents=True)
-
-        cwd = tmp_path / "cwd"
-        cwd.mkdir()
-
         checkout = tmp_path / "checkout"
         checkout.mkdir()
-
-        monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", lambda p: True)
-        monkeypatch.setattr(
-            layout_module.git_helpers,
-            "checkout_root",
-            lambda cwd=None, env=None: checkout,
-        )
-        monkeypatch.setattr(
-            layout_module.git_helpers,
-            "git_common_dir",
-            lambda cwd=None, env=None: git_subdir,
-        )
+        cwd = checkout / "sub"
+        cwd.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=checkout, env=env, check=True)
 
         result = current_workspace_or_project_root(cwd)
         assert result == checkout
@@ -1848,29 +1657,12 @@ class TestCurrentProjectDirGitCommonDirTry:
 
 class TestCurrentProjectDirGitCommonDirPath:
     def test_git_common_dir_parent_finds_project_via_worktrees_marker(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         """Fallback does not use git_common_dir to search for project markers."""
-        project = tmp_path / "myproject"
-        repo = project / "repo"
-        repo.mkdir(parents=True)
-        worktrees = project / ".agm" / "worktrees"
-        worktrees.mkdir(parents=True)
-
         worktree = tmp_path / "checkout"
         worktree.mkdir()
-
-        monkeypatch.setattr(layout_module.git_helpers, "is_git_repo", lambda p: True)
-        monkeypatch.setattr(
-            layout_module.git_helpers,
-            "checkout_root",
-            lambda cwd=None, env=None: worktree,
-        )
-        monkeypatch.setattr(
-            layout_module.git_helpers,
-            "git_common_dir",
-            lambda cwd=None, env=None: repo / ".git",
-        )
+        subprocess.run(["git", "init", "-b", "main"], cwd=worktree, env=env, check=True)
 
         result = current_workspace_or_project_root(worktree)
         assert result == worktree
@@ -1961,8 +1753,8 @@ def test_copy_config_copies_dot_env_directly_when_branch_given(tmp_path: Path) -
 
 
 def test_copy_config_skips_branch_dir_when_not_a_dir(tmp_path: Path) -> None:
-    """When workspace_config_dir is not a directory, the 'if workspace_config_dir.is_dir()'
-    branch on line 422 is False and we skip to _merge_config_dotenv_files."""
+    """When workspace_config_dir is not a directory, the branch-dir copy is skipped
+    and processing continues to _merge_config_dotenv_files."""
     project = tmp_path / "proj"
     config_dir = project / "config"
     config_dir.mkdir(parents=True)

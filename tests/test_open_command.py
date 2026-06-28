@@ -22,7 +22,6 @@ from agm.commands.workspace.open import (
 from agm.core import dry_run
 from agm.project import workspace_shell
 from agm.project.workspace_shell import ensure_workspace_shell
-from agm.tmux.session import create_tmux_session
 
 
 def _make_git_project(tmp_path: Path, env: dict[str, str]) -> Path:
@@ -59,13 +58,13 @@ class TestValidatePaneCount:
     def test_re_raises_when_exit_code_is_not_one(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Cover line 35: raise when exc.code != 1."""
+        """Cover the re-raise when exc.code != 1."""
+
+        def _raise_exit_2(cmd: list[str], pane_count: str | None) -> int:
+            raise SystemExit(2)
+
         # Patch validate_tmux_pane_count to raise SystemExit(2) — code != 1
-        monkeypatch.setattr(
-            open_module,
-            "validate_tmux_pane_count",
-            lambda cmd, pane_count: (_ for _ in ()).throw(SystemExit(2)),
-        )
+        monkeypatch.setattr(open_module, "validate_tmux_pane_count", _raise_exit_2)
         with pytest.raises(SystemExit) as exc_info:
             validate_pane_count("whatever")
         assert exc_info.value.code == 2
@@ -126,19 +125,6 @@ class TestQueueSetupAndFocusSession:
         assert out.index("tmux new-session") < out.index("agm workspace setup")
         assert "tmux attach-session -t s" in out
 
-    def test_raises_assertion_when_session_name_is_none(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            open_module, "create_tmux_session", lambda **kw: None
-        )
-        with pytest.raises(AssertionError):
-            queue_setup_and_focus_workspace_session(
-                detached=True,
-                pane_count=None,
-                session_name="s",
-                repo_path=tmp_path,
-            )
 
 
 class TestEnsureWorkspaceShell:
@@ -365,85 +351,60 @@ class TestEnsureWorkspaceShell:
 
 
 class TestOpenSession:
-    def _base_setup(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> tuple[Path, Path]:
-        proj_dir = tmp_path / "proj"
-        repo_dir = proj_dir / "repo"
-        repo_dir.mkdir(parents=True)
-        monkeypatch.setattr(
-            open_module, "require_current_project_dir", lambda cwd=None: proj_dir
-        )
-        monkeypatch.setattr(open_module, "project_repo_dir", lambda pd: repo_dir)
-        monkeypatch.setattr(
-            open_module.git_helpers, "current_branch", lambda rd, **kw: "main"
-        )
-        monkeypatch.setattr(
-            open_module, "load_workspace_env", lambda pd, branch, workspace_dir: {}
-        )
-        monkeypatch.setattr(open_module, "create_tmux_session", lambda **kw: None)
-        return proj_dir, repo_dir
+    """Tests for open_workspace.
+
+    Note: the happy-path behaviors are also covered end-to-end by TestOpen in
+    test_e2e.py; these unit tests add dry-run output assertions and additional
+    scenario coverage, all driven by real on-disk project/worktree state.
+    """
 
     def test_opens_main_repo_session_when_branch_is_none(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
+        env: dict[str, str],
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         dry_run.set_enabled(True)
-        proj_dir, repo_dir = self._base_setup(tmp_path, monkeypatch)
-        monkeypatch.setattr(open_module, "create_tmux_session", create_tmux_session)
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+        project = _make_git_project(tmp_path, env)
 
-        open_workspace(detached=True, pane_count=None, branch=None, cwd=tmp_path)
+        open_workspace(detached=True, pane_count=None, branch=None, cwd=project)
 
         out = capsys.readouterr().out
+        repo_dir = project / "repo"
         assert "tmux new-session -dP" in out
         assert f"-c {repo_dir}" in out
-        assert f"Detached tmux session {proj_dir.name} created" in out
+        assert "Detached tmux session proj created" in out
 
     def test_exits_when_worktree_not_at_expected_path(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        proj_dir, repo_dir = self._base_setup(tmp_path, monkeypatch)
-        monkeypatch.setattr(
-            open_module,
-            "branch_worktree_path",
-            lambda pd, branch, repo_branch: tmp_path / "worktrees" / branch,
-        )
-        monkeypatch.setattr(
-            open_module, "has_expected_worktree", lambda pd, branch, **kw: False
-        )
+        # "feature" worktree is absent — has_expected_worktree returns False for real.
+        project = _make_git_project(tmp_path, env)
         with pytest.raises(SystemExit) as exc_info:
-            open_workspace(detached=True, pane_count=None, branch="feature", cwd=tmp_path)
+            open_workspace(detached=True, pane_count=None, branch="feature", cwd=project)
         assert exc_info.value.code == 1
 
     def test_opens_branch_session_when_worktree_exists(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
+        env: dict[str, str],
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         dry_run.set_enabled(True)
-        proj_dir, repo_dir = self._base_setup(tmp_path, monkeypatch)
-        monkeypatch.setattr(open_module, "create_tmux_session", create_tmux_session)
-        feat_path = tmp_path / "worktrees" / "feature"
-        feat_path.mkdir(parents=True)
-        monkeypatch.setattr(
-            open_module,
-            "branch_worktree_path",
-            lambda pd, branch, repo_branch: feat_path,
-        )
-        monkeypatch.setattr(
-            open_module, "has_expected_worktree", lambda pd, branch, **kw: True
-        )
-        monkeypatch.setattr(
-            open_module, "branch_session_name", lambda pd, branch: f"{pd.name}/{branch}"
-        )
-        monkeypatch.setattr(
-            open_module, "ensure_dependency_configs_for_branch", lambda **kw: None
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+        project = _make_git_project(tmp_path, env)
+        feat_path = project / "worktrees" / "feature"
+        subprocess.run(
+            ["git", "worktree", "add", "-b", "feature", str(feat_path)],
+            cwd=project / "repo",
+            env=env,
+            check=True,
         )
 
-        open_workspace(detached=True, pane_count=None, branch="feature", cwd=tmp_path)
+        open_workspace(detached=True, pane_count=None, branch="feature", cwd=project)
 
         out = capsys.readouterr().out
         assert "tmux new-session -dP" in out
@@ -456,44 +417,51 @@ class TestOpenSession:
         monkeypatch: pytest.MonkeyPatch,
         env: dict[str, str],
     ) -> None:
-        proj_dir, repo_dir = self._base_setup(tmp_path, monkeypatch)
-        config_dir = proj_dir / "config"
-        config_dir.mkdir()
+        project = _make_git_project(tmp_path, env)
+        config_dir = project / "config"
         subprocess.run(["git", "init", "-b", "main"], cwd=config_dir, env=env, check=True)
+        subprocess.run(
+            ["git", "commit", "--allow-empty", "-m", "init"], cwd=config_dir, env=env, check=True
+        )
         feature_config = config_dir / "feature"
         feature_config.mkdir()
         (feature_config / "config.toml").write_text("[settings]\n", encoding="utf-8")
-        feat_path = tmp_path / "worktrees" / "feature"
-        feat_path.mkdir(parents=True)
-        monkeypatch.setattr(
-            open_module,
-            "branch_worktree_path",
-            lambda pd, branch, repo_branch: feat_path,
+        # The per-branch env.sh sets a DIFFERENT git author than the process env, so the
+        # commit author proves load_workspace_env's env was actually plumbed through to
+        # commit_config_dir_changes. If the env were dropped, the git subprocess would
+        # inherit the process env ("Process Env") and the assertion below would fail.
+        (feature_config / "env.sh").write_text(
+            'export GIT_AUTHOR_NAME="Worktree Env"\n'
+            'export GIT_COMMITTER_NAME="Worktree Env"\n',
+            encoding="utf-8",
         )
-        monkeypatch.setattr(
-            open_module, "has_expected_worktree", lambda pd, branch, **kw: True
+        feat_path = project / "worktrees" / "feature"
+        subprocess.run(
+            ["git", "worktree", "add", "-b", "feature", str(feat_path)],
+            cwd=project / "repo",
+            env=env,
+            check=True,
         )
-        monkeypatch.setattr(
-            open_module, "branch_session_name", lambda pd, branch: f"{pd.name}/{branch}"
-        )
-        monkeypatch.setattr(
-            open_module, "ensure_dependency_configs_for_branch", lambda **kw: None
-        )
-        worktree_env = dict(env)
-        worktree_env["GIT_AUTHOR_NAME"] = "Worktree Env"
-        worktree_env["GIT_COMMITTER_NAME"] = "Worktree Env"
-        monkeypatch.setattr(
-            open_module,
-            "load_workspace_env",
-            lambda pd, branch, workspace_dir: worktree_env,
-        )
-        monkeypatch.setattr(
-            open_module,
-            "create_configured_workspace_session",
-            lambda **kw: None,
-        )
+        # Process env carries a DIFFERENT author; only the worktree env.sh sets "Worktree Env".
+        monkeypatch.setenv("GIT_AUTHOR_NAME", "Process Env")
+        monkeypatch.setenv("GIT_COMMITTER_NAME", "Process Env")
+        monkeypatch.setenv("GIT_AUTHOR_EMAIL", "worktree@test.com")
+        monkeypatch.setenv("GIT_COMMITTER_EMAIL", "worktree@test.com")
+        monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+        # create_configured_workspace_session is the tmux boundary — suppress it.
+        def _noop_session(
+            *,
+            detached: bool,
+            pane_count: str | None,
+            session_name: str,
+            repo_path: Path,
+            run_setup: bool,
+        ) -> None:
+            pass
 
-        open_workspace(detached=True, pane_count=None, branch="feature", cwd=tmp_path)
+        monkeypatch.setattr(open_module, "create_configured_workspace_session", _noop_session)
+
+        open_workspace(detached=True, pane_count=None, branch="feature", cwd=project)
 
         result = subprocess.run(
             ["git", "log", "-1", "--format=%an"],
@@ -668,29 +636,20 @@ class TestOpenRun:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
+        env: dict[str, str],
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         dry_run.set_enabled(True)
-        proj_dir = tmp_path / "proj"
-        repo_dir = proj_dir / "repo"
-        repo_dir.mkdir(parents=True)
-        monkeypatch.setattr(
-            open_module, "require_current_project_dir", lambda cwd=None: proj_dir
-        )
-        monkeypatch.setattr(open_module, "project_repo_dir", lambda pd: repo_dir)
-        monkeypatch.setattr(open_module.git_helpers, "current_branch", lambda rd: "main")
-        monkeypatch.setattr(
-            open_module,
-            "is_main_workspace_branch",
-            lambda pd, branch, repo_branch: True,
-        )
-        monkeypatch.setattr(open_module, "load_workspace_env", lambda pd, branch, workspace_dir: {})
+        project = _make_git_project(tmp_path, env)
+        monkeypatch.chdir(project)
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
 
         open_module.run(
             OpenArgs(detached=True, pane_count=None, parent=None, branch="main")
         )
 
         out = capsys.readouterr().out
+        repo_dir = project / "repo"
         assert "tmux new-session -dP" in out
         assert f"-c {repo_dir}" in out
         assert "Detached tmux session proj created" in out

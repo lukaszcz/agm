@@ -23,7 +23,7 @@ class TestModuleIdConstruction:
     def test_frozen(self) -> None:
         mid = ModuleId.from_dotted("foo")
         with pytest.raises((AttributeError, TypeError)):
-            mid.segments = ("bar",)  # type: ignore[misc]
+            setattr(mid, "segments", ("bar",))
 
     def test_equality_and_hash(self) -> None:
         a = ModuleId.from_dotted("foo.bar")
@@ -147,26 +147,10 @@ class TestEntryId:
         mid = ModuleId.from_dotted("main")
         assert ENTRY_ID != mid
 
-    def test_entry_id_segments_not_user_resolvable(self) -> None:
-        """Entry id segment must be invalid as an identifier so from_dotted can't produce it."""
-        for seg in ENTRY_ID.segments:
-            # At least one segment must not pass identifier validation
-            try:
-                ModuleId.from_dotted(seg)
-                is_valid = True
-            except ValueError:
-                is_valid = False
-            if not is_valid:
-                return  # Found a non-user-resolvable segment - test passes
-        # If all segments pass from_dotted, the dotted form should itself fail
-        try:
+    def test_entry_id_dotted_form_is_not_round_trippable(self) -> None:
+        """from_dotted must reject the dotted form of ENTRY_ID, enforcing its sentinel status."""
+        with pytest.raises(ValueError):
             ModuleId.from_dotted(ENTRY_ID.dotted())
-            # If it succeeds, we have a collision risk — but we need to check
-            # that ENTRY_ID itself is distinguishable via is_entry
-            # In that case, is_entry must be the only discriminator
-            # which is fine per the contract
-        except ValueError:
-            pass  # This is the ideal case
 
     def test_entry_id_is_sentinel(self) -> None:
         """ENTRY_ID should be a stable singleton-like object."""
@@ -178,14 +162,3 @@ class TestEntryId:
         d: dict[ModuleId, str] = {}
         d[ENTRY_ID] = "entry"
         assert d[ENTRY_ID] == "entry"
-
-    def test_from_dotted_cannot_produce_entry_segments(self) -> None:
-        """The entry id's reserved segment contains a char that identifiers cannot have."""
-        # This verifies that from_dotted rejects the entry sentinel segment
-        for seg in ENTRY_ID.segments:
-            if not seg.replace("_", "a").replace("-", "").isidentifier():
-                # Has non-identifier chars — confirmed unreachable via from_dotted
-                return
-        # If all segments look identifier-like but ENTRY_ID.is_entry, that's
-        # acceptable if is_entry is implemented as an explicit flag
-        assert ENTRY_ID.is_entry

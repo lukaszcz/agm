@@ -22,7 +22,7 @@ from agm.agl.scope import (
     ResolvedProgram,
     resolve,
 )
-from agm.agl.scope.symbols import BinderKind
+from agm.agl.scope.symbols import BinderKind, BindingRef
 from agm.agl.syntax.nodes import (
     AssignStmt,
     AssignTarget,
@@ -57,7 +57,7 @@ from agm.agl.syntax.nodes import (
     VarPattern,
     VarRef,
 )
-from agm.agl.syntax.spans import SourceSpan  # noqa: TCH002
+from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import IntT
 
 # ---------------------------------------------------------------------------
@@ -81,6 +81,119 @@ def diag(err: AglScopeError) -> tuple[int, str]:
     """Return (line, message) from an AglScopeError."""
     d = err.to_diagnostic()
     return d.line, d.message
+
+
+def _find_varref(program: object, name: str, occurrence: int = -1) -> VarRef:
+    """Walk *program* depth-first; return the VarRef named *name* at *occurrence*.
+
+    occurrence=-1 (default) returns the last match; 0 returns the first.
+    Raises AssertionError if no match found.
+    """
+    from agm.agl.syntax.nodes import (
+        BinaryOp,
+        Case,
+        Cast,
+        DictLit,
+        IndexAccess,
+        InterpSegment,
+        IsTest,
+        ListLit,
+        ParamDecl,
+        Raise,
+        UnaryNeg,
+        UnaryNot,
+    )
+
+    results: list[VarRef] = []
+
+    def walk(node: object) -> None:
+        if isinstance(node, VarRef):
+            if node.name == name:
+                results.append(node)
+            return
+        if isinstance(node, Program):
+            walk(node.body)
+        elif isinstance(node, Block):
+            for item in node.items:
+                walk(item)
+        elif isinstance(node, FuncDef):
+            for param in node.params:
+                if param.default is not None:
+                    walk(param.default)
+            walk(node.body)
+        elif isinstance(node, Lambda):
+            for param in node.params:
+                if param.default is not None:
+                    walk(param.default)
+            walk(node.body)
+        elif isinstance(node, LetDecl):
+            walk(node.value)
+        elif isinstance(node, VarDecl):
+            walk(node.value)
+        elif isinstance(node, AssignStmt):
+            walk(node.value)
+        elif isinstance(node, Call):
+            walk(node.callee)
+            for arg in node.args:
+                walk(arg)
+            for na in node.named_args:
+                walk(na.value)
+        elif isinstance(node, BinaryOp):
+            walk(node.left)
+            walk(node.right)
+        elif isinstance(node, If):
+            for branch in node.branches:
+                walk(branch.cond)
+                walk(branch.body)
+        elif isinstance(node, Case):
+            walk(node.subject)
+            for cbranch in node.branches:
+                walk(cbranch.body)
+        elif isinstance(node, Do):
+            walk(node.body)
+            walk(node.condition)
+        elif isinstance(node, Try):
+            walk(node.body)
+            for clause in node.handlers:
+                walk(clause.body)
+        elif isinstance(node, Template):
+            for seg in node.segments:
+                if isinstance(seg, InterpSegment):
+                    walk(seg.expr)
+        elif isinstance(node, FieldAccess):
+            walk(node.obj)
+        elif isinstance(node, IndexAccess):
+            walk(node.obj)
+            walk(node.index)
+        elif isinstance(node, UnaryNot):
+            walk(node.operand)
+        elif isinstance(node, UnaryNeg):
+            walk(node.operand)
+        elif isinstance(node, Raise):
+            walk(node.exc)
+        elif isinstance(node, Cast):
+            walk(node.expr)
+        elif isinstance(node, IsTest):
+            walk(node.expr)
+        elif isinstance(node, ListLit):
+            for elem in node.elements:
+                walk(elem)
+        elif isinstance(node, DictLit):
+            for entry in node.entries:
+                walk(entry.value)
+        elif isinstance(node, ParamDecl):
+            if node.default is not None:
+                walk(node.default)
+
+    walk(program)
+    assert results, f"No VarRef named {name!r} found"
+    return results[occurrence]
+
+
+def _ref(r: ResolvedProgram, name: str, occurrence: int = -1) -> BindingRef:
+    """Return the BindingRef for the VarRef named *name* (at *occurrence*) in *r.program*."""
+    vr = _find_varref(r.program, name, occurrence)
+    return r.resolution[vr.node_id]
 
 
 # ---------------------------------------------------------------------------
@@ -170,27 +283,29 @@ def reject_program(*items: Item) -> AglScopeError:
 class TestAcceptance:
     def test_simple_let(self) -> None:
         r = parse_and_resolve('let x = "hello"\nx')
-        assert r.program is not None
+        assert _ref(r, "x").kind == BinderKind.let_binding
 
     def test_let_and_print(self) -> None:
         r = parse_and_resolve('let x = "hello"\nprint x')
-        assert r.program is not None
+        assert _ref(r, "x").kind == BinderKind.let_binding
 
     def test_var_and_assign(self) -> None:
         r = parse_and_resolve("var n: int = 0\nn := 1\nn")
-        assert r.program is not None
+        ref = _ref(r, "n")
+        assert ref.kind == BinderKind.var_binding
+        assert ref.mutable
 
     def test_param_at_root(self) -> None:
         r = parse_and_resolve("param spec\nspec")
-        assert r.program is not None
+        assert _ref(r, "spec").kind == BinderKind.param_binding
 
     def test_param_with_type(self) -> None:
         r = parse_and_resolve("param spec: text\nprint spec")
-        assert r.program is not None
+        assert _ref(r, "spec").kind == BinderKind.param_binding
 
     def test_let_after_input(self) -> None:
         r = parse_and_resolve("param spec\nlet x = spec\nx")
-        assert r.program is not None
+        assert _ref(r, "x").kind == BinderKind.let_binding
 
     def test_let_with_interpolation(self) -> None:
         r = parse_and_resolve(
@@ -198,7 +313,7 @@ class TestAcceptance:
             'let greeting = "Hello ${name}"\n'
             "greeting"
         )
-        assert r.program is not None
+        assert _ref(r, "greeting").kind == BinderKind.let_binding
 
     def test_multiple_inputs(self) -> None:
         r = parse_and_resolve(
@@ -206,27 +321,30 @@ class TestAcceptance:
             "param max_severity: int\n"
             "spec"
         )
-        assert r.program is not None
+        assert _ref(r, "spec").kind == BinderKind.param_binding
 
     def test_unit_lit(self) -> None:
         r = parse_and_resolve("()")
-        assert r.program is not None
+        assert r.resolution == {}
 
     def test_type_alias_at_root(self) -> None:
         r = parse_and_resolve("type MyText = text\n()")
-        assert r.program is not None
+        assert "MyText" in r.declared_type_names
 
     def test_record_def_at_root(self) -> None:
         r = parse_and_resolve("record P\n  n: int\n()")
-        assert r.program is not None
+        lookup_p = r.root_scope.lookup("P")
+        assert lookup_p is not None
+        assert lookup_p.kind == BinderKind.constructor_binding
 
     def test_enum_def_at_root(self) -> None:
         r = parse_and_resolve("enum E\n  | A\n  | B\n()")
-        assert r.program is not None
+        assert "A" in r.constructor_candidates
+        assert r.constructor_candidates["A"][0].owner_name == "E"
 
     def test_raise_expr(self) -> None:
         r = parse_and_resolve("raise 1\n")
-        assert r.program is not None
+        assert r.resolution == {}
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +356,7 @@ class TestBlockScoping:
     def test_forward_binding_visible_after_let(self) -> None:
         """A name bound by ``let`` is visible to all subsequent items."""
         r = parse_and_resolve("let x = 1\nlet y = x\ny")
-        assert r.program is not None
+        assert _ref(r, "y").kind == BinderKind.let_binding
 
     def test_binding_not_visible_before_let(self) -> None:
         """A name is NOT visible before its binder in the same block."""
@@ -269,7 +387,9 @@ class TestBlockScoping:
             "| else =>\n"
             "  outer\n"
         )
-        assert r.program is not None
+        # Both VarRefs to "outer" (in then-branch and else-branch) resolve to the let_binding.
+        assert _ref(r, "outer", occurrence=0).kind == BinderKind.let_binding
+        assert _ref(r, "outer", occurrence=1).kind == BinderKind.let_binding
 
     def test_redeclaration_same_scope_let_let(self) -> None:
         err = reject_scope("let x = 1\nlet x = 2\nx")
@@ -410,7 +530,6 @@ class TestAssignErrors:
 
     def test_assign_to_var_resolves(self) -> None:
         r = parse_and_resolve("var n = 0\nn := 1\nn")
-        assert r.program is not None
         # Verify the assignment statement is in the resolution table.
         block = r.program.body
         assign_node = block.items[1]
@@ -771,7 +890,7 @@ class TestCallResolution:
 class TestFuncDefMutualRecursion:
     def test_def_at_root_accepted(self) -> None:
         r = parse_and_resolve("def f(n: int) -> int = n\nf(1)")
-        assert r.program is not None
+        assert _ref(r, "f").kind == BinderKind.function_binding
         assert "f" in r.declared_functions
 
     def test_def_self_recursion(self) -> None:
@@ -779,7 +898,7 @@ class TestFuncDefMutualRecursion:
             "def fact(n: int) -> int = if n <= 1 => 1 | else => n * fact(n - 1)\n"
             "fact(5)"
         )
-        assert r.program is not None
+        assert _ref(r, "fact").kind == BinderKind.function_binding
 
     def test_def_mutual_recursion(self) -> None:
         """Two top-level defs can reference each other."""
@@ -788,7 +907,7 @@ class TestFuncDefMutualRecursion:
             "def odd(n: int) -> bool = if n = 0 => false | else => even(n - 1)\n"
             "even(4)"
         )
-        assert r.program is not None
+        assert _ref(r, "even").kind == BinderKind.function_binding
         assert "even" in r.declared_functions
         assert "odd" in r.declared_functions
 
@@ -799,12 +918,12 @@ class TestFuncDefMutualRecursion:
             "def callee(n: int) -> int = n\n"
             "caller(1)"
         )
-        assert r.program is not None
+        assert _ref(r, "caller").kind == BinderKind.function_binding
 
     def test_def_body_sees_param(self) -> None:
         """Param names are in scope inside the body."""
         r = parse_and_resolve("def f(x: int) -> int = x\nf(1)")
-        assert r.program is not None
+        assert _ref(r, "x").kind == BinderKind.param_binding
 
     def test_def_params_not_visible_outside(self) -> None:
         """Param names are not visible outside the function body."""
@@ -846,7 +965,7 @@ class TestFuncDefMutualRecursion:
             "def f(x: int = base) -> int = x\n"
             "f()"
         )
-        assert r.program is not None
+        assert _ref(r, "base").kind == BinderKind.let_binding
 
     def test_def_param_duplicate_rejected(self) -> None:
         err = reject_scope("def f(x: int, x: int) -> int = x\nf(1, 2)")
@@ -862,7 +981,7 @@ class TestFuncDefMutualRecursion:
 class TestLambdaScoping:
     def test_lambda_param_visible_in_body(self) -> None:
         r = parse_and_resolve("let f = fn(x: int) => x\nf(1)")
-        assert r.program is not None
+        assert _ref(r, "x").kind == BinderKind.param_binding
 
     def test_lambda_non_recursive(self) -> None:
         """Lambda body does NOT see the let-binding (f is not in scope in its RHS)."""
@@ -879,7 +998,7 @@ class TestLambdaScoping:
     def test_lambda_captures_outer(self) -> None:
         """Lambda body can reference outer-scope bindings."""
         r = parse_and_resolve("let base = 10\nlet f = fn(x: int) => x\nf(1)")
-        assert r.program is not None
+        assert _ref(r, "f").kind == BinderKind.let_binding
 
     def test_lambda_param_reserved_rejected(self) -> None:
         err = reject_scope("let f = fn(print: int) => print\nf(1)")
@@ -898,7 +1017,7 @@ class TestLambdaScoping:
     def test_lambda_default_in_enclosing_scope(self) -> None:
         """Default expressions in a lambda are resolved in the enclosing scope."""
         r = parse_and_resolve("let base = 5\nlet f = fn(x: int = base) => x\nf()")
-        assert r.program is not None
+        assert _ref(r, "base").kind == BinderKind.let_binding
 
 
 # ---------------------------------------------------------------------------
@@ -986,7 +1105,9 @@ class TestDoScoping:
             "until n >= 1\n"
             "n"
         )
-        assert r.program is not None
+        ref = _ref(r, "n")
+        assert ref.kind == BinderKind.var_binding
+        assert ref.mutable
 
     def test_do_body_binding_not_visible_after_loop(self) -> None:
         """A binding from the do body is not visible after the loop."""
@@ -1009,7 +1130,9 @@ class TestDoScoping:
     def test_do_inline_body_resolved(self) -> None:
         """Inline (non-block) do body is also resolved."""
         r = parse_and_resolve("var n = 0\ndo[2] n := 1 until n >= 1\nn")
-        assert r.program is not None
+        ref = _ref(r, "n")
+        assert ref.kind == BinderKind.var_binding
+        assert ref.mutable
 
 
 # ---------------------------------------------------------------------------
@@ -1023,7 +1146,7 @@ class TestIfScoping:
             "let x = true\n"
             "if x => 1 | else => 2\n"
         )
-        assert r.program is not None
+        assert _ref(r, "x").kind == BinderKind.let_binding
 
     def test_if_branch_body_local(self) -> None:
         r = parse_and_resolve(
@@ -1034,7 +1157,7 @@ class TestIfScoping:
             "| else =>\n"
             "  x\n"
         )
-        assert r.program is not None
+        assert _ref(r, "y").kind == BinderKind.let_binding
 
     def test_if_inner_not_visible_outside(self) -> None:
         err = reject_scope(
@@ -1050,7 +1173,7 @@ class TestIfScoping:
 
     def test_if_no_else_accepted(self) -> None:
         r = parse_and_resolve("let x = 1\nif x = 1 => print 1\n")
-        assert r.program is not None
+        assert _ref(r, "x").kind == BinderKind.let_binding
 
 
 # ---------------------------------------------------------------------------
@@ -1065,7 +1188,7 @@ class TestCaseScoping:
             "case x of\n"
             "  | n => n\n"
         )
-        assert r.program is not None
+        assert _ref(r, "n").kind == BinderKind.pattern_binding
 
     def test_case_pattern_not_visible_outside(self) -> None:
         err = reject_scope(
@@ -1084,7 +1207,7 @@ class TestCaseScoping:
             "case x of\n"
             "  | _ => 0\n"
         )
-        assert r.program is not None
+        assert _ref(r, "x").kind == BinderKind.let_binding
 
 
 # ---------------------------------------------------------------------------
@@ -1101,7 +1224,7 @@ class TestTryScoping:
             "catch _ =>\n"
             "  0\n"
         )
-        assert r.program is not None
+        assert _ref(r, "x").kind == BinderKind.let_binding
 
     def test_catch_binder_visible_in_catch_body(self) -> None:
         r = parse_and_resolve(
@@ -1110,7 +1233,7 @@ class TestTryScoping:
             "catch _ as err =>\n"
             "  err\n"
         )
-        assert r.program is not None
+        assert _ref(r, "err").kind == BinderKind.catch_binder
 
     def test_catch_binder_not_visible_outside(self) -> None:
         err = reject_scope(
@@ -1274,7 +1397,7 @@ class TestParentScopeSeam:
     def test_type_name_shadowed_by_param_resolves_as_field_access(self) -> None:
         """When a type name is shadowed by a function parameter, a field
         access on it resolves as an ordinary value field access (not qualified
-        constructor access).  Covers the 1046->1053 branch in _resolve_field_access."""
+        constructor access).  Covers the constructor-access branch in _resolve_field_access."""
         # 'Box' is a type name AND a parameter name inside f.
         # Inside f, Box.x is a regular field access on the parameter, not a
         # qualified constructor reference.
@@ -1384,34 +1507,38 @@ class TestDirectASTConstruction:
         let_probe = _make_let("probe", _make_varref("n"))
         assign_n = _make_assign("n", _make_varref("probe"))
         body = _make_block(let_probe, assign_n)
+        cond_probe = _make_varref("probe")
         do_node = Do(
             limit=5,
             body=body,
-            condition=_make_varref("probe"),
+            condition=cond_probe,
             span=_sp(),
             node_id=_nid(),
         )
         r = resolve_program(var_n, do_node)
-        assert r.program is not None
+        # "probe" is declared in the do body and is visible in the until condition
+        assert r.resolution[cond_probe.node_id].kind == BinderKind.let_binding
 
     def test_do_body_single_expr_resolved(self) -> None:
         var_n = _make_var("n", _make_intlit(0))
+        body_n = _make_varref("n")
         do_node = Do(
             limit=5,
-            body=_make_varref("n"),
+            body=body_n,
             condition=_make_boollit(True),
             span=_sp(),
             node_id=_nid(),
         )
         r = resolve_program(var_n, do_node)
-        assert r.program is not None
+        assert r.resolution[body_n.node_id].kind == BinderKind.var_binding
 
     # --- If with block bodies ---
 
     def test_if_block_body_scope(self) -> None:
         let_x = _make_let("x", _make_intlit(1))
         let_in = _make_let("inner", _make_varref("x"))
-        body_block = _make_block(let_in, _make_varref("inner"))
+        inner_use = _make_varref("inner")
+        body_block = _make_block(let_in, inner_use)
         branch = IfBranch(
             cond=_make_boollit(True),
             body=body_block,
@@ -1420,7 +1547,7 @@ class TestDirectASTConstruction:
         )
         if_node = If(branches=(branch,), span=_sp(), node_id=_nid())
         r = resolve_program(let_x, if_node)
-        assert r.program is not None
+        assert r.resolution[inner_use.node_id].kind == BinderKind.let_binding
 
     def test_if_block_inner_not_visible_outside(self) -> None:
         let_in = _make_let("inner", _make_intlit(1))
@@ -1439,10 +1566,11 @@ class TestDirectASTConstruction:
     # --- Try/catch ---
 
     def test_try_with_catch_binder(self) -> None:
+        err_use = _make_varref("err")
         clause = CatchClause(
             exc_type="SomeError",
             binding="err",
-            body=_make_varref("err"),
+            body=err_use,
             span=_sp(),
             node_id=_nid(),
         )
@@ -1453,7 +1581,7 @@ class TestDirectASTConstruction:
             node_id=_nid(),
         )
         r = resolve_program(try_node)
-        assert r.program is not None
+        assert r.resolution[err_use.node_id].kind == BinderKind.catch_binder
 
     def test_try_catch_binder_not_visible_outside(self) -> None:
         clause = CatchClause(
@@ -1495,9 +1623,8 @@ class TestDirectASTConstruction:
             node_id=_nid(),
         )
         r = resolve_program(enum_def, let_n, ctor_call)
-        assert r.program is not None
         # The named-arg value (VarRef("n")) must be resolved
-        assert arg.value.node_id in r.resolution  # type: ignore[union-attr]
+        assert arg.value.node_id in r.resolution
         # The callee VarRef("point") must be resolved as constructor_binding
         callee = ctor_call.callee
         assert isinstance(callee, VarRef)
@@ -1509,38 +1636,44 @@ class TestDirectASTConstruction:
 
         let_x = _make_let("x", _make_intlit(1))
         let_y = _make_let("y", _make_intlit(2))
+        x_ref = _make_varref("x")
+        y_ref = _make_varref("y")
         binop = BinaryOp(
             op=BinOp.ADD,
-            left=_make_varref("x"),
-            right=_make_varref("y"),
+            left=x_ref,
+            right=y_ref,
             span=_sp(),
             node_id=_nid(),
         )
         r = resolve_program(let_x, let_y, binop)
-        assert r.program is not None
+        assert r.resolution[x_ref.node_id].kind == BinderKind.let_binding
+        assert r.resolution[y_ref.node_id].kind == BinderKind.let_binding
 
     def test_unary_not_resolved(self) -> None:
         from agm.agl.syntax.nodes import UnaryNot
 
         let_b = _make_let("b", _make_boollit(True))
-        expr = UnaryNot(operand=_make_varref("b"), span=_sp(), node_id=_nid())
+        b_ref = _make_varref("b")
+        expr = UnaryNot(operand=b_ref, span=_sp(), node_id=_nid())
         r = resolve_program(let_b, expr)
-        assert r.program is not None
+        assert r.resolution[b_ref.node_id].kind == BinderKind.let_binding
 
     def test_unary_neg_resolved(self) -> None:
         from agm.agl.syntax.nodes import UnaryNeg
 
         let_n = _make_let("n", _make_intlit(1))
-        expr = UnaryNeg(operand=_make_varref("n"), span=_sp(), node_id=_nid())
+        n_ref = _make_varref("n")
+        expr = UnaryNeg(operand=n_ref, span=_sp(), node_id=_nid())
         r = resolve_program(let_n, expr)
-        assert r.program is not None
+        assert r.resolution[n_ref.node_id].kind == BinderKind.let_binding
 
     def test_is_test_resolved(self) -> None:
         from agm.agl.syntax.nodes import IsTest
 
         let_x = _make_let("x", _make_intlit(1))
+        x_ref = _make_varref("x")
         expr = IsTest(
-            expr=_make_varref("x"),
+            expr=x_ref,
             qualifier=None,
             variant="Pass",
             negated=False,
@@ -1548,42 +1681,46 @@ class TestDirectASTConstruction:
             node_id=_nid(),
         )
         r = resolve_program(let_x, expr)
-        assert r.program is not None
+        assert r.resolution[x_ref.node_id].kind == BinderKind.let_binding
 
     def test_field_access_on_varref(self) -> None:
         let_x = _make_let("x", _make_intlit(1))
+        x_ref = _make_varref("x")
         field_expr = FieldAccess(
-            obj=_make_varref("x"), field="f", span=_sp(), node_id=_nid()
+            obj=x_ref, field="f", span=_sp(), node_id=_nid()
         )
         r = resolve_program(let_x, field_expr)
-        assert r.program is not None
+        assert r.resolution[x_ref.node_id].kind == BinderKind.let_binding
 
     def test_list_lit_resolved(self) -> None:
         from agm.agl.syntax.nodes import ListLit
 
         let_x = _make_let("x", _make_intlit(1))
-        lst = ListLit(elements=(_make_varref("x"),), span=_sp(), node_id=_nid())
+        x_ref = _make_varref("x")
+        lst = ListLit(elements=(x_ref,), span=_sp(), node_id=_nid())
         r = resolve_program(let_x, lst)
-        assert r.program is not None
+        assert r.resolution[x_ref.node_id].kind == BinderKind.let_binding
 
     def test_dict_lit_resolved(self) -> None:
         from agm.agl.syntax.nodes import DictEntry, DictLit
 
         let_x = _make_let("x", _make_intlit(1))
         key = StringLit(value="a", span=_sp(), node_id=_nid())
-        entry = DictEntry(key=key, value=_make_varref("x"), span=_sp(), node_id=_nid())
+        x_ref = _make_varref("x")
+        entry = DictEntry(key=key, value=x_ref, span=_sp(), node_id=_nid())
         dlit = DictLit(entries=(entry,), span=_sp(), node_id=_nid())
         r = resolve_program(let_x, dlit)
-        assert r.program is not None
+        assert r.resolution[x_ref.node_id].kind == BinderKind.let_binding
 
     # --- Pattern variable binding ---
 
     def test_case_var_pattern_binds(self) -> None:
         let_x = _make_let("x", _make_intlit(1))
         pattern_var = VarPattern(name="matched", span=_sp(), node_id=_nid())
+        matched_ref = _make_varref("matched")
         branch = CaseBranch(
             pattern=pattern_var,
-            body=_make_varref("matched"),
+            body=matched_ref,
             span=_sp(),
             node_id=_nid(),
         )
@@ -1595,7 +1732,7 @@ class TestDirectASTConstruction:
             node_id=_nid(),
         )
         r = resolve_program(let_x, case_node)
-        assert r.program is not None
+        assert r.resolution[matched_ref.node_id].kind == BinderKind.pattern_binding
 
     def test_case_constructor_pattern_with_field(self) -> None:
         let_x = _make_let("x", _make_intlit(1))
@@ -1604,9 +1741,10 @@ class TestDirectASTConstruction:
         ctor_pattern = ConstructorPattern(
             qualifier=None, name="Fail", fields=(pf,), span=_sp(), node_id=_nid()
         )
+        issues_ref = _make_varref("issues")
         branch = CaseBranch(
             pattern=ctor_pattern,
-            body=_make_varref("issues"),
+            body=issues_ref,
             span=_sp(),
             node_id=_nid(),
         )
@@ -1618,7 +1756,7 @@ class TestDirectASTConstruction:
             node_id=_nid(),
         )
         r = resolve_program(let_x, case_node)
-        assert r.program is not None
+        assert r.resolution[issues_ref.node_id].kind == BinderKind.pattern_binding
 
     def test_duplicate_pattern_var_rejected(self) -> None:
         let_x = _make_let("x", _make_intlit(1))
@@ -1643,15 +1781,18 @@ class TestDirectASTConstruction:
         let_outer = _make_let("v", _make_intlit(99))
         let_x = _make_let("x", _make_intlit(1))
         pv = VarPattern(name="v", span=_sp(), node_id=_nid())
+        v_in_branch = _make_varref("v")
         branch = CaseBranch(
-            pattern=pv, body=_make_varref("v"), span=_sp(), node_id=_nid()
+            pattern=pv, body=v_in_branch, span=_sp(), node_id=_nid()
         )
         from agm.agl.syntax.nodes import Case
         case_node = Case(
             subject=_make_varref("x"), branches=(branch,), span=_sp(), node_id=_nid()
         )
         r = resolve_program(let_outer, let_x, case_node)
-        assert r.program is not None
+        # The inner VarRef resolves to the pattern_binding, not the outer let "v"
+        assert r.resolution[v_in_branch.node_id].kind == BinderKind.pattern_binding
+        assert r.resolution[v_in_branch.node_id].decl_node_id == pv.node_id
 
     # --- Type declarations outside root rejected ---
 
@@ -1734,16 +1875,19 @@ class TestDirectASTConstruction:
         sp = _sp()
         int_t = IntT(span=sp, node_id=_nid())
         param = Param(name="x", type_expr=int_t, default=None, span=sp, node_id=_nid())
+        x_in_body = _make_varref("x")
         funcdef = FuncDef(
             name="g",
             params=(param,),
             return_type=int_t,
-            body=_make_varref("x"),
+            body=x_in_body,
             span=sp,
             node_id=_nid(),
         )
-        r = resolve_program(funcdef, _make_varref("g"))
-        assert r.program is not None
+        g_ref = _make_varref("g")
+        r = resolve_program(funcdef, g_ref)
+        assert r.resolution[x_in_body.node_id].kind == BinderKind.param_binding
+        assert r.resolution[g_ref.node_id].kind == BinderKind.function_binding
 
     def test_funcdef_param_not_visible_outside_body(self) -> None:
         sp = _sp()
@@ -1767,16 +1911,19 @@ class TestDirectASTConstruction:
         sp = _sp()
         int_t = IntT(span=sp, node_id=_nid())
         param = Param(name="x", type_expr=int_t, default=None, span=sp, node_id=_nid())
+        x_in_lam = _make_varref("x")
         lam = Lambda(
             params=(param,),
             return_type=None,
-            body=_make_varref("x"),
+            body=x_in_lam,
             span=sp,
             node_id=_nid(),
         )
         let_f = _make_let("f", lam)
-        r = resolve_program(let_f, _make_varref("f"))
-        assert r.program is not None
+        f_ref = _make_varref("f")
+        r = resolve_program(let_f, f_ref)
+        assert r.resolution[x_in_lam.node_id].kind == BinderKind.param_binding
+        assert r.resolution[f_ref.node_id].kind == BinderKind.let_binding
 
     def test_lambda_not_self_recursive(self) -> None:
         """A lambda body that references its own let-binding name fails."""
@@ -1898,8 +2045,10 @@ class TestBlockAsExpr:
         inner_ref = _make_varref("x")
         inner_block = _make_block(let_x, inner_ref)
         let_result = _make_let("result", inner_block)
-        r = resolve_program(let_result, _make_varref("result"))
-        assert r.program is not None
+        result_ref = _make_varref("result")
+        r = resolve_program(let_result, result_ref)
+        assert r.resolution[inner_ref.node_id].kind == BinderKind.let_binding
+        assert r.resolution[result_ref.node_id].kind == BinderKind.let_binding
 
     def test_block_as_expr_inner_binding_isolated(self) -> None:
         """Bindings in a Block expr don't escape outside the block."""
@@ -1929,7 +2078,9 @@ class TestAmbientAgentBindingEdgeCases:
             parent_scope=session.root_scope,
             ambient_agents=frozenset({"session_bot"}),
         )
-        assert entry.program is not None
+        ref = _ref(entry, "x")
+        assert ref.name == "x"
+        assert ref.kind == BinderKind.let_binding
 
     def test_ambient_agent_already_declared_locally_skipped(self) -> None:
         """If an ambient agent name is also declared locally, local takes precedence."""
@@ -1938,8 +2089,8 @@ class TestAmbientAgentBindingEdgeCases:
             parse_program("agent bot\nlet x = bot\nx"),
             ambient_agents=frozenset({"bot"}),
         )
-        assert r.program is not None
-        # The local declared_agents entry takes precedence.
+        # The local declared_agents entry takes precedence; "bot" resolves as agent_binding.
+        assert _ref(r, "bot").kind == BinderKind.agent_binding
         assert "bot" in r.declared_agents
 
     def test_def_name_collides_with_ambient_agent_rejected(self) -> None:
@@ -1959,7 +2110,7 @@ class TestAmbientAgentBindingEdgeCases:
 
 
 # ---------------------------------------------------------------------------
-# Lambda duplicate param (covers line 885)
+# Lambda duplicate param
 # ---------------------------------------------------------------------------
 
 
@@ -2037,7 +2188,6 @@ class TestConstructorBindings:
             "let b = Box(value: 1)\n"
             "b\n"
         )
-        assert r.program is not None
         # The callee VarRef("Box") should be in constructor_refs
         # and the constructor candidate is for 'Box'
         assert "Box" in r.constructor_candidates
@@ -2065,7 +2215,6 @@ class TestConstructorBindings:
             "  | some\n"
             "none\n"
         )
-        assert r.program is not None
         assert "none" in r.constructor_candidates
         assert "some" in r.constructor_candidates
 
@@ -2302,7 +2451,13 @@ class TestConstructorBindings:
             "  | some(value: T)\n"
             "Option.some(value: 1)\n"
         )
-        assert r.program is not None
+        call_node = r.program.body.items[2]
+        assert isinstance(call_node, Call)
+        assert isinstance(call_node.callee, FieldAccess)
+        assert call_node.callee.node_id in r.qualified_constructor_refs
+        owner, member, _ = r.qualified_constructor_refs[call_node.callee.node_id]
+        assert owner == "Option"
+        assert member == "some"
 
     # --- Qualified constructor access ---
 
@@ -2332,7 +2487,11 @@ class TestConstructorBindings:
             "  | some\n"
             "Option.some\n"
         )
-        assert r.program is not None
+        last = r.program.body.items[1]
+        assert isinstance(last, FieldAccess)
+        assert last.node_id in r.qualified_constructor_refs
+        owner, member, _ = r.qualified_constructor_refs[last.node_id]
+        assert owner == "Option" and member == "some"
 
     def test_qualified_access_none_variant(self) -> None:
         """Option.none is recorded in qualified_constructor_refs."""
@@ -2345,7 +2504,9 @@ class TestConstructorBindings:
         last = r.program.body.items[1]
         assert isinstance(last, FieldAccess)
         assert last.node_id in r.qualified_constructor_refs
-        assert r.qualified_constructor_refs[last.node_id][:2] == ("Option", "none")
+        type_name, variant_name, _mod = r.qualified_constructor_refs[last.node_id]
+        assert type_name == "Option"
+        assert variant_name == "none"
 
     def test_qualified_access_with_record_type(self) -> None:
         """Box.value is NOT a constructor qualified access (Box is a record, value is a field)."""
@@ -2357,7 +2518,6 @@ class TestConstructorBindings:
             "  value: int\n"
             "Box.value\n"
         )
-        assert r.program is not None
         last = r.program.body.items[1]
         assert isinstance(last, FieldAccess)
         assert last.node_id in r.qualified_constructor_refs
@@ -2398,22 +2558,6 @@ class TestConstructorBindings:
         msg = err.to_diagnostic().message
         assert "some" in msg
 
-    def test_let_shadows_constructor_in_nested_scope_no_error(self) -> None:
-        """In a nested scope, a 'let' binding shadows a constructor from the outer scope."""
-        # In a nested block (if branch), a let can shadow the constructor
-        # without error; no duplicate-binding error is raised because they're
-        # in different scopes.
-        r = parse_and_resolve(
-            "enum Option\n"
-            "  | some\n"
-            "if true =>\n"
-            "  let some = 42\n"
-            "  some\n"
-            "| else =>\n"
-            "  some\n"
-        )
-        assert r.program is not None
-
     def test_let_shadows_constructor_in_if_branch_no_error(self) -> None:
         """In a branch, a 'let' name can shadow a constructor from the outer scope.
 
@@ -2429,13 +2573,12 @@ class TestConstructorBindings:
             "| else =>\n"
             "  some\n"
         )
-        assert r.program is not None
-        # The VarRef in the else branch (index 1 of branches, its body is VarRef)
-        # resolves to the constructor_binding, while the then-branch's VarRef
-        # resolves to the let_binding.  We verify no error and the program is fine.
-        # The outer 'some' VarRef in the else branch should have a constructor_ref.
-        # We can verify via the resolution table but the node_ids are harder to
-        # locate without traversal; no-error is sufficient here.
+        inner = _find_varref(r.program, "some", occurrence=0)
+        outer = _find_varref(r.program, "some", occurrence=1)
+        # The then-branch "some" resolves to the let_binding (shadowing)
+        assert r.resolution[inner.node_id].kind == BinderKind.let_binding
+        # The else-branch "some" resolves to the constructor_binding (not shadowed)
+        assert r.resolution[outer.node_id].kind == BinderKind.constructor_binding
 
     def test_let_at_root_conflicts_with_constructor(self) -> None:
         """At root, 'let some' conflicts with the constructor 'some'."""
@@ -2490,8 +2633,6 @@ class TestConstructorBindings:
             "  | Some\n"
             "Option.None\n"
         )
-        assert r_lower.program is not None
-        assert r_upper.program is not None
         # Both should have a single qualified_constructor_ref
         assert len(r_lower.qualified_constructor_refs) == 1
         assert len(r_upper.qualified_constructor_refs) == 1
@@ -2506,7 +2647,6 @@ class TestConstructorBindings:
             "let b = someVal\n"
             "a\n"
         )
-        assert r.program is not None
         assert "none" in r.constructor_candidates
         assert "someVal" in r.constructor_candidates
 
@@ -2581,7 +2721,7 @@ class TestConstructorBindings:
             "def id[T](x: int) -> int = x\n"
             "id(1)\n"
         )
-        assert r.program is not None
+        assert _ref(r, "id").kind == BinderKind.function_binding
 
     def test_multiple_type_params_unique_accepted(self) -> None:
         """Multiple unique type params in a record are accepted."""
@@ -2590,7 +2730,9 @@ class TestConstructorBindings:
             "  value: int\n"
             "()\n"
         )
-        assert r.program is not None
+        lookup_pair = r.root_scope.lookup("Pair")
+        assert lookup_pair is not None
+        assert lookup_pair.kind == BinderKind.constructor_binding
 
     # --- declared_type_names populated ---
 
@@ -2625,7 +2767,6 @@ class TestConstructorBindings:
             node_id=_nid(),
         )
         r = resolve_program(rec, call)
-        assert r.program is not None
         assert "Point" in r.constructor_candidates
         assert r.constructor_candidates["Point"][0].variant is None
 
@@ -2666,7 +2807,9 @@ class TestConstructorBindings:
         )
         r = resolve_program(enum, fa)
         assert fa.node_id in r.qualified_constructor_refs
-        assert r.qualified_constructor_refs[fa.node_id][:2] == ("Color", "red")
+        type_name2, variant_name2, _mod2 = r.qualified_constructor_refs[fa.node_id]
+        assert type_name2 == "Color"
+        assert variant_name2 == "red"
 
     def test_ordinary_field_access_not_qualified_ref(self) -> None:
         """FieldAccess on a regular value is NOT recorded in qualified_constructor_refs."""

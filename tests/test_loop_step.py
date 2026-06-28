@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -24,6 +24,7 @@ from agm.commands.loop.step import (
     cleanup_runtime,
     execute_single_step,
     prepare_runtime,
+    print_dry_run,
     print_startup,
     run,
 )
@@ -126,6 +127,9 @@ def _make_runtime(
     bootstrap_prompt: PreparedPrompt | None = None,
     log_file: Path | None = None,
     runner_command: list[str] | None = None,
+    extra_prompt_source: str | Path | None = None,
+    idle_timeout: float | None = None,
+    env: dict[str, str] | None = None,
 ) -> LoopStepRuntime:
     tasks_dir = tmp_path / "tasks"
     tasks_dir.mkdir(parents=True, exist_ok=True)
@@ -140,16 +144,16 @@ def _make_runtime(
         temp_files=[],
         resolved_tasks_dir=tasks_dir,
         resolved_progress_file=progress,
-        env={"TASKS_DIR": str(tasks_dir)},
+        env=env if env is not None else {"TASKS_DIR": str(tasks_dir)},
         resolved_runner_command=runner_command if runner_command is not None else ["myrunner"],
         select_invocation=select_invocation,
         implement_prompt_file=implement_prompt_file,
         loop_prompt=loop_prompt,
         resolved_prompt=resolved_prompt,
         bootstrap_prompt=bootstrap_prompt,
-        extra_prompt_source=None,
+        extra_prompt_source=extra_prompt_source,
         log_file=log_file,
-        idle_timeout=None,
+        idle_timeout=idle_timeout,
     )
 
 
@@ -315,20 +319,14 @@ class TestWriteStream:
 
 
 class TestPrintDryRunCommand:
-    def test_delegates_to_dry_run_print_labeled_command(
-        self, monkeypatch: pytest.MonkeyPatch
+    def test_prints_labeled_command_to_stdout(
+        self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        captured_calls: list[tuple[str, list[str]]] = []
-
-        def fake_print_labeled_command(label: str, command: list[str]) -> None:
-            captured_calls.append((label, command))
-
-        monkeypatch.setattr(
-            "agm.commands.loop.step.dry_run.print_labeled_command",
-            fake_print_labeled_command,
-        )
         _print_dry_run_command("runner", ["myrunner", "--verbose"])
-        assert captured_calls == [("runner", ["myrunner", "--verbose"])]
+        out, _ = capsys.readouterr()
+        assert "command [runner]:" in out
+        assert "myrunner" in out
+        assert "--verbose" in out
 
 
 # ===========================================================================
@@ -458,6 +456,7 @@ class TestPrepareRuntime:
         monkeypatch.chdir(tmp_path)
 
         run_calls: list[list[str]] = []
+        run_targets: list[Path] = []
 
         def fake_run_command(
             command: list[str],
@@ -467,6 +466,7 @@ class TestPrepareRuntime:
             idle_timeout: float | None = None,
         ) -> str:
             run_calls.append(command)
+            run_targets.append(target)
             return ""
 
         monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
@@ -477,8 +477,9 @@ class TestPrepareRuntime:
 
         assert runtime.bootstrap_prompt is not None
         assert runtime.bootstrap_prompt.label == "bootstrap"
-        # bootstrap runner was invoked
+        # bootstrap runner was invoked with the runner command targeting the bootstrap prompt
         assert run_calls == [["fake-runner"]]
+        assert run_targets == [runtime.bootstrap_prompt.effective_file]
         cleanup_runtime(runtime)
 
     def test_prepare_runtime_uses_explicit_prompt_file(
@@ -577,8 +578,7 @@ class TestPrepareRuntime:
         with pytest.raises(SystemExit) as exc_info:
             prepare_runtime(args)
         assert exc_info.value.code == 1
-        # Improve coverage for the missing implement.md error path (line 165-166)
-        # This also verifies that selector mode requires implement.md when no explicit prompt
+        # Verifies that selector mode requires implement.md when no explicit prompt is given.
 
     def test_prepare_runtime_selector_mode_no_implement_with_inline_prompt(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -816,10 +816,7 @@ class TestExecuteSingleStep:
             "agm.commands.loop.step.run_prompt_command",
             lambda *a, **kw: "COMPLETE",
         )
-        monkeypatch.setattr(
-            "agm.commands.loop.step.selector_result",
-            lambda output, tasks_dir: None,
-        )
+        # Real selector_result: "COMPLETE" on the last line → returns None → done.
         result = execute_single_step(runtime, step_number=1)
         assert result is True
 
@@ -865,13 +862,14 @@ class TestExecuteSingleStep:
             nonlocal call_count
             call_count += 1
             all_targets.append(target)
+            # Selector call: return task filename so real selector_result resolves it.
+            # Runner call: return arbitrary output.
+            if command == ["fake-selector"]:
+                return "task-1.md\n"
             return "task output"
 
         monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        monkeypatch.setattr(
-            "agm.commands.loop.step.selector_result",
-            lambda output, tasks_dir: task_file,
-        )
+        # Real selector_result: "task-1.md" found in tasks_dir → returns Path.
         result = execute_single_step(runtime, step_number=1)
         assert result is False
         # selector + runner calls = 2
@@ -924,13 +922,13 @@ class TestExecuteSingleStep:
         ) -> str:
             all_targets.append(target)
             all_envs.append(env)
+            # Selector call: real selector_result resolves "task-1.md" → task_file.
+            if command == ["fake-selector"]:
+                return "task-1.md\n"
             return "task output"
 
         monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        monkeypatch.setattr(
-            "agm.commands.loop.step.selector_result",
-            lambda output, tasks_dir: task_file,
-        )
+        # Real selector_result: "task-1.md" found in tasks_dir → returns Path.
         execute_single_step(runtime, step_number=1)
 
         # Runner (2nd call) receives preprocessed implement.md with TASK_FILE expanded
@@ -985,13 +983,13 @@ class TestExecuteSingleStep:
         ) -> str:
             all_targets.append(target)
             all_envs.append(env)
+            # Selector call: real selector_result resolves "task-1.md" → task_file.
+            if command == ["fake-selector"]:
+                return "task-1.md\n"
             return "output"
 
         monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        monkeypatch.setattr(
-            "agm.commands.loop.step.selector_result",
-            lambda output, tasks_dir: task_file,
-        )
+        # Real selector_result: "task-1.md" found in tasks_dir → returns Path.
         execute_single_step(runtime, step_number=1)
 
         # Explicit prompt is re-prepared with TASK_FILE env
@@ -1040,13 +1038,13 @@ class TestExecuteSingleStep:
         ) -> str:
             all_targets.append(target)
             all_envs.append(env)
+            # Selector call: real selector_result resolves "task-1.md" → task_file.
+            if command == ["fake-selector"]:
+                return "task-1.md\n"
             return "output"
 
         monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        monkeypatch.setattr(
-            "agm.commands.loop.step.selector_result",
-            lambda output, tasks_dir: task_file,
-        )
+        # Real selector_result: "task-1.md" found in tasks_dir → returns Path.
         execute_single_step(runtime, step_number=1)
 
         # Raw task file is used as runner target (fallback)
@@ -1082,16 +1080,28 @@ class TestExecuteSingleStep:
         )
 
         selector_call_count = 0
-        selector_results: list[Path | None | str] = ["not a path yet", task_file]
 
-        def fake_selector_result(output: str, *, tasks_dir: Path) -> Path | None | str:
+        def fake_run_command(
+            command: list[str],
+            target: Path,
+            *,
+            env: dict[str, str],
+            stdout_callback: object = None,
+            stderr_callback: object = None,
+            idle_timeout: float | None = None,
+        ) -> str:
             nonlocal selector_call_count
-            val = selector_results[selector_call_count]
-            selector_call_count += 1
-            return val
+            if command == ["fake-selector"]:
+                selector_call_count += 1
+                # 1st selector call: return non-resolvable text → real selector_result → str.
+                # 2nd selector call: return task filename → real selector_result → Path.
+                if selector_call_count == 1:
+                    return "not a path yet\n"
+                return "task-1.md\n"
+            return "output"
 
-        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", lambda *a, **kw: "output")
-        monkeypatch.setattr("agm.commands.loop.step.selector_result", fake_selector_result)
+        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
+        # Real selector_result drives the retry: str on 1st call, Path on 2nd.
         execute_single_step(runtime, step_number=1)
         assert selector_call_count == 2
 
@@ -1635,288 +1645,145 @@ class TestLoopRun:
         assert cleanup_called[0] is False
 
 
+# ---------------------------------------------------------------------------
+# Runtime builders for TestPrintDryRunFull parametrized cases
+# ---------------------------------------------------------------------------
+
+
+def _make_selector_invocation(tmp_path: Path) -> PreparedSelectInvocation:
+    """Build a selector PreparedSelectInvocation for dry-run tests."""
+    prompt = tmp_path / "select.md"
+    prompt.write_text("select\n", encoding="utf-8")
+    return PreparedSelectInvocation(
+        source_prompt_file=prompt,
+        effective_prompt_file=prompt,
+        command=["selector"],
+        command_kind="selector",
+        runner_command=["runner"],
+        selector_command=["selector"],
+    )
+
+
+def _dry_run_selector_idle_timeout(tmp_path: Path) -> LoopStepRuntime:
+    return _make_runtime(
+        tmp_path,
+        select_invocation=_make_selector_invocation(tmp_path),
+        loop_prompt=None,
+        runner_command=["runner"],
+        env={},
+        idle_timeout=5.0,
+    )
+
+
+def _dry_run_selector_implement_prompt(tmp_path: Path) -> LoopStepRuntime:
+    impl = tmp_path / "implement.md"
+    impl.write_text("implement\n", encoding="utf-8")
+    return _make_runtime(
+        tmp_path,
+        select_invocation=_make_selector_invocation(tmp_path),
+        implement_prompt_file=impl,
+        loop_prompt=None,
+        runner_command=["runner"],
+        env={},
+    )
+
+
+def _dry_run_selector_explicit_prompt(tmp_path: Path) -> LoopStepRuntime:
+    resolved_file = tmp_path / "custom-prompt.md"
+    resolved_file.write_text("custom\n", encoding="utf-8")
+    rp = ResolvedPrompt(source=resolved_file, effective_file=resolved_file)
+    return _make_runtime(
+        tmp_path,
+        select_invocation=_make_selector_invocation(tmp_path),
+        resolved_prompt=rp,
+        loop_prompt=None,
+        runner_command=["runner"],
+        env={},
+    )
+
+
+def _dry_run_no_selector_log_file(tmp_path: Path) -> LoopStepRuntime:
+    return _make_runtime(
+        tmp_path,
+        runner_command=["runner"],
+        env={},
+        log_file=tmp_path / "test.log",
+    )
+
+
+def _dry_run_no_selector_explicit_prompt(tmp_path: Path) -> LoopStepRuntime:
+    rp = ResolvedPrompt(source="inline text", effective_file=tmp_path / "inline.md")
+    return _make_runtime(
+        tmp_path,
+        runner_command=["runner"],
+        env={},
+        resolved_prompt=rp,
+    )
+
+
+def _dry_run_with_bootstrap(tmp_path: Path) -> LoopStepRuntime:
+    bootstrap_f = tmp_path / "select.md"
+    bootstrap_f.write_text("bootstrap\n", encoding="utf-8")
+    bp = PreparedPrompt(label="bootstrap", source_file=bootstrap_f, effective_file=bootstrap_f)
+    return _make_runtime(
+        tmp_path,
+        runner_command=["runner"],
+        env={},
+        bootstrap_prompt=bp,
+    )
+
+
 class TestPrintDryRunFull:
-    def test_print_dry_run_with_selector_invocation(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    @pytest.mark.parametrize(
+        ("build_runtime", "expected_snippets"),
+        [
+            pytest.param(
+                _dry_run_selector_idle_timeout,
+                ["idle timeout: 5.0s", "selector command: selector"],
+                id="selector_idle_timeout",
+            ),
+            pytest.param(
+                _dry_run_selector_implement_prompt,
+                ["implement.md", "(default)"],
+                id="selector_implement_prompt",
+            ),
+            pytest.param(
+                _dry_run_selector_explicit_prompt,
+                ["custom-prompt"],
+                id="selector_explicit_prompt",
+            ),
+            pytest.param(
+                _dry_run_no_selector_log_file,
+                ["idle timeout: disabled", "test.log"],
+                id="no_selector_log_file",
+            ),
+            pytest.param(
+                _dry_run_no_selector_explicit_prompt,
+                ["explicit prompt:"],
+                id="no_selector_explicit_prompt",
+            ),
+            pytest.param(
+                _dry_run_with_bootstrap,
+                ["command [bootstrap]:"],
+                id="bootstrap_prompt",
+            ),
+        ],
+    )
+    def test_print_dry_run_output(
+        self,
+        tmp_path: Path,
+        build_runtime: Callable[[Path], LoopStepRuntime],
+        expected_snippets: list[str],
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
-        from agm.commands.loop.step import LoopStepRuntime, print_dry_run
-
-        tasks_dir = tmp_path / "tasks"
-        tasks_dir.mkdir()
-        progress = tasks_dir / "PROGRESS.md"
-        prompt = tmp_path / "select.md"
-        prompt.write_text("select\n", encoding="utf-8")
-
-        invocation = PreparedSelectInvocation(
-            source_prompt_file=prompt,
-            effective_prompt_file=prompt,
-            command=["selector"],
-            command_kind="selector",
-            runner_command=["runner"],
-            selector_command=["selector"],
-        )
-
-        runtime = LoopStepRuntime(
-            temp_files=[],
-            resolved_tasks_dir=tasks_dir,
-            resolved_progress_file=progress,
-            env={},
-            resolved_runner_command=["runner"],
-            select_invocation=invocation,
-            implement_prompt_file=None,
-            loop_prompt=None,
-            resolved_prompt=None,
-            bootstrap_prompt=None,
-            extra_prompt_source=None,
-            log_file=None,
-            idle_timeout=5.0,
-        )
-
-        from agm.core import dry_run
-
-        dry_run_calls: list[Any] = []
-        monkeypatch.setattr(
-            dry_run, "print_configuration", lambda label: dry_run_calls.append(("config", label))
-        )
-        monkeypatch.setattr(
-            dry_run, "print_detail", lambda k, v: dry_run_calls.append(("detail", k, v))
-        )
-        monkeypatch.setattr(
-            dry_run,
-            "print_labeled_command",
-            lambda label, cmd, cwd=None: dry_run_calls.append(("cmd", label, cmd)),
-        )
-        monkeypatch.setattr(
-            dry_run,
-            "format_command",
-            lambda cmd: " ".join(cmd),
-        )
-        monkeypatch.setattr(
-            dry_run,
-            "print_operation",
-            lambda name, detail: dry_run_calls.append(("op", name, detail)),
-        )
-
+        runtime = build_runtime(tmp_path)
         print_dry_run(runtime)
-
-        detail_calls = [c for c in dry_run_calls if c[0] == "detail"]
-        assert any(d[1] == "idle timeout" and d[2] == "5.0s" for d in detail_calls)
-        assert any(d[1] == "selector command" and d[2] == "selector" for d in detail_calls)
-
-    def test_print_dry_run_with_selector_and_implement_prompt(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        from agm.commands.loop.step import LoopStepRuntime, print_dry_run
-
-        tasks_dir = tmp_path / "tasks"
-        tasks_dir.mkdir()
-        progress = tasks_dir / "PROGRESS.md"
-        prompt = tmp_path / "select.md"
-        prompt.write_text("select\n", encoding="utf-8")
-        implement_file = tmp_path / "implement.md"
-        implement_file.write_text("implement\n", encoding="utf-8")
-
-        invocation = PreparedSelectInvocation(
-            source_prompt_file=prompt,
-            effective_prompt_file=prompt,
-            command=["selector"],
-            command_kind="selector",
-            runner_command=["runner"],
-            selector_command=["selector"],
-        )
-
-        runtime = LoopStepRuntime(
-            temp_files=[],
-            resolved_tasks_dir=tasks_dir,
-            resolved_progress_file=progress,
-            env={},
-            resolved_runner_command=["runner"],
-            select_invocation=invocation,
-            implement_prompt_file=implement_file,
-            loop_prompt=None,
-            resolved_prompt=None,
-            bootstrap_prompt=None,
-            extra_prompt_source=None,
-            log_file=None,
-            idle_timeout=None,
-        )
-
-        print_dry_run(runtime)
-
         output = capsys.readouterr().out
-        assert "implement.md" in output
-        assert "(default)" in output
-
-    def test_print_dry_run_selector_with_explicit_prompt(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        from agm.commands.loop.step import LoopStepRuntime, print_dry_run
-
-        tasks_dir = tmp_path / "tasks"
-        tasks_dir.mkdir()
-        progress = tasks_dir / "PROGRESS.md"
-        prompt = tmp_path / "select.md"
-        prompt.write_text("select\n", encoding="utf-8")
-
-        invocation = PreparedSelectInvocation(
-            source_prompt_file=prompt,
-            effective_prompt_file=prompt,
-            command=["selector"],
-            command_kind="selector",
-            runner_command=["runner"],
-            selector_command=["selector"],
-        )
-
-        resolved_file = tmp_path / "custom-prompt.md"
-        resolved_file.write_text("custom\n", encoding="utf-8")
-        resolved_prompt = ResolvedPrompt(source=resolved_file, effective_file=resolved_file)
-
-        runtime = LoopStepRuntime(
-            temp_files=[],
-            resolved_tasks_dir=tasks_dir,
-            resolved_progress_file=progress,
-            env={},
-            resolved_runner_command=["runner"],
-            select_invocation=invocation,
-            implement_prompt_file=None,
-            loop_prompt=None,
-            resolved_prompt=resolved_prompt,
-            bootstrap_prompt=None,
-            extra_prompt_source=None,
-            log_file=None,
-            idle_timeout=None,
-        )
-
-        print_dry_run(runtime)
-
-        output = capsys.readouterr().out
-        assert "custom-prompt" in output
-
-    def test_print_dry_run_without_selector_invocation(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from agm.commands.loop.step import LoopStepRuntime, PreparedPrompt, print_dry_run
-
-        tasks_dir = tmp_path / "tasks"
-        tasks_dir.mkdir()
-        progress = tasks_dir / "PROGRESS.md"
-        prompt = tmp_path / "loop.md"
-        prompt.write_text("loop\n", encoding="utf-8")
-
-        loop_prompt = PreparedPrompt(
-            label="loop", source_file=prompt, effective_file=prompt
-        )
-
-        runtime = LoopStepRuntime(
-            temp_files=[],
-            resolved_tasks_dir=tasks_dir,
-            resolved_progress_file=progress,
-            env={},
-            resolved_runner_command=["runner"],
-            select_invocation=None,
-            implement_prompt_file=None,
-            loop_prompt=loop_prompt,
-            resolved_prompt=None,
-            bootstrap_prompt=None,
-            extra_prompt_source=None,
-            log_file=tmp_path / "test.log",
-            idle_timeout=None,
-        )
-
-        from agm.core import dry_run
-
-        dry_run_calls: list[Any] = []
-        monkeypatch.setattr(
-            dry_run, "print_configuration", lambda label: dry_run_calls.append(("config", label))
-        )
-        monkeypatch.setattr(
-            dry_run, "print_detail", lambda k, v: dry_run_calls.append(("detail", k, v))
-        )
-        monkeypatch.setattr(
-            dry_run,
-            "print_labeled_command",
-            lambda label, cmd, cwd=None: dry_run_calls.append(("cmd", label, cmd)),
-        )
-        monkeypatch.setattr(
-            dry_run,
-            "format_command",
-            lambda cmd: " ".join(cmd),
-        )
-        monkeypatch.setattr(
-            dry_run,
-            "print_operation",
-            lambda name, detail: dry_run_calls.append(("op", name, detail)),
-        )
-
-        print_dry_run(runtime)
-
-        detail_calls = [c for c in dry_run_calls if c[0] == "detail"]
-        assert any(d[1] == "idle timeout" and d[2] == "disabled" for d in detail_calls)
-        assert any(d[1] == "log file" and str(tmp_path / "test.log") in d[2] for d in detail_calls)
-
-    def test_print_dry_run_with_explicit_prompt_detail(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from agm.commands.loop.step import LoopStepRuntime, PreparedPrompt, print_dry_run
-
-        tasks_dir = tmp_path / "tasks"
-        tasks_dir.mkdir()
-        progress = tasks_dir / "PROGRESS.md"
-        prompt = tmp_path / "loop.md"
-        prompt.write_text("loop\n", encoding="utf-8")
-
-        loop_prompt = PreparedPrompt(
-            label="loop", source_file=prompt, effective_file=prompt
-        )
-        resolved_prompt = ResolvedPrompt(
-            source="inline text", effective_file=tmp_path / "inline.md"
-        )
-
-        runtime = LoopStepRuntime(
-            temp_files=[],
-            resolved_tasks_dir=tasks_dir,
-            resolved_progress_file=progress,
-            env={},
-            resolved_runner_command=["runner"],
-            select_invocation=None,
-            implement_prompt_file=None,
-            loop_prompt=loop_prompt,
-            resolved_prompt=resolved_prompt,
-            bootstrap_prompt=None,
-            extra_prompt_source=None,
-            log_file=None,
-            idle_timeout=None,
-        )
-
-        from agm.core import dry_run
-
-        dry_run_calls: list[Any] = []
-        monkeypatch.setattr(
-            dry_run, "print_configuration", lambda label: dry_run_calls.append(("config", label))
-        )
-        monkeypatch.setattr(
-            dry_run, "print_detail", lambda k, v: dry_run_calls.append(("detail", k, v))
-        )
-        monkeypatch.setattr(
-            dry_run,
-            "print_labeled_command",
-            lambda label, cmd, cwd=None: dry_run_calls.append(("cmd", label, cmd)),
-        )
-        monkeypatch.setattr(
-            dry_run,
-            "format_command",
-            lambda cmd: " ".join(cmd),
-        )
-        monkeypatch.setattr(
-            dry_run,
-            "print_operation",
-            lambda name, detail: dry_run_calls.append(("op", name, detail)),
-        )
-
-        print_dry_run(runtime)
-
-        detail_calls = [c for c in dry_run_calls if c[0] == "detail"]
-        assert any(d[1] == "explicit prompt" for d in detail_calls)
+        for snippet in expected_snippets:
+            assert snippet in output
+        # When a log file is configured, the dry-run output names its full path.
+        if runtime.log_file is not None:
+            assert str(runtime.log_file) in output
 
 
 class TestPrepareRuntimeMissingPromptFiles:
@@ -1924,8 +1791,6 @@ class TestPrepareRuntimeMissingPromptFiles:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """prepare_runtime exits when bootstrap prompt (select.md) is missing."""
-        from agm.commands.loop.step import prepare_runtime
-
         home = tmp_path / "home"
         (home / ".agm" / "prompts").mkdir(parents=True)
         # Create loop.md so the loop prompt check passes
@@ -1964,8 +1829,6 @@ class TestExecuteSingleStepSelectorStringResult:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """When selector_result returns a string (not Path), selector retries."""
-        from agm.commands.loop.step import LoopStepRuntime, execute_single_step
-
         prompt = tmp_path / "select.md"
         prompt.write_text("select\n", encoding="utf-8")
         invocation = PreparedSelectInvocation(
@@ -1976,22 +1839,12 @@ class TestExecuteSingleStepSelectorStringResult:
             runner_command=["fake-runner"],
             selector_command=["fake-selector"],
         )
-        tasks_dir_path = tmp_path / "tasks"
-        tasks_dir_path.mkdir(parents=True)
-        runtime = LoopStepRuntime(
-            temp_files=[],
-            resolved_tasks_dir=tasks_dir_path,
-            resolved_progress_file=tasks_dir_path / "PROGRESS.md",
-            env={},
-            resolved_runner_command=["fake-runner"],
+        runtime = _make_runtime(
+            tmp_path,
             select_invocation=invocation,
-            implement_prompt_file=None,
             loop_prompt=None,
-            resolved_prompt=None,
-            bootstrap_prompt=None,
-            extra_prompt_source=None,
-            log_file=None,
-            idle_timeout=None,
+            runner_command=["fake-runner"],
+            env={},
         )
 
         call_count = 0
@@ -2007,26 +1860,21 @@ class TestExecuteSingleStepSelectorStringResult:
         ) -> str:
             nonlocal call_count
             call_count += 1
-            # Return COMPLETE on second call (the retry)
-            return "COMPLETE"
-
-        # First returns a string (not a path), then None (COMPLETE on retry)
-        selector_results = ["not-a-file-path"]
-        selector_idx = 0
-
-        def fake_selector_result(output: str, *, tasks_dir: Path) -> Path | None | str:
-            nonlocal selector_idx
-            if selector_idx < len(selector_results):
-                val = selector_results[selector_idx]
-                selector_idx += 1
-                return val
-            return None  # COMPLETE on third call
+            # 1st selector call: non-resolvable text → real selector_result → str → retry.
+            # 2nd selector call: COMPLETE → real selector_result → None → done.
+            if call_count == 1:
+                return "not-a-file-path\n"
+            return "COMPLETE\n"
 
         monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        monkeypatch.setattr("agm.commands.loop.step.selector_result", fake_selector_result)
+        # Real selector_result: "not-a-file-path" is not a file → str (retry);
+        # then "COMPLETE" on last line → None (done).
         result = execute_single_step(runtime, step_number=1)
         # After string result, selector retries; eventually COMPLETE returns True
         assert result is True
+        # The str result must have triggered a retry: exactly two selector calls,
+        # never a runner call (this branch never selects a task).
+        assert call_count == 2
 
 
 class TestExecuteSingleStepWithResolvedPrompt:
@@ -2034,9 +1882,6 @@ class TestExecuteSingleStepWithResolvedPrompt:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """When runtime has resolved_prompt and loop_prompt, runner uses loop_prompt."""
-        from agm.commands.loop.step import LoopStepRuntime, execute_single_step
-        from agm.commands.loop.step import PreparedPrompt as StepPrepPrompt
-
         prompt = tmp_path / "select.md"
         prompt.write_text("select\n", encoding="utf-8")
         invocation = PreparedSelectInvocation(
@@ -2054,26 +1899,17 @@ class TestExecuteSingleStepWithResolvedPrompt:
         loop_file.write_text("loop\n", encoding="utf-8")
 
         resolved_prompt = ResolvedPrompt(source="inline", effective_file=resolved_file)
-        loop_prompt = StepPrepPrompt(
+        loop_prompt = PreparedPrompt(
             label="loop", source_file=loop_file, effective_file=loop_file
         )
 
-        tasks_dir_path = tmp_path / "tasks"
-        tasks_dir_path.mkdir(parents=True)
-        runtime = LoopStepRuntime(
-            temp_files=[],
-            resolved_tasks_dir=tasks_dir_path,
-            resolved_progress_file=tasks_dir_path / "PROGRESS.md",
-            env={},
-            resolved_runner_command=["fake-runner"],
+        runtime = _make_runtime(
+            tmp_path,
             select_invocation=invocation,
-            implement_prompt_file=None,
             loop_prompt=loop_prompt,
             resolved_prompt=resolved_prompt,
-            bootstrap_prompt=None,
-            extra_prompt_source=None,
-            log_file=None,
-            idle_timeout=None,
+            runner_command=["fake-runner"],
+            env={},
         )
 
         task_file = tmp_path / "tasks" / "task-1.md"
@@ -2094,12 +1930,13 @@ class TestExecuteSingleStepWithResolvedPrompt:
         ) -> str:
             run_targets.append(target)
             run_envs.append(env)
+            # Selector call: real selector_result resolves "task-1.md" → task_file.
+            if command == ["fake-selector"]:
+                return "task-1.md\n"
             return "output"
 
         monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        monkeypatch.setattr(
-            "agm.commands.loop.step.selector_result", lambda output, tasks_dir: task_file
-        )
+        # Real selector_result: "task-1.md" found in tasks_dir → returns Path.
         result = execute_single_step(runtime, step_number=1)
         assert result is False
         # Prompt is re-prepared from original source with TASK_FILE in env,
@@ -2114,9 +1951,6 @@ class TestExecuteSingleStepExpandsTaskFileInPrompt:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """When a prompt file contains ${TASK_FILE}, it is expanded after task selection."""
-        from agm.commands.loop.step import LoopStepRuntime, execute_single_step
-        from agm.commands.loop.step import PreparedPrompt as StepPrepPrompt
-
         select_prompt = tmp_path / "select.md"
         select_prompt.write_text("select\n", encoding="utf-8")
         invocation = PreparedSelectInvocation(
@@ -2138,26 +1972,17 @@ class TestExecuteSingleStepExpandsTaskFileInPrompt:
         resolved_prompt = ResolvedPrompt(
             source=prompt_file_path, effective_file=prompt_file_path
         )
-        loop_prompt = StepPrepPrompt(
+        loop_prompt = PreparedPrompt(
             label="loop", source_file=prompt_file_path, effective_file=prompt_file_path
         )
 
-        tasks_dir_path = tmp_path / "tasks"
-        tasks_dir_path.mkdir(parents=True)
-        runtime = LoopStepRuntime(
-            temp_files=[],
-            resolved_tasks_dir=tasks_dir_path,
-            resolved_progress_file=tasks_dir_path / "PROGRESS.md",
-            env={},
-            resolved_runner_command=["fake-runner"],
+        runtime = _make_runtime(
+            tmp_path,
             select_invocation=invocation,
-            implement_prompt_file=None,
             loop_prompt=loop_prompt,
             resolved_prompt=resolved_prompt,
-            bootstrap_prompt=None,
-            extra_prompt_source=None,
-            log_file=None,
-            idle_timeout=None,
+            runner_command=["fake-runner"],
+            env={},
         )
 
         task_file = tmp_path / "tasks" / "task-1.md"
@@ -2176,12 +2001,13 @@ class TestExecuteSingleStepExpandsTaskFileInPrompt:
             idle_timeout: float | None = None,
         ) -> str:
             run_targets.append(target)
+            # Selector call: real selector_result resolves "task-1.md" → task_file.
+            if command == ["fake-selector"]:
+                return "task-1.md\n"
             return "output"
 
         monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        monkeypatch.setattr(
-            "agm.commands.loop.step.selector_result", lambda output, tasks_dir: task_file
-        )
+        # Real selector_result: "task-1.md" found in tasks_dir → returns Path.
         result = execute_single_step(runtime, step_number=1)
         assert result is False
         # The runner target should be a new file with TASK_FILE expanded,
@@ -2195,9 +2021,6 @@ class TestExecuteSingleStepExpandsTaskFileInPrompt:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """When inline prompt text contains ${TASK_FILE}, it is expanded after task selection."""
-        from agm.commands.loop.step import LoopStepRuntime, execute_single_step
-        from agm.commands.loop.step import PreparedPrompt as StepPrepPrompt
-
         select_prompt = tmp_path / "select.md"
         select_prompt.write_text("select\n", encoding="utf-8")
         invocation = PreparedSelectInvocation(
@@ -2214,26 +2037,17 @@ class TestExecuteSingleStepExpandsTaskFileInPrompt:
         from agm.agent.loop import loop_env
         env_no_task = loop_env(tmp_path / "tasks")
         resolved_prompt = ResolvedPrompt(source=inline_text, effective_file=tmp_path / "stub")
-        loop_prompt = StepPrepPrompt(
+        loop_prompt = PreparedPrompt(
             label="loop", source_file=tmp_path / "stub", effective_file=tmp_path / "stub"
         )
 
-        tasks_dir_path = tmp_path / "tasks"
-        tasks_dir_path.mkdir(parents=True)
-        runtime = LoopStepRuntime(
-            temp_files=[],
-            resolved_tasks_dir=tasks_dir_path,
-            resolved_progress_file=tasks_dir_path / "PROGRESS.md",
-            env=env_no_task,
-            resolved_runner_command=["fake-runner"],
+        runtime = _make_runtime(
+            tmp_path,
             select_invocation=invocation,
-            implement_prompt_file=None,
             loop_prompt=loop_prompt,
             resolved_prompt=resolved_prompt,
-            bootstrap_prompt=None,
-            extra_prompt_source=None,
-            log_file=None,
-            idle_timeout=None,
+            runner_command=["fake-runner"],
+            env=env_no_task,
         )
 
         task_file = tmp_path / "tasks" / "task-1.md"
@@ -2252,12 +2066,13 @@ class TestExecuteSingleStepExpandsTaskFileInPrompt:
             idle_timeout: float | None = None,
         ) -> str:
             run_targets.append(target)
+            # Selector call: real selector_result resolves "task-1.md" → task_file.
+            if command == ["fake-selector"]:
+                return "task-1.md\n"
             return "output"
 
         monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        monkeypatch.setattr(
-            "agm.commands.loop.step.selector_result", lambda output, tasks_dir: task_file
-        )
+        # Real selector_result: "task-1.md" found in tasks_dir → returns Path.
         result = execute_single_step(runtime, step_number=1)
         assert result is False
         # The runner target content should have TASK_FILE expanded
@@ -2265,81 +2080,6 @@ class TestExecuteSingleStepExpandsTaskFileInPrompt:
         content = runner_target.read_text(encoding="utf-8")
         assert "${TASK_FILE}" not in content
         assert str(task_file) in content
-
-
-# ---------------------------------------------------------------------------
-# parser.py – line 562: raise ValueError in _help_text_for_path
-# ---------------------------------------------------------------------------
-
-
-class TestPrintDryRunWithBootstrap:
-    def test_print_dry_run_with_bootstrap_prompt(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """print_dry_run includes bootstrap prompt when present."""
-        from agm.commands.loop.step import LoopStepRuntime, PreparedPrompt, print_dry_run
-
-        tasks_dir = tmp_path / "tasks"
-        tasks_dir.mkdir()
-        progress = tasks_dir / "PROGRESS.md"
-        prompt = tmp_path / "loop.md"
-        prompt.write_text("loop\n", encoding="utf-8")
-        bootstrap = tmp_path / "select.md"
-        bootstrap.write_text("bootstrap\n", encoding="utf-8")
-
-        loop_prompt = PreparedPrompt(
-            label="loop", source_file=prompt, effective_file=prompt
-        )
-        bootstrap_prompt = PreparedPrompt(
-            label="bootstrap", source_file=bootstrap, effective_file=bootstrap
-        )
-
-        runtime = LoopStepRuntime(
-            temp_files=[],
-            resolved_tasks_dir=tasks_dir,
-            resolved_progress_file=progress,
-            env={},
-            resolved_runner_command=["runner"],
-            select_invocation=None,
-            implement_prompt_file=None,
-            loop_prompt=loop_prompt,
-            resolved_prompt=None,
-            bootstrap_prompt=bootstrap_prompt,
-            extra_prompt_source=None,
-            log_file=None,
-            idle_timeout=None,
-        )
-
-        from agm.core import dry_run
-
-        dry_run_calls: list[Any] = []
-        monkeypatch.setattr(
-            dry_run, "print_configuration", lambda label: dry_run_calls.append(("config", label))
-        )
-        monkeypatch.setattr(
-            dry_run, "print_detail", lambda k, v: dry_run_calls.append(("detail", k, v))
-        )
-        monkeypatch.setattr(
-            dry_run,
-            "print_labeled_command",
-            lambda label, cmd, cwd=None: dry_run_calls.append(("cmd", label, cmd)),
-        )
-        monkeypatch.setattr(
-            dry_run,
-            "format_command",
-            lambda cmd: " ".join(cmd),
-        )
-        monkeypatch.setattr(
-            dry_run,
-            "print_operation",
-            lambda name, detail: dry_run_calls.append(("op", name, detail)),
-        )
-
-        print_dry_run(runtime)
-
-        # Bootstrap command should be printed
-        cmd_calls = [c for c in dry_run_calls if c[0] == "cmd"]
-        assert any(c[1] == "bootstrap" for c in cmd_calls)
 
 
 # ---------------------------------------------------------------------------
@@ -2353,26 +2093,11 @@ class TestCleanupRuntimeViaStep:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """cleanup_runtime delegates to cleanup_temp_files."""
-        from agm.commands.loop.step import LoopStepRuntime, cleanup_runtime
-
         f1 = tmp_path / "temp1.md"
         f1.write_text("temp", encoding="utf-8")
 
-        runtime = LoopStepRuntime(
-            temp_files=[f1],
-            resolved_tasks_dir=tmp_path,
-            resolved_progress_file=tmp_path / "PROGRESS.md",
-            env={},
-            resolved_runner_command=[],
-            select_invocation=None,
-            implement_prompt_file=None,
-            loop_prompt=None,
-            resolved_prompt=None,
-            bootstrap_prompt=None,
-            extra_prompt_source=None,
-            log_file=None,
-            idle_timeout=None,
-        )
+        runtime = _make_runtime(tmp_path)
+        runtime.temp_files.append(f1)
         cleanup_runtime(runtime)
         assert not f1.exists()
 
@@ -2475,21 +2200,7 @@ class TestExecuteSingleStepWithExtraPrompt:
             select_invocation=invocation,
             implement_prompt_file=implement_file,
             loop_prompt=None,
-        )
-        runtime = LoopStepRuntime(
-            temp_files=runtime.temp_files,
-            resolved_tasks_dir=runtime.resolved_tasks_dir,
-            resolved_progress_file=runtime.resolved_progress_file,
-            env=runtime.env,
-            resolved_runner_command=runtime.resolved_runner_command,
-            select_invocation=runtime.select_invocation,
-            implement_prompt_file=runtime.implement_prompt_file,
-            loop_prompt=runtime.loop_prompt,
-            resolved_prompt=runtime.resolved_prompt,
-            bootstrap_prompt=runtime.bootstrap_prompt,
             extra_prompt_source="EXTRA CONTENT",
-            log_file=runtime.log_file,
-            idle_timeout=runtime.idle_timeout,
         )
 
         all_targets: list[Path] = []
@@ -2504,13 +2215,13 @@ class TestExecuteSingleStepWithExtraPrompt:
             idle_timeout: float | None = None,
         ) -> str:
             all_targets.append(target)
+            # Selector call: real selector_result resolves "task-1.md" → task_file.
+            if command == ["fake-selector"]:
+                return "task-1.md\n"
             return "output"
 
         monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        monkeypatch.setattr(
-            "agm.commands.loop.step.selector_result",
-            lambda output, tasks_dir: task_file,
-        )
+        # Real selector_result: "task-1.md" found in tasks_dir → returns Path.
         execute_single_step(runtime, step_number=1)
 
         assert len(all_targets) == 2
@@ -2547,21 +2258,7 @@ class TestExecuteSingleStepWithExtraPrompt:
             select_invocation=invocation,
             resolved_prompt=resolved_prompt,
             loop_prompt=None,
-        )
-        runtime = LoopStepRuntime(
-            temp_files=runtime.temp_files,
-            resolved_tasks_dir=runtime.resolved_tasks_dir,
-            resolved_progress_file=runtime.resolved_progress_file,
-            env=runtime.env,
-            resolved_runner_command=runtime.resolved_runner_command,
-            select_invocation=runtime.select_invocation,
-            implement_prompt_file=runtime.implement_prompt_file,
-            loop_prompt=runtime.loop_prompt,
-            resolved_prompt=runtime.resolved_prompt,
-            bootstrap_prompt=runtime.bootstrap_prompt,
             extra_prompt_source="APPENDED EXTRA",
-            log_file=runtime.log_file,
-            idle_timeout=runtime.idle_timeout,
         )
 
         all_targets: list[Path] = []
@@ -2576,13 +2273,13 @@ class TestExecuteSingleStepWithExtraPrompt:
             idle_timeout: float | None = None,
         ) -> str:
             all_targets.append(target)
+            # Selector call: real selector_result resolves "task-1.md" → task_file.
+            if command == ["fake-selector"]:
+                return "task-1.md\n"
             return "output"
 
         monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
-        monkeypatch.setattr(
-            "agm.commands.loop.step.selector_result",
-            lambda output, tasks_dir: task_file,
-        )
+        # Real selector_result: "task-1.md" found in tasks_dir → returns Path.
         execute_single_step(runtime, step_number=1)
 
         assert len(all_targets) == 2

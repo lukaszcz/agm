@@ -1,6 +1,6 @@
-"""M3f-A differential ir_semantic — if/raise/try control flow.
+"""IR evaluation tests for if/raise/try control flow.
 
-Covers IrIf, IrRaise, IrTry with all parity cases:
+Covers IrIf, IrRaise, IrTry with all cases:
 - if without else → UnitValue
 - if with else → taken branch value
 - nested ifs
@@ -92,15 +92,14 @@ def _make_program(
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — if without else
+# IR evaluation tests — if without else
 # ---------------------------------------------------------------------------
 
 
 def test_if_without_else_true_runs_body_returns_unit() -> None:
     """if without else: taken branch still yields unit (effects run)."""
     source = "let u: unit = if true => ()\nu"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["u"] == UnitValue()
+    ir = evaluate_ir(source)
     assert ir["u"] == UnitValue()
 
 
@@ -112,8 +111,7 @@ if false =>
   r := 99
 r
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["r"] == IntValue(0)
+    ir = evaluate_ir(source)
     assert ir["r"] == IntValue(0)
 
 
@@ -125,29 +123,26 @@ if true =>
   r := 42
 r
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["r"] == IntValue(42)
+    ir = evaluate_ir(source)
     assert ir["r"] == IntValue(42)
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — if with else (returns branch value)
+# IR evaluation tests — if with else (returns branch value)
 # ---------------------------------------------------------------------------
 
 
 def test_if_with_else_taken_true() -> None:
     """if-else: condition true → then branch value returned."""
     source = "let r = if true => 1 | else => 2\nr"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["r"] == IntValue(1)
+    ir = evaluate_ir(source)
     assert ir["r"] == IntValue(1)
 
 
 def test_if_with_else_taken_false() -> None:
     """if-else: condition false → else branch value returned."""
     source = "let r = if false => 1 | else => 2\nr"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["r"] == IntValue(2)
+    ir = evaluate_ir(source)
     assert ir["r"] == IntValue(2)
 
 
@@ -158,8 +153,7 @@ let x = 5
 let r = if x > 10 => "big" | else => "small"
 r
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["r"] == TextValue("small")
+    ir = evaluate_ir(source)
     assert ir["r"] == TextValue("small")
 
 
@@ -170,18 +164,17 @@ let x = 5
 let r = if x > 0 => (if x > 3 => "big" | else => "small") | else => "neg"
 r
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["r"] == TextValue("big")
+    ir = evaluate_ir(source)
     assert ir["r"] == TextValue("big")
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — raise
+# IR evaluation tests — raise
 # ---------------------------------------------------------------------------
 
 
 def test_raise_propagates() -> None:
-    """raise propagates as AglRaise; both pipelines raise equivalent exceptions."""
+    """raise propagates as AglRaise."""
     source = "raise Abort(message: \"oops\")\n"
     evaluate_ir_raises(source)
 
@@ -195,13 +188,12 @@ catch Abort =>
   99
 r
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["r"] == IntValue(99)
+    ir = evaluate_ir(source)
     assert ir["r"] == IntValue(99)
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — try body does not raise
+# IR evaluation tests — try body does not raise
 # ---------------------------------------------------------------------------
 
 
@@ -214,8 +206,7 @@ catch Exception =>
   0
 r
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["r"] == IntValue(42)
+    ir = evaluate_ir(source)
     assert ir["r"] == IntValue(42)
 
 
@@ -230,13 +221,12 @@ catch Exception =>
   0
 r
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["r"] == IntValue(7)
+    ir = evaluate_ir(source)
     assert ir["r"] == IntValue(7)
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — try with specific catch handler (no binding)
+# IR evaluation tests — try with specific catch handler (no binding)
 # ---------------------------------------------------------------------------
 
 
@@ -251,13 +241,12 @@ catch Exception =>
   "caught other"
 r
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["r"] == TextValue("caught Abort")
+    ir = evaluate_ir(source)
     assert ir["r"] == TextValue("caught Abort")
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — try with specific catch handler WITH binding
+# IR evaluation tests — try with specific catch handler WITH binding
 # ---------------------------------------------------------------------------
 
 
@@ -270,8 +259,7 @@ catch Abort as e =>
   e.message
 r
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["r"] == TextValue("the message")
+    ir = evaluate_ir(source)
     assert ir["r"] == TextValue("the message")
 
 
@@ -284,15 +272,13 @@ catch Abort as e =>
   e.message
 r
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert isinstance(ir_reference["r"], TextValue)
-    assert ir_reference["r"].value == "hello"
+    ir = evaluate_ir(source)
     assert isinstance(ir["r"], TextValue)
     assert ir["r"].value == "hello"
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — catch-all handlers
+# IR evaluation tests — catch-all handlers
 # ---------------------------------------------------------------------------
 
 
@@ -305,8 +291,7 @@ catch _ =>
   "caught all"
 r
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["r"] == TextValue("caught all")
+    ir = evaluate_ir(source)
     assert ir["r"] == TextValue("caught all")
 
 
@@ -319,8 +304,7 @@ catch Exception =>
   "caught all exception"
 r
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["r"] == TextValue("caught all exception")
+    ir = evaluate_ir(source)
     assert ir["r"] == TextValue("caught all exception")
 
 
@@ -333,13 +317,12 @@ catch Exception as e =>
   e.message
 r
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["r"] == TextValue("catchall msg")
+    ir = evaluate_ir(source)
     assert ir["r"] == TextValue("catchall msg")
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — first-match ordering
+# IR evaluation tests — first-match ordering
 # ---------------------------------------------------------------------------
 
 
@@ -354,8 +337,7 @@ catch Exception =>
   "second"
 r
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["r"] == TextValue("first")
+    ir = evaluate_ir(source)
     assert ir["r"] == TextValue("first")
 
 
@@ -370,13 +352,12 @@ catch _ =>
   "fallback"
 r
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["r"] == TextValue("fallback")
+    ir = evaluate_ir(source)
     assert ir["r"] == TextValue("fallback")
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — no matching handler re-raises
+# IR evaluation tests — no matching handler re-raises
 # ---------------------------------------------------------------------------
 
 
@@ -715,14 +696,14 @@ def test_validate_ir_try_cheap_ok() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Parity bug regression tests — nested binders must not leak into results
+# Binder-leak regression tests — nested binders must not leak into results
 # ---------------------------------------------------------------------------
 
 
 def test_let_inside_if_branch_does_not_leak() -> None:
     """let declared inside an if branch body must not appear in top-level results.
 
-    Regression for the parity bug where nested let/var binders were allocated
+    Regression for the binder-leak bug where nested let/var binders were allocated
     with public=True and leaked into _collect_results.
     """
     source = """\
@@ -732,10 +713,8 @@ if true =>
   sink := inner
 sink
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert "inner" not in ir_reference
+    ir = evaluate_ir(source)
     assert "inner" not in ir
-    assert ir_reference["sink"] == IntValue(7)
     assert ir["sink"] == IntValue(7)
 
 
@@ -748,10 +727,8 @@ if true =>
   result := tmp + 1
 result
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert "tmp" not in ir_reference
+    ir = evaluate_ir(source)
     assert "tmp" not in ir
-    assert ir_reference["result"] == IntValue(6)
     assert ir["result"] == IntValue(6)
 
 
@@ -766,10 +743,8 @@ catch Exception =>
   ()
 out
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert "inner" not in ir_reference
+    ir = evaluate_ir(source)
     assert "inner" not in ir
-    assert ir_reference["out"] == IntValue(42)
     assert ir["out"] == IntValue(42)
 
 
@@ -784,10 +759,8 @@ catch Abort =>
   out := handler_val
 out
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert "handler_val" not in ir_reference
+    ir = evaluate_ir(source)
     assert "handler_val" not in ir
-    assert ir_reference["out"] == IntValue(99)
     assert ir["out"] == IntValue(99)
 
 
@@ -804,8 +777,6 @@ let x = if true =>
 | else => 0
 x
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert "y" not in ir_reference
+    ir = evaluate_ir(source)
     assert "y" not in ir
-    assert ir_reference["x"] == IntValue(6)
     assert ir["x"] == IntValue(6)

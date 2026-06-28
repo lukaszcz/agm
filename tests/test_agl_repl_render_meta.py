@@ -100,6 +100,9 @@ class TestRenderEntryResult:
         )
         assert render_mod.render_entry_result(result, echo=True) == "aaa"
 
+    # The REPL binding echo is user-visible output with a stable format; these exact-string
+    # assertions intentionally pin that contract (cf. the no-exact-error-message rule, which
+    # applies to diagnostics, not user-facing REPL output).
     def test_binding_echo_quotes_text(self) -> None:
         result = _result(
             kind="binding",

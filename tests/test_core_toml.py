@@ -6,9 +6,10 @@ from pathlib import Path
 
 import pytest
 import tomlkit
-from tomlkit.exceptions import KeyAlreadyPresent
+from tomlkit.exceptions import KeyAlreadyPresent, ParseError
 from tomlkit.items import Table
 
+from agm.config.general import load_run_config
 from agm.core.toml import (
     _get_or_create_table,
     dumps_toml,
@@ -80,6 +81,17 @@ class TestLoadTomlFile:
         result = load_toml_file(toml_file)
         assert isinstance(result, dict)
         assert result["key"] == 42
+
+    def test_raises_on_malformed_toml(self, tmp_path: Path) -> None:
+        toml_file = tmp_path / "config.toml"
+        toml_file.write_text("not = valid = toml = [", encoding="utf-8")
+        with pytest.raises(ParseError):
+            load_toml_file(toml_file)
+
+    def test_raises_on_missing_file(self, tmp_path: Path) -> None:
+        toml_file = tmp_path / "nonexistent.toml"
+        with pytest.raises(FileNotFoundError):
+            load_toml_file(toml_file)
 
 
 class TestLoadTomlDoc:
@@ -154,3 +166,19 @@ class TestDumpsToml:
         result = dumps_toml(doc)
         assert "[section]" in result
         assert "key" in result and "value" in result
+
+
+class TestHigherLevelConfigLoaderErrors:
+    def test_load_run_config_propagates_malformed_toml(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """load_run_config propagates a tomlkit ParseError from a malformed config file."""
+        home = tmp_path / "home"
+        agm_dir = home / ".agm"
+        agm_dir.mkdir(parents=True)
+        (agm_dir / "config.toml").write_text("not = valid = toml = [", encoding="utf-8")
+        monkeypatch.setattr(
+            "agm.config.general.agm_installation_prefix", lambda: None
+        )
+        with pytest.raises(ParseError):
+            load_run_config(home=home, proj_dir=None, cwd=tmp_path)

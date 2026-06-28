@@ -1,1 +1,1 @@
-{"diagnostic": {"message_contains": ["P"]}}
+{"diagnostic": {"message_contains": ["already declared"], "line": 3}}

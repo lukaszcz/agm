@@ -18,7 +18,7 @@ class TestRootSet:
     def test_frozen(self, tmp_path: Path) -> None:
         rs = RootSet(roots=frozenset([tmp_path]))
         with pytest.raises((AttributeError, TypeError)):
-            rs.roots = frozenset()  # type: ignore[misc]
+            setattr(rs, "roots", frozenset())
 
     def test_sorted_roots_is_deterministic(self, tmp_path: Path) -> None:
         dirs = [tmp_path / f"root{i}" for i in range(5)]

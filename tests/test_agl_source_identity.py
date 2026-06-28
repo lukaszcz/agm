@@ -42,7 +42,7 @@ class TestSourceId:
     def test_frozen(self) -> None:
         sid = SourceId(label="x")
         with pytest.raises((AttributeError, TypeError)):
-            sid.label = "y"  # type: ignore[misc]
+            setattr(sid, "label", "y")
 
     def test_equality(self) -> None:
         assert SourceId(label="a") == SourceId(label="a")

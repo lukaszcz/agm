@@ -705,7 +705,7 @@ class TestReadTextArgNoneStrerror:
         def patched_read_text(self: Path, encoding: str = "utf-8", **_: object) -> str:
             if self == existing_file:
                 err = OSError("unknown error")
-                err.strerror = None  # type: ignore[assignment]
+                setattr(err, "strerror", None)
                 raise err
             return original_read_text(self, encoding=encoding)
 

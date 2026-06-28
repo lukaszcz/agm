@@ -1,7 +1,7 @@
-"""Tests for the AgL v2 type model (S3a).
+"""Tests for the AgL v2 type model.
 
-Imports ONLY ``agm.agl.semantics.types`` and ``agm.agl.typecheck.env`` —
-both import cleanly without depending on the checker (which is mid-rewrite).
+Covers ``agm.agl.semantics.types`` and ``agm.agl.typecheck.env`` —
+both import cleanly without depending on the rest of the checker.
 
 Coverage:
 - UnitType / AgentType / FunctionType: kind, repr, structural equality.
@@ -62,7 +62,7 @@ class TestUnitType:
     def test_frozen(self) -> None:
         u = UnitType()
         with pytest.raises(Exception):
-            u.kind = "x"  # type: ignore[misc]
+            setattr(u, "kind", "x")
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +83,7 @@ class TestAgentType:
     def test_frozen(self) -> None:
         a = AgentType()
         with pytest.raises(Exception):
-            a.kind = "x"  # type: ignore[misc]
+            setattr(a, "kind", "x")
 
 
 # ---------------------------------------------------------------------------
@@ -387,7 +387,7 @@ class TestSeedFrom:
         source = TypeEnvironment()
         # Manually inject a different type under the prelude name in source._types.
         # We reach inside _types to simulate a hypothetical collision.
-        source._types["ExecResult"] = RecordType(  # type: ignore[attr-defined]
+        getattr(source, "_types")["ExecResult"] = RecordType(
             name="ExecResult", fields={"x": IntType()}
         )
         target = TypeEnvironment()
@@ -471,7 +471,7 @@ class TestTypeVarType:
     def test_frozen(self) -> None:
         tv = TypeVarType("T")
         with pytest.raises(Exception):
-            tv.name = "U"  # type: ignore[misc]
+            setattr(tv, "name", "U")
 
     def test_not_json_shaped(self) -> None:
         assert is_json_shaped(TypeVarType("T")) is False

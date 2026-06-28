@@ -14,7 +14,7 @@ class TestReplConfig:
     def test_frozen(self) -> None:
         cfg = ReplConfig(theme="dark")
         with pytest.raises(FrozenInstanceError):
-            cfg.theme = "light"  # type: ignore[misc]
+            setattr(cfg, "theme", "light")
 
     def test_fields(self) -> None:
         cfg = ReplConfig(theme="light")

@@ -74,4 +74,4 @@ Package layering is enforced by a dependency-contract test (`tests/test_agl_depe
 - Read [modules.md](modules.md) for the file-based module system and the graph-aware passes.
 - Read [repl.md](repl.md) for the incremental REPL session, `agm exec` parameter/agent wiring, and config declarations.
 
-The language grammar and surface syntax are documented separately in `docs/agl-grammar.md`.
+The language grammar and surface syntax are documented from the user's perspective in the AgL reference (`docs/agl/reference/grammar.md` and `docs/agl/reference/lexical-structure.md`). The implementation-level token contract — the canonical token-type names and the lexer's merge/disambiguation passes — lives in `src/agm/agl/lexer/tokens.py` (declared the single source of truth) and the pass docstrings in `src/agm/agl/lexer/lexer.py`.

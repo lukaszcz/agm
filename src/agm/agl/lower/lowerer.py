@@ -548,8 +548,6 @@ class _Lowerer:
             ir_params.append(IrFunctionParam(symbol=psym, default=default_ir))
 
         sig = self._checked.type_env.get_function_signature_by_node_id(funcdef.node_id)
-        if sig is None:
-            sig = self._checked.type_env.get_function_signature(funcdef.name)
         assert sig is not None, (
             f"compiler bug: no function signature for {funcdef.name!r}"
         )
@@ -1300,8 +1298,6 @@ class _Lowerer:
         )
 
         sig = self._checked.type_env.get_function_signature_by_node_id(callee_ref.decl_node_id)
-        if sig is None:
-            sig = self._checked.type_env.get_function_signature(callee_ref.name)
         assert sig is not None, (
             f"compiler bug: no signature for function {callee_ref.name!r}"
         )
@@ -1317,13 +1313,12 @@ class _Lowerer:
             elif pos_idx < len(pos_args):
                 ir_args.append(self.lower_coerced(pos_args[pos_idx], ptype))
                 pos_idx += 1
-            elif has_default:
-                ir_args.append(UseDefault(param_index=i))
             else:
-                raise AssertionError(
+                assert has_default, (
                     f"compiler bug: missing required arg for param {pname!r} in call to"
                     f" {callee_ref.name!r} (checker should have caught this)"
                 )
+                ir_args.append(UseDefault(param_index=i))
 
         return IrDirectCall(
             location=self._loc(span),
@@ -1710,42 +1705,28 @@ class _Lowerer:
 
         max_attempts = self._extract_max_attempts(call_node)
 
-        result_type = self._checked.node_types.get(call_node.node_id)
-        is_unit = isinstance(result_type, UnitType)
-
         spec = self._checked.contract_specs.get(call_node.node_id)
-        if is_unit or spec is None:
-            contract_req = ContractRequest(
-                codec_name="text",
-                strict_json=None,
-                json_schema=None,
-                decode=None,
-                target_type_label="text",
-                structured_exec=False,
-                format_instructions="",
-                is_unit=False,
-            )
+        assert spec is not None, "exec always has a contract spec after checking"
+        structured_exec = spec.structured_exec
+        if spec.codec_name == "json":
+            schema_dict = derive_schema(spec.target_type)
+            json_schema_str: str | None = json.dumps(schema_dict)
+            fmt_instr = build_format_instructions(schema_dict)
+            decode_schema = build_decode_schema(spec.target_type)
         else:
-            structured_exec = spec.structured_exec
-            if spec.codec_name == "json":
-                schema_dict = derive_schema(spec.target_type)
-                json_schema_str: str | None = json.dumps(schema_dict)
-                fmt_instr = build_format_instructions(schema_dict)
-                decode_schema = build_decode_schema(spec.target_type)
-            else:
-                json_schema_str = None
-                fmt_instr = ""
-                decode_schema = None
-            contract_req = ContractRequest(
-                codec_name=spec.codec_name,
-                strict_json=spec.strict_json,
-                json_schema=json_schema_str,
-                decode=decode_schema,
-                target_type_label=repr(spec.target_type),
-                structured_exec=structured_exec,
-                format_instructions=fmt_instr,
-                is_unit=False,
-            )
+            json_schema_str = None
+            fmt_instr = ""
+            decode_schema = None
+        contract_req = ContractRequest(
+            codec_name=spec.codec_name,
+            strict_json=spec.strict_json,
+            json_schema=json_schema_str,
+            decode=decode_schema,
+            target_type_label=repr(spec.target_type),
+            structured_exec=structured_exec,
+            format_instructions=fmt_instr,
+            is_unit=False,
+        )
 
         contract_id = self._alloc_contract(contract_req)
         return IrExec(

@@ -1,4 +1,5 @@
 {
+  "note": "This program has no param declarations and no agent calls, so exactly one execution path exists. The single scenario exhaustively exercises juxtaposition call sugar with nested call results as the argument.",
   "scenarios": [
     {
       "name": "nested_call_result_argument",

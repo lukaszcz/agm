@@ -72,8 +72,6 @@ def create_configured_workspace_session(
         cwd=repo_path,
         shell_command=str(ensure_workspace_shell(session_name)),
     )
-    if created_session is None:
-        raise AssertionError("detached tmux session creation did not return a session name")
     if run_setup:
         queue_command_in_session(
             session_name=created_session,

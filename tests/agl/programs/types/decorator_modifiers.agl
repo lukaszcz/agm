@@ -1,0 +1,37 @@
+# Decorator-style declaration modifiers: `private` (and `builtin`) may sit on
+# the line directly above the declaration they adorn — the newline after the
+# modifier is insignificant. This program exercises the separate-line form for a
+# private record, a generic private enum, a private type alias, and a private
+# function, alongside the same-line form, combined with generics, `case`, and
+# field access.
+param loud: bool
+
+private
+record Tag
+  name: text
+  weight: int
+
+private
+enum Status[T]
+  | Active(payload: T)
+  | Idle
+
+private
+type Label = text
+
+private
+def format_tag(t: Tag) -> Label =
+  "${t.name}#${t.weight}"
+
+# The same-line form remains valid (the newline is optional, not required).
+private def emphasize(s: Label) -> Label = "${s}!"
+
+let t = Tag(name: "core", weight: 3)
+let st: Status[Tag] = Active(payload: t)
+
+case st of
+  | Active(payload) => print format_tag(payload)
+  | Idle => print "idle"
+
+let line = format_tag(t)
+print(if loud => emphasize(line) else => line)

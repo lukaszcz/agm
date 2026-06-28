@@ -122,41 +122,6 @@ class TestCloseSessionRemovesWorkspaceConfig:
             tmp_path, monkeypatch, branch="feature"
         )
 
-        close_workspace(branch="feature", cwd=tmp_path)
-
-        assert not workspace_config.exists()
-
-    def test_removes_branch_dir_and_commits(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        proj_dir, workspace_config = self._setup_close_dependencies(
-            tmp_path, monkeypatch, branch="feature"
-        )
-        workspace_config.mkdir()
-
-        commit_calls: list[tuple[Path, str, list[Path]]] = []
-        monkeypatch.setattr(
-            close_module,
-            "commit_config_dir_changes",
-            lambda pd, msg, **kw: commit_calls.append((pd, msg, kw.get("add_paths", []))),
-        )
-
-        close_workspace(branch="feature", cwd=tmp_path)
-
-        assert not workspace_config.exists()
-        assert len(commit_calls) == 1
-        assert commit_calls[0][0] == proj_dir
-        assert "remove config for feature" in commit_calls[0][1]
-        assert commit_calls[0][2] == [workspace_config]
-
-    def test_removes_workspace_config_file_and_commits(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _, workspace_config = self._setup_close_dependencies(
-            tmp_path, monkeypatch, branch="feature"
-        )
-        workspace_config.write_text("data", encoding="utf-8")
-
         commit_calls: list[str] = []
         monkeypatch.setattr(
             close_module,
@@ -167,9 +132,9 @@ class TestCloseSessionRemovesWorkspaceConfig:
         close_workspace(branch="feature", cwd=tmp_path)
 
         assert not workspace_config.exists()
-        assert len(commit_calls) == 1
+        assert commit_calls == []
 
-    def test_commit_message_names_removed_branch(
+    def test_removes_workspace_config_and_commits_with_branch_name(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _, workspace_config = self._setup_close_dependencies(
@@ -177,18 +142,30 @@ class TestCloseSessionRemovesWorkspaceConfig:
         )
         workspace_config.mkdir()
 
-        commit_calls: list[str] = []
+        commit_messages: list[str] = []
         monkeypatch.setattr(
             close_module,
             "commit_config_dir_changes",
-            lambda pd, msg, **kw: commit_calls.append(msg),
+            lambda pd, msg, **kw: commit_messages.append(msg),
         )
 
         close_workspace(branch="my-feature", cwd=tmp_path)
 
         assert not workspace_config.exists()
-        assert len(commit_calls) == 1
-        assert "my-feature" in commit_calls[0]
+        assert len(commit_messages) == 1
+        assert "my-feature" in commit_messages[0]
+
+    def test_removes_workspace_config_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, workspace_config = self._setup_close_dependencies(
+            tmp_path, monkeypatch, branch="feature"
+        )
+        workspace_config.write_text("data", encoding="utf-8")
+
+        close_workspace(branch="feature", cwd=tmp_path)
+
+        assert not workspace_config.exists()
 
 
 # ===========================================================================

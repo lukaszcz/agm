@@ -21,6 +21,7 @@ NOTE: This file must NOT modify tests/test_agl_e2e.py or tests/agl/.
 
 from __future__ import annotations
 
+import dataclasses
 import decimal
 import importlib.resources
 import logging
@@ -34,6 +35,7 @@ from agm.agl.parser import (
     is_incomplete_source,
     parse_program,
     parse_program_seeded,
+    parse_type_expr,
 )
 from agm.agl.syntax import (
     AgentDecl,
@@ -54,6 +56,7 @@ from agm.agl.syntax import (
     DictLit,
     Do,
     EnumDef,
+    ExceptionDef,
     FieldAccess,
     FieldDef,
     FuncDef,
@@ -75,6 +78,7 @@ from agm.agl.syntax import (
     ParamDecl,
     PatternField,
     Program,
+    ProgramDecl,
     Raise,
     RecordDef,
     StringLit,
@@ -124,6 +128,24 @@ def items(prog: Program) -> tuple[object, ...]:
 def first(prog: Program) -> object:
     """Return the first top-level item."""
     return prog.body.items[0]
+
+
+def _collect_node_ids(obj: object, result: list[int]) -> None:
+    """Recursively collect every node_id into *result*, preserving duplicates.
+
+    Unlike ``all_node_ids`` (which deduplicates into a set), this appends every
+    encountered node_id so that ``len(result) != len(set(result))`` reliably
+    detects collisions.
+    """
+    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+        nid = getattr(obj, "node_id", None)
+        if isinstance(nid, int):
+            result.append(nid)
+        for f in dataclasses.fields(obj):
+            _collect_node_ids(getattr(obj, f.name), result)
+    elif isinstance(obj, (tuple, list)):
+        for item in obj:
+            _collect_node_ids(item, result)
 
 
 # ---------------------------------------------------------------------------
@@ -224,9 +246,10 @@ class TestProgramRoot:
         assert len(items(prog)) == 3
 
     def test_node_id_uniqueness(self) -> None:
-        prog = parse("let x = 1\nlet y = 2\nx")
-        ids = [node.node_id for node in [prog, prog.body]]
-        assert len(set(ids)) == len(ids)
+        prog = parse("let x = 1\nlet y = 2\nx + y")
+        id_list: list[int] = []
+        _collect_node_ids(prog, id_list)
+        assert len(id_list) == len(set(id_list)), "duplicate node_ids detected in parsed tree"
 
 
 # ---------------------------------------------------------------------------
@@ -404,8 +427,8 @@ class TestTypeExpressions:
             parse("let d: dict[list[int], int] = {}")
 
     def test_dict_named_type_key_raises(self) -> None:
-        # dict key type must be text; a named type key triggers _type_expr_spelling
-        # NameT branch (t.name path at line 1580).
+        # dict key type must be text; a named type key triggers the NameT branch
+        # in _type_expr_spelling, which returns its name in the error message.
         from agm.agl.parser.errors import AglSyntaxError
         with pytest.raises(AglSyntaxError, match="Review"):
             parse("let d: dict[Review, int] = {}")
@@ -570,6 +593,223 @@ class TestDeclarations:
         cfg = first(parse('config runner = "claude"'))
         assert isinstance(cfg, ConfigPragma)
         assert cfg.value == "claude"
+
+    def test_exception_def_simple(self) -> None:
+        exc = first(parse("exception MyErr(msg: text)"))
+        assert isinstance(exc, ExceptionDef)
+        assert exc.name == "MyErr"
+        assert len(exc.fields) == 1
+        assert exc.fields[0].name == "msg"
+        assert exc.base is None
+        assert exc.is_private is False
+        assert exc.is_builtin is False
+
+    def test_exception_def_with_base(self) -> None:
+        exc = first(parse("exception DerivedErr extends BaseErr(msg: text)"))
+        assert isinstance(exc, ExceptionDef)
+        assert exc.name == "DerivedErr"
+        assert exc.base == "BaseErr"
+        assert len(exc.fields) == 1
+        assert exc.fields[0].name == "msg"
+
+    def test_exception_def_no_fields(self) -> None:
+        exc = first(parse("exception SimpleErr()"))
+        assert isinstance(exc, ExceptionDef)
+        assert exc.name == "SimpleErr"
+        assert exc.fields == ()
+        assert exc.base is None
+
+    def test_exception_def_indent_body(self) -> None:
+        exc = first(parse("exception MultiErr\n  code: int\n  reason: text"))
+        assert isinstance(exc, ExceptionDef)
+        assert exc.name == "MultiErr"
+        assert len(exc.fields) == 2
+        assert [f.name for f in exc.fields] == ["code", "reason"]
+
+    def test_program_decl(self) -> None:
+        pd = first(parse("program myapp\n()"))
+        assert isinstance(pd, ProgramDecl)
+        assert pd.name == "myapp"
+
+    def test_builtin_func_def(self) -> None:
+        fd = first(parse("builtin def encode(x: text) -> int"))
+        assert isinstance(fd, FuncDef)
+        assert fd.name == "encode"
+        assert fd.is_builtin is True
+        assert fd.body is None
+        assert len(fd.params) == 1
+
+    def test_builtin_record_def(self) -> None:
+        rec = first(parse("builtin record Token(id: int)"))
+        assert isinstance(rec, RecordDef)
+        assert rec.name == "Token"
+        assert rec.is_builtin is True
+        assert len(rec.fields) == 1
+
+    def test_builtin_enum_def(self) -> None:
+        en = first(parse("builtin enum Status = Ok | Err"))
+        assert isinstance(en, EnumDef)
+        assert en.name == "Status"
+        assert en.is_builtin is True
+        assert len(en.variants) == 2
+
+
+# ---------------------------------------------------------------------------
+# parse_type_expr — direct unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestParseTypeExpr:
+    """parse_type_expr(text) parses a single AgL type expression."""
+
+    def test_int(self) -> None:
+        from agm.agl.syntax.types import IntT
+        result = parse_type_expr("int")
+        assert isinstance(result, IntT)
+
+    def test_text(self) -> None:
+        from agm.agl.syntax.types import TextT
+        result = parse_type_expr("text")
+        assert isinstance(result, TextT)
+
+    def test_bool(self) -> None:
+        from agm.agl.syntax.types import BoolT
+        result = parse_type_expr("bool")
+        assert isinstance(result, BoolT)
+
+    def test_decimal(self) -> None:
+        from agm.agl.syntax.types import DecimalT
+        result = parse_type_expr("decimal")
+        assert isinstance(result, DecimalT)
+
+    def test_list_int(self) -> None:
+        from agm.agl.syntax.types import IntT, ListT
+        result = parse_type_expr("list[int]")
+        assert isinstance(result, ListT)
+        assert isinstance(result.elem, IntT)
+
+    def test_dict_text_int(self) -> None:
+        from agm.agl.syntax.types import DictT, IntT
+        result = parse_type_expr("dict[text, int]")
+        assert isinstance(result, DictT)
+        assert isinstance(result.value, IntT)
+
+    def test_named_type(self) -> None:
+        from agm.agl.syntax.types import NameT
+        result = parse_type_expr("MyRecord")
+        assert isinstance(result, NameT)
+        assert result.name == "MyRecord"
+
+    def test_applied_generic(self) -> None:
+        from agm.agl.syntax.types import AppliedT, IntT
+        result = parse_type_expr("Option[int]")
+        assert isinstance(result, AppliedT)
+        assert result.name == "Option"
+        assert len(result.args) == 1
+        assert isinstance(result.args[0], IntT)
+
+    def test_func_type(self) -> None:
+        from agm.agl.syntax.types import FuncT, IntT, TextT
+        result = parse_type_expr("(int) -> text")
+        assert isinstance(result, FuncT)
+        assert len(result.params) == 1
+        assert isinstance(result.params[0], IntT)
+        assert isinstance(result.result, TextT)
+
+    def test_unit_type(self) -> None:
+        from agm.agl.syntax.types import UnitT
+        result = parse_type_expr("unit")
+        assert isinstance(result, UnitT)
+
+    def test_agent_type(self) -> None:
+        from agm.agl.syntax.types import AgentT
+        result = parse_type_expr("agent")
+        assert isinstance(result, AgentT)
+
+    def test_qualified_named_type(self) -> None:
+        from agm.agl.syntax.types import AppliedT
+        # mod::Box[int] — qualified applied type
+        result = parse_type_expr("mymod::Box[int]")
+        assert isinstance(result, AppliedT)
+        assert result.name == "Box"
+        assert result.module_qualifier is not None
+        assert result.module_qualifier.segments == ("mymod",)
+
+    def test_invalid_raises_syntax_error(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse_type_expr("let x = 1")
+
+    def test_empty_raises_syntax_error(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse_type_expr("")
+
+    def test_start_id_is_honoured(self) -> None:
+        """start_id offsets the first assigned node_id."""
+        result = parse_type_expr("int", start_id=100)
+        from agm.agl.syntax.types import IntT
+        assert isinstance(result, IntT)
+        # Node id is ≥ start_id (offset applied)
+        assert result.node_id >= 100
+
+
+# ---------------------------------------------------------------------------
+# program NAME declaration — side-table assertions via scope resolve
+# ---------------------------------------------------------------------------
+
+
+class TestProgramDeclScopeSideTables:
+    """Parse a 'program NAME' source and assert the side tables on ResolvedProgram."""
+
+    def _parse_and_resolve(self, source: str) -> object:
+        from agm.agl.scope import resolve
+        return resolve(parse_program(source))
+
+    def test_program_name_set_in_resolved_program(self) -> None:
+        """Parsing 'program myapp' sets program_name on ResolvedProgram."""
+        r = self._parse_and_resolve("program myapp\n()")
+        from agm.agl.scope.symbols import ResolvedProgram
+        assert isinstance(r, ResolvedProgram)
+        assert r.program_name == "myapp"
+
+    def test_no_program_decl_gives_none(self) -> None:
+        """No 'program' declaration → program_name is None."""
+        r = self._parse_and_resolve("()")
+        from agm.agl.scope.symbols import ResolvedProgram
+        assert isinstance(r, ResolvedProgram)
+        assert r.program_name is None
+
+    def test_builtin_calls_populated_for_print(self) -> None:
+        """A 'print' call is classified in builtin_calls."""
+        r = self._parse_and_resolve('print "hello"')
+        from agm.agl.scope import BuiltinKind
+        from agm.agl.scope.symbols import ResolvedProgram
+        assert isinstance(r, ResolvedProgram)
+        assert BuiltinKind.PRINT in r.builtin_calls.values()
+
+    def test_builtin_calls_populated_for_exec(self) -> None:
+        """An 'exec' call is classified in builtin_calls."""
+        r = self._parse_and_resolve('let x = exec "ls"\nx')
+        from agm.agl.scope import BuiltinKind
+        from agm.agl.scope.symbols import ResolvedProgram
+        assert isinstance(r, ResolvedProgram)
+        assert BuiltinKind.EXEC in r.builtin_calls.values()
+
+    def test_bare_variant_patterns_populated(self) -> None:
+        """A bare name in a case pattern that names a constructor is in bare_variant_patterns."""
+        source = (
+            "enum Status\n"
+            "  | Ok\n"
+            "  | Fail\n"
+            "let s = Ok()\n"
+            "case s of\n"
+            "  | Ok => 1\n"
+            "  | Fail => 0\n"
+        )
+        r = self._parse_and_resolve(source)
+        from agm.agl.scope.symbols import ResolvedProgram
+        assert isinstance(r, ResolvedProgram)
+        # At least one VarPattern node_id was recognised as a bare-variant constructor.
+        assert len(r.bare_variant_patterns) >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -1145,6 +1385,34 @@ class TestBinaryOperators:
         with pytest.raises(AglSyntaxError):
             parse("x == y")
 
+    def test_eq_eq_message(self) -> None:
+        """== triggers the 'Use `=` for equality.' friendly diagnostic (design §2.3)."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse("let b = a == b")
+        assert str(exc_info.value) == "Use `=` for equality."
+
+    @pytest.mark.parametrize(
+        "src",
+        [
+            "x = y = z",
+            "1 < 2 < 3",
+            "a <= b != c",
+        ],
+    )
+    def test_chained_comparison_raises(self, src: str) -> None:
+        """Chained comparisons are non-associative in AgL (design §4.3)."""
+        with pytest.raises(AglSyntaxError, match="non-associative"):
+            parse(src)
+
+    def test_chained_comparison_full_message(self) -> None:
+        """Pins the full designed wording for the chained-comparison diagnostic."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse("x = y = z")
+        assert str(exc_info.value) == (
+            "Comparisons are non-associative; parenthesize explicitly, "
+            "e.g. `(x = y) = z`."
+        )
+
 
 # ---------------------------------------------------------------------------
 # Control flow: if_expr
@@ -1522,10 +1790,14 @@ class TestReplSeam:
 
     def test_node_ids_globally_unique(self) -> None:
         prog1, next_id1 = parse_program_seeded("let x = 1", start_id=0)
-        prog2, next_id2 = parse_program_seeded("let y = 2", start_id=next_id1)
-        ids1 = {prog1.node_id, prog1.body.node_id}
-        ids2 = {prog2.node_id, prog2.body.node_id}
-        assert not ids1.intersection(ids2)
+        prog2, _next_id2 = parse_program_seeded("let y = 2", start_id=next_id1)
+        ids1: list[int] = []
+        _collect_node_ids(prog1, ids1)
+        ids2: list[int] = []
+        _collect_node_ids(prog2, ids2)
+        assert set(ids1).isdisjoint(set(ids2)), (
+            "node_ids from separate parse_program_seeded calls must not overlap"
+        )
 
     def test_is_incomplete_source_complete(self) -> None:
         assert not is_incomplete_source("let x = 1")
@@ -1848,7 +2120,7 @@ class TestParserErrorCoverage:
 
 
 class TestAglSyntaxErrorSourceSpan:
-    """Covers AglSyntaxError.source_span (lines 71-72)."""
+    """Covers AglSyntaxError.source_span returning a valid SourceSpan."""
 
     def test_source_span_returns_span(self) -> None:
         """source_span returns the same SourceSpan object as .span."""
@@ -1868,10 +2140,9 @@ class TestAglSyntaxErrorSourceSpan:
 
 
 class TestInlineCompoundElseBranch:
-    """Covers _make_inline_compound_error else branch (line 148).
+    """Covers the else branch of the inline-compound error dispatch.
 
-    Line 148 is the else of the ``if stmt_context / elif keyword=='case'``
-    dispatch.  It fires when the unexpected inline-blocked token is NOT
+    The else branch fires when the unexpected inline-blocked token is NOT
     ``case`` AND the parser is in an *expression* context (stmt_context=False),
     i.e. ``if`` appearing as an operand inside an arithmetic or unary
     expression.  The message is identical to the stmt_context=True branch
@@ -2842,4 +3113,83 @@ class TestPrivateDecls:
         assert isinstance(it[0], FuncDef)
         assert it[0].is_private is False
         assert isinstance(it[1], FuncDef)
+        assert it[1].is_private is True
+
+
+class TestModifierDecoratorNewline:
+    """`builtin` and `private` act as decorators: a newline may follow them.
+
+    The modifier and the declaration it adorns may sit on the same line or on
+    consecutive lines; the newline after the modifier is insignificant.
+    """
+
+    def test_builtin_enum_separate_line(self) -> None:
+        prog = parse("builtin\nenum Option[T]\n  | Some(elem: T)\n  | None")
+        (decl,) = items(prog)
+        assert isinstance(decl, EnumDef)
+        assert decl.is_builtin is True
+        assert decl.name == "Option"
+
+    def test_builtin_record_separate_line(self) -> None:
+        prog = parse("builtin\nrecord Point\n  x: int\n  y: int")
+        (decl,) = items(prog)
+        assert isinstance(decl, RecordDef)
+        assert decl.is_builtin is True
+        assert decl.name == "Point"
+
+    def test_builtin_exception_separate_line(self) -> None:
+        prog = parse("builtin\nexception Boom\n  reason: text")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ExceptionDef)
+        assert decl.is_builtin is True
+        assert decl.name == "Boom"
+
+    def test_builtin_func_separate_line(self) -> None:
+        prog = parse("builtin\ndef identity[T](x: T) -> T")
+        (decl,) = items(prog)
+        assert isinstance(decl, FuncDef)
+        assert decl.is_builtin is True
+        assert decl.name == "identity"
+
+    def test_private_enum_separate_line(self) -> None:
+        prog = parse("private\nenum Color | Red | Green | Blue")
+        (decl,) = items(prog)
+        assert isinstance(decl, EnumDef)
+        assert decl.is_private is True
+        assert decl.name == "Color"
+
+    def test_private_record_separate_line(self) -> None:
+        prog = parse("private\nrecord Foo\n    bar: text")
+        (decl,) = items(prog)
+        assert isinstance(decl, RecordDef)
+        assert decl.is_private is True
+        assert decl.name == "Foo"
+
+    def test_private_func_separate_line(self) -> None:
+        prog = parse('private\ndef f() -> text = "hi"')
+        (decl,) = items(prog)
+        assert isinstance(decl, FuncDef)
+        assert decl.is_private is True
+        assert decl.name == "f"
+
+    def test_private_type_alias_separate_line(self) -> None:
+        prog = parse("private\ntype Alias = text")
+        (decl,) = items(prog)
+        assert isinstance(decl, TypeAlias)
+        assert decl.is_private is True
+        assert decl.name == "Alias"
+
+    def test_modifier_same_line_still_parses(self) -> None:
+        """The same-line form remains valid (newline is optional, not required)."""
+        prog = parse("builtin enum Option[T] | Some(elem: T) | None")
+        (decl,) = items(prog)
+        assert isinstance(decl, EnumDef)
+        assert decl.is_builtin is True
+
+    def test_decorator_decl_among_other_items(self) -> None:
+        """A decorator-style declaration coexists with surrounding items."""
+        prog = parse('def pub() -> text = "a"\nprivate\nenum E | A | B')
+        it = items(prog)
+        assert isinstance(it[0], FuncDef)
+        assert isinstance(it[1], EnumDef)
         assert it[1].is_private is True

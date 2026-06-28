@@ -1,1 +1,1 @@
-{"diagnostic": {}}
+{"diagnostic": {"message_contains": ["cycle"], "line": 1}}

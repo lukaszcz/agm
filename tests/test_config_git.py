@@ -5,8 +5,8 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -28,9 +28,17 @@ class TestAddPaths:
         git_root.mkdir()
 
         captured_cmds: list[list[str]] = []
-        monkeypatch.setattr(
-            config_git, "run_capture", lambda cmd, **kw: (captured_cmds.append(cmd) or (0, "", ""))
-        )
+
+        def fake_run_capture(
+            cmd: list[str],
+            *,
+            env: dict[str, str] | None = None,
+            **_kwargs: object,
+        ) -> tuple[int, str, str]:
+            captured_cmds.append(cmd)
+            return 0, "", ""
+
+        monkeypatch.setattr(config_git, "run_capture", fake_run_capture)
 
         _add_paths(git_root, [git_root / "feature"], env={})
 
@@ -45,7 +53,12 @@ class TestAddPaths:
         git_root = tmp_path / "config"
         git_root.mkdir()
 
-        def fake_run_capture(cmd: list[str], **kw: Any) -> tuple[int, str, str]:
+        def fake_run_capture(
+            cmd: list[str],
+            *,
+            env: dict[str, str] | None = None,
+            **_kwargs: object,
+        ) -> tuple[int, str, str]:
             if "add" in cmd:
                 return 1, "", "pathspec 'feature' did not match any files"
             return 0, "", ""
@@ -62,9 +75,17 @@ class TestAddPaths:
         git_root.mkdir()
 
         captured_cmds: list[list[str]] = []
-        monkeypatch.setattr(
-            config_git, "run_capture", lambda cmd, **kw: (captured_cmds.append(cmd) or (0, "", ""))
-        )
+
+        def fake_run_capture(
+            cmd: list[str],
+            *,
+            env: dict[str, str] | None = None,
+            **_kwargs: object,
+        ) -> tuple[int, str, str]:
+            captured_cmds.append(cmd)
+            return 0, "", ""
+
+        monkeypatch.setattr(config_git, "run_capture", fake_run_capture)
         monkeypatch.setattr(dry_run, "enabled", lambda: True)
 
         _add_paths(git_root, [git_root / "feature"], env={})
@@ -80,7 +101,12 @@ class TestAddPaths:
 
         run_capture_calls: list[list[str]] = []
 
-        def fake_run_capture(cmd: list[str], **kw: Any) -> tuple[int, str, str]:
+        def fake_run_capture(
+            cmd: list[str],
+            *,
+            env: dict[str, str] | None = None,
+            **_kwargs: object,
+        ) -> tuple[int, str, str]:
             run_capture_calls.append(cmd)
             if "add" in cmd:
                 return 1, "", "some unexpected error"
@@ -99,249 +125,56 @@ class TestAddPaths:
 class TestCommitConfigDirChanges:
     """Tests for commit_config_dir_changes."""
 
-    def test_does_nothing_when_config_dir_is_not_a_git_repo(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        project_dir = tmp_path / "proj"
-        config_dir = project_dir / "config"
-        config_dir.mkdir(parents=True)
-
-        monkeypatch.setattr(git_helpers, "exact_repo_root", lambda path, env=None: None)
-
-        commands_run: list[list[str]] = []
-        monkeypatch.setattr(
-            config_git, "require_success", lambda cmd, env=None: commands_run.append(cmd)
-        )
-
-        commit_config_dir_changes(project_dir, "chore: test", env={})
-
-        assert commands_run == []
-
-    def test_does_nothing_when_config_dir_does_not_exist(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        project_dir = tmp_path / "proj"
-        project_dir.mkdir()
-
-        commands_run: list[list[str]] = []
-        monkeypatch.setattr(
-            config_git, "require_success", lambda cmd, env=None: commands_run.append(cmd)
-        )
-
-        commit_config_dir_changes(project_dir, "chore: test", env={})
-
-        assert commands_run == []
-
-    def test_adds_all_and_commits_with_add_paths(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        project_dir = tmp_path / "proj"
-        config_dir = project_dir / "config"
-        config_dir.mkdir(parents=True)
-        workspace_config = config_dir / "feature"
-        workspace_config.mkdir()
-
-        monkeypatch.setattr(
-            git_helpers, "exact_repo_root", lambda path, env=None: config_dir
-        )
-        monkeypatch.setattr(
-            config_git, "_add_paths", lambda root, paths, env=None: None
-        )
-        monkeypatch.setattr(
-            git_helpers, "has_staged_changes", lambda repo_dir, paths, env=None: True
-        )
-
-        commands_run: list[tuple[list[str], dict[str, str] | None]] = []
-        monkeypatch.setattr(
-            config_git,
-            "require_success",
-            lambda cmd, env=None: commands_run.append((cmd, env)),
-        )
-
-        env = {"HOME": "/tmp"}
-        commit_config_dir_changes(
-            project_dir, "chore: add config for feature",
-            add_paths=[workspace_config], env=env,
-        )
-
-        # Should have one require_success call for the commit
-        assert len(commands_run) == 1
-        commit_cmd = commands_run[0]
-        assert "commit" in commit_cmd[0]
-        assert "chore: add config for feature" in commit_cmd[0]
-        assert commit_cmd[1] == env
-
-    def test_adds_tracked_changes_and_config_toml_when_no_add_paths(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        project_dir = tmp_path / "proj"
-        config_dir = project_dir / "config"
-        config_dir.mkdir(parents=True)
-        config_toml = config_dir / "config.toml"
-        config_toml.write_text("[deps]", encoding="utf-8")
-
-        monkeypatch.setattr(
-            git_helpers, "exact_repo_root", lambda path, env=None: config_dir
-        )
-        monkeypatch.setattr(config_git, "rglob", lambda p, pattern: [config_toml])
-        monkeypatch.setattr(
-            git_helpers, "has_staged_changes", lambda repo_dir, paths, env=None: True
-        )
-
-        commands_run: list[list[str]] = []
-        monkeypatch.setattr(
-            config_git, "require_success", lambda cmd, env=None: commands_run.append(cmd)
-        )
-
-        commit_config_dir_changes(project_dir, "chore: update config", env={})
-
-        # git add -u, git add config.toml, git commit = 3 calls
-        assert len(commands_run) == 3
-        assert "add" in commands_run[0]
-        assert "-u" in commands_run[0]
-        assert "add" in commands_run[1]
-        assert "config.toml" in " ".join(commands_run[1])
-        assert "commit" in commands_run[2]
-
-    def test_adds_tracked_changes_without_config_toml(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        project_dir = tmp_path / "proj"
-        config_dir = project_dir / "config"
-        config_dir.mkdir(parents=True)
-
-        monkeypatch.setattr(
-            git_helpers, "exact_repo_root", lambda path, env=None: config_dir
-        )
-        monkeypatch.setattr(config_git, "rglob", lambda p, pattern: [])
-        monkeypatch.setattr(
-            git_helpers, "has_staged_changes", lambda repo_dir, paths, env=None: True
-        )
-
-        commands_run: list[list[str]] = []
-        monkeypatch.setattr(
-            config_git, "require_success", lambda cmd, env=None: commands_run.append(cmd)
-        )
-
-        commit_config_dir_changes(project_dir, "chore: update config", env={})
-
-        # git add -u, git commit = 2 calls (no config.toml found)
-        assert len(commands_run) == 2
-        assert "add" in commands_run[0]
-        assert "-u" in commands_run[0]
-        assert "commit" in commands_run[1]
-
-    def test_skips_commit_when_no_staged_changes(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        project_dir = tmp_path / "proj"
-        config_dir = project_dir / "config"
-        config_dir.mkdir(parents=True)
-        workspace_config = config_dir / "feature"
-        workspace_config.mkdir()
-
-        monkeypatch.setattr(
-            git_helpers, "exact_repo_root", lambda path, env=None: config_dir
-        )
-        monkeypatch.setattr(
-            config_git, "_add_paths", lambda root, paths, env=None: None
-        )
-        monkeypatch.setattr(
-            git_helpers, "has_staged_changes", lambda repo_dir, paths, env=None: False
-        )
-
-        commands_run: list[list[str]] = []
-        monkeypatch.setattr(
-            config_git, "require_success", lambda cmd, env=None: commands_run.append(cmd)
-        )
-
-        commit_config_dir_changes(
-            project_dir, "chore: test", add_paths=[workspace_config], env={},
-        )
-
-        # No commit, _add_paths was called but no require_success calls
-        assert commands_run == []
-
-    def test_does_nothing_with_empty_add_paths(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        project_dir = tmp_path / "proj"
-        config_dir = project_dir / "config"
-        config_dir.mkdir(parents=True)
-
-        monkeypatch.setattr(
-            git_helpers, "exact_repo_root", lambda path, env=None: config_dir
-        )
-
-        commands_run: list[list[str]] = []
-        monkeypatch.setattr(
-            config_git, "require_success", lambda cmd, env=None: commands_run.append(cmd)
-        )
-
-        commit_config_dir_changes(project_dir, "chore: test", add_paths=[], env={})
-
-        assert commands_run == []
-
     def test_uses_default_env_when_none(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # Kept as a mock: a real-repo version would require git identity in
+        # os.environ (the process env), which is not portable across CI setups.
+        # The assertion verifies that the env=None default is forwarded to
+        # require_success rather than silently replaced with {} (which would
+        # strip HOME and break git identity resolution in practice).
         project_dir = tmp_path / "proj"
         config_dir = project_dir / "config"
         config_dir.mkdir(parents=True)
         workspace_config = config_dir / "feature"
         workspace_config.mkdir()
 
-        monkeypatch.setattr(
-            git_helpers, "exact_repo_root", lambda path, env=None: config_dir
-        )
-        monkeypatch.setattr(
-            config_git, "_add_paths", lambda root, paths, env=None: None
-        )
-        monkeypatch.setattr(
-            git_helpers, "has_staged_changes", lambda repo_dir, paths, env=None: True
-        )
+        def fake_exact_repo_root(
+            path: Path, *, env: dict[str, str] | None = None
+        ) -> Path:
+            return config_dir
+
+        def fake_add_paths(
+            root: Path, paths: list[Path], *, env: dict[str, str] | None = None
+        ) -> None:
+            pass
+
+        def fake_has_staged_changes(
+            repo_dir: Path,
+            paths: Sequence[Path],
+            *,
+            env: dict[str, str] | None = None,
+        ) -> bool:
+            return True
+
+        monkeypatch.setattr(git_helpers, "exact_repo_root", fake_exact_repo_root)
+        monkeypatch.setattr(config_git, "_add_paths", fake_add_paths)
+        monkeypatch.setattr(git_helpers, "has_staged_changes", fake_has_staged_changes)
 
         commands_run: list[tuple[list[str], dict[str, str] | None]] = []
-        monkeypatch.setattr(
-            config_git,
-            "require_success",
-            lambda cmd, env=None: commands_run.append((cmd, env)),
-        )
+
+        def fake_require_success(
+            cmd: list[str], *, env: dict[str, str] | None = None, **_kwargs: object
+        ) -> None:
+            commands_run.append((cmd, env))
+
+        monkeypatch.setattr(config_git, "require_success", fake_require_success)
 
         commit_config_dir_changes(
             project_dir, "chore: test", add_paths=[workspace_config],
         )
 
         assert commands_run[0][1] is None
-
-    def test_git_add_uses_correct_config_repo_root(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Verify git -C uses the config git root."""
-
-        project_dir = tmp_path / "proj"
-        config_dir = project_dir / "config"
-        config_dir.mkdir(parents=True)
-
-        monkeypatch.setattr(
-            git_helpers, "exact_repo_root", lambda path, env=None: config_dir
-        )
-        monkeypatch.setattr(config_git, "rglob", lambda p, pattern: [])
-        monkeypatch.setattr(
-            git_helpers, "has_staged_changes", lambda repo_dir, paths, env=None: True
-        )
-
-        commands_run: list[list[str]] = []
-        monkeypatch.setattr(
-            config_git, "require_success", lambda cmd, env=None: commands_run.append(cmd)
-        )
-
-        commit_config_dir_changes(project_dir, "chore: test", env={})
-
-        for cmd in commands_run:
-            assert "-C" in cmd
-            idx = cmd.index("-C")
-            assert cmd[idx + 1] == str(config_dir)
 
 
 @needs_git
@@ -506,3 +339,159 @@ class TestCommitConfigDirChangesRealRepo:
             env=env,
         )
         assert log.stdout.strip() == ""
+
+    def test_config_dir_does_not_exist_does_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        """Config dir being absent is silently ignored — no exception, no commit."""
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        # config subdir intentionally absent; exact_repo_root returns None before
+        # calling git (containing_root checks path.exists()), so env={} is safe.
+        commit_config_dir_changes(project_dir, "chore: test", env={})
+
+    def test_config_dir_not_git_repo_does_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        """Config dir that exists but is not a git repo is silently ignored."""
+        _, env = self._make_repo(tmp_path)
+        # Create a separate project whose config dir has no git init.
+        project_dir = tmp_path / "proj2"
+        config_dir = project_dir / "config"
+        config_dir.mkdir(parents=True)
+
+        commit_config_dir_changes(project_dir, "chore: test", env=env)
+
+        # No git repo should have been created as a side effect.
+        assert not (config_dir / ".git").exists()
+
+    def test_no_add_paths_commits_tracked_changes_and_config_toml(
+        self, tmp_path: Path
+    ) -> None:
+        """Without add_paths, tracked modifications and new config.toml are committed."""
+        project_dir, env = self._make_repo(tmp_path)
+        config_dir = project_dir / "config"
+
+        # Track a file, then modify it.
+        tracked_file = config_dir / "settings.toml"
+        tracked_file.write_text("[base]\n", encoding="utf-8")
+        subprocess.run(
+            ["git", "-C", str(config_dir), "add", "settings.toml"], check=True, env=env
+        )
+        subprocess.run(
+            ["git", "-C", str(config_dir), "commit", "-m", "initial"], check=True, env=env
+        )
+        tracked_file.write_text("[base]\nupdated = true\n", encoding="utf-8")
+
+        # Add a new untracked config.toml that should also be picked up.
+        config_toml = config_dir / "config.toml"
+        config_toml.write_text("[project]\n", encoding="utf-8")
+
+        commit_config_dir_changes(project_dir, "chore: update config", env=env)
+
+        committed = subprocess.run(
+            ["git", "-C", str(config_dir), "show", "--name-only", "--format=", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+            env=env,
+        )
+        assert "settings.toml" in committed.stdout
+        assert "config.toml" in committed.stdout
+        log = subprocess.run(
+            ["git", "-C", str(config_dir), "log", "--format=%s", "-1"],
+            capture_output=True,
+            text=True,
+            check=True,
+            env=env,
+        )
+        assert "chore: update config" in log.stdout
+
+    def test_no_add_paths_commits_tracked_changes_without_config_toml(
+        self, tmp_path: Path
+    ) -> None:
+        """Without add_paths and no config.toml present, only tracked changes commit."""
+        project_dir, env = self._make_repo(tmp_path)
+        config_dir = project_dir / "config"
+
+        # Track a file, then modify it; no config.toml exists.
+        tracked_file = config_dir / "settings.toml"
+        tracked_file.write_text("[base]\n", encoding="utf-8")
+        subprocess.run(
+            ["git", "-C", str(config_dir), "add", "settings.toml"], check=True, env=env
+        )
+        subprocess.run(
+            ["git", "-C", str(config_dir), "commit", "-m", "initial"], check=True, env=env
+        )
+        tracked_file.write_text("[base]\nupdated = true\n", encoding="utf-8")
+
+        commit_config_dir_changes(project_dir, "chore: update config", env=env)
+
+        committed = subprocess.run(
+            ["git", "-C", str(config_dir), "show", "--name-only", "--format=", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+            env=env,
+        )
+        assert "settings.toml" in committed.stdout
+        assert "config.toml" not in committed.stdout
+
+    def test_no_staged_changes_does_not_create_commit(
+        self, tmp_path: Path
+    ) -> None:
+        """When nothing is staged after _add_paths, no commit is created."""
+        project_dir, env = self._make_repo(tmp_path)
+        config_dir = project_dir / "config"
+        # An empty workspace dir has no files to stage.
+        workspace_config = config_dir / "feature"
+        workspace_config.mkdir()
+
+        commit_config_dir_changes(
+            project_dir,
+            "chore: test",
+            add_paths=[workspace_config],
+            env=env,
+        )
+
+        log = subprocess.run(
+            ["git", "-C", str(config_dir), "log", "--oneline"],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert log.stdout.strip() == ""
+
+    def test_empty_add_paths_does_not_create_commit(
+        self, tmp_path: Path
+    ) -> None:
+        """Passing add_paths=[] causes an early return with no git operations."""
+        project_dir, env = self._make_repo(tmp_path)
+        config_dir = project_dir / "config"
+
+        # Stage a file so a commit would be possible if add_paths were not empty.
+        staged_file = config_dir / "something.txt"
+        staged_file.write_text("content\n", encoding="utf-8")
+        subprocess.run(
+            ["git", "-C", str(config_dir), "add", "something.txt"], check=True, env=env
+        )
+
+        commit_config_dir_changes(project_dir, "chore: test", add_paths=[], env=env)
+
+        # No commit should have been created.
+        log = subprocess.run(
+            ["git", "-C", str(config_dir), "log", "--oneline"],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert log.stdout.strip() == ""
+        # The staged file must remain staged (function did nothing).
+        still_staged = subprocess.run(
+            ["git", "-C", str(config_dir), "diff", "--cached", "--name-only"],
+            capture_output=True,
+            text=True,
+            check=True,
+            env=env,
+        )
+        assert "something.txt" in still_staged.stdout

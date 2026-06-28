@@ -281,11 +281,6 @@ class _Checker:
                 f"'{node.name}' is a built-in type name and cannot be used as a function name.",
                 span=node.span,
             )
-        if node.name in _BUILTIN_FUNC_NAMES and not node.is_builtin:
-            raise AglTypeError(
-                f"'{node.name}' is a built-in function name and cannot be redefined.",
-                span=node.span,
-            )
         if node.is_builtin and node.name not in _BUILTIN_FUNC_NAMES:
             raise AglTypeError(
                 f"Unknown builtin function '{node.name}'.",
@@ -355,9 +350,6 @@ class _Checker:
 
     def _check_block(self, block: Block, *, expected: Type | None) -> Type:
         """Type-check a block and return the type of its last item."""
-        if not block.items:
-            return UnitType()
-
         last = block.items[-1]
         if isinstance(last, (LetDecl, VarDecl)):
             raise AglTypeError(
@@ -645,10 +637,7 @@ class _Checker:
 
     def _require_binding_type(self, ref: BindingRef) -> Type:
         typ = self._env.resolve_binding(ref)
-        if typ is None:
-            raise AssertionError(
-                f"Binding {ref!r} has no recorded type; checker invariant violated."
-            )
+        assert typ is not None, f"Binding {ref!r} has no recorded type; checker invariant violated."
         return typ
 
     # --- Cast ---
@@ -886,11 +875,6 @@ class _Checker:
                     f"Parameter '{mp_name}' supplied both positionally and by name.",
                     span=na.span,
                 )
-            if mp_name in named_filled:
-                raise AglTypeError(
-                    f"Duplicate named argument '{mp_name}' in call to '{func_name}'.",
-                    span=na.span,
-                )
             at = self._check_expr(na.value, expected=mp_type)
             self._assert_assignable(at, mp_type, na.span)
             named_filled.add(mp_name)
@@ -985,8 +969,10 @@ class _Checker:
         # signatures, which would cause the name-keyed table to return the wrong
         # signature for a qualified cross-module call.
         sig = self._env.get_function_signature_by_node_id(callee_node_id)
-        if sig is None:
-            return self._check_value_call(node, expected=expected)
+        assert sig is not None, (
+            f"no signature for function-binding callee node_id={callee_node_id!r}; "
+            "checker invariant violated."
+        )
 
         # Dispatch to the generic path when the function has type parameters.
         if sig.type_params:
@@ -1090,9 +1076,6 @@ class _Checker:
             bt = self._check_expr(branch.body, expected=expected)
             branch_types.append(bt)
         self._warn_non_exhaustive(subj_type, [b.pattern for b in node.branches], node.span)
-
-        if not branch_types:
-            return expected if expected is not None else TextType()
 
         return self._unify_branch_types(branch_types, node.span, "Case expression")
 

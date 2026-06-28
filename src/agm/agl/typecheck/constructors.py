@@ -297,11 +297,9 @@ class ConstructorChecker:
         owner: Type | None = self._ctx._env.get_type(ref.owner_name)
         if owner is None:
             owner = self._ctx._env.resolve_named_type(ref.owner_name)
-        if not isinstance(owner, (RecordType, EnumType, ExceptionType)):
-            raise AglTypeError(
-                f"'{ref.owner_name}' is not a known constructible type.",
-                span=span,
-            )
+        assert isinstance(owner, (RecordType, EnumType, ExceptionType)), (
+            f"'{ref.owner_name}' is not a known constructible type."
+        )
         return owner
 
     # --- Qualified constructor as value (public entry point) ---
@@ -618,15 +616,6 @@ class ConstructorChecker:
             type_label = f"Exception type '{owner.name}'"
 
         provided = {arg.name: arg for arg in args}
-
-        seen_args: set[str] = set()
-        for arg in args:
-            if arg.name in seen_args:
-                raise AglTypeError(
-                    f"Duplicate argument '{arg.name}' in constructor call.",
-                    span=arg.span,
-                )
-            seen_args.add(arg.name)
 
         for arg_name in provided:
             if arg_name not in fields:

@@ -1719,9 +1719,8 @@ class TestHelpTextCoverage:
         from agm.cli import app
 
         cli_commands = set(get_command(app).list_commands(None))
-        command_docs = Path("docs/commands")
         doc_text = "\n".join(
-            path.read_text(encoding="utf-8") for path in command_docs.glob("*.md")
+            path.read_text(encoding="utf-8") for path in sorted(Path("docs/commands").glob("*.md"))
         )
         documented = set(re.findall(r"`agm (\w+)", doc_text))
         missing = cli_commands - documented

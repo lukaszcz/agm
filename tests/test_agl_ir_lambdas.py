@@ -1,4 +1,4 @@
-"""IR semantic tests for M4b: lambdas, indirect (function-value) calls, first-class functions.
+"""IR evaluation tests for lambdas, indirect (function-value) calls, and first-class functions.
 
 Covers:
 1. Lambda with explicit return type bound to let, then called
@@ -6,10 +6,10 @@ Covers:
 3. Named def bound to a typed let, called indirectly
 4. Higher-order: def apply(f, n) calling a function-valued param
 5. A function/lambda RETURNED from a function then called by the caller
-6. Capture-through: lambda inside def captures def's param/local; var mutation parity
-7. No-arg-coercion parity: checker behaviour for value calls
-8. Recursion-depth limit via indirect call → both raise identical RecursionError
-9. Closure-valued bindings normalized equal across both evaluators
+6. Capture-through: lambda inside def captures def's param/local; var mutation
+7. No-arg-coercion: checker behaviour for value calls
+8. Recursion-depth limit via indirect call → IR raises RecursionError
+9. Closure-valued bindings produce consistent results through the IR pipeline
 10. function_values.agl end-to-end
 """
 
@@ -39,8 +39,8 @@ def first(n: int) -> int =
 def second(n: int) -> int =
   n * 2
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["answer"] == ir["answer"] == IntValue(41)
+    ir = evaluate_ir(source)
+    assert ir["answer"] == ir["answer"] == IntValue(41)
 
 
 def test_function_mutates_module_var_without_capture() -> None:
@@ -53,8 +53,8 @@ def increment() -> unit =
 increment()
 increment()
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["count"] == ir["count"] == IntValue(2)
+    ir = evaluate_ir(source)
+    assert ir["count"] == ir["count"] == IntValue(2)
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +69,7 @@ def test_lambda_explicit_return_type() -> None:
         "let r = dbl(4)\n"
         "()"
     )
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     assert ir["r"] == IntValue(8)
 
 
@@ -85,7 +85,7 @@ def test_lambda_inferred_return_type() -> None:
         "let r = inc(9)\n"
         "()"
     )
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     assert ir["r"] == IntValue(10)
 
 
@@ -105,7 +105,7 @@ def test_def_bound_to_typed_let_indirect_call() -> None:
         "let r3 = g(0)\n"
         "()"
     )
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     assert ir["r1"] == TextValue("pos")
     assert ir["r2"] == TextValue("neg")
     assert ir["r3"] == TextValue("zero")
@@ -126,7 +126,7 @@ def test_higher_order_apply() -> None:
         "let r2 = apply(classify, -5)\n"
         "()"
     )
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     assert ir["r1"] == TextValue("pos")
     assert ir["r2"] == TextValue("neg")
 
@@ -144,7 +144,7 @@ def test_returned_lambda_called() -> None:
         "let r = add5(3)\n"
         "()"
     )
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     assert ir["r"] == IntValue(8)
 
 
@@ -158,7 +158,7 @@ def test_returned_def_called() -> None:
         "let r = f(7)\n"
         "()"
     )
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     assert ir["r"] == IntValue(14)
 
 
@@ -175,7 +175,7 @@ def test_capture_through_def_param() -> None:
         "let r = add10(3)\n"
         "()"
     )
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     assert ir["r"] == IntValue(13)
 
 
@@ -189,7 +189,7 @@ def test_capture_through_def_local_let() -> None:
         "let r = triple_base(5)\n"
         "()"
     )
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     assert ir["r"] == IntValue(30)
 
 
@@ -205,16 +205,16 @@ def test_capture_through_var_by_cell() -> None:
         "let r = getter(())\n"
         "()"
     )
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     assert ir["r"] == IntValue(1)
 
 
 # ---------------------------------------------------------------------------
-# 7. Indirect-call arg coercion parity (regression: BLOCKER bug in M4b)
+# 7. Indirect-call arg coercion (regression: indirect-call arg-coercion BLOCKER bug)
 # ---------------------------------------------------------------------------
 #
 # Root cause: indirect calls previously lowered args with lower_expr (no coercion)
-# while ir_reference compensates via a runtime result-coercion in _apply_closure.  The IR
+# while ir compensates via a runtime result-coercion in _apply_closure.  The IR
 # statically elides the result coercion when body-type == return-type, so an int
 # literal passed to a decimal param leaks as IntValue instead of DecimalValue.
 # Fix: lower indirect args with lower_coerced(arg, param_type) just like direct calls.
@@ -223,15 +223,15 @@ def test_capture_through_var_by_cell() -> None:
 def test_value_call_int_arg_to_decimal_param() -> None:
     """Indirect call passing an int literal to a decimal param must yield DecimalValue.
 
-    Regression for BLOCKER bug: IR previously yielded IntValue(5) while ir_reference
-    yielded DecimalValue(5).  Both evaluators must now agree on DecimalValue.
+    Regression for BLOCKER bug: IR previously yielded IntValue(5) while ir
+    yielded DecimalValue(5).  Evaluation must now yield DecimalValue.
     """
     source = (
         "let f = fn(x: decimal) => x\n"
         "let r = f(5)\n"
         "()"
     )
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     assert ir["r"] == DecimalValue(decimal.Decimal("5"))
 
 
@@ -239,8 +239,8 @@ def test_value_call_int_arg_to_json_param() -> None:
     """Indirect call passing an int literal to a json param must yield the JSON int.
 
     Regression for BLOCKER bug: same root cause as the decimal variant — IR used
-    to yield IntValue(5) while ir_reference yielded the json-wrapped integer.
-    Both evaluators must agree.
+    to yield IntValue(5) while ir yielded the json-wrapped integer.
+    Evaluation must yield the expected value.
     """
     from agm.agl.semantics.values import JsonValue
 
@@ -249,7 +249,7 @@ def test_value_call_int_arg_to_json_param() -> None:
         "let r = f(5)\n"
         "()"
     )
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     assert ir["r"] == JsonValue(5)
 
 
@@ -259,7 +259,7 @@ def test_higher_order_indirect_arg_coercion() -> None:
     Regression for BLOCKER bug: def apply(f: (decimal)->decimal, n: decimal) calls
     f(n) indirectly.  Passing an int literal as n must coerce to decimal at the
     direct-call boundary, and the indirect call f(n) must also deliver a decimal
-    to f — both evaluators must agree.
+    to f — the IR pipeline must deliver the correctly coerced value.
     """
     source = (
         "def apply(f: (decimal) -> decimal, n: decimal) -> decimal = f(n)\n"
@@ -267,7 +267,7 @@ def test_higher_order_indirect_arg_coercion() -> None:
         "let r = apply(identity, 7)\n"
         "()"
     )
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     assert ir["r"] == DecimalValue(decimal.Decimal("7"))
 
 
@@ -288,10 +288,8 @@ def test_recursion_depth_via_indirect_call() -> None:
         "let r = f(0)\n"
         "()"
     )
-    ir_reference_exc, ir_exc = evaluate_ir_raises(source)
-    assert ir_reference_exc.display_name == "RecursionError"
+    ir_exc = evaluate_ir_raises(source)
     assert ir_exc.display_name == "RecursionError"
-    assert ir_reference_exc.fields["message"] == ir_exc.fields["message"]
     assert ir_exc.fields["limit"] == IntValue(256)
 
 
@@ -325,13 +323,13 @@ def test_recursion_depth_custom_limit_indirect() -> None:
 
 
 def test_closure_valued_binding_normalized() -> None:
-    """A lambda binding normalizes to <closure> sentinel on both sides."""
+    """A lambda binding normalizes to a <closure> sentinel in the IR pipeline."""
     source = (
         "let f = fn(x: int) => x * 2\n"
         "let r = f(3)\n"
         "()"
     )
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     assert ir["r"] == IntValue(6)
 
 
@@ -364,7 +362,7 @@ def test_function_values_program() -> None:
         "let r_apply_label = apply(label, -5)\n"
         "()"
     )
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     assert ir["r_g7"] == TextValue("pos")
     assert ir["r_gm3"] == TextValue("neg")
     assert ir["r_g0"] == TextValue("zero")
@@ -386,7 +384,7 @@ def test_lambda_with_decimal_return() -> None:
         "let r = to_dec(3)\n"
         "()"
     )
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     assert ir["r"] == DecimalValue(decimal.Decimal("3"))
 
 
@@ -399,7 +397,7 @@ def test_lambda_called_multiple_times() -> None:
         "let c = square(5)\n"
         "()"
     )
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     assert ir["a"] == IntValue(9)
     assert ir["b"] == IntValue(16)
     assert ir["c"] == IntValue(25)
@@ -412,7 +410,7 @@ def test_lambda_passed_as_arg_to_higher_order() -> None:
         "let r = apply(fn(x: int) => x + 10, 5)\n"
         "()"
     )
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     assert ir["r"] == IntValue(15)
 
 
@@ -423,7 +421,7 @@ def test_indirect_call_with_two_args() -> None:
         "let r = add(3, 4)\n"
         "()"
     )
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     assert ir["r"] == IntValue(7)
 
 
@@ -435,7 +433,7 @@ def test_function_value_captures_outer_let() -> None:
         "let r = add_offset(5)\n"
         "()"
     )
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     assert ir["r"] == IntValue(105)
 
 
@@ -450,13 +448,13 @@ def test_two_lambdas_independent_capture() -> None:
         "let rb = fb(1)\n"
         "()"
     )
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     assert ir["ra"] == IntValue(11)
     assert ir["rb"] == IntValue(21)
 
 
 def test_lambda_with_default_param() -> None:
-    """Lambda with a default parameter: lowerer lowers the default coerced (M4b).
+    """Lambda with a default parameter: lowerer lowers the default coerced.
 
     This exercises the ``param.default is not None`` branch in ``_lower_lambda``
     (lowerer.py lines 584-587).  The checker requires exact arity for value calls
@@ -469,5 +467,5 @@ def test_lambda_with_default_param() -> None:
         "let r = add(5, 3)\n"
         "()"
     )
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     assert ir["r"] == IntValue(8)

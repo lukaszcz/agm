@@ -441,11 +441,11 @@ def test_run_alias_with_flags_splits_into_separate_args_no_sandbox(
         isolate_process_group: bool = False,
     ) -> int:
         captured.update(cmd=cmd)
-        return 0
+        return 42
 
     monkeypatch.setattr(run_command, "run_foreground", fake_run_foreground)
 
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as exc_info:
         run_command.run(
             RunArgs(
                 run_command=["claude", "--some-arg"],
@@ -460,6 +460,7 @@ def test_run_alias_with_flags_splits_into_separate_args_no_sandbox(
         )
 
     assert captured["cmd"] == ["claude", "--dangerously-skip-permissions", "--some-arg"]
+    assert exc_info.value.code == 42
 
 
 def test_run_alias_with_flags_splits_into_separate_args_sandbox(
@@ -555,11 +556,11 @@ def test_run_simple_alias_no_flags_no_sandbox(
         isolate_process_group: bool = False,
     ) -> int:
         captured.update(cmd=cmd)
-        return 0
+        return 42
 
     monkeypatch.setattr(run_command, "run_foreground", fake_run_foreground)
 
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as exc_info:
         run_command.run(
             RunArgs(
                 run_command=["myagent", "--some-arg"],
@@ -574,3 +575,4 @@ def test_run_simple_alias_no_flags_no_sandbox(
         )
 
     assert captured["cmd"] == ["claude", "--some-arg"]
+    assert exc_info.value.code == 42

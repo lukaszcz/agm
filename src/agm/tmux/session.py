@@ -8,6 +8,7 @@ import subprocess
 import sys
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Literal, overload
 
 from agm.core import dry_run
 from agm.core.env import clone_env, is_safe_shell_env_assignment_name
@@ -37,6 +38,30 @@ def _filter_env(env: dict[str, str]) -> list[tuple[str, str]]:
             continue
         filtered.append((name, value))
     return filtered
+
+
+@overload
+def create_tmux_session(
+    *,
+    detach: Literal[True],
+    pane_count: str | None,
+    session_name: str | None,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    shell_command: str | None = None,
+) -> str: ...
+
+
+@overload
+def create_tmux_session(
+    *,
+    detach: bool,
+    pane_count: str | None,
+    session_name: str | None,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    shell_command: str | None = None,
+) -> str | None: ...
 
 
 def create_tmux_session(

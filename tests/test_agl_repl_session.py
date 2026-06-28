@@ -1195,7 +1195,7 @@ class TestIndexedAssignTargets:
 class TestTryExpr:
     def test_try_assign_target_detected_in_body(self) -> None:
         # A ``try`` expression containing a ``:=`` in its body must have the
-        # ``:=`` target detected by ``_assign_targets_in_program`` (lines 89-90)
+        # ``:=`` target detected by ``_assign_targets_in_program``
         # so the var is included in atomic rollback tracking.
         s = ReplSession()
         s.eval_entry("var x = 0")
@@ -1205,7 +1205,7 @@ class TestTryExpr:
         assert vals["x"] == 1
 
     def test_try_assign_target_detected_in_handler(self) -> None:
-        # A ``:=`` inside a catch handler must also be detected (line 91) so
+        # A ``:=`` inside a catch handler must also be detected so
         # the var snapshot is captured before the entry runs.
         s = ReplSession()
         s.eval_entry("var x = 0")
@@ -1531,7 +1531,7 @@ class TestImports:
 
     def test_inject_dedup_skips_already_imported(self, tmp_path: Path) -> None:
         # When the current entry already imports the same module as an accumulated
-        # import, the injection skips it (line 819 and preamble-empty branch).
+        # import, the injection skips it (preamble-empty branch).
         lib = tmp_path / 'util.agl'
         lib.write_text('def double(x: int) -> int = x * 2\n')
         s = self._make_session_with_root(tmp_path)

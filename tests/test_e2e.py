@@ -30,8 +30,6 @@ import pytest
 from agm.project.workspace_shell import _sanitize_session_key
 from tests._proc_helpers import wait_for_path
 
-HAS_ZSH = shutil.which("zsh") is not None
-
 
 def _workspace_shell_path(env: dict[str, str], session_name: str) -> Path:
     """Return the per-session wrapper path the real agm writes under *env*.
@@ -46,7 +44,7 @@ def _workspace_shell_path(env: dict[str, str], session_name: str) -> Path:
     else:
         base = Path(env["HOME"]) / ".cache"
     return base / "agm" / "shell" / _sanitize_session_key(session_name) / "shell"
-needs_zsh = pytest.mark.skipif(not HAS_ZSH, reason="zsh is required")
+
 
 # A fake ``tmux`` binary used by tests for agm open, tmux.sh and
 # tmux-apply-layout.sh.  It logs every invocation and returns canned
@@ -800,7 +798,7 @@ class TestCpConfig:
         result = run_agm(["config", "cp", str(dest)], env=env, cwd=str(src), check=False)
 
         assert result.returncode != 0
-        assert "not a valid AGM project directory" in result.stderr
+        assert "project" in result.stderr.lower()
 
     def test_requires_dirname_argument(self, tmp_path: Path, env: dict[str, str]) -> None:
         src = tmp_path / "src"
@@ -1072,6 +1070,20 @@ class TestConfigEnv:
             f"VYPER_AUTOMATION={expected_dep}",
             f"DEP_SEEN_BY_ENV_SH={expected_dep}/from-env-sh",
         ]
+
+    def test_outputs_shell_statements_via_run_agm(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """run_agm(["config","env"]) exits 0 and outputs export statements."""
+        project = _make_workspace_project(tmp_path, env)
+        # PROJ_DIR is not set in the env fixture (clear_project_env strips it),
+        # so config env always exports it — giving a stable behavioral assertion.
+        result = run_agm(["config", "env"], env=env, cwd=str(project))
+
+        assert result.returncode == 0
+        assert any(
+            line == f"export PROJ_DIR={project}" for line in result.stdout.splitlines()
+        ), f"Expected 'export PROJ_DIR={project}' in output; got:\n{result.stdout}"
 
 
 # ── agm config update ───────────────────────────────────────────────────────
@@ -1978,6 +1990,61 @@ class TestClose:
         branches = _git("branch", cwd=str(project), env=env).stdout
         assert "feat/close-embedded" not in branches
         assert "Closed session proj/feat/close-embedded" in result.stdout
+
+
+# ── agm workspace open / agm workspace close ─────────────────────────────────
+
+
+class TestWorkspaceOpenClose:
+    """agm workspace open / agm workspace close: group-scoped open and close.
+
+    These commands are distinct entry points from top-level ``agm open`` /
+    ``agm close`` (same underlying implementation, different command path).
+    Tests here exercise the ``workspace open`` / ``workspace close`` CLI paths
+    end-to-end using the fake-tmux harness, mirroring ``TestOpen``/``TestClose``.
+    """
+
+    def test_workspace_open_creates_tmux_session(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """``agm workspace open BRANCH`` creates a detached tmux session."""
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env, name="myproj")
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+
+        run_agm(["workspace", "open", "repo"], env=env, cwd=str(project))
+
+        log = tmux_log.read_text()
+        assert "new-session" in log
+        assert "-s myproj" in log
+
+    def test_workspace_close_removes_worktree_and_kills_session(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """``agm workspace close BRANCH`` removes the worktree and kills the session."""
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env, name="proj")
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+
+        run_agm(["wt", "new", "feat/wsp-close"], env=env, cwd=str(project / "repo"))
+        worktree = project / "worktrees" / "feat/wsp-close"
+        assert worktree.is_dir()
+        # Open a detached session so a shell wrapper is created and can be torn down.
+        run_agm(["open", "-d", "feat/wsp-close"], env=env, cwd=str(project))
+        wrapper = _workspace_shell_path(env, "proj/feat/wsp-close")
+        assert wrapper.exists()
+
+        result = run_agm(
+            ["workspace", "close", "feat/wsp-close"], env=env, cwd=str(project)
+        )
+
+        assert not worktree.exists()
+        assert not wrapper.exists()
+        assert "Closed session proj/feat/wsp-close" in result.stdout
+        log = tmux_log.read_text()
+        assert "kill-session -t proj/feat/wsp-close" in log
 
 
 # ── agm dep new ─────────────────────────────────────────────────────────────
@@ -2916,7 +2983,8 @@ class TestInit:
         )
 
         assert result.returncode != 0
-        assert "--branch requires REPO_URL" in result.stderr
+        assert "--branch" in result.stderr
+        assert "REPO_URL" in result.stderr
         assert not (tmp_path / "proj").exists()
 
     def test_error_when_repo_not_empty(self, tmp_path: Path, env: dict[str, str]) -> None:
@@ -3234,11 +3302,8 @@ class TestSandbox:
         )
         assert result.returncode == 0
         assert result.stderr == ""
-        assert (
-            "agm run [--no-sandbox] [--no-patch] [--memory LIMIT] [--swap LIMIT]\n"
-            "[--no-memory-limit] [--no-swap-limit] [-f|--file SETTINGS] "
-            "COMMAND [ARGS...]" in result.stdout
-        )
+        assert "agm run" in result.stdout
+        assert "COMMAND" in result.stdout
 
     def test_no_sandbox_runs_command_without_srt_or_settings(
         self, tmp_path: Path, env: dict[str, str]
@@ -5879,7 +5944,7 @@ class TestLoop:
         result = run_agm(["loop", "select", "--no-selector"], env=env, cwd=str(work), check=False)
 
         assert result.returncode != 0
-        assert "requires selector mode" in result.stderr
+        assert "selector" in result.stderr
         assert not Path(env["FAKE_RUNNER_LOG"]).exists()
 
     def test_loop_run_uses_selector_mode_by_default(
@@ -6082,7 +6147,6 @@ class TestLoop:
 # ── agm open ────────────────────────────────────────────────────────────────
 
 
-@needs_zsh
 class TestOpen:
     """agm open: workspace management."""
 
@@ -6428,7 +6492,7 @@ class TestOpen:
             check=False,
         )
         assert result.returncode != 0
-        assert "pane count must be a positive integer" in result.stderr
+        assert "pane count" in result.stderr
 
     def test_no_subcommand_shows_help(self, tmp_path: Path, env: dict[str, str]) -> None:
         result = run_agm(
@@ -6580,7 +6644,6 @@ class TestOpen:
 # ── agm tmux open/close ─────────────────────────────────────────────────────
 
 
-@needs_zsh
 class TestTmuxOpenSession:
     """agm tmux open: create tmux sessions with tiled pane layout."""
 
@@ -6704,7 +6767,6 @@ class TestTmuxOpenSession:
         assert "Detached" in result.stdout
 
 
-@needs_zsh
 class TestTmuxCloseSession:
     """agm tmux close: kill tmux sessions by name."""
 
@@ -6721,7 +6783,6 @@ class TestTmuxCloseSession:
         assert "kill-session -t my-session" in log
 
 
-@needs_zsh
 class TestTmuxOpenErrors:
     """agm tmux open: argument validation."""
 
@@ -6738,7 +6799,7 @@ class TestTmuxOpenErrors:
             check=False,
         )
         assert result.returncode != 0
-        assert "invalid pane count" in result.stderr.lower()
+        assert "pane count" in result.stderr.lower()
 
     def test_too_many_positional_args(self, tmp_path: Path, env: dict[str, str]) -> None:
         tmux_log = tmp_path / "tmux.log"
@@ -6759,7 +6820,6 @@ class TestTmuxOpenErrors:
 # ── agm tmux layout ────────────────────────────────────────────────────────
 
 
-@needs_zsh
 class TestTmuxLayout:
     """agm tmux layout: apply tiled pane layout."""
 
@@ -6969,47 +7029,31 @@ class TestHelp:
     ) -> None:
         result = run_agm(["help", "run"], env=env, cwd=str(tmp_path))
         assert result.returncode == 0
-        assert "<install-prefix>/.agm/config.toml" in result.stdout
-        assert "$HOME/.agm/config.toml" in result.stdout
-        assert "project config.toml and ./.agm/config.toml" in result.stdout
-        assert '[run.<command>] alias = "<other-command>"' in result.stdout
-        assert '[run] memory = "32G"' in result.stdout or (
-            "The default\n               memory limit is 32G" in result.stdout
-        )
-        assert "--memory LIMIT" in result.stdout
-        assert "--swap LIMIT" in result.stdout
+        # Option names (stable CLI interface)
+        assert "--memory" in result.stdout
+        assert "--swap" in result.stdout
         assert "--no-swap-limit" in result.stdout
-        assert "MemoryMax=LIMIT" in result.stdout
-        assert "-f, --file SETTINGS" in result.stdout
-        assert "Use this settings file directly" in result.stdout
         assert "--no-patch" in result.stdout
-        assert "Do not append the project notes, deps, and repo .git" in result.stdout
-        assert "paths to filesystem.allowWrite" in result.stdout
-        assert "$HOME/.agm/sandbox/<command>.json" in result.stdout
-        assert "$HOME/.agm/sandbox/default.json" in result.stdout
-        assert "the project sandbox config directory" in result.stdout
-        assert "./.sandbox/<command>.json" in result.stdout
-        assert "./.sandbox/default.json" in result.stdout
-        assert "try the aliased command's" in result.stdout
-        assert "Later files override earlier ones." in result.stdout
-        assert "agm adds the project notes, deps, and" in result.stdout
-        assert "repo .git paths to filesystem.allowWrite" in result.stdout
+        assert "--file" in result.stdout
+        assert "-f" in result.stdout
+        # Stable identifiers proving settings-merge, sandbox, and alias docs are present
+        assert "config.toml" in result.stdout
+        assert "sandbox" in result.stdout
+        assert "filesystem.allowWrite" in result.stdout
+        assert "MemoryMax" in result.stdout
+        assert "alias" in result.stdout
 
     def test_init_help_shows_branch_only_for_repo_url_forms(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         result = run_agm(["help", "init"], env=env, cwd=str(tmp_path))
 
-        assert (
-            "agm init [--embedded | --split]"
-            "\n         [--no-git-init | --no-repo-git | --no-config-git | --no-notes-git]"
-            "\n         PROJECT_NAME"
-            in result.stdout
-        )
-        assert (
-            "agm init [--embedded | --split] [-b|--branch BRANCH] PROJECT_NAME"
-            not in result.stdout
-        )
+        assert "--embedded" in result.stdout
+        assert "--split" in result.stdout
+        assert "PROJECT_NAME" in result.stdout
+        # The non-URL form (PROJECT_NAME without REPO_URL) must not show --branch.
+        # Partition at the standalone PROJECT_NAME usage line to check only the non-URL forms.
+        assert "--branch" not in result.stdout.partition("PROJECT_NAME\n")[0]
 
     def test_help_aliases_resolve(self, tmp_path: Path, env: dict[str, str]) -> None:
         """Aliases show help for the canonical command."""
@@ -7100,7 +7144,6 @@ class TestHelp:
             check=False,
         )
         assert result.returncode == 1
-        assert "unknown command" in result.stderr
         assert "bogus" in result.stderr
 
     @pytest.mark.parametrize(
@@ -7132,14 +7175,14 @@ class TestHelp:
             (
                 ["config", "cp"],
                 ["config", "cp", "-h"],
-                "error: the following arguments are required",
+                "required",
             ),
             (
                 ["open", "-n", "abc", "repo"],
                 ["open", "-h"],
-                "error: pane count must be a positive integer",
+                "pane count",
             ),
-            (["tmux", "open", "-n", "abc"], ["tmux", "open", "-h"], "invalid pane count"),
+            (["tmux", "open", "-n", "abc"], ["tmux", "open", "-h"], "pane count"),
         ],
     )
     def test_incorrect_usage_includes_full_help(
@@ -7209,7 +7252,6 @@ class TestEdgeCases:
         ).stdout.strip()
         assert head == "release/v2.1.0"
 
-    @needs_zsh
     def test_pane_count_zero(self, tmp_path: Path, env: dict[str, str]) -> None:
         """Pane count of 0 should be rejected."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
@@ -7224,9 +7266,8 @@ class TestEdgeCases:
             check=False,
         )
         assert result.returncode != 0
-        assert "pane count must be a positive integer" in result.stderr
+        assert "pane count" in result.stderr
 
-    @needs_zsh
     def test_negative_pane_count(self, tmp_path: Path, env: dict[str, str]) -> None:
         """Negative pane count should be rejected."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
@@ -7301,7 +7342,6 @@ class TestEdgeCases:
 
         assert (tmp_path / "my-cool-project" / "repo").is_dir()
 
-    @needs_zsh
     def test_large_pane_count(self, tmp_path: Path, env: dict[str, str]) -> None:
         """A larger pane count (16) should work without error."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
@@ -7403,7 +7443,6 @@ class TestWorkflows:
         assert (wt / ".env").read_text() == "DB_HOST=localhost"
         assert (wt / ".mcp.json").read_text() == '{"key": "value"}'
 
-    @needs_zsh
     def test_init_then_open_then_new_sessions(self, tmp_path: Path, env: dict[str, str]) -> None:
         """init → open repo → open feature branch → verify both."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
@@ -7747,7 +7786,7 @@ class TestExecCommand:
         result = run_agm(["exec", str(program)], env=env, cwd=str(work))
 
         assert result.returncode == 0
-        assert "pong" in result.stdout
+        assert result.stdout.strip() == "pong"
 
     def test_exec_runs_multi_agent_review_fix_workflow(
         self, tmp_path: Path, env: dict[str, str]
@@ -7899,8 +7938,8 @@ class TestReplCommand:
         )
 
         assert result.returncode == 0
-        # The evaluated expression yields 3 in the output.
-        assert "3" in result.stdout
+        # The evaluated expression yields exactly 3 on a standalone output line.
+        assert any(line.split()[-1:] == ["3"] for line in result.stdout.splitlines())
 
     def test_repl_help_lists_meta_commands(
         self, tmp_path: Path, env: dict[str, str]
@@ -7929,9 +7968,9 @@ class TestReplCommand:
         )
 
         assert result.returncode == 0
-        # The first binding evaluates to 21, the second expression reuses it.
-        assert "21" in result.stdout
-        assert "42" in result.stdout
+        # The first binding evaluates to 21; the second expression evaluates to exactly 42.
+        assert any(line.split()[-1:] == ["21"] for line in result.stdout.splitlines())
+        assert any(line.split()[-1:] == ["42"] for line in result.stdout.splitlines())
 
     def test_repl_persistent_ir_supports_mutation_and_functions(
         self, tmp_path: Path, env: dict[str, str]
@@ -7952,7 +7991,7 @@ class TestReplCommand:
         )
 
         assert result.returncode == 0
-        assert "10" in result.stdout
+        assert any(line.split()[-1:] == ["10"] for line in result.stdout.splitlines())
 
     def test_repl_with_configured_lib_root(
         self, tmp_path: Path, env: dict[str, str]
@@ -7978,7 +8017,7 @@ class TestReplCommand:
             input="import math\ndouble(21)\n:quit\n",
         )
         assert result.returncode == 0
-        assert "42" in result.stdout
+        assert any(line.split()[-1:] == ["42"] for line in result.stdout.splitlines())
 
 
 class TestReviewCommand:

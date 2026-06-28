@@ -49,7 +49,7 @@ Run the CLI locally with `uv run agm ...` when iterating on a command.
 - Make sure tests are not flaky.
 - Maintain 100% test coverage of `src/`.
 - Maintain 100% command coverage in e2e tests.
-- Test files in `tests/` group tests by module or meaningful category.
+- Group the tests in `tests/` by meaningful categories and name the files meaningfully.
 - NEVER run real agents (claude, codex, pi, ...) in the tests - ALWAYS mock agent calls.
 
 ## Commit Guidelines
@@ -61,7 +61,7 @@ Run the CLI locally with `uv run agm ...` when iterating on a command.
 
 - Keep docs (`README.md` and `docs/commands/*.md`) and command help texts up to date with implemented command functionality. `README.md` is a brief description of the AGM program and should not contain overhwelming details, while `docs/commands/*.md` and the help texts are comprehensive command references.
 - ALWAYS keep comments and docstrings up-to-date with the codebase.
-- Avoid references to plans or unversioned files in the docs, comments and docstrings.
+- Avoid references to plans, milestones, or unversioned files in the docs, comments and docstrings.
 
 ## Instructions
 

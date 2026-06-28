@@ -115,3 +115,83 @@ class TestPullRun:
         captured = capsys.readouterr()
         assert "Merging repo" in captured.out
         assert "Merging worktrees/feat" in captured.out
+
+
+class TestPullRunEdgeCases:
+    """Edge cases and failure scenarios for the pull run() entrypoint."""
+
+    def test_merge_failure_propagates_and_stops_remaining_merges(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A merge failure raises SystemExit and stops merging remaining worktrees.
+
+        We stub merge to raise SystemExit — the same exception require_success raises on
+        a non-zero git exit.  Constructing a real merge conflict requires a git remote with
+        conflicting branches, which is complex and fragile to set up deterministically.
+        """
+        project_dir = tmp_path / "proj"
+        repo_dir = project_dir / "repo"
+        worktree_dir = project_dir / "worktrees" / "feat"
+
+        monkeypatch.setattr(pull_cmd, "require_current_project_dir", lambda: project_dir)
+        monkeypatch.setattr(pull_cmd.fetch_command, "project_git_repos", lambda p: [repo_dir])
+        monkeypatch.setattr(pull_cmd.fetch_command, "fetch_project_repos", lambda p, r: None)
+        monkeypatch.setattr(
+            pull_cmd.git_helpers,
+            "worktree_list",
+            lambda p: [
+                WorktreeInfo(path=repo_dir, branch="main"),
+                WorktreeInfo(path=worktree_dir, branch="feat"),
+            ],
+        )
+
+        merged: list[Path] = []
+
+        def failing_merge(p: Path) -> None:
+            merged.append(p)
+            raise SystemExit(1)
+
+        monkeypatch.setattr(pull_cmd.git_helpers, "merge", failing_merge)
+
+        with pytest.raises(SystemExit):
+            pull_cmd.run(object())
+
+        # Exception stopped execution after the first attempted merge
+        assert merged == [repo_dir]
+
+    def test_only_main_worktree_completes_cleanly(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A repo with only the main worktree (no linked extras) pulls without error."""
+        project_dir = tmp_path / "proj"
+        repo_dir = project_dir / "repo"
+
+        monkeypatch.setattr(pull_cmd, "require_current_project_dir", lambda: project_dir)
+        monkeypatch.setattr(pull_cmd.fetch_command, "project_git_repos", lambda p: [repo_dir])
+        monkeypatch.setattr(pull_cmd.fetch_command, "fetch_project_repos", lambda p, r: None)
+        monkeypatch.setattr(
+            pull_cmd.git_helpers,
+            "worktree_list",
+            lambda p: [WorktreeInfo(path=repo_dir, branch="main")],
+        )
+
+        merged: list[Path] = []
+        monkeypatch.setattr(pull_cmd.git_helpers, "merge", lambda p: merged.append(p))
+
+        pull_cmd.run(object())
+
+        assert merged == [repo_dir]
+
+    def test_missing_repo_surfaces_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When the project has no git repo, pull propagates the SystemExit from discovery."""
+        # No repo/ subdir and the project dir itself is not a git repo, so the REAL
+        # project_git_repos discovery guard raises SystemExit — pull must not swallow it.
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+
+        monkeypatch.setattr(pull_cmd, "require_current_project_dir", lambda: project_dir)
+
+        with pytest.raises(SystemExit):
+            pull_cmd.run(object())

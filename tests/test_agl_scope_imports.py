@@ -991,7 +991,7 @@ class TestImportEnvImmutability:
             exports={},
         )
         with pytest.raises((AttributeError, TypeError)):
-            env.unqualified = {}  # type: ignore[misc]
+            setattr(env, "unqualified", {})
 
 
 # ---------------------------------------------------------------------------

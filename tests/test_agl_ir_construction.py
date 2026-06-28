@@ -1,6 +1,6 @@
-"""M3d differential ir_semantic — record/enum/exception construction and constructor refs.
+"""IR evaluation tests for record/enum/exception construction and constructor refs.
 
-Tests all M3d node types: IrMakeRecord, IrMakeEnum, IrMakeException, IrMakeConstructor.
+Tests all node types: IrMakeRecord, IrMakeEnum, IrMakeException, IrMakeConstructor.
 """
 
 from __future__ import annotations
@@ -75,7 +75,7 @@ def _lower(source: str) -> ExecutableProgram:
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — record construction
+# IR evaluation tests — record construction
 # ---------------------------------------------------------------------------
 
 
@@ -88,8 +88,8 @@ record Point
 let p = Point(x: 3, y: 4)
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    p = ir_reference["p"]
+    ir = evaluate_ir(source)
+    p = ir["p"]
     assert isinstance(p, RecordValue)
     assert p.fields["x"] == IntValue(3)
     assert p.fields["y"] == IntValue(4)
@@ -98,7 +98,7 @@ let p = Point(x: 3, y: 4)
 
 
 def test_record_field_access_now_unblocked() -> None:
-    """Record construction + field access: p.x works end-to-end (un-skipped M3c case)."""
+    """Record construction + field access: p.x works end-to-end."""
     source = """\
 record Point
   x: int
@@ -107,8 +107,7 @@ let p = Point(x: 3, y: 4)
 let px = p.x
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["px"] == IntValue(3)
+    ir = evaluate_ir(source)
     assert ir["px"] == IntValue(3)
 
 
@@ -125,8 +124,8 @@ record Score
 let s = Score(name: "Alice", value: 42)
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    s = ir_reference["s"]
+    ir = evaluate_ir(source)
+    s = ir["s"]
     assert isinstance(s, RecordValue)
     assert s.fields["name"] == TextValue("Alice")
     assert s.fields["value"] == DecimalValue(decimal.Decimal(42))
@@ -143,8 +142,8 @@ let p2 = Pair(a: 1, b: 2)
 let eq = p1 = p2
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["eq"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["eq"] == BoolValue(True)
 
 
 def test_record_inequality_different_fields() -> None:
@@ -158,12 +157,12 @@ let p2 = Pair(a: 1, b: 9)
 let ne = p1 != p2
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["ne"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["ne"] == BoolValue(True)
 
 
 def test_template_with_record_interpolation_now_unblocked() -> None:
-    """Template interpolation with a record value (un-skipped M3c case)."""
+    """Template interpolation with a record value."""
     source = """\
 record Point
   x: int
@@ -172,13 +171,12 @@ let p = Point(x: 1, y: 2)
 let s: text = "point: ${p}"
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert isinstance(ir_reference["s"], TextValue)
-    assert ir_reference["s"] == ir["s"]
+    ir = evaluate_ir(source)
+    assert isinstance(ir["s"], TextValue)
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — enum construction
+# IR evaluation tests — enum construction
 # ---------------------------------------------------------------------------
 
 
@@ -189,8 +187,8 @@ enum Color | Red | Blue
 let c = Color.Red()
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    c = ir_reference["c"]
+    ir = evaluate_ir(source)
+    c = ir["c"]
     assert isinstance(c, EnumValue)
     assert c.variant == "Red"
     assert c.fields == {}
@@ -203,8 +201,8 @@ enum Shape | Circle(radius: decimal) | Rectangle(w: decimal, h: decimal)
 let s = Shape.Circle(radius: 3.0)
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    s = ir_reference["s"]
+    ir = evaluate_ir(source)
+    s = ir["s"]
     assert isinstance(s, EnumValue)
     assert s.variant == "Circle"
     assert s.fields["radius"] == DecimalValue(decimal.Decimal("3.0"))
@@ -219,8 +217,8 @@ let c2 = Color.Red()
 let eq = c1 = c2
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["eq"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["eq"] == BoolValue(True)
 
 
 def test_enum_inequality_different_variants() -> None:
@@ -232,15 +230,15 @@ let c2 = Color.Blue()
 let ne = c1 != c2
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["ne"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["ne"] == BoolValue(True)
 
 
 def test_enum_inequality_different_nominals() -> None:
     """Two enum values from different nominals produce different NominalIds (D2 property).
 
     We cannot compare them with != in AgL (the checker requires same type for ==).
-    Instead we verify that both pipelines produce EnumValues with different nominals.
+    Instead we verify that evaluation produces EnumValues with different nominals.
     """
     source_a = """\
 enum ColorA | Red
@@ -252,10 +250,10 @@ enum ColorB | Red
 let c = ColorB.Red()
 ()
 """
-    ir_reference_a, ir_a = evaluate_ir(source_a)
-    ir_reference_b, ir_b = evaluate_ir(source_b)
-    ca = ir_reference_a["c"]
-    cb = ir_reference_b["c"]
+    ir_a = evaluate_ir(source_a)
+    ir_b = evaluate_ir(source_b)
+    ca = ir_a["c"]
+    cb = ir_b["c"]
     assert isinstance(ca, EnumValue)
     assert isinstance(cb, EnumValue)
     assert ca.nominal != cb.nominal, "Different enum types must have different NominalIds"
@@ -274,14 +272,14 @@ enum Size | Big(amount: decimal) | Small
 let s = Size.Big(amount: 7)
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    sv = ir_reference["s"]
+    ir = evaluate_ir(source)
+    sv = ir["s"]
     assert isinstance(sv, EnumValue)
     assert sv.fields["amount"] == DecimalValue(decimal.Decimal(7))
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — NominalId hashing (D2)
+# IR evaluation tests — NominalId hashing (D2)
 # ---------------------------------------------------------------------------
 
 
@@ -291,14 +289,13 @@ def test_nominal_id_hashing_record_as_set_member() -> None:
     AgL's dict type only supports text keys, so we cannot express "use a record
     as a dict key" in AgL source.  Instead we:
       1. Construct two *equal* records (p1, p2) and one *different* record (p3)
-         via AgL; both pipelines must agree on the values.
+         via AgL and assert on the evaluated values.
       2. Use the returned RecordValue objects as Python set members / dict keys
          to verify that __hash__ and __eq__ (both NominalId-based per D2) are
          consistent: equal records land in the same slot, the different record
          in its own slot.
     This exercises the full pipeline — lowering → evaluation → NominalId equality
-    and hashing — and the ir_semantic guarantees both evaluators produce hash-identical
-    values.
+    and hashing — and asserts the IR pipeline produces hash-identical values.
     """
     source = """\
 record Point
@@ -309,30 +306,30 @@ let p2 = Point(x: 1, y: 2)
 let p3 = Point(x: 9, y: 9)
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
 
-    # --- ir_reference pipeline hashing ---
-    lp1 = ir_reference["p1"]
-    lp2 = ir_reference["p2"]
-    lp3 = ir_reference["p3"]
+    # --- ir pipeline hashing ---
+    lp1 = ir["p1"]
+    lp2 = ir["p2"]
+    lp3 = ir["p3"]
     assert isinstance(lp1, RecordValue)
     assert isinstance(lp2, RecordValue)
     assert isinstance(lp3, RecordValue)
 
     # Equal records must hash identically (set deduplication / dict key lookup).
-    ir_reference_set = {lp1, lp2, lp3}
-    assert len(ir_reference_set) == 2, (
-        f"Expected 2 distinct members in set (p1==p2), got {len(ir_reference_set)}"
+    ir_set = {lp1, lp2, lp3}
+    assert len(ir_set) == 2, (
+        f"Expected 2 distinct members in set (p1==p2), got {len(ir_set)}"
     )
     # Use as dict keys: p1 and p2 must map to the same slot.
-    ir_reference_dict: dict[RecordValue, str] = {lp1: "first"}
-    ir_reference_dict[lp2] = "second"  # should overwrite lp1's slot (same key)
-    assert len(ir_reference_dict) == 1, "p1 and p2 must occupy the same dict slot"
-    assert ir_reference_dict[lp1] == "second"
+    ir_dict: dict[RecordValue, str] = {lp1: "first"}
+    ir_dict[lp2] = "second"  # should overwrite lp1's slot (same key)
+    assert len(ir_dict) == 1, "p1 and p2 must occupy the same dict slot"
+    assert ir_dict[lp1] == "second"
 
     # p3 is distinct — it lands in its own slot.
-    ir_reference_dict[lp3] = "third"
-    assert len(ir_reference_dict) == 2
+    ir_dict[lp3] = "third"
+    assert len(ir_dict) == 2
 
     # --- IR pipeline hashing (same assertions) ---
     ip1 = ir["p1"]
@@ -357,8 +354,8 @@ def test_nominal_id_hashing_enum_as_set_member() -> None:
     """NominalId-based hashing: constructed enum values are usable as set members / dict keys.
 
     Two equal enum values (same variant, same nominal) must deduplicate in a set;
-    a value from a different variant must be distinct.  Both pipelines must produce
-    hash-identical results (ir_semantic agreement).
+    a value from a different variant must be distinct.  Evaluation must produce
+    hash-identical results (IR evaluation agreement).
     """
     source = """\
 enum Color | Red | Blue
@@ -367,25 +364,25 @@ let c2 = Color.Red()
 let c3 = Color.Blue()
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
 
-    # --- ir_reference pipeline hashing ---
-    lc1 = ir_reference["c1"]
-    lc2 = ir_reference["c2"]
-    lc3 = ir_reference["c3"]
+    # --- ir pipeline hashing ---
+    lc1 = ir["c1"]
+    lc2 = ir["c2"]
+    lc3 = ir["c3"]
     assert isinstance(lc1, EnumValue)
     assert isinstance(lc2, EnumValue)
     assert isinstance(lc3, EnumValue)
 
-    ir_reference_set = {lc1, lc2, lc3}
-    assert len(ir_reference_set) == 2, (
-        f"Expected 2 distinct set members (c1==c2), got {len(ir_reference_set)}"
+    ir_set = {lc1, lc2, lc3}
+    assert len(ir_set) == 2, (
+        f"Expected 2 distinct set members (c1==c2), got {len(ir_set)}"
     )
-    ir_reference_dict: dict[EnumValue, str] = {lc1: "red-1"}
-    ir_reference_dict[lc2] = "red-2"  # must overwrite lc1's slot
-    assert len(ir_reference_dict) == 1
-    ir_reference_dict[lc3] = "blue"
-    assert len(ir_reference_dict) == 2
+    ir_dict: dict[EnumValue, str] = {lc1: "red-1"}
+    ir_dict[lc2] = "red-2"  # must overwrite lc1's slot
+    assert len(ir_dict) == 1
+    ir_dict[lc3] = "blue"
+    assert len(ir_dict) == 2
 
     # --- IR pipeline hashing ---
     ic1 = ir["c1"]
@@ -407,7 +404,7 @@ let c3 = Color.Blue()
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — exception construction
+# IR evaluation tests — exception construction
 # ---------------------------------------------------------------------------
 
 
@@ -415,15 +412,14 @@ def test_exception_construction_builtin_explicit_fields() -> None:
     """Exception construction using a built-in exception type with explicit fields.
 
     ArithmeticError has (message, trace_id, operation); we provide message and
-    operation; trace_id is auto-injected.  The harness normalizes trace_id so both
-    pipelines compare equal.
+    operation; trace_id is auto-injected.
     """
     source = """\
 let e = ArithmeticError(message: "div/0", operation: "/")
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    e = ir_reference["e"]
+    ir = evaluate_ir(source)
+    e = ir["e"]
     assert isinstance(e, ExceptionValue)
     assert e.fields["message"] == TextValue("div/0")
     assert e.fields["operation"] == TextValue("/")
@@ -434,16 +430,16 @@ let e = ArithmeticError(message: "div/0", operation: "/")
 def test_exception_auto_trace_single_id_per_construction() -> None:
     """Two separately constructed exceptions have different trace_ids (distinct events).
 
-    We verify the ir and ir_reference sides agree on each construction.
+    The IR pipeline assigns a distinct trace_id to each construction.
     """
     source = """\
 let e1 = ArithmeticError(message: "one", operation: "+")
 let e2 = ArithmeticError(message: "two", operation: "+")
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    e1 = ir_reference["e1"]
-    e2 = ir_reference["e2"]
+    ir = evaluate_ir(source)
+    e1 = ir["e1"]
+    e2 = ir["e2"]
     assert isinstance(e1, ExceptionValue)
     assert isinstance(e2, ExceptionValue)
     # Different constructions get different trace IDs
@@ -451,7 +447,7 @@ let e2 = ArithmeticError(message: "two", operation: "+")
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — first-class constructor references
+# IR evaluation tests — first-class constructor references
 # ---------------------------------------------------------------------------
 
 
@@ -467,32 +463,28 @@ record Pt
 let mk = Pt
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    mk_ir_reference = ir_reference["mk"]
-    mk_ir = ir["mk"]
-    assert isinstance(mk_ir_reference, ConstructorValue), f"ir_reference: {mk_ir_reference!r}"
-    assert isinstance(mk_ir, ConstructorValue), f"ir: {mk_ir!r}"
-    assert mk_ir_reference.display_name == "Pt"
-    assert mk_ir_reference.variant is None
+    ir = evaluate_ir(source)
+    mk = ir["mk"]
+    assert isinstance(mk, ConstructorValue), f"ir: {mk!r}"
+    assert mk.display_name == "Pt"
+    assert mk.variant is None
 
 
 def test_first_class_enum_constructor_ref_nullary_gives_enum_value() -> None:
     """A nullary enum variant accessed without calling it produces an EnumValue directly.
 
     Nullary variants (no fields) are always eagerly evaluated — no ConstructorValue
-    wrapper is created.  Both ir_reference and IR pipelines must agree on this.
+    wrapper is created.
     """
     source = """\
 enum Color | Red | Blue
 let mk = Color.Red
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    mk_ir_reference = ir_reference["mk"]
-    mk_ir = ir["mk"]
-    assert isinstance(mk_ir_reference, EnumValue), f"ir_reference: {mk_ir_reference!r}"
-    assert isinstance(mk_ir, EnumValue), f"ir: {mk_ir!r}"
-    assert mk_ir_reference.variant == "Red"
+    ir = evaluate_ir(source)
+    mk = ir["mk"]
+    assert isinstance(mk, EnumValue), f"ir: {mk!r}"
+    assert mk.variant == "Red"
 
 
 def test_first_class_enum_constructor_ref_with_fields_gives_constructor_value() -> None:
@@ -508,13 +500,11 @@ enum Shape
 let mk = Shape.Circle
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    mk_ir_reference = ir_reference["mk"]
-    mk_ir = ir["mk"]
-    assert isinstance(mk_ir_reference, ConstructorValue), f"ir_reference: {mk_ir_reference!r}"
-    assert isinstance(mk_ir, ConstructorValue), f"ir: {mk_ir!r}"
-    assert mk_ir_reference.display_name == "Shape"
-    assert mk_ir_reference.variant == "Circle"
+    ir = evaluate_ir(source)
+    mk = ir["mk"]
+    assert isinstance(mk, ConstructorValue), f"ir: {mk!r}"
+    assert mk.display_name == "Shape"
+    assert mk.variant == "Circle"
 
 
 # ---------------------------------------------------------------------------
@@ -1027,16 +1017,16 @@ def test_validate_check_enum_variant_skips_when_nominal_not_in_table() -> None:
     We check it via deep=True but with no descriptor in the table — deep checks
     the nominal first (and raises), but if we test _check_enum_variant in isolation
     we can call it directly.  Instead we rely on the IrMakeConstructor path to
-    exercise line 177: variant=not-None, nominal not in table, deep=True.
+    exercise the absent-nominal early return: variant=not-None, nominal not in table, deep=True.
     The _check_nominal_in_table call raises first; but _check_enum_variant is called
     after that in IrMakeConstructor when variant is not None.  So we test via
     IrMakeConstructor with variant=None to take the line-403 path (skip variant check)
     and IrMakeConstructor with variant='X' + nominal absent.
-    The absent-nominal early-return in _check_enum_variant (line 177) is reached:
+    The absent-nominal early-return in _check_enum_variant is reached:
     IrMakeConstructor deep with nominal absent AND variant present triggers both
     _check_nominal_in_table (which raises) and then is NOT reached for _check_enum_variant.
-    To reach line 177 purely, we need to call validate when variant is 'X' but table
-    has the nominal — with a non-ENUM kind.
+    To reach the absent-nominal early-return purely, we need to call validate
+    when variant is 'X' but the table has the nominal — with a non-ENUM kind.
     """
     from agm.agl.ir.ids import Location, SourceId
     from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
@@ -1045,7 +1035,7 @@ def test_validate_check_enum_variant_skips_when_nominal_not_in_table() -> None:
     sid = SourceId(0)
     loc = Location(source_id=sid, start_offset=0, end_offset=1, start_line=1, start_col=0)
     nominal_id = NominalId(ENTRY_ID, "Pt")
-    # Register nominal as RECORD (kind != ENUM) — variant check is skipped (line 179)
+    # Register nominal as RECORD (kind != ENUM) — variant check is skipped
     desc = NominalDescriptor(
         nominal=nominal_id,
         display_name="Pt",
@@ -1068,5 +1058,5 @@ def test_validate_check_enum_variant_skips_when_nominal_not_in_table() -> None:
         sources={sid: SourceFile(display_name="<test>", normalized_text=" ")},
     )
     # deep=True: _check_nominal_in_table passes (nominal is registered),
-    # _check_enum_variant is called but returns early at line 179 (kind != ENUM).
+    # _check_enum_variant is called but returns early (kind != ENUM).
     validate_ir(prog, deep=True)  # must not raise

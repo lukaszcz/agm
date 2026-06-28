@@ -472,7 +472,7 @@ class TestEnsureWorktree:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """When existing_worktrees contains entries that don't match the target,
-        the for-loop at line 114 continues (line 115->114 False branch)."""
+        the for-loop continues to the next entry (no match, skip)."""
         project_dir = tmp_path / "proj"
         repo_dir = project_dir / "repo"
         other_path = project_dir / "worktrees" / "other"

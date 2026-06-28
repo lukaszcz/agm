@@ -1,0 +1,14 @@
+{
+  "scenarios": [
+    {
+      "name": "bounds_fixed_at_entry_not_mutated",
+      "params": {},
+      "expect": {"stdout": "5\n505\n3\n"}
+    },
+    {
+      "name": "downto_step_fixed_despite_body_mutation",
+      "params": {"down_start": 20, "down_stop": 1, "down_step": 3},
+      "expect": {"stdout": "5\n505\n7\n"}
+    }
+  ]
+}

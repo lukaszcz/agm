@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "threshold_3_n_5",
+      "params": {"threshold": 3, "n": 5},
+      "expect": {"stdout": "2\n3\n"}
+    },
+    {
+      "name": "threshold_0_all_above",
+      "params": {"threshold": 0, "n": 4},
+      "expect": {"stdout": "4\n0\n"}
+    },
+    {
+      "name": "threshold_100_all_at_or_below",
+      "params": {"threshold": 100, "n": 5},
+      "expect": {"stdout": "0\n5\n"}
+    }
+  ]
+}

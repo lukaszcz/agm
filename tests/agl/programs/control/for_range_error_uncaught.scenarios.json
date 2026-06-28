@@ -1,0 +1,25 @@
+{
+  "scenarios": [
+    {
+      "name": "positive_step_runs_normally",
+      "params": {"step": 1},
+      "expect": {"stdout": "15\n"}
+    },
+    {
+      "name": "step_zero_raises_range_error",
+      "params": {"step": 0},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "RangeError"}
+      }
+    },
+    {
+      "name": "negative_step_raises_range_error",
+      "params": {"step": -2},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "RangeError"}
+      }
+    }
+  ]
+}

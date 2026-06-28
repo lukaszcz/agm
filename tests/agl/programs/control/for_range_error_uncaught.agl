@@ -1,0 +1,9 @@
+# Non-positive dynamic step raises RangeError (uncaught).
+# Exercises: RangeError from step=0, RangeError from negative dynamic step.
+param step: int
+
+var total: int = 0
+for i in 1 to 5 by step do
+  total := total + i
+done
+print total

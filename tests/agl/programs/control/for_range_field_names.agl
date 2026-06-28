@@ -1,0 +1,16 @@
+# Field names 'to', 'downto', 'by' remain usable in record fields after becoming keywords.
+# Regression: keyword admission in field_name position for to/downto/by.
+record Step
+  by: int
+  to: int
+  downto: int
+
+let s = Step(by: 3, to: 10, downto: 2)
+print s.by
+print s.to
+print s.downto
+
+for i in s.by to s.to do
+  ()
+done
+print "ok"

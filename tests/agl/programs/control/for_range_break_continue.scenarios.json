@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "continue_all_n5_break_sums_1_to_4",
+      "params": {"n": 5},
+      "expect": {"stdout": "5\n10\n"}
+    },
+    {
+      "name": "continue_all_n1_break_sums_nothing",
+      "params": {"n": 1},
+      "expect": {"stdout": "1\n0\n"}
+    },
+    {
+      "name": "continue_all_n3_break_sums_1_to_2",
+      "params": {"n": 3},
+      "expect": {"stdout": "3\n3\n"}
+    }
+  ]
+}

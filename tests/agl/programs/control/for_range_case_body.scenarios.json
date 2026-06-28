@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "n_4_dispatches_1_2_other_other",
+      "params": {"n": 4},
+      "expect": {"stdout": "one\ntwo\nother\nother\n"}
+    },
+    {
+      "name": "n_2_dispatches_1_2",
+      "params": {"n": 2},
+      "expect": {"stdout": "one\ntwo\n"}
+    },
+    {
+      "name": "n_0_empty_range",
+      "params": {"n": 0},
+      "expect": {"stdout": ""}
+    }
+  ]
+}

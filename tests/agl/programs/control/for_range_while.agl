@@ -1,0 +1,9 @@
+# Range for + while clause: loop stops when range exhausts or while becomes false.
+# Exercises: composition of integer-range for with a while guard.
+param limit: int
+
+var total: int = 0
+for i in 1 to 20 while i <= limit do
+  total := total + i
+done
+print total

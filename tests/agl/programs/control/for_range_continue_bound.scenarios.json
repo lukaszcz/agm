@@ -1,0 +1,22 @@
+{
+  "scenarios": [
+    {
+      "name": "range_exhausted_before_bound",
+      "params": {"n": 3, "bound": 5},
+      "expect": {"stdout": "done\n"}
+    },
+    {
+      "name": "bound_exceeded_continue_counts",
+      "params": {"n": 1000, "bound": 3},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "MaxIterationsExceeded", "fields": {"limit": 3}}
+      }
+    },
+    {
+      "name": "degenerate_range_no_iters",
+      "params": {"n": 0, "bound": 5},
+      "expect": {"stdout": "done\n"}
+    }
+  ]
+}

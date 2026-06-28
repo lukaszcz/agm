@@ -1,0 +1,21 @@
+# Range for with different terminators: done, until, and layout-omitted.
+# Exercises: done terminator, until condition, omitted-terminator layout form.
+param n: int
+
+var a: int = 0
+for i in 1 to n do
+  a := a + i
+done
+
+var b: int = 0
+for i in 1 to n do
+  b := b + i
+until b >= 10
+
+var c: int = 0
+for i in 1 to n do
+  c := c + i
+
+print a
+print b
+print c

@@ -1,0 +1,12 @@
+# Range for inside a try body: RangeError from a non-positive dynamic step is caught.
+# Exercises: range for in try body, RangeError catchable, step=0 hits catch.
+param step: int
+
+var total: int = 0
+try
+  for i in 1 to 5 by step do
+    total := total + i
+  done
+catch RangeError as e =>
+  print "caught: ${e.message}"
+print total

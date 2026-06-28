@@ -1,0 +1,15 @@
+# Range for with if in the body: conditional logic using the loop variable.
+# Exercises: if expression in range for body, loop variable in condition.
+param threshold: int
+param n: int
+
+var above: int = 0
+var at_or_below: int = 0
+for i in 1 to n do
+  if i > threshold =>
+    above := above + 1
+  else =>
+    at_or_below := at_or_below + 1
+done
+print above
+print at_or_below

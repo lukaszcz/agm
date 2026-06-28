@@ -1,0 +1,24 @@
+{
+  "scenarios": [
+    {
+      "name": "while_stops_at_5",
+      "params": {"limit": 5},
+      "expect": {"stdout": "15\n"}
+    },
+    {
+      "name": "while_false_from_start",
+      "params": {"limit": 0},
+      "expect": {"stdout": "0\n"}
+    },
+    {
+      "name": "range_exhausted_before_while_fires",
+      "params": {"limit": 100},
+      "expect": {"stdout": "210\n"}
+    },
+    {
+      "name": "while_stops_at_1",
+      "params": {"limit": 1},
+      "expect": {"stdout": "1\n"}
+    }
+  ]
+}

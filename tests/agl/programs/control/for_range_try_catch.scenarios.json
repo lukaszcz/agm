@@ -1,0 +1,24 @@
+{
+  "scenarios": [
+    {
+      "name": "step_1_runs_all",
+      "params": {"step": 1},
+      "expect": {"stdout": "15\n"}
+    },
+    {
+      "name": "step_2_runs_normally",
+      "params": {"step": 2},
+      "expect": {"stdout": "9\n"}
+    },
+    {
+      "name": "step_0_range_error_caught",
+      "params": {"step": 0},
+      "expect": {"stdout": "caught: loop step must be positive\n0\n"}
+    },
+    {
+      "name": "step_neg1_range_error_caught",
+      "params": {"step": -1},
+      "expect": {"stdout": "caught: loop step must be positive\n0\n"}
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+# Range for with break and continue: break exits innermost, continue advances cursor.
+# A range that always continues still terminates (cursor advances before re-entry).
+# Exercises: break in range for, continue in range for, continue advancing cursor.
+param n: int
+
+var all_continued: int = 0
+for i in 1 to n do
+  all_continued := all_continued + 1
+  continue
+done
+print all_continued
+
+var before_n: int = 0
+for i in 1 to 100 do
+  if i >= n => break
+  before_n := before_n + i
+done
+print before_n

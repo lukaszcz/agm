@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "n_5_until_stops_at_10",
+      "params": {"n": 5},
+      "expect": {"stdout": "15\n10\n15\n"}
+    },
+    {
+      "name": "n_4_all_sum_10",
+      "params": {"n": 4},
+      "expect": {"stdout": "10\n10\n10\n"}
+    },
+    {
+      "name": "n_2_sum_3_until_not_reached",
+      "params": {"n": 2},
+      "expect": {"stdout": "3\n3\n3\n"}
+    }
+  ]
+}

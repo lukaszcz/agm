@@ -1,0 +1,24 @@
+{
+  "scenarios": [
+    {
+      "name": "sum_1_to_3_step_1",
+      "params": {"start": 1, "stop": 3, "step": 1},
+      "expect": {"stdout": "6\n"}
+    },
+    {
+      "name": "sum_1_to_6_step_2_overshoot",
+      "params": {"start": 1, "stop": 6, "step": 2},
+      "expect": {"stdout": "9\n"}
+    },
+    {
+      "name": "degenerate_start_after_stop",
+      "params": {"start": 5, "stop": 1, "step": 1},
+      "expect": {"stdout": "0\n"}
+    },
+    {
+      "name": "single_value_range",
+      "params": {"start": 7, "stop": 7, "step": 3},
+      "expect": {"stdout": "7\n"}
+    }
+  ]
+}

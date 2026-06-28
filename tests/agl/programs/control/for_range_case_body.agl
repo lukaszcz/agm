@@ -1,0 +1,10 @@
+# Case expression in a range-for body: dispatch on the loop counter value.
+# Exercises: case over int literal patterns inside range for, wildcard arm.
+param n: int
+
+for i in 1 to n do
+  case i of
+    | 1 => print "one"
+    | 2 => print "two"
+    | _ => print "other"
+done

@@ -534,7 +534,7 @@ _HELP_TEXTS: dict[str, str] = {
         or [exec] config instead.
 
         Params (`param NAME: T`) resolve eagerly when entered: first from
-        [params.<program>] config when a `program NAME` declaration is active,
+        [<program>] config when a `program NAME` declaration is active,
         then from the param default expression. There is no CLI param seeding.
         Use :params to list declared params and their resolved values.
 

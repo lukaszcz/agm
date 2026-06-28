@@ -21,7 +21,14 @@ Later layers override earlier ones; table-valued sections merge by key rather th
 
 Configuration is organized into sections consumed by specific features — for example loop, run, exec, and module-root settings. Some commands additionally support per-command override sections (such as a per-command review or revise table) that merge over the base section, so a default can be set once and specialized for a particular command.
 
-For AgL execution, three sources combine with a defined precedence: a program's in-source `config` pragmas, the `[exec]` config section, and CLI flags. CLI flags win, then source pragmas, then config files. This is described in [agl/repl.md](agl/repl.md).
+For AgL execution, four sources combine with a defined precedence:
+
+- **Engine keys** (`runner`, `log`, `strict-json`, `max-iters`, `log-file`, `timeout`):
+  `CLI flag > source pragma (config X = e) > [<program>].X > [exec].X > engine default`
+- **Param values** (`param NAME`):
+  `CLI flag > [<program>].Y > source default (param Y = e) > required error`
+
+`[exec]` holds global engine defaults with kebab field names (`strict-json`, `max-iters`, `log-file`). `[<program>]` is a **top-level** section keyed by the `program NAME` declaration or the `.agl` file stem; it holds both engine-key overrides and param values for that specific program. Inline `-c` programs with no `program` declaration have no config section. A file stem matching a reserved AGM section name (e.g. `loop`, `exec`) is a pre-execution error unless the source has an explicit `program NAME` declaration.
 
 ## Sandbox Configuration
 

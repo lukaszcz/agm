@@ -573,7 +573,7 @@ class ReplSession:
                 elif item.default is None:
                     effective_program_name = entry_program_name or self._program_name
                     prog_hint = (
-                        f" via [params.{effective_program_name}] config"
+                        f" via [{effective_program_name}] config"
                         if effective_program_name is not None
                         else ""
                     )

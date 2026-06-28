@@ -7754,7 +7754,7 @@ class TestExecCommand:
     ) -> None:
         work = tmp_path / "work"
         work.mkdir()
-        program = work / "review.agl"
+        program = work / "review_workflow.agl"
         program.write_text(
             "param task: text\n"
             "record Issue\n"

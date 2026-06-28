@@ -612,7 +612,7 @@ class TestIntegrationConfigLogTrue:
         (home / ".agm").mkdir()
         log_path = tmp_path / "config_trace.jsonl"
         (home / ".agm" / "config.toml").write_text(
-            f"[exec]\nlog_file = {str(log_path)!r}\n"
+            f"[exec]\nlog-file = {str(log_path)!r}\n"
         )
         monkeypatch.setenv("HOME", str(home))
         monkeypatch.delenv("AGM_PROJECT_DIR", raising=False)

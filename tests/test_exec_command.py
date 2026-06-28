@@ -923,7 +923,7 @@ class TestExecCommandM1:
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
         (home / ".agm" / "config.toml").write_text(
-            "\n".join(["[params.demo]", 'typo = "ignored"'])
+            "\n".join(["[demo]", 'typo = "ignored"'])
         )
         agl_file = tmp_path / "test.agl"
         agl_file.write_text('program demo\nparam msg: text = "ok"\nprint msg\n')
@@ -1076,13 +1076,13 @@ def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
 
 
 class TestExecConfigWiring:
-    """F12: [exec] config (strict_json/default_loop_limit) flows into the runtime."""
+    """F12: [exec] config (strict-json/max-iters) flows into the runtime."""
 
     def _config_home(self, tmp_path: Path) -> Path:
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
         (home / ".agm" / "config.toml").write_text(
-            "[exec]\nstrict_json = true\ndefault_loop_limit = 9\n"
+            "[exec]\nstrict-json = true\nmax-iters = 9\n"
         )
         return home
 
@@ -1831,7 +1831,7 @@ class TestExecPerAgentRunnerValidation:
             log=False,
             log_file=None,
         )
-        monkeypatch.setattr(exec_command, "load_exec_config", lambda **_: bad_config)
+        monkeypatch.setattr(exec_command, "exec_config_from_merged", lambda *_, **__: bad_config)
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text('print "ran"\n')
         # Must not raise (the inert ghost command is never validated/dispatched).
@@ -2330,7 +2330,9 @@ class TestExecPragmaPrecedence:
             log=False,
             log_file=None,
         )
-        monkeypatch.setattr(exec_command, "load_exec_config", lambda **_: low_limit_config)
+        monkeypatch.setattr(
+            exec_command, "exec_config_from_merged", lambda *_, **__: low_limit_config
+        )
 
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
@@ -2394,7 +2396,7 @@ class TestExecPragmaPrecedence:
             log=False,
             log_file=None,
         )
-        monkeypatch.setattr(exec_command, "load_exec_config", lambda **_: strict_config)
+        monkeypatch.setattr(exec_command, "exec_config_from_merged", lambda *_, **__: strict_config)
 
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text("config strict-json = false\nlet x = 1\nx\n")
@@ -2454,7 +2456,9 @@ class TestExecPragmaPrecedence:
             log=False,
             log_file=None,
         )
-        monkeypatch.setattr(exec_command, "load_exec_config", lambda **_: config_with_timeout)
+        monkeypatch.setattr(
+            exec_command, "exec_config_from_merged", lambda *_, **__: config_with_timeout
+        )
 
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text('config timeout = "30s"\nlet x = 1\nx\n')
@@ -2574,7 +2578,7 @@ class TestExecPragmaPrecedence:
             log=False,
             log_file=None,
         )
-        monkeypatch.setattr(exec_command, "load_exec_config", lambda **_: no_log_config)
+        monkeypatch.setattr(exec_command, "exec_config_from_merged", lambda *_, **__: no_log_config)
 
         exec_command.run(
             ExecArgs(
@@ -3086,15 +3090,38 @@ class TestConfigBaseOptionKeys:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> dict[str, object]:
         """Patch PipelineDriver.run_prepared_graph to capture the config_base kwarg."""
+        from collections.abc import Mapping
+
         from agm.agl.pipeline import PipelineDriver as RealRuntime
+        from agm.agl.pipeline import PreparedGraph, RunResult
+        from agm.agl.semantics.values import Value
+        from agm.agl.typecheck.graph import CheckedModuleGraph
 
         captured: dict[str, object] = {}
 
         class CapturingRuntime(RealRuntime):
-            def run_prepared_graph(self, prepared: object, **kwargs: object) -> object:  # type: ignore[override]
-                captured["config_base"] = kwargs.get("config_base")
+            def run_prepared_graph(
+                self,
+                prepared: PreparedGraph,
+                *,
+                param_values: Mapping[str, object] | None = None,
+                check_only: bool = False,
+                log_file: Path | None = None,
+                checked_graph: CheckedModuleGraph | None = None,
+                config_cli: Mapping[str, Value] | None = None,
+                config_base: Mapping[str, Value] | None = None,
+            ) -> RunResult:
+                captured["config_base"] = config_base
                 # Proceed with actual execution so exec.py sees a proper result.
-                return super().run_prepared_graph(prepared, **kwargs)  # type: ignore[arg-type]
+                return super().run_prepared_graph(
+                    prepared,
+                    param_values=param_values,
+                    check_only=check_only,
+                    log_file=log_file,
+                    checked_graph=checked_graph,
+                    config_cli=config_cli,
+                    config_base=config_base,
+                )
 
         monkeypatch.setattr(exec_command, "PipelineDriver", CapturingRuntime)
         return captured
@@ -3104,18 +3131,16 @@ class TestConfigBaseOptionKeys:
     ) -> None:
         """Bare ``config timeout`` with [exec].timeout set must bind some(...), not none."""
         from agm.agl.semantics.values import EnumValue
-        from agm.config.general import ExecConfig
+        from agm.config.context import ConfigContext
 
-        config_with_timeout = ExecConfig(
-            runner=None,
-            strict_json=False,
-            default_loop_limit=5,
-            timeout=60.0,
-            agents={},
-            log=False,
-            log_file=None,
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[exec]\ntimeout = "60s"\n')
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
-        monkeypatch.setattr(exec_command, "load_exec_config", lambda **_: config_with_timeout)
 
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text("config timeout\nlet x = 1\nx\n")
@@ -3147,7 +3172,9 @@ class TestConfigBaseOptionKeys:
             log=False,
             log_file=expected_path,
         )
-        monkeypatch.setattr(exec_command, "load_exec_config", lambda **_: config_with_log_file)
+        monkeypatch.setattr(
+            exec_command, "exec_config_from_merged", lambda *_, **__: config_with_log_file
+        )
 
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text("config log-file\nlet x = 1\nx\n")
@@ -3162,3 +3189,277 @@ class TestConfigBaseOptionKeys:
         assert isinstance(log_file_val, EnumValue)
         assert log_file_val.variant == "Some"
         assert log_file_val.fields == {"value": TextValue(expected_path)}
+
+
+class TestReservedFileStem:
+    """§15: a file stem matching a reserved AGM section name must exit 1."""
+
+    def test_reserved_stem_no_program_decl_exits_1(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """File 'loop.agl' with no ``program`` decl uses stem 'loop' (reserved) → exit 1."""
+        agl_file = tmp_path / "loop.agl"
+        agl_file.write_text("let x = 1\nx\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+
+        assert exc_info.value.code == 1
+
+    def test_exec_stem_no_program_decl_exits_1(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """File 'exec.agl' with no ``program`` decl uses stem 'exec' (reserved) → exit 1."""
+        agl_file = tmp_path / "exec.agl"
+        agl_file.write_text("let x = 1\nx\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+
+        assert exc_info.value.code == 1
+
+    def test_reserved_stem_with_program_decl_ok(self, tmp_path: Path) -> None:
+        """A file named 'loop.agl' with an explicit ``program myapp`` decl runs fine."""
+        agl_file = tmp_path / "loop.agl"
+        agl_file.write_text("program myapp\nlet x = 1\nx\n")
+
+        # Should succeed (program decl provides a non-reserved key).
+        result = exec_command.run(_exec_args_no_log(agl_file))
+        assert result is None
+
+    def test_non_reserved_stem_runs_fine(self, tmp_path: Path) -> None:
+        """A file with a non-reserved stem works normally."""
+        agl_file = tmp_path / "myworkflow.agl"
+        agl_file.write_text("let x = 1\nx\n")
+
+        result = exec_command.run(_exec_args_no_log(agl_file))
+        assert result is None
+
+    def test_inline_c_with_reserved_name_unaffected(self, tmp_path: Path) -> None:
+        """Inline -c programs have no file stem and are never affected."""
+        from agm.cli_support.args import ExecArgs
+
+        args = ExecArgs(
+            file=None,
+            command="let x = 1\nx\n",
+            param_tokens=[],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=True,
+            log_file=None,
+            log=False,
+        )
+        result = exec_command.run(args)
+        assert result is None
+
+
+class TestRawStringRoundTrip:
+    """Task 5 carry-forward: timeout raw string in config_base (no str(float) loss)."""
+
+    def _spy_config_base(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> dict[str, object]:
+        from collections.abc import Mapping
+
+        from agm.agl.pipeline import PipelineDriver as RealRuntime
+        from agm.agl.pipeline import PreparedGraph, RunResult
+        from agm.agl.semantics.values import Value
+        from agm.agl.typecheck.graph import CheckedModuleGraph
+
+        captured: dict[str, object] = {}
+
+        class CapturingRuntime(RealRuntime):
+            def run_prepared_graph(
+                self,
+                prepared: PreparedGraph,
+                *,
+                param_values: Mapping[str, object] | None = None,
+                check_only: bool = False,
+                log_file: Path | None = None,
+                checked_graph: CheckedModuleGraph | None = None,
+                config_cli: Mapping[str, Value] | None = None,
+                config_base: Mapping[str, Value] | None = None,
+            ) -> RunResult:
+                captured["config_base"] = config_base
+                return super().run_prepared_graph(
+                    prepared,
+                    param_values=param_values,
+                    check_only=check_only,
+                    log_file=log_file,
+                    checked_graph=checked_graph,
+                    config_cli=config_cli,
+                    config_base=config_base,
+                )
+
+        monkeypatch.setattr(exec_command, "PipelineDriver", CapturingRuntime)
+        return captured
+
+    def test_exec_timeout_string_preserved_in_config_base(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """[exec].timeout = \"30s\" must produce config_base[\"timeout\"] = some(\"30s\"),
+        not some(\"30.0\") (the str(float) approximation must be fixed)."""
+        from agm.agl.semantics.values import EnumValue, TextValue
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[exec]\ntimeout = "30s"\n')
+
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("config timeout\nlet x = 1\nx\n")
+
+        captured = self._spy_config_base(monkeypatch)
+        result = exec_command.run(_exec_args_no_log(agl_file))
+        assert result is None
+
+        config_base = captured["config_base"]
+        assert isinstance(config_base, dict)
+        timeout_val = config_base["timeout"]
+        assert isinstance(timeout_val, EnumValue)
+        assert timeout_val.variant == "Some"
+        # The raw string "30s" must be preserved, not "30.0".
+        assert timeout_val.fields == {"value": TextValue("30s")}
+
+    def test_program_timeout_override_string_preserved(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """[<program>].timeout = \"60m\" overrides [exec].timeout and preserves string."""
+        from agm.agl.semantics.values import EnumValue, TextValue
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            '[exec]\ntimeout = "30s"\n\n[myprog]\ntimeout = "60m"\n'
+        )
+
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        agl_file = tmp_path / "myprog.agl"
+        agl_file.write_text("config timeout\nlet x = 1\nx\n")
+
+        captured = self._spy_config_base(monkeypatch)
+        result = exec_command.run(_exec_args_no_log(agl_file))
+        assert result is None
+
+        config_base = captured["config_base"]
+        assert isinstance(config_base, dict)
+        timeout_val = config_base["timeout"]
+        assert isinstance(timeout_val, EnumValue)
+        assert timeout_val.variant == "Some"
+        # Program override "60m" must be preserved.
+        assert timeout_val.fields == {"value": TextValue("60m")}
+
+
+class TestF1StemVsProgramNameBug:
+    """F1 regression: file stem != program NAME decl must not split engine/param key."""
+
+    def test_program_name_decl_used_for_both_engine_config_and_config_base(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """File foo.agl with 'program bar': [bar].timeout must win for engine AND config_base.
+
+        With the bug, stem 'foo' is used for engine config -> [foo] (empty) -> 30s
+        and 'bar' is used for params. The fix makes both use 'bar' -> 60m.
+        """
+        from collections.abc import Mapping
+
+        from agm.agl.pipeline import PipelineDriver as RealRuntime
+        from agm.agl.pipeline import PreparedGraph, RunResult
+        from agm.agl.semantics.values import EnumValue, TextValue, Value
+        from agm.agl.typecheck.graph import CheckedModuleGraph
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        # [exec] has 30s; [bar] (the declared program name) overrides with 60m.
+        (home / ".agm" / "config.toml").write_text(
+            '[exec]\ntimeout = "30s"\n\n[bar]\ntimeout = "60m"\n'
+        )
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        # File stem is 'foo', but program declares 'bar'.
+        agl_file = tmp_path / "foo.agl"
+        agl_file.write_text("program bar\nconfig timeout\nlet x = 1\nx\n")
+
+        captured: dict[str, object] = {}
+
+        class CapturingRuntime(RealRuntime):
+            def run_prepared_graph(
+                self,
+                prepared: PreparedGraph,
+                *,
+                param_values: Mapping[str, object] | None = None,
+                check_only: bool = False,
+                log_file: Path | None = None,
+                checked_graph: CheckedModuleGraph | None = None,
+                config_cli: Mapping[str, Value] | None = None,
+                config_base: Mapping[str, Value] | None = None,
+            ) -> RunResult:
+                captured["config_base"] = config_base
+                captured["shell_exec_timeout"] = self._shell_exec_timeout
+                return super().run_prepared_graph(
+                    prepared,
+                    param_values=param_values,
+                    check_only=check_only,
+                    log_file=log_file,
+                    checked_graph=checked_graph,
+                    config_cli=config_cli,
+                    config_base=config_base,
+                )
+
+        monkeypatch.setattr(exec_command, "PipelineDriver", CapturingRuntime)
+
+        result = exec_command.run(_exec_args_no_log(agl_file))
+        assert result is None
+
+        # Both config_base timeout and engine shell_exec_timeout must come from [bar] (60m),
+        # not [exec] (30s).
+        config_base_val = captured["config_base"]
+        assert isinstance(config_base_val, dict)
+        timeout_binding = config_base_val["timeout"]
+        assert isinstance(timeout_binding, EnumValue)
+        assert timeout_binding.variant == "Some"
+        assert timeout_binding.fields == {"value": TextValue("60m")}
+
+        # Engine shell-exec timeout: 60 minutes = 3600 seconds.
+        shell_timeout = captured["shell_exec_timeout"]
+        assert shell_timeout == pytest.approx(3600.0)
+
+
+class TestProgramLogFilePathResolution:
+    """F2: [<program>].log-file relative path is anchored to the config directory."""
+
+    def test_program_log_file_relative_resolved_to_config_dir(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.config.general import load_merged_config, program_config_from_merged
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[myprog]\nlog-file = "my.log"\n')
+
+        merged = load_merged_config(home=home, proj_dir=None, cwd=tmp_path)
+        prog = program_config_from_merged(merged, "myprog")
+
+        log_file_val = prog.get("log-file")
+        assert isinstance(log_file_val, str)
+        # Must be absolute (anchored to ~/.agm/ where the config lives)
+        assert Path(log_file_val).is_absolute()
+        assert log_file_val.endswith("my.log")

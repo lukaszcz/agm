@@ -8,9 +8,11 @@ import pytest
 
 from agm.config.general import (
     ExecConfig,
+    exec_config_from_merged,
     load_exec_config,
-    load_params_config,
-    params_config_from_merged,
+    load_merged_config,
+    load_program_config,
+    program_config_from_merged,
 )
 
 
@@ -70,8 +72,8 @@ class TestLoadExecConfig:
                 [
                     "[exec]",
                     'runner = "claude -p"',
-                    "strict_json = true",
-                    "default_loop_limit = 10",
+                    "strict-json = true",
+                    "max-iters = 10",
                     'timeout = "30m"',
                     "",
                     "[exec.agents]",
@@ -97,7 +99,7 @@ class TestLoadExecConfig:
                 [
                     "[exec]",
                     'runner = "home-runner"',
-                    "default_loop_limit = 3",
+                    "max-iters = 3",
                 ]
             )
         )
@@ -241,7 +243,7 @@ class TestLoadExecConfig:
         (home / ".agm").mkdir()
         log_path = tmp_path / "trace.jsonl"
         (home / ".agm" / "config.toml").write_text(
-            f"[exec]\nlog_file = {str(log_path)!r}\n"
+            f"[exec]\nlog-file = {str(log_path)!r}\n"
         )
         cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
         assert cfg.log_file == str(log_path)
@@ -253,22 +255,91 @@ class TestLoadExecConfig:
         assert cfg.log_file is None
 
 
-class TestParamsConfig:
-    def test_load_params_config_from_toml(self, tmp_path: Path) -> None:
+class TestProgramConfig:
+    def test_load_program_config_from_toml(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
         home.mkdir()
         (home / ".agm").mkdir()
         (home / ".agm" / "config.toml").write_text(
-            "\n".join(["[params.demo]", 'topic = "docs"', "count = 3"])
+            "\n".join(["[demo]", 'topic = "docs"', "count = 3"])
         )
 
-        cfg = load_params_config(
+        cfg = load_program_config(
+            "demo",
             home=home,
             proj_dir=None,
             cwd=tmp_path,
-            program_name="demo",
         )
         assert cfg == {"topic": "docs", "count": 3}
 
-    def test_params_config_from_merged_non_table_is_empty(self) -> None:
-        assert params_config_from_merged({"params": {"demo": "not-a-table"}}, "demo") == {}
+    def test_program_config_from_merged_non_table_is_empty(self) -> None:
+        assert program_config_from_merged({"demo": "not-a-table"}, "demo") == {}
+
+    def test_program_config_from_merged_absent_is_empty(self) -> None:
+        assert program_config_from_merged({}, "demo") == {}
+
+    def test_program_config_from_merged_returns_all_keys(self) -> None:
+        merged = {"demo": {"topic": "docs", "timeout": "60s", "count": 3}}
+        cfg = program_config_from_merged(merged, "demo")
+        assert cfg == {"topic": "docs", "timeout": "60s", "count": 3}
+
+
+class TestExecConfigProgramTableOverride:
+    def test_program_table_overrides_exec_engine_keys(self, tmp_path: Path) -> None:
+        """[<program>] engine keys override the global [exec] values."""
+        home = tmp_path / "home"
+        home.mkdir()
+        (home / ".agm").mkdir()
+        (home / ".agm" / "config.toml").write_text(
+            "\n".join(
+                [
+                    "[exec]",
+                    'runner = "global-runner"',
+                    "max-iters = 5",
+                    "",
+                    "[myprog]",
+                    'runner = "prog-runner"',
+                    "max-iters = 10",
+                ]
+            )
+        )
+        merged = load_merged_config(home=home, proj_dir=None, cwd=tmp_path)
+        prog_table = program_config_from_merged(merged, "myprog")
+        cfg = exec_config_from_merged(merged, program_table=prog_table)
+        assert cfg.runner == "prog-runner"
+        assert cfg.default_loop_limit == 10
+
+    def test_program_table_partial_override(self, tmp_path: Path) -> None:
+        """[<program>] overrides only the keys it specifies; others fall back to [exec]."""
+        home = tmp_path / "home"
+        home.mkdir()
+        (home / ".agm").mkdir()
+        (home / ".agm" / "config.toml").write_text(
+            "\n".join(
+                [
+                    "[exec]",
+                    'runner = "global-runner"',
+                    "max-iters = 7",
+                    "",
+                    "[myprog]",
+                    'runner = "prog-runner"',
+                ]
+            )
+        )
+        merged = load_merged_config(home=home, proj_dir=None, cwd=tmp_path)
+        prog_table = program_config_from_merged(merged, "myprog")
+        cfg = exec_config_from_merged(merged, program_table=prog_table)
+        assert cfg.runner == "prog-runner"
+        assert cfg.default_loop_limit == 7  # from [exec], not overridden
+
+    def test_no_program_table_uses_exec_defaults(self, tmp_path: Path) -> None:
+        """Without a program table, exec_config_from_merged uses [exec] alone."""
+        home = tmp_path / "home"
+        home.mkdir()
+        (home / ".agm").mkdir()
+        (home / ".agm" / "config.toml").write_text(
+            "\n".join(["[exec]", 'runner = "exec-runner"'])
+        )
+        merged = load_merged_config(home=home, proj_dir=None, cwd=tmp_path)
+        cfg = exec_config_from_merged(merged)
+        assert cfg.runner == "exec-runner"

@@ -251,7 +251,8 @@ def resolve_param_values(
 
     Args:
         declared_names: The set of param names declared in the program.
-        config_values: Raw TOML-native values from ``[params.<program>]`` config.
+        config_values: Raw TOML-native values from ``[<program>]`` config (engine keys
+            already stripped by the caller; only undeclared param keys will warn).
         cli_values: Values parsed from CLI ``--param`` tokens.
         program_name: The program name used for the config table key, used in
             warning messages.  When ``None``, the table name is omitted.
@@ -266,7 +267,7 @@ def resolve_param_values(
     warnings: list[str] = []
     # Start from config values that ARE declared, warn on undeclared.
     external: dict[str, object] = {}
-    table_ref = f"[params.{program_name}]" if program_name is not None else "[params.*]"
+    table_ref = f"[{program_name}]" if program_name is not None else "<program config>"
     for key, value in config_values.items():
         if key in declared_names:
             external[key] = value

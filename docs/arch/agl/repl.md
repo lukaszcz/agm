@@ -12,7 +12,7 @@ When an entry imports modules — or earlier entries did — the session switche
 
 ## Program Parameters
 
-`param` declarations make a program parameterizable. The pipeline can discover the typed parameter inventory before execution, which `agm exec` uses to expose each parameter as a first-class CLI option (boolean params become flag pairs; names that collide with built-in flags are rejected) and to load values from the `[params.<program>]` config section. Resolution precedence is external value > default expression > error for a required param, and external values are converted and type-checked before any evaluation, so a bad value fails before any agent or shell call runs. In the REPL the same precedence applies, with config values converted in a pre-evaluation check.
+`param` declarations make a program parameterizable. The pipeline can discover the typed parameter inventory before execution, which `agm exec` uses to expose each parameter as a first-class CLI option (boolean params become flag pairs; names that collide with built-in flags are rejected) and to load values from the `[<program>]` config section. Resolution precedence is external value > default expression > error for a required param, and external values are converted and type-checked before any evaluation, so a bad value fails before any agent or shell call runs. In the REPL the same precedence applies, with config values converted in a pre-evaluation check.
 
 ## Agent Declaration and Reconciliation
 

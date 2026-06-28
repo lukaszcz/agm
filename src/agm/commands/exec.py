@@ -53,7 +53,11 @@ from agm.agl.modules.roots import assemble_roots
 from agm.agl.pipeline import static_config_values
 from agm.agl.runtime.agents import runner_backed_agent_factory
 from agm.agl.runtime.params import convert_config_value
-from agm.agl.semantics.engine_keys import get_engine_key_type
+from agm.agl.semantics.engine_keys import (
+    ENGINE_KEY_NAMES,
+    RESERVED_PROGRAM_NAMES,
+    get_engine_key_type,
+)
 from agm.agl.semantics.types import Type
 from agm.agl.semantics.values import BoolValue, IntValue, TextValue, Value
 from agm.cli_support.args import ExecArgs
@@ -64,15 +68,16 @@ from agm.cli_support.exec_params import (
 )
 from agm.config.context import current_config_context
 from agm.config.general import (
-    load_exec_config,
+    exec_config_from_merged,
     load_merged_config,
-    params_config_from_merged,
+    program_config_from_merged,
 )
 from agm.config.module_roots import load_module_roots, resolve_lib_root, resolve_stdlib_root
 from agm.core import dry_run
 from agm.core.fs import read_text_arg
 from agm.core.log import prepare_trace_log_from_layers
 from agm.core.parse import parse_timeout
+from agm.core.toml import toml_dict
 from agm.parser import exit_with_usage_error
 
 _T = TypeVar("_T")
@@ -83,6 +88,26 @@ _V = TypeVar("_V", bound=Value)
 def _first(*values: _T | None) -> _T | None:
     """Return the first non-None value, or None if all are None."""
     return next((v for v in values if v is not None), None)
+
+
+def _raw_option_str(
+    primary: dict[str, object],
+    fallback: dict[str, object],
+    key: str,
+) -> str | None:
+    """Return the raw TOML value for *key* as a string, checking primary then fallback.
+
+    Preserves the exact string written in the config file (e.g. ``"30s"``).
+    For numeric values (int/float), converts to string (e.g. ``60`` → ``"60"``).
+    Returns ``None`` when the key is absent or empty/invalid in both tables.
+    """
+    for table in (primary, fallback):
+        val = table.get(key)
+        if isinstance(val, str) and val.strip():
+            return val
+        if isinstance(val, (int, float)) and not isinstance(val, bool) and val > 0:
+            return str(val)
+    return None
 
 
 def _typed_const(consts: dict[str, bool | int | str], key: str, typ: type[_T]) -> _T | None:
@@ -150,14 +175,11 @@ def run(args: ExecArgs) -> None:
         print("Error: exec requires either a FILE or -c/--command", file=sys.stderr)
         raise SystemExit(1)
 
-    # Load the merged config once; derive [exec] and [params.<program>] from it.
+    # Load the merged config once; program_table and exec config are deferred until
+    # after prepare_program so the declared program name is available.
     ctx = current_config_context()
-    try:
-        merged_config = load_merged_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
-        config = load_exec_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
-    except ValueError as exc:
-        print(f"Error: invalid exec configuration: {exc}", file=sys.stderr)
-        raise SystemExit(1) from exc
+    raw_stem: str | None = Path(args.file).stem if args.file is not None else None
+    merged_config = load_merged_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
 
     # ----------------------------------------------------------------
     # Assemble module roots and load + scope the graph ONCE to read config
@@ -206,6 +228,45 @@ def run(args: ExecArgs) -> None:
         static_consts = static_config_values(entry_mod.resolved.program)
     else:
         static_consts = {}
+
+    # Resolve the single final program key for BOTH engine-key overrides and param
+    # resolution.  The declared ``program NAME`` takes precedence over the file stem;
+    # a stem that collides with an AGM reserved section name produces no key (and
+    # triggers the reserved-stem error below when no ``program NAME`` decl exists).
+    if prepared.program_name is not None:
+        program_key: str | None = prepared.program_name
+    elif raw_stem is not None and raw_stem not in RESERVED_PROGRAM_NAMES:
+        program_key = raw_stem
+    else:
+        program_key = None
+
+    # Reserved file-stem check (§15): when no ``program NAME`` decl is present,
+    # a file stem that matches an AGM config section name would silently shadow
+    # the global ``[exec]`` config.  Require an explicit ``program NAME`` decl
+    # with a non-reserved name instead.  Inline ``-c`` (no file stem) is unaffected.
+    if (
+        raw_stem is not None
+        and raw_stem in RESERVED_PROGRAM_NAMES
+        and prepared.program_name is None
+    ):
+        print(
+            f"Error: file stem '{raw_stem}' is a reserved AGM section name. "
+            "Add a 'program NAME' declaration with a non-reserved name.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    # Fetch the [<program_key>] table once.  The same table feeds both the
+    # engine-key overlay in exec_config_from_merged and param resolution in
+    # resolve_param_values, so both always read the same program section.
+    program_table: dict[str, object] = (
+        program_config_from_merged(merged_config, program_key) if program_key is not None else {}
+    )
+    try:
+        config = exec_config_from_merged(merged_config, program_table=program_table)
+    except ValueError as exc:
+        print(f"Error: invalid exec configuration: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
 
     # Resolve strict_json: CLI > config.  Source config strict-json = VALUE
     # is applied at runtime by the D6 effect (IrConfigBind → _apply_config_effect).
@@ -353,24 +414,19 @@ def run(args: ExecArgs) -> None:
         except ValueError as exc:
             exit_with_usage_error(["exec"], f"error: {exc}")
 
-        if discovery.program_name is not None:
-            param_config_key: str | None = discovery.program_name
-        elif args.file is not None:
-            param_config_key = Path(args.file).stem
-        else:
-            param_config_key = None
-
-        config_param_values = (
-            params_config_from_merged(merged_config, param_config_key)
-            if param_config_key is not None
-            else {}
-        )
+        # Strip engine keys before param resolution: they were already applied to
+        # ExecConfig; leaving them in would trigger spurious "unknown param" warnings.
+        # program_key and program_table are shared with the engine-config path above,
+        # ensuring both always read the same [<program>] section.
+        config_param_values = {
+            k: v for k, v in program_table.items() if k not in ENGINE_KEY_NAMES
+        }
         declared_names = {p.name for p in discovery.params}
         resolved_params, config_warnings = resolve_param_values(
             declared_names,
             config_param_values,
             cli_params,
-            program_name=param_config_key,
+            program_name=program_key,
         )
         external_params.update(resolved_params)
         for msg in config_warnings:
@@ -426,19 +482,18 @@ def run(args: ExecArgs) -> None:
     ) is not None:
         config_cli["timeout"] = v
 
-    # For ``timeout`` in config_base: config.timeout is a pre-parsed float (seconds);
-    # the exact original raw string (e.g. "30s") is lost.  str(float) is an acceptable
-    # approximation — round-trip fidelity is a Task 5 concern.
+    # Build config_base with the raw TOML string for Option-typed keys so the
+    # binding reflects exactly what was written (e.g. "30s" not "1800.0").
+    # For ``timeout``: prefer [<program>].timeout raw string over [exec].timeout.
+    # For ``log-file``: config.log_file is already path-resolved from the exec table.
+    exec_raw_table = toml_dict(merged_config.get("exec"))
+    raw_timeout = _raw_option_str(program_table, exec_raw_table, "timeout")
     config_base: dict[str, Value] = {
         "strict-json": BoolValue(config.strict_json),
         "max-iters": IntValue(config.default_loop_limit),
         "runner": TextValue(runner_cmd),
         "log": BoolValue(config.log),
-        "timeout": convert_config_value(
-            "timeout",
-            None if config.timeout is None else str(config.timeout),
-            _timeout_type,
-        ),
+        "timeout": convert_config_value("timeout", raw_timeout, _timeout_type),
         "log-file": convert_config_value(
             "log-file",
             config.log_file,

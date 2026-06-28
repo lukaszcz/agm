@@ -33,7 +33,7 @@ from agm.cli_support.args import ReplArgs
 from agm.config.context import current_config_context
 from agm.config.general import (
     load_exec_config,
-    load_params_config,
+    load_program_config,
     load_repl_config,
     save_repl_theme,
 )
@@ -86,7 +86,7 @@ def run(args: ReplArgs) -> None:
     )
 
     def _params_config_loader(program_name: str) -> dict[str, object]:
-        return load_params_config(
+        return load_program_config(
             program_name, home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd
         )
 

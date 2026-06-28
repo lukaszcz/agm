@@ -41,6 +41,7 @@ from agm.agl.lexer.tokens import (
     CALL_LBRACE,
     DCOLON,
     DOT,
+    EXPORT,
     GRAMMAR_TOKEN_REMAP,
     HIDING,
     IMPORT,
@@ -206,6 +207,8 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
                     tok = _retype(tok, USING)
                 elif tv == "hiding":
                     tok = _retype(tok, HIDING)
+                elif tv == "export":
+                    tok = _retype(tok, EXPORT)
 
         result.append(tok)
         prev_type = tok.type

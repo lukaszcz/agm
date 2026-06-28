@@ -3076,6 +3076,79 @@ class TestImportDecl:
         assert decl.mode == syntax.ImportMode.USING
         assert decl.items[0].name == "x"
 
+    # --- Re-export (export annotation on import) ---
+
+    def test_import_reexport_all(self) -> None:
+        """import foo export — re-exports all public names from foo."""
+        prog = parse("import foo export")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.module_path == ("foo",)
+        assert decl.export is True
+        assert decl.mode == syntax.ImportMode.ALL
+        assert decl.items == ()
+
+    def test_import_hiding_reexport(self) -> None:
+        """import foo hiding bar export — imports hiding bar, re-exports the rest."""
+        prog = parse("import foo hiding bar export")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.export is True
+        assert decl.mode == syntax.ImportMode.HIDING
+        assert len(decl.items) == 1
+        assert decl.items[0].name == "bar"
+        assert decl.items[0].export is False
+
+    def test_import_using_per_item_export(self) -> None:
+        """import foo using bar export, baz — bar is re-exported, baz is not."""
+        prog = parse("import foo using bar export, baz")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.export is False
+        assert decl.mode == syntax.ImportMode.USING
+        assert len(decl.items) == 2
+        by_name = {i.name: i for i in decl.items}
+        assert by_name["bar"].export is True
+        assert by_name["baz"].export is False
+
+    def test_import_using_rename_export(self) -> None:
+        """import foo using bar as b export — rename + per-item re-export."""
+        prog = parse("import foo using bar as b export")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.export is False
+        assert decl.mode == syntax.ImportMode.USING
+        assert len(decl.items) == 1
+        item = decl.items[0]
+        assert item.name == "bar"
+        assert item.rename == "b"
+        assert item.export is True
+
+    def test_import_wildcard_reexport_all(self) -> None:
+        """import foo.* export — wildcard re-export all."""
+        prog = parse("import foo.* export")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.wildcard is True
+        assert decl.export is True
+        assert decl.mode == syntax.ImportMode.ALL
+
+    def test_import_qualified_reexport(self) -> None:
+        """import foo qualified export — qualified + re-export all."""
+        prog = parse("import foo qualified export")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.qualified is True
+        assert decl.export is True
+
+    def test_import_no_export_flag_by_default(self) -> None:
+        """Plain imports have export=False by default."""
+        prog = parse("import foo using bar")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.export is False
+        assert decl.items[0].export is False
+
 
 # ---------------------------------------------------------------------------
 # Qualified reference tests

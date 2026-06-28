@@ -2230,19 +2230,23 @@ class TestModuleSystemNodes:
 
     def test_import_item_with_rename(self) -> None:
         from agm.agl.syntax import ImportItem
-        item = ImportItem(name="foo", rename="bar", span=self._sp(), node_id=0)
+        item = ImportItem(name="foo", rename="bar", export=False, span=self._sp(), node_id=0)
         assert item.name == "foo"
         assert item.rename == "bar"
 
     def test_import_item_no_rename(self) -> None:
         from agm.agl.syntax import ImportItem
-        item = ImportItem(name="baz", rename=None, span=self._sp(), node_id=0)
+        item = ImportItem(name="baz", rename=None, export=False, span=self._sp(), node_id=0)
         assert item.rename is None
 
     def test_import_item_equality_ignores_span(self) -> None:
         from agm.agl.syntax import ImportItem
-        i1 = ImportItem(name="x", rename=None, span=SourceSpan(1,0,1,1,0,1), node_id=0)
-        i2 = ImportItem(name="x", rename=None, span=SourceSpan(2,0,2,1,0,1), node_id=99)
+        i1 = ImportItem(
+            name="x", rename=None, export=False, span=SourceSpan(1, 0, 1, 1, 0, 1), node_id=0
+        )
+        i2 = ImportItem(
+            name="x", rename=None, export=False, span=SourceSpan(2, 0, 2, 1, 0, 1), node_id=99
+        )
         assert i1 == i2
 
     def test_import_decl_basic(self) -> None:
@@ -2254,6 +2258,7 @@ class TestModuleSystemNodes:
             alias=None,
             mode=ImportMode.ALL,
             items=(),
+            export=False,
             span=self._sp(),
             node_id=0,
         )
@@ -2273,6 +2278,7 @@ class TestModuleSystemNodes:
             alias=None,
             mode=ImportMode.ALL,
             items=(),
+            export=False,
             span=self._sp(),
             node_id=0,
         )
@@ -2287,6 +2293,7 @@ class TestModuleSystemNodes:
             alias="f",
             mode=ImportMode.ALL,
             items=(),
+            export=False,
             span=self._sp(),
             node_id=0,
         )
@@ -2296,8 +2303,8 @@ class TestModuleSystemNodes:
     def test_import_decl_using_mode(self) -> None:
         from agm.agl.syntax import ImportDecl, ImportItem, ImportMode
         items = (
-            ImportItem(name="foo", rename=None, span=self._sp(), node_id=1),
-            ImportItem(name="bar", rename="b", span=self._sp(), node_id=2),
+            ImportItem(name="foo", rename=None, export=False, span=self._sp(), node_id=1),
+            ImportItem(name="bar", rename="b", export=False, span=self._sp(), node_id=2),
         )
         decl = ImportDecl(
             module_path=("m",),
@@ -2306,6 +2313,7 @@ class TestModuleSystemNodes:
             alias=None,
             mode=ImportMode.USING,
             items=items,
+            export=False,
             span=self._sp(),
             node_id=0,
         )
@@ -2314,7 +2322,9 @@ class TestModuleSystemNodes:
 
     def test_import_decl_hiding_mode(self) -> None:
         from agm.agl.syntax import ImportDecl, ImportItem, ImportMode
-        items = (ImportItem(name="private_fn", rename=None, span=self._sp(), node_id=1),)
+        items = (
+            ImportItem(name="private_fn", rename=None, export=False, span=self._sp(), node_id=1),
+        )
         decl = ImportDecl(
             module_path=("m",),
             wildcard=False,
@@ -2322,6 +2332,7 @@ class TestModuleSystemNodes:
             alias=None,
             mode=ImportMode.HIDING,
             items=items,
+            export=False,
             span=self._sp(),
             node_id=0,
         )
@@ -2336,6 +2347,7 @@ class TestModuleSystemNodes:
             alias=None,
             mode=ImportMode.ALL,
             items=(),
+            export=False,
             span=self._sp(),
             node_id=0,
         )
@@ -2347,7 +2359,7 @@ class TestModuleSystemNodes:
     def test_import_decl_walk_visits_items(self) -> None:
         from agm.agl.syntax import ImportDecl, ImportItem, ImportMode
         from agm.agl.syntax.visitor import walk
-        item = ImportItem(name="x", rename=None, span=self._sp(), node_id=1)
+        item = ImportItem(name="x", rename=None, export=False, span=self._sp(), node_id=1)
         decl = ImportDecl(
             module_path=("m",),
             wildcard=False,
@@ -2355,6 +2367,7 @@ class TestModuleSystemNodes:
             alias=None,
             mode=ImportMode.USING,
             items=(item,),
+            export=False,
             span=self._sp(),
             node_id=0,
         )

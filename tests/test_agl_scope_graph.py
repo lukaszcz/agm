@@ -190,7 +190,7 @@ class TestResolvedModuleGraphShape:
         assert entry_mod.module_id == ENTRY_ID
         assert entry_mod.resolved is not None
         assert entry_mod.import_env is not None
-        assert isinstance(entry_mod.exports, frozenset)
+        assert isinstance(entry_mod.exports, dict)
 
     def test_multi_module_graph_has_both_modules(self, tmp_path: Path) -> None:
         """A two-module graph has entries for entry and the library module."""
@@ -1469,3 +1469,151 @@ class TestResolveGraphReplSeams:
         })
         result = resolve_graph(graph)
         assert result.warnings == ()
+
+
+# ---------------------------------------------------------------------------
+# Re-export behaviour
+# ---------------------------------------------------------------------------
+
+
+class TestReexport:
+    """Tests for the `export` annotation on import declarations."""
+
+    def test_reexport_all_adds_to_exports(self, tmp_path: Path) -> None:
+        """import lib export — all public names from lib appear in the facade's exports."""
+        graph = _make_graph_from_files(tmp_path, {
+            "entry": "import facade\n()",
+            "facade": "import lib export",
+            "lib": "def foo() -> int = 1\nprivate def _bar() -> int = 2",
+        })
+        result = resolve_graph(graph)
+        facade_id = ModuleId.from_dotted("facade")
+        lib_id = ModuleId.from_dotted("lib")
+        facade_exports = result.modules[facade_id].exports
+        assert "foo" in facade_exports
+        assert facade_exports["foo"] == (lib_id, "foo")
+        assert "_bar" not in facade_exports
+
+    def test_reexport_origin_is_preserved_through_chain(self, tmp_path: Path) -> None:
+        """Re-export is transparent: B re-exports from A, C uses B — origin is A, not B."""
+        graph = _make_graph_from_files(tmp_path, {
+            "entry": "import b\nlet x = foo()",
+            "b": "import a export",
+            "a": "def foo() -> int = 42",
+        })
+        result = resolve_graph(graph)
+        b_id = ModuleId.from_dotted("b")
+        a_id = ModuleId.from_dotted("a")
+        b_exports = result.modules[b_id].exports
+        assert b_exports["foo"] == (a_id, "foo")
+
+    def test_per_item_reexport_selective(self, tmp_path: Path) -> None:
+        """import lib using foo export, bar — only foo is re-exported."""
+        graph = _make_graph_from_files(tmp_path, {
+            "entry": "import facade\n()",
+            "facade": "import lib using foo export, bar",
+            "lib": "def foo() -> int = 1\ndef bar() -> int = 2",
+        })
+        result = resolve_graph(graph)
+        facade_id = ModuleId.from_dotted("facade")
+        lib_id = ModuleId.from_dotted("lib")
+        facade_exports = result.modules[facade_id].exports
+        assert "foo" in facade_exports
+        assert facade_exports["foo"] == (lib_id, "foo")
+        assert "bar" not in facade_exports
+
+    def test_per_item_reexport_with_rename(self, tmp_path: Path) -> None:
+        """import lib using foo as plus export — re-exported as 'plus', origin is lib.foo."""
+        graph = _make_graph_from_files(tmp_path, {
+            "entry": "import facade\n()",
+            "facade": "import lib using foo as plus export",
+            "lib": "def foo() -> int = 1",
+        })
+        result = resolve_graph(graph)
+        facade_id = ModuleId.from_dotted("facade")
+        lib_id = ModuleId.from_dotted("lib")
+        facade_exports = result.modules[facade_id].exports
+        assert "plus" in facade_exports
+        assert facade_exports["plus"] == (lib_id, "foo")
+        assert "foo" not in facade_exports
+
+    def test_hiding_reexport(self, tmp_path: Path) -> None:
+        """import lib hiding secret export — all except 'secret' are re-exported."""
+        graph = _make_graph_from_files(tmp_path, {
+            "entry": "import facade\n()",
+            "facade": "import lib hiding secret export",
+            "lib": "def foo() -> int = 1\ndef secret() -> int = 0",
+        })
+        result = resolve_graph(graph)
+        facade_id = ModuleId.from_dotted("facade")
+        lib_id = ModuleId.from_dotted("lib")
+        facade_exports = result.modules[facade_id].exports
+        assert "foo" in facade_exports
+        assert facade_exports["foo"] == (lib_id, "foo")
+        assert "secret" not in facade_exports
+
+    def test_no_export_flag_does_not_reexport(self, tmp_path: Path) -> None:
+        """Plain import (no export) does not add names to the module's exports."""
+        graph = _make_graph_from_files(tmp_path, {
+            "entry": "import facade\n()",
+            "facade": "import lib\ndef local() -> int = 1",
+            "lib": "def foo() -> int = 42",
+        })
+        result = resolve_graph(graph)
+        facade_id = ModuleId.from_dotted("facade")
+        facade_exports = result.modules[facade_id].exports
+        assert "foo" not in facade_exports
+        assert "local" in facade_exports
+
+    def test_reexport_chain_multi_hop(self, tmp_path: Path) -> None:
+        """A re-exports from B which re-exports from C — A's consumers get C's origin."""
+        graph = _make_graph_from_files(tmp_path, {
+            "entry": "import a\nlet x = foo()",
+            "a": "import b export",
+            "b": "import c export",
+            "c": "def foo() -> int = 99",
+        })
+        result = resolve_graph(graph)
+        a_id = ModuleId.from_dotted("a")
+        c_id = ModuleId.from_dotted("c")
+        a_exports = result.modules[a_id].exports
+        assert a_exports["foo"] == (c_id, "foo")
+
+    def test_wildcard_reexport(self, tmp_path: Path) -> None:
+        """import lib.* export — all matching modules' public names are re-exported."""
+        graph = _make_graph_from_files(tmp_path, {
+            "entry": "import facade\n()",
+            "facade": "import lib.* export",
+            "lib.ops": "def add() -> int = 1",
+        })
+        result = resolve_graph(graph)
+        facade_id = ModuleId.from_dotted("facade")
+        lib_ops_id = ModuleId.from_dotted("lib.ops")
+        facade_exports = result.modules[facade_id].exports
+        assert "add" in facade_exports
+        assert facade_exports["add"] == (lib_ops_id, "add")
+
+    def test_reexport_conflict_raises(self, tmp_path: Path) -> None:
+        """Re-exporting the same name from two different origins raises AglScopeError."""
+        graph = _make_graph_from_files(tmp_path, {
+            "entry": "import facade\n()",
+            "facade": "import a export\nimport b export",
+            "a": "def foo() -> int = 1",
+            "b": "def foo() -> int = 2",
+        })
+        with pytest.raises(AglScopeError):
+            resolve_graph(graph)
+
+    def test_per_item_reexport_through_chain(self, tmp_path: Path) -> None:
+        """Per-item export resolves correctly even when target's re-exports aren't yet populated."""
+        graph = _make_graph_from_files(tmp_path, {
+            "entry": "import a\nlet x = foo()",
+            "a": "import b using foo export",
+            "b": "import c export",
+            "c": "def foo() -> int = 99",
+        })
+        result = resolve_graph(graph)
+        a_id = ModuleId.from_dotted("a")
+        c_id = ModuleId.from_dotted("c")
+        a_exports = result.modules[a_id].exports
+        assert a_exports["foo"] == (c_id, "foo")

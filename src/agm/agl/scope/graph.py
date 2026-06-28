@@ -33,12 +33,19 @@ from agm.agl.modules.loader import ModuleGraph
 from agm.agl.scope.imports import (
     ImportEnv,
     ImportTarget,
+    QName,
     SingleTarget,
     WildcardTarget,
     build_import_env,
 )
 from agm.agl.scope.resolver import _Resolver
-from agm.agl.scope.symbols import BinderKind, ConstructorRef, ResolvedProgram, ScopeNode
+from agm.agl.scope.symbols import (
+    AglScopeError,
+    BinderKind,
+    ConstructorRef,
+    ResolvedProgram,
+    ScopeNode,
+)
 from agm.agl.syntax.nodes import (
     AgentDecl,
     EnumDef,
@@ -50,6 +57,12 @@ from agm.agl.syntax.nodes import (
     TypeAlias,
 )
 from agm.agl.syntax.spans import SourceSpan
+from agm.agl.syntax.types import ImportMode
+
+
+def _mid_sort_key(m: ModuleId) -> tuple[str, ...]:
+    return m.segments
+
 
 # ---------------------------------------------------------------------------
 # Output types
@@ -68,14 +81,16 @@ class ResolvedModule:
     ``import_env``
         The import environment computed from this module's import declarations.
     ``exports``
-        Frozenset of non-private top-level ``def``/``record``/``enum``/``type``
-        names exported by this module.
+        Export map for this module: maps each exported name to its origin
+        :data:`~agm.agl.scope.imports.QName`.  For locally-defined public names
+        the origin is ``(self_module_id, name)``; for re-exported imported names
+        it is the original defining module and name, preserved through chains.
     """
 
     module_id: ModuleId
     resolved: ResolvedProgram
     import_env: ImportEnv
-    exports: frozenset[str]
+    exports: dict[str, QName]
     source_text: str
 
 
@@ -168,18 +183,102 @@ def _build_cross_module_constructor_candidates(
     )
 
 
-def _compute_exports(program: Program) -> frozenset[str]:
-    """Compute the export set for a module from its program items.
+def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[str, QName]:
+    """Compute the local export map for a module from its own declarations.
 
-    Returns the set of non-private top-level ``FuncDef``, ``RecordDef``,
-    ``EnumDef``, and ``TypeAlias`` names.
+    Returns a dict mapping each non-private top-level name to the QName
+    ``(self_id, name)``.  Re-exported imported names are NOT included here;
+    they are added by :func:`_resolve_reexports` in a subsequent pass.
     """
-    result: set[str] = set()
+    result: dict[str, QName] = {}
     for item in program.body.items:
         if isinstance(item, (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias)):
             if not item.is_private:
-                result.add(item.name)
-    return frozenset(result)
+                result[item.name] = (self_id, item.name)
+    return result
+
+
+def _resolve_reexports(
+    export_maps: dict[ModuleId, dict[str, QName]],
+    all_targets: dict[int, ImportTarget],
+    graph: ModuleGraph,
+) -> None:
+    """Fixed-point resolution of re-exports across the module graph.
+
+    Iterates until no new re-exported names are added.  For each import
+    declaration with re-export annotation (``decl.export=True`` or per-item
+    ``item.export=True``), this function propagates the target module's
+    exported names into the current module's export map with their origin
+    :data:`QName` preserved.
+
+    Re-export name conflicts (same exposed name → different origin QNames)
+    raise :class:`~agm.agl.scope.symbols.AglScopeError`.
+    """
+    changed = True
+    while changed:
+        changed = False
+        for mid, loaded in graph.modules.items():
+            for decl in loaded.imports:
+                if not decl.export and not any(item.export for item in decl.items):
+                    continue
+
+                target = all_targets[decl.node_id]
+                if isinstance(target, SingleTarget):
+                    target_mids: list[ModuleId] = [target.module]
+                else:
+                    target_mids = sorted(target.modules, key=_mid_sort_key)
+
+                for target_mid in target_mids:
+                    target_exports = export_maps.get(target_mid, {})
+                    additions = _compute_reexport_additions(decl, target_exports)
+                    current_exports = export_maps[mid]
+                    for exposed, qname in additions.items():
+                        existing = current_exports.get(exposed)
+                        if existing is None:
+                            current_exports[exposed] = qname
+                            changed = True
+                        elif existing != qname:
+                            raise AglScopeError(
+                                f"re-export name {exposed!r} has conflicting origins:"
+                                f" {existing[0].dotted()!r}::{existing[1]!r}"
+                                f" and {qname[0].dotted()!r}::{qname[1]!r}",
+                                span=decl.span,
+                            )
+
+
+def _compute_reexport_additions(
+    decl: ImportDecl,
+    target_exports: dict[str, QName],
+) -> dict[str, QName]:
+    """Compute names to add to the current module's exports from one re-exporting ImportDecl.
+
+    Returns a dict of ``exposed_name → origin_qname``.  This is called once
+    per (module, import-decl, target-module) triple during the fixed-point.
+    """
+    result: dict[str, QName] = {}
+
+    if decl.export:
+        # Decl-level export: re-export all public names, applying hiding filter if present.
+        if decl.mode == ImportMode.HIDING:
+            hidden = frozenset(item.name for item in decl.items)
+            s = frozenset(target_exports.keys()) - hidden
+        else:  # ImportMode.ALL
+            s = frozenset(target_exports.keys())
+        for src_name in s:
+            result[src_name] = target_exports[src_name]
+    else:
+        # Per-item export: only items with item.export=True in a using clause.
+        for item in decl.items:
+            if not item.export:
+                continue
+            src_name = item.name
+            origin = target_exports.get(src_name)
+            if origin is None:
+                continue  # name not yet propagated; fixed-point will retry
+            exposed = item.rename if item.rename is not None else src_name
+            result[exposed] = origin
+
+    return result
 
 
 def _decl_to_import_target(
@@ -258,11 +357,11 @@ def resolve_graph(
         On the first static scope violation (first-error abort).
     """
     # ------------------------------------------------------------------
-    # Step 1: Build export sets for every module.
+    # Step 1: Build local export maps (own declarations only).
     # ------------------------------------------------------------------
-    exports: dict[ModuleId, frozenset[str]] = {}
+    export_maps: dict[ModuleId, dict[str, QName]] = {}
     for mid, loaded in graph.modules.items():
-        exports[mid] = _compute_exports(loaded.program)
+        export_maps[mid] = _compute_local_exports(mid, loaded.program)
 
     # ------------------------------------------------------------------
     # Step 2: Map ImportDecl → ImportTarget for every module.
@@ -274,7 +373,12 @@ def resolve_graph(
             all_targets[decl.node_id] = target
 
     # ------------------------------------------------------------------
-    # Step 3: Build ImportEnv per module.
+    # Step 3: Resolve re-exports (fixed-point propagation).
+    # ------------------------------------------------------------------
+    _resolve_reexports(export_maps, all_targets, graph)
+
+    # ------------------------------------------------------------------
+    # Step 4: Build ImportEnv per module.
     # ------------------------------------------------------------------
     import_envs: dict[ModuleId, ImportEnv] = {}
     for mid, loaded in graph.modules.items():
@@ -283,10 +387,10 @@ def resolve_graph(
         module_targets: dict[int, ImportTarget] = {
             decl.node_id: all_targets[decl.node_id] for decl in decls
         }
-        import_envs[mid] = build_import_env(mid, decls, module_targets, exports)
+        import_envs[mid] = build_import_env(mid, decls, module_targets, export_maps)
 
     # ------------------------------------------------------------------
-    # Step 4: Whole-graph pre-pass — collect public funcs/types and
+    # Step 5: Whole-graph pre-pass — collect public funcs/types and
     # build decl_info for cross-module BindingRef construction.
     # ------------------------------------------------------------------
     all_public_funcs: dict[tuple[ModuleId, str], FuncDef] = {}
@@ -325,7 +429,7 @@ def resolve_graph(
                     decl_info[key] = (item.node_id, item.span, kind)
 
     # ------------------------------------------------------------------
-    # Step 5: Resolve each module's bodies.
+    # Step 6: Resolve each module's bodies.
     # ------------------------------------------------------------------
     resolved_modules: dict[ModuleId, ResolvedModule] = {}
     all_warnings: list[Diagnostic] = []
@@ -357,7 +461,7 @@ def resolve_graph(
             module_id=mid,
             resolved=resolved,
             import_env=import_envs[mid],
-            exports=exports[mid],
+            exports=export_maps[mid],
             source_text=graph.modules[mid].source_text,
         )
         if is_entry:

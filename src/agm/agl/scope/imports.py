@@ -107,7 +107,7 @@ def _module_dotted(mid: ModuleId) -> str:
 def _compute_s(
     decl: ImportDecl,
     module: ModuleId,
-    module_exports: frozenset[str],
+    module_exports: frozenset[str],  # set of exported names (keys of the exports map)
     *,
     is_wildcard: bool,
 ) -> frozenset[str]:
@@ -162,7 +162,7 @@ def _compute_s(
 
 def _validate_wildcard_items(
     decl: ImportDecl,
-    all_exports: Mapping[ModuleId, frozenset[str]],
+    all_exports: Mapping[ModuleId, frozenset[str]],  # name-only sets (keys of export maps)
 ) -> None:
     """For wildcard ``using``/``hiding``: every listed name must appear in ≥1 matched module.
 
@@ -333,7 +333,7 @@ def build_import_env(
     current_module: ModuleId,
     decls: tuple[ImportDecl, ...],
     targets: Mapping[int, ImportTarget],
-    exports: Mapping[ModuleId, frozenset[str]],
+    exports: Mapping[ModuleId, Mapping[str, "QName"]],
 ) -> ImportEnv:
     """Compute the :class:`ImportEnv` for *current_module* from its import declarations.
 
@@ -347,8 +347,10 @@ def build_import_env(
     targets:
         Maps each ``ImportDecl.node_id`` to its resolved :class:`ImportTarget`.
     exports:
-        Maps each module referenced in *targets* to its export set (non-private
-        top-level ``def``/``record``/``enum``/``type`` names).
+        Maps each module referenced in *targets* to its export map: a dict of
+        exported name → origin :data:`QName`.  For locally-defined names the
+        origin is ``(module, name)``; for re-exported names it is the original
+        defining module and name, preserving identity through re-export chains.
 
     Returns
     -------
@@ -427,19 +429,20 @@ def _register_qname(
 def _process_single(
     decl: ImportDecl,
     module: ModuleId,
-    exports: Mapping[ModuleId, frozenset[str]],
+    exports: Mapping[ModuleId, Mapping[str, "QName"]],
     unqualified_acc: dict[str, set[QName]],
     qualified_acc: dict[tuple[str, ...], dict[str, QName]],
 ) -> None:
     """Process a single-module ImportDecl, updating the accumulators."""
-    module_exports: frozenset[str] = exports.get(module, frozenset())
+    module_exports_map: Mapping[str, QName] = exports.get(module, {})
+    module_exports: frozenset[str] = frozenset(module_exports_map.keys())
     s = _compute_s(decl, module, module_exports, is_wildcard=False)
     rename_map = _build_rename_map(decl)
     handle = _qualifier_handle(decl, module)
 
     for src_name in sorted(s):  # deterministic order
         exposed = _exposed_name(src_name, rename_map)
-        qname: QName = (module, src_name)
+        qname: QName = module_exports_map[src_name]
         _register_qname(handle, exposed, qname, qualified_acc, decl)
         if not decl.qualified:
             if exposed not in unqualified_acc:
@@ -450,18 +453,21 @@ def _process_single(
 def _process_wildcard(
     decl: ImportDecl,
     modules: frozenset[ModuleId],
-    exports: Mapping[ModuleId, frozenset[str]],
+    exports: Mapping[ModuleId, Mapping[str, "QName"]],
     unqualified_acc: dict[str, set[QName]],
     qualified_acc: dict[tuple[str, ...], dict[str, QName]],
 ) -> None:
     """Process a wildcard ImportDecl, updating the accumulators."""
-    # Build per-module exports subset (only the matched modules)
-    matched_exports: dict[ModuleId, frozenset[str]] = {
-        mod: exports.get(mod, frozenset()) for mod in modules
+    # Build per-module name-sets and maps (only the matched modules)
+    matched_export_names: dict[ModuleId, frozenset[str]] = {
+        mod: frozenset(exports.get(mod, {}).keys()) for mod in modules
+    }
+    matched_export_maps: dict[ModuleId, Mapping[str, QName]] = {
+        mod: exports.get(mod, {}) for mod in modules
     }
 
     # Validate using/hiding names against the union of all matched exports
-    _validate_wildcard_items(decl, matched_exports)
+    _validate_wildcard_items(decl, matched_export_names)
 
     rename_map = _build_rename_map(decl)
 
@@ -470,13 +476,14 @@ def _process_wildcard(
         return m.segments
 
     for module in sorted(modules, key=_module_sort_key):
-        module_exports = matched_exports[module]
-        s = _compute_s(decl, module, module_exports, is_wildcard=True)
+        module_export_names = matched_export_names[module]
+        module_exports_map = matched_export_maps[module]
+        s = _compute_s(decl, module, module_export_names, is_wildcard=True)
         handle = _qualifier_handle(decl, module)
 
         for src_name in sorted(s):  # deterministic order
             exposed = _exposed_name(src_name, rename_map)
-            qname: QName = (module, src_name)
+            qname: QName = module_exports_map[src_name]
             _register_qname(handle, exposed, qname, qualified_acc, decl)
             if not decl.qualified:
                 if exposed not in unqualified_acc:

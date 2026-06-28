@@ -44,11 +44,14 @@ the references is qualified.
 import_decl ::= "import" module_path [".*"]
                     ["qualified"]
                     ["as" NAME]
-                    [("using" | "hiding") name_list]
+                    [import_spec]
 
+import_spec ::= "export"
+              | "using" using_item ("," using_item)*
+              | "hiding" NAME ("," NAME)* ["export"]
+
+using_item  ::= NAME ["as" NAME] ["export"]
 module_path ::= NAME ("." NAME)*
-name_list   ::= name_item ("," name_item)*
-name_item   ::= NAME ["as" NAME]
 ```
 
 - `qualified` suppresses unqualified injection (all names require a qualifier).
@@ -150,6 +153,50 @@ import foo.bar.* as A
 produces qualifier handles `A` (for `foo.bar`) and `A.baz` (for `foo.bar.baz`),
 so `foo.bar::x` becomes `A::x` and `foo.bar.baz::y` becomes `A.baz::y`.  The
 original handles `foo.bar` and `foo.bar.baz` are no longer registered.
+
+### Re-exporting imported names
+
+A module may **re-export** names it imports, making them visible to consumers of
+the module as if they were defined locally.  Re-exports are transparent: a name
+re-exported through a chain of modules always carries its original defining
+module as its identity.
+
+**Decl-level re-export** — append `export` after the module path (and any
+filter clause) to re-export all names in the imported set:
+
+```agl
+import math.ops export           # re-exports everything from math.ops
+import math.ops hiding _impl export  # re-exports everything except _impl
+```
+
+**Per-item re-export** — append `export` after individual `using` items to
+re-export only those items:
+
+```agl
+# re-exports 'add' and 'mul', but not 'internal'
+import math.ops using add export, mul export, internal
+```
+
+**Per-item re-export with rename** — the re-exported name uses the alias:
+
+```agl
+import math.ops using add as plus export   # re-exported as 'plus', not 'add'
+```
+
+Re-exported names are included in the module's public export set and are
+available to any module that imports the current module.  Private names are
+never re-exported regardless of the `export` annotation.
+
+A wildcard import may also carry decl-level re-export:
+
+```agl
+import math.* export   # re-exports all public names from every math.* module
+```
+
+**Name conflict**: if two `export` annotations would expose the same name with
+different origins, it is a static error.  Diamond re-exports (the same name
+re-exported via two paths from the same original definition) are allowed and
+collapse silently.
 
 ### Merging imports
 

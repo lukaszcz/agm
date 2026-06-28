@@ -194,6 +194,7 @@ IMPORT = "IMPORT"       # contextual: 'import' at item-start
 QUALIFIED = "QUALIFIED" # contextual: 'qualified' in import line
 USING = "USING"         # contextual: 'using' in import line
 HIDING = "HIDING"       # contextual: 'hiding' in import line
+EXPORT = "EXPORT"       # contextual: 'export' in import line
 PRIVATE = "PRIVATE"     # contextual: 'private' at item-start
 MODQUAL = "MODQUAL"     # synthetic: merged module-qualifier prefix (e.g. "foo.bar::")
 MODPATH = "MODPATH"     # synthetic: merged module path in import (e.g. "foo.bar")

@@ -1,0 +1,12 @@
+{
+  "scenarios": [
+    {
+      "name": "reexport_all_forms",
+      "module_roots": ["program_modules/modules/reexport"],
+      "expect": {
+        "stdout": "7\n10\n11\n8\n7\n3\n",
+        "calls": {}
+      }
+    }
+  ]
+}

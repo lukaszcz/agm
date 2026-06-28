@@ -128,6 +128,7 @@ def _synthetic_stdlib_import(node_id: int) -> ImportDecl:
         alias=None,
         mode=ImportMode.ALL,
         items=(),
+        export=False,
         span=span,
         node_id=node_id,
     )

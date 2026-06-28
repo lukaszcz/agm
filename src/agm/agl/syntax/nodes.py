@@ -83,17 +83,18 @@ class BinOp(enum.Enum):
 
 @dataclass(frozen=True, slots=True)
 class ImportItem:
-    """A single item in a ``using`` import clause: ``name [as rename]``."""
+    """A single item in a ``using`` import clause: ``name [as rename] [export]``."""
 
     name: str
     rename: str | None
+    export: bool
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
 
 
 @dataclass(frozen=True, slots=True)
 class ImportDecl:
-    """``import MODPATH[.*] [qualified] [as ALIAS] [using…|hiding…]`` declaration."""
+    """``import MODPATH[.*] [qualified] [as ALIAS] [using…|hiding…] [export]`` declaration."""
 
     module_path: tuple[str, ...]
     wildcard: bool
@@ -101,6 +102,7 @@ class ImportDecl:
     alias: str | None
     mode: ImportMode
     items: tuple[ImportItem, ...]
+    export: bool
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
 

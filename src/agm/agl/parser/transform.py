@@ -1667,6 +1667,7 @@ class AstBuilder(Transformer):
         alias: str | None = None
         mode = ImportMode.ALL
         items: tuple[syntax.ImportItem, ...] = ()
+        export = False
 
         for a in args:
             if isinstance(a, Token) and a.type == "QUALIFIED":
@@ -1680,9 +1681,9 @@ class AstBuilder(Transformer):
                 # import_alias result: plain str (not Token, which is also a str subclass)
                 alias = a
             else:
-                # import_clause result: (ImportMode, items)
-                clause = cast(tuple[ImportMode, tuple[syntax.ImportItem, ...]], a)
-                mode, items = clause
+                # import_spec result: (ImportMode, items, export)
+                spec = cast(tuple[ImportMode, tuple[syntax.ImportItem, ...], bool], a)
+                mode, items, export = spec
 
         return syntax.ImportDecl(
             module_path=module_path,
@@ -1691,16 +1692,17 @@ class AstBuilder(Transformer):
             alias=alias,
             mode=mode,
             items=items,
+            export=export,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
     def import_decl_plain(self, meta: Meta, args: _Args) -> syntax.ImportDecl:
-        """import_decl_plain: IMPORT MODPATH QUALIFIED? import_alias? import_clause?"""
+        """import_decl_plain: IMPORT MODPATH QUALIFIED? import_alias? import_spec?"""
         return self._import_decl_from_args(meta, args, wildcard=False)
 
     def import_decl_wildcard(self, meta: Meta, args: _Args) -> syntax.ImportDecl:
-        """import_decl_wildcard: IMPORT MODPATH DOT STAR QUALIFIED? import_alias?"""
+        """import_decl_wildcard: IMPORT MODPATH DOT STAR QUALIFIED? import_alias? import_spec?"""
         return self._import_decl_from_args(meta, args, wildcard=True)
 
     def import_alias(self, meta: Meta, args: _Args) -> str:
@@ -1708,28 +1710,57 @@ class AstBuilder(Transformer):
         tok = next(a for a in args if isinstance(a, Token) and a.type == "NAME")
         return str(tok)
 
-    def import_clause_using(
+    def _hiding_items(
         self, meta: Meta, args: _Args
-    ) -> tuple[ImportMode, tuple[syntax.ImportItem, ...]]:
-        """import_clause_using: USING import_item (COMMA import_item)*"""
-        import_items = tuple(a for a in args if isinstance(a, syntax.ImportItem))
-        return (ImportMode.USING, import_items)
-
-    def import_clause_hiding(
-        self, meta: Meta, args: _Args
-    ) -> tuple[ImportMode, tuple[syntax.ImportItem, ...]]:
-        """import_clause_hiding: HIDING name (COMMA name)*"""
+    ) -> tuple[syntax.ImportItem, ...]:
+        """Build hiding ImportItem tuples from the names in a HIDING clause."""
         hiding_names = [str(a) for a in args if isinstance(a, Token) and a.type == "NAME"]
-        hiding_items = tuple(
+        return tuple(
             syntax.ImportItem(
                 name=name,
                 rename=None,
+                export=False,
                 span=self._span_from_meta(meta),
                 node_id=self._next_id(),
             )
             for name in hiding_names
         )
-        return (ImportMode.HIDING, hiding_items)
+
+    def import_spec_reexport_all(
+        self, meta: Meta, args: _Args
+    ) -> tuple[ImportMode, tuple[syntax.ImportItem, ...], bool]:
+        """import_spec_reexport_all: EXPORT — re-export all public names."""
+        return (ImportMode.ALL, (), True)
+
+    def import_spec_using(
+        self, meta: Meta, args: _Args
+    ) -> tuple[ImportMode, tuple[syntax.ImportItem, ...], bool]:
+        """import_spec_using: USING import_item (COMMA import_item)*"""
+        import_items = tuple(a for a in args if isinstance(a, syntax.ImportItem))
+        return (ImportMode.USING, import_items, False)
+
+    def import_spec_hiding_reexport(
+        self, meta: Meta, args: _Args
+    ) -> tuple[ImportMode, tuple[syntax.ImportItem, ...], bool]:
+        """import_spec_hiding_reexport: HIDING name (COMMA name)* EXPORT"""
+        return (ImportMode.HIDING, self._hiding_items(meta, args), True)
+
+    def import_spec_hiding(
+        self, meta: Meta, args: _Args
+    ) -> tuple[ImportMode, tuple[syntax.ImportItem, ...], bool]:
+        """import_spec_hiding: HIDING name (COMMA name)*"""
+        return (ImportMode.HIDING, self._hiding_items(meta, args), False)
+
+    def import_item_rename_export(self, meta: Meta, args: _Args) -> syntax.ImportItem:
+        """import_item_rename_export: name "as" name EXPORT"""
+        name_toks = [str(a) for a in args if isinstance(a, Token) and a.type == "NAME"]
+        return syntax.ImportItem(
+            name=name_toks[0],
+            rename=name_toks[1],
+            export=True,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+        )
 
     def import_item_rename(self, meta: Meta, args: _Args) -> syntax.ImportItem:
         """import_item_rename: name "as" name"""
@@ -1737,6 +1768,18 @@ class AstBuilder(Transformer):
         return syntax.ImportItem(
             name=name_toks[0],
             rename=name_toks[1],
+            export=False,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    def import_item_plain_export(self, meta: Meta, args: _Args) -> syntax.ImportItem:
+        """import_item_plain_export: name EXPORT"""
+        name_toks = [str(a) for a in args if isinstance(a, Token) and a.type == "NAME"]
+        return syntax.ImportItem(
+            name=name_toks[0],
+            rename=None,
+            export=True,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
@@ -1747,6 +1790,7 @@ class AstBuilder(Transformer):
         return syntax.ImportItem(
             name=name_toks[0],
             rename=None,
+            export=False,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )

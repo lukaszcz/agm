@@ -157,6 +157,33 @@ def test_named_only_shorthand_bare_positional() -> None:
     assert result[1] is z_val  # the bare item itself, not a wrapper
 
 
+def test_positional_skips_leading_named_only() -> None:
+    """A positional arg binds to a positional-capable param even when a named-only
+    param precedes it (non-contiguous case: e.g. an exception's inherited named-only
+    ``message`` field before a marked standard field). The positional arg must bind
+    the standard field, not the leading named-only one."""
+    params = [
+        BindParam("message", NAMED_ONLY, False),
+        BindParam("code", STANDARD, False),
+    ]
+    code_val = _item("7")
+    msg_val = _item("boom")
+    result = _bind(params, [code_val], [("message", msg_val)])
+    assert result[0] is msg_val  # message bound by name
+    assert result[1] is code_val  # 7 bound positionally to the standard field
+
+
+def test_positional_skips_named_only_then_missing() -> None:
+    """With a leading named-only param and a trailing standard one, a lone positional
+    arg fills the standard field; the named-only field is then missing-required."""
+    params = [
+        BindParam("message", NAMED_ONLY, False),
+        BindParam("code", STANDARD, False),
+    ]
+    with pytest.raises(AglTypeError, match="[Mm]issing required argument 'message'"):
+        _bind(params, [_item("7")], [])
+
+
 def test_mixed_zones_all_positional() -> None:
     """pos-only + standard + named-only, fill pos-only and std positionally."""
     params = [

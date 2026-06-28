@@ -135,24 +135,22 @@ def bind_arguments(
         unknown named arg, duplicate supply (positional + named), or missing
         required param.
     """
-    # Split params into positional-capable prefix and named-only suffix.
-    # Because zones are ordered (POSITIONAL_ONLY → STANDARD → NAMED_ONLY),
-    # positional-capable params always form a contiguous prefix.
-    n_pos_capable = sum(
-        1
-        for p in params
-        if p.kind in (ParamKind.POSITIONAL_ONLY, ParamKind.STANDARD)
-    )
-
     # Track which params have been bound (by param index).
     bound: list[T | None] = [None] * len(params)
     filled: list[bool] = [False] * len(params)
 
     # --- Step 1: Bind positional args ---
+    # Positional args fill positional-capable (POSITIONAL_ONLY/STANDARD) params in
+    # declaration order.  A user-written zone-ordered list keeps these as a prefix,
+    # but a constructor field list can interleave an inherited named-only field
+    # (e.g. an exception's ``message``) before a marked positional-capable field, so
+    # we advance past named-only params rather than assume a contiguous prefix.
     pos_idx = 0  # index into `params` for the next available positional-capable slot
     for arg in positional:
-        if pos_idx < n_pos_capable:
-            # Bind to the next positional-capable parameter.
+        while pos_idx < len(params) and params[pos_idx].kind == ParamKind.NAMED_ONLY:
+            pos_idx += 1
+        if pos_idx < len(params):
+            # params[pos_idx] is positional-capable (POSITIONAL_ONLY or STANDARD).
             bound[pos_idx] = arg
             filled[pos_idx] = True
             pos_idx += 1

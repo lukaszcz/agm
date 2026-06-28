@@ -1,6 +1,6 @@
 # AgL Modules
 
-AgL has a file-based module system. A program with `import` declarations is compiled as a *module graph* rather than a single file: loading discovers the transitive set of modules, and graph-aware variants of scope, typecheck, and lowering operate over the whole graph at once. Single-file programs bypass this machinery entirely and use the original single-module passes. The two modes share the same AST, value model, and evaluator (see [index.md](index.md)).
+AgL has a file-based module system. A program with `import` declarations is compiled as a *module graph* rather than a single file: loading discovers the transitive set of modules, and graph-aware variants of scope, typecheck, and lowering operate over the whole graph at once. Single-file programs bypass this machinery entirely and use the single-module passes. The two modes share the same AST, value model, and evaluator (see [index.md](index.md)).
 
 ## Module Identity and Roots
 

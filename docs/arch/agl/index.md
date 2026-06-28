@@ -45,7 +45,7 @@ AgL has no separate statement category. Every construct — bindings, assignment
 
 ## Single-File and Graph Modes
 
-AgL supports file-based modules. A single-file program runs through the original single-module passes; a program with imports runs through graph-aware variants of scope, typecheck, and lowering that operate over the whole module graph at once. The two modes share the same AST, value model, and evaluator. Module loading and the graph passes are described in [modules.md](modules.md).
+AgL supports file-based modules. A single-file program runs through the single-module passes; a program with imports runs through graph-aware variants of scope, typecheck, and lowering that operate over the whole module graph at once. The two modes share the same AST, value model, and evaluator. Module loading and the graph passes are described in [modules.md](modules.md).
 
 ## Package Map
 

@@ -1162,7 +1162,7 @@ class TestVisitorWalk:
         type_alias = TypeAlias(name="Names", type_expr=list_t, span=s, node_id=214)
         param_decl = ParamDecl(name="spec", annotation=text_t, default=None, span=s, node_id=215)
         agent_decl = AgentDecl(name="reviewer", runner=None, span=s, node_id=216)
-        config_pragma = ConfigDecl(
+        config_decl = ConfigDecl(
             name="log",
             value=BoolLit(value=True, span=s, node_id=2170),
             span=s,
@@ -1315,7 +1315,7 @@ class TestVisitorWalk:
         top_block = Block(
             items=(
                 record_def, enum_def, type_alias, param_decl, input_no_ann,
-                agent_decl, config_pragma, func_def,
+                agent_decl, config_decl, func_def,
                 let_decl, let_with_type, let_applied, var_decl, var_with_type,
                 assign_stmt, indexed_assign_stmt,
                 # expressions directly in block

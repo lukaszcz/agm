@@ -1695,7 +1695,7 @@ def _snapshot(s: ReplSession) -> list[tuple[str, str, str]]:
 
 
 # ---------------------------------------------------------------------------
-# Config pragma rejection in the REPL
+# Config declarations in the REPL
 # ---------------------------------------------------------------------------
 
 

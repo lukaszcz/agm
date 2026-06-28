@@ -488,9 +488,9 @@ _HELP_TEXTS: dict[str, str] = {
         take a JSON string. Run `agm exec FILE --help` to show discovered params.
 
         Trace logging is OFF by default.  Enable it with --log, --log-file,
-        a source-level "config log = true" pragma, or [exec] log = true in
-        config.toml.  Source pragmas (config KEY = VALUE at the top of the
-        program) override config; CLI flags override pragmas.
+        a source-level "config log = true" declaration, or [exec] log = true
+        in config.toml.  Source config declarations override config-file values;
+        CLI flags override source declarations (CLI > source > config).
 
         Options:
           -c, --command COMMAND  Execute the program given as COMMAND instead of FILE.
@@ -500,7 +500,7 @@ _HELP_TEXTS: dict[str, str] = {
           --runner COMMAND      Override the default agent runner command.
           --log                 Enable trace logging (auto timestamped path).
           --log-file PATH       Write trace log to PATH.
-          --no-log              Disable trace logging (overrides pragma/config).
+          --no-log              Disable trace logging (overrides source/config).
           --log, --log-file, and --no-log are mutually exclusive.
           --no-stdlib           Do not automatically open std.core in the entry module.
           -I DIR, --module-path DIR
@@ -529,9 +529,10 @@ _HELP_TEXTS: dict[str, str] = {
         session reuses the [exec] configuration (runner, per-agent commands,
         loop limit, JSON strictness, timeout).
 
-        Trace logging is OFF by default.  Config pragmas (config KEY = VALUE)
-        entered at the prompt are rejected — set session options via CLI flags
-        or [exec] config instead.
+        Trace logging is OFF by default.  Source config declarations
+        (config KEY = VALUE) entered at the REPL prompt take effect from their
+        declaration point and persist for the session; :reset clears them.
+        Set session-wide defaults via CLI flags or [exec] config.
 
         Params (`param NAME: T`) resolve eagerly when entered: first from
         [<program>] config when a `program NAME` declaration is active,

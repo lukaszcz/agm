@@ -37,7 +37,7 @@ The firewall is *semantic*, not an I/O boundary: it isolates the static passes f
 
 - **Agent invocation** goes through `agm.agent.runner` (the same prepare/run path as loop/review), with the default runner resolved from the shared `[loop]` config via `agm.agent.config.default_agent_runner`. AgL adds only its own dispatch/typed-request layer (`runtime/agents.py`) over that runner.
 - **Primitives** come from `agm.core`: shell `exec` and agent subprocesses use `core.process`, environments use `core.env`, file and trace I/O use `core.fs`/`core.log` (so AgL participates in dry-run for free), and generic helpers (`util.text`, `util.graph`) are reused for newline normalization, module-cycle SCCs, and type-dependency toposort.
-- **Configuration** is loaded and layered by `agm.config`; the only config logic inside `agl/` is static validation of source `config` pragmas in the scope pass. The `exec`/`repl` commands resolve the CLI > pragma > config precedence using shared helpers (`core.log`).
+- **Configuration** is loaded and layered by `agm.config`; the config logic inside `agl/` covers scope validation of `config` declarations, typecheck of their value expressions, and lowering into `IrConfigBind` initializers that the evaluator resolves and applies at runtime. The `exec`/`repl` commands resolve the CLI > source > config precedence using shared helpers (`core.log`).
 
 ## Expression-Oriented Design
 

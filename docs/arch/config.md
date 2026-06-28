@@ -24,7 +24,7 @@ Configuration is organized into sections consumed by specific features — for e
 For AgL execution, four sources combine with a defined precedence:
 
 - **Engine keys** (`runner`, `log`, `strict-json`, `max-iters`, `log-file`, `timeout`):
-  `CLI flag > source pragma (config X = e) > [<program>].X > [exec].X > engine default`
+  `CLI flag > source config declaration (config X = e) > [<program>].X > [exec].X > engine default`
 - **Param values** (`param NAME`):
   `CLI flag > [<program>].Y > source default (param Y = e) > required error`
 

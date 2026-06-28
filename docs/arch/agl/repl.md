@@ -26,7 +26,7 @@ Agents must be declared in source; the host backs declared names but never owns 
 
 Three engine keys — `strict-json`, `max-iters`, `timeout` — have **D6 effect-at-binding**: when `IrConfigBind` executes for one of these keys, the evaluator immediately updates the corresponding live interpreter field (`_strict_json`, `_loop_limit`, `_shell_exec_timeout`). The resolved value takes effect from that point forward, so subsequent `ask`, `do`, and `exec` calls within the program see the updated setting. The remaining keys (`runner`, `log`, `log-file`) are start-resolved by `agm exec` before the program runs.
 
-`agm exec` passes the CLI/base value maps to the runtime (see [config.md](../config.md)). Config is an exec/program feature; the REPL rejects it and takes its options from flags and config instead.
+`agm exec` passes the CLI/base value maps to the runtime (see [config.md](../config.md)). Config declarations are fully supported in the REPL: effect-at-binding applies per-entry and persists across entries; `:reset` clears all config bindings.
 
 ## Console and Confirmation
 
@@ -38,4 +38,4 @@ The REPL console adds interactivity around the session. Live agent calls are gat
 - `src/agm/agl/pipeline.py` — program preparation, parameter discovery, agent reconciliation, and host-environment assembly shared by `exec` and the REPL.
 - `src/agm/commands/exec.py` and `src/agm/commands/repl.py` — the hosting commands.
 - `src/agm/cli_support/exec_params.py` — parameter discovery and option wiring for `agm exec`.
-- Tests: `tests/test_agl_repl_session.py`, `tests/test_agl_repl_console.py`, `tests/test_agl_repl_agents.py`, `tests/test_agl_repl_themes.py`, `tests/test_agl_config_pragma.py`, `tests/test_exec_command.py`.
+- Tests: `tests/test_agl_repl_session.py`, `tests/test_agl_repl_console.py`, `tests/test_agl_repl_agents.py`, `tests/test_agl_repl_themes.py`, `tests/test_agl_config_decl.py`, `tests/test_exec_command.py`.

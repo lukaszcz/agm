@@ -555,20 +555,20 @@ class TestDeclarations:
         assert isinstance(ag, AgentDecl)
         assert ag.runner == "claude -p %{PROMPT_FILE}"
 
-    def test_config_pragma_bool(self) -> None:
+    def test_config_decl_bool(self) -> None:
         cfg = first(parse("config log = true"))
         assert isinstance(cfg, ConfigDecl)
         assert cfg.name == "log"
         assert isinstance(cfg.value, BoolLit)
         assert cfg.value.value is True
 
-    def test_config_pragma_int(self) -> None:
+    def test_config_decl_int(self) -> None:
         cfg = first(parse("config max-iters = 10"))
         assert isinstance(cfg, ConfigDecl)
         assert isinstance(cfg.value, IntLit)
         assert cfg.value.value == 10
 
-    def test_config_pragma_string(self) -> None:
+    def test_config_decl_string(self) -> None:
         cfg = first(parse('config runner = "claude"'))
         assert isinstance(cfg, ConfigDecl)
         assert isinstance(cfg.value, StringLit)
@@ -1751,14 +1751,14 @@ class TestLiteralPatternsCoverage:
 class TestDeclarationsCoverage:
     """Covers config decl values not yet tested: false and decimal."""
 
-    def test_config_pragma_false(self) -> None:
+    def test_config_decl_false(self) -> None:
         cfg = first(parse("config log = false"))
         assert isinstance(cfg, ConfigDecl)
         assert cfg.name == "log"
         assert isinstance(cfg.value, BoolLit)
         assert cfg.value.value is False
 
-    def test_config_pragma_decimal(self) -> None:
+    def test_config_decl_decimal(self) -> None:
         cfg = first(parse("config rate = 1.5"))
         assert isinstance(cfg, ConfigDecl)
         assert cfg.name == "rate"

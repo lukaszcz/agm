@@ -2542,12 +2542,12 @@ class TestFunctionSignature:
 
 
 # ---------------------------------------------------------------------------
-# Config pragma (pass-through)
+# Config declaration (pass-through)
 # ---------------------------------------------------------------------------
 
 
-class TestConfigPragma:
-    def test_config_pragma_accepted(self) -> None:
+class TestConfigDeclPassthrough:
+    def test_config_decl_accepted(self) -> None:
         r = accept_type("config log = true\n1")
         assert r.resolved.program is not None
 

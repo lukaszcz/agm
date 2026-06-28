@@ -211,9 +211,8 @@ program_decl: "program" name
 // The optional runner string must be a static literal (checked in transformer).
 agent_decl: AGENT name (EQ template)?
 
-// config_decl: "config" NAME [= expr] (header-only; enforced in scope pass).
-// The optional value is a general expression; the scope pass validates it is
-// a literal scalar (transitional bridge until full readable-binding support).
+// config_decl: "config" NAME [= expr] — root-only engine-key binding;
+// the optional value is a general expression resolved at runtime.
 config_decl: "config" name (EQ expr)?
 
 // ---------------------------------------------------------------------------

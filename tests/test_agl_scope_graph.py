@@ -1017,18 +1017,18 @@ class TestAssignStmtModuleId:
 
 
 # ---------------------------------------------------------------------------
-# Test: config pragma in non-entry errors
+# Test: config declaration in non-entry errors
 # ---------------------------------------------------------------------------
 
 
-class TestConfigPragmaInNonEntry:
-    def test_config_pragma_in_non_entry_errors(self, tmp_path: Path) -> None:
-        """A config pragma in a non-entry module is an error."""
+class TestConfigDeclInNonEntry:
+    def test_config_decl_in_non_entry_errors(self, tmp_path: Path) -> None:
+        """A config declaration in a non-entry module is an error."""
         graph = _make_graph_from_files(tmp_path, {
             "entry": "import mylib\n()",
             "mylib": "config log = true",
         })
-        with pytest.raises(AglScopeError, match="config|pragma"):
+        with pytest.raises(AglScopeError, match="config"):
             resolve_graph(graph)
 
 

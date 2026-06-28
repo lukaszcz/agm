@@ -2215,7 +2215,7 @@ class TestExecAgentPrecedence:
 
 
 # ---------------------------------------------------------------------------
-# M3: config pragma wiring — CLI > pragma > config precedence
+# M3: source config declaration wiring — CLI > source > config precedence
 # ---------------------------------------------------------------------------
 
 
@@ -2229,7 +2229,7 @@ def _exec_args_no_log(
     log_file: str | None = None,
     log: bool = False,
 ) -> ExecArgs:
-    """Build a minimal ExecArgs for M3 pragma-precedence tests."""
+    """Build a minimal ExecArgs for M3 source-config-precedence tests."""
     return ExecArgs(
         file=str(agl_file),
         param_tokens=[],
@@ -2242,18 +2242,18 @@ def _exec_args_no_log(
     )
 
 
-class TestExecPragmaPrecedence:
-    """M3: ``config`` pragmas in source (CLI > pragma > config precedence).
+class TestExecSourceConfigPrecedence:
+    """M3: source ``config`` declarations (CLI > source > config precedence).
 
     Each test uses behavioral assertions — observable exit codes and output —
     rather than internal call counts, following the testing policy.
     """
 
     # ------------------------------------------------------------------
-    # max_iters pragma
+    # max_iters source declaration
     # ------------------------------------------------------------------
 
-    def test_pragma_max_iters_caps_loop_at_pragma_value(
+    def test_source_max_iters_caps_loop_at_source_value(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """``config max-iters = 3`` in source caps the do loop at 3 iterations.
@@ -2274,7 +2274,7 @@ class TestExecPragmaPrecedence:
             exec_command.run(_exec_args_no_log(agl_file))
         assert exc_info.value.code == 2
 
-    def test_pragma_max_iters_allows_completion_when_sufficient(
+    def test_source_max_iters_allows_completion_when_sufficient(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """``config max-iters = 100`` allows a do loop that needs exactly 100 iterations."""
@@ -2291,13 +2291,13 @@ class TestExecPragmaPrecedence:
         assert result is None  # exit 0
         assert capsys.readouterr().out == "done\n"
 
-    def test_cli_max_iters_overrides_pragma_max_iters(
+    def test_cli_max_iters_overrides_source_max_iters(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """CLI ``--max-iters 100`` overrides ``config max-iters = 3`` in source.
 
         With --max-iters 100 the loop completes in 100 iterations (exits 0);
-        with pragma max_iters=3 it would fail (exit 2).
+        with source config max-iters=3 it would fail (exit 2).
         """
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
@@ -2309,15 +2309,15 @@ class TestExecPragmaPrecedence:
             'print "done"\n'
         )
         result = exec_command.run(_exec_args_no_log(agl_file, max_iters=100))
-        assert result is None  # exit 0 — CLI 100 overrides pragma 3
+        assert result is None  # exit 0 — CLI 100 overrides source 3
         assert capsys.readouterr().out == "done\n"
 
-    def test_pragma_max_iters_overrides_config_max_iters(
+    def test_source_max_iters_overrides_config_max_iters(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """Source pragma ``config max-iters = 100`` overrides ``[exec] default_loop_limit = 3``.
+        """Source ``config max-iters = 100`` overrides ``[exec] max-iters = 3`` in config.
 
-        Config says 3 (loop would fail); pragma says 100 (loop completes).
+        Config says 3 (loop would fail); source declaration says 100 (loop completes).
         """
         from agm.config.general import ExecConfig
 
@@ -2344,14 +2344,14 @@ class TestExecPragmaPrecedence:
             'print "done"\n'
         )
         result = exec_command.run(_exec_args_no_log(agl_file))
-        assert result is None  # exit 0 — pragma 100 overrides config 3
+        assert result is None  # exit 0 — source 100 overrides config 3
         assert capsys.readouterr().out == "done\n"
 
     # ------------------------------------------------------------------
-    # strict_json pragma
+    # strict-json source declaration
     # ------------------------------------------------------------------
 
-    def test_pragma_strict_json_flows_into_runtime(
+    def test_source_strict_json_flows_into_runtime(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """``config strict-json = true`` in source does NOT pre-fold into the
@@ -2363,11 +2363,11 @@ class TestExecPragmaPrecedence:
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
         assert result is None
-        # D6: constructor gets the config-file default; the source pragma
+        # D6: constructor gets the config-file default; the source declaration
         # applies the live change at the point of the IrConfigBind execution.
         assert captured["default_strict_json"] is False
 
-    def test_cli_strict_json_overrides_pragma_strict_json(
+    def test_cli_strict_json_overrides_source_strict_json(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """CLI ``--no-strict-json`` (strict_json=False) overrides ``config strict-json = true``."""
@@ -2379,12 +2379,12 @@ class TestExecPragmaPrecedence:
         assert result is None
         assert captured["default_strict_json"] is False
 
-    def test_pragma_strict_json_overrides_config_strict_json(
+    def test_source_strict_json_overrides_config_strict_json(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Source ``config strict-json = false`` overrides ``[exec] strict_json = true``
+        """Source ``config strict-json = false`` overrides ``[exec] strict-json = true``
         at runtime via D6.  The PipelineDriver constructor still receives the
-        config-file value (True); the source pragma takes effect at binding time."""
+        config-file value (True); the source declaration takes effect at binding time."""
         from agm.config.general import ExecConfig
 
         strict_config = ExecConfig(
@@ -2404,15 +2404,15 @@ class TestExecPragmaPrecedence:
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
         assert result is None
-        # D6: constructor gets config-file value (True); the source pragma (False)
+        # D6: constructor gets config-file value (True); the source declaration (False)
         # overrides it at runtime via IrConfigBind → _apply_config_effect.
         assert captured["default_strict_json"] is True
 
     # ------------------------------------------------------------------
-    # timeout pragma
+    # timeout source declaration
     # ------------------------------------------------------------------
 
-    def test_pragma_timeout_flows_into_runtime(
+    def test_source_timeout_flows_into_runtime(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """``config timeout = "30s"`` in source does NOT pre-fold into the
@@ -2425,10 +2425,10 @@ class TestExecPragmaPrecedence:
         result = exec_command.run(_exec_args_no_log(agl_file))
         assert result is None
         # D6: constructor gets the config-file default (None); the source
-        # pragma updates shell_exec_timeout at binding time.
+        # declaration updates shell_exec_timeout at binding time.
         assert captured["shell_exec_timeout"] is None
 
-    def test_pragma_timeout_integer_rejected(
+    def test_source_timeout_integer_rejected(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """``config timeout = 60`` (integer) is a type error: timeout is Option[text]."""
@@ -2439,12 +2439,12 @@ class TestExecPragmaPrecedence:
             exec_command.run(_exec_args_no_log(agl_file))
         assert exc_info.value.code == 1
 
-    def test_pragma_timeout_overrides_config_timeout(
+    def test_source_timeout_overrides_config_timeout(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Source ``config timeout = "30s"`` overrides ``[exec] timeout = 999``
         at runtime via D6.  The PipelineDriver constructor still receives the
-        config-file value (999.0); the source pragma takes effect at binding time."""
+        config-file value (999.0); the source declaration takes effect at binding time."""
         from agm.config.general import ExecConfig
 
         config_with_timeout = ExecConfig(
@@ -2466,11 +2466,11 @@ class TestExecPragmaPrecedence:
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
         assert result is None
-        # D6: constructor gets config-file value (999.0); the source pragma (30s)
+        # D6: constructor gets config-file value (999.0); the source declaration (30s)
         # overrides it at runtime via IrConfigBind → _apply_config_effect.
         assert captured["shell_exec_timeout"] == pytest.approx(999.0)
 
-    def test_pragma_timeout_invalid_string_raises_runtime_error(
+    def test_source_timeout_invalid_string_raises_runtime_error(
         self, tmp_path: Path
     ) -> None:
         """A source timeout string that type-checks but fails parse_timeout raises
@@ -2488,10 +2488,10 @@ class TestExecPragmaPrecedence:
         assert exc_info.value.code == 2
 
     # ------------------------------------------------------------------
-    # log pragma
+    # log source declaration
     # ------------------------------------------------------------------
 
-    def test_pragma_log_true_creates_trace_file(self, tmp_path: Path) -> None:
+    def test_source_log_true_creates_trace_file(self, tmp_path: Path) -> None:
         """``config log = true`` in source enables trace logging (creates a file)."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text('config log = true\nprint "hi"\n')
@@ -2520,7 +2520,7 @@ class TestExecPragmaPrecedence:
         log_files = list(agent_files.glob("exec-*.log"))
         assert log_files, "Expected a trace log file to be created by config log = true"
 
-    def test_pragma_log_file_writes_to_specified_path(self, tmp_path: Path) -> None:
+    def test_source_log_file_writes_to_specified_path(self, tmp_path: Path) -> None:
         """``config log-file = "path"`` in source writes the trace to that path."""
         log_path = tmp_path / "trace.log"
         agl_file = tmp_path / "prog.agl"
@@ -2537,9 +2537,9 @@ class TestExecPragmaPrecedence:
                 log_file=None,
             )
         )
-        assert log_path.exists(), "Expected trace log at pragma-specified path"
+        assert log_path.exists(), "Expected trace log at source-specified path"
 
-    def test_cli_no_log_overrides_pragma_log_true(self, tmp_path: Path) -> None:
+    def test_cli_no_log_overrides_source_log_true(self, tmp_path: Path) -> None:
         """CLI ``--no-log`` overrides ``config log = true`` — no trace file created."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text('config log = true\nprint "hi"\n')
@@ -2553,17 +2553,17 @@ class TestExecPragmaPrecedence:
         finally:
             os.chdir(old_cwd)
 
-        # --no-log must prevent trace creation even when the pragma says log=true.
+        # --no-log must prevent trace creation even when the source says log=true.
         agent_files = tmp_path / ".agent-files"
         if agent_files.exists():
             log_files = list(agent_files.glob("exec-*.log"))
-            assert not log_files, "Expected no trace log when --no-log overrides pragma log=true"
+            assert not log_files, "Expected no trace log when --no-log overrides source log=true"
 
-    def test_pragma_log_file_overrides_config_log(
+    def test_source_log_file_overrides_config_log(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``config log-file`` pragma overrides ``[exec] log = false`` in config."""
-        log_path = tmp_path / "pragma_trace.log"
+        """``config log-file`` source declaration overrides ``[exec] log = false`` in config."""
+        log_path = tmp_path / "source_trace.log"
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(f'config log-file = "{log_path}"\nprint "hi"\n')
 
@@ -2592,17 +2592,17 @@ class TestExecPragmaPrecedence:
             )
         )
         assert log_path.exists(), (
-            "Expected trace log at pragma-specified path despite config log=false"
+            "Expected trace log at source-specified path despite config log=false"
         )
 
     # ------------------------------------------------------------------
-    # runner pragma
+    # runner source declaration
     # ------------------------------------------------------------------
 
-    def test_pragma_runner_flows_into_agent_factory(
+    def test_source_runner_flows_into_agent_factory(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``config runner = "..."`` pragma sets the default runner command.
+        """``config runner = "..."`` source declaration sets the default runner command.
 
         We capture the runner command passed to runner_backed_agent_factory
         because it is the single user-observable boundary between exec.py and
@@ -2636,12 +2636,12 @@ class TestExecPragmaPrecedence:
         exec_command.run(_exec_args_no_log(agl_file))
         assert captured_runner == ["my-runner"]
 
-    def test_cli_runner_overrides_pragma_runner(
+    def test_cli_runner_overrides_source_runner(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """CLI ``--runner`` overrides ``config runner`` pragma."""
+        """CLI ``--runner`` overrides ``config runner`` source declaration."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('config runner = "pragma-runner"\nlet x = 1\nx\n')
+        agl_file.write_text('config runner = "source-runner"\nlet x = 1\nx\n')
 
         captured_runner: list[str] = []
 

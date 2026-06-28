@@ -77,7 +77,7 @@ immutable, runtime-resolved **readable value** — like `param`, but for the
 program's own engine options:
 
 ```ebnf
-config_decl ::= "config" KEY ("=" expr)?
+config_decl ::= "config" NAME ("=" expr)?
 ```
 
 Config declarations may appear **anywhere at the program root** — before or
@@ -97,21 +97,36 @@ The value expression, when present, must have the key's declared type. A bare
 | `timeout` | `Option[text]` | Shell execution timeout. |
 
 For an `Option[T]` key (`log-file`, `timeout`) a bare `T` value is accepted and
-projected into `some(value)`; an `Option[T]` value may also be given directly.
+projected into `Some(value)`; an `Option[T]` value may also be given directly.
 
 A config key is a normal readable binding: it can be used in any expression.
 The binding is immutable — assigning to it is a static error.
 
 ```agl
 config max-iters = 10
-config timeout = "30s"        # projected into some("30s")
+config timeout = "30s"        # projected into Some("30s")
 config runner = "claude -p"
 let budget = max-iters        # config keys are readable
 print budget
 ```
 
-**Precedence.** The bound value is resolved per key as: a matching CLI flag,
-otherwise the source value (if given), otherwise the host's configured default.
+**Precedence.** The bound value is resolved per key as:
+`CLI flag > source value (if given) > [<program>].KEY > [exec].KEY > engine default`.
+
+A bare `config KEY` (no `=` value) contributes no source value and falls through
+to the program-section / exec-section / engine-default layers.
+
+**Effect-at-binding.** The three eval-consumed keys (`strict-json`, `max-iters`,
+`timeout`) take effect at the point the declaration executes in declaration order;
+expressions that follow see the updated setting. The remaining keys (`runner`,
+`log`, `log-file`) are start-resolved before the program runs; place them near the
+top of the program so the agent factory and trace infrastructure see them.
+
+**Error surface.** A source `config timeout = "…"` value is a runtime-evaluated
+expression; a bad value raises a runtime error (exit 2). A bad `--timeout` or
+`[exec].timeout` value is caught before execution (exit 1). The source `config
+timeout` controls the **shell-exec** timeout only; the agent idle timeout is always
+start-resolved from the CLI or `[exec]`.
 
 ## Binders: `let` and `var`
 

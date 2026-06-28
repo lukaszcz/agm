@@ -1037,7 +1037,7 @@ def exec_cmd(
     no_log: bool = typer.Option(
         False,
         "--no-log",
-        help="Disable trace logging (overrides a config pragma or [exec] log = true).",
+        help="Disable trace logging (overrides a source config declaration or [exec] log = true).",
     ),
     log: bool = typer.Option(
         False,
@@ -1045,7 +1045,7 @@ def exec_cmd(
         help=(
             "Enable trace logging to an auto-named timestamped file under .agent-files/. "
             "Trace logging is off by default; --log, --log-file, a source 'config log = true' "
-            "pragma, or [exec] log = true in config.toml opt in."
+            "declaration, or [exec] log = true in config.toml opt in."
         ),
     ),
     module_paths: list[str] = typer.Option(
@@ -1209,7 +1209,7 @@ def repl_cmd(
         help=(
             "Enable trace logging to an auto-named timestamped file under .agent-files/. "
             "Trace logging is off by default; --log, --log-file, or [exec] log = true in "
-            "config.toml opt in. Config pragmas are not applied in the REPL."
+            "config.toml opt in. Source config declarations take effect in the REPL too."
         ),
     ),
     _help: bool = _help_option(),

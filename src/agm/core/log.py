@@ -25,7 +25,7 @@ def default_agent_files_dir() -> Path:
 
 @dataclass(frozen=True)
 class LogDecision:
-    """Resolved logging decision from the CLI/pragma/config precedence chain.
+    """Resolved logging decision from the CLI/source/config precedence chain.
 
     ``enabled`` is the final on/off state.  ``explicit_path`` is the resolved
     log-file path when the user (or config) provided one explicitly; ``None``
@@ -41,14 +41,14 @@ def resolve_log_decision(
     cli_no_log: bool,
     cli_log: bool,
     cli_log_file: str | None,
-    pragma_log: bool | None,
-    pragma_log_file: str | None,
+    source_log: bool | None,
+    source_log_file: str | None,
     config_log: bool,
     config_log_file: str | None,
 ) -> LogDecision:
     """Resolve the final logging decision from three priority layers.
 
-    Precedence (highest first): CLI > pragma > config.
+    Precedence (highest first): CLI > source config declaration > config file.
 
     CLI layer:
       - ``--no-log``        → enabled=False, path=None  (explicit disable)
@@ -56,18 +56,18 @@ def resolve_log_decision(
       - ``--log``           → enabled=True,  path=None
       - (none)              → enabled=None   (unset; fall through)
 
-    Pragma layer (Part B; pass ``None`` until pragmas are wired):
-      - ``pragma_log_file`` → path=pragma_log_file; enabled=True when present
-      - ``pragma_log``      → enabled per value (True/False/None)
+    Source layer (``config log``/``config log-file`` declarations in the program):
+      - ``source_log_file`` → path=source_log_file; enabled=True when present
+      - ``source_log``      → enabled per value (True/False/None)
 
     Config layer:
       - ``config_log=True`` or ``config_log_file`` → enabled=True
       - ``config_log=False`` (default) and no file → fall through as None
       Note: config cannot express an explicit False distinctly from default;
-      use CLI ``--no-log`` or a pragma to force off when config has defaults.
+      use CLI ``--no-log`` to force off when config has defaults.
 
-    Enabled resolution: first non-None of [cli, pragma, config], default False.
-    Path resolution:    first non-None of [cli.path, pragma.path, config.path].
+    Enabled resolution: first non-None of [cli, source, config], default False.
+    Path resolution:    first non-None of [cli.path, source.path, config.path].
     """
     # --- CLI layer ---
     if cli_no_log:
@@ -80,24 +80,24 @@ def resolve_log_decision(
         cli_enabled = None
     cli_path = cli_log_file  # None when --log or --no-log; explicit str otherwise
 
-    # --- Pragma layer ---
-    pragma_path = pragma_log_file
-    if pragma_log_file is not None:
-        pragma_enabled: bool | None = True if pragma_log is None else pragma_log
+    # --- Source config declaration layer ---
+    source_path = source_log_file
+    if source_log_file is not None:
+        source_enabled: bool | None = True if source_log is None else source_log
     else:
-        pragma_enabled = pragma_log  # True, False, or None
+        source_enabled = source_log  # True, False, or None
 
     # --- Config layer ---
     config_path = config_log_file
     config_enabled: bool | None = True if (config_log or config_log_file) else None
 
     # --- Resolve enabled ---
-    enabled_layers = [cli_enabled, pragma_enabled, config_enabled]
+    enabled_layers = [cli_enabled, source_enabled, config_enabled]
     resolved_enabled = next((v for v in enabled_layers if v is not None), False)
 
     # --- Resolve path ---
     resolved_path = next(
-        (p for p in [cli_path, pragma_path, config_path] if p is not None), None
+        (p for p in [cli_path, source_path, config_path] if p is not None), None
     )
 
     return LogDecision(enabled=resolved_enabled, explicit_path=resolved_path)
@@ -111,25 +111,25 @@ def prepare_trace_log_from_layers(
     cli_log_file: str | None,
     config_log: bool,
     config_log_file: str | None,
-    pragma_log: bool | None = None,
-    pragma_log_file: str | None = None,
+    source_log: bool | None = None,
+    source_log_file: str | None = None,
 ) -> Path | None:
-    """Resolve the CLI/pragma/config logging decision and prepare the trace file.
+    """Resolve the CLI/source/config logging decision and prepare the trace file.
 
     Combines :func:`resolve_log_decision` with :func:`prepare_trace_log` so the
     two commands that support the full ``--log``/``--no-log``/``--log-file`` +
     config precedence chain (``agm exec`` and ``agm repl``) share one call site.
-    ``agm exec`` forwards the ``log``/``log_file`` config pragmas via
-    ``pragma_log``/``pragma_log_file``; ``agm repl`` rejects pragmas and leaves
-    them at their ``None`` defaults.  Callers handle the ``--dry-run``
-    short-circuit before calling.
+    ``agm exec`` forwards the source ``config log``/``config log-file`` binding
+    values via ``source_log``/``source_log_file``; ``agm repl`` leaves them at
+    their ``None`` defaults.  Callers handle the ``--dry-run`` short-circuit
+    before calling.
     """
     decision = resolve_log_decision(
         cli_no_log=cli_no_log,
         cli_log=cli_log,
         cli_log_file=cli_log_file,
-        pragma_log=pragma_log,
-        pragma_log_file=pragma_log_file,
+        source_log=source_log,
+        source_log_file=source_log_file,
         config_log=config_log,
         config_log_file=config_log_file,
     )

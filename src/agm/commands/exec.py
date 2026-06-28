@@ -25,9 +25,10 @@ Flag notes:
       A source-level ``strict_json`` call option overrides this default.
     - Trace logging is OFF by default.  ``--log`` enables it (auto-named path);
       ``--log-file PATH`` writes to PATH; ``--no-log`` disables it.  At most one
-      of these three flags may be given (mutually exclusive).  A source-level
-      ``config log = true`` pragma or ``[exec] log = true`` in config also enables
-      logging; CLI flags override pragmas (CLI > pragma > config).
+      of these three flags may be given (mutually exclusive).  A source
+      ``config log = true`` declaration or ``[exec] log = true`` in
+      config also enables logging; CLI flags override source declarations
+      (CLI > source > config).
     - ``--runner COMMAND`` overrides the default agent runner command from config.
       When set, it is used as the default runner for all unnamed agents.
     - Source ``config KEY = VALUE`` declarations override config-file settings for
@@ -163,9 +164,9 @@ def run(args: ExecArgs) -> None:
     merged_config = load_merged_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
 
     # ----------------------------------------------------------------
-    # Assemble module roots and load + scope the graph ONCE to read config
-    # pragmas before resolving any runtime settings.  Pragma values override
-    # config; CLI overrides pragma (CLI > pragma > config).
+    # Assemble module roots and load + scope the graph ONCE to read source
+    # config declarations before resolving any runtime settings.  Source values
+    # override config; CLI overrides source (CLI > source > config).
     # ----------------------------------------------------------------
     try:
         mr_config = load_module_roots(
@@ -287,8 +288,8 @@ def run(args: ExecArgs) -> None:
             cli_no_log=args.no_log,
             cli_log=args.log,
             cli_log_file=args.log_file,
-            pragma_log=_typed_const(static_consts, "log", bool),
-            pragma_log_file=_typed_const(static_consts, "log-file", str),
+            source_log=_typed_const(static_consts, "log", bool),
+            source_log_file=_typed_const(static_consts, "log-file", str),
             config_log=config.log,
             config_log_file=config.log_file,
         )
@@ -323,7 +324,7 @@ def run(args: ExecArgs) -> None:
     #     source `agent` runner hint
     #     resolved default runner (runner_cmd, the floor)
     #
-    # ``prepare_program`` was already called above to read config pragmas; the
+    # ``prepare_program`` was already called above to read source config declarations; the
     # same ``PreparedGraph`` is reused here and handed to ``run_prepared_graph``
     # below, so the source is never loaded or scoped twice.  On a source with
     # load/scope errors ``declared_agents`` is ``()`` and ``run_prepared_graph``

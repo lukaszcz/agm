@@ -1,0 +1,22 @@
+# User-defined exceptions: construction, raise, field access, and catch.
+# Exercises exception Boom (named-only fields, default for exceptions), both
+# triggered and non-triggered paths, and an escalating exception that propagates.
+exception Boom extends Exception
+  code: int
+
+exception AppError extends Exception
+  code: int
+  detail: text
+
+param trigger: bool
+param code: int
+
+try
+  if trigger =>
+    raise Boom(message = "boom!", code = code)
+  else =>
+    print "no error"
+catch Boom as e =>
+  print "boom code ${e.code}"
+catch Exception as e =>
+  print "other"

@@ -1,4 +1,4 @@
-"""Shared argument-binding routine for AgL function and constructor calls.
+"""Shared argument-binding routines for AgL function and constructor calls.
 
 ``bind_arguments`` is the ONE shared core that maps a kind-annotated parameter
 list against a call's positional + named arguments.  It is generic over the
@@ -10,6 +10,14 @@ argument-item type ``T`` so the same function can serve:
 The routine is PURE: it does not resolve types, does not lower expressions, and
 does not mutate the checker state.  It raises ``AglTypeError`` on any binding
 violation.
+
+``bind_constructor_args`` is a convenience wrapper over ``bind_arguments`` for
+the common constructor case (record, enum variant, exception).  It builds the
+``BindParam`` list from a field-kinds tuple, applies the VarRef bare-name rule,
+asserts every field is bound (constructors have no defaults), and returns the
+``{field_name: expr}`` mapping in declaration order.  Used by the checker
+(both concrete and generic-inference paths) and the lowerer to avoid repeating
+the same boilerplate three times.
 
 Algorithm (positional-greedy with named-only shorthand)
 -------------------------------------------------------
@@ -37,7 +45,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
-from agm.agl.syntax.nodes import ParamKind
+from agm.agl.syntax.nodes import Expr, NamedArg, ParamKind, VarRef
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.env import AglTypeError
 
@@ -223,3 +231,73 @@ def bind_arguments(
             # bound[i] stays None → caller uses default.
 
     return tuple(bound)
+
+
+# ---------------------------------------------------------------------------
+# Constructor-specific convenience wrapper
+# ---------------------------------------------------------------------------
+
+
+def bind_constructor_args(
+    field_kinds: tuple[tuple[str, ParamKind], ...],
+    positional: Sequence[Expr],
+    named: Sequence[NamedArg],
+    *,
+    call_span: SourceSpan,
+    context_desc: str,
+) -> dict[str, Expr]:
+    """Bind positional and named arguments for a record/enum/exception constructor.
+
+    Builds the :class:`BindParam` list from *field_kinds*, runs
+    :func:`bind_arguments` with the ``VarRef`` bare-name rule, asserts every
+    field is bound (constructors have no defaults), and returns an ordered
+    ``{field_name: expr}`` mapping.
+
+    Parameters
+    ----------
+    field_kinds:
+        Ordered ``(field_name, ParamKind)`` pairs from the constructor's
+        field-kinds registry — produced by ``get_constructor_field_kinds``.
+    positional:
+        Positional argument expressions in source order.
+    named:
+        Named argument expressions in source order.
+    call_span:
+        The span of the entire call expression (for missing-arg errors).
+    context_desc:
+        Human-readable description for error messages, e.g.
+        ``"constructor 'R'"``, ``"variant 'E.Some'"``, ``"exception 'Boom'"``.
+
+    Returns
+    -------
+    An ordered ``{field_name: Expr}`` dict mapping each declared field to its
+    bound argument expression.  The dict is in field declaration order.
+
+    Raises
+    ------
+    AglTypeError
+        On any binding violation (surplus/missing/duplicate args, positional
+        arg in named-only territory that is not a bare name, etc.).
+    """
+    bind_params = tuple(
+        BindParam(name=fname, kind=fkind, has_default=False) for fname, fkind in field_kinds
+    )
+    named_bns: list[BoundName[Expr]] = [
+        BoundName(name=na.name, value=na.value, span=na.span) for na in named
+    ]
+    binding = bind_arguments(
+        bind_params,
+        positional,
+        named_bns,
+        bare_name=lambda e: e.name if isinstance(e, VarRef) else None,
+        span_of=lambda e: e.span,
+        call_span=call_span,
+        context_desc=context_desc,
+    )
+    bound_exprs: dict[str, Expr] = {}
+    for (fname, _fkind), bound_expr in zip(field_kinds, binding):
+        assert bound_expr is not None, (
+            f"compiler bug: required field '{fname}' missing in binding for {context_desc}"
+        )
+        bound_exprs[fname] = bound_expr
+    return bound_exprs

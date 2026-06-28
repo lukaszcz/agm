@@ -2480,7 +2480,7 @@ def test_cross_module_generic_record_template_has_module_id(tmp_path: Path) -> N
     }
     mg = _make_graph_from_files(tmp_path, modules)
     rg = resolve_graph(mg)  # type: ignore[arg-type]
-    _gtt, graph_generic_table, _gcts = _build_graph_type_table(rg)  # type: ignore[arg-type]
+    _gtt, graph_generic_table, _gcts, _gckft = _build_graph_type_table(rg)  # type: ignore[arg-type]
 
     lib_id = ModuleId.from_dotted("lib")
     gdef = graph_generic_table.get((lib_id, "Box"))
@@ -2510,7 +2510,7 @@ def test_cross_module_generic_enum_template_has_module_id(tmp_path: Path) -> Non
     }
     mg = _make_graph_from_files(tmp_path, modules)
     rg = resolve_graph(mg)  # type: ignore[arg-type]
-    _gtt, graph_generic_table, _gcts = _build_graph_type_table(rg)  # type: ignore[arg-type]
+    _gtt, graph_generic_table, _gcts, _gckft = _build_graph_type_table(rg)  # type: ignore[arg-type]
 
     lib_id = ModuleId.from_dotted("lib")
     gdef = graph_generic_table.get((lib_id, "Opt"))

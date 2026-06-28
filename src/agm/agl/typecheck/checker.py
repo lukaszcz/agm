@@ -1150,7 +1150,9 @@ class _Checker:
 
             exc_type: ExceptionType = EXCEPTION_BASE
         else:
-            resolved = self._env.get_type(clause.exc_type)
+            # resolve_named_type is used instead of get_type so that open-imported
+            # exception types (cross-module graph mode) are found as well.
+            resolved = self._env.resolve_named_type(clause.exc_type)
             if resolved is None or not isinstance(resolved, ExceptionType):
                 raise AglTypeError(
                     f"'{clause.exc_type}' is not a known exception type.",

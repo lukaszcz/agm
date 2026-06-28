@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Protocol
 
-from agm.agl.modules.ids import ModuleId
+from agm.agl.modules.ids import PRELUDE_ID, ModuleId
 from agm.agl.scope.symbols import BindingRef, ConstructorRef, ResolvedProgram
 from agm.agl.semantics.types import (
     EnumType,
@@ -23,6 +23,7 @@ from agm.agl.semantics.types import (
 )
 from agm.agl.syntax.nodes import Call, Expr, FieldAccess, NamedArg, VarRef
 from agm.agl.syntax.spans import SourceSpan
+from agm.agl.typecheck.arguments import bind_constructor_args
 from agm.agl.typecheck.env import (
     AglTypeError,
     ConstructorSignature,
@@ -80,43 +81,6 @@ class ConstructorCheckCtx(Protocol):
     def _result_hint(
         self, result_template: Type, expected: Type | None, *, span: SourceSpan
     ) -> dict[str, Type]: ...
-
-
-# ---------------------------------------------------------------------------
-# Shared constructor-argument helper
-# ---------------------------------------------------------------------------
-
-
-def merge_constructor_args(
-    args: tuple[Expr, ...], named_args: tuple[NamedArg, ...]
-) -> tuple[NamedArg, ...]:
-    """Merge positional shorthand args with explicit named args for a ctor call.
-
-    Constructor calls do not accept arbitrary positional arguments, but a bare
-    field name may be passed positionally as shorthand for ``name = name``: a
-    positional ``VarRef`` ``x`` is reinterpreted as the named binding ``x = x``.
-    Any other positional expression (e.g. ``R(1)``, ``R(x + 1)``, ``R(f())``) is
-    rejected.  Shorthand bindings are accepted in any position.
-
-    Duplicate-name detection is deferred to ``_check_constructor_call``, so a
-    field supplied both via shorthand and explicitly is reported there as a
-    duplicate.
-    """
-    shorthand: list[NamedArg] = []
-    for arg in args:
-        if not isinstance(arg, VarRef):
-            raise AglTypeError(
-                "Constructor arguments must be named; only a bare field name may be "
-                "passed positionally as shorthand for `name = name`.",
-                span=arg.span,
-            )
-        # The wrapping NamedArg is synthetic, so it gets the codebase's
-        # synthetic-node sentinel id (-1, as in checker.py / resolver.py)
-        # rather than reusing the VarRef's id; the inner VarRef keeps its own.
-        shorthand.append(
-            NamedArg(name=arg.name, value=arg, span=arg.span, node_id=-1)
-        )
-    return (*shorthand, *named_args)
 
 
 # ---------------------------------------------------------------------------
@@ -213,7 +177,7 @@ class ConstructorChecker:
                 else self._ctx._env.instantiate_nominal(owner_name, concrete_args)
             )
             return self._check_constructor_call(
-                owner=concrete_type, variant=variant, args=(), span=span
+                owner=concrete_type, variant=variant, positional=(), named=(), span=span
             )
         else:
             # Payload constructor as value: produce a FunctionType.
@@ -246,7 +210,8 @@ class ConstructorChecker:
         *,
         node_type_args: tuple[object, ...],
         ctor_ref: ConstructorRef,
-        named_args: tuple[NamedArg, ...],
+        positional: tuple[Expr, ...],
+        named: tuple[NamedArg, ...],
         span: SourceSpan,
         expected: Type | None,
         sig: ConstructorSignature | None = None,
@@ -284,16 +249,43 @@ class ConstructorChecker:
                 )
                 subst[p] = resolved_arg
         else:
-            # Inference path: match field arg types against field templates.
-            # A hint from the expected result type lets annotation-requiring
-            # literals (e.g. an empty list field on `let b: Box[int] = Box(items: [])`)
-            # resolve before the field arguments are individually checked.
+            # Inference path: use bind_arguments to map positional and named args to
+            # field names, then infer type-parameter substitutions from the bound args.
+            # A hint from the expected result type lets annotation-requiring literals
+            # (e.g. an empty list field on `let b: Box[int] = Box(items: [])`) resolve
+            # before the field arguments are individually checked.
             hint = self._ctx._result_hint(sig.result_template, expected, span=span)
-            named_by_field = {na.name: na for na in named_args}
-            for field_name, field_template in zip(sig.field_names, sig.field_templates):
-                if field_name in named_by_field:
-                    na = named_by_field[field_name]
-                    self._ctx._infer_arg(field_template, na.value, subst, hint, span=na.span)
+            # Look up field kinds from the registry.  For cross-module generic types
+            # the kinds come via the graph table (module_id from gdef.template.module_id).
+            owner_module_id_for_kinds: ModuleId | None = (
+                gdef.template.module_id if gdef is not None else None
+            )
+            actual_name_for_kinds = (
+                gdef.template.name
+                if gdef is not None and isinstance(gdef.template, (RecordType, EnumType))
+                else owner_name
+            )
+            field_kinds_for_inf = self._ctx._env.get_constructor_field_kinds(
+                actual_name_for_kinds, variant, module_id=owner_module_id_for_kinds
+            )
+            assert field_kinds_for_inf is not None, (
+                f"compiler bug: no field-kinds for generic constructor '{owner_name}'"
+            )
+            # Bind positional and named args to field names via the shared helper.
+            # All fields are required (no defaults on constructors), so every slot is
+            # non-None after binding — the helper asserts this internally.
+            bound_by_name_inf = bind_constructor_args(
+                field_kinds_for_inf,
+                positional,
+                named,
+                call_span=span,
+                context_desc=f"constructor '{owner_name}'",
+            )
+            sig_templates_by_name = dict(zip(sig.field_names, sig.field_templates))
+            for fname, _fkind in field_kinds_for_inf:
+                bound_expr = bound_by_name_inf[fname]
+                field_template = sig_templates_by_name[fname]
+                self._ctx._infer_arg(field_template, bound_expr, subst, hint, span=bound_expr.span)
             # Fill remaining unsolved from expected result type.
             if expected is not None:
                 self._ctx._match(sig.result_template, expected, subst, span=span, challenge=False)
@@ -318,7 +310,7 @@ class ConstructorChecker:
             concrete_type = self._ctx._env.instantiate_nominal(owner_name, concrete_args, span=span)
         # Validate the constructor call.
         return self._check_constructor_call(
-            owner=concrete_type, variant=variant, args=named_args, span=span
+            owner=concrete_type, variant=variant, positional=positional, named=named, span=span
         )
 
     # --- Resolve constructor owner (public entry point) ---
@@ -439,7 +431,7 @@ class ConstructorChecker:
             params = tuple(fields.values())
             return FunctionType(params=params, result=owner)
         return self._check_constructor_call(
-            owner=owner, variant=variant, args=(), span=span
+            owner=owner, variant=variant, positional=(), named=(), span=span
         )
 
     # --- Resolve qualified constructor and call (private helper) ---
@@ -450,7 +442,8 @@ class ConstructorChecker:
         owner_name: str,
         variant: str,
         owner_module_id: ModuleId | None = None,
-        args: tuple[NamedArg, ...],
+        positional: tuple[Expr, ...],
+        named: tuple[NamedArg, ...],
         span: SourceSpan,
         expected: Type | None = None,
         type_args: tuple[object, ...] = (),
@@ -480,7 +473,8 @@ class ConstructorChecker:
             return self._check_generic_constructor_call(
                 node_type_args=type_args,
                 ctor_ref=ctor_ref,
-                named_args=args,
+                positional=positional,
+                named=named,
                 span=span,
                 expected=expected,
                 sig=sig,
@@ -496,7 +490,7 @@ class ConstructorChecker:
             owner_name, variant, span, owner_module_id=owner_module_id
         )
         return self._check_constructor_call(
-            owner=enum_type, variant=variant, args=args, span=span
+            owner=enum_type, variant=variant, positional=positional, named=named, span=span
         )
 
     # --- Cross-module constructor call (public entry point) ---
@@ -514,7 +508,6 @@ class ConstructorChecker:
         resolved to a ``constructor_binding`` in a non-entry module.
         """
         assert isinstance(node.callee, VarRef)
-        named_args = merge_constructor_args(node.args, node.named_args)
         # Cross-module generic constructor — both explicit (lib::Box[int](v = 1)) and
         # inferred (lib::Box(value = 1)) routes go here.
         gdef = self._ctx._env.get_generic_type_from_module(callee_ref.module_id, callee_ref.name)
@@ -535,7 +528,8 @@ class ConstructorChecker:
             return self._check_generic_constructor_call(
                 node_type_args=node.type_args,
                 ctor_ref=ctor_ref,
-                named_args=named_args,
+                positional=node.args,
+                named=node.named_args,
                 span=node.span,
                 expected=expected,
                 sig=ctor_sig,
@@ -548,14 +542,16 @@ class ConstructorChecker:
                 span=node.span,
             )
         owner_type = self._ctx._env.resolve_type_by_module_id(callee_ref.module_id, callee_ref.name)
-        # Invariant: scope resolver only sets constructor_binding for RecordDef/EnumDef,
-        # which are always RecordType/EnumType in the graph type table.
-        assert isinstance(owner_type, (RecordType, EnumType)), (
+        # The scope resolver sets constructor_binding for RecordDef, EnumDef, and
+        # ExceptionDef, all of which map to their respective semantic types in the
+        # graph type table.
+        assert isinstance(owner_type, (RecordType, EnumType, ExceptionType)), (
             f"constructor_binding for '{callee_ref.name}' in "
             f"'{callee_ref.module_id.dotted()}' resolved to {type(owner_type).__name__}"
         )
         return self._check_constructor_call(
-            owner=owner_type, variant=None, args=named_args, span=node.span
+            owner=owner_type, variant=None, positional=node.args, named=node.named_args,
+            span=node.span
         )
 
     # --- Unqualified constructor callee call (public entry point) ---
@@ -564,7 +560,6 @@ class ConstructorChecker:
         """Handle a Call whose callee is an unqualified constructor VarRef."""
         assert isinstance(node.callee, VarRef)
         ctor_ref = self._ctx._resolved.constructor_refs[node.callee.node_id]
-        named_args = merge_constructor_args(node.args, node.named_args)
         if ctor_ref.type_params:
             # Generic constructor: route to generic call handler.
             gdef = None
@@ -582,7 +577,8 @@ class ConstructorChecker:
             return self._check_generic_constructor_call(
                 node_type_args=node.type_args,
                 ctor_ref=ctor_ref,
-                named_args=named_args,
+                positional=node.args,
+                named=node.named_args,
                 span=node.span,
                 expected=expected,
                 sig=sig,
@@ -602,7 +598,8 @@ class ConstructorChecker:
                 span=node.span,
             )
         return self._check_constructor_call(
-            owner=owner, variant=ctor_ref.variant, args=named_args, span=node.span
+            owner=owner, variant=ctor_ref.variant, positional=node.args, named=node.named_args,
+            span=node.span
         )
 
     # --- Qualified constructor callee call (public entry point) ---
@@ -615,10 +612,10 @@ class ConstructorChecker:
         owner_name, variant, owner_module_id = (
             self._ctx._resolved.qualified_constructor_refs[node.callee.node_id]
         )
-        named_args = merge_constructor_args(node.args, node.named_args)
         return self._resolve_qualified_constructor_and_call(
             owner_name=owner_name, variant=variant, owner_module_id=owner_module_id,
-            args=named_args, span=node.span, expected=expected, type_args=node.type_args,
+            positional=node.args, named=node.named_args, span=node.span,
+            expected=expected, type_args=node.type_args,
         )
 
     # --- Constructor call validation (private helper) ---
@@ -628,51 +625,54 @@ class ConstructorChecker:
         *,
         owner: RecordType | EnumType | ExceptionType,
         variant: str | None,
-        args: tuple[NamedArg, ...],
+        positional: tuple[Expr, ...],
+        named: tuple[NamedArg, ...],
         span: SourceSpan,
     ) -> RecordType | EnumType | ExceptionType:
+        lookup_variant: str | None
         if isinstance(owner, EnumType):
             assert variant is not None, "variant is required for EnumType"
             fields = owner.variants[variant]
-            type_label = f"Variant '{owner.name}.{variant}'"
+            context_desc = f"variant '{owner.name}.{variant}'"
+            module_id: ModuleId = owner.module_id
+            lookup_variant = variant
         elif isinstance(owner, RecordType):
             fields = owner.fields
-            type_label = f"Record '{owner.name}'"
+            context_desc = f"constructor '{owner.name}'"
+            module_id = owner.module_id
+            lookup_variant = None
         else:
             fields = owner.fields
-            type_label = f"Exception type '{owner.name}'"
+            context_desc = f"exception '{owner.name}'"
+            # Exceptions carry no module_id (ExceptionType has no such field).
+            # They are globally unique, so their field-kinds are indexed under
+            # PRELUDE_ID in both the local registry and the cross-module graph
+            # table — ensuring cross-module exception construction can find them.
+            module_id = PRELUDE_ID
+            lookup_variant = None
 
-        provided = {arg.name: arg for arg in args}
+        # Get field kinds from the registry (excludes trace_id for exceptions).
+        # For records and exceptions, field kinds are always stored under variant=None.
+        field_kinds = self._ctx._env.get_constructor_field_kinds(
+            owner.name, lookup_variant, module_id=module_id
+        )
+        assert field_kinds is not None, (
+            f"compiler bug: no field-kinds registered for {context_desc}"
+        )
 
-        seen_args: set[str] = set()
-        for arg in args:
-            if arg.name in seen_args:
-                raise AglTypeError(
-                    f"Duplicate argument '{arg.name}' in constructor call.",
-                    span=arg.span,
-                )
-            seen_args.add(arg.name)
+        # Bind positional and named args to field names via the shared helper.
+        # All fields are required (no defaults on constructors), so every slot is
+        # non-None after binding — the helper asserts this internally.
+        bound_exprs = bind_constructor_args(
+            field_kinds, positional, named, call_span=span, context_desc=context_desc
+        )
 
-        for arg_name in provided:
-            if arg_name not in fields:
-                raise AglTypeError(
-                    f"{type_label} has no field '{arg_name}'.",
-                    span=provided[arg_name].span,
-                )
-
-        for field_name in fields:
-            if isinstance(owner, ExceptionType) and field_name == "trace_id":
-                continue
-            if field_name not in provided:
-                raise AglTypeError(
-                    f"Missing field '{field_name}' in constructor call for "
-                    f"{type_label}.",
-                    span=span,
-                )
-
-        for arg in args:
-            expected_field_type = fields[arg.name]
-            arg_type = self._ctx._check_expr(arg.value, expected=expected_field_type)
-            self._ctx._assert_assignable(arg_type, expected_field_type, arg.span)
+        # Type-check each user field (exceptions skip trace_id, which is excluded
+        # from field_kinds at registration time).
+        for fname, _fkind in field_kinds:
+            expected_field_type = fields[fname]
+            arg_expr = bound_exprs[fname]
+            arg_type = self._ctx._check_expr(arg_expr, expected=expected_field_type)
+            self._ctx._assert_assignable(arg_type, expected_field_type, arg_expr.span)
 
         return owner

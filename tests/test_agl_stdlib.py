@@ -192,6 +192,18 @@ def test_exception_in_field_type_is_built_before_record() -> None:
     )
 
 
+def test_exception_extends_concrete_exception_inherits_field_kinds() -> None:
+    # Exercises builder.py _build_exception branch: base_registered is not None
+    # (concrete exception A extending concrete exception B, both user-defined).
+    _check(
+        "exception Base extends Exception\n"
+        "  code: int\n"
+        "exception Derived extends Base\n"
+        "  detail: text\n"
+        "Derived(message = \"m\", code = 1, detail = \"d\")\n"
+    )
+
+
 def test_exception_in_applied_field_type_is_built_before_rejection() -> None:
     with pytest.raises(AglTypeError, match="Type 'Local' does not take type arguments"):
         _check(

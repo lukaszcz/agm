@@ -294,6 +294,9 @@ class TypeEnvironment:
         graph_ctor_sig_table: Mapping[
             tuple[ModuleId, str, str | None], ConstructorSignature
         ] | None = None,
+        graph_ctor_field_kinds_table: Mapping[
+            tuple[ModuleId, str, str | None], tuple[tuple[str, ParamKind], ...]
+        ] | None = None,
         import_env: ImportEnv | None = None,
         module_id: ModuleId = ENTRY_ID,
     ) -> None:
@@ -318,6 +321,17 @@ class TypeEnvironment:
         # bare name (which would pick the wrong signature when two modules define
         # functions with the same name but different signatures).
         self._function_signatures_by_node_id: dict[int, FunctionSignature] = {}
+        # Constructor field-kinds registry — (owner_name, variant | None) → ordered
+        # (field_name, ParamKind) pairs.  Populated by _TypeBuilder for every
+        # record/enum/exception; consumed by the checker and lowerer to build
+        # bind_arguments param lists without round-tripping through the AST.
+        self._constructor_field_kinds: dict[
+            tuple[str, str | None], tuple[tuple[str, ParamKind], ...]
+        ] = {}
+        # Cross-module constructor field-kinds table: (ModuleId, owner_name, variant) → kinds.
+        self._graph_ctor_field_kinds_table: Mapping[
+            tuple[ModuleId, str, str | None], tuple[tuple[str, ParamKind], ...]
+        ] | None = graph_ctor_field_kinds_table
         # Graph-mode context (M4): None in single-program path.
         self._graph_type_table: Mapping[tuple[ModuleId, str], Type] | None = graph_type_table
         # Cross-module generic type definitions: (ModuleId, name) → GenericTypeDef.
@@ -337,6 +351,15 @@ class TypeEnvironment:
         # Built-in prelude types (AgL v2: ExecResult, ParsePolicy) are always available.
         for prelude_name, prelude_type in BUILTIN_PRELUDE_TYPES.items():
             self._types[prelude_name] = prelude_type
+        # Pre-register builtin exception field kinds (all non-trace_id fields, NAMED_ONLY).
+        for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
+            if not exc_type.abstract:
+                _kinds: tuple[tuple[str, ParamKind], ...] = tuple(
+                    (fname, ParamKind.NAMED_ONLY)
+                    for fname in exc_type.fields
+                    if fname != "trace_id"
+                )
+                self._constructor_field_kinds[(exc_name, None)] = _kinds
 
     # --- Type namespace queries ---
 
@@ -996,6 +1019,41 @@ class TypeEnvironment:
             return None
         return self._graph_ctor_sig_table.get((module_id, owner_name, variant))
 
+    def register_constructor_field_kinds(
+        self,
+        owner_name: str,
+        variant: str | None,
+        fields: tuple[tuple[str, ParamKind], ...],
+    ) -> None:
+        """Register ordered (field_name, ParamKind) pairs for a constructor."""
+        self._constructor_field_kinds[(owner_name, variant)] = fields
+
+    def get_constructor_field_kinds(
+        self,
+        owner_name: str,
+        variant: str | None,
+        *,
+        module_id: ModuleId | None = None,
+    ) -> tuple[tuple[str, ParamKind], ...] | None:
+        """Return the ordered field-kind pairs for a constructor, or ``None`` if unknown.
+
+        First checks the own-module registry; falls back to the cross-module graph table
+        when ``module_id`` is provided (used for cross-module constructor calls where the
+        owner type carries its declaring module's ``module_id``).
+        """
+        result = self._constructor_field_kinds.get((owner_name, variant))
+        if result is not None:
+            return result
+        if module_id is not None and self._graph_ctor_field_kinds_table is not None:
+            return self._graph_ctor_field_kinds_table.get((module_id, owner_name, variant))
+        return None
+
+    def all_constructor_field_kinds(
+        self,
+    ) -> list[tuple[tuple[str, str | None], tuple[tuple[str, ParamKind], ...]]]:
+        """Return all own-module constructor field-kind entries as (key, kinds) pairs."""
+        return list(self._constructor_field_kinds.items())
+
     def all_generic_types(self) -> dict[str, GenericTypeDef]:
         """Return the own-module generic type map (name → GenericTypeDef)."""
         return self._generic_types
@@ -1024,5 +1082,6 @@ class TypeEnvironment:
         self._function_signatures.update(other._function_signatures)
         self._generic_types.update(other._generic_types)
         self._constructor_sigs.update(other._constructor_sigs)
+        self._constructor_field_kinds.update(other._constructor_field_kinds)
         self._alias_type_params.update(other._alias_type_params)
         self._function_signatures_by_node_id.update(other._function_signatures_by_node_id)

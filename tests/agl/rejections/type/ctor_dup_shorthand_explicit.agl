@@ -1,0 +1,6 @@
+record R
+  x: int
+  y: int
+let x = 1
+let r = R(x, x = 2, y = 3)
+print r.x

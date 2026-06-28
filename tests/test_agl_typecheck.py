@@ -1978,7 +1978,11 @@ class TestConstructors:
 
     def test_record_unknown_field_raises(self) -> None:
         err = reject_type("record Point\n  x: int\nPoint(x = 1, z = 2)")
-        assert "no field" in str(err).lower() or "field" in str(err).lower()
+        assert (
+            "no field" in str(err).lower()
+            or "field" in str(err).lower()
+            or "unknown" in str(err).lower()
+        )
 
     def test_record_duplicate_arg_raises(self) -> None:
         # Parser catches duplicate field args
@@ -2074,7 +2078,11 @@ class TestConstructorRefDispatch:
 
     def test_unknown_field_still_errors(self) -> None:
         err = reject_type("record Box\n  value: int\nBox(value = 1, extra = 2)")
-        assert "no field" in str(err).lower() or "field" in str(err).lower()
+        assert (
+            "no field" in str(err).lower()
+            or "field" in str(err).lower()
+            or "unknown" in str(err).lower()
+        )
 
     def test_field_type_mismatch_still_errors(self) -> None:
         err = reject_type('record Box\n  value: int\nBox(value = "hello")')
@@ -2118,6 +2126,44 @@ class TestConstructorRefDispatch:
         # so this is caught as a type checker error when using the VarRef form.
         err = reject_type("enum E\n  | Pass\nPass::[int]()")
         assert "type argument" in str(err).lower() or "not supported" in str(err).lower()
+
+    def test_single_field_variant_positional(self) -> None:
+        # Single-field enum variant with no markers → STANDARD zone → positional works.
+        r = accept_type("enum Opt\n  | Some(value: int)\n  | None\nSome(42)")
+        assert r.resolved.program is not None
+
+    def test_single_field_variant_named_still_works(self) -> None:
+        # Single-field variant: named arg still works even though zone is STANDARD.
+        r = accept_type("enum Opt\n  | Some(value: int)\nSome(value = 5)")
+        assert r.resolved.program is not None
+
+    def test_std_record_positional(self) -> None:
+        # Record with @std marker → positional args allowed.
+        r = accept_type("record P\n  @std\n  x: int\n  y: int\nP(1, 2)")
+        assert r.resolved.program is not None
+
+    def test_std_record_mixed_pos_named(self) -> None:
+        # Record with @std: positional then named allowed.
+        r = accept_type("record P\n  @std\n  x: int\n  y: int\nP(1, y = 2)")
+        assert r.resolved.program is not None
+
+    def test_pos_only_field_by_name_rejected(self) -> None:
+        # A pos-only field cannot be passed by name.
+        err = reject_type("record R\n  @pos\n  x: int\n  y: int\nR(x = 1, y = 2)")
+        assert "positional-only" in str(err).lower() or "positional" in str(err).lower()
+
+    def test_multi_field_variant_nonbare_positional_rejected(self) -> None:
+        # Non-bare positional in named-only multi-field variant → error.
+        err = reject_type("enum E\n  | F(x: int, y: int)\nF(1, 2)")
+        assert "named-only" in str(err).lower() or "positional" in str(err).lower()
+
+    def test_get_constructor_field_kinds_no_graph_table(self) -> None:
+        # get_constructor_field_kinds in single-program mode: no graph table → None for unknown.
+        from agm.agl.modules.ids import ModuleId
+        env = TypeEnvironment()
+        lib_id = ModuleId.from_dotted("lib")
+        result = env.get_constructor_field_kinds("Unknown", None, module_id=lib_id)
+        assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -5019,7 +5065,11 @@ class TestGenericConstructorErrors:
             "  value: T\n"
             "Box(value = 1, extra = 2)"
         )
-        assert "no field" in str(err).lower() or "field" in str(err).lower()
+        assert (
+            "no field" in str(err).lower()
+            or "field" in str(err).lower()
+            or "unknown" in str(err).lower()
+        )
 
     def test_inconsistent_type_inference_rejected(self) -> None:
         # Pair(first: 1, second: T=bool) when annotation says Pair[int, int]

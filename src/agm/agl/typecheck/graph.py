@@ -60,12 +60,13 @@ from typing import Mapping
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
-from agm.agl.modules.ids import ModuleId
+from agm.agl.modules.ids import PRELUDE_ID, ModuleId
 from agm.agl.scope.graph import ResolvedModuleGraph
 from agm.agl.scope.imports import ImportEnv
 from agm.agl.scope.symbols import ResolvedProgram
 from agm.agl.semantics.types import (
     CastSpec,
+    ExceptionType,
     FunctionType,
     Type,
 )
@@ -458,6 +459,7 @@ def _build_graph_type_table(
     dict[tuple[ModuleId, str], Type],
     dict[tuple[ModuleId, str], GenericTypeDef],
     dict[tuple[ModuleId, str, str | None], ConstructorSignature],
+    dict[tuple[ModuleId, str, str | None], tuple[tuple[str, ParamKind], ...]],
 ]:
     """Phase 1: collect and resolve all public type declarations across all modules.
 
@@ -583,19 +585,35 @@ def _build_graph_type_table(
             cross_envs=cross_envs,
         )
 
-    # Collect cross-module generic type definitions and constructor signatures from
-    # the per-module envs (which now have fully resolved bodies).  These are indexed
-    # by (ModuleId, name) so that the per-module checker can look them up when it
-    # encounters a module-qualified generic constructor call (e.g. lib::Box[int](v:1)).
+    # Collect cross-module generic type definitions, constructor signatures, and
+    # constructor field kinds from the per-module envs (which now have fully resolved
+    # bodies).  These are indexed by (ModuleId, name) so that the per-module checker
+    # can look them up when it encounters a module-qualified generic constructor call
+    # (e.g. lib::Box[int](v:1)).
     graph_generic_table: dict[tuple[ModuleId, str], GenericTypeDef] = {}
     graph_ctor_sig_table: dict[tuple[ModuleId, str, str | None], ConstructorSignature] = {}
+    graph_ctor_field_kinds_table: dict[
+        tuple[ModuleId, str, str | None], tuple[tuple[str, ParamKind], ...]
+    ] = {}
     for mid, cross_env in cross_envs.items():
         for name, gdef in cross_env.all_generic_types().items():
             graph_generic_table[(mid, name)] = gdef
         for (owner_name, variant), sig in cross_env.all_constructor_sigs():
             graph_ctor_sig_table[(mid, owner_name, variant)] = sig
+        for (owner_name, variant), kinds in cross_env.all_constructor_field_kinds():
+            graph_ctor_field_kinds_table[(mid, owner_name, variant)] = kinds
+            # Exception types carry no module_id (ExceptionType has no such field)
+            # and are globally unique by name.  Also register their field-kinds under
+            # PRELUDE_ID so a consuming module can find them with module_id=PRELUDE_ID
+            # when the owner is an ExceptionType — regardless of which module defined
+            # the exception.  This is the cross-module counterpart of the local-registry
+            # entry built by _TypeBuilder._build_exception (which is always found first
+            # for same-module and built-in exceptions via _constructor_field_kinds).
+            typ = cross_env.get_type(owner_name)
+            if isinstance(typ, ExceptionType) and not typ.abstract:
+                graph_ctor_field_kinds_table[(PRELUDE_ID, owner_name, variant)] = kinds
 
-    return graph_type_table, graph_generic_table, graph_ctor_sig_table
+    return graph_type_table, graph_generic_table, graph_ctor_sig_table, graph_ctor_field_kinds_table
 
 
 # ---------------------------------------------------------------------------
@@ -725,6 +743,9 @@ def _check_module(
     graph_func_sig_table: dict[int, tuple[str, FunctionSignature, FunctionType]],
     graph_generic_table: dict[tuple[ModuleId, str], GenericTypeDef],
     graph_ctor_sig_table: dict[tuple[ModuleId, str, str | None], ConstructorSignature],
+    graph_ctor_field_kinds_table: dict[
+        tuple[ModuleId, str, str | None], tuple[tuple[str, ParamKind], ...]
+    ],
     entry_seed_env: TypeEnvironment | None = None,
 ) -> CheckedModule:
     """Type-check one module with a module-aware ``TypeEnvironment``.
@@ -750,6 +771,7 @@ def _check_module(
         graph_type_table=graph_type_table,
         graph_generic_table=graph_generic_table,
         graph_ctor_sig_table=graph_ctor_sig_table,
+        graph_ctor_field_kinds_table=graph_ctor_field_kinds_table,
         import_env=import_env,
         module_id=mid,
     )
@@ -850,11 +872,15 @@ def check_graph(
         On the first static type violation in any module (first-error abort).
     """
     # Phase 1: build the graph-wide type table with all module types stamped
-    # with their owning module_id.  Also collects cross-module generic type defs
-    # and constructor signatures from the per-module envs built during body resolution.
-    graph_type_table, graph_generic_table, graph_ctor_sig_table = _build_graph_type_table(
-        resolved_graph
-    )
+    # with their owning module_id.  Also collects cross-module generic type defs,
+    # constructor signatures, and constructor field kinds from the per-module envs
+    # built during body resolution.
+    (
+        graph_type_table,
+        graph_generic_table,
+        graph_ctor_sig_table,
+        graph_ctor_field_kinds_table,
+    ) = _build_graph_type_table(resolved_graph)
 
     # Phase 2: build the graph-wide function-signature table.
     # Resolves parameter/return TypeExprs for every top-level FuncDef in every
@@ -896,6 +922,7 @@ def check_graph(
             graph_func_sig_table,
             graph_generic_table,
             graph_ctor_sig_table,
+            graph_ctor_field_kinds_table,
             entry_seed_env=entry_seed_env if mid.is_entry else None,
         )
         checked_modules[mid] = cm

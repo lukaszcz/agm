@@ -1,0 +1,6 @@
+record R
+  @pos
+  x: int
+  y: int
+let r = R(x = 1, y = 2)
+print r.x

@@ -61,7 +61,7 @@ ELSE: ElseSentinel = ElseSentinel()
 class BinOp(enum.Enum):
     """Closed set of binary operators recognised by AgL."""
 
-    EQ = "="
+    EQ = "=="
     NEQ = "!="
     LT = "<"
     LE = "<="
@@ -182,7 +182,7 @@ class Template:
 
 @dataclass(frozen=True, slots=True)
 class NamedArg:
-    """A named argument in a constructor or call expression: ``name: value``."""
+    """A named argument in a constructor or call expression: ``name = value``."""
 
     name: str
     value: Expr
@@ -267,12 +267,33 @@ class Call:
     type_args: tuple[TypeExpr, ...] = ()
 
 
+class ParamKind(enum.Enum):
+    """The zone a parameter belongs to in its parameter list.
+
+    Values are stable strings for debuggability; no code should branch on them.
+    The transformer assigns a concrete kind to every ``Param`` at parse time;
+    no downstream pass ever sees a marker token.
+    """
+
+    POSITIONAL_ONLY = "positional_only"
+    STANDARD = "standard"
+    NAMED_ONLY = "named_only"
+
+
 @dataclass(frozen=True, slots=True)
 class Param:
-    """A function or lambda parameter: ``name: TypeExpr [= default]``."""
+    """A function/lambda parameter or a record/enum-variant/exception field.
+
+    ``kind`` records which zone this parameter belongs to (positional-only,
+    standard, or named-only).  In this version kinds are assigned by the
+    transformer but not yet enforced by the binder — they are inert data.
+    ``default`` is ``None`` for field params (records/variants/exceptions);
+    only ``def``/``builtin def``/lambda params may carry a default expression.
+    """
 
     name: str
     type_expr: TypeExpr
+    kind: ParamKind
     default: Expr | None
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
@@ -595,11 +616,21 @@ class PatternField:
 
 @dataclass(frozen=True, slots=True)
 class ConstructorPattern:
-    """A constructor (record/variant) destructuring pattern."""
+    """A constructor (record/variant) destructuring pattern.
+
+    ``positional`` holds positional sub-patterns (in source order); they bind
+    to positional-capable (POSITIONAL_ONLY or STANDARD) fields left to right, or
+    overflow to named-only shorthand when all positional-capable slots are full.
+    ``named`` holds named sub-patterns ``name = pattern`` (PatternField), each
+    bound to the field with that name.  Positional must precede named (enforced
+    by the transformer); the checker routes both through ``bind_arguments``.
+    Partial patterns are allowed — unmentioned fields are wildcards.
+    """
 
     qualifier: str | None
     name: str
-    fields: tuple[PatternField, ...]
+    positional: tuple[Pattern, ...]
+    named: tuple[PatternField, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     module_qualifier: Qualifier | None = None
@@ -687,21 +718,11 @@ Binder = LetDecl | VarDecl | AssignStmt
 
 
 @dataclass(frozen=True, slots=True)
-class FieldDef:
-    """A field definition in a ``record`` or enum-variant body."""
-
-    name: str
-    type_expr: TypeExpr
-    span: SourceSpan = dc_field(compare=False)
-    node_id: int = dc_field(compare=False)
-
-
-@dataclass(frozen=True, slots=True)
 class RecordDef:
     """``record Name(fields)`` declaration."""
 
     name: str
-    fields: tuple[FieldDef, ...]
+    fields: tuple[Param, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     type_params: tuple[str, ...] = ()
@@ -714,7 +735,7 @@ class VariantDef:
     """A single variant inside an ``enum`` declaration."""
 
     name: str
-    fields: tuple[FieldDef, ...]
+    fields: tuple[Param, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
 
@@ -737,7 +758,7 @@ class ExceptionDef:
     """``exception Name [extends Base](fields...)`` declaration."""
 
     name: str
-    fields: tuple[FieldDef, ...]
+    fields: tuple[Param, ...]
     base: str | None
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)

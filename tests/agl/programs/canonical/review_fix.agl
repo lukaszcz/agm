@@ -21,7 +21,7 @@ agent impl
 agent reviewer
 agent critic
 
-var artifact: text = ask("Implement ${spec}", agent: impl)
+var artifact: text = ask("Implement ${spec}", agent = impl)
 
 # review declared as var so the until condition can reference it.
 var review: Review = Pass
@@ -33,7 +33,7 @@ try
 
     Artifact:
     ${artifact}
-    """, agent: reviewer, on_parse_error: Retry(n: 2))
+    """, agent = reviewer, on_parse_error = Retry(n = 2))
 
     case review of
       | Pass() =>
@@ -48,7 +48,7 @@ try
 
           Current artifact:
           ${artifact}
-          """, agent: impl, on_parse_error: Retry(n: 2))
+          """, agent = impl, on_parse_error = Retry(n = 2))
 
           case result of
             | Complete(output) =>
@@ -56,8 +56,8 @@ try
             | Changed(output) =>
                 artifact := output
             | Blocked(reason) =>
-                let blocker_report = ask("Explain blocker:\n${reason}", agent: critic)
-                raise Abort(message: blocker_report)
+                let blocker_report = ask("Explain blocker:\n${reason}", agent = critic)
+                raise Abort(message = blocker_report)
 
   until review is Pass
 
@@ -76,7 +76,7 @@ catch AgentParseError as e =>
 
   Validation errors:
   ${e.validation_errors}
-  """, agent: critic)
+  """, agent = critic)
   raise e
 
 catch MaxIterationsExceeded as e =>
@@ -88,7 +88,7 @@ catch MaxIterationsExceeded as e =>
 
   Loop metadata:
   ${e}
-  """, agent: critic)
+  """, agent = critic)
   raise e
 
 print artifact

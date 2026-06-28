@@ -6,7 +6,7 @@ param target
 
 # Attempt cast and inspect all fields on failure
 try
-  if target = "int" =>
+  if target == "int" =>
     let n = value as int
     print "int: ${n}"
   else =>

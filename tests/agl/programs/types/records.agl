@@ -17,12 +17,12 @@ param min_severity: int
 agent tracker
 
 let issue = Issue(
-  title: "Missing tests",
-  severity: 3,
-  weight: 0.5,
-  tags: ["tests", "coverage"],
-  extra: {origin: "static", retries: null},
-  author: Author(name: "Ada", active: true),
+  title = "Missing tests",
+  severity = 3,
+  weight = 0.5,
+  tags = ["tests", "coverage"],
+  extra = {origin: "static", retries: null},
+  author = Author(name = "Ada", active = true),
 )
 
 print issue.title
@@ -31,7 +31,7 @@ print issue.weight
 print issue.author.name
 print issue.author.active
 
-let fetched: Issue = ask("Fetch the top issue.", agent: tracker)
+let fetched: Issue = ask("Fetch the top issue.", agent = tracker)
 print fetched.title
 print fetched.severity
 

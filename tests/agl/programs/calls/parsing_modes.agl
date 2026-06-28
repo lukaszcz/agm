@@ -3,9 +3,9 @@
 # a per-call opt-in to strict parsing.
 agent counter
 agent fetcher
-let n: int = ask("Count the items.", agent: counter)
+let n: int = ask("Count the items.", agent = counter)
 print n
-let exact: int = ask("Count again.", agent: counter, strict_json: true)
+let exact: int = ask("Count again.", agent = counter, strict_json = true)
 print exact
-let data: json = ask("Fetch the data.", agent: fetcher)
+let data: json = ask("Fetch the data.", agent = fetcher)
 print data

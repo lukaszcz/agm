@@ -9,14 +9,14 @@ agent stepper
 let a = "x"; let b = "y"; print(a + b)
 var n: int = 0
 var s: Status = More
-do[5] n := n + 1; s := ask("Step ${n}.", agent: stepper) until s is Done
+do[5] n := n + 1; s := ask("Step ${n}.", agent = stepper) until s is Done
 print n
-if | n = 1 => print "single" | n = 2 => print "double" | else => print "many"
+if | n == 1 => print "single" | n == 2 => print "double" | else => print "many"
 case n of | 1 => () | _ => print "case inline ${n}"
 do[2] print "tail"; n := n + 10 until n > 5
 print n
 try
-  let z: Status = ask("Final check.", agent: stepper)
+  let z: Status = ask("Final check.", agent = stepper)
   ()
 catch AgentParseError as e => print "caught ${e.agent}"
 print "end"

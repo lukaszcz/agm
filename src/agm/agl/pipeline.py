@@ -946,6 +946,7 @@ class PipelineDriver:
             type_env=entry_cm.type_env,
             function_signatures=entry_cm.function_signatures,
             cast_specs=entry_cm.cast_specs,
+            argument_bindings=entry_cm.argument_bindings,
         )
 
         infos: list[ParamDeclInfo] = []

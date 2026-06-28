@@ -23,8 +23,8 @@ qual_prefix    ::= NAME ("." NAME)* "::"   (* module-qualified prefix *)
                | "::"                      (* current-module prefix *)
 
 pattern_fields ::= pattern_field ("," pattern_field)* ","?
-pattern_field  ::= NAME                                   (* shorthand *)
-                 | NAME ":" pattern                       (* field: subpattern *)
+pattern_field  ::= pattern                                (* positional sub-pattern *)
+                 | NAME "=" pattern                       (* named sub-pattern: field = subpattern *)
 ```
 
 ### Wildcard `_`
@@ -50,7 +50,7 @@ constructor, never by its spelling: capitalization carries no meaning
 
 ```agl
 case result of
-  | Blocked(reason) => raise Abort(message: reason)
+  | Blocked(reason) => raise Abort(message = reason)
   | other => print other            # 'other' names no constructor → binder
 ```
 
@@ -62,7 +62,7 @@ the constructor would otherwise claim is again a plain binder.
 ### Literal patterns
 
 An `int`, `decimal`, `bool`, `null`, or string literal matches by value
-equality (the same `=` semantics, including `int`/`decimal` numeric
+equality (the same `==` semantics, including `int`/`decimal` numeric
 equivalence — the pattern `1` matches the value `1.0`):
 
 ```agl
@@ -95,8 +95,8 @@ Pass                       # nullary variant — bare name that names a construc
 Pass()                     # nullary variant, explicit call form
 Review.Pass                # nullary variant, qualified (aliases resolve transparently)
 Fail(issues)               # shorthand: binds field 'issues' to name 'issues'
-Fail(issues: xs)           # binds field 'issues' to name 'xs'
-Fail(issues: ["stuck"])    # nested literal pattern on a field
+Fail(issues = xs)          # binds field 'issues' to name 'xs'
+Fail(issues = ["stuck"])   # nested literal pattern on a field
 ```
 
 A **bare** constructor name matches **nullary** variants only. A bare name for a
@@ -123,12 +123,35 @@ form (`::`) may appear before the constructor name. This is useful when two
 open-imported modules export enum types with the same variant name, since
 qualification always disambiguates.
 
-Payload patterns are **field-based, not positional**. `Fail(x)` is valid
-only if the variant actually has a field named `x`; to bind field `issues`
-to another name, write `Fail(issues: x)`. The general form
-`field: pattern` nests arbitrarily — the sub-pattern may itself be a
-wildcard, literal, binder, or (where the field is enum-typed) another
-constructor pattern.
+**Payload sub-patterns** follow the same positional-greedy binding as calls:
+
+- **Positional sub-patterns** fill positional-capable (pos-only/standard) field
+  slots left to right, in declaration order.
+- **Named sub-patterns** (`field = pattern`) bind a specific field by name; they
+  may follow positional sub-patterns.
+- **Bare-name shorthand** (`x` in a position where positional slots are exhausted)
+  means `x = x` — it binds field `x` to pattern variable `x`. Only valid when the
+  bare name lands on a named-only field.
+
+```agl
+enum Result
+  | Ok(value: int)           # single field, standard zone
+  | Err(reason: text, fatal: bool)   # two fields, named-only by default
+
+case r of
+  | Ok(v)                 => ...  # positional: binds field 'value' to v
+  | Ok(value = v)         => ...  # named: same effect
+  | Err(reason, fatal)    => ...  # shorthand for Err(reason = reason, fatal = fatal)
+  | Err(reason = r, fatal = f) => ...  # fully named
+```
+
+Named sub-patterns nest arbitrarily — the sub-pattern may be a wildcard, literal,
+binder, or another constructor pattern:
+
+```agl
+Fail(issues = ["stuck"])   # nested literal pattern
+Fail(issues = xs)          # binds field 'issues' to pattern variable xs
+```
 
 Static rules:
 
@@ -140,6 +163,9 @@ Static rules:
 4. Fields not mentioned in the pattern are simply ignored (patterns need not
    be complete).
 5. A name may be bound only once per pattern.
+6. A positional sub-pattern must precede all named sub-patterns. A positional
+   expression that lands on a named-only field (with no positional slots available)
+   is a static error unless it is a bare name (which is reinterpreted as `name = name`).
 
 ### Patterns on generic enums
 
@@ -198,7 +224,7 @@ when you need the payload:
 until review is Pass
 
 case review of
-  | Fail(issues) => artifact := ask("Fix ${issues}", agent: impl)
+  | Fail(issues) => artifact := ask("Fix ${issues}", agent = impl)
   | Pass => ()
 ```
 
@@ -206,7 +232,7 @@ case review of
 same way as in a pattern:
 
 ```agl
-let probe: Option[int] = some(value: 99)
+let probe: Option[int] = some(value = 99)
 if probe is Option.some => print "probe is some"
 if probe is not Option.none => print "probe is not none"
 ```

@@ -85,7 +85,7 @@ def test_record_construction_basic() -> None:
 record Point
   x: int
   y: int
-let p = Point(x: 3, y: 4)
+let p = Point(x = 3, y = 4)
 ()
 """
     ir = evaluate_ir(source)
@@ -103,7 +103,7 @@ def test_record_field_access_now_unblocked() -> None:
 record Point
   x: int
   y: int
-let p = Point(x: 3, y: 4)
+let p = Point(x = 3, y = 4)
 let px = p.x
 ()
 """
@@ -121,7 +121,7 @@ def test_record_field_coercion_int_to_decimal() -> None:
 record Score
   name: text
   value: decimal
-let s = Score(name: "Alice", value: 42)
+let s = Score(name = "Alice", value = 42)
 ()
 """
     ir = evaluate_ir(source)
@@ -137,9 +137,9 @@ def test_record_equality_by_nominal_and_fields() -> None:
 record Pair
   a: int
   b: int
-let p1 = Pair(a: 1, b: 2)
-let p2 = Pair(a: 1, b: 2)
-let eq = p1 = p2
+let p1 = Pair(a = 1, b = 2)
+let p2 = Pair(a = 1, b = 2)
+let eq = p1 == p2
 ()
 """
     ir = evaluate_ir(source)
@@ -152,8 +152,8 @@ def test_record_inequality_different_fields() -> None:
 record Pair
   a: int
   b: int
-let p1 = Pair(a: 1, b: 2)
-let p2 = Pair(a: 1, b: 9)
+let p1 = Pair(a = 1, b = 2)
+let p2 = Pair(a = 1, b = 9)
 let ne = p1 != p2
 ()
 """
@@ -167,7 +167,7 @@ def test_template_with_record_interpolation_now_unblocked() -> None:
 record Point
   x: int
   y: int
-let p = Point(x: 1, y: 2)
+let p = Point(x = 1, y = 2)
 let s: text = "point: ${p}"
 ()
 """
@@ -198,7 +198,7 @@ def test_enum_variant_with_fields() -> None:
     """Enum variant with fields constructs correctly."""
     source = """\
 enum Shape | Circle(radius: decimal) | Rectangle(w: decimal, h: decimal)
-let s = Shape.Circle(radius: 3.0)
+let s = Shape.Circle(radius = 3.0)
 ()
 """
     ir = evaluate_ir(source)
@@ -214,7 +214,7 @@ def test_enum_equality_same_variant() -> None:
 enum Color | Red | Blue
 let c1 = Color.Red()
 let c2 = Color.Red()
-let eq = c1 = c2
+let eq = c1 == c2
 ()
 """
     ir = evaluate_ir(source)
@@ -269,7 +269,7 @@ def test_enum_variant_field_coercion() -> None:
     """Enum variant field: int→decimal coercion applied at lowering time."""
     source = """\
 enum Size | Big(amount: decimal) | Small
-let s = Size.Big(amount: 7)
+let s = Size.Big(amount = 7)
 ()
 """
     ir = evaluate_ir(source)
@@ -301,9 +301,9 @@ def test_nominal_id_hashing_record_as_set_member() -> None:
 record Point
   x: int
   y: int
-let p1 = Point(x: 1, y: 2)
-let p2 = Point(x: 1, y: 2)
-let p3 = Point(x: 9, y: 9)
+let p1 = Point(x = 1, y = 2)
+let p2 = Point(x = 1, y = 2)
+let p3 = Point(x = 9, y = 9)
 ()
 """
     ir = evaluate_ir(source)
@@ -415,7 +415,7 @@ def test_exception_construction_builtin_explicit_fields() -> None:
     operation; trace_id is auto-injected.
     """
     source = """\
-let e = ArithmeticError(message: "div/0", operation: "/")
+let e = ArithmeticError(message = "div/0", operation = "/")
 ()
 """
     ir = evaluate_ir(source)
@@ -433,8 +433,8 @@ def test_exception_auto_trace_single_id_per_construction() -> None:
     The IR pipeline assigns a distinct trace_id to each construction.
     """
     source = """\
-let e1 = ArithmeticError(message: "one", operation: "+")
-let e2 = ArithmeticError(message: "two", operation: "+")
+let e1 = ArithmeticError(message = "one", operation = "+")
+let e2 = ArithmeticError(message = "two", operation = "+")
 ()
 """
     ir = evaluate_ir(source)
@@ -518,7 +518,7 @@ def test_golden_record_lowers_to_ir_make_record() -> None:
 record Point
   x: int
   y: int
-let p = Point(x: 3, y: 4)
+let p = Point(x = 3, y = 4)
 ()
 """
     prog = _lower(source)
@@ -563,7 +563,7 @@ def test_golden_exception_lowers_to_ir_make_exception_with_auto_trace() -> None:
     gets an AutoTraceField sentinel in the IR.
     """
     source = """\
-let e = ArithmeticError(message: "oops", operation: "/")
+let e = ArithmeticError(message = "oops", operation = "/")
 ()
 """
     prog = _lower(source)
@@ -594,7 +594,7 @@ def test_golden_record_field_coercion_lowered() -> None:
 record Score
   name: text
   value: decimal
-let s = Score(name: "Bob", value: 5)
+let s = Score(name = "Bob", value = 5)
 ()
 """
     prog = _lower(source)
@@ -644,7 +644,7 @@ def test_nominals_table_contains_user_record() -> None:
 record Point
   x: int
   y: int
-let p = Point(x: 1, y: 2)
+let p = Point(x = 1, y = 2)
 ()
 """
     prog = _lower(source)

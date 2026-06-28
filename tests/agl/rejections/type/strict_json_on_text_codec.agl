@@ -1,2 +1,2 @@
-let x: text = exec("ls", strict_json: true)
+let x: text = exec("ls", strict_json = true)
 x

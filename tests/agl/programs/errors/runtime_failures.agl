@@ -16,7 +16,7 @@ catch ArithmeticError as e =>
   print "math failed: ${e.operation}"
 
 try
-  let flip: Coin = ask("Flip a coin.", agent: tosser)
+  let flip: Coin = ask("Flip a coin.", agent = tosser)
   case flip of
     | Heads() => print "heads"
 catch MatchError as e =>
@@ -26,22 +26,22 @@ try
   var i: int = 0
   do[2]
     i := i + 1
-  until mode = "converge"
+  until mode == "converge"
   print "loop done ${i}"
 catch MaxIterationsExceeded as e =>
   print "exhausted at ${e.limit}"
 
 try
-  if mode = "boom" =>
-    raise Abort(message: "boom")
+  if mode == "boom" =>
+    raise Abort(message = "boom")
   else =>
     ()
 catch Exception as e =>
   print "generic: ${e.message}"
 
 try
-  if mode = "boom" =>
-    raise Abort(message: "again")
+  if mode == "boom" =>
+    raise Abort(message = "again")
   else =>
     ()
 catch _ =>

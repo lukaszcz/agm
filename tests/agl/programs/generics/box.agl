@@ -14,23 +14,23 @@ record Box[T]
 param n: int
 
 # Inference from the payload, then field access.
-let bi: Box[int] = Box(value: n)
+let bi: Box[int] = Box(value = n)
 print bi.value
 
 # Same definition, a different instantiation — erasure means one runtime path.
-let bt: Box[text] = Box(value: "hi")
+let bt: Box[text] = Box(value = "hi")
 print bt.value
 
 # Explicit type-argument override.
-let be = Box::[int](value: 99)
+let be = Box::[int](value = 99)
 print be.value
 
 # Nesting: a Box of a Box.
-let nested: Box[Box[int]] = Box(value: Box(value: 7))
+let nested: Box[Box[int]] = Box(value = Box(value = 7))
 print nested.value.value
 
 # The generic constructor as a first-class value, passed THROUGH a generic HOF
-# and called there — `apply` builds `Box(value: n)` at runtime via erasure.
+# and called there — `apply` builds `Box(value = n)` at runtime via erasure.
 let mk: (int) -> Box[int] = Box
 let made = apply(n, mk)
 print made.value

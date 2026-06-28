@@ -209,7 +209,7 @@ class TestAgentCallRecord:
         rt = PipelineDriver()
         rt.register_agent("reviewer", _agent_returning("good"))
         rt.run(
-            'agent reviewer\nlet x: text = ask("check this", agent: reviewer)\nx',
+            'agent reviewer\nlet x: text = ask("check this", agent = reviewer)\nx',
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
@@ -221,7 +221,7 @@ class TestAgentCallRecord:
         rt = PipelineDriver()
         rt.register_agent("critic", _agent_returning("ok"))
         rt.run(
-            'agent critic\nlet x: text = ask("review", agent: critic)\nx',
+            'agent critic\nlet x: text = ask("review", agent = critic)\nx',
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
@@ -234,7 +234,7 @@ class TestAgentCallRecord:
         rt = PipelineDriver()
         rt.register_agent("impl", _agent_returning("result"))
         rt.run(
-            'agent impl\nlet x: text = ask("do work", agent: impl)\nx',
+            'agent impl\nlet x: text = ask("do work", agent = impl)\nx',
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
@@ -265,7 +265,8 @@ class TestRetryRecords:
 
         rt.register_agent("impl", agent)
         rt.run(
-            'agent impl\nlet x: int = ask("get int", agent: impl, on_parse_error: Retry(n: 2))\nx',
+            "agent impl\n"
+            'let x: int = ask("get int", agent = impl, on_parse_error = Retry(n = 2))\nx',
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
@@ -288,7 +289,8 @@ class TestRetryRecords:
 
         rt.register_agent("impl", agent)
         rt.run(
-            'agent impl\nlet x: int = ask("get int", agent: impl, on_parse_error: Retry(n: 2))\nx',
+            "agent impl\n"
+            'let x: int = ask("get int", agent = impl, on_parse_error = Retry(n = 2))\nx',
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
@@ -305,7 +307,10 @@ class TestRetryRecords:
             return AgentResponse(content="not json at all")
 
         rt.register_agent("impl", agent)
-        src = 'agent impl\nlet x: int = ask("get int", agent: impl, on_parse_error: Retry(n: 1))\nx'
+        src = (
+            "agent impl\n"
+            'let x: int = ask("get int", agent = impl, on_parse_error = Retry(n = 1))\nx'
+        )
         try:
             rt.run(src, log_file=log_path)
         except SystemExit:
@@ -331,7 +336,7 @@ class TestExceptionRecord:
 
         rt.register_agent("impl", agent)
         result = rt.run(
-            'agent impl\nlet x: int = ask("get int", agent: impl)\nx', log_file=log_path
+            'agent impl\nlet x: int = ask("get int", agent = impl)\nx', log_file=log_path
         )
         assert not result.ok
         assert result.error is not None
@@ -349,7 +354,7 @@ class TestExceptionRecord:
 
         rt.register_agent("impl", agent)
         result = rt.run(
-            'agent impl\nlet x: int = ask("get int", agent: impl)\nx', log_file=log_path
+            'agent impl\nlet x: int = ask("get int", agent = impl)\nx', log_file=log_path
         )
         assert not result.ok
 
@@ -366,7 +371,7 @@ class TestExceptionRecord:
 
         rt.register_agent("impl", agent)
         result = rt.run(
-            'agent impl\nlet x: int = ask("get int", agent: impl)\nx', log_file=log_path
+            'agent impl\nlet x: int = ask("get int", agent = impl)\nx', log_file=log_path
         )
         assert not result.ok
 
@@ -386,7 +391,7 @@ class TestExceptionRecord:
 
         rt.register_agent("impl", agent)
         result = rt.run(
-            'agent impl\nlet x: int = ask("get int", agent: impl)\nx', log_file=log_path
+            'agent impl\nlet x: int = ask("get int", agent = impl)\nx', log_file=log_path
         )
         assert not result.ok
         assert result.error is not None
@@ -418,7 +423,7 @@ class TestExceptionRecord:
         result = rt.run(
             'agent impl\n'
             'try\n'
-            '  let x: int = ask("get int", agent: impl)\n'
+            '  let x: int = ask("get int", agent = impl)\n'
             '  x\n'
             'catch AgentParseError as e =>\n'
             '  0\n',
@@ -576,7 +581,7 @@ class TestNoLog:
     def test_no_log_with_agent_call_writes_nothing(self, tmp_path: Path) -> None:
         rt = PipelineDriver()
         rt.register_agent("a", _agent_returning("hello"))
-        result = rt.run('agent a\nlet x: text = ask("hi", agent: a)\nx', log_file=None)
+        result = rt.run('agent a\nlet x: text = ask("hi", agent = a)\nx', log_file=None)
         assert result.ok
         jsonl_files = list(tmp_path.rglob("*.jsonl"))
         assert not jsonl_files
@@ -703,7 +708,7 @@ class TestSourceSpans:
         log_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver()
         rt.register_agent("impl", _agent_returning("hello"))
-        rt.run('agent impl\nlet x: text = ask("do work", agent: impl)\nx', log_file=log_path)
+        rt.run('agent impl\nlet x: text = ask("do work", agent = impl)\nx', log_file=log_path)
         records = _load_jsonl(log_path)
         call_recs = [r for r in records if r.get("kind") == "agent_call_attempt"]
         assert call_recs
@@ -904,7 +909,8 @@ class TestUnparseableFeedback:
 
         rt.register_agent("impl", agent)
         result = rt.run(
-            'agent impl\nlet x: int = ask("get int", agent: impl, on_parse_error: Retry(n: 1))\nx',
+            "agent impl\n"
+            'let x: int = ask("get int", agent = impl, on_parse_error = Retry(n = 1))\nx',
             log_file=log_path,
         )
         assert result.ok
@@ -931,7 +937,8 @@ class TestUnparseableFeedback:
 
         rt.register_agent("impl", agent)
         rt.run(
-            'agent impl\nlet x: int = ask("get int", agent: impl, on_parse_error: Retry(n: 1))\nx',
+            "agent impl\n"
+            'let x: int = ask("get int", agent = impl, on_parse_error = Retry(n = 1))\nx',
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
@@ -964,7 +971,7 @@ class TestUnparseableFeedback:
             "agm.agl.eval.ir_interpreter._parse_contract_output", return_value=bare_fail
         ):
             result = rt.run(
-                'agent impl\nlet x: int = ask("q", agent: impl, on_parse_error: Abort())\nx'
+                'agent impl\nlet x: int = ask("q", agent = impl, on_parse_error = Abort())\nx'
             )
         # The program raises AgentParseError; run returns ok=False.
         assert not result.ok

@@ -1,0 +1,49 @@
+# Pattern matching with '=': field shorthand (Holds(shape)), full-form field
+# patterns (name = pattern), and nested ENUM-in-enum constructor patterns
+# (Holds(shape = Line(len = n))). Constructor patterns target only enum-typed
+# values; the record-typed field 'at' is bound (shorthand/full form) and read
+# via field access in the branch body, never destructured by a ctor pattern.
+record Pt
+  x: int
+  y: int
+
+enum Shape
+  | Dot
+  | Line(len: int)
+  | Box(at: Pt, len: int)
+
+enum Wrapped
+  | Empty
+  | Holds(shape: Shape)
+
+agent picker
+
+let wrapped: Wrapped = ask("Pick a wrapped shape.", agent = picker)
+
+# Nested constructor patterns with '=' on the enum-typed field 'shape'; the
+# record-typed field 'at' is bound full-form ('at = p') and read via 'p.x'/'p.y'.
+let described = case wrapped of
+  | Empty => "empty"
+  | Holds(shape = Dot) => "dot"
+  | Holds(shape = Line(len = n)) => "line ${n}"
+  | Holds(shape = Box(at = p, len = n)) => "box at ${p.x},${p.y} size ${n}"
+
+print described
+
+# Construction (with shorthand) inside branch bodies; nested constructor + a
+# record-typed field bound by shorthand then read via field access.
+let bumped: Wrapped = case wrapped of
+  | Empty => Empty
+  | Holds(shape) =>
+      case shape of
+        | Dot => Holds(shape = Dot)
+        | Line(len) => Holds(shape = Line(len = len + 1))
+        | Box(at, len) =>
+            let nx = at.x + 1
+            Holds(shape = Box(at = Pt(x = nx, y = at.y), len = len))
+
+case bumped of
+  | Empty => print "still empty"
+  | Holds(shape = Dot) => print "still dot"
+  | Holds(shape = Line(len = m)) => print "bumped line ${m}"
+  | Holds(shape = Box(at = q, len = m)) => print "bumped box ${q.x} ${m}"

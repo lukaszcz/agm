@@ -1,1 +1,1 @@
-render(1, quote_strings: 1)
+render(1, quote_strings = 1)

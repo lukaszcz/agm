@@ -1,2 +1,2 @@
-let r = exec("ls", timeout: 10)
+let r = exec("ls", timeout = 10)
 r

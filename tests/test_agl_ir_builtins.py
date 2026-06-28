@@ -84,12 +84,12 @@ def test_print_record() -> None:
         record Point
           x: int
           y: int
-        let p = Point(x: 10, y: 20)
+        let p = Point(x = 10, y = 20)
         print(p)
         ()
     """)
     out = evaluate_ir_output(source)
-    assert out == "Point(x: 10, y: 20)\n"
+    assert out == "Point(x = 10, y = 20)\n"
 
 
 def test_print_enum_variant() -> None:

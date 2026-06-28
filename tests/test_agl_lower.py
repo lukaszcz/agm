@@ -777,7 +777,7 @@ class TestNominalsEmpty:
             "\n"
             "type ColorAlias = Color\n"
             "\n"
-            "let p = Point(x: 1, y: 2)\n"
+            "let p = Point(x = 1, y = 2)\n"
             "let c = Color.Red\n"
             "()\n"
         )
@@ -1103,7 +1103,7 @@ class TestM4aLowerFunctions:
             "record Holder\n"
             "  f: (int) -> int\n"
             "let g = fn(x: int) -> int => x + 1\n"
-            "let h = Holder(f: g)\n"
+            "let h = Holder(f = g)\n"
             "let r = h.f(5)\n()"
         )
         prog = _lower(source)
@@ -1376,7 +1376,7 @@ class TestLowerGraph:
             "  y: int\n"
             "\n"
             "def make_point(a: int, b: int) -> LibPoint =\n"
-            "    LibPoint(x: a, y: b)\n"
+            "    LibPoint(x = a, y = b)\n"
         )
         entry_source = (
             "import lib\n"
@@ -1384,7 +1384,7 @@ class TestLowerGraph:
             "  width: int\n"
             "\n"
             "let result = lib::make_point(1, 2)\n"
-            "let box = EntryBox(width: 10)\n"
+            "let box = EntryBox(width = 10)\n"
             "()\n"
         )
 
@@ -1489,7 +1489,7 @@ class TestLowerGraph:
             "type ColorAlias = Color\n"
             "\n"
             "def origin() -> Point =\n"
-            "    Point(x: 0, y: 0)\n"
+            "    Point(x = 0, y = 0)\n"
         )
         entry_source = (
             "import lib\n"
@@ -1597,7 +1597,7 @@ class TestM6aLowering:
         """render(x, pretty:, quote_strings:) lowers to IrRenderValue."""
         from agm.agl.ir.nodes import IrBind, IrRenderValue
 
-        source = 'let s = render("x", pretty: false, quote_strings: false)\n()'
+        source = 'let s = render("x", pretty = false, quote_strings = false)\n()'
         prog = _lower(source)
         entry = prog.modules[list(prog.modules.keys())[-1]]
         ir_bind = next(
@@ -1670,7 +1670,7 @@ class TestM6aLowering:
         """ask() now lowers to IrAsk (M6b implemented)."""
         from agm.agl.ir.nodes import IrAsk, IrBind
 
-        source = "agent impl\nlet r: text = ask(\"prompt\", agent: impl)\n()"
+        source = "agent impl\nlet r: text = ask(\"prompt\", agent = impl)\n()"
         prog = _lower(source)
         # The initializers contain IrBind(IrAgentHandle) for `impl` then IrBind(IrAsk) for `r`.
         inits = prog.modules[prog.entry_module].initializers
@@ -1709,7 +1709,7 @@ class TestM6aLowering:
         """ask-request lowers to IrAskRequest + ContractRequest in program.contracts (M6b)."""
         from agm.agl.ir.nodes import IrAskRequest, IrBind
 
-        source = "agent worker\nlet req = ask-request(\"my prompt\", agent: worker)\n()"
+        source = "agent worker\nlet req = ask-request(\"my prompt\", agent = worker)\n()"
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
         # The ask-request binding lowers to IrBind(symbol, IrAskRequest(...)).
@@ -1925,12 +1925,12 @@ class TestBinaryOpKindSelection:
         assert cmp.kind is CompareKind.DECIMAL
 
     def test_equality_lowers_to_compare_eq_structural(self) -> None:
-        """= on ints → IrCompare with op=EQ and kind=STRUCTURAL.
+        """== on ints → IrCompare with op=EQ and kind=STRUCTURAL.
 
         _lower_equality always uses STRUCTURAL (wider than INT/DECIMAL) because
         equality is defined over any comparable type, not just numerics.
         """
-        prog = _lower("let r = 1 = 1\n()")
+        prog = _lower("let r = 1 == 1\n()")
         bind = prog.modules[prog.entry_module].initializers[0]
         assert isinstance(bind, IrBind)
         cmp = bind.value
@@ -2199,10 +2199,10 @@ class TestIrMakeExceptionLowering:
         return body
 
     def test_exception_construction_emits_ir_make_exception(self) -> None:
-        """raise Abort(message: ...) → IrRaise(exc=IrMakeException(display_name='Abort'))."""
+        """raise Abort(message = ...) → IrRaise(exc=IrMakeException(display_name='Abort'))."""
         source = (
             'def stop_fn() -> unit =\n'
-            '  raise Abort(message: "stop")\n'
+            '  raise Abort(message = "stop")\n'
             'stop_fn()\n'
         )
         raise_node = self._get_raise_in_fn(source)
@@ -2214,7 +2214,7 @@ class TestIrMakeExceptionLowering:
         """Explicitly provided 'message' field → IrConstText, not AutoTraceField."""
         source = (
             'def stop_fn() -> unit =\n'
-            '  raise Abort(message: "stop")\n'
+            '  raise Abort(message = "stop")\n'
             'stop_fn()\n'
         )
         raise_node = self._get_raise_in_fn(source)
@@ -2237,7 +2237,7 @@ class TestIrMakeExceptionLowering:
         """
         source = (
             'def stop_fn() -> unit =\n'
-            '  raise Abort(message: "stop")\n'
+            '  raise Abort(message = "stop")\n'
             'stop_fn()\n'
         )
         raise_node = self._get_raise_in_fn(source)

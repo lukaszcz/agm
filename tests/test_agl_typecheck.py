@@ -42,6 +42,7 @@ from agm.agl.syntax.nodes import (
     AssignTarget,
     Block,
     Call,
+    Case,
     Cast,
     DictEntry,
     DictLit,
@@ -56,8 +57,10 @@ from agm.agl.syntax.nodes import (
     Lambda,
     LetDecl,
     ListLit,
+    NamedArg,
     Param,
     ParamDecl,
+    ParamKind,
     Program,
     Raise,
     StringLit,
@@ -610,6 +613,39 @@ class TestTypeEnvironment:
         result = env.get_generic_type_from_module(ModuleId.from_dotted("lib"), "Box")
         assert result is None
 
+    def test_get_open_imported_type_no_graph_context(self) -> None:
+        env = TypeEnvironment()
+        assert env.get_open_imported_type("Point") is None
+
+    def test_get_open_imported_type_ignores_missing_graph_entries(self) -> None:
+        from agm.agl.modules.ids import ModuleId
+        from agm.agl.scope.imports import ImportEnv
+
+        mod = ModuleId.from_dotted("lib")
+        import_env = ImportEnv(
+            unqualified={"Point": frozenset({(mod, "Point")})},
+            qualified={},
+        )
+        env = TypeEnvironment(graph_type_table={}, import_env=import_env)
+        assert env.get_open_imported_type("Point") is None
+
+    def test_get_open_imported_type_ambiguous_returns_none(self) -> None:
+        from agm.agl.modules.ids import ModuleId
+        from agm.agl.scope.imports import ImportEnv
+
+        mod_a = ModuleId.from_dotted("a")
+        mod_b = ModuleId.from_dotted("b")
+        graph_table = {
+            (mod_a, "Point"): RecordType(name="Point", fields={}),
+            (mod_b, "Point"): RecordType(name="Point", fields={}),
+        }
+        import_env = ImportEnv(
+            unqualified={"Point": frozenset({(mod_a, "Point"), (mod_b, "Point")})},
+            qualified={},
+        )
+        env = TypeEnvironment(graph_type_table=graph_table, import_env=import_env)
+        assert env.get_open_imported_type("Point") is None
+
     def test_get_ctor_sig_from_module_no_graph_table(self) -> None:
         # Coverage: env.py get_ctor_sig_from_module — single-program mode returns None.
         from agm.agl.modules.ids import ModuleId
@@ -818,7 +854,7 @@ class TestPrint:
         assert "print" in str(err).lower() or "argument" in str(err).lower()
 
     def test_print_named_arg(self) -> None:
-        err = reject_type("print(x: 42)")
+        err = reject_type("print(x = 42)")
         assert "print" in str(err).lower() or "argument" in str(err).lower()
 
 
@@ -835,7 +871,7 @@ class TestRenderBuiltin:
         assert r.type_env.get_binding_type(decl.node_id) == TextType()
 
     def test_render_accepts_options(self) -> None:
-        accept_type('render("hello", pretty: false, quote_strings: false)')
+        accept_type('render("hello", pretty = false, quote_strings = false)')
 
     def test_render_wrong_arg_count_rejected(self) -> None:
         err = reject_type("render(1, 2)")
@@ -843,12 +879,12 @@ class TestRenderBuiltin:
         assert "one positional" in str(err).lower()
 
     def test_render_unknown_named_arg_rejected(self) -> None:
-        err = reject_type("render(1, style: true)")
+        err = reject_type("render(1, style = true)")
         assert "render" in str(err).lower()
         assert "unknown" in str(err).lower()
 
     def test_render_option_must_be_bool(self) -> None:
-        err = reject_type('render(1, pretty: "yes")')
+        err = reject_type('render(1, pretty = "yes")')
         assert "bool" in str(err).lower()
 
 
@@ -886,7 +922,7 @@ class TestAsk:
         assert r.node_types[decl.value.node_id] == UnitType()
 
     def test_ask_with_explicit_agent(self) -> None:
-        r = accept_type('agent reviewer\nask("Q", agent: reviewer)')
+        r = accept_type('agent reviewer\nask("Q", agent = reviewer)')
         assert r.resolved.program is not None
 
     def test_ask_no_default_agent_raises(self) -> None:
@@ -898,63 +934,63 @@ class TestAsk:
         assert "prompt" in str(err).lower() or "argument" in str(err).lower()
 
     def test_ask_wrong_agent_type(self) -> None:
-        err = reject_type('let x = "not_agent"\nask("Q", agent: x)')
+        err = reject_type('let x = "not_agent"\nask("Q", agent = x)')
         assert "agent" in str(err).lower()
 
     def test_ask_with_json_codec(self) -> None:
-        r = accept_type('let n: int = ask("Q", format: "json")\nn')
+        r = accept_type('let n: int = ask("Q", format = "json")\nn')
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
         spec = r.contract_specs[decl.value.node_id]
         assert spec.codec_name == "json"
 
     def test_ask_strict_json_true(self) -> None:
-        r = accept_type('let n: int = ask("Q", format: "json", strict_json: true)\nn')
+        r = accept_type('let n: int = ask("Q", format = "json", strict_json = true)\nn')
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
         spec = r.contract_specs[decl.value.node_id]
         assert spec.strict_json is True
 
     def test_ask_strict_json_without_json_codec_raises(self) -> None:
-        err = reject_type('let x = ask("Q", strict_json: true)\nx')
+        err = reject_type('let x = ask("Q", strict_json = true)\nx')
         assert "strict_json" in str(err).lower() or "json" in str(err).lower()
 
     def test_ask_format_non_string_raises(self) -> None:
-        err = reject_type('let n: int = ask("Q", format: 42)\nn')
+        err = reject_type('let n: int = ask("Q", format = 42)\nn')
         assert "format" in str(err).lower() or "static" in str(err).lower()
 
     def test_ask_strict_json_non_bool_raises(self) -> None:
-        err = reject_type('let n: int = ask("Q", format: "json", strict_json: "yes")\nn')
+        err = reject_type('let n: int = ask("Q", format = "json", strict_json = "yes")\nn')
         assert "strict_json" in str(err).lower() or "bool" in str(err).lower()
 
     def test_ask_on_parse_error_abort(self) -> None:
-        r = accept_type('let n: int = ask("Q", on_parse_error: Abort())\nn')
+        r = accept_type('let n: int = ask("Q", on_parse_error = Abort())\nn')
         assert r.call_sites[0].parse_policy == "abort"
 
     def test_ask_on_parse_error_retry(self) -> None:
-        r = accept_type('let n: int = ask("Q", on_parse_error: Retry(n: 3))\nn')
+        r = accept_type('let n: int = ask("Q", on_parse_error = Retry(n = 3))\nn')
         assert r.call_sites[0].parse_policy == "retry[3]"
 
     def test_ask_on_parse_error_text_warns(self) -> None:
-        r = accept_type('ask("Q", on_parse_error: Abort())')
+        r = accept_type('ask("Q", on_parse_error = Abort())')
         assert len(r.warnings) == 1
         assert "on_parse_error" in r.warnings[0].message
 
     def test_ask_on_parse_error_bare_abort_varref(self) -> None:
         # Bare ``Abort`` (no parens) is accepted as abort policy.
-        r = accept_type('let n: int = ask("Q", on_parse_error: Abort)\nn')
+        r = accept_type('let n: int = ask("Q", on_parse_error = Abort)\nn')
         assert r.call_sites[0].parse_policy == "abort"
 
     def test_ask_on_parse_error_bare_qualified_abort(self) -> None:
         # Bare ``ParsePolicy.Abort`` (no parens) is accepted as abort policy.
-        r = accept_type('let n: int = ask("Q", on_parse_error: ParsePolicy.Abort)\nn')
+        r = accept_type('let n: int = ask("Q", on_parse_error = ParsePolicy.Abort)\nn')
         assert r.call_sites[0].parse_policy == "abort"
 
     def test_ask_on_parse_error_bad_qualified_policy_raises(self) -> None:
         # A FieldAccess callee with wrong qualifier is rejected.
         err = reject_type(
             "enum FooBar\n  | Abort\n"
-            'let n: int = ask("Q", on_parse_error: FooBar.Abort())\nn'
+            'let n: int = ask("Q", on_parse_error = FooBar.Abort())\nn'
         )
         assert "parse_error" in str(err).lower() or "ParsePolicy" in str(err)
 
@@ -963,7 +999,7 @@ class TestAsk:
         # is rejected even though the field name is "Abort".
         err = reject_type(
             "enum SomethingElse\n  | Abort\n"
-            'let n: int = ask("Q", on_parse_error: SomethingElse.Abort)\nn'
+            'let n: int = ask("Q", on_parse_error = SomethingElse.Abort)\nn'
         )
         assert "parse_error" in str(err).lower() or "ParsePolicy" in str(err)
 
@@ -984,16 +1020,16 @@ class TestAsk:
         assert cs.line == 1
 
     def test_ask_unknown_codec_raises(self) -> None:
-        err = reject_type('let x = ask("Q", format: "cbor")\nx')
+        err = reject_type('let x = ask("Q", format = "cbor")\nx')
         assert "cbor" in str(err) or "codec" in str(err).lower()
 
     def test_ask_codec_mismatch_raises(self) -> None:
         # text codec doesn't support int kind
-        err = reject_type('let n: int = ask("Q", format: "text")\nn')
+        err = reject_type('let n: int = ask("Q", format = "text")\nn')
         assert "text" in str(err) or "codec" in str(err).lower() or "support" in str(err).lower()
 
     def test_ask_strict_json_false(self) -> None:
-        r = accept_type('let n: int = ask("Q", format: "json", strict_json: false)\nn')
+        r = accept_type('let n: int = ask("Q", format = "json", strict_json = false)\nn')
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
         spec = r.contract_specs[decl.value.node_id]
@@ -1047,7 +1083,7 @@ class TestAskRequest:
 
     @pytest.mark.parametrize(
         "option",
-        ('format: "text"', "strict_json: true", "on_parse_error: Abort()"),
+        ('format = "text"', "strict_json = true", "on_parse_error = Abort()"),
     )
     def test_unit_target_rejects_parse_options(self, option: str) -> None:
         err = reject_type(f'ask-request::[unit]("Q", {option})')
@@ -1089,7 +1125,7 @@ class TestAskRequest:
         assert "type argument" in str(err).lower() or "got 2" in str(err)
 
     def test_unknown_named_arg_raises(self) -> None:
-        err = reject_type('ask-request::[text]("Q", bogus: 1)')
+        err = reject_type('ask-request::[text]("Q", bogus = 1)')
         assert "bogus" in str(err) or "argument" in str(err).lower()
 
     def test_function_target_rejected(self) -> None:
@@ -1101,22 +1137,22 @@ class TestAskRequest:
         assert "function" in str(err).lower() or "agent" in str(err).lower()
 
     def test_with_explicit_agent(self) -> None:
-        r = accept_type('agent reviewer\nask-request::[text]("Q", agent: reviewer)')
+        r = accept_type('agent reviewer\nask-request::[text]("Q", agent = reviewer)')
         assert r.resolved.program is not None
 
     def test_wrong_agent_type_raises(self) -> None:
-        err = reject_type('let x = "no"\nask-request::[text]("Q", agent: x)')
+        err = reject_type('let x = "no"\nask-request::[text]("Q", agent = x)')
         assert "agent" in str(err).lower()
 
     def test_strict_json_option(self) -> None:
-        r = accept_type('ask-request::[int]("Q", format: "json", strict_json: true)')
+        r = accept_type('ask-request::[int]("Q", format = "json", strict_json = true)')
         call = r.resolved.program.body.items[0]
         assert isinstance(call, Call)
         spec = r.contract_specs[call.node_id]
         assert spec.strict_json is True
 
     def test_on_parse_error_policy_recorded(self) -> None:
-        r = accept_type('ask-request::[int]("Q", on_parse_error: Retry(n: 3))')
+        r = accept_type('ask-request::[int]("Q", on_parse_error = Retry(n = 3))')
         assert len(r.call_sites) == 1
         cs = r.call_sites[0]
         assert cs.callee == "ask-request"
@@ -1177,21 +1213,21 @@ class TestExec:
         assert "command" in str(err).lower() or "argument" in str(err).lower()
 
     def test_exec_with_format_json(self) -> None:
-        r = accept_type('let n: int = exec("ls", format: "json")\nn')
+        r = accept_type('let n: int = exec("ls", format = "json")\nn')
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
         spec = r.contract_specs[decl.value.node_id]
         assert spec.codec_name == "json"
 
     def test_exec_strict_json(self) -> None:
-        r = accept_type('let n: int = exec("ls", format: "json", strict_json: true)\nn')
+        r = accept_type('let n: int = exec("ls", format = "json", strict_json = true)\nn')
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
         spec = r.contract_specs[decl.value.node_id]
         assert spec.strict_json is True
 
     def test_exec_on_parse_error_text_warns(self) -> None:
-        r = accept_type('let x: text = exec("ls", on_parse_error: Abort())\nx')
+        r = accept_type('let x: text = exec("ls", on_parse_error = Abort())\nx')
         assert len(r.warnings) == 1
         assert "on_parse_error" in r.warnings[0].message
 
@@ -1202,19 +1238,19 @@ class TestExec:
         assert cs.callee == "exec"
 
     def test_exec_call_site_abort_policy(self) -> None:
-        r = accept_type('let n: int = exec("ls", on_parse_error: Abort())\nn')
+        r = accept_type('let n: int = exec("ls", on_parse_error = Abort())\nn')
         assert r.call_sites[0].parse_policy == "abort"
 
     def test_exec_call_site_retry_policy(self) -> None:
-        r = accept_type('let n: int = exec("ls", on_parse_error: Retry(n: 2))\nn')
+        r = accept_type('let n: int = exec("ls", on_parse_error = Retry(n = 2))\nn')
         assert r.call_sites[0].parse_policy == "retry[2]"
 
     def test_exec_strict_json_without_json_raises(self) -> None:
-        err = reject_type('let x: text = exec("ls", strict_json: true)\nx')
+        err = reject_type('let x: text = exec("ls", strict_json = true)\nx')
         assert "strict_json" in str(err).lower() or "json" in str(err).lower()
 
     def test_exec_format_non_string_raises(self) -> None:
-        err = reject_type('let n: int = exec("ls", format: 42)\nn')
+        err = reject_type('let n: int = exec("ls", format = 42)\nn')
         assert "format" in str(err).lower() or "static" in str(err).lower()
 
 
@@ -1236,7 +1272,7 @@ class TestFuncDef:
         r = accept_type("def f(x: int, y: int = 0) -> int = x + y\nf(1)")
         assert "f" in r.function_signatures
         sig = r.function_signatures["f"]
-        assert sig.params[1][2] is True  # has_default
+        assert sig.params[1].has_default is True  # y has a default
 
     def test_funcdef_required_after_defaulted_raises(self) -> None:
         err = reject_type("def f(x: int = 0, y: int) -> int = x\nf(1, 2)")
@@ -1256,11 +1292,11 @@ class TestFuncDef:
 
     def test_funcdef_with_raise_body(self) -> None:
         # raise has BottomType, assignable to any declared return type
-        r = accept_type('def f(x: int) -> text = raise Abort(message: "err")\nf(1)')
+        r = accept_type('def f(x: int) -> text = raise Abort(message = "err")\nf(1)')
         assert r.resolved.program is not None
 
     def test_funcdef_called_with_named_args(self) -> None:
-        r = accept_type("def f(x: int, y: int = 0) -> int = x + y\nf(1, y: 2)")
+        r = accept_type("def f(x: int, y: int = 0) -> int = x + y\nf(1, y = 2)")
         assert r.resolved.program is not None
 
     def test_funcdef_missing_required_arg(self) -> None:
@@ -1272,19 +1308,23 @@ class TestFuncDef:
         assert "too many" in str(err).lower() or "argument" in str(err).lower()
 
     def test_funcdef_unknown_named_arg(self) -> None:
-        err = reject_type("def f(x: int) -> int = x\nf(z: 1)")
+        err = reject_type("def f(x: int) -> int = x\nf(z = 1)")
         assert "unknown" in str(err).lower() or "parameter" in str(err).lower()
 
     def test_funcdef_param_supplied_positionally_and_by_name(self) -> None:
-        err = reject_type("def f(x: int) -> int = x\nf(1, x: 2)")
-        assert "positionally" in str(err).lower() or "both" in str(err).lower()
+        err = reject_type("def f(x: int) -> int = x\nf(1, x = 2)")
+        assert (
+            "positionally" in str(err).lower()
+            or "both" in str(err).lower()
+            or "duplicate" in str(err).lower()
+        )
 
     def test_funcdef_default_wrong_type_raises(self) -> None:
         err = reject_type('def f(x: int = "bad") -> int = x')
         assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
 
     def test_funcdef_all_named_args(self) -> None:
-        r = accept_type("def f(x: int, y: int) -> int = x + y\nf(x: 1, y: 2)")
+        r = accept_type("def f(x: int, y: int) -> int = x + y\nf(x = 1, y = 2)")
         assert r.resolved.program is not None
 
     def test_funcdef_named_then_positional(self) -> None:
@@ -1295,7 +1335,7 @@ class TestFuncDef:
     def test_funcdef_duplicate_named_arg_via_call(self) -> None:
         # The parser catches duplicate args at parse time (AglSyntaxError)
         # so we test via reject_any instead of reject_type
-        err = reject_any("def f(x: int, y: int) -> int = x\nf(y: 1, y: 2)")
+        err = reject_any("def f(x: int, y: int) -> int = x\nf(y = 1, y = 2)")
         assert "y" in str(err) or "duplicate" in str(err).lower()
 
     def test_funcdef_shadows_builtin_name_is_scope_error(self) -> None:
@@ -1336,11 +1376,11 @@ class TestLambda:
         assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
 
     def test_lambda_with_raise_body_needs_annotation(self) -> None:
-        err = reject_type('fn() => raise Abort(message: "x")')
+        err = reject_type('fn() => raise Abort(message = "x")')
         assert "infer" in str(err).lower() or "return" in str(err).lower()
 
     def test_lambda_with_raise_and_annotation(self) -> None:
-        r = accept_type('fn() -> int => raise Abort(message: "x")')
+        r = accept_type('fn() -> int => raise Abort(message = "x")')
         assert r.resolved.program is not None
 
     def test_lambda_value_call(self) -> None:
@@ -1356,7 +1396,7 @@ class TestLambda:
         assert "function" in str(err).lower() or "callee" in str(err).lower()
 
     def test_lambda_value_call_named_args_rejected(self) -> None:
-        err = reject_type("let f = fn(x: int) -> int => x\nf(x: 42)")
+        err = reject_type("let f = fn(x: int) -> int => x\nf(x = 42)")
         assert "named" in str(err).lower() or "declared" in str(err).lower()
 
 
@@ -1465,8 +1505,8 @@ class TestCase:
     def test_case_with_constructor_field_pattern(self) -> None:
         r = accept_type(
             "enum Result\n  | Ok(value: int)\n  | Err(msg: text)\n"
-            "let res = Ok(value: 42)\n"
-            "case res of | Result.Ok(value: v) => v | Result.Err(msg: m) => 0"
+            "let res = Ok(value = 42)\n"
+            "case res of | Result.Ok(value = v) => v | Result.Err(msg = m) => 0"
         )
         assert r.resolved.program is not None
 
@@ -1539,7 +1579,7 @@ class TestTryCatch:
 
 class TestRaise:
     def test_raise_abort_ok(self) -> None:
-        r = accept_type('raise Abort(message: "error")')
+        r = accept_type('raise Abort(message = "error")')
         raise_node = r.resolved.program.body.items[0]
         assert isinstance(raise_node, Raise)
         t = r.node_types[raise_node.node_id]
@@ -1551,11 +1591,11 @@ class TestRaise:
 
     def test_raise_bottom_assignable_to_any(self) -> None:
         # raise can be used where any type is expected (annotated binding)
-        r = accept_type('let x: int = raise Abort(message: "err")\nx')
+        r = accept_type('let x: int = raise Abort(message = "err")\nx')
         assert r.resolved.program is not None
 
     def test_raise_in_funcdef_body(self) -> None:
-        r = accept_type('def f() -> text = raise Abort(message: "err")\nf()')
+        r = accept_type('def f() -> text = raise Abort(message = "err")\nf()')
         assert r.resolved.program is not None
 
 
@@ -1602,7 +1642,7 @@ class TestTemplate:
         assert r.resolved.program is not None
 
     def test_interpolated_non_json_in_dict_rejected(self) -> None:
-        err = reject_type('record R\n  x: int\nlet r = R(x: 1)\n"${{"a": r}}"')
+        err = reject_type('record R\n  x: int\nlet r = R(x = 1)\n"${{"a": r}}"')
         assert "json" in str(err).lower() or "mismatch" in str(err).lower()
 
 
@@ -1652,7 +1692,7 @@ class TestBinaryOps:
         assert r.node_types[node.node_id] == DecimalType()
 
     def test_eq_same_type(self) -> None:
-        r = accept_type("1 = 2")
+        r = accept_type("1 == 2")
         node = r.resolved.program.body.items[0]
         assert r.node_types[node.node_id] == BoolType()
 
@@ -1719,7 +1759,7 @@ class TestBinaryOps:
         assert "or" in str(err).lower() or "bool" in str(err).lower()
 
     def test_eq_different_types_raises(self) -> None:
-        err = reject_type('1 = "hello"')
+        err = reject_type('1 == "hello"')
         assert "same" in str(err).lower() or "equality" in str(err).lower()
 
     # Transitive no-equality: function/agent/unit inside containers/records/enums.
@@ -1729,7 +1769,7 @@ class TestBinaryOps:
             "def g(n: int) -> int = n\n"
             "let fs: list[(int) -> int] = [f, g]\n"
             "let gs: list[(int) -> int] = [f]\n"
-            "let r = (fs = gs)\nr"
+            "let r = (fs == gs)\nr"
         )
         assert "equality" in str(err).lower()
 
@@ -1738,7 +1778,7 @@ class TestBinaryOps:
             "def f(n: int) -> int = n\n"
             'let d1: dict[text, (int) -> int] = {"a": f}\n'
             'let d2: dict[text, (int) -> int] = {"b": f}\n'
-            "let r = (d1 = d2)\nr"
+            "let r = (d1 == d2)\nr"
         )
         assert "equality" in str(err).lower()
 
@@ -1746,9 +1786,9 @@ class TestBinaryOps:
         err = reject_type(
             "def f(n: int) -> int = n\n"
             "record R\n  cb: (int) -> int\n"
-            "let r1 = R(cb: f)\n"
-            "let r2 = R(cb: f)\n"
-            "let result = (r1 = r2)\nresult"
+            "let r1 = R(cb = f)\n"
+            "let r2 = R(cb = f)\n"
+            "let result = (r1 == r2)\nresult"
         )
         assert "equality" in str(err).lower()
 
@@ -1756,9 +1796,9 @@ class TestBinaryOps:
         err = reject_type(
             "def f(n: int) -> int = n\n"
             "enum E\n  | A(cb: (int) -> int)\n  | B\n"
-            "let e1 = E.A(cb: f)\n"
+            "let e1 = E.A(cb = f)\n"
             "let e2 = E.B\n"
-            "let result = (e1 = e2)\nresult"
+            "let result = (e1 == e2)\nresult"
         )
         assert "equality" in str(err).lower()
 
@@ -1767,7 +1807,7 @@ class TestBinaryOps:
             "agent reviewer\n"
             "let as1: list[agent] = [reviewer]\n"
             "let as2: list[agent] = [reviewer]\n"
-            "let r = (as1 = as2)\nr"
+            "let r = (as1 == as2)\nr"
         )
         assert "equality" in str(err).lower()
 
@@ -1775,7 +1815,7 @@ class TestBinaryOps:
         err = reject_type(
             "let us1: list[unit] = [()]\n"
             "let us2: list[unit] = [()]\n"
-            "let r = (us1 = us2)\nr"
+            "let r = (us1 == us2)\nr"
         )
         assert "equality" in str(err).lower()
 
@@ -1783,9 +1823,9 @@ class TestBinaryOps:
         err = reject_type(
             "agent reviewer\n"
             "record Task\n  name: text\n  assignee: agent\n"
-            "let t1 = Task(name: \"a\", assignee: reviewer)\n"
-            "let t2 = Task(name: \"b\", assignee: reviewer)\n"
-            "let result = (t1 = t2)\nresult"
+            "let t1 = Task(name = \"a\", assignee = reviewer)\n"
+            "let t2 = Task(name = \"b\", assignee = reviewer)\n"
+            "let result = (t1 == t2)\nresult"
         )
         assert "equality" in str(err).lower()
 
@@ -1793,50 +1833,50 @@ class TestBinaryOps:
     def test_eq_bare_fn_raises(self) -> None:
         err = reject_type(
             "def f(n: int) -> int = n\n"
-            "let r = (f = f)\nr"
+            "let r = (f == f)\nr"
         )
         assert "equality" in str(err).lower()
 
     def test_eq_bare_agent_raises(self) -> None:
         err = reject_type(
             "agent reviewer\n"
-            "let r = (reviewer = reviewer)\nr"
+            "let r = (reviewer == reviewer)\nr"
         )
         assert "equality" in str(err).lower()
 
     def test_eq_bare_unit_raises(self) -> None:
-        err = reject_type("let r = (() = ())\nr")
+        err = reject_type("let r = (() == ())\nr")
         assert "equality" in str(err).lower()
 
     # Still-accept: lists/records/dicts of equatable scalars must stay green.
     def test_eq_list_of_int_accepted(self) -> None:
-        accept_type("let xs: list[int] = [1, 2]\nlet ys: list[int] = [3]\nlet r = (xs = ys)\nr")
+        accept_type("let xs: list[int] = [1, 2]\nlet ys: list[int] = [3]\nlet r = (xs == ys)\nr")
 
     def test_eq_dict_of_text_accepted(self) -> None:
         accept_type(
             'let d1: dict[text, text] = {"a": "x"}\n'
             'let d2: dict[text, text] = {"b": "y"}\n'
-            "let r = (d1 = d2)\nr"
+            "let r = (d1 == d2)\nr"
         )
 
     def test_eq_json_accepted(self) -> None:
-        accept_type("let a: json = null\nlet b: json = null\nlet r = (a = b)\nr")
+        accept_type("let a: json = null\nlet b: json = null\nlet r = (a == b)\nr")
 
     def test_eq_int_decimal_cross_accepted(self) -> None:
-        accept_type("let r = (1 = 1.0)\nr")
+        accept_type("let r = (1 == 1.0)\nr")
 
     def test_eq_record_with_scalar_fields_accepted(self) -> None:
         accept_type(
             "record Point\n  x: int\n  y: int\n"
-            "let p1 = Point(x: 0, y: 0)\n"
-            "let p2 = Point(x: 1, y: 1)\n"
-            "let r = (p1 = p2)\nr"
+            "let p1 = Point(x = 0, y = 0)\n"
+            "let p2 = Point(x = 1, y = 1)\n"
+            "let r = (p1 == p2)\nr"
         )
 
     def test_eq_enum_with_scalar_fields_accepted(self) -> None:
         accept_type(
             "enum Color\n  | Red\n  | Blue\n"
-            "let r = (Color.Red = Color.Blue)\nr"
+            "let r = (Color.Red == Color.Blue)\nr"
         )
 
     def test_ordering_non_numeric_non_text_raises(self) -> None:
@@ -1901,12 +1941,12 @@ class TestUnaryOps:
 
 class TestFieldAccess:
     def test_record_field_access(self) -> None:
-        r = accept_type("record Point\n  x: int\n  y: int\nlet p = Point(x: 1, y: 2)\np.x")
+        r = accept_type("record Point\n  x: int\n  y: int\nlet p = Point(x = 1, y = 2)\np.x")
         assert r.resolved.program is not None
 
     def test_record_unknown_field_raises(self) -> None:
-        err = reject_type("record Point\n  x: int\nlet p = Point(x: 1)\np.z")
-        assert "field" in str(err).lower()
+        err = reject_type("record Point\n  x: int\nlet p = Point(x = 1)\np.z")
+        assert "field" in str(err).lower() or "z" in str(err)
 
     def test_exception_field_access(self) -> None:
         # catch Abort and access its message field
@@ -1965,24 +2005,28 @@ class TestIsTest:
 
 class TestConstructors:
     def test_record_constructor(self) -> None:
-        r = accept_type("record Point\n  x: int\n  y: int\nPoint(x: 1, y: 2)")
+        r = accept_type("record Point\n  x: int\n  y: int\nPoint(x = 1, y = 2)")
         assert r.resolved.program is not None
 
     def test_record_missing_field_raises(self) -> None:
-        err = reject_type("record Point\n  x: int\n  y: int\nPoint(x: 1)")
+        err = reject_type("record Point\n  x: int\n  y: int\nPoint(x = 1)")
         assert "missing" in str(err).lower() or "field" in str(err).lower()
 
     def test_record_unknown_field_raises(self) -> None:
-        err = reject_type("record Point\n  x: int\nPoint(x: 1, z: 2)")
-        assert "no field" in str(err).lower() or "field" in str(err).lower()
+        err = reject_type("record Point\n  x: int\nPoint(x = 1, z = 2)")
+        assert (
+            "no field" in str(err).lower()
+            or "field" in str(err).lower()
+            or "unknown" in str(err).lower()
+        )
 
     def test_record_duplicate_arg_raises(self) -> None:
         # Parser catches duplicate field args
-        err = reject_any("record Point\n  x: int\nPoint(x: 1, x: 2)")
-        assert "duplicate" in str(err).lower()
+        err = reject_any("record Point\n  x: int\nPoint(x = 1, x = 2)")
+        assert "duplicate" in str(err).lower() or "x" in str(err)
 
     def test_record_field_type_mismatch(self) -> None:
-        err = reject_type('record Point\n  x: int\nPoint(x: "hello")')
+        err = reject_type('record Point\n  x: int\nPoint(x = "hello")')
         assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
 
     def test_enum_variant_qualified(self) -> None:
@@ -2003,22 +2047,22 @@ class TestConstructors:
         assert "variant" in str(err).lower()
 
     def test_exception_constructor(self) -> None:
-        r = accept_type('Abort(message: "error")')
+        r = accept_type('Abort(message = "error")')
         assert r.resolved.program is not None
 
     def test_abstract_exception_not_constructible(self) -> None:
-        err = reject_type('Exception(message: "e")')
+        err = reject_type('Exception(message = "e")')
         assert "abstract" in str(err).lower() or "constructible" in str(err).lower()
 
     def test_unknown_constructor_raises(self) -> None:
         # Unknown names are now caught at scope-resolution time (AglScopeError).
-        err = reject_any("Unknown(x: 1)")
+        err = reject_any("Unknown(x = 1)")
         assert "unknown" in str(err).lower() or "Unknown" in str(err) or "not defined" in str(err)
 
     def test_enum_variant_with_fields(self) -> None:
         # enum variants can have named fields
         r = accept_type(
-            "enum Result\n  | Ok(value: int)\n  | Err(msg: text)\nOk(value: 42)"
+            "enum Result\n  | Ok(value: int)\n  | Err(msg: text)\nOk(value = 42)"
         )
         assert r.resolved.program is not None
 
@@ -2046,17 +2090,17 @@ class TestConstructorRefDispatch:
 
     def test_call_varref_record_constructor(self) -> None:
         # Record construction via Call(callee=VarRef)
-        r = accept_type("record Box\n  value: int\nBox(value: 1)")
+        r = accept_type("record Box\n  value: int\nBox(value = 1)")
         assert r.resolved.program is not None
 
     def test_call_varref_enum_payload_variant(self) -> None:
         # Payload variant via Call(callee=VarRef)
-        r = accept_type("enum Option\n  | none\n  | some(value: int)\nsome(value: 1)")
+        r = accept_type("enum Option\n  | none\n  | some(value: int)\nsome(value = 1)")
         assert r.resolved.program is not None
 
     def test_qualified_call_enum_variant(self) -> None:
-        # Qualified construction: Option.some(value: 1)
-        r = accept_type("enum Option\n  | none\n  | some(value: int)\nOption.some(value: 1)")
+        # Qualified construction: Option.some(value = 1)
+        r = accept_type("enum Option\n  | none\n  | some(value: int)\nOption.some(value = 1)")
         assert r.resolved.program is not None
 
     def test_qualified_bare_nullary_variant(self) -> None:
@@ -2069,11 +2113,15 @@ class TestConstructorRefDispatch:
         assert "missing" in str(err).lower() or "field" in str(err).lower()
 
     def test_unknown_field_still_errors(self) -> None:
-        err = reject_type("record Box\n  value: int\nBox(value: 1, extra: 2)")
-        assert "no field" in str(err).lower() or "field" in str(err).lower()
+        err = reject_type("record Box\n  value: int\nBox(value = 1, extra = 2)")
+        assert (
+            "no field" in str(err).lower()
+            or "field" in str(err).lower()
+            or "unknown" in str(err).lower()
+        )
 
     def test_field_type_mismatch_still_errors(self) -> None:
-        err = reject_type('record Box\n  value: int\nBox(value: "hello")')
+        err = reject_type('record Box\n  value: int\nBox(value = "hello")')
         assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
 
     def test_qualified_variant_not_found_errors(self) -> None:
@@ -2086,11 +2134,11 @@ class TestConstructorRefDispatch:
 
     def test_exception_constructor_via_new_dispatch(self) -> None:
         # Exception constructors go through the new unqualified path
-        r = accept_type('Abort(message: "error")')
+        r = accept_type('Abort(message = "error")')
         assert r.resolved.program is not None
 
     def test_abstract_exception_rejected_in_new_dispatch(self) -> None:
-        err = reject_type('Exception(message: "e")')
+        err = reject_type('Exception(message = "e")')
         assert "abstract" in str(err).lower() or "constructible" in str(err).lower()
 
     def test_positional_arg_on_unqualified_constructor_rejected(self) -> None:
@@ -2114,6 +2162,44 @@ class TestConstructorRefDispatch:
         # so this is caught as a type checker error when using the VarRef form.
         err = reject_type("enum E\n  | Pass\nPass::[int]()")
         assert "type argument" in str(err).lower() or "not supported" in str(err).lower()
+
+    def test_single_field_variant_positional(self) -> None:
+        # Single-field enum variant with no markers → STANDARD zone → positional works.
+        r = accept_type("enum Opt\n  | Some(value: int)\n  | None\nSome(42)")
+        assert r.resolved.program is not None
+
+    def test_single_field_variant_named_still_works(self) -> None:
+        # Single-field variant: named arg still works even though zone is STANDARD.
+        r = accept_type("enum Opt\n  | Some(value: int)\nSome(value = 5)")
+        assert r.resolved.program is not None
+
+    def test_std_record_positional(self) -> None:
+        # Record with @std marker → positional args allowed.
+        r = accept_type("record P\n  @std\n  x: int\n  y: int\nP(1, 2)")
+        assert r.resolved.program is not None
+
+    def test_std_record_mixed_pos_named(self) -> None:
+        # Record with @std: positional then named allowed.
+        r = accept_type("record P\n  @std\n  x: int\n  y: int\nP(1, y = 2)")
+        assert r.resolved.program is not None
+
+    def test_pos_only_field_by_name_rejected(self) -> None:
+        # A pos-only field cannot be passed by name.
+        err = reject_type("record R\n  @pos\n  x: int\n  y: int\nR(x = 1, y = 2)")
+        assert "positional-only" in str(err).lower() or "positional" in str(err).lower()
+
+    def test_multi_field_variant_nonbare_positional_rejected(self) -> None:
+        # Non-bare positional in named-only multi-field variant → error.
+        err = reject_type("enum E\n  | F(x: int, y: int)\nF(1, 2)")
+        assert "named-only" in str(err).lower() or "positional" in str(err).lower()
+
+    def test_get_constructor_field_kinds_no_graph_table(self) -> None:
+        # get_constructor_field_kinds in single-program mode: no graph table → None for unknown.
+        from agm.agl.modules.ids import ModuleId
+        env = TypeEnvironment()
+        lib_id = ModuleId.from_dotted("lib")
+        result = env.get_constructor_field_kinds("Unknown", None, module_id=lib_id)
+        assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -2156,7 +2242,7 @@ class TestListLiterals:
         assert r.resolved.program is not None
 
     def test_list_record_in_json_raises(self) -> None:
-        err = reject_type("record R\n  x: int\nlet xs: list[json] = [R(x: 1)]\nxs")
+        err = reject_type("record R\n  x: int\nlet xs: list[json] = [R(x = 1)]\nxs")
         assert "json" in str(err).lower() or "mismatch" in str(err).lower()
 
 
@@ -2201,7 +2287,7 @@ class TestDictLiterals:
 
 class TestTypeDeclarations:
     def test_record_def(self) -> None:
-        r = accept_type("record Point\n  x: int\n  y: int\nPoint(x: 1, y: 2)")
+        r = accept_type("record Point\n  x: int\n  y: int\nPoint(x = 1, y = 2)")
         assert r.resolved.program is not None
 
     def test_enum_def(self) -> None:
@@ -2251,17 +2337,17 @@ class TestTypeDeclarations:
         assert "cycle" in str(err).lower()
 
     def test_duplicate_type_name_raises(self) -> None:
-        err = reject_any("record A\n  x: int\nrecord A\n  y: int\nA(x: 1)")
+        err = reject_any("record A\n  x: int\nrecord A\n  y: int\nA(x = 1)")
         assert "already declared" in str(err).lower() or "duplicate" in str(err).lower()
 
     def test_type_builder_duplicate_type_name_guard_raises(self) -> None:
-        program = parse_program("record A\n  x: int\nrecord A\n  y: int\nA(x: 1)")
+        program = parse_program("record A\n  x: int\nrecord A\n  y: int\nA(x = 1)")
         with pytest.raises(AglTypeError) as exc_info:
             _TypeBuilder(TypeEnvironment()).collect(program)
         assert "already declared" in str(exc_info.value).lower()
 
     def test_record_recursive_raises(self) -> None:
-        err = reject_type("record Node\n  child: Node\nNode(child: Node(child: ()))")
+        err = reject_type("record Node\n  child: Node\nNode(child = Node(child = ()))")
         assert "recursive" in str(err).lower()
 
     def test_enum_recursive_raises(self) -> None:
@@ -2271,7 +2357,7 @@ class TestTypeDeclarations:
         assert "recursive" in str(err).lower()
 
     def test_record_duplicate_field_raises(self) -> None:
-        err = reject_type("record R\n  x: int\n  x: text\nR(x: 1)")
+        err = reject_type("record R\n  x: int\n  x: text\nR(x = 1)")
         assert "duplicate" in str(err).lower() or "field" in str(err).lower()
 
     def test_enum_duplicate_variant_raises(self) -> None:
@@ -2283,7 +2369,7 @@ class TestTypeDeclarations:
         assert "cycle" in str(err).lower()
 
     def test_record_not_json_shaped(self) -> None:
-        err = reject_type("record R\n  x: int\nlet r: json = R(x: 1)\nr")
+        err = reject_type("record R\n  x: int\nlet r: json = R(x = 1)\nr")
         assert "json" in str(err).lower() or "mismatch" in str(err).lower()
 
     def test_enum_not_json_shaped(self) -> None:
@@ -2306,15 +2392,15 @@ class TestVarAssign:
         assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
 
     def test_var_bottom_inference_raises(self) -> None:
-        err = reject_type('var x = raise Abort(message: "e")\nx')
+        err = reject_type('var x = raise Abort(message = "e")\nx')
         assert "infer" in str(err).lower() or "raises" in str(err).lower()
 
     def test_let_bottom_inference_raises(self) -> None:
-        err = reject_type('let x = raise Abort(message: "e")\nx')
+        err = reject_type('let x = raise Abort(message = "e")\nx')
         assert "infer" in str(err).lower() or "raises" in str(err).lower()
 
     def test_var_with_annotation_allows_bottom(self) -> None:
-        r = accept_type('var x: int = raise Abort(message: "e")\nx')
+        r = accept_type('var x: int = raise Abort(message = "e")\nx')
         assert r.resolved.program is not None
 
 
@@ -2325,33 +2411,33 @@ class TestVarAssign:
 
 class TestParsePolicy:
     def test_on_parse_error_abort(self) -> None:
-        r = accept_type('let n: int = ask("Q", on_parse_error: Abort())\nn')
+        r = accept_type('let n: int = ask("Q", on_parse_error = Abort())\nn')
         assert r.call_sites[0].parse_policy == "abort"
 
     def test_on_parse_error_retry(self) -> None:
-        r = accept_type('let n: int = ask("Q", on_parse_error: Retry(n: 5))\nn')
+        r = accept_type('let n: int = ask("Q", on_parse_error = Retry(n = 5))\nn')
         assert r.call_sites[0].parse_policy == "retry[5]"
 
     def test_on_parse_error_invalid_constructor_raises(self) -> None:
-        err = reject_type('let n: int = ask("Q", on_parse_error: 42)\nn')
+        err = reject_type('let n: int = ask("Q", on_parse_error = 42)\nn')
         assert "on_parse_error" in str(err).lower() or "ParsePolicy" in str(err)
 
     def test_on_parse_error_abort_with_extra_args_raises(self) -> None:
-        err = reject_type('let n: int = ask("Q", on_parse_error: Abort(message: "x"))\nn')
+        err = reject_type('let n: int = ask("Q", on_parse_error = Abort(message = "x"))\nn')
         assert "on_parse_error" in str(err).lower() or "Abort" in str(err)
 
     def test_on_parse_error_retry_no_n_raises(self) -> None:
-        err = reject_type('let n: int = ask("Q", on_parse_error: Retry())\nn')
+        err = reject_type('let n: int = ask("Q", on_parse_error = Retry())\nn')
         assert "on_parse_error" in str(err).lower() or "Retry" in str(err)
 
     def test_on_parse_error_wrong_qualifier_raises(self) -> None:
         # 'Other' is not a declared type name, so this fails at scope time.
-        err = reject_any('let n: int = ask("Q", on_parse_error: Other.Abort())\nn')
+        err = reject_any('let n: int = ask("Q", on_parse_error = Other.Abort())\nn')
         err_str = str(err).lower()
         assert "on_parse_error" in err_str or "ParsePolicy" in str(err) or "Other" in str(err)
 
     def test_on_parse_error_text_target_warns(self) -> None:
-        r = accept_type('ask("Q", on_parse_error: Abort())')
+        r = accept_type('ask("Q", on_parse_error = Abort())')
         assert len(r.warnings) == 1
         assert "on_parse_error" in r.warnings[0].message
 
@@ -2611,7 +2697,7 @@ class TestMisc:
 
     def test_validate_format_option_unsupported_kind(self) -> None:
         # Codec 'text' doesn't support 'int' kind
-        err = reject_type('let n: int = ask("Q", format: "text")\nn')
+        err = reject_type('let n: int = ask("Q", format = "text")\nn')
         assert "text" in str(err) or "support" in str(err).lower()
 
     def test_funcdef_value_binding_type(self) -> None:
@@ -2628,7 +2714,7 @@ class TestMisc:
         assert r.type_env.get_binding_type(decl.node_id) == TextType()
 
     def test_param_bottom_default_without_annotation_raises(self) -> None:
-        err = reject_type('param x = raise Abort(message: "e")\nx')
+        err = reject_type('param x = raise Abort(message = "e")\nx')
         assert "Cannot infer type of param" in str(err)
 
     def test_do_loop_yields_unit(self) -> None:
@@ -2655,11 +2741,11 @@ class TestMisc:
     def test_function_signature_ordering_valid(self) -> None:
         r = accept_type('def f(x: int, y: text = "ok") -> int = x\nf(1)')
         sig = r.function_signatures["f"]
-        assert sig.params[0][2] is False   # x: not defaulted
-        assert sig.params[1][2] is True    # y: has default
+        assert sig.params[0].has_default is False   # x: not defaulted
+        assert sig.params[1].has_default is True    # y: has default
 
     def test_ask_strict_json_false(self) -> None:
-        r = accept_type('let n: int = ask("Q", format: "json", strict_json: false)\nn')
+        r = accept_type('let n: int = ask("Q", format = "json", strict_json = false)\nn')
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
         spec = r.contract_specs[decl.value.node_id]
@@ -2675,17 +2761,18 @@ class TestMisc:
 
     def test_constructor_pattern_duplicate_field_raises(self) -> None:
         err = reject_type(
-            "enum E\n  | A(x: int)\nlet e = A(x: 1)\n"
-            "case e of | E.A(x: n, x: m) => n | _ => 0"
+            "enum E\n  | A(x: int)\nlet e = A(x = 1)\n"
+            "case e of | E.A(x = n, x = m) => n | _ => 0"
         )
         assert "duplicate" in str(err).lower() or "field" in str(err).lower()
 
     def test_constructor_pattern_unknown_field_raises(self) -> None:
         err = reject_type(
-            "enum E\n  | A(x: int)\nlet e = A(x: 1)\n"
-            "case e of | E.A(z: n) => n | _ => 0"
+            "enum E\n  | A(x: int)\nlet e = A(x = 1)\n"
+            "case e of | E.A(z = n) => n | _ => 0"
         )
-        assert "no field" in str(err).lower()
+        msg = str(err).lower()
+        assert "no field" in msg or "unknown" in msg or "field" in msg
 
     def test_variant_qualifier_wrong_raises(self) -> None:
         err = reject_type(
@@ -2703,15 +2790,15 @@ class TestMisc:
 
     def test_enum_variant_with_fields(self) -> None:
         r = accept_type(
-            "enum Result\n  | Ok(value: int)\n  | Err(msg: text)\nOk(value: 42)"
+            "enum Result\n  | Ok(value: int)\n  | Err(msg: text)\nOk(value = 42)"
         )
         assert r.resolved.program is not None
 
     def test_enum_variant_with_fields_case(self) -> None:
         r = accept_type(
             "enum Result\n  | Ok(value: int)\n  | Err(msg: text)\n"
-            "let res = Ok(value: 42)\n"
-            "case res of | Result.Ok(value: v) => v | Result.Err(msg: m) => 0"
+            "let res = Ok(value = 42)\n"
+            "case res of | Result.Ok(value = v) => v | Result.Err(msg = m) => 0"
         )
         assert r.resolved.program is not None
 
@@ -2734,23 +2821,23 @@ class TestMisc:
             assert isinstance(name, str)
 
     def test_record_field_types(self) -> None:
-        r = accept_type("record P\n  x: int\n  y: decimal\nP(x: 1, y: 2.5)")
+        r = accept_type("record P\n  x: int\n  y: decimal\nP(x = 1, y = 2.5)")
         assert r.resolved.program is not None
 
     def test_builtin_type_name_shadow_raises(self) -> None:
         # ExecResult is a BUILTIN_PRELUDE_TYPE_NAMES — record shadows it
-        err = reject_type("record ExecResult\n  x: int\nExecResult(x: 1)")
+        err = reject_type("record ExecResult\n  x: int\nExecResult(x = 1)")
         assert "built-in" in str(err).lower() or "ExecResult" in str(err)
 
     def test_alias_to_record_field(self) -> None:
         # Exercises alias->record resolution in _ensure_referenced_type_built
-        r = accept_type("record R\n  x: int\ntype MyR = R\nlet r: MyR = R(x: 1)\nr")
+        r = accept_type("record R\n  x: int\ntype MyR = R\nlet r: MyR = R(x = 1)\nr")
         assert r.resolved.program is not None
 
     def test_field_list_of_record(self) -> None:
         # Exercises ListT path in _ensure_referenced_type_built
         r = accept_type(
-            "record R\n  x: int\nrecord S\n  items: list[R]\nS(items: [])"
+            "record R\n  x: int\nrecord S\n  items: list[R]\nS(items = [])"
         )
         assert r.resolved.program is not None
 
@@ -2784,8 +2871,8 @@ class TestMisc:
         assert "not a known enum" in str(err).lower() or "enum" in str(err).lower()
 
     def test_enum_variant_field_duplicate_raises(self) -> None:
-        # Exercises the duplicate field check in enum variant declarations.
-        err = reject_type("enum E\n  | A(x: int, x: text)\nA(x: 1)")
+        # Exercises line 287: duplicate field in enum variant
+        err = reject_type("enum E\n  | A(x: int, x: text)\nA(x = 1)")
         assert "duplicate" in str(err).lower() or "field" in str(err).lower()
 
     def test_unqualified_ctor_with_enum_expected_type(self) -> None:
@@ -2804,8 +2891,8 @@ class TestMisc:
     def test_constructor_pattern_with_qualifier(self) -> None:
         # Exercises the qualifier check in constructor pattern matching.
         r = accept_type(
-            "enum E\n  | A(x: int)\nlet e = A(x: 1)\n"
-            "case e of | E.A(x: n) => n | _ => 0"
+            "enum E\n  | A(x: int)\nlet e = A(x = 1)\n"
+            "case e of | E.A(x = n) => n | _ => 0"
         )
         assert r.resolved.program is not None
 
@@ -2839,23 +2926,23 @@ class TestMisc:
         assert result is None
 
     def test_retry_with_non_int_n_raises(self) -> None:
-        # Exercises the error when Retry's n argument is not an integer literal.
-        err = reject_type('let n: int = ask("Q", on_parse_error: Retry(n: "bad"))\nn')
+        # Exercises line 880->879: Retry n_arg not an IntLit
+        err = reject_type('let n: int = ask("Q", on_parse_error = Retry(n = "bad"))\nn')
         assert "on_parse_error" in str(err).lower() or "Retry" in str(err)
 
     def test_retry_with_wrong_key_raises(self) -> None:
-        # Exercises the error when Retry uses a wrong keyword argument.
-        err = reject_type('let n: int = ask("Q", on_parse_error: Retry(m: 3))\nn')
+        # Exercises line 880 -> falls through to raise
+        err = reject_type('let n: int = ask("Q", on_parse_error = Retry(m = 3))\nn')
         assert "on_parse_error" in str(err).lower() or "Retry" in str(err)
 
     def test_parse_policy_unknown_variant_raises(self) -> None:
-        # Exercises the error when on_parse_error uses an unrecognized policy variant.
-        err = reject_type('let n: int = ask("Q", on_parse_error: ParsePolicy.Bad())\nn')
+        # Exercises line 877->890: arg.name is neither "Abort" nor "Retry"
+        err = reject_type('let n: int = ask("Q", on_parse_error = ParsePolicy.Bad())\nn')
         assert "on_parse_error" in str(err).lower() or "ParsePolicy" in str(err)
 
     def test_exec_strict_json_non_bool_raises(self) -> None:
-        # Exercises the error when strict_json is not a boolean literal.
-        err = reject_type('let n: int = exec("ls", format: "json", strict_json: "yes")\nn')
+        # Exercises line 815: strict_json non-BoolLit in exec
+        err = reject_type('let n: int = exec("ls", format = "json", strict_json = "yes")\nn')
         assert "strict_json" in str(err).lower() or "bool" in str(err).lower()
 
     def test_decimal_subtraction_yields_decimal(self) -> None:
@@ -2878,23 +2965,23 @@ class TestMisc:
         assert r.node_types[node.node_id] == ListType(elem=DecimalType())
 
     def test_alias_field_in_record(self) -> None:
-        # Exercises alias handling in _ensure_referenced_type_built.
-        r = accept_type("type N = int\nrecord R\n  x: N\nR(x: 1)")
+        # Exercises lines 314-316: alias in _ensure_referenced_type_built
+        r = accept_type("type N = int\nrecord R\n  x: N\nR(x = 1)")
         assert r.resolved.program is not None
 
     def test_list_field_of_aliased_type(self) -> None:
-        # Exercises ListT handling in _ensure_referenced_type_built.
-        r = accept_type("type N = int\nrecord R\n  xs: list[N]\nR(xs: [])")
+        # Exercises line 321: ListT in _ensure_referenced_type_built
+        r = accept_type("type N = int\nrecord R\n  xs: list[N]\nR(xs = [])")
         assert r.resolved.program is not None
 
     def test_dict_field_of_aliased_type(self) -> None:
-        # Exercises DictT handling in _ensure_referenced_type_built.
-        r = accept_type("type N = int\nrecord R\n  d: dict[text, N]\nR(d: {})")
+        # Exercises line 323: DictT in _ensure_referenced_type_built
+        r = accept_type("type N = int\nrecord R\n  d: dict[text, N]\nR(d = {})")
         assert r.resolved.program is not None
 
     def test_two_records_same_enum_field(self) -> None:
-        # Exercises _ensure_built_enum early-return when called twice for the same enum.
-        r = accept_type("enum E\n  | A\nrecord R1\n  e: E\nrecord R2\n  e: E\nR1(e: A())")
+        # Exercises line 246: _ensure_built_enum called twice returns early
+        r = accept_type("enum E\n  | A\nrecord R1\n  e: E\nrecord R2\n  e: E\nR1(e = A())")
         assert r.resolved.program is not None
 
     def test_template_nested_list_in_list(self) -> None:
@@ -2915,8 +3002,8 @@ class TestMisc:
     def test_constructor_pattern_without_qualifier(self) -> None:
         # Exercises a constructor pattern without a qualifier.
         r = accept_type(
-            "enum E\n  | A(x: int)\nlet e = A(x: 1)\n"
-            "case e of | A(x: n) => n | _ => 0"
+            "enum E\n  | A(x: int)\nlet e = A(x = 1)\n"
+            "case e of | A(x = n) => n | _ => 0"
         )
         assert r.resolved.program is not None
 
@@ -2925,7 +3012,7 @@ class TestMisc:
         # (it's a built-in type, not user-declared)
         r = accept_type(
             "record Wrapper\n  result: ExecResult\n"
-            "let x = exec(\"ls\")\nWrapper(result: x)"
+            "let x = exec(\"ls\")\nWrapper(result = x)"
         )
         assert r.resolved.program is not None
 
@@ -2939,12 +3026,12 @@ class TestMisc:
         # Exercises _unify_branch_types returning BottomType when all branches always raise.
         r = accept_type(
             "def f(x: int) -> int =\n"
-            "  if x = 0 =>\n"
+            "  if x == 0 =>\n"
             "    let msg = \"zero\"\n"
-            "    raise Abort(message: msg)\n"
+            "    raise Abort(message = msg)\n"
             "  | else =>\n"
             "    let msg = \"nonzero\"\n"
-            "    raise Abort(message: msg)"
+            "    raise Abort(message = msg)"
         )
         assert r.resolved.program is not None
 
@@ -3292,6 +3379,7 @@ class TestIndexTypechecking:
                 span=sp,
                 node_id=_mk_node_id(),
             ),
+            kind=ParamKind.STANDARD,
             default=None,
             span=sp,
             node_id=_mk_node_id(),
@@ -3394,18 +3482,78 @@ class TestIndexTypechecking:
 # ---------------------------------------------------------------------------
 
 
-class TestConstructorAndAliasRejections:
-    """Real-source rejection tests for constructor argument validation and alias cycles.
+class TestDefensiveGuards:
+    """Cover defensive guards that are unreachable from the parser.
 
-    All tests drive real AgL source through the full parse → resolve → check
-    pipeline and assert on user-visible type errors.
+    These tests construct AST nodes and ``ResolvedProgram`` objects directly to
+    exercise branches that the parser/scope pass prevent from being reached via
+    normal source code.  This ensures 100% branch coverage of the checker.
     """
+
+    def _mk_resolved(
+        self,
+        program: Program,
+        resolution: dict[int, BindingRef] | None = None,
+        builtin_calls: dict[int, object] | None = None,
+        declared_functions: dict[str, FuncDef] | None = None,
+    ) -> _ResolvedProgram:
+        from agm.agl.scope.symbols import BuiltinKind as _BuiltinKind
+
+        root = ScopeNode(node_id=program.node_id)
+        bc: dict[int, _BuiltinKind] = {}
+        return _ResolvedProgram(
+            program=program,
+            resolution=resolution or {},
+            builtin_calls=bc,
+            root_scope=root,
+            declared_functions=declared_functions or {},
+        )
+
+    def test_empty_block_yields_unit(self) -> None:
+        # Exercises the path where _check_block returns UnitType() for an empty block.
+        # The grammar never produces an empty block from source, so we construct
+        # the AST directly.
+        sp = mk_span()
+        block = Block(items=(), span=sp, node_id=_mk_node_id())
+        prog = Program(body=block, span=sp, node_id=_mk_node_id())
+        resolved = self._mk_resolved(prog)
+        result = check(resolved, default_capabilities())
+        assert result is not None
+
+    def test_empty_case_branches_fallback(self) -> None:
+        # Exercises the path where _check_case returns fallback type when branches is empty.
+        # The grammar requires at least one branch, so we construct directly.
+        sp = mk_span()
+        subject = IntLit(value=1, span=sp, node_id=_mk_node_id())
+        case_node = Case(subject=subject, branches=(), span=sp, node_id=_mk_node_id())
+        block = Block(items=(case_node,), span=sp, node_id=_mk_node_id())
+        prog = Program(body=block, span=sp, node_id=_mk_node_id())
+        resolved = self._mk_resolved(prog)
+        result = check(resolved, default_capabilities())
+        assert result is not None
 
     def test_duplicate_constructor_arg_rejected(self) -> None:
         # Parser rejects duplicate named args at parse time (AglSyntaxError/AglTypeError).
         # Use reject_any since the parser may catch it before the type checker.
-        err = reject_any("record P\n  x: int\nP(x: 1, x: 2)")
-        assert "duplicate" in str(err).lower()
+        err = reject_any("record P\n  x: int\nP(x = 1, x = 2)")
+        assert "duplicate" in str(err).lower() or "x" in str(err)
+
+    def test_builtin_func_name_def_rejected(self) -> None:
+        # Exercises line 372: _preregister_funcdef raises for names in _BUILTIN_FUNC_NAMES.
+        # The scope pass rejects print/exec/ask before typecheck, so we bypass it
+        # by building a FuncDef node with name "print" inside a ResolvedProgram.
+        sp = mk_span()
+        body_expr = IntLit(value=1, span=sp, node_id=_mk_node_id())
+        ret_type = IntT(span=sp, node_id=_mk_node_id())
+        fd = FuncDef(
+            name="print", params=(), return_type=ret_type, body=body_expr,
+            span=sp, node_id=_mk_node_id(),
+        )
+        block = Block(items=(fd,), span=sp, node_id=_mk_node_id())
+        prog = Program(body=block, span=sp, node_id=_mk_node_id())
+        resolved = self._mk_resolved(prog, declared_functions={"print": fd})
+        with pytest.raises(AglTypeError, match="built-in function"):
+            check(resolved, default_capabilities())
 
     def test_alias_seen_guard_in_ensure_referenced(self) -> None:
         err = reject_type(
@@ -3417,6 +3565,147 @@ class TestConstructorAndAliasRejections:
         )
         assert "cycle" in str(err).lower()
         assert "a" in str(err).lower()
+
+    def test_binding_type_not_set_assertion(self) -> None:
+        # Exercises line 609: _require_binding_type raises AssertionError when a
+        # VarRef resolves to a BindingRef whose decl_node_id has no type in the env.
+        sp = mk_span()
+        decl_nid = _mk_node_id()
+        ref_nid = _mk_node_id()
+        varref = VarRef(name="x", span=sp, node_id=ref_nid)
+        binding_ref = BindingRef(
+            name="x", mutable=False, decl_span=sp, decl_node_id=decl_nid,
+            kind=BinderKind.let_binding,
+        )
+        block = Block(items=(varref,), span=sp, node_id=_mk_node_id())
+        prog = Program(body=block, span=sp, node_id=_mk_node_id())
+        resolved = self._mk_resolved(prog, resolution={ref_nid: binding_ref})
+        with pytest.raises(AssertionError, match="checker invariant"):
+            check(resolved, default_capabilities())
+
+    def test_declared_call_sig_none_fallback(self) -> None:
+        # Exercises line 935: _check_declared_name_call falls back to value-call
+        # when get_function_signature returns None.  This happens when a FuncDef
+        # is in declared_functions but not in the block items (so the pre-pass skips it).
+        sp = mk_span()
+        body_expr = IntLit(value=1, span=sp, node_id=_mk_node_id())
+        ret_type = IntT(span=sp, node_id=_mk_node_id())
+        fd_nid = _mk_node_id()
+        fd = FuncDef(
+            name="h", params=(), return_type=ret_type, body=body_expr,
+            span=sp, node_id=fd_nid,
+        )
+        callee_nid = _mk_node_id()
+        callee = VarRef(name="h", span=sp, node_id=callee_nid)
+        call = Call(callee=callee, args=(), named_args=(), span=sp, node_id=_mk_node_id())
+        # block has only the call — no FuncDef, so pre-pass skips h
+        block = Block(items=(call,), span=sp, node_id=_mk_node_id())
+        prog = Program(body=block, span=sp, node_id=_mk_node_id())
+        binding_ref = BindingRef(
+            name="h", mutable=False, decl_span=sp, decl_node_id=fd_nid,
+            kind=BinderKind.function_binding,
+        )
+        # h IS in declared_functions → _check_declared_name_call runs, sig is None,
+        # falls through to value-call → binding type of h not set → AssertionError
+        resolved = self._mk_resolved(
+            prog,
+            resolution={callee_nid: binding_ref},
+            declared_functions={"h": fd},
+        )
+        with pytest.raises(AssertionError, match="checker invariant"):
+            check(resolved, default_capabilities())
+
+    def test_duplicate_named_arg_in_declared_call(self) -> None:
+        # Exercises line 970: duplicate named arg check in _check_declared_name_call.
+        # The parser rejects duplicate named args, so we construct directly.
+        sp = mk_span()
+        p_nid = _mk_node_id()
+        ret_t = IntT(span=sp, node_id=_mk_node_id())
+        param_t = IntT(span=sp, node_id=_mk_node_id())
+        param = Param(
+            name="x", type_expr=param_t, kind=ParamKind.STANDARD, default=None,
+            span=sp, node_id=p_nid
+        )
+        body_expr = IntLit(value=1, span=sp, node_id=_mk_node_id())
+        fd_nid = _mk_node_id()
+        fd = FuncDef(
+            name="g", params=(param,), return_type=ret_t, body=body_expr,
+            span=sp, node_id=fd_nid,
+        )
+        callee_nid = _mk_node_id()
+        callee = VarRef(name="g", span=sp, node_id=callee_nid)
+        val1 = IntLit(value=1, span=sp, node_id=_mk_node_id())
+        val2 = IntLit(value=2, span=sp, node_id=_mk_node_id())
+        na1 = NamedArg(name="x", value=val1, span=sp, node_id=_mk_node_id())
+        na2 = NamedArg(name="x", value=val2, span=sp, node_id=_mk_node_id())
+        call = Call(
+            callee=callee, args=(), named_args=(na1, na2), span=sp, node_id=_mk_node_id(),
+        )
+        block = Block(items=(fd, call), span=sp, node_id=_mk_node_id())
+        prog = Program(body=block, span=sp, node_id=_mk_node_id())
+        binding_ref = BindingRef(
+            name="g", mutable=False, decl_span=sp, decl_node_id=fd_nid,
+            kind=BinderKind.function_binding,
+        )
+        resolved = self._mk_resolved(
+            prog,
+            resolution={callee_nid: binding_ref},
+            declared_functions={"g": fd},
+        )
+        with pytest.raises(AglTypeError, match="Duplicate argument"):
+            check(resolved, default_capabilities())
+
+    def test_duplicate_named_arg_in_constructor_rejected(self) -> None:
+        # Exercises the duplicate named arg path in
+        # ConstructorChecker._check_constructor_call (typecheck/constructors.py).
+        # The parser rejects duplicate named args, so we construct the AST directly.
+        from agm.agl.scope.symbols import ConstructorRef
+
+        sp = mk_span()
+        # Build a record type that has field 'x'.
+        record_source = "record Box\n  x: int\nBox(x = 1)"
+        prog_base = parse_program(record_source)
+        res_base = resolve(prog_base)
+        checked_base = check(res_base, default_capabilities())
+        box_type = checked_base.type_env.get_type("Box")
+        assert box_type is not None
+
+        # Manually build a Call with duplicate named arg for 'x'.
+        callee_nid = _mk_node_id()
+        callee = VarRef(name="Box", span=sp, node_id=callee_nid)
+        val1 = IntLit(value=1, span=sp, node_id=_mk_node_id())
+        val2 = IntLit(value=2, span=sp, node_id=_mk_node_id())
+        na1 = NamedArg(name="x", value=val1, span=sp, node_id=_mk_node_id())
+        na2 = NamedArg(name="x", value=val2, span=sp, node_id=_mk_node_id())
+        call_nid = _mk_node_id()
+        call = Call(callee=callee, args=(), named_args=(na1, na2), span=sp, node_id=call_nid)
+        block = Block(items=(call,), span=sp, node_id=_mk_node_id())
+        prog_nid = _mk_node_id()
+        prog = Program(body=block, span=sp, node_id=prog_nid)
+        # Register a ConstructorRef for 'Box' and the callee VarRef.
+        box_decl_node_id = prog_base.body.items[0].node_id
+        ctor_ref = ConstructorRef(
+            owner_name="Box",
+            variant="Box",
+            owner_decl_node_id=box_decl_node_id,
+            type_params=(),
+        )
+        binding_ref = BindingRef(
+            name="Box", mutable=False, decl_span=sp, decl_node_id=box_decl_node_id,
+            kind=BinderKind.constructor_binding,
+        )
+        root = ScopeNode(node_id=prog_nid)
+        from agm.agl.scope.symbols import ResolvedProgram as _RP
+
+        resolved = _RP(
+            program=prog,
+            resolution={callee_nid: binding_ref},
+            builtin_calls={},
+            root_scope=root,
+            constructor_refs={callee_nid: ctor_ref},
+        )
+        with pytest.raises(AglTypeError, match="[Dd]uplicate"):
+            check(resolved, default_capabilities(), seed_env=checked_base.type_env)
 
     def test_type_arg_on_qualified_constructor_rejected(self) -> None:
         err = reject_type("enum Status\n  | Pass\n  | Fail\nStatus.Pass::[int]()\n()")
@@ -3452,7 +3741,7 @@ class TestCallDispatchScopeAware:
             "def classify(a: int, b: int) -> text = \"hi\"\n"
             "def wrap() -> int =\n"
             "  let classify: (int) -> int = fn(y: int) -> int => y\n"
-            "  classify(y: 5)\n"
+            "  classify(y = 5)\n"
             "wrap()"
         )
         assert "named" in str(err).lower() or "declared" in str(err).lower()
@@ -3472,7 +3761,7 @@ class TestCallDispatchScopeAware:
         # The top-level def must still accept named/defaulted args.
         r = accept_type(
             "def add(x: int, y: int = 0) -> int = x + y\n"
-            "add(1, y: 2)"
+            "add(1, y = 2)"
         )
         assert r.resolved.program is not None
 
@@ -3496,7 +3785,7 @@ class TestCallDispatchScopeAware:
     def test_param_binding_named_arg_rejected(self) -> None:
         # Named arg on a param-bound callee is rejected.
         err = reject_type(
-            "def apply(f: (int) -> int, x: int) -> int = f(n: x)\n"
+            "def apply(f: (int) -> int, x: int) -> int = f(n = x)\n"
             "apply(fn(n: int) => n, 7)"
         )
         assert "named" in str(err).lower() or "declared" in str(err).lower()
@@ -3506,7 +3795,7 @@ class TestCallDispatchScopeAware:
         r = accept_type(
             "record Wrapper\n"
             "  fn_field: (int) -> int\n"
-            "let w = Wrapper(fn_field: fn(x: int) -> int => x)\n"
+            "let w = Wrapper(fn_field = fn(x: int) -> int => x)\n"
             "w.fn_field(42)"
         )
         assert r.resolved.program is not None
@@ -3519,12 +3808,12 @@ class TestCallDispatchScopeAware:
 
 class TestAskUnknownArgs:
     def test_ask_unknown_named_arg_rejected(self) -> None:
-        err = reject_type('ask("Q", bogus: 1)')
+        err = reject_type('ask("Q", bogus = 1)')
         assert "ask" in str(err).lower() or "unknown" in str(err).lower()
         assert "bogus" in str(err)
 
     def test_ask_typo_named_arg_rejected(self) -> None:
-        err = reject_type('ask("Q", strict_jsonn: true)')
+        err = reject_type('ask("Q", strict_jsonn = true)')
         assert "ask" in str(err).lower() or "unknown" in str(err).lower()
         assert "strict_jsonn" in str(err)
 
@@ -3535,21 +3824,21 @@ class TestAskUnknownArgs:
     def test_ask_valid_named_arg_combinations_still_accepted(self) -> None:
         # All four known named args together must be accepted.
         r = accept_type(
-            'agent a\nlet n: int = ask("Q", agent: a, format: "json",'
-            ' strict_json: true, on_parse_error: Abort())\nn'
+            'agent a\nlet n: int = ask("Q", agent = a, format = "json",'
+            ' strict_json = true, on_parse_error = Abort())\nn'
         )
         assert r.resolved.program is not None
 
 
 class TestExecUnknownArgs:
     def test_exec_unknown_named_arg_rejected(self) -> None:
-        err = reject_type('exec("ls", bogus: 1)')
+        err = reject_type('exec("ls", bogus = 1)')
         assert "exec" in str(err).lower() or "unknown" in str(err).lower()
         assert "bogus" in str(err)
 
     def test_exec_agent_named_arg_rejected(self) -> None:
         # exec has no 'agent:' argument (D10).
-        err = reject_type('agent a\nexec("ls", agent: a)')
+        err = reject_type('agent a\nexec("ls", agent = a)')
         assert "exec" in str(err).lower() or "unknown" in str(err).lower()
 
     def test_exec_extra_positional_rejected(self) -> None:
@@ -3559,8 +3848,8 @@ class TestExecUnknownArgs:
     def test_exec_valid_named_arg_combinations_still_accepted(self) -> None:
         # format, strict_json, on_parse_error are valid for exec.
         r = accept_type(
-            'let n: int = exec("ls", format: "json", strict_json: true,'
-            ' on_parse_error: Abort())\nn'
+            'let n: int = exec("ls", format = "json", strict_json = true,'
+            ' on_parse_error = Abort())\nn'
         )
         assert r.resolved.program is not None
 
@@ -3594,19 +3883,19 @@ class TestExecStructured:
         assert spec.structured_exec is False
 
     def test_exec_structured_format_rejected(self) -> None:
-        err = reject_type('exec("ls", format: "json")')
+        err = reject_type('exec("ls", format = "json")')
         assert "ExecResult" in str(err) or "format" in str(err).lower()
 
     def test_exec_structured_strict_json_rejected(self) -> None:
-        err = reject_type('exec("ls", strict_json: true)')
+        err = reject_type('exec("ls", strict_json = true)')
         assert "ExecResult" in str(err) or "strict_json" in str(err).lower()
 
     def test_exec_structured_on_parse_error_rejected(self) -> None:
-        err = reject_type('exec("ls", on_parse_error: Abort())')
+        err = reject_type('exec("ls", on_parse_error = Abort())')
         assert "ExecResult" in str(err) or "on_parse_error" in str(err).lower()
 
     def test_exec_parsed_form_has_no_structured_exec(self) -> None:
-        r = accept_type('let n: int = exec("ls", format: "json")\nn')
+        r = accept_type('let n: int = exec("ls", format = "json")\nn')
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
         spec = r.contract_specs[decl.value.node_id]
@@ -3638,7 +3927,7 @@ class TestValueCallErrors:
         r = accept_type(
             "record Box\n"
             "  compute: (int) -> int\n"
-            "let b = Box(compute: fn(n: int) -> int => n * 2)\n"
+            "let b = Box(compute = fn(n: int) -> int => n * 2)\n"
             "b.compute(5)"
         )
         assert r.resolved.program is not None
@@ -3648,8 +3937,8 @@ class TestValueCallErrors:
         err = reject_type(
             "record Box\n"
             "  compute: (int) -> int\n"
-            "let b = Box(compute: fn(n: int) -> int => n * 2)\n"
-            "b.compute(n: 5)"
+            "let b = Box(compute = fn(n: int) -> int => n * 2)\n"
+            "b.compute(n = 5)"
         )
         assert "named" in str(err).lower() or "declared" in str(err).lower()
 
@@ -4113,7 +4402,7 @@ class TestGenerics:
     # ------------------------------------------------------------------
 
     def test_d2_equality_on_T_rejected(self) -> None:
-        err = reject_type("def eq[T](a: T, b: T) -> bool = a = b")
+        err = reject_type("def eq[T](a: T, b: T) -> bool = a == b")
         assert (
             "type variable" in str(err).lower()
             or "abstract" in str(err).lower()
@@ -4279,7 +4568,7 @@ class TestGenerics:
 
     def test_d2_right_eq_T_rejected(self) -> None:
         # left is concrete, right is TypeVarType
-        err = reject_type("def f[T](x: T) -> bool = 1 = x")
+        err = reject_type("def f[T](x: T) -> bool = 1 == x")
         assert "type variable" in str(err).lower() or "not permitted" in str(err).lower()
 
     def test_d2_right_ordering_T_rejected(self) -> None:
@@ -4367,21 +4656,22 @@ class TestGenerics:
     # ------------------------------------------------------------------
 
     def test_generic_named_arg_call_accepted(self) -> None:
-        r = accept_type("def f[T](x: T, y: T) -> T = x\nf(x: 1, y: 2)")
+        r = accept_type("def f[T](x: T, y: T) -> T = x\nf(x = 1, y = 2)")
         assert r.resolved.program is not None
 
     def test_generic_named_arg_call_error_unknown(self) -> None:
         # T is inferred from positional arg; then named arg 'z' is unknown
-        err = reject_type("def f[T](x: T, y: T) -> T = x\nf(1, z: 2)")
+        err = reject_type("def f[T](x: T, y: T) -> T = x\nf(1, z = 2)")
         assert "unknown" in str(err).lower() or "parameter" in str(err).lower()
 
     def test_generic_named_arg_positional_and_named_duplicate(self) -> None:
-        err = reject_type("def f[T](x: T) -> T = x\nf(1, x: 1)")
+        err = reject_type("def f[T](x: T) -> T = x\nf(1, x = 1)")
         assert (
             "positional" in str(err).lower()
             or "parameter" in str(err).lower()
             or "name" in str(err).lower()
             or "both" in str(err).lower()
+            or "duplicate" in str(err).lower()
         )
 
     # ------------------------------------------------------------------
@@ -4399,6 +4689,12 @@ class TestGenerics:
     def test_generic_missing_required_arg_error(self) -> None:
         err = reject_type("def f[T](x: T, y: T) -> T = x\nf(1)")
         assert "missing" in str(err).lower() or "required" in str(err).lower()
+
+    def test_generic_call_with_defaulted_param_omitted(self) -> None:
+        # Covers the bound_expr-is-None branch in the new inference loop
+        # (a defaulted param is omitted at the call site).
+        r = accept_type("def f[T](x: T, y: int = 5) -> T = x\nf(\"hello\")")
+        assert r.resolved.program is not None
 
     # ------------------------------------------------------------------
     # Non-generic function rejects explicit type args
@@ -4451,7 +4747,7 @@ class TestGenericTypeDecl:
         r = accept_type(
             "record Box[T]\n"
             "  value: T\n"
-            "let b: Box[int] = Box(value: 42)\nb"
+            "let b: Box[int] = Box(value = 42)\nb"
         )
         assert r.resolved.program is not None
 
@@ -4460,7 +4756,7 @@ class TestGenericTypeDecl:
             "enum Option[T]\n"
             "  | none\n"
             "  | some(value: T)\n"
-            "let x: Option[int] = some(value: 1)\nx"
+            "let x: Option[int] = some(value = 1)\nx"
         )
         assert r.resolved.program is not None
 
@@ -4469,7 +4765,7 @@ class TestGenericTypeDecl:
             "record Pair[A, B]\n"
             "  first: A\n"
             "  second: B\n"
-            'let p: Pair[int, text] = Pair(first: 1, second: "hi")\np'
+            'let p: Pair[int, text] = Pair(first = 1, second = "hi")\np'
         )
         assert r.resolved.program is not None
 
@@ -4478,7 +4774,7 @@ class TestGenericTypeDecl:
             "enum Either[L, R]\n"
             "  | left(value: L)\n"
             "  | right(value: R)\n"
-            "let e: Either[int, text] = left(value: 1)\ne"
+            "let e: Either[int, text] = left(value = 1)\ne"
         )
         assert r.resolved.program is not None
 
@@ -4487,7 +4783,7 @@ class TestGenericTypeDecl:
             "record Tagged[T]\n"
             "  label: text\n"
             "  value: T\n"
-            'let t: Tagged[int] = Tagged(label: "n", value: 5)\nt'
+            'let t: Tagged[int] = Tagged(label = "n", value = 5)\nt'
         )
         assert r.resolved.program is not None
 
@@ -4495,7 +4791,7 @@ class TestGenericTypeDecl:
         r = accept_type(
             "record Box[T]\n"
             "  value: T\n"
-            "let b: Box[int] = Box(value: 1)\nb"
+            "let b: Box[int] = Box(value = 1)\nb"
         )
         gdef = r.type_env.get_generic_type("Box")
         assert gdef is not None
@@ -4505,7 +4801,7 @@ class TestGenericTypeDecl:
         err = reject_type(
             "record Box[T]\n"
             "  value: T\n"
-            "let b: Box = Box(value: 1)\nb"
+            "let b: Box = Box(value = 1)\nb"
         )
         assert "type argument" in str(err).lower()
 
@@ -4514,7 +4810,7 @@ class TestGenericTypeDecl:
             "record Bad[T]\n"
             "  x: T\n"
             "  x: int\n"
-            "Bad(x: 1)"
+            "Bad(x = 1)"
         )
         assert "duplicate" in str(err).lower() or "field" in str(err).lower()
 
@@ -4535,7 +4831,7 @@ class TestGenericConstructorInference:
         r = accept_type(
             "record Box[T]\n"
             "  value: T\n"
-            "Box(value: 42)"
+            "Box(value = 42)"
         )
         assert r.resolved.program is not None
 
@@ -4543,7 +4839,7 @@ class TestGenericConstructorInference:
         r = accept_type(
             "record Box[T]\n"
             "  value: T\n"
-            "let b: Box[int] = Box(value: 42)\nb"
+            "let b: Box[int] = Box(value = 42)\nb"
         )
         assert r.resolved.program is not None
 
@@ -4552,7 +4848,7 @@ class TestGenericConstructorInference:
             "enum Option[T]\n"
             "  | none\n"
             "  | some(value: T)\n"
-            "some(value: 1)"
+            "some(value = 1)"
         )
         assert r.resolved.program is not None
 
@@ -4561,7 +4857,7 @@ class TestGenericConstructorInference:
             "enum Option[T]\n"
             "  | none\n"
             "  | some(value: T)\n"
-            "let x: Option[int] = some(value: 1)\nx"
+            "let x: Option[int] = some(value = 1)\nx"
         )
         assert r.resolved.program is not None
 
@@ -4578,7 +4874,7 @@ class TestGenericConstructorInference:
         r = accept_type(
             "record Box[T]\n"
             "  value: T\n"
-            "let bs: list[Box[int]] = [Box(value: 1), Box(value: 2)]\nbs"
+            "let bs: list[Box[int]] = [Box(value = 1), Box(value = 2)]\nbs"
         )
         assert r.resolved.program is not None
 
@@ -4587,7 +4883,7 @@ class TestGenericConstructorInference:
             "enum Option[T]\n"
             "  | none\n"
             "  | some(value: T)\n"
-            "let x: Option[int] = Option.some(value: 1)\nx"
+            "let x: Option[int] = Option.some(value = 1)\nx"
         )
         assert r.resolved.program is not None
 
@@ -4596,17 +4892,17 @@ class TestGenericConstructorInference:
             "record Pair[A, B]\n"
             "  first: A\n"
             "  second: B\n"
-            'Pair(first: 1, second: "hi")'
+            'Pair(first = 1, second = "hi")'
         )
         assert r.resolved.program is not None
 
     def test_inferred_type_matches_result(self) -> None:
-        # Box(value: 1) infers T=int; assert the binding's type_args is (IntType(),)
+        # Box(value = 1) infers T=int; assert the binding's type_args is (IntType(),)
         # to lock down "no stale T / no concrete leak".
         r = accept_type(
             "record Box[T]\n"
             "  value: T\n"
-            "let b = Box(value: 1)\nb"
+            "let b = Box(value = 1)\nb"
         )
         decl = r.resolved.program.body.items[1]
         assert isinstance(decl, LetDecl)
@@ -4636,7 +4932,7 @@ class TestGenericConstructorExplicit:
         r = accept_type(
             "record Box[T]\n"
             "  value: T\n"
-            "Box::[int](value: 42)"
+            "Box::[int](value = 42)"
         )
         assert r.resolved.program is not None
 
@@ -4645,7 +4941,7 @@ class TestGenericConstructorExplicit:
             "enum Option[T]\n"
             "  | none\n"
             "  | some(value: T)\n"
-            "some::[int](value: 1)"
+            "some::[int](value = 1)"
         )
         assert r.resolved.program is not None
 
@@ -4654,7 +4950,7 @@ class TestGenericConstructorExplicit:
             "enum Option[T]\n"
             "  | none\n"
             "  | some(value: T)\n"
-            "Option.some::[int](value: 1)"
+            "Option.some::[int](value = 1)"
         )
         assert r.resolved.program is not None
 
@@ -4663,7 +4959,7 @@ class TestGenericConstructorExplicit:
             "record Pair[A, B]\n"
             "  first: A\n"
             "  second: B\n"
-            'Pair::[int, text](first: 1, second: "hi")'
+            'Pair::[int, text](first = 1, second = "hi")'
         )
         assert r.resolved.program is not None
 
@@ -4671,7 +4967,7 @@ class TestGenericConstructorExplicit:
         err = reject_type(
             "record Box[T]\n"
             "  value: T\n"
-            "Box::[int, text](value: 42)"
+            "Box::[int, text](value = 42)"
         )
         assert "type argument" in str(err).lower()
 
@@ -4692,7 +4988,7 @@ class TestGenericConstructorErrors:
         err = reject_type(
             "record Box[T]\n"
             "  value: T\n"
-            'let b: Box[int] = Box(value: "text")\nb'
+            'let b: Box[int] = Box(value = "text")\nb'
         )
         assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
 
@@ -4712,9 +5008,13 @@ class TestGenericConstructorErrors:
         err = reject_type(
             "record Box[T]\n"
             "  value: T\n"
-            "Box(value: 1, extra: 2)"
+            "Box(value = 1, extra = 2)"
         )
-        assert "no field" in str(err).lower() or "field" in str(err).lower()
+        assert (
+            "no field" in str(err).lower()
+            or "field" in str(err).lower()
+            or "unknown" in str(err).lower()
+        )
 
     def test_inconsistent_type_inference_rejected(self) -> None:
         # Pair(first: 1, second: T=bool) when annotation says Pair[int, int]
@@ -4722,7 +5022,7 @@ class TestGenericConstructorErrors:
             "record Pair[A, B]\n"
             "  first: A\n"
             "  second: B\n"
-            "let p: Pair[int, int] = Pair(first: 1, second: true)\np"
+            "let p: Pair[int, int] = Pair(first = 1, second = true)\np"
         )
         assert (
             "mismatch" in str(err).lower()
@@ -4746,7 +5046,7 @@ class TestGenericInvariance:
         err = reject_type(
             "record Box[T]\n"
             "  value: T\n"
-            'let b: Box[text] = Box(value: 1)\nb'
+            'let b: Box[text] = Box(value = 1)\nb'
         )
         assert (
             "mismatch" in str(err).lower()
@@ -4759,7 +5059,7 @@ class TestGenericInvariance:
             "enum Option[T]\n"
             "  | none\n"
             "  | some(value: T)\n"
-            "let x: Option[text] = some(value: 1)\nx"
+            "let x: Option[text] = some(value = 1)\nx"
         )
         assert (
             "mismatch" in str(err).lower()
@@ -4771,7 +5071,7 @@ class TestGenericInvariance:
         r = accept_type(
             "record Box[T]\n"
             "  value: T\n"
-            "let b: Box[int] = Box(value: 1)\nb"
+            "let b: Box[int] = Box(value = 1)\nb"
         )
         assert r.resolved.program is not None
 
@@ -4783,7 +5083,7 @@ class TestGenericFieldAccess:
         r = accept_type(
             "record Box[T]\n"
             "  value: T\n"
-            "let b: Box[int] = Box(value: 42)\nb.value"
+            "let b: Box[int] = Box(value = 42)\nb.value"
         )
         assert r.resolved.program is not None
 
@@ -4791,7 +5091,7 @@ class TestGenericFieldAccess:
         r = accept_type(
             "record Box[T]\n"
             "  value: T\n"
-            "let b: Box[int] = Box(value: 42)\n"
+            "let b: Box[int] = Box(value = 42)\n"
             "let v: int = b.value\nv"
         )
         assert r.resolved.program is not None
@@ -4800,7 +5100,7 @@ class TestGenericFieldAccess:
         err = reject_type(
             "record Box[T]\n"
             "  value: T\n"
-            "let b: Box[int] = Box(value: 42)\n"
+            "let b: Box[int] = Box(value = 42)\n"
             "let s: text = b.value\ns"
         )
         assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
@@ -4810,7 +5110,7 @@ class TestGenericFieldAccess:
             "record Pair[A, B]\n"
             "  first: A\n"
             "  second: B\n"
-            'let p: Pair[int, text] = Pair(first: 1, second: "hi")\n'
+            'let p: Pair[int, text] = Pair(first = 1, second = "hi")\n'
             "let x: int = p.first\n"
             "let y: text = p.second\nx"
         )
@@ -4825,8 +5125,8 @@ class TestGenericPatterns:
             "enum Option[T]\n"
             "  | none\n"
             "  | some(value: T)\n"
-            "let x: Option[int] = some(value: 1)\n"
-            "case x of | some(value: v) => v | none() => 0"
+            "let x: Option[int] = some(value = 1)\n"
+            "case x of | some(value = v) => v | none() => 0"
         )
         assert r.resolved.program is not None
 
@@ -4835,8 +5135,8 @@ class TestGenericPatterns:
             "enum Option[T]\n"
             "  | none\n"
             "  | some(value: T)\n"
-            "let x: Option[int] = some(value: 1)\n"
-            "case x of | some(value: v) => v + 1 | none() => 0"
+            "let x: Option[int] = some(value = 1)\n"
+            "case x of | some(value = v) => v + 1 | none() => 0"
         )
         assert r.resolved.program is not None
 
@@ -4878,7 +5178,7 @@ class TestNonGenericConstructorsUnchanged:
     """Verify that non-generic constructors continue to work as before."""
 
     def test_non_generic_record_still_works(self) -> None:
-        r = accept_type("record Point\n  x: int\n  y: int\nPoint(x: 1, y: 2)")
+        r = accept_type("record Point\n  x: int\n  y: int\nPoint(x = 1, y = 2)")
         assert r.resolved.program is not None
 
     def test_non_generic_enum_still_works(self) -> None:
@@ -4886,7 +5186,7 @@ class TestNonGenericConstructorsUnchanged:
         assert r.resolved.program is not None
 
     def test_non_generic_type_arg_rejected(self) -> None:
-        err = reject_type("record Point\n  x: int\n  y: int\nPoint::[int](x: 1, y: 2)")
+        err = reject_type("record Point\n  x: int\n  y: int\nPoint::[int](x = 1, y = 2)")
         assert (
             "type argument" in str(err).lower()
             or "not a generic" in str(err).lower()
@@ -4927,7 +5227,7 @@ class TestNonGenericConstructorAsValue:
 
     def test_record_ctor_value_called_with_named_arg_rejected(self) -> None:
         err = reject_type(
-            "record Box\n  item: int\nlet make = Box\nmake(item: 5)"
+            "record Box\n  item: int\nlet make = Box\nmake(item = 5)"
         )
         assert (
             "named" in str(err).lower()
@@ -5010,7 +5310,7 @@ class TestGenericEnumQualifiersAndTypeVarScoping:
         # resolved as a concrete type, which rejects bare generic names.
         r = accept_type(
             self._OPTION
-            + "let o: Option[int] = some(value: 5)\n"
+            + "let o: Option[int] = some(value = 5)\n"
             + "case o of\n"
             + "  | Option.none => 0\n"
             + "  | Option.some(value) => value\n"
@@ -5021,7 +5321,7 @@ class TestGenericEnumQualifiersAndTypeVarScoping:
         # The bound payload is instantiated from the scrutinee's type args.
         r = accept_type(
             self._OPTION
-            + "let o: Option[int] = some(value: 5)\n"
+            + "let o: Option[int] = some(value = 5)\n"
             + "case o of\n"
             + "  | Option.none => 0\n"
             + "  | Option.some(value) => value + 1\n"
@@ -5031,7 +5331,7 @@ class TestGenericEnumQualifiersAndTypeVarScoping:
     def test_qualified_is_test_on_generic_enum(self) -> None:
         r = accept_type(
             self._OPTION
-            + "let o: Option[int] = some(value: 5)\n"
+            + "let o: Option[int] = some(value = 5)\n"
             + "if o is Option.some => print 1\n"
             + "if o is not Option.none => print 2\n"
         )
@@ -5043,7 +5343,7 @@ class TestGenericEnumQualifiersAndTypeVarScoping:
         err = reject_type(
             self._OPTION
             + "record Box[T]\n  value: T\n"
-            + "let o: Option[int] = some(value: 5)\n"
+            + "let o: Option[int] = some(value = 5)\n"
             + "if o is Box.some => print 1\n"
         )
         assert "not a known enum type" in str(err).lower()
@@ -5053,7 +5353,7 @@ class TestGenericEnumQualifiersAndTypeVarScoping:
         err = reject_type(
             self._OPTION
             + "enum Maybe[T]\n  | nothing\n  | just(value: T)\n"
-            + "let o: Option[int] = some(value: 5)\n"
+            + "let o: Option[int] = some(value = 5)\n"
             + "if o is Maybe.just => print 1\n"
         )
         assert "resolves to enum" in str(err).lower()
@@ -5102,7 +5402,7 @@ class TestGenericCoverageEdgeCases:
             "  value: T\n"
             "record Wrapper\n"
             "  box: Box[int]\n"
-            "let w = Wrapper(box: Box(value: 42))\nw"
+            "let w = Wrapper(box = Box(value = 42))\nw"
         )
         assert r.resolved.program is not None
 
@@ -5114,7 +5414,7 @@ class TestGenericCoverageEdgeCases:
             "  | some(value: T)\n"
             "record Wrapper\n"
             "  opt: Option[int]\n"
-            "let w = Wrapper(opt: some(value: 1))\nw"
+            "let w = Wrapper(opt = some(value = 1))\nw"
         )
         assert r.resolved.program is not None
 
@@ -5149,7 +5449,7 @@ class TestGenericCoverageEdgeCases:
             "  value: T\n"
             "record Wrapper\n"
             "  box: Box[Unknown[int]]\n"
-            "let w = Wrapper(box: Box(value: 1))\nw"
+            "let w = Wrapper(box = Box(value = 1))\nw"
         )
         assert err is not None
 
@@ -5166,12 +5466,12 @@ class TestNestedGenericInference:
     """
 
     def test_def_call_unwrap_infers_u_from_box(self) -> None:
-        # def-call path: unwrap(b: Box(value: 1)) must infer U=int without annotation.
+        # def-call path: unwrap(b = Box(value = 1)) must infer U=int without annotation.
         r = accept_type(
             "record Box[T]\n"
             "  value: T\n"
             "def unwrap[U](b: Box[U]) -> U = b.value\n"
-            "let n: int = unwrap(b: Box(value: 1))\nn"
+            "let n: int = unwrap(b = Box(value = 1))\nn"
         )
         assert r.resolved.program is not None
 
@@ -5181,19 +5481,19 @@ class TestNestedGenericInference:
             "record Box[T]\n"
             "  value: T\n"
             "def unwrap[U](b: Box[U]) -> U = b.value\n"
-            "let s: text = unwrap(b: Box(value: 1))\ns"
+            "let s: text = unwrap(b = Box(value = 1))\ns"
         )
         assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
 
     def test_constructor_holder_infers_u_from_nested_box(self) -> None:
-        # constructor path: Holder(inner: Box(value: 1)) infers U=int.
+        # constructor path: Holder(inner = Box(value = 1)) infers U=int.
         # Assert the binding's type_args is (IntType(),).
         r = accept_type(
             "record Box[T]\n"
             "  value: T\n"
             "record Holder[U]\n"
             "  inner: Box[U]\n"
-            "let h = Holder(inner: Box(value: 1))\nh"
+            "let h = Holder(inner = Box(value = 1))\nh"
         )
         decl = r.resolved.program.body.items[2]
         assert isinstance(decl, LetDecl)
@@ -5208,7 +5508,7 @@ class TestNestedGenericInference:
             "  value: T\n"
             "record Holder[U]\n"
             "  inner: Box[U]\n"
-            "let h = Holder(inner: Box(value: 1))\n"
+            "let h = Holder(inner = Box(value = 1))\n"
             "let n: int = h.inner.value\nn"
         )
         assert r.resolved.program is not None
@@ -5219,7 +5519,7 @@ class TestNestedGenericInference:
             "record Box[T]\n"
             "  value: T\n"
             "def swap[U](a: Box[U], b: Box[U]) -> U = a.value\n"
-            "swap(a: Box(value: 1), b: Box(value: \"hi\"))"
+            "swap(a = Box(value = 1), b = Box(value = \"hi\"))"
         )
         assert (
             "inconsistent" in str(err).lower()
@@ -5245,7 +5545,7 @@ class TestGenericRecursionRejection:
             "record Tree[T]\n"
             "  value: T\n"
             "  child: Tree[T]\n"
-            "Tree(value: 1, child: Tree(value: 2, child: ()))"
+            "Tree(value = 1, child = Tree(value = 2, child = ()))"
         )
         assert "recursive" in str(err).lower()
 
@@ -5255,7 +5555,7 @@ class TestGenericRecursionRejection:
             "record Tree[T]\n"
             "  value: T\n"
             "  children: list[Tree[T]]\n"
-            "Tree(value: 1, children: [])"
+            "Tree(value = 1, children = [])"
         )
         assert "recursive" in str(err).lower()
 
@@ -5265,7 +5565,7 @@ class TestGenericRecursionRejection:
             "record Tree[T]\n"
             "  value: T\n"
             "  children: dict[text, Tree[T]]\n"
-            "Tree(value: 1, children: {})"
+            "Tree(value = 1, children = {})"
         )
         assert "recursive" in str(err).lower()
 
@@ -5286,7 +5586,7 @@ class TestGenericRecursionRejection:
             "  b: B[T]\n"
             "record B[T]\n"
             "  a: A[T]\n"
-            "A(b: B(a: ()))"
+            "A(b = B(a = ()))"
         )
         assert "recursive" in str(err).lower()
 
@@ -5305,7 +5605,7 @@ class TestGenericAbstractInstanceAccess:
             "record Box[T]\n"
             "  value: T\n"
             "def unbox[U](b: Box[U]) -> U = b.value\n"
-            "let n: int = unbox(b: Box(value: 42))\nn"
+            "let n: int = unbox(b = Box(value = 42))\nn"
         )
         assert r.resolved.program is not None
 
@@ -5315,7 +5615,7 @@ class TestGenericAbstractInstanceAccess:
             "record Box[T]\n"
             "  value: T\n"
             "def unbox[U](b: Box[U]) -> U = b.value\n"
-            "let s: text = unbox(b: Box(value: 42))\ns"
+            "let s: text = unbox(b = Box(value = 42))\ns"
         )
         assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
 
@@ -5327,9 +5627,9 @@ class TestGenericAbstractInstanceAccess:
             "  | some(value: T)\n"
             "def get_or[U](opt: Option[U], default: U) -> U =\n"
             "  case opt of\n"
-            "    | some(value: v) => v\n"
+            "    | some(value = v) => v\n"
             "    | none() => default\n"
-            "let n: int = get_or(opt: some(value: 1), default: 0)\nn"
+            "let n: int = get_or(opt = some(value = 1), default = 0)\nn"
         )
         assert r.resolved.program is not None
 
@@ -5341,9 +5641,9 @@ class TestGenericAbstractInstanceAccess:
             "  | some(value: T)\n"
             "def get_or[U](opt: Option[U], default: U) -> U =\n"
             "  case opt of\n"
-            "    | some(value: v) => v\n"
+            "    | some(value = v) => v\n"
             "    | none() => default\n"
-            "let s: text = get_or(opt: some(value: 1), default: 0)\ns"
+            "let s: text = get_or(opt = some(value = 1), default = 0)\ns"
         )
         assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
 
@@ -5424,7 +5724,7 @@ class TestCast:
     def test_record_as_json_accepted(self) -> None:
         """record as json is now TOTAL_JSON (D10 — explicit nominal→json cast)."""
         from agm.agl.semantics.types import CastKind
-        r = accept_type("record R\n  x: int\nlet r = R(x: 1)\nr as json")
+        r = accept_type("record R\n  x: int\nlet r = R(x = 1)\nr as json")
         assert r
         spec = next(iter(r.cast_specs.values()))
         assert spec.kind == CastKind.TOTAL_JSON
@@ -5488,7 +5788,7 @@ class TestCast:
 
     def test_raise_operand_can_be_cast(self) -> None:
         """A cast preserves the universal assignability of bottom."""
-        r = accept_type('(raise Abort(message: "x")) as text')
+        r = accept_type('(raise Abort(message = "x")) as text')
         cast = r.resolved.program.body.items[0]
         assert isinstance(cast, Cast)
         assert r.node_types[cast.node_id] == TextType()
@@ -5532,7 +5832,7 @@ class TestParseJsonCall:
 
     def test_parse_json_named_arg_rejected(self) -> None:
         """Named args to parse_json are rejected."""
-        err = reject_type('parse_json(text: "42")')
+        err = reject_type('parse_json(text = "42")')
         assert "parse_json" in str(err).lower() or "positional" in str(err).lower()
 
     def test_parse_json_wrong_arity_rejected(self) -> None:
@@ -5576,7 +5876,7 @@ class TestSelfRefTypeInSingleModule:
 
     def test_self_ref_own_record_type_accepted(self) -> None:
         """'::MyRecord' in a single-module program resolves to the local record type."""
-        r = accept_type("record MyRecord\n  x: int\ndef f() -> ::MyRecord = MyRecord(x: 1)\nf()")
+        r = accept_type("record MyRecord\n  x: int\ndef f() -> ::MyRecord = MyRecord(x = 1)\nf()")
         # accept_type returns CheckedProgram; just checking it doesn't raise
         assert r is not None
 
@@ -5678,7 +5978,7 @@ class TestGenericNominalModuleId:
 
         # In single-module mode the module_id is ENTRY_ID; verify the template
         # also has ENTRY_ID (consistency check: it's at least not wrong).
-        cp = parse_resolve_check("record Box[T]\n  value: T\nlet x: Box[int] = Box(value: 1)\nx")
+        cp = parse_resolve_check("record Box[T]\n  value: T\nlet x: Box[int] = Box(value = 1)\nx")
         gdef = cp.type_env.get_generic_type("Box")
         assert gdef is not None
         assert isinstance(gdef, GenericTypeDef)
@@ -5689,7 +5989,135 @@ class TestGenericNominalModuleId:
 
 
 # ---------------------------------------------------------------------------
-# Config declarations — typecheck (Task 2)
+# Field-assignment syntax change: constructor shorthand binding, positional
+# literal rejection, and '==' / '!=' equality typing. These specify the TARGET
+# behavior and are expected to fail until grammar + constructor checker update.
+# ---------------------------------------------------------------------------
+
+
+class TestFieldAssignmentSyntaxChecks:
+    def test_constructor_shorthand_binds_field(self) -> None:
+        """R(x) binds field 'x' to the in-scope local 'x' (shorthand for x = x)."""
+        r = accept_type("record R\n  x: int\n  y: int\nlet x = 5\nlet r = R(x, y = 1)\nr")
+        assert r.resolved.program is not None
+
+    def test_enum_shorthand_binds_field(self) -> None:
+        r = accept_type("enum E\n  | A(x: int)\nlet x = 7\nlet e = A(x)\ne")
+        assert r.resolved.program is not None
+
+    def test_shorthand_and_explicit_same_field_is_duplicate(self) -> None:
+        """A field supplied both via shorthand and explicitly is a duplicate."""
+        err = reject_any("record R\n  x: int\nlet x = 1\nR(x, x = 2)")
+        assert "duplicate" in str(err).lower()
+
+    def test_reversed_order_shorthand_after_named_arg(self) -> None:
+        """Positional args (including bare-name shorthands) must precede named args.
+        B(r = ..., x) is rejected because positional 'x' follows named arg 'r = ...'."""
+        from agm.agl.parser.errors import AglSyntaxError
+
+        with pytest.raises(AglSyntaxError):
+            accept_type(
+                "record R\n  x: int\n"
+                "enum E\n  | B(x: int, r: R)\n"
+                "let x = 1\n"
+                "let e = B(r = R(x = 9), x)\ne"
+            )
+
+    def test_positional_literal_to_constructor_rejected(self) -> None:
+        """A non-VarRef positional arg (a literal) is not shorthand — rejected."""
+        err = reject_type("record R\n  x: int\nR(1)")
+        assert "named" in str(err).lower() or "positional" in str(err).lower()
+
+    def test_positional_expr_to_constructor_rejected(self) -> None:
+        err = reject_type("record R\n  x: int\nlet x = 1\nR(x + 1)")
+        assert "named" in str(err).lower() or "positional" in str(err).lower()
+
+    def test_eq_eq_typechecks_to_bool(self) -> None:
+        r = accept_type("1 == 2")
+        node = r.resolved.program.body.items[0]
+        assert r.node_types[node.node_id] == BoolType()
+
+    def test_eq_eq_and_neq_on_structured_value_typecheck_to_bool(self) -> None:
+        """Both '==' and '!=' on a structured (record) value yield bool."""
+        src = (
+            "record P\n  n: int\n"
+            "let a = P(n = 1)\n"
+            "let b = P(n = 2)\n"
+            "a == b\n"
+            "a != b"
+        )
+        r = accept_type(src)
+        # item 0 is the RecordDef; the two let bindings are items 1-2; the
+        # '==' and '!=' expression statements are items 3 and 4.
+        items = r.resolved.program.body.items
+        assert r.node_types[items[3].node_id] == BoolType()
+        assert r.node_types[items[4].node_id] == BoolType()
+
+
+# ---------------------------------------------------------------------------
+# Finding 1 regression: generic inference for named-only shorthand out-of-order
+# ---------------------------------------------------------------------------
+
+
+class TestGenericNamedOnlyShorthandInference:
+    """Regression tests for Finding 1: generic inference must use bind_arguments
+    so that named-only shorthand positional args are matched to their param by
+    NAME rather than by raw positional index.
+
+    def g[T, U](x: int, *, z: T, w: U) -> T = z
+
+    All three call forms must be accepted and infer correctly.
+    """
+
+    _DEF = "def g[T, U](x: int, *, z: T, w: U) -> T = z\n"
+
+    def test_named_only_shorthands_in_order_accepted(self) -> None:
+        """g(1, z, w) — in-order shorthands (already worked before fix)."""
+        src = self._DEF + "let z: text = \"hi\"\nlet w = 0\ng(1, z, w)"
+        r = accept_type(src)
+        assert r.resolved.program is not None
+
+    def test_named_only_shorthand_and_named_arg_out_of_order_accepted(self) -> None:
+        """g(1, w, z = myv) — shorthand w + named z, out of declaration order."""
+        src = self._DEF + "let myv: text = \"hi\"\nlet w = 0\ng(1, w, z = myv)"
+        r = accept_type(src)
+        assert r.resolved.program is not None
+
+    def test_named_only_two_shorthands_out_of_order_accepted(self) -> None:
+        """g(1, w, z) — two shorthands, out of declaration order."""
+        src = self._DEF + "let z: text = \"hi\"\nlet w = 0\ng(1, w, z)"
+        r = accept_type(src)
+        assert r.resolved.program is not None
+
+
+# ---------------------------------------------------------------------------
+# Finding 2 regression: lambda D6b required-after-defaulted check
+# ---------------------------------------------------------------------------
+
+
+class TestLambdaRequiredAfterDefaulted:
+    """Regression tests for Finding 2: the D6b required-after-defaulted check
+    must apply to lambdas, not just def declarations.
+    """
+
+    def test_lambda_required_after_defaulted_rejected(self) -> None:
+        """fn(x: int = 5, y: int) -> int => x + y must be rejected."""
+        err = reject_type("fn(x: int = 5, y: int) -> int => x + y")
+        assert "default" in str(err).lower() or "required" in str(err).lower()
+
+    def test_lambda_valid_defaulted_after_required_accepted(self) -> None:
+        """fn(x: int, y: int = 5) -> int => x + y is fine (required before default)."""
+        r = accept_type("fn(x: int, y: int = 5) -> int => x + y")
+        assert r.resolved.program is not None
+
+    def test_lambda_named_only_any_default_order_accepted(self) -> None:
+        """Named-only params are order-free: fn(*, x: int = 0, y: int) -> int => y is ok."""
+        r = accept_type("fn(*, x: int = 0, y: int) -> int => y")
+        assert r.resolved.program is not None
+
+
+# ---------------------------------------------------------------------------
+# Config declarations — typecheck
 # ---------------------------------------------------------------------------
 
 

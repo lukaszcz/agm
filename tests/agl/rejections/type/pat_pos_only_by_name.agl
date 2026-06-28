@@ -1,0 +1,6 @@
+enum E
+  | V(a: int, /, b: int)
+let e: E = V(1, 2)
+case e of
+  | V(a = x, b = y) => print x
+  | _ => print "other"

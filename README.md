@@ -178,7 +178,7 @@ DSL for composable agent workflows: it supports typed params and outputs, user-d
 (`def`/`fn`), structured JSON targets, do-loops with retry/abort policies, control flow
 (if/case/try), shell execution (`exec`), and named agents declared in the source (`agent NAME`,
 optionally `= "runner"`). All calls — including `ask`, `print`, and `exec` — use the uniform
-`f(arg, name: val)` syntax. The runner command for each declared agent is resolved from
+`f(arg, name = val)` syntax. The runner command for each declared agent is resolved from
 `[exec.agents]` (per-agent), the source runner hint, `--runner`, `[exec] runner`,
 `[loop] runner`, or `claude -p` (built-in default).
 

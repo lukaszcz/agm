@@ -11,8 +11,8 @@ def unwrap(o: Opt) -> int =
 
 def label(o: Opt) -> text = "value=${unwrap(o)}"
 
-print label(Opt.Some(x: 1))
-let nested_label = label Opt.Some(x: 2)
+print label(Opt.Some(x = 1))
+let nested_label = label Opt.Some(x = 2)
 print nested_label
 let none_value = unwrap Opt.None
 print none_value

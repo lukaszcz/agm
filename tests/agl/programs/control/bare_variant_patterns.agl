@@ -40,12 +40,12 @@ def describe(b: Box) -> text =
 # Nested: a bare variant pattern (Red) and a bare binder (other) on a subfield.
 def inner_name(w: Wrapper) -> text =
   case w of
-    | Wrap(color: Red) => "wrapped-red"
-    | Wrap(color: other) => "wrapped-${name(other)}"
+    | Wrap(color = Red) => "wrapped-red"
+    | Wrap(color = other) => "wrapped-${name(other)}"
 
 let c: Color = pick(n)
 print(name(c))
 print(code(c))
 print(describe(Empty))
-print(describe(Full(item: n)))
-print(inner_name(Wrap(color: c)))
+print(describe(Full(item = n)))
+print(inner_name(Wrap(color = c)))

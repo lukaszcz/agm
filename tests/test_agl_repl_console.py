@@ -234,7 +234,7 @@ class TestMultiline:
 class TestIsIncomplete:
     @pytest.mark.parametrize(
         "source",
-        ["record R", "enum E", "case x of", "try", "do agent", "if x = 1 =>", "1 +"],
+        ["record R", "enum E", "case x of", "try", "do agent", "if x == 1 =>", "1 +"],
     )
     def test_incomplete_sources(self, source: str) -> None:
         assert is_incomplete(source) is True
@@ -293,8 +293,8 @@ class TestLexer:
     def test_half_typed_line_does_not_raise(self) -> None:
         lexer = AglPromptLexer()
         # An invalid character mid-line must fall back to plain text, not raise.
-        fragments = lexer.lex_document(Document("let x = @bad"))(0)
-        assert "".join(text for _style, text in fragments) == "let x = @bad"
+        fragments = lexer.lex_document(Document("let x = ~bad"))(0)
+        assert "".join(text for _style, text in fragments) == "let x = ~bad"
 
     def test_string_literal_is_styled(self) -> None:
         lexer = AglPromptLexer()

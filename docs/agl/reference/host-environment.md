@@ -73,7 +73,7 @@ output is a valid empty response ([Exceptions](exceptions.md)).
 ## Codecs
 
 The built-in codecs are `text` and `json`. Hosts may register additional
-codecs (selectable per call with `format:`). Built-in names are reserved;
+codecs (selectable per call with `format`). Built-in names are reserved;
 duplicate registrations are host configuration errors.
 
 Each registration declares which type kinds it supports, and the
@@ -185,7 +185,7 @@ or an auto path from `--log` still applies to the trace infrastructure. Use
 | Agent idle timeout | host-defined | every agent dispatch |
 
 Source-level call options always override host defaults — in both
-directions: `strict_json: false` forces lenient parsing even under a strict
+directions: `strict_json = false` forces lenient parsing even under a strict
 host default.
 
 ## Tracing

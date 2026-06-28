@@ -1,0 +1,25 @@
+{
+  "scenarios": [
+    {
+      "name": "start_seven",
+      "params": {"start": 7},
+      "expect": {
+        "stdout": "true\n7\n8\n9\ntrue\n"
+      }
+    },
+    {
+      "name": "start_three",
+      "params": {"start": 3},
+      "expect": {
+        "stdout": "true\n3\n4\n5\ntrue\n"
+      }
+    },
+    {
+      "name": "start_zero",
+      "params": {"start": 0},
+      "expect": {
+        "stdout": "true\n0\n1\n2\ntrue\n"
+      }
+    }
+  ]
+}

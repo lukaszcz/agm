@@ -10,10 +10,10 @@ enum Verdict
   | Fail(issues: list[text])
 
 def review_once(doc: text) -> Verdict =
-  ask("Review this document: " + doc, agent: reviewer)
+  ask("Review this document: " + doc, agent = reviewer)
 
 def review_with_retry(doc: text) -> Verdict =
-  ask("Review this document: " + doc, agent: reviewer, on_parse_error: Retry(n: 2))
+  ask("Review this document: " + doc, agent = reviewer, on_parse_error = Retry(n = 2))
 
 # Direct call via function — result printed.
 let v1: Verdict = review_once(topic)

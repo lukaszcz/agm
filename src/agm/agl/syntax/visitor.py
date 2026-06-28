@@ -49,7 +49,6 @@ from agm.agl.syntax.nodes import (
     EnumDef,
     ExceptionDef,
     FieldAccess,
-    FieldDef,
     FuncDef,
     If,
     IfBranch,
@@ -163,7 +162,6 @@ class Visitor:
     def visit_ImportDecl(self, node: ImportDecl) -> None: ...
 
     # Declaration nodes
-    def visit_FieldDef(self, node: FieldDef) -> None: ...
     def visit_RecordDef(self, node: RecordDef) -> None: ...
     def visit_VariantDef(self, node: VariantDef) -> None: ...
     def visit_EnumDef(self, node: EnumDef) -> None: ...
@@ -260,7 +258,6 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         ImportItem,
         ImportDecl,
         # declaration nodes
-        FieldDef,
         RecordDef,
         VariantDef,
         EnumDef,
@@ -390,9 +387,6 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
             walk(import_item, callback)
 
     # --- Declaration nodes ---
-    elif isinstance(node, FieldDef):
-        walk(node.type_expr, callback)
-
     elif isinstance(node, RecordDef):
         for f in node.fields:
             walk(f, callback)
@@ -589,7 +583,9 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
     elif isinstance(node, ConstructorPattern):
         if node.module_qualifier is not None:
             walk(node.module_qualifier, callback)
-        for pf in node.fields:
+        for p in node.positional:
+            walk(p, callback)
+        for pf in node.named:
             walk(pf, callback)
 
     elif isinstance(node, ElseSentinel):

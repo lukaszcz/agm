@@ -64,7 +64,6 @@ from agm.agl.syntax import (
     ExceptionDef,
     Expr,
     FieldAccess,
-    FieldDef,
     FuncDef,
     FuncT,
     If,
@@ -88,6 +87,7 @@ from agm.agl.syntax import (
     NullLit,
     Param,
     ParamDecl,
+    ParamKind,
     Pattern,
     PatternField,
     Program,
@@ -537,7 +537,8 @@ class TestParamNode:
 
     def test_param_required(self) -> None:
         t = IntT(span=self._s(), node_id=2)
-        p = Param(name="x", type_expr=t, default=None, span=self._s(), node_id=1)
+        p = Param(name="x", type_expr=t, kind=ParamKind.STANDARD, default=None,
+                  span=self._s(), node_id=1)
         assert p.name == "x"
         assert p.type_expr is t
         assert p.default is None
@@ -545,19 +546,23 @@ class TestParamNode:
     def test_param_with_default(self) -> None:
         t = IntT(span=self._s(), node_id=2)
         default = IntLit(value=0, span=self._s(), node_id=3)
-        p = Param(name="n", type_expr=t, default=default, span=self._s(), node_id=1)
+        p = Param(name="n", type_expr=t, kind=ParamKind.STANDARD, default=default,
+                  span=self._s(), node_id=1)
         assert p.default is default
 
     def test_param_equality_ignores_span_node_id(self) -> None:
         t1 = IntT(span=span(1, 0, 1, 3), node_id=10)
         t2 = IntT(span=span(5, 0, 5, 3), node_id=20)
-        a = Param(name="x", type_expr=t1, default=None, span=span(1, 0, 1, 5), node_id=1)
-        b = Param(name="x", type_expr=t2, default=None, span=span(9, 0, 9, 5), node_id=99)
+        a = Param(name="x", type_expr=t1, kind=ParamKind.STANDARD, default=None,
+                  span=span(1, 0, 1, 5), node_id=1)
+        b = Param(name="x", type_expr=t2, kind=ParamKind.STANDARD, default=None,
+                  span=span(9, 0, 9, 5), node_id=99)
         assert a == b
 
     def test_param_frozen(self) -> None:
         t = IntT(span=span(), node_id=2)
-        p = Param(name="x", type_expr=t, default=None, span=span(), node_id=1)
+        p = Param(name="x", type_expr=t, kind=ParamKind.STANDARD, default=None,
+                  span=span(), node_id=1)
         with pytest.raises((FrozenInstanceError, AttributeError)):
             setattr(p, "name", "y")
 
@@ -586,6 +591,7 @@ class TestFuncDefNode:
         p = Param(
             name="n",
             type_expr=IntT(span=self._s(), node_id=3),
+            kind=ParamKind.STANDARD,
             default=None,
             span=self._s(),
             node_id=2,
@@ -632,6 +638,7 @@ class TestLambdaNode:
         p = Param(
             name="x",
             type_expr=IntT(span=self._s(), node_id=2),
+            kind=ParamKind.STANDARD,
             default=None,
             span=self._s(),
             node_id=3,
@@ -645,6 +652,7 @@ class TestLambdaNode:
         p = Param(
             name="x",
             type_expr=IntT(span=self._s(), node_id=2),
+            kind=ParamKind.STANDARD,
             default=None,
             span=self._s(),
             node_id=3,
@@ -946,22 +954,26 @@ class TestDeclarations:
     def _s(self) -> SourceSpan:
         return span()
 
-    def test_field_def(self) -> None:
+    def test_field_as_param(self) -> None:
         t = TextT(span=self._s(), node_id=2)
-        f = FieldDef(name="title", type_expr=t, span=self._s(), node_id=1)
+        f = Param(name="title", type_expr=t, kind=ParamKind.NAMED_ONLY, default=None,
+                  span=self._s(), node_id=1)
         assert f.name == "title"
         assert f.type_expr is t
+        assert f.kind == ParamKind.NAMED_ONLY
 
     def test_record_def(self) -> None:
         t = IntT(span=self._s(), node_id=3)
-        f = FieldDef(name="x", type_expr=t, span=self._s(), node_id=2)
+        f = Param(name="x", type_expr=t, kind=ParamKind.NAMED_ONLY, default=None,
+                  span=self._s(), node_id=2)
         node = RecordDef(name="Point", fields=(f,), span=self._s(), node_id=1)
         assert node.name == "Point"
         assert isinstance(node.fields, tuple)
 
     def test_variant_def(self) -> None:
         t = IntT(span=self._s(), node_id=3)
-        f = FieldDef(name="val", type_expr=t, span=self._s(), node_id=2)
+        f = Param(name="val", type_expr=t, kind=ParamKind.STANDARD, default=None,
+                  span=self._s(), node_id=2)
         v = VariantDef(name="Some", fields=(f,), span=self._s(), node_id=1)
         assert v.name == "Some"
 
@@ -1023,7 +1035,10 @@ class TestDeclarations:
     def test_exception_def_fields(self) -> None:
         """ExceptionDef stores name, fields, base, and privacy/builtin flags."""
         t = TextT(span=self._s(), node_id=3)
-        f = FieldDef(name="msg", type_expr=t, span=self._s(), node_id=2)
+        f = Param(
+            name="msg", type_expr=t, kind=ParamKind.NAMED_ONLY,
+            default=None, span=self._s(), node_id=2,
+        )
         node = ExceptionDef(name="MyErr", fields=(f,), base=None, span=self._s(), node_id=1)
         assert node.name == "MyErr"
         assert isinstance(node.fields, tuple)
@@ -1041,7 +1056,10 @@ class TestDeclarations:
 
     def test_exception_def_equality_ignores_span(self) -> None:
         t = IntT(span=self._s(), node_id=3)
-        f = FieldDef(name="code", type_expr=t, span=self._s(), node_id=2)
+        f = Param(
+            name="code", type_expr=t, kind=ParamKind.NAMED_ONLY,
+            default=None, span=self._s(), node_id=2,
+        )
         a = ExceptionDef(name="E", fields=(f,), base=None, span=span(1, 0, 1, 1), node_id=1)
         b = ExceptionDef(name="E", fields=(f,), base=None, span=span(9, 0, 9, 1), node_id=99)
         assert a == b
@@ -1053,12 +1071,14 @@ class TestDeclarations:
         assert ExceptionDef in args
 
     def test_exception_def_walk_visits_fields(self) -> None:
-        """walk(ExceptionDef) visits the node and each FieldDef in its fields."""
+        """walk(ExceptionDef) visits the node and each Param in its fields."""
         from agm.agl.syntax.visitor import walk
 
         s = self._s()
         t = IntT(span=s, node_id=3)
-        field = FieldDef(name="code", type_expr=t, span=s, node_id=2)
+        field = Param(
+            name="code", type_expr=t, kind=ParamKind.NAMED_ONLY, default=None, span=s, node_id=2
+        )
         exc = ExceptionDef(name="MyErr", fields=(field,), base=None, span=s, node_id=1)
 
         visited: list[object] = []
@@ -1091,9 +1111,12 @@ class TestPatterns:
         assert p.name == "x"
 
     def test_constructor_pattern_no_fields(self) -> None:
-        p = ConstructorPattern(qualifier=None, name="None_", fields=(), span=self._s(), node_id=1)
+        p = ConstructorPattern(
+            qualifier=None, name="None_", positional=(), named=(), span=self._s(), node_id=1
+        )
         assert p.name == "None_"
-        assert p.fields == ()
+        assert p.positional == ()
+        assert p.named == ()
 
     def test_constructor_pattern_with_fields(self) -> None:
         pf = PatternField(
@@ -1105,12 +1128,13 @@ class TestPatterns:
         p = ConstructorPattern(
             qualifier=None,
             name="Some",
-            fields=(pf,),
+            positional=(),
+            named=(pf,),
             span=self._s(),
             node_id=1,
         )
-        assert isinstance(p.fields, tuple)
-        assert p.fields[0].name == "val"
+        assert isinstance(p.named, tuple)
+        assert p.named[0].name == "val"
 
     def test_pattern_equality_ignores_span_node_id(self) -> None:
         a = WildcardPattern(span=span(1, 0, 1, 1), node_id=1)
@@ -1192,12 +1216,23 @@ class TestVisitorWalk:
         applied_t = AppliedT(name="Pair", args=(int_t, text_t), span=s, node_id=111)
 
         # Declarations — each field uses a different type so all types appear.
-        field_int = FieldDef(name="x", type_expr=int_t, span=s, node_id=200)
-        field_bool = FieldDef(name="flag", type_expr=bool_t, span=s, node_id=201)
-        field_json = FieldDef(name="data", type_expr=json_t, span=s, node_id=202)
-        field_decimal = FieldDef(name="price", type_expr=decimal_t, span=s, node_id=203)
-        field_name = FieldDef(name="ref", type_expr=name_t, span=s, node_id=204)
-        field_dict = FieldDef(name="meta", type_expr=dict_t, span=s, node_id=205)
+        _no = ParamKind.NAMED_ONLY
+        field_int = Param(name="x", type_expr=int_t, kind=_no, default=None, span=s, node_id=200)
+        field_bool = Param(
+            name="flag", type_expr=bool_t, kind=_no, default=None, span=s, node_id=201
+        )
+        field_json = Param(
+            name="data", type_expr=json_t, kind=_no, default=None, span=s, node_id=202
+        )
+        field_decimal = Param(
+            name="price", type_expr=decimal_t, kind=_no, default=None, span=s, node_id=203
+        )
+        field_name = Param(
+            name="ref", type_expr=name_t, kind=_no, default=None, span=s, node_id=204
+        )
+        field_dict = Param(
+            name="meta", type_expr=dict_t, kind=_no, default=None, span=s, node_id=205
+        )
         record_def = RecordDef(
             name="Point",
             fields=(field_int, field_bool, field_json, field_decimal, field_name, field_dict),
@@ -1205,12 +1240,18 @@ class TestVisitorWalk:
             node_id=210,
         )
 
-        variant_field = FieldDef(name="val", type_expr=text_t, span=s, node_id=211)
+        variant_field = Param(
+            name="val", type_expr=text_t, kind=ParamKind.STANDARD, default=None,
+            span=s, node_id=211
+        )
         variant_def = VariantDef(name="Some", fields=(variant_field,), span=s, node_id=212)
         enum_def = EnumDef(name="Opt", variants=(variant_def,), span=s, node_id=213)
 
         type_alias = TypeAlias(name="Names", type_expr=list_t, span=s, node_id=214)
-        exc_field = FieldDef(name="msg", type_expr=text_t, span=s, node_id=2140)
+        exc_field = Param(
+            name="msg", type_expr=text_t, kind=ParamKind.NAMED_ONLY,
+            default=None, span=s, node_id=2140,
+        )
         exception_def = ExceptionDef(
             name="MyErr",
             fields=(exc_field,),
@@ -1228,11 +1269,13 @@ class TestVisitorWalk:
         )
 
         # FuncDef — exercises UnitT, AgentT, FuncT via type annotations + Param
-        p_unit = Param(name="u", type_expr=unit_t, default=None, span=s, node_id=218)
-        p_agent = Param(name="a", type_expr=agent_t, default=None, span=s, node_id=219)
+        _std = ParamKind.STANDARD
+        p_unit = Param(name="u", type_expr=unit_t, kind=_std, default=None, span=s, node_id=218)
+        p_agent = Param(name="a", type_expr=agent_t, kind=_std, default=None, span=s, node_id=219)
         p_func = Param(
             name="f",
             type_expr=func_t,
+            kind=_std,
             default=IntLit(value=0, span=s, node_id=220),
             span=s,
             node_id=221,
@@ -1292,6 +1335,7 @@ class TestVisitorWalk:
         lam_param = Param(
             name="x",
             type_expr=int_t,
+            kind=ParamKind.STANDARD,
             default=None,
             span=s,
             node_id=412,
@@ -1319,7 +1363,7 @@ class TestVisitorWalk:
         var_pat = VarPattern(name="v", span=s, node_id=502)
         pat_field = PatternField(name="val", pattern=var_pat, span=s, node_id=503)
         ctor_pat = ConstructorPattern(
-            qualifier=None, name="Some", fields=(pat_field,), span=s, node_id=504
+            qualifier=None, name="Some", positional=(), named=(pat_field,), span=s, node_id=504
         )
 
         # Case with multiple patterns
@@ -1418,7 +1462,7 @@ class TestVisitorWalk:
         kinds = {type(n) for n in visited}
 
         decl_kinds = {
-            RecordDef, EnumDef, ExceptionDef, TypeAlias, ParamDecl, FieldDef, VariantDef,
+            RecordDef, EnumDef, ExceptionDef, TypeAlias, ParamDecl, Param, VariantDef,
             AgentDecl, FuncDef, ConfigDecl,
         }
         for kind in decl_kinds:
@@ -1548,7 +1592,8 @@ class TestVisitorWalk:
 
         s = self._s()
         p_type = IntT(span=s, node_id=3)
-        p = Param(name="x", type_expr=p_type, default=None, span=s, node_id=2)
+        p = Param(name="x", type_expr=p_type, kind=ParamKind.STANDARD, default=None,
+                  span=s, node_id=2)
         ret = TextT(span=s, node_id=4)
         body = VarRef(name="x", span=s, node_id=5)
         fd = FuncDef(name="f", params=(p,), return_type=ret, body=body, span=s, node_id=1)
@@ -1568,7 +1613,8 @@ class TestVisitorWalk:
 
         s = self._s()
         p_type = IntT(span=s, node_id=3)
-        p = Param(name="x", type_expr=p_type, default=None, span=s, node_id=2)
+        p = Param(name="x", type_expr=p_type, kind=ParamKind.STANDARD, default=None,
+                  span=s, node_id=2)
         ret = BoolT(span=s, node_id=4)
         body = BoolLit(value=True, span=s, node_id=5)
         lam = Lambda(params=(p,), return_type=ret, body=body, span=s, node_id=1)
@@ -1695,7 +1741,8 @@ class TestVisitorWalk:
         s = self._s()
         p_type = IntT(span=s, node_id=2)
         default = IntLit(value=0, span=s, node_id=3)
-        p = Param(name="x", type_expr=p_type, default=default, span=s, node_id=1)
+        p = Param(name="x", type_expr=p_type, kind=ParamKind.STANDARD, default=default,
+                  span=s, node_id=1)
 
         visited: list[object] = []
         walk(p, visited.append)
@@ -1710,7 +1757,8 @@ class TestVisitorWalk:
 
         s = self._s()
         p_type = IntT(span=s, node_id=2)
-        p = Param(name="x", type_expr=p_type, default=None, span=s, node_id=1)
+        p = Param(name="x", type_expr=p_type, kind=ParamKind.STANDARD, default=None,
+                  span=s, node_id=1)
 
         visited: list[object] = []
         walk(p, visited.append)
@@ -1904,6 +1952,19 @@ class TestVisitorWalk:
         walk(prog, visited.append)
         assert any(isinstance(n, Qualifier) for n in visited), (
             "Qualifier node not visited when walking a qualified ConstructorPattern"
+        )
+
+    def test_walk_constructor_pattern_visits_positional(self) -> None:
+        """walk() on a ConstructorPattern with positional sub-patterns visits each one."""
+        from agm.agl.parser import parse_program
+        from agm.agl.syntax.visitor import walk
+
+        prog = parse_program("case x of | Some(v) => 1")
+        visited: list[object] = []
+        walk(prog, visited.append)
+        var_pats = [n for n in visited if isinstance(n, VarPattern)]
+        assert any(vp.name == "v" for vp in var_pats), (
+            "Positional sub-pattern VarPattern not visited in ConstructorPattern"
         )
 
     def test_walk_known_node_without_branch_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2366,5 +2427,7 @@ class TestModuleSystemNodes:
         assert t.module_qualifier is None
 
     def test_constructor_pattern_module_qualifier_default_none(self) -> None:
-        pat = ConstructorPattern(qualifier=None, name="Foo", fields=(), span=self._sp(), node_id=0)
+        pat = ConstructorPattern(
+            qualifier=None, name="Foo", positional=(), named=(), span=self._sp(), node_id=0
+        )
         assert pat.module_qualifier is None

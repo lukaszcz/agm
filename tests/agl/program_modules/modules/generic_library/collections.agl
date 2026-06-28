@@ -14,4 +14,4 @@ def or_else[T](o: Maybe[T], fallback: T) -> T =
     | none() => fallback
     | some(value) => value
 
-def make_pair[A, B](a: A, b: B) -> Pair[A, B] = Pair(first: a, second: b)
+def make_pair[A, B](a: A, b: B) -> Pair[A, B] = Pair(first = a, second = b)

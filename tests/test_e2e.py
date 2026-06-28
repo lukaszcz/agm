@@ -7772,7 +7772,7 @@ class TestExecCommand:
         work.mkdir()
         program = work / "ask.agl"
         program.write_text(
-            "agent reviewer\nlet r = ask(\"ping\", agent: reviewer)\nprint r\n",
+            "agent reviewer\nlet r = ask(\"ping\", agent = reviewer)\nprint r\n",
             encoding="utf-8",
         )
         # Install a fake runner named ``claude`` (the built-in default) that
@@ -7805,14 +7805,14 @@ class TestExecCommand:
             "  | Complete(output: text)\n"
             'agent impl = "impl-runner"\n'
             'agent reviewer = "review-runner"\n'
-            'var artifact: text = ask("Implement ${task}", agent: impl)\n'
+            'var artifact: text = ask("Implement ${task}", agent = impl)\n'
             "var review: Review = Pass\n"
             "do[3]\n"
-            '  review := ask("Review ${artifact}", agent: reviewer)\n'
+            '  review := ask("Review ${artifact}", agent = reviewer)\n'
             "  case review of\n"
             "    | Pass() => ()\n"
             "    | Fail(issues) =>\n"
-            '        let fix: Fix = ask("Fix ${issues} in ${artifact}", agent: impl)\n'
+            '        let fix: Fix = ask("Fix ${issues} in ${artifact}", agent = impl)\n'
             "        case fix of\n"
             "          | Complete(output) =>\n"
             "              artifact := output\n"
@@ -7869,8 +7869,8 @@ class TestExecCommand:
             "enum Review\n"
             "  | Pass\n"
             'agent reviewer = "review-runner"\n'
-            'let review: Review = ask("Review now", agent: reviewer, '
-            "on_parse_error: Retry(n: 1))\n"
+            'let review: Review = ask("Review now", agent = reviewer, '
+            "on_parse_error = Retry(n = 1))\n"
             "case review of\n"
             '  | Pass => print "accepted"\n',
             encoding="utf-8",
@@ -7909,7 +7909,7 @@ class TestExecCommand:
         work = tmp_path / "work"
         work.mkdir()
         program = work / "abort.agl"
-        program.write_text('raise Abort(message: "stop now")\n', encoding="utf-8")
+        program.write_text('raise Abort(message = "stop now")\n', encoding="utf-8")
 
         result = run_agm(["exec", str(program)], env=env, cwd=work, check=False)
 

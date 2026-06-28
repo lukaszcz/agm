@@ -99,7 +99,7 @@ def test_is_field_carrying_variant() -> None:
     """`is` works on a value of a variant that carries fields."""
     source = """\
 enum Shape | Circle(radius: decimal) | Rectangle(w: decimal, h: decimal)
-let s = Shape.Circle(radius: 2.5)
+let s = Shape.Circle(radius = 2.5)
 let is_circle = s is Circle
 let is_rect = s is Rectangle
 ()

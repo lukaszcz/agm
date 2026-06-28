@@ -1,4 +1,4 @@
 record P
   n: int
-let j: json = P(n: 1)
+let j: json = P(n = 1)
 j

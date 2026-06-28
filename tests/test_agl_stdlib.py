@@ -19,8 +19,10 @@ from agm.agl.semantics.types import (
     IntType,
     RecordType,
     TextType,
+    Type,
     TypeVarType,
 )
+from agm.agl.syntax.nodes import ParamKind
 from agm.agl.typecheck import check
 from agm.agl.typecheck.builder import _type_shape_matches
 from agm.agl.typecheck.checker import (
@@ -28,7 +30,7 @@ from agm.agl.typecheck.checker import (
     _builtin_function_signature_alternates,
     _signature_matches,
 )
-from agm.agl.typecheck.env import AglTypeError, FunctionSignature
+from agm.agl.typecheck.env import AglTypeError, FunctionSignature, ParamSpec
 from agm.agl.typecheck.graph import check_graph
 
 _ROOTS = RootSet(frozenset({Path(__file__).resolve().parents[1] / "stdlib"}))
@@ -42,12 +44,12 @@ def _check(source: str, *, default_stdlib: bool = True) -> None:
 
 
 def test_core_stdlib_is_opened_unqualified_by_default() -> None:
-    _check("let x: Option[int] = Some(value: 1)\nprint(x)\n")
+    _check("let x: Option[int] = Some(value = 1)\nprint(x)\n")
 
 
 def test_no_stdlib_disables_default_open_import() -> None:
     graph = load_graph(
-        "let x: Option[int] = Some(value: 1)\nx\n",
+        "let x: Option[int] = Some(value = 1)\nx\n",
         entry_path=None,
         roots=_ROOTS,
         default_stdlib=False,
@@ -58,7 +60,7 @@ def test_no_stdlib_disables_default_open_import() -> None:
 
 def test_no_stdlib_still_allows_explicit_std_core_import() -> None:
     _check(
-        "import std.core\nlet x: Option[int] = Some(value: 1)\nx\n",
+        "import std.core\nlet x: Option[int] = Some(value = 1)\nx\n",
         default_stdlib=False,
     )
 
@@ -83,17 +85,20 @@ def test_stdlib_ask_signature_is_context_inferred_with_optional_arguments() -> N
 
     assert ask_sig.type_params == ("T",)
     assert ask_sig.result == TypeVarType("T")
-    assert ask_sig.params[:4] == (
-        ("prompt", TextType(), False),
-        ("agent", AgentType(), True),
-        ("format", TextType(), True),
-        ("strict_json", BoolType(), True),
+    params = ask_sig.params
+    assert params[0].name == "prompt" and params[0].type == TextType() and not params[0].has_default
+    assert params[1].name == "agent" and params[1].type == AgentType() and params[1].has_default
+    assert params[2].name == "format" and params[2].type == TextType() and params[2].has_default
+    assert (
+        params[3].name == "strict_json"
+        and params[3].type == BoolType()
+        and params[3].has_default
     )
-    policy_name, policy_type, policy_has_default = ask_sig.params[4]
-    assert policy_name == "on_parse_error"
-    assert isinstance(policy_type, EnumType)
-    assert policy_type.name == "ParsePolicy"
-    assert policy_has_default is True
+    p4 = params[4]
+    assert p4.name == "on_parse_error"
+    assert isinstance(p4.type, EnumType)
+    assert p4.type.name == "ParsePolicy"
+    assert p4.has_default is True
 
 
 def test_builtin_function_signature_mismatches_are_rejected() -> None:
@@ -109,38 +114,42 @@ def test_builtin_function_signature_mismatches_are_rejected() -> None:
             _check(source)
 
 
+def _ps(name: str, t: Type, has_default: bool = False) -> ParamSpec:
+    return ParamSpec(name=name, type=t, kind=ParamKind.STANDARD, has_default=has_default)
+
+
 def test_builtin_signature_helpers_cover_negative_paths() -> None:
-    sig = FunctionSignature(params=(("value", TextType(), False),), result=TextType())
+    sig = FunctionSignature(params=(_ps("value", TextType()),), result=TextType())
     assert _builtin_function_signature("unknown") is None
     assert _builtin_function_signature_alternates("unknown") == ()
     assert not _signature_matches(
         sig,
-        FunctionSignature(params=(("value", IntType(), False),), result=TextType()),
+        FunctionSignature(params=(_ps("value", IntType()),), result=TextType()),
     )
     assert not _signature_matches(
-        FunctionSignature(params=(("value", IntType(), False),), result=TextType()),
+        FunctionSignature(params=(_ps("value", IntType()),), result=TextType()),
         FunctionSignature(
-            params=(("value", RecordType(name="R", fields={}), False),),
+            params=(_ps("value", RecordType(name="R", fields={})),),
             result=TextType(),
         ),
     )
     assert _signature_matches(
         FunctionSignature(
-            params=(("value", RecordType(name="R", fields={}), False),),
+            params=(_ps("value", RecordType(name="R", fields={})),),
             result=TextType(),
         ),
         FunctionSignature(
-            params=(("value", RecordType(name="R", fields={}), False),),
+            params=(_ps("value", RecordType(name="R", fields={})),),
             result=TextType(),
         ),
     )
     assert not _signature_matches(
         FunctionSignature(
-            params=(("value", EnumType(name="Actual", variants={}), False),),
+            params=(_ps("value", EnumType(name="Actual", variants={})),),
             result=TextType(),
         ),
         FunctionSignature(
-            params=(("value", EnumType(name="Expected", variants={}), False),),
+            params=(_ps("value", EnumType(name="Expected", variants={})),),
             result=TextType(),
         ),
     )
@@ -179,7 +188,19 @@ def test_exception_in_field_type_is_built_before_record() -> None:
         "  code: int\n"
         "record Wrapper\n"
         "  err: Local\n"
-        "Wrapper(err: Local(message: \"m\", code: 1))\n"
+        "Wrapper(err = Local(message = \"m\", code = 1))\n"
+    )
+
+
+def test_exception_extends_concrete_exception_inherits_field_kinds() -> None:
+    # Exercises builder.py _build_exception branch: base_registered is not None
+    # (concrete exception A extending concrete exception B, both user-defined).
+    _check(
+        "exception Base extends Exception\n"
+        "  code: int\n"
+        "exception Derived extends Base\n"
+        "  detail: text\n"
+        "Derived(message = \"m\", code = 1, detail = \"d\")\n"
     )
 
 
@@ -237,4 +258,4 @@ def test_builtin_named_value_call_is_not_classified_as_builtin() -> None:
 
 
 def test_source_defined_exception_extends_base_and_trace_id_is_optional() -> None:
-    _check('raise Abort(message: "stop")\n')
+    _check('raise Abort(message = "stop")\n')

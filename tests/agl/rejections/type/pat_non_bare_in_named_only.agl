@@ -1,0 +1,6 @@
+enum Pair
+  | P(a: int, b: int)
+let p: Pair = P(a = 1, b = 2)
+case p of
+  | P(3, b) => print "three"
+  | _ => print "other"

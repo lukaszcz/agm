@@ -1,0 +1,47 @@
+# Construction with explicit zone markers: @std record, single-field variant positional,
+# reordered named fields, shorthand, and generic construction.
+record StdPair
+  @std
+  fst: int
+  snd: int
+
+record Named
+  x: int
+  y: int
+
+enum Result
+  | Ok(value: int)
+  | Err(reason: text, fatal: bool)
+
+param base: int
+
+# StdPair(@std): both fields are standard (positional or named)
+let p1 = StdPair(base, base + 1)
+let p2 = StdPair(0, snd = base)
+print p1.fst
+print p1.snd
+print p2.fst
+print p2.snd
+
+# Named record: named-only by default
+let n1 = Named(x = base, y = base + 1)
+let x = base
+let n2 = Named(x, y = base + 2)
+print n1.x
+print n1.y
+print n2.x
+print n2.y
+
+# Single-field variant: standard zone -> positional valid
+let ok1 = Ok(base)
+let ok2 = Ok(value = base + 10)
+let err = Err(reason = "bad", fatal = false)
+case ok1 of
+  | Ok(value) => print value
+  | Err(reason, fatal) => print "err"
+case ok2 of
+  | Ok(value) => print value
+  | Err(reason, fatal) => print "err"
+case err of
+  | Ok(value) => print "ok"
+  | Err(reason, fatal) => print reason

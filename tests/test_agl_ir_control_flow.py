@@ -174,8 +174,8 @@ r
 
 
 def test_raise_propagates() -> None:
-    """raise propagates as AglRaise."""
-    source = "raise Abort(message: \"oops\")\n"
+    """raise propagates as AglRaise; both pipelines raise equivalent exceptions."""
+    source = "raise Abort(message = \"oops\")\n"
     evaluate_ir_raises(source)
 
 
@@ -183,7 +183,7 @@ def test_raise_caught_by_try() -> None:
     """raise inside try is caught by a matching handler."""
     source = """\
 let r = try
-  raise Abort(message: "boom")
+  raise Abort(message = "boom")
 catch Abort =>
   99
 r
@@ -234,7 +234,7 @@ def test_try_specific_catch_no_binding() -> None:
     """try: specific exc_type match without binding variable."""
     source = """\
 let r = try
-  raise Abort(message: "bad")
+  raise Abort(message = "bad")
 catch Abort =>
   "caught Abort"
 catch Exception =>
@@ -254,7 +254,7 @@ def test_try_specific_catch_with_binding() -> None:
     """try: specific exc_type match WITH binding variable; bound value accessible."""
     source = """\
 let r = try
-  raise Abort(message: "the message")
+  raise Abort(message = "the message")
 catch Abort as e =>
   e.message
 r
@@ -267,7 +267,7 @@ def test_try_catch_with_binding_exception_value() -> None:
     """try: binding variable gives access to exception fields."""
     source = """\
 let r = try
-  raise Abort(message: "hello")
+  raise Abort(message = "hello")
 catch Abort as e =>
   e.message
 r
@@ -286,7 +286,7 @@ def test_try_catchall_underscore() -> None:
     """try: catch-all with _ exc_type catches anything."""
     source = """\
 let r = try
-  raise Abort(message: "x")
+  raise Abort(message = "x")
 catch _ =>
   "caught all"
 r
@@ -299,7 +299,7 @@ def test_try_catchall_exception() -> None:
     """try: catch-all with 'Exception' catches anything."""
     source = """\
 let r = try
-  raise Abort(message: "x")
+  raise Abort(message = "x")
 catch Exception =>
   "caught all exception"
 r
@@ -312,7 +312,7 @@ def test_try_catchall_with_binding() -> None:
     """try: catch-all with binding variable."""
     source = """\
 let r = try
-  raise Abort(message: "catchall msg")
+  raise Abort(message = "catchall msg")
 catch Exception as e =>
   e.message
 r
@@ -330,7 +330,7 @@ def test_try_first_match_wins() -> None:
     """try: first matching handler wins; later handlers not tried."""
     source = """\
 let r = try
-  raise Abort(message: "a")
+  raise Abort(message = "a")
 catch Abort =>
   "first"
 catch Exception =>
@@ -345,7 +345,7 @@ def test_try_first_match_wins_catchall_last() -> None:
     """try: catch-all at end wins when specific handler doesn't match."""
     source = """\
 let r = try
-  raise Abort(message: "a")
+  raise Abort(message = "a")
 catch CastError =>
   "cast"
 catch _ =>
@@ -365,7 +365,7 @@ def test_try_no_match_reraises() -> None:
     """try: when no handler matches, original exception re-propagates."""
     source = """\
 try
-  raise Abort(message: "unhandled")
+  raise Abort(message = "unhandled")
 catch CastError =>
   ()
 """
@@ -449,7 +449,7 @@ def test_lower_raise_shape() -> None:
     """Golden lowering: raise produces IrRaise with an IrMakeException for the exc."""
     from agm.agl.ir.program import ExecutableProgram
 
-    source = "raise Abort(message: \"boom\")\n"
+    source = "raise Abort(message = \"boom\")\n"
     prog = _lower(source)
     assert isinstance(prog, ExecutableProgram)
     entry = prog.modules[prog.entry_module]
@@ -753,7 +753,7 @@ def test_let_inside_catch_handler_does_not_leak() -> None:
     source = """\
 var out = 0
 try
-  raise Abort(message: "boom")
+  raise Abort(message = "boom")
 catch Abort =>
   let handler_val = 99
   out := handler_val

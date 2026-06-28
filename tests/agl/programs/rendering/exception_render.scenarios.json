@@ -5,15 +5,15 @@
       "params": {"bad_input": "abc"},
       "expect": {
         "stdout_contains": [
-          "CastError(message: \"Failed to parse text as JSON:",
-          "source_type: \"text\", target_type: \"int\", raw: \"abc\")",
+          "CastError(message = \"Failed to parse text as JSON:",
+          "source_type = \"text\", target_type = \"int\", raw = \"abc\")",
           "caught: text -> int\n",
           "\"source_type\": \"text\"",
           "\"target_type\": \"int\"",
           "\"raw\": \"abc\"",
           "no int\n",
-          "ArithmeticError(message: \"Division by zero\", trace_id: \"",
-          "operation: \"/\")",
+          "ArithmeticError(message = \"Division by zero\", trace_id = \"",
+          "operation = \"/\")",
           "operation: /\n"
         ],
         "stdout_not_contains": ["parsed:"]
@@ -26,8 +26,8 @@
         "stdout_contains": [
           "parsed: 42\n",
           "got int\n",
-          "ArithmeticError(message: \"Division by zero\", trace_id: \"",
-          "operation: \"/\")",
+          "ArithmeticError(message = \"Division by zero\", trace_id = \"",
+          "operation = \"/\")",
           "operation: /\n"
         ],
         "stdout_not_contains": ["CastError", "caught:"]

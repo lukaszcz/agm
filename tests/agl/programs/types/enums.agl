@@ -9,7 +9,7 @@ param fallback
 
 agent worker
 
-let first: Outcome = ask("Attempt the task.", agent: worker)
+let first: Outcome = ask("Attempt the task.", agent = worker)
 
 if
   | first is Done => print "done"
@@ -23,7 +23,7 @@ case first of
       if fatal => print "fatal: ${reason}"
       else => print "retry later: ${reason}"
 
-let made: Outcome = Partial(left: 2)
+let made: Outcome = Partial(left = 2)
 print made
-let qualified = Outcome.Failed(reason: fallback, fatal: false)
+let qualified = Outcome.Failed(reason = fallback, fatal = false)
 print qualified

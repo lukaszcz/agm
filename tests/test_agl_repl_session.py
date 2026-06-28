@@ -98,9 +98,9 @@ class TestRedefinition:
         assert r.kind == "declaration"
         assert r.name == "R"
         # The new shape is the one in effect.
-        use = s.eval_entry('let r = R(b: "hi")')
+        use = s.eval_entry('let r = R(b = "hi")')
         assert use.ok
-        bad = s.eval_entry("let r2 = R(a: 1)")
+        bad = s.eval_entry("let r2 = R(a = 1)")
         assert not bad.ok  # old field 'a' no longer valid
 
 
@@ -259,7 +259,7 @@ class TestFailureEffects:
             "record Box\n  value: int\nlet z: decimal = 1 / 0\nlet after = 9\nafter"
         )
         assert not result.ok
-        assert s.eval_entry("Box(value: 3)").ok
+        assert s.eval_entry("Box(value = 3)").ok
         assert not s.eval_entry("after").ok
 
     def test_runtime_raise_preserves_assign_to_prior_var(self) -> None:
@@ -362,7 +362,7 @@ class TestExactlyOnce:
         named = CountingAgent("named-reply")
         s = ReplSession()
         s.register_agent("reviewer", named)
-        r = s.eval_entry('agent reviewer\nlet out = ask("""review this""", agent: reviewer)')
+        r = s.eval_entry('agent reviewer\nlet out = ask("""review this""", agent = reviewer)')
         assert r.ok, r.diagnostics
         assert _text(r.value) == "named-reply"
         assert named.calls == 1
@@ -383,7 +383,7 @@ class TestAgentDeclarations:
         # Test: registering and declaring an agent in the same entry works.
         s = ReplSession()
         s.register_agent("reviewer", CountingAgent("ok"))
-        r = s.eval_entry('agent reviewer\nask("""look""", agent: reviewer)')
+        r = s.eval_entry('agent reviewer\nask("""look""", agent = reviewer)')
         assert r.ok
 
     def test_undeclared_unregistered_agent_call_errors(self) -> None:
@@ -402,7 +402,7 @@ class TestAgentDeclarations:
         s.register_agent("helper", CountingAgent("done"))
         r1 = s.eval_entry("agent helper")
         assert r1.ok
-        r2 = s.eval_entry('let out = ask("""go""", agent: helper)')
+        r2 = s.eval_entry('let out = ask("""go""", agent = helper)')
         assert r2.ok, r2.diagnostics
         assert _text(r2.value) == "done"
 
@@ -433,7 +433,7 @@ class TestAgentDeclarations:
         s = ReplSession()
         s.register_agent("reviewer", CountingAgent("x"))
         s.eval_entry("agent reviewer")
-        assert s.type_of('ask("""ask""", agent: reviewer)') == repr(TextType())
+        assert s.type_of('ask("""ask""", agent = reviewer)') == repr(TextType())
 
     def test_reset_clears_declared_agents(self) -> None:
         # After reset, a previously source-declared agent is gone: a call to it
@@ -609,7 +609,7 @@ class TestLoadFile:
         f.write_text(
             "let n = 1\n"
             "var label: text = \"\"\n"
-            "if n = 1 =>\n"
+            "if n == 1 =>\n"
             "    label := \"one\"\n"
             "| else =>\n"
             "    label := \"many\"\n"
@@ -627,7 +627,7 @@ class TestLoadFile:
             "record Point\n"
             "    x: int\n"
             "    y: int\n"
-            "let p = Point(x: 1, y: 2)\n"
+            "let p = Point(x = 1, y = 2)\n"
             "p.x\n"
         )
         s = ReplSession()
@@ -773,7 +773,7 @@ class TestCheckOnly:
         assert r.kind == "declaration"
         assert r.name == "P"
         # Not promoted.
-        assert not s.eval_entry("let p = P(x: 1)").ok
+        assert not s.eval_entry("let p = P(x = 1)").ok
 
     def test_check_only_type_error_still_fails(self) -> None:
         s = ReplSession()
@@ -927,7 +927,7 @@ class TestAgentCancellation:
         s = ReplSession(default_agent=_CancellingAgent())
         r = s.eval_entry('record Box\n  value: int\nlet g = ask """x"""')
         assert not r.ok
-        assert s.eval_entry("Box(value: 3)").ok
+        assert s.eval_entry("Box(value = 3)").ok
 
     def test_cancellation_excludes_record_declared_after_call(self) -> None:
         # A type declared after the cancelled call is not promoted.
@@ -1485,7 +1485,7 @@ class TestImports:
     def test_agl_raise_in_graph_mode(self, tmp_path: Path) -> None:
         # An AglRaise exception during graph-mode evaluation aborts the entry.
         lib = tmp_path / 'mylib.agl'
-        lib.write_text('def boom() -> int = raise Abort(message: "boom")\n')
+        lib.write_text('def boom() -> int = raise Abort(message = "boom")\n')
         s = self._make_session_with_root(tmp_path)
         r = s.eval_entry("import mylib\nboom()")
         assert not r.ok
@@ -1495,7 +1495,7 @@ class TestImports:
         import json
 
         lib = tmp_path / 'mylib.agl'
-        lib.write_text('def boom() -> int = raise Abort(message: "boom")\n')
+        lib.write_text('def boom() -> int = raise Abort(message = "boom")\n')
         trace = tmp_path / "trace.jsonl"
         s = self._make_session_with_root(tmp_path)
         s._trace_path = trace
@@ -1571,7 +1571,7 @@ class TestImports:
         s = self._make_session_with_root(tmp_path)
         # The ask() built-in produces a contract spec; trigger it in graph mode.
         s.register_agent("helper", CountingAgent("ok"))
-        r = s.eval_entry('import mylib\nagent helper\nask("hi", agent: helper)')
+        r = s.eval_entry('import mylib\nagent helper\nask("hi", agent = helper)')
         assert not r.ok
         assert any("Contract error" in d.message for d in r.diagnostics)
 
@@ -1595,7 +1595,7 @@ class TestImports:
         lib.write_text('def noop(n: int) -> int = n\n')
         s = self._make_session_with_root(tmp_path)
         s.register_agent("helper", _CancellingAgent())
-        r = s.eval_entry("import mylib\nagent helper\nnoop(ask(\"hi\", agent: helper))")
+        r = s.eval_entry("import mylib\nagent helper\nnoop(ask(\"hi\", agent = helper))")
         assert not r.ok
         assert r.error is None
         assert r.diagnostics

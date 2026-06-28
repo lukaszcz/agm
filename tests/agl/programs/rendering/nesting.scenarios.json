@@ -5,7 +5,7 @@
       "name": "full_rendering",
       "params": {},
       "expect": {
-        "stdout": "Author(name: \"Ada\", active: true)\nIssue(title: \"Missing tests\", severity: 3, tags: [\"tests\", \"coverage\"], author: Author(name: \"Ada\", active: true))\n[Author(name: \"Bo\", active: false), Author(name: \"Ada\", active: true)]\n{\"Bo\": 0, \"Ada\": 3}\nStatus.Open\nStatus.Closed(by: \"Ada\", reason: \"fixed\")\nAnnotated(label: \"note\", meta: {\"key\": \"value\", \"n\": 1})\n{\"key\": \"value\", \"n\": 1}\n{\"name\": \"Ada\", \"active\": true}\n{\"$case\": \"Closed\", \"by\": \"Ada\", \"reason\": \"fixed\"}\ninactive: Xe\nactive: Ada\n"
+        "stdout": "Author(name = \"Ada\", active = true)\nIssue(title = \"Missing tests\", severity = 3, tags = [\"tests\", \"coverage\"], author = Author(name = \"Ada\", active = true))\n[Author(name = \"Bo\", active = false), Author(name = \"Ada\", active = true)]\n{\"Bo\": 0, \"Ada\": 3}\nStatus.Open\nStatus.Closed(by = \"Ada\", reason = \"fixed\")\nAnnotated(label = \"note\", meta = {\"key\": \"value\", \"n\": 1})\n{\"key\": \"value\", \"n\": 1}\n{\"name\": \"Ada\", \"active\": true}\n{\"$case\": \"Closed\", \"by\": \"Ada\", \"reason\": \"fixed\"}\ninactive: Xe\nactive: Ada\n"
       }
     }
   ]

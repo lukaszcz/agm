@@ -1,0 +1,9 @@
+# Library module defining exceptions consumed cross-module.
+# Named-only fields (the default for exceptions).
+exception Boom extends Exception
+  code: int
+
+# Exception with two own fields — proves kinds list length correct cross-module.
+exception BoomDetail extends Exception
+  code: int
+  detail: text

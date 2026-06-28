@@ -2,8 +2,8 @@
 # and follows the parse policy. on_parse_error on a text target is a
 # warning only — the program must still run.
 agent prompter
-let blank = ask("Say nothing.", on_parse_error: Retry(n: 1))
+let blank = ask("Say nothing.", on_parse_error = Retry(n = 1))
 print blank
 print "after"
-let typed: int = ask("Number, please.", agent: prompter)
+let typed: int = ask("Number, please.", agent = prompter)
 print typed

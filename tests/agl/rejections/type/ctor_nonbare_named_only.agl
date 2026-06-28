@@ -1,0 +1,4 @@
+enum E
+  | Fail(x: int, y: int)
+let e = Fail(1, 2)
+print e

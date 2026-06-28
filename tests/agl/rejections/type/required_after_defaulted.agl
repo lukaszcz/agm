@@ -1,0 +1,2 @@
+def f(x: int = 0, y: int) -> int = x + y
+print(f(y = 1))

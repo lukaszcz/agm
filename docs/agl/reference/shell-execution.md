@@ -84,7 +84,7 @@ stdout into that type (honouring `format`, `strict_json`, and
 let out: text = exec "cat ${path}"          # stdout verbatim; raises on nonzero
 let data: dict[text, int] = exec(           # JSON parsed; raises on nonzero
   "compute-stats --json",
-  on_parse_error: Retry(n: 1)
+  on_parse_error = Retry(n = 1)
 )
 ```
 
@@ -107,9 +107,9 @@ A nonzero exit raises `ExecError`, and unparseable output raises
 
 `exec` accepts the same codec-related named parameters as `ask`:
 
-- `format:` — codec name (a `text` value); normally auto-selected.
-- `strict_json:` — `bool`; opts the JSON codec into strict parsing.
-- `on_parse_error:` — `ParsePolicy`; controls retry behavior on parse
+- `format` — codec name (a `text` value); normally auto-selected.
+- `strict_json` — `bool`; opts the JSON codec into strict parsing.
+- `on_parse_error` — `ParsePolicy`; controls retry behavior on parse
   failures in the parsed form. In the structured form this parameter is
   ignored.
 

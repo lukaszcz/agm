@@ -1,0 +1,25 @@
+{
+  "scenarios": [
+    {
+      "name": "small_values",
+      "params": {"a_val": 2, "b_val": 3, "z_val": 5},
+      "expect": {
+        "stdout": "5\n5\n10\n10\n10\n5\n5\n17\n10\n[\n  2,\n  3\n]\n"
+      }
+    },
+    {
+      "name": "larger_values",
+      "params": {"a_val": 10, "b_val": 4, "z_val": 6},
+      "expect": {
+        "stdout": "14\n14\n60\n60\n20\n14\n14\n26\n20\n[\n  10,\n  4\n]\n"
+      }
+    },
+    {
+      "name": "zero_values",
+      "params": {"a_val": 0, "b_val": 0, "z_val": 0},
+      "expect": {
+        "stdout": "0\n0\n0\n0\n0\n0\n0\n10\n0\n[\n  0,\n  0\n]\n"
+      }
+    }
+  ]
+}

@@ -353,7 +353,9 @@ class _Lowerer:
                 if pattern.node_id not in self._checked.resolved.bare_variant_patterns:
                     out.add(pattern.node_id)
             case ConstructorPattern():
-                for pf in pattern.fields:
+                for p in pattern.positional:
+                    self._pattern_binding_ids(p, out)
+                for pf in pattern.named:
                     self._pattern_binding_ids(pf.pattern, out)
             case WildcardPattern() | LiteralPattern():
                 pass
@@ -558,7 +560,7 @@ class _Lowerer:
             module_id=self._module_id,
             params=tuple(ir_params),
             body=body_ir,
-            param_labels=tuple(repr(param_type) for _, param_type, _ in sig.params),
+            param_labels=tuple(repr(p.type) for p in sig.params),
             result_label=repr(sig.result),
         )
         self._link.functions[fn_id] = desc
@@ -1247,7 +1249,10 @@ class _Lowerer:
             cref = self._checked.resolved.constructor_refs.get(callee.node_id)
             if cref is not None:
                 return self._lower_named_constructor_call(
-                    nid, cref.owner_name, cref.variant, call_node.named_args, span
+                    nid,
+                    cref.owner_name,
+                    cref.variant,
+                    span,
                 )
             # (b) VarRef callee resolving via BinderKind.constructor_binding (M5).
             callee_ref = self._checked.resolved.resolution.get(callee.node_id)
@@ -1256,7 +1261,10 @@ class _Lowerer:
                 and callee_ref.kind is BinderKind.constructor_binding
             ):
                 return self._lower_named_constructor_call(
-                    nid, callee.name, None, call_node.named_args, span
+                    nid,
+                    callee.name,
+                    None,
+                    span,
                 )
             # (c) Direct user function call
             if (
@@ -1270,7 +1278,10 @@ class _Lowerer:
             if qcr is not None:
                 owner_name, variant_name, _qcr_mid = qcr
                 return self._lower_named_constructor_call(
-                    nid, owner_name, variant_name, call_node.named_args, span
+                    nid,
+                    owner_name,
+                    variant_name,
+                    span,
                 )
 
         # Indirect/value call (M4b): callee is an arbitrary expression (lambda, let-bound
@@ -1296,23 +1307,15 @@ class _Lowerer:
             f"compiler bug: no signature for function {callee_ref.name!r}"
         )
 
-        pos_args = list(call_node.args)
-        named_args: dict[str, Expr] = {na.name: na.value for na in call_node.named_args}
+        # The checker already bound the call; reuse its result (never re-bind).
+        binding = self._checked.argument_bindings.function_calls[result_node_id]
 
         ir_args: list[IrExpr | UseDefault] = []
-        pos_idx = 0
-        for i, (pname, ptype, has_default) in enumerate(sig.params):
-            if pname in named_args:
-                ir_args.append(self.lower_coerced(named_args[pname], ptype))
-            elif pos_idx < len(pos_args):
-                ir_args.append(self.lower_coerced(pos_args[pos_idx], ptype))
-                pos_idx += 1
-            else:
-                assert has_default, (
-                    f"compiler bug: missing required arg for param {pname!r} in call to"
-                    f" {callee_ref.name!r} (checker should have caught this)"
-                )
+        for i, (spec, bound_expr) in enumerate(zip(sig.params, binding)):
+            if bound_expr is None:
                 ir_args.append(UseDefault(param_index=i))
+            else:
+                ir_args.append(self.lower_coerced(bound_expr, spec.type))
 
         return IrDirectCall(
             location=self._loc(span),
@@ -1365,12 +1368,15 @@ class _Lowerer:
         result_node_id: int,
         owner_name: str,
         variant: str | None,
-        named_args: "tuple[NamedArg, ...]",
         span: "SourceSpan",
     ) -> IrExpr:
-        """Lower a constructor call with named arguments to an IrMake* node."""
-        arg_exprs: dict[str, "Expr"] = {arg.name: arg.value for arg in named_args}
+        """Lower a constructor call to an IrMake* node.
+
+        Reuses the field→expr binding the checker already computed (never re-binds),
+        then builds the Ir node via ``_lower_constructor_from_type``.
+        """
         typ = self._checked.node_types.get(result_node_id)
+        arg_exprs = self._checked.argument_bindings.constructor_calls[result_node_id]
         return self._lower_constructor_from_type(typ, owner_name, variant, arg_exprs, span)
 
     def _lower_constructor_from_type(
@@ -1583,9 +1589,11 @@ class _Lowerer:
                 # Lower the literal to its IrConst* node (re-use lower_expr).
                 return IrLiteralPlan(value=self.lower_expr(lit))
 
-            case ConstructorPattern(name=variant_name, fields=fields):
+            case ConstructorPattern(name=variant_name):
                 field_plans: list[tuple[str, IrMatchPlan]] = [
-                    (pf.name, self._compile_plan(pf.pattern)) for pf in fields
+                    (fname, self._compile_plan(sub_pat))
+                    for fname, sub_pat
+                    in self._checked.argument_bindings.constructor_patterns[pattern.node_id]
                 ]
                 return IrConstructorPlan(
                     variant=variant_name,

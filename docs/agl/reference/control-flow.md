@@ -21,7 +21,7 @@ if present, must be last; its own `|` is optional:
 
 ```agl
 if code is Fail or design is Fail =>
-  artifact := ask("Fix issues:\n${code}\n${design}", agent: impl)
+  artifact := ask("Fix issues:\n${code}\n${design}", agent = impl)
 else =>
   ()
 ```
@@ -79,7 +79,7 @@ case_branch      ::= pattern "=>" branch_body
 case result of
   Complete(output) => artifact := output
   | Changed(output) => artifact := output
-  | Blocked(reason) => raise Abort(message: reason)
+  | Blocked(reason) => raise Abort(message = reason)
   | _ => ()
 ```
 
@@ -116,12 +116,12 @@ immediately after `do`:
 do[5]
   let r: Review = ask(
     "Review ${artifact}",
-    agent: reviewer,
-    on_parse_error: Retry(n: 2)
+    agent = reviewer,
+    on_parse_error = Retry(n = 2)
   )
   case r of
     | Fail(issues) =>
-        artifact := ask("Fix ${issues}", agent: impl)
+        artifact := ask("Fix ${issues}", agent = impl)
     | Pass => ()
 until r is Pass
 ```
@@ -129,7 +129,7 @@ until r is Pass
 Inline:
 
 ```agl
-do[5] let r: Review = ask("Review ${a}", agent: reviewer) until r is Pass
+do[5] let r: Review = ask("Review ${a}", agent = reviewer) until r is Pass
 ```
 
 Semantics:
@@ -161,13 +161,13 @@ Iteration-local bindings do not survive to the next iteration or past the
 loop. Persistent state lives in an outer `var` mutated with `:=`:
 
 ```agl
-var artifact: text = ask("Implement ${spec}", agent: impl)
+var artifact: text = ask("Implement ${spec}", agent = impl)
 
 do[5]
-  let review: Review = ask("Review ${artifact}", agent: reviewer)
+  let review: Review = ask("Review ${artifact}", agent = reviewer)
   case review of
     | Fail(issues) =>
-        artifact := ask("Fix ${issues}", agent: impl)
+        artifact := ask("Fix ${issues}", agent = impl)
     | Pass => ()
 until review is Pass
 ```

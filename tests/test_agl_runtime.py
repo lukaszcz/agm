@@ -75,7 +75,7 @@ class TestRegisterAgent:
 
         rt.register_agent("my_agent", my_agent)
         result = rt.run(
-            'agent my_agent\nlet answer = ask("meaningful prompt", agent: my_agent)\n'
+            'agent my_agent\nlet answer = ask("meaningful prompt", agent = my_agent)\n'
             "print answer"
         )
 
@@ -197,7 +197,7 @@ class TestFallbackAgent:
     def test_named_agent_registered_accepted(self) -> None:
         rt = PipelineDriver()
         rt.register_agent("impl", lambda req: "output")
-        result = rt.run('agent impl\nask("do it", agent: impl)')
+        result = rt.run('agent impl\nask("do it", agent = impl)')
         assert result.ok is True
 
     def test_undeclared_named_agent_is_static_error(self) -> None:
@@ -211,7 +211,7 @@ class TestFallbackAgent:
     def test_default_agent_backs_declared_name(self) -> None:
         rt = PipelineDriver(default_agent=lambda req: "ok")
         # A default_agent backs any declared name without a dedicated registration.
-        result = rt.run('agent any_agent_name\nask("hi", agent: any_agent_name)')
+        result = rt.run('agent any_agent_name\nask("hi", agent = any_agent_name)')
         assert result.ok is True
 
     def test_declared_but_uncalled_agent_surfaces_warning(self) -> None:
@@ -344,7 +344,7 @@ class TestAgentRequest:
 
         rt = PipelineDriver()
         rt.register_agent("reviewer", reviewer)
-        rt.run('agent reviewer\nask("Review this", agent: reviewer)')
+        rt.run('agent reviewer\nask("Review this", agent = reviewer)')
         assert received[0].agent == "reviewer"
 
 
@@ -831,6 +831,7 @@ class TestWarningsThreadedOnFailurePaths:
                 type_env=checked.type_env,
                 function_signatures=checked.function_signatures,
                 cast_specs=checked.cast_specs,
+                argument_bindings=checked.argument_bindings,
             )
 
         monkeypatch.setattr(tc_mod, "check", check_with_warning)
@@ -1215,7 +1216,7 @@ class TestRenderValue:
             display_name="Issue",
             fields={"title": TextValue("Missing tests"), "severity": IntValue(3)},
         )
-        assert render_value(v) == 'Issue(title: "Missing tests", severity: 3)'
+        assert render_value(v) == 'Issue(title = "Missing tests", severity = 3)'
 
     def test_record_empty(self) -> None:
         """A record with no fields renders as ``TypeName()``."""
@@ -1241,7 +1242,7 @@ class TestRenderValue:
             fields={"title": TextValue("Missing tests"), "author": author},
         )
         out = render_value(issue)
-        assert out == 'Issue(title: "Missing tests", author: Author(name: "Ada", active: true))'
+        assert out == 'Issue(title = "Missing tests", author = Author(name = "Ada", active = true))'
 
     def test_record_with_list_field(self) -> None:
         """Record with a list field renders correctly (list inline)."""
@@ -1258,14 +1259,14 @@ class TestRenderValue:
             },
         )
         out = render_value(v)
-        assert out == 'Issue(title: "Missing tests", severity: 3, tags: ["tests", "coverage"])'
+        assert out == 'Issue(title = "Missing tests", severity = 3, tags = ["tests", "coverage"])'
 
     # ------------------------------------------------------------------
     # enum: qualified form, nullary variant
     # ------------------------------------------------------------------
 
     def test_enum_with_payload(self) -> None:
-        """Enum with payload renders as ``TypeName.Variant(field: value)``."""
+        """Enum with payload renders as ``TypeName.Variant(field = value)``."""
         from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import EnumValue, IntValue
 
@@ -1273,7 +1274,7 @@ class TestRenderValue:
             nominal=NominalId(ENTRY_ID, "Outcome"), display_name="Outcome",
             variant="Partial", fields={"left": IntValue(2)},
         )
-        assert render_value(v) == "Outcome.Partial(left: 2)"
+        assert render_value(v) == "Outcome.Partial(left = 2)"
 
     def test_enum_nullary_variant(self) -> None:
         """Nullary enum variant renders as ``TypeName.Variant`` (no parens)."""
@@ -1297,7 +1298,7 @@ class TestRenderValue:
             variant="V",
             fields={"a": IntValue(1), "b": IntValue(2), "c": IntValue(3)},
         )
-        assert render_value(v) == "E.V(a: 1, b: 2, c: 3)"
+        assert render_value(v) == "E.V(a = 1, b = 2, c = 3)"
 
     # ------------------------------------------------------------------
     # exception: record-style with all fields incl. trace_id
@@ -1321,8 +1322,8 @@ class TestRenderValue:
         )
         out = render_value(v)
         expected = (
-            'CastError(message: "cannot parse \\"x\\" as int", trace_id: "evt-7", '
-            'source_type: "text", target_type: "int", raw: "x")'
+            'CastError(message = "cannot parse \\"x\\" as int", trace_id = "evt-7", '
+            'source_type = "text", target_type = "int", raw = "x")'
         )
         assert out == expected
 
@@ -1340,7 +1341,7 @@ class TestRenderValue:
             },
         )
         out = render_value(v)
-        assert out == 'Abort(message: "fatal", trace_id: "abc123")'
+        assert out == 'Abort(message = "fatal", trace_id = "abc123")'
         assert "<dsl-value" not in out
 
     # ------------------------------------------------------------------
@@ -1413,7 +1414,7 @@ class TestRenderValue:
         out = render_value(v)
         # The json field must be compact (no newlines) so the record stays single-line.
         assert "\n" not in out
-        assert out == 'R(data: {"a": 1, "b": 2})'
+        assert out == 'R(data = {"a": 1, "b": 2})'
 
     def test_list_pretty(self) -> None:
         """Pretty lists render over multiple indented lines."""
@@ -1443,7 +1444,7 @@ class TestRenderValue:
         )
         assert (
             render_value(v, pretty=True)
-            == 'Issue(\n  title: "Missing tests",\n  severity: 3\n)'
+            == 'Issue(\n  title = "Missing tests",\n  severity = 3\n)'
         )
 
     def test_pretty_nested_indentation(self) -> None:
@@ -1461,7 +1462,7 @@ class TestRenderValue:
         )
         assert (
             render_value(v, pretty=True)
-            == 'Issue(\n  title: "Missing tests",\n  scores: [\n    1,\n    2\n  ]\n)'
+            == 'Issue(\n  title = "Missing tests",\n  scores = [\n    1,\n    2\n  ]\n)'
         )
 
     # ------------------------------------------------------------------
@@ -2029,9 +2030,9 @@ class TestRuntimeErrorPaths:
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         result = PipelineDriver().run(
-            'print(render("hello", quote_strings: false))\n'
-            "print(render([1, 2], pretty: false))\n"
-            'print(render({"a": 1} as json, pretty: false))\n'
+            'print(render("hello", quote_strings = false))\n'
+            "print(render([1, 2], pretty = false))\n"
+            'print(render({"a": 1} as json, pretty = false))\n'
         )
 
         assert result.ok is True
@@ -2432,14 +2433,14 @@ class TestAgentReconciliation:
 
         rt = PipelineDriver()
         rt.register_agent("impl", agent)
-        result = rt.run('agent impl\nask("do it", agent: impl)')
+        result = rt.run('agent impl\nask("do it", agent = impl)')
         assert result.ok is True
         assert calls == ["do it"]
 
     def test_declared_with_default_agent_runs(self) -> None:
         # No dedicated registration, but a default agent backs the declared name.
         rt = PipelineDriver(default_agent=lambda req: "ok")
-        result = rt.run('agent any_name\nask("hi", agent: any_name)')
+        result = rt.run('agent any_name\nask("hi", agent = any_name)')
         assert result.ok is True
 
     def test_both_error_categories_reported_together(self) -> None:
@@ -2978,7 +2979,7 @@ class TestV2AskWithAgentValue:
 
         rt = PipelineDriver()
         rt.register_agent("helper", agent)
-        result = rt.run('agent helper\nask("question", agent: helper)\n')
+        result = rt.run('agent helper\nask("question", agent = helper)\n')
         assert result.ok is True
         assert received == ["question"]
 
@@ -3061,7 +3062,7 @@ class TestPrepareProgram:
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = PipelineDriver.prepare_program(
-            'agent reviewer\nask("q", agent: reviewer)',
+            'agent reviewer\nask("q", agent = reviewer)',
             entry_path=None,
             roots=roots,
         )

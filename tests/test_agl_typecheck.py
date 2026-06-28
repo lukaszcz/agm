@@ -5788,3 +5788,102 @@ class TestGenericNominalModuleId:
             f"Template module_id must be ENTRY_ID in single-module mode, "
             f"got {gdef.template.module_id!r}."
         )
+
+
+# ---------------------------------------------------------------------------
+# Integer-range for loops — typecheck
+# ---------------------------------------------------------------------------
+
+
+class TestRangeForLoop:
+    """Type-checking for integer-range for loops (for i in a to/downto b [by k])."""
+
+    def test_range_for_to_typechecks(self) -> None:
+        r = accept_type("for i in 1 to 10 do\n  i\ndone")
+        assert r.resolved.program is not None
+
+    def test_range_for_to_loop_yields_unit(self) -> None:
+        r = accept_type("for i in 1 to 10 do\n  i\ndone")
+        loop_node = r.resolved.program.body.items[0]
+        assert isinstance(loop_node, Loop)
+        assert r.node_types[loop_node.node_id] == UnitType()
+
+    def test_range_for_downto_typechecks(self) -> None:
+        r = accept_type("for i in 10 downto 1 do\n  i\ndone")
+        assert r.resolved.program is not None
+
+    def test_range_for_to_by_typechecks(self) -> None:
+        r = accept_type("for i in 0 to 20 by 3 do\n  i\ndone")
+        assert r.resolved.program is not None
+
+    def test_range_for_downto_by_typechecks(self) -> None:
+        r = accept_type("for i in 10 downto 1 by 2 do\n  i\ndone")
+        assert r.resolved.program is not None
+
+    def test_range_for_loop_var_is_int(self) -> None:
+        r = accept_type("for i in 1 to 10 do\n  i + 1\ndone")
+        assert r.resolved.program is not None
+
+    def test_range_for_loop_var_used_where_text_expected_is_error(self) -> None:
+        err = reject_type(
+            'for i in 1 to 10 do\n  let s: text = i\n  s\ndone'
+        )
+        assert err is not None
+
+    def test_range_for_non_int_start_is_error(self) -> None:
+        err = reject_type('for i in "a" to 10 do\n  i\ndone')
+        assert err is not None
+
+    def test_range_for_non_int_to_bound_is_error(self) -> None:
+        err = reject_type('for i in 1 to "ten" do\n  i\ndone')
+        assert err is not None
+
+    def test_range_for_non_int_by_step_is_error(self) -> None:
+        err = reject_type('for i in 1 to 10 by 2.5 do\n  i\ndone')
+        assert err is not None
+
+    def test_range_for_literal_by_zero_is_static_error(self) -> None:
+        err = reject_type("for i in 1 to 10 by 0 do\n  i\ndone")
+        assert err is not None
+
+    def test_range_for_literal_by_negative_is_static_error(self) -> None:
+        err = reject_type("for i in 1 to 10 by -1 do\n  i\ndone")
+        assert err is not None
+
+    def test_range_for_non_literal_by_expression_not_static_error(self) -> None:
+        r = accept_type("var k = 2\nfor i in 1 to 10 by k do\n  i\ndone")
+        assert r.resolved.program is not None
+
+    def test_range_for_with_while_and_bound_typechecks(self) -> None:
+        r = accept_type(
+            "for i in 1 to 100 while i < 50 do[10]\n  i\ndone"
+        )
+        assert r.resolved.program is not None
+
+    def test_range_for_nested_typechecks(self) -> None:
+        r = accept_type(
+            "for i in 1 to 3 do\n"
+            "  for j in 1 to 3 do\n"
+            "    i + j\n"
+            "  done\n"
+            "done"
+        )
+        assert r.resolved.program is not None
+
+    # --- Collection for regression ---
+
+    def test_collection_for_list_still_works(self) -> None:
+        r = accept_type("for x in [1, 2, 3] do\n  x + 1\ndone")
+        assert r.resolved.program is not None
+
+    def test_collection_for_dict_still_works(self) -> None:
+        r = accept_type('for k in {"a": 1, "b": 2} do\n  k\ndone')
+        assert r.resolved.program is not None
+
+    def test_collection_for_text_still_works(self) -> None:
+        r = accept_type('for c in "hello" do\n  c\ndone')
+        assert r.resolved.program is not None
+
+    def test_collection_for_non_iterable_still_rejected(self) -> None:
+        err = reject_type("for x in 42 do\n  x\ndone")
+        assert err is not None

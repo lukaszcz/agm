@@ -1093,7 +1093,45 @@ class _Checker:
                     f"do-loop bound must be int; got '{bound_type!r}'.",
                     span=node.bound.span,
                 )
-        if node.for_iter is not None:
+        if node.for_range_to is not None:
+            # Integer-range for: for VAR in a to/downto b [by k]
+            assert node.for_iter is not None
+            start_type = self._check_expr(node.for_iter, expected=None)
+            if not isinstance(start_type, IntType):
+                raise AglTypeError(
+                    f"'for' range start must be int; got '{start_type!r}'.",
+                    span=node.for_iter.span,
+                )
+            to_type = self._check_expr(node.for_range_to, expected=None)
+            if not isinstance(to_type, IntType):
+                raise AglTypeError(
+                    f"'for' range bound must be int; got '{to_type!r}'.",
+                    span=node.for_range_to.span,
+                )
+            if node.for_range_by is not None:
+                by_type = self._check_expr(node.for_range_by, expected=None)
+                if not isinstance(by_type, IntType):
+                    raise AglTypeError(
+                        f"'for' range step must be int; got '{by_type!r}'.",
+                        span=node.for_range_by.span,
+                    )
+                # Static guard: a literal step <= 0 is always wrong.
+                # IntLit(0) → zero; UnaryNeg(IntLit(k)) with k >= 1 → always negative.
+                by_expr = node.for_range_by
+                if isinstance(by_expr, IntLit) and by_expr.value <= 0:
+                    raise AglTypeError(
+                        "loop step must be positive; got a literal step of "
+                        f"{by_expr.value}.",
+                        span=by_expr.span,
+                    )
+                if isinstance(by_expr, UnaryNeg) and isinstance(by_expr.operand, IntLit):
+                    raise AglTypeError(
+                        "loop step must be positive; got a literal negative step.",
+                        span=by_expr.span,
+                    )
+            self._env.set_binding_type(node.node_id, IntType())
+        elif node.for_iter is not None:
+            # Collection for: for VAR in COLLECTION
             iter_type = self._check_expr(node.for_iter, expected=None)
             if isinstance(iter_type, ListType):
                 elem_type: Type = iter_type.elem

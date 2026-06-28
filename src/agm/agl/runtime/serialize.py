@@ -33,6 +33,7 @@ from agm.agl.semantics.values import (
     ExceptionValue,
     IntValue,
     IrClosureValue,
+    IteratorValue,
     JsonValue,
     ListValue,
     RecordValue,
@@ -79,6 +80,8 @@ def value_to_json_obj(value: Value) -> object:
         raise TypeError("ConstructorValue has no JSON representation")
     if isinstance(value, IrClosureValue):
         raise TypeError("IrClosureValue has no JSON representation")
+    if isinstance(value, IteratorValue):
+        raise TypeError("IteratorValue has no JSON representation")
     assert_never(value)  # pragma: no cover
 
 

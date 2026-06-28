@@ -1,0 +1,8 @@
+# for x in list do[k] body that always continues:
+# continue still advances the iterator and counts toward the bound,
+# so MaxIterationsExceeded is raised after k iterations.
+param items: list[int]
+param k: int
+for x in items do[k]
+  continue
+done

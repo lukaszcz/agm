@@ -1,0 +1,3 @@
+while true for x in [1, 2] do
+  ()
+done

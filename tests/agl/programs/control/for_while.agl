@@ -1,0 +1,11 @@
+# for x in list while x < limit do body done — for+while combination.
+# The while guard stops early even when the list is not exhausted.
+# Exercises: for+while, for var visible in while guard and body,
+# loop-carried outer var, done terminator.
+param items: list[int]
+param limit: int
+var total: int = 0
+for x in items while x < limit do
+  total := total + x
+done
+print total

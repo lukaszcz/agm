@@ -1,0 +1,24 @@
+{
+  "scenarios": [
+    {
+      "name": "skip_below_2_break_at_6",
+      "params": {"skip_below": 2, "stop_at": 6},
+      "expect": {"stdout": "12\n"}
+    },
+    {
+      "name": "no_skip_break_at_4",
+      "params": {"skip_below": 0, "stop_at": 4},
+      "expect": {"stdout": "6\n"}
+    },
+    {
+      "name": "all_skipped_by_continue_then_while_exits",
+      "params": {"skip_below": 3, "stop_at": 3},
+      "expect": {"stdout": "0\n"}
+    },
+    {
+      "name": "immediate_break",
+      "params": {"skip_below": 0, "stop_at": 1},
+      "expect": {"stdout": "0\n"}
+    }
+  ]
+}

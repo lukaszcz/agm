@@ -1,0 +1,8 @@
+# for x in list do body — iterate list elements, accumulate sum.
+# Exercises: for over list, for var in body, loop-carried var, done terminator.
+param items: list[int]
+var total: int = 0
+for x in items do
+  total := total + x
+done
+print total

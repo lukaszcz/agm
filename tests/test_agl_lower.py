@@ -39,6 +39,9 @@ from agm.agl.ir.nodes import (
     IrDirectCall,
     IrIf,
     IrIndirectCall,
+    IrIterHasNext,
+    IrIterInit,
+    IrIterNext,
     IrLoad,
     IrLoop,
     IrMakeClosure,
@@ -51,6 +54,7 @@ from agm.agl.ir.nodes import (
     IrTemplateText,
     IrTemplateValue,
     IrTry,
+    IrUnary,
     IrVariantPlan,
 )
 from agm.agl.ir.operations import (
@@ -60,11 +64,13 @@ from agm.agl.ir.operations import (
     CompareKind,
     ContainsKind,
     IntToDecimal,
+    IterKind,
     MapDictValues,
     MapEnumFields,
     MapList,
     MapRecordFields,
     ToJson,
+    UnaryOp,
 )
 from agm.agl.ir.program import ExecutableProgram
 from agm.agl.ir.validate import validate_ir
@@ -1175,9 +1181,9 @@ class TestScanCapturesLoopForIterWhileCond:
 
         A Loop node with for_iter and while_cond referencing an outer binding must
         have those references detected as captures.  This covers the None-safe
-        for_iter/while_cond branches in _scan_captures, which are exercised via
-        hand-constructed Loop nodes because the parser always produces
-        for_iter=None and while_cond=None from current syntax.
+        for_iter/while_cond branches in _scan_captures.  The test constructs
+        synthetic Loop nodes directly so it can isolate the capture-scanning
+        branches from the rest of the lowering pipeline.
         """
         from agm.agl.scope.symbols import BindingRef
         from agm.agl.syntax.nodes import Loop, UnitLit, VarRef
@@ -2550,3 +2556,178 @@ class TestLoopDesugar:
         from agm.agl.semantics.values import TextValue
 
         assert ir_exc.fields.get("condition") == TextValue("i > 100")
+
+    def test_for_while_bounded_until_full_body_item_order(self) -> None:
+        """``for x in items while x < 10 do[5] body until total > 20`` — all 7 items.
+
+        Asserts the lowered IrLoop body items are in desugar order:
+        1. for-exhaustion check (IrIf wrapping IrIterHasNext)
+        2. for-var bind (IrBind wrapping IrIterNext)
+        3. while guard (IrIf wrapping the condition)
+        4. bound check (IrIf)
+        5. count increment (IrAssign)
+        6. body
+        7. until guard (IrIf)
+
+        Also asserts the pre-loop IrSequence binds __it (IrIterInit) first, then
+        __n and __count, before the IrLoop.
+        """
+        source = (
+            "param items: list[int]\n"
+            "var total: int = 0\n"
+            "for x in items while x < 10 do[5]\n"
+            "  total := total + x\n"
+            "until total > 20\n"
+        )
+        node = _get_loop_ir(source)
+        # Pre-loop: IrSequence with 4 items: __it bind, __n bind, __count bind, IrLoop
+        assert isinstance(node, IrSequence), (
+            f"for+while+bound: expected IrSequence, got {type(node).__name__}"
+        )
+        assert len(node.items) == 4, (
+            f"expected 4 pre-loop+loop items, got {len(node.items)}"
+        )
+        it_bind = node.items[0]
+        n_bind = node.items[1]
+        count_bind = node.items[2]
+        loop = node.items[3]
+
+        # __it bind: IrBind(IrIterInit(LIST, ...))
+        assert isinstance(it_bind, IrBind), (
+            f"item 0 must be IrBind(__it), got {type(it_bind).__name__}"
+        )
+        assert isinstance(it_bind.value, IrIterInit), (
+            f"__it value must be IrIterInit, got {type(it_bind.value).__name__}"
+        )
+        assert it_bind.value.kind is IterKind.LIST, (
+            f"__it kind must be LIST for list[int], got {it_bind.value.kind!r}"
+        )
+        # __n bind: IrBind(IrConstInt(5))
+        assert isinstance(n_bind, IrBind), (
+            f"item 1 must be IrBind(__n), got {type(n_bind).__name__}"
+        )
+        assert isinstance(n_bind.value, IrConstInt), (
+            f"__n value must be IrConstInt, got {type(n_bind.value).__name__}"
+        )
+        assert n_bind.value.value == 5
+        # __count bind: IrBind(IrConstInt(0))
+        assert isinstance(count_bind, IrBind), (
+            f"item 2 must be IrBind(__count), got {type(count_bind).__name__}"
+        )
+        assert isinstance(count_bind.value, IrConstInt), (
+            f"__count value must be IrConstInt(0), got {type(count_bind.value).__name__}"
+        )
+        assert count_bind.value.value == 0
+
+        # IrLoop with 7-item body
+        assert isinstance(loop, IrLoop), (
+            f"item 3 must be IrLoop, got {type(loop).__name__}"
+        )
+        body = loop.body
+        assert isinstance(body, IrBlock)
+        assert len(body.items) == 7, (
+            f"for+while+bound+until: expected 7 body items, got {len(body.items)}"
+        )
+
+        # Item 1: for-exhaustion check — IrIf(not IrIterHasNext(__it))
+        item1 = body.items[0]
+        assert isinstance(item1, IrIf), "item 1 must be IrIf (for-exhaustion check)"
+        assert len(item1.branches) == 1
+        assert item1.has_else is False
+        cond1 = item1.branches[0].cond
+        assert isinstance(cond1, IrUnary), "item 1 condition must be IrUnary (not)"
+        assert cond1.op is UnaryOp.NOT
+        assert isinstance(cond1.value, IrIterHasNext), (
+            "item 1 IrUnary.value must be IrIterHasNext"
+        )
+        assert isinstance(item1.branches[0].body, IrBreak), (
+            "item 1 branch body must be IrBreak"
+        )
+
+        # Item 2: for-var bind — IrBind(for_var, IrIterNext(__it))
+        item2 = body.items[1]
+        assert isinstance(item2, IrBind), "item 2 must be IrBind (for-var = IrIterNext)"
+        assert isinstance(item2.value, IrIterNext), (
+            f"item 2 value must be IrIterNext, got {type(item2.value).__name__}"
+        )
+
+        # Item 3: while guard — IrIf(not while_cond)
+        item3 = body.items[2]
+        assert isinstance(item3, IrIf), "item 3 must be IrIf (while guard)"
+        assert len(item3.branches) == 1
+        assert item3.has_else is False
+        cond3 = item3.branches[0].cond
+        assert isinstance(cond3, IrUnary), "item 3 condition must be IrUnary (not)"
+        assert cond3.op is UnaryOp.NOT
+        assert isinstance(item3.branches[0].body, IrBreak), (
+            "item 3 branch body must be IrBreak"
+        )
+
+        # Item 4: bound check — IrIf (GE outer)
+        item4 = body.items[3]
+        assert isinstance(item4, IrIf), "item 4 must be IrIf (bound check)"
+
+        # Item 5: count increment — IrAssign
+        item5 = body.items[4]
+        assert isinstance(item5, IrAssign), "item 5 must be IrAssign (count increment)"
+
+        # Item 6: body (total := total + x) — wrapped in IrBlock by the lowerer
+        item6 = body.items[5]
+        assert isinstance(item6, IrBlock), "item 6 (body) must be IrBlock"
+
+        # Item 7: until guard — IrIf (until total > 20)
+        item7 = body.items[6]
+        assert isinstance(item7, IrIf), "item 7 must be IrIf (until guard)"
+        assert len(item7.branches) == 1
+        assert item7.has_else is False
+        assert isinstance(item7.branches[0].body, IrBreak), (
+            "item 7 branch body must be IrBreak"
+        )
+
+    def test_for_iter_kind_list(self) -> None:
+        """``for x in items`` over ``list[int]`` selects IterKind.LIST."""
+        source = "param items: list[int]\nvar n: int = 0\nfor x in items do\n  n := n + x\ndone\n"
+        node = _get_loop_ir(source)
+        assert isinstance(node, IrSequence), (
+            f"for over list: expected IrSequence, got {type(node).__name__}"
+        )
+        it_bind = node.items[0]
+        assert isinstance(it_bind, IrBind)
+        assert isinstance(it_bind.value, IrIterInit), (
+            f"expected IrIterInit, got {type(it_bind.value).__name__}"
+        )
+        assert it_bind.value.kind is IterKind.LIST, (
+            f"expected IterKind.LIST for list[int], got {it_bind.value.kind!r}"
+        )
+
+    def test_for_iter_kind_dict_keys(self) -> None:
+        """``for k in d`` over ``dict[text, int]`` selects IterKind.DICT_KEYS."""
+        source = "param d: dict[text, int]\nvar n: int = 0\nfor k in d do\n  n := n + 1\ndone\n"
+        node = _get_loop_ir(source)
+        assert isinstance(node, IrSequence), (
+            f"for over dict: expected IrSequence, got {type(node).__name__}"
+        )
+        it_bind = node.items[0]
+        assert isinstance(it_bind, IrBind)
+        assert isinstance(it_bind.value, IrIterInit), (
+            f"expected IrIterInit, got {type(it_bind.value).__name__}"
+        )
+        assert it_bind.value.kind is IterKind.DICT_KEYS, (
+            f"expected IterKind.DICT_KEYS for dict[text, int], got {it_bind.value.kind!r}"
+        )
+
+    def test_for_iter_kind_text(self) -> None:
+        """``for ch in s`` over ``text`` selects IterKind.TEXT."""
+        source = "param s: text\nvar n: int = 0\nfor ch in s do\n  n := n + 1\ndone\n"
+        node = _get_loop_ir(source)
+        assert isinstance(node, IrSequence), (
+            f"for over text: expected IrSequence, got {type(node).__name__}"
+        )
+        it_bind = node.items[0]
+        assert isinstance(it_bind, IrBind)
+        assert isinstance(it_bind.value, IrIterInit), (
+            f"expected IrIterInit, got {type(it_bind.value).__name__}"
+        )
+        assert it_bind.value.kind is IterKind.TEXT, (
+            f"expected IterKind.TEXT for text, got {it_bind.value.kind!r}"
+        )

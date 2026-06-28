@@ -168,15 +168,19 @@ while `xs [0]` is not.
 ## Loops
 
 ```ebnf
-do_loop    ::= "do" loop_bound? suite loop_end
-             | "do" loop_bound? inline_body "until" or_expr
+loop_expr    ::= for_clause? while_clause? "do" loop_bound? suite loop_end
+               | for_clause? while_clause? "do" loop_bound? inline_body "until" or_expr
 
-loop_end   ::= "until" or_expr        (* exit when condition is true *)
-             | "done"                  (* never exit; equivalent to until false *)
+for_clause   ::= "for" NAME "in" or_expr NEWLINE?
+while_clause ::= "while" or_expr NEWLINE?
 
-loop_bound ::= "[" expr "]"
+loop_end     ::= "until" or_expr        (* exit when condition is true *)
+               | "done"                  (* equivalent to until false *)
+               | (* omitted in suite form — implicit done *)
 
-inline_body ::= item (";" item)*
+loop_bound   ::= "[" expr "]"
+
+inline_body  ::= item (";" item)*
 ```
 
 ## `if`
@@ -372,3 +376,7 @@ config_value  ::= "true" | "false" | INT | DECIMAL | STRING
 - The `bar_safe` stratification of v1 is **removed**. Branch bodies and
   `until` conditions reference `or_expr` directly; a `case` or `if`
   expression in those positions must be parenthesized.
+- `for` and `while` are reserved keywords. The `for_clause` always precedes
+  the `while_clause` in the header; `while before for` and duplicate clauses
+  are parse errors. A `for` collection expression is parsed at `or_expr`
+  level so that `for x in f(items) while cond do` parses correctly.

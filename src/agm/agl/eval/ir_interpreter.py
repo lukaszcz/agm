@@ -70,6 +70,9 @@ from agm.agl.ir.nodes import (
     IrIf,
     IrIndex,
     IrIndirectCall,
+    IrIterHasNext,
+    IrIterInit,
+    IrIterNext,
     IrLiteralPlan,
     IrLoad,
     IrLoop,
@@ -133,6 +136,7 @@ from agm.agl.semantics.values import (
     Frame,
     IntValue,
     IrClosureValue,
+    IteratorValue,
     JsonValue,
     ListValue,
     RecordValue,
@@ -1029,6 +1033,38 @@ class IrInterpreter:
 
             case IrContinue():
                 raise _ContinueSignal()
+
+            case IrIterInit(collection=collection_expr):
+                coll = self._eval(collection_expr)
+                if isinstance(coll, ListValue):
+                    elements: list[Value] = list(coll.elements)
+                elif isinstance(coll, DictValue):
+                    elements = [TextValue(k) for k in coll.entries]
+                elif isinstance(coll, TextValue):
+                    elements = [TextValue(ch) for ch in coll.value]
+                else:  # pragma: no cover
+                    raise InvalidIrError(
+                        f"IrIterInit: unexpected collection type {type(coll)!r}"
+                    )
+                return IteratorValue(elements=elements)
+
+            case IrIterHasNext(iterator=iter_expr):
+                it = self._eval(iter_expr)
+                if not isinstance(it, IteratorValue):  # pragma: no cover
+                    raise InvalidIrError(
+                        f"IrIterHasNext: expected IteratorValue, got {type(it)!r}"
+                    )
+                return BoolValue(it.pos < len(it.elements))
+
+            case IrIterNext(iterator=iter_expr):
+                it = self._eval(iter_expr)
+                if not isinstance(it, IteratorValue):  # pragma: no cover
+                    raise InvalidIrError(
+                        f"IrIterNext: expected IteratorValue, got {type(it)!r}"
+                    )
+                elem = it.elements[it.pos]
+                it.pos += 1
+                return elem
 
             case IrMakeClosure(function_id=fn_id, captures=captures):
                 cap_slots: list[tuple[SymbolId, Value | Cell]] = []

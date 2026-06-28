@@ -1,13 +1,18 @@
-"""IR evaluation tests for loops (IrLoop / IrBreak / IrContinue).
+"""IR evaluation tests for loops (IrLoop / IrBreak / IrContinue / for / while).
 
 Covers:
 - Source-level loop programs through the full pipeline (parse → lower → eval).
 - IR-level unit tests for IrBreak and IrContinue primitives built directly.
 - Control-signal bypass: IrBreak/IrContinue propagate through IrTry bodies.
-- validate_ir: IrLoop, IrBreak, IrContinue structural checks.
+- validate_ir: IrLoop, IrBreak, IrContinue, IrIterInit/HasNext/Next structural checks.
+- for-loop iteration over list, dict, and text collections.
+- while-clause guard with and without for-clause.
+- Type error for non-iterable for-clause collection.
 """
 
 from __future__ import annotations
+
+import pytest
 
 from agm.agl.eval.ir_interpreter import IrInterpreter
 from agm.agl.ir.ids import Location, NominalId, SourceId, SymbolId
@@ -21,15 +26,19 @@ from agm.agl.ir.nodes import (
     IrCompare,
     IrConstBool,
     IrConstInt,
+    IrConstText,
     IrConstUnit,
     IrContinue,
     IrIf,
     IrIfBranch,
+    IrIterHasNext,
+    IrIterInit,
+    IrIterNext,
     IrLoad,
     IrLoop,
     IrTry,
 )
-from agm.agl.ir.operations import ArithKind, ArithOp, CmpOp, CompareKind
+from agm.agl.ir.operations import ArithKind, ArithOp, CmpOp, CompareKind, IterKind
 from agm.agl.ir.program import (
     ExecutableModule,
     ExecutableProgram,
@@ -615,3 +624,225 @@ def test_validate_ir_ircontinue() -> None:
         symbols=symbols,
     )
     validate_ir(prog)
+
+
+# ---------------------------------------------------------------------------
+# for-loop: iteration over list, dict, and text collections
+# ---------------------------------------------------------------------------
+
+
+def test_for_loop_list_iteration_accumulates_sum() -> None:
+    """for x in list do body done — iterates over all list elements."""
+    source = (
+        "var items = [1, 2, 3, 4]\n"
+        "var total = 0\n"
+        "for x in items do\n"
+        "  total := total + x\n"
+        "done\n"
+        "total\n"
+    )
+    result = evaluate_ir(source)
+    assert result["total"] == IntValue(10)
+
+
+def test_for_loop_list_empty_skips_body() -> None:
+    """for x in empty list do body done — body never executes."""
+    source = (
+        "let xs: list[int] = []\n"
+        "var total = 0\n"
+        "for x in xs do\n"
+        "  total := total + 1\n"
+        "done\n"
+        "total\n"
+    )
+    result = evaluate_ir(source)
+    assert result["total"] == IntValue(0)
+
+
+def test_for_loop_dict_iterates_keys() -> None:
+    """for k in dict do body done — iterates over dict keys."""
+    source = (
+        "var count = 0\n"
+        'for k in {"a": 1, "b": 2, "c": 3} do\n'
+        "  count := count + 1\n"
+        "done\n"
+        "count\n"
+    )
+    result = evaluate_ir(source)
+    assert result["count"] == IntValue(3)
+
+
+def test_for_loop_text_iterates_characters() -> None:
+    """for c in text do body done — iterates over individual characters."""
+    source = (
+        "var count = 0\n"
+        'for c in "hello" do\n'
+        "  count := count + 1\n"
+        "done\n"
+        "count\n"
+    )
+    result = evaluate_ir(source)
+    assert result["count"] == IntValue(5)
+
+
+def test_for_loop_var_accessible_in_body() -> None:
+    """The iteration variable is in scope inside the loop body."""
+    source = (
+        "var last = \"\"\n"
+        'for ch in "abc" do\n'
+        "  last := ch\n"
+        "done\n"
+        "last\n"
+    )
+    result = evaluate_ir(source)
+    assert result["last"] == TextValue("c")
+
+
+def test_for_loop_list_bound_limits_iterations() -> None:
+    """for x in list do[bound] body until false — bound raises MaxIterationsExceeded."""
+    source = (
+        "var total = 0\n"
+        "for x in [10, 20, 30, 40, 50] do[3]\n"
+        "  total := total + x\n"
+        "until false\n"
+    )
+    exc = evaluate_ir_raises(source)
+    assert exc.display_name == "MaxIterationsExceeded"
+    assert exc.fields.get("limit") == IntValue(3)
+
+
+# ---------------------------------------------------------------------------
+# while-clause guard
+# ---------------------------------------------------------------------------
+
+
+def test_while_loop_runs_while_condition_true() -> None:
+    """while cond do body done — body runs as long as condition holds."""
+    source = (
+        "var n = 0\n"
+        "while n < 5 do\n"
+        "  n := n + 1\n"
+        "done\n"
+        "n\n"
+    )
+    result = evaluate_ir(source)
+    assert result["n"] == IntValue(5)
+
+
+def test_while_loop_false_condition_skips_body() -> None:
+    """while false do body done — condition already false; body never runs."""
+    source = (
+        "var n = 0\n"
+        "while false do\n"
+        "  n := n + 1\n"
+        "done\n"
+        "n\n"
+    )
+    result = evaluate_ir(source)
+    assert result["n"] == IntValue(0)
+
+
+def test_for_loop_with_while_guard() -> None:
+    """for x in list while cond do body done — while guard stops early."""
+    source = (
+        "var total = 0\n"
+        "for x in [1, 2, 3, 4, 5] while x <= 3 do\n"
+        "  total := total + x\n"
+        "done\n"
+        "total\n"
+    )
+    result = evaluate_ir(source)
+    assert result["total"] == IntValue(6)
+
+
+# ---------------------------------------------------------------------------
+# for-loop type errors
+# ---------------------------------------------------------------------------
+
+
+def test_for_loop_non_iterable_bool_raises_type_error() -> None:
+    """for x in bool do body done — non-iterable type is a typecheck error."""
+    from agm.agl.typecheck.env import AglTypeError
+    from tests.agl.ir_harness import m2_caps
+
+    source = "for x in true do\n  ()\ndone\n"
+    with pytest.raises(AglTypeError):
+        from agm.agl.parser import parse_program
+        from agm.agl.scope import resolve
+        from agm.agl.typecheck import check
+
+        check(resolve(parse_program(source)), m2_caps())
+
+
+def test_for_loop_int_collection_raises_type_error() -> None:
+    """for x in int_expr do body done — int is not an iterable collection."""
+    from agm.agl.typecheck.env import AglTypeError
+    from tests.agl.ir_harness import m2_caps
+
+    source = "for x in 42 do\n  ()\ndone\n"
+    with pytest.raises(AglTypeError):
+        from agm.agl.parser import parse_program
+        from agm.agl.scope import resolve
+        from agm.agl.typecheck import check
+
+        check(resolve(parse_program(source)), m2_caps())
+
+
+# ---------------------------------------------------------------------------
+# validate_ir: IrIterInit, IrIterHasNext, IrIterNext structural validation
+# ---------------------------------------------------------------------------
+
+
+def test_validate_ir_iterinit_iternext_in_loop() -> None:
+    """validate_ir accepts IrIterInit / IrIterHasNext / IrIterNext in an IrLoop."""
+    it_sym = SymbolId(42)
+    symbols = {
+        it_sym: SymbolDescriptor(
+            symbol_id=it_sym,
+            mutable=True,
+            public_name=None,
+            owner=ENTRY_ID,
+        )
+    }
+    loop = IrLoop(
+        location=_DUMMY_LOC,
+        body=IrBlock(
+            location=_DUMMY_LOC,
+            items=(
+                IrIf(
+                    location=_DUMMY_LOC,
+                    branches=(
+                        IrIfBranch(
+                            cond=IrIterHasNext(
+                                location=_DUMMY_LOC,
+                                iterator=IrLoad(location=_DUMMY_LOC, symbol=it_sym),
+                            ),
+                            body=IrBreak(location=_DUMMY_LOC),
+                        ),
+                    ),
+                    has_else=False,
+                ),
+                IrIterNext(
+                    location=_DUMMY_LOC,
+                    iterator=IrLoad(location=_DUMMY_LOC, symbol=it_sym),
+                ),
+            ),
+        ),
+    )
+    prog = _make_minimal_program(
+        (
+            IrBind(
+                location=_DUMMY_LOC,
+                symbol=it_sym,
+                value=IrIterInit(
+                    location=_DUMMY_LOC,
+                    kind=IterKind.LIST,
+                    collection=IrConstText(location=_DUMMY_LOC, value="placeholder"),
+                ),
+            ),
+            loop,
+        ),
+        source_text="",
+        symbols=symbols,
+    )
+    validate_ir(prog)  # must not raise

@@ -72,6 +72,9 @@ from agm.agl.ir.nodes import (
     IrIndex,
     IrIndexStep,
     IrIndirectCall,
+    IrIterHasNext,
+    IrIterInit,
+    IrIterNext,
     IrLiteralPlan,
     IrLoad,
     IrLoop,
@@ -106,6 +109,7 @@ from agm.agl.ir.operations import (
     CompareKind,
     ContainsKind,
     IndexKind,
+    IterKind,
     NumericKind,
     UnaryOp,
 )
@@ -366,6 +370,7 @@ class _Lowerer:
         BinderKind.catch_binder,
         BinderKind.pattern_binding,
         BinderKind.agent_binding,
+        BinderKind.loop_var_binding,
     })
 
     def _pattern_binding_ids(self, pattern: Pattern, out: set[int]) -> None:
@@ -442,10 +447,12 @@ class _Lowerer:
             case Loop():
                 if node.for_iter is not None:
                     self._scan_captures(node.for_iter, local_ids, captured)
-                if node.while_cond is not None:
-                    self._scan_captures(node.while_cond, local_ids, captured)
                 if node.bound is not None:
                     self._scan_captures(node.bound, local_ids, captured)
+                if node.for_var is not None:
+                    local_ids.add(node.node_id)
+                if node.while_cond is not None:
+                    self._scan_captures(node.while_cond, local_ids, captured)
                 self._scan_captures(node.body, local_ids, captured)
                 if node.until_cond is not None:
                     self._scan_captures(node.until_cond, local_ids, captured)
@@ -977,9 +984,25 @@ class _Lowerer:
             # loop expression → IrLoop (desugared by _lower_loop)
             # ----------------------------------------------------------
             case Loop(
-                bound=bound_expr, body=body_expr, until_cond=until_cond_expr, span=span
+                for_var=for_var,
+                for_iter=for_iter_expr,
+                while_cond=while_cond_expr,
+                bound=bound_expr,
+                body=body_expr,
+                until_cond=until_cond_expr,
+                span=span,
+                node_id=loop_nid,
             ):
-                return self._lower_loop(bound_expr, body_expr, until_cond_expr, span)
+                return self._lower_loop(
+                    for_var=for_var,
+                    for_iter_expr=for_iter_expr,
+                    while_cond_expr=while_cond_expr,
+                    bound_expr=bound_expr,
+                    body_expr=body_expr,
+                    until_cond_expr=until_cond_expr,
+                    span=span,
+                    loop_nid=loop_nid,
+                )
 
             # ----------------------------------------------------------
             # break / continue — wire to the existing IR signals
@@ -1005,37 +1028,70 @@ class _Lowerer:
 
     def _lower_loop(
         self,
+        *,
+        for_var: "str | None",
+        for_iter_expr: "Expr | None",
+        while_cond_expr: "Expr | None",
         bound_expr: "Expr | None",
         body_expr: "Expr",
         until_cond_expr: "Expr | None",
         span: "SourceSpan",
+        loop_nid: int,
     ) -> IrExpr:
         """Desugar a ``Loop`` AST node to ``IrLoop(body)``.
 
-        ``for_var``/``for_iter``/``while_cond`` clauses are not yet desugared.
-        This method handles the bound check (4), count increment (5), body (6),
-        and until guard (7) items only.
-
-        **Pre-loop** (emitted ONLY when ``bound_expr`` is present):
-        - ``IrBind(__n, lower_coerced(bound_expr, IntType()))``   — immutable
-        - ``IrBind(__count, IrConstInt(0))``                      — mutable
+        **Pre-loop** (emitted as needed):
+        - ``IrBind(__it, IrIterInit(kind, lower(for_iter_expr)))``  — mutable; for ``for``
+        - ``IrBind(__n, lower_coerced(bound_expr, IntType()))``      — immutable; for bound
+        - ``IrBind(__count, IrConstInt(0))``                         — mutable; for bound
 
         **``IrLoop(body = IrBlock([…]))``** with:
-        4. Bound check   (only if bounded)
-        5. Count incr    (only if bounded)
-        6. Body          (always)
-        7. Until guard   (only if ``until_cond_expr`` is not ``None``)
+        1. For exhaustion check  (only if ``for_iter_expr`` is not ``None``)
+        2. For variable bind     (only if ``for_var`` is not ``None``)
+        3. While guard           (only if ``while_cond_expr`` is not ``None``)
+        4. Bound check           (only if bounded)
+        5. Count increment       (only if bounded)
+        6. Body                  (always)
+        7. Until guard           (only if ``until_cond_expr`` is not ``None``)
 
-        Returns ``IrSequence(pre_items..., IrLoop)`` when bounded; the plain
-        ``IrLoop`` when unbounded.
+        Returns ``IrSequence(pre_items..., IrLoop)`` when pre-loop items exist;
+        the plain ``IrLoop`` when not.
         """
         loc = self._loc(span)
         pre_items: list[IrExpr] = []
+        it_sym: SymbolId | None = None
         n_sym: SymbolId | None = None
         count_sym: SymbolId | None = None
 
+        # Pre-loop: for iterator initialisation
+        if for_iter_expr is not None:
+            iter_type = self._node_type(for_iter_expr.node_id)
+            if isinstance(iter_type, ListType):
+                iter_kind = IterKind.LIST
+            elif isinstance(iter_type, DictType):
+                iter_kind = IterKind.DICT_KEYS
+            else:  # TextType
+                iter_kind = IterKind.TEXT
+            it_sym = self._alloc_synthetic_sym(mutable=True)
+            pre_items.append(
+                IrBind(
+                    location=loc,
+                    symbol=it_sym,
+                    value=IrIterInit(
+                        location=loc,
+                        kind=iter_kind,
+                        collection=self.lower_expr(for_iter_expr),
+                    ),
+                )
+            )
+
+        # Allocate for_var symbol in the loop frame (immutable let-by-value)
+        for_var_sym: SymbolId | None = None
+        if for_var is not None:
+            for_var_sym = self._alloc_sym(loop_nid, name=for_var, mutable=False, public=False)
+
+        # Pre-loop: bound initialisation
         if bound_expr is not None:
-            # __n = bound  (immutable — evaluated once before the loop)
             n_sym = self._alloc_synthetic_sym(mutable=False)
             pre_items.append(
                 IrBind(
@@ -1044,7 +1100,6 @@ class _Lowerer:
                     value=self.lower_coerced(bound_expr, IntType()),
                 )
             )
-            # __count = 0  (mutable — counts body entries)
             count_sym = self._alloc_synthetic_sym(mutable=True)
             pre_items.append(
                 IrBind(
@@ -1055,6 +1110,62 @@ class _Lowerer:
             )
 
         body_items: list[IrExpr] = []
+
+        # Item 1: for exhaustion check — if not IrIterHasNext(__it) then break
+        if it_sym is not None:
+            body_items.append(
+                IrIf(
+                    location=loc,
+                    branches=(
+                        IrIfBranch(
+                            cond=IrUnary(
+                                location=loc,
+                                op=UnaryOp.NOT,
+                                kind=None,
+                                value=IrIterHasNext(
+                                    location=loc,
+                                    iterator=IrLoad(location=loc, symbol=it_sym),
+                                ),
+                            ),
+                            body=IrBreak(location=loc),
+                        ),
+                    ),
+                    has_else=False,
+                )
+            )
+
+        # Item 2: for variable bind — let for_var = IrIterNext(__it)
+        if it_sym is not None and for_var_sym is not None:
+            body_items.append(
+                IrBind(
+                    location=loc,
+                    symbol=for_var_sym,
+                    value=IrIterNext(
+                        location=loc,
+                        iterator=IrLoad(location=loc, symbol=it_sym),
+                    ),
+                )
+            )
+
+        # Item 3: while guard — if not while_cond then break
+        if while_cond_expr is not None:
+            body_items.append(
+                IrIf(
+                    location=loc,
+                    branches=(
+                        IrIfBranch(
+                            cond=IrUnary(
+                                location=loc,
+                                op=UnaryOp.NOT,
+                                kind=None,
+                                value=self.lower_coerced(while_cond_expr, BoolType()),
+                            ),
+                            body=IrBreak(location=loc),
+                        ),
+                    ),
+                    has_else=False,
+                )
+            )
 
         # Item 4: bound check — if __count >= __n => inner_if
         if n_sym is not None and count_sym is not None:

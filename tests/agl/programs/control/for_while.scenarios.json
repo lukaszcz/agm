@@ -1,0 +1,24 @@
+{
+  "scenarios": [
+    {
+      "name": "while_stops_early",
+      "params": {"items": [1, 2, 10, 3], "limit": 5},
+      "expect": {"stdout": "3\n"}
+    },
+    {
+      "name": "list_exhausted_before_guard_fails",
+      "params": {"items": [1, 2, 3], "limit": 100},
+      "expect": {"stdout": "6\n"}
+    },
+    {
+      "name": "while_false_from_start",
+      "params": {"items": [10, 20], "limit": 0},
+      "expect": {"stdout": "0\n"}
+    },
+    {
+      "name": "empty_list",
+      "params": {"items": [], "limit": 5},
+      "expect": {"stdout": "0\n"}
+    }
+  ]
+}

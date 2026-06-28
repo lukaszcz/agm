@@ -1,0 +1,14 @@
+{
+  "scenarios": [
+    {
+      "name": "sum_three_omitted",
+      "params": {"items": [4, 5, 6]},
+      "expect": {"stdout": "15\n"}
+    },
+    {
+      "name": "empty_list_omitted",
+      "params": {"items": []},
+      "expect": {"stdout": "0\n"}
+    }
+  ]
+}

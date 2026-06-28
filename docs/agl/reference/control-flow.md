@@ -103,14 +103,83 @@ let next_prompt: text = case action of
   | Escalate(reason) => "Investigate:\n${reason}"
 ```
 
-## `do … until` loops
+## Loops
 
 ```ebnf
-do_loop    ::= "do" ("[" expr "]")? block ("until" or_expr | "done")
+loop_expr    ::= for_clause? while_clause? "do" ("[" expr "]")? block loop_end
+               | for_clause? while_clause? "do" ("[" expr "]")? inline_body "until" or_expr
+
+for_clause   ::= "for" NAME "in" or_expr NEWLINE?
+while_clause ::= "while" or_expr NEWLINE?
+
+loop_end     ::= "until" or_expr
+               | "done"
+               | (* omitted — suite body only; equivalent to "done" *)
 ```
 
-AgL's loop is a **post-test** loop. An optional bound is written immediately
-after `do`:
+A loop body executes repeatedly. All three header clauses — `for`, `while`,
+and the `[bound]` — are optional and may be combined. The terminator (`until
+E`, `done`, or omitted) follows the body.
+
+### `for` clause
+
+`for NAME in EXPR` declares a loop variable `NAME` bound to successive elements
+of the collection `EXPR`:
+
+- **`list[T]`** — elements in declaration order; `NAME` has type `T`.
+- **`dict[text, V]`** — keys in insertion order; `NAME` has type `text`. Values
+  are retrieved from the dict with the key: `d[NAME]`.
+- **`text`** — UTF-8 characters in order; `NAME` has type `text`.
+
+The loop variable is immutable (`:=` to it is a static error), has the type of
+the collection's element, and is visible in the `while` guard, the body, and
+the `until` condition. It is not visible outside the loop.
+
+The loop exits after the last element is consumed without raising any exception.
+
+```agl
+var total: int = 0
+for item in items do
+  total := total + item
+done
+
+for key in config do
+  print "Key: ${key} = ${config[key]}"
+done
+```
+
+### `while` clause
+
+`while EXPR` is a pre-body guard: if `EXPR` (which must be `bool`) evaluates
+to `false`, the loop exits immediately without running the body. It is
+re-evaluated at the start of each iteration, after the `for` variable has been
+bound (if a `for` clause is also present).
+
+```agl
+var n: int = 0
+while n < limit do
+  n := n + 1
+done
+```
+
+### `for`+`while` combination
+
+When both clauses are present, each iteration:
+1. Checks whether the collection has a next element; exits if not.
+2. Binds the loop variable to that element.
+3. Evaluates the `while` guard; exits if false.
+4. Runs the body.
+
+```agl
+for x in candidates while score(x) > threshold do
+  process(x)
+done
+```
+
+### `do` and the body
+
+The `do` keyword introduces the body. An optional bound `[expr]` may appear
+immediately after `do`:
 
 ```agl
 do[5]
@@ -126,85 +195,65 @@ do[5]
 until r is Pass
 ```
 
-Inline:
+Inline body (single expression; no INDENT):
 
 ```agl
 do[5] let r: Review = ask("Review ${a}", agent: reviewer) until r is Pass
 ```
 
-Semantics:
+### Bound `[expr]`
 
-1. If a bound `[expr]` is present, evaluate `expr` (an `int`-typed expression)
-   **once in the enclosing scope** to obtain the bound `N`. A bound `N ≤ 0`
-   runs the body **zero times** and the loop completes normally (yields `unit`).
-2. Execute the body in a **fresh iteration scope**.
-3. Evaluate the `until` condition *in that same iteration scope* — it sees
-   the body's bindings for that iteration. The condition must be `bool`.
-4. If the condition is true, the loop ends.
-5. Otherwise discard the iteration scope and repeat.
-6. If a bound `N ≥ 1` was given and the body has executed `N` times with the
-   condition still false, raise **`MaxIterationsExceeded`**. An unbounded loop
-   (`do` without `[…]`) never raises `MaxIterationsExceeded`.
+The bound is an arbitrary `int`-typed expression evaluated **once at loop
+entry, in the enclosing scope**:
 
-The `do … until` loop always has type **`unit`**: it runs for effect and
-produces no value.
+- **N ≤ 0** — runs the body zero times; the loop completes normally.
+- **N ≥ 1** — when the body has executed N times and the exit condition has
+  not yet triggered, **`MaxIterationsExceeded`** is raised.
+- **Absent** — the loop is unbounded and never raises `MaxIterationsExceeded`.
 
-### `done` terminator
+The bound counts body executions, not agent calls. Retries inside the body do
+not consume iterations. Mutating a `var` the bound references from inside the
+body does not change the already-fixed bound. Arithmetic is equally valid:
+`do[rounds + 1]`, `do[base * 2]`.
 
-`done` is an alternative terminator equivalent to `until false` — the loop
-never exits on its own. This form is only useful with a bound `[n]`: when the
-bound is exhausted the loop raises `MaxIterationsExceeded`; with no bound it
-runs forever.
+### Terminators
+
+**`until EXPR`** — after each body execution, evaluate `EXPR` (must be
+`bool`) in the iteration scope; if true, exit the loop normally.
+
+**`done`** — equivalent to `until false`; the loop only exits via `break`,
+the bound, or for-collection exhaustion.
+
+**Omitted terminator** — when a multi-line `do` body is written without an
+explicit `until` or `done`, the dedent to the enclosing indent level implicitly
+closes the loop as if `done` were present.
 
 ```agl
-do[max_rounds]
+# all three forms are equivalent:
+do[n]
   artifact := ask("Implement ${spec}", agent: impl)
 done
-```
 
-When a multi-line `do` body is written without an explicit `until` or `done`,
-it is implicitly terminated as if `done` were written — so the two forms are
-identical:
-
-```agl
-# identical to the example above
-do[max_rounds]
+do[n]
   artifact := ask("Implement ${spec}", agent: impl)
+until false
+
+do[n]
+  artifact := ask("Implement ${spec}", agent: impl)
+# (next statement at enclosing indent — implicit done)
 ```
 
-The bound:
+### Stacked header form
 
-- is an arbitrary `int`-typed expression — it may reference params, `let`s,
-  `var`s, arithmetic, or calls. It is evaluated **once at loop entry, in the
-  enclosing scope**: it cannot see the body's bindings, and mutating a `var`
-  the bound references from inside the body does not change the already-fixed
-  bound;
-- counts **body executions**, not agent calls — retries inside the body do
-  not consume loop iterations;
-- when omitted, the loop is **unbounded** — it runs until the `until`
-  condition holds and never raises `MaxIterationsExceeded`.
-
-A bound ≤ 0 runs the body zero times and completes normally. For a positive
-bound or an omitted bound, the body always executes at least once.
-
-### Expression bound example
+Each header clause may appear on its own line above `do`:
 
 ```agl
-param max_rounds: int
-
-var artifact: text = ask("Implement ${spec}", agent: impl)
-
+for x in candidates
+while score(x) > threshold
 do[max_rounds]
-  let r: Review = ask("Review ${artifact}", agent: reviewer)
-  case r of
-    | Fail(issues) =>
-        artifact := ask("Fix ${issues}", agent: impl)
-    | Pass => ()
-until r is Pass
+  process(x)
+until satisfied(x)
 ```
-
-The bound `max_rounds` is a param, resolved before the loop begins. Arithmetic
-is equally valid: `do[rounds + 1]`, `do[base * 2]`.
 
 ### Loop state
 
@@ -223,9 +272,11 @@ do[5]
 until review is Pass
 ```
 
-The `until` keyword may start its own line aligned with `do`, courtesy of the
-branch-marker continuation rule
+The `until` and `done` keywords may start their own lines aligned with the
+enclosing statement, courtesy of the branch-marker continuation rule
 ([Lexical structure](lexical-structure.md)).
+
+All loops have type **`unit`** — they run for effect and produce no value.
 
 ## `break` and `continue`
 

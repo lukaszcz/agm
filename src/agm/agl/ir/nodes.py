@@ -61,6 +61,7 @@ from agm.agl.ir.operations import (
     CompareKind,
     ContainsKind,
     IndexKind,
+    IterKind,
     NumericKind,
     UnaryOp,
 )
@@ -94,6 +95,9 @@ __all__ = [
     "IrContains",
     "IrContinue",
     "IrConvert",
+    "IrIterHasNext",
+    "IrIterInit",
+    "IrIterNext",
     "IrDirectCall",
     "IrExpr",
     "IrField",
@@ -795,6 +799,45 @@ class IrContinue:
     location: Location
 
 
+@dataclass(frozen=True, slots=True)
+class IrIterInit:
+    """Initialize a loop iterator over a collection.
+
+    ``kind`` selects list / dict-keys / text iteration.
+    ``collection`` evaluates to the collection to iterate.
+    Yields an ``IteratorValue`` (internal; never user-visible).
+    """
+
+    location: Location
+    kind: "IterKind"
+    collection: "IrExpr"
+
+
+@dataclass(frozen=True, slots=True)
+class IrIterHasNext:
+    """Test whether a loop iterator has more elements.
+
+    ``iterator`` evaluates to an ``IteratorValue``.
+    Yields ``BoolValue(True)`` when more elements remain.
+    """
+
+    location: Location
+    iterator: "IrExpr"
+
+
+@dataclass(frozen=True, slots=True)
+class IrIterNext:
+    """Advance a loop iterator and return the current element.
+
+    ``iterator`` evaluates to an ``IteratorValue``.
+    Advances the iterator's position and returns the element at the
+    previous position.  Caller must check ``IrIterHasNext`` first.
+    """
+
+    location: Location
+    iterator: "IrExpr"
+
+
 # ---------------------------------------------------------------------------
 # Function/closure nodes (M4a)
 # ---------------------------------------------------------------------------
@@ -1005,6 +1048,9 @@ IrExpr = (
     | IrLoop
     | IrBreak
     | IrContinue
+    | IrIterInit
+    | IrIterHasNext
+    | IrIterNext
     | IrMakeClosure
     | IrDirectCall
     | IrIndirectCall

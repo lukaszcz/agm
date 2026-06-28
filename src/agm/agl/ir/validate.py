@@ -79,6 +79,9 @@ from agm.agl.ir.nodes import (
     IrIndex,
     IrIndexStep,
     IrIndirectCall,
+    IrIterHasNext,
+    IrIterInit,
+    IrIterNext,
     IrLiteralPlan,
     IrLoad,
     IrLoop,
@@ -590,6 +593,18 @@ def _validate_expr(node: IrExpr, ctx: _Context) -> None:
 
         case IrContinue():
             _validate_location(node.location, ctx)
+
+        case IrIterInit(collection=collection):
+            _validate_location(node.location, ctx)
+            _validate_expr(collection, ctx)
+
+        case IrIterHasNext(iterator=iterator):
+            _validate_location(node.location, ctx)
+            _validate_expr(iterator, ctx)
+
+        case IrIterNext(iterator=iterator):
+            _validate_location(node.location, ctx)
+            _validate_expr(iterator, ctx)
 
         case IrMakeClosure(function_id=fn_id, captures=captures):
             _validate_location(node.location, ctx)

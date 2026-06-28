@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "count_to_5",
+      "params": {"limit": 5},
+      "expect": {"stdout": "5\n"}
+    },
+    {
+      "name": "false_condition_zero_iterations",
+      "params": {"limit": 0},
+      "expect": {"stdout": "0\n"}
+    },
+    {
+      "name": "count_to_1",
+      "params": {"limit": 1},
+      "expect": {"stdout": "1\n"}
+    }
+  ]
+}

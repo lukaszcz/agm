@@ -101,6 +101,8 @@ class BinderKind(enum.Enum):
         A function/lambda parameter binding (immutable, function-local).
     ``constructor_binding``
         A record constructor or enum variant binding (immutable value binding).
+    ``loop_var_binding``
+        A ``for``-loop iteration variable (immutable, loop-body-local).
     """
 
     let_binding = "let_binding"
@@ -111,6 +113,7 @@ class BinderKind(enum.Enum):
     agent_binding = "agent_binding"
     param_binding = "param_binding"
     constructor_binding = "constructor_binding"
+    loop_var_binding = "loop_var_binding"
 
 
 # ---------------------------------------------------------------------------

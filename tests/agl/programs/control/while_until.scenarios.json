@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "until_matches_while_exit",
+      "params": {"limit": 3},
+      "expect": {"stdout": "3\n"}
+    },
+    {
+      "name": "limit_zero_no_body",
+      "params": {"limit": 0},
+      "expect": {"stdout": "0\n"}
+    },
+    {
+      "name": "count_to_7",
+      "params": {"limit": 7},
+      "expect": {"stdout": "7\n"}
+    }
+  ]
+}

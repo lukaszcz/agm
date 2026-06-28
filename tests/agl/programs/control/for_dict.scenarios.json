@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "two_entries",
+      "params": {"d": {"a": 10, "b": 20}},
+      "expect": {"stdout": "2\n30\n"}
+    },
+    {
+      "name": "empty_dict",
+      "params": {"d": {}},
+      "expect": {"stdout": "0\n0\n"}
+    },
+    {
+      "name": "single_entry",
+      "params": {"d": {"x": 7}},
+      "expect": {"stdout": "1\n7\n"}
+    }
+  ]
+}

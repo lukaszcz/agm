@@ -1093,7 +1093,21 @@ class _Checker:
                     f"do-loop bound must be int; got '{bound_type!r}'.",
                     span=node.bound.span,
                 )
-        # while_cond is None this task (will be extended later).
+        if node.for_iter is not None:
+            iter_type = self._check_expr(node.for_iter, expected=None)
+            if isinstance(iter_type, ListType):
+                elem_type: Type = iter_type.elem
+            elif isinstance(iter_type, DictType):
+                elem_type = TextType()
+            elif isinstance(iter_type, TextType):
+                elem_type = TextType()
+            else:
+                raise AglTypeError(
+                    f"'for' collection must be list[T], dict[text,V], or text; "
+                    f"got '{iter_type!r}'.",
+                    span=node.for_iter.span,
+                )
+            self._env.set_binding_type(node.node_id, elem_type)
         if node.while_cond is not None:
             while_type = self._check_expr(node.while_cond, expected=None)
             self._require_bool_condition(while_type, node.while_cond.span, "while")

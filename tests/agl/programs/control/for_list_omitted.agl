@@ -1,0 +1,7 @@
+# for x in list do body — omitted terminator (dedent triggers synthetic done).
+# Exercises: omitted-terminator form of for loop.
+param items: list[int]
+var total: int = 0
+for x in items do
+  total := total + x
+print total

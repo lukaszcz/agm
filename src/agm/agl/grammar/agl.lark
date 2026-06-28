@@ -364,12 +364,17 @@ first_case_branch: PIPE? case_branch
 
 case_branch: pattern ARROW branch_body
 
-// loop expression: do[bound]? body until/done/omitted(via layout).
+// loop expression: optional for/while clauses, then do[bound]? body until/done/omitted(via layout).
 // The bound's opening "[" is lexed as DO_LSQB (the first "[" after `do`), so
 // the optional loop_bound is unambiguous against a list-literal body (avoids
 // S/R). The terminator is mandatory in the grammar; the layout injects a
 // synthetic DONE token for multi-line bodies that omit it.
-loop_expr : "do" loop_bound? do_body loop_end
+// loop_clauses is always present (possibly empty) so loop_expr always has a
+// fixed number of non-terminal children, avoiding maybe_placeholders issues.
+loop_expr    : loop_clauses "do" loop_bound? do_body loop_end
+loop_clauses : for_clause? while_clause?
+for_clause   : "for" name "in" or_expr _NEWLINE?
+while_clause : "while" or_expr _NEWLINE?
 
 // loop_bound: [expr] — an arbitrary int-typed expression as the iteration bound.
 loop_bound: DO_LSQB or_expr RSQB

@@ -342,6 +342,22 @@ class IrClosureValue:
         return id(self)
 
 
+@dataclass(slots=True, eq=False)
+class IteratorValue:
+    """Internal loop iterator cursor.
+
+    Holds a materialized snapshot of the collection as a list of element
+    values and a position index.  Mutable in place so ``IrIterNext`` can
+    advance without rebuilding the object.
+
+    Never rendered, hashed for equality, serialized, or returned to user
+    code — it is an evaluator-internal value only.
+    """
+
+    elements: list["Value"]
+    pos: int = 0
+
+
 # ---------------------------------------------------------------------------
 # Broad runtime value union
 # ---------------------------------------------------------------------------
@@ -361,6 +377,7 @@ Value: TypeAlias = (
     | AgentValue
     | ConstructorValue
     | IrClosureValue
+    | IteratorValue
 )
 
 # ---------------------------------------------------------------------------
@@ -403,6 +420,7 @@ __all__ = [
     "Frame",
     "IntValue",
     "IrClosureValue",
+    "IteratorValue",
     "JsonValue",
     "ListValue",
     "NominalId",

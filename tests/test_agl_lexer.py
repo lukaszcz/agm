@@ -2415,3 +2415,33 @@ class TestSyntheticDoneInjection:
         result = self._toks(source)
         types = [t for t, _ in result]
         assert "done" in types
+
+    def test_for_loop_mid_line_do_until_no_spurious_done(self) -> None:
+        # `for x in items do` has `do` mid-line (after the for-clause).
+        # The enclosing indent level (0) matches the `until` column, so no
+        # synthetic DONE is emitted and the until terminates the loop.
+        source = "for x in items do\n  body\nuntil false"
+        result = lark_tok(source)
+        types = [t for t, _ in result]
+        assert "DONE" not in types
+        assert "UNTIL" in types
+
+    def test_for_while_stacked_do_until_no_spurious_done(self) -> None:
+        # Stacked for/while/do form: for_clause on one line, while_clause on
+        # the next, then do on its own line followed by a suite body.
+        # The until at the enclosing indent closes the loop without a synthetic DONE.
+        source = "for x in items\nwhile true\ndo\n  body\nuntil false"
+        result = lark_tok(source)
+        types = [t for t, _ in result]
+        assert "DONE" not in types
+        assert "UNTIL" in types
+
+    def test_mid_line_do_expr_until_no_spurious_done(self) -> None:
+        # `let r = do` places `do` mid-line (column > 0). The suite body opens
+        # tagged with the enclosing indent level (column 0), so an `until` at
+        # column 0 is recognised as an explicit terminator, not a spurious close.
+        source = "let r = do\n  ()\nuntil true"
+        result = lark_tok(source)
+        types = [t for t, _ in result]
+        assert "DONE" not in types
+        assert "UNTIL" in types

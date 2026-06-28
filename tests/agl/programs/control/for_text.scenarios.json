@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "finds_exclamation",
+      "params": {"s": "hi!"},
+      "expect": {"stdout": "3\ntrue\n"}
+    },
+    {
+      "name": "no_exclamation_exhausts",
+      "params": {"s": "hello"},
+      "expect": {"stdout": "5\nfalse\n"}
+    },
+    {
+      "name": "exclamation_first",
+      "params": {"s": "!ok"},
+      "expect": {"stdout": "1\ntrue\n"}
+    }
+  ]
+}

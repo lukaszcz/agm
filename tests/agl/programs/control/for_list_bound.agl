@@ -1,0 +1,9 @@
+# for x in list do[n] body done — bound limits iterations before list is exhausted.
+# Exercises: for with bound, MaxIterationsExceeded when list not yet done.
+param items: list[int]
+param n: int
+var total: int = 0
+for x in items do[n]
+  total := total + x
+done
+print total

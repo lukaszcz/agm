@@ -28,6 +28,7 @@ __all__ = [
     "ContainsKind",
     "IndexKind",
     "IntToDecimal",
+    "IterKind",
     "MapDictValues",
     "MapEnumFields",
     "MapList",
@@ -117,6 +118,14 @@ class UnaryOp(enum.Enum):
 
     NOT = "not"
     NEG = "neg"
+
+
+class IterKind(enum.Enum):
+    """Kind tag for for-loop iteration: list elements, dict keys, or text chars."""
+
+    LIST = "list"
+    DICT_KEYS = "dict_keys"
+    TEXT = "text"
 
 
 # ---------------------------------------------------------------------------

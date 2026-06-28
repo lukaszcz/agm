@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "sum_three_elements",
+      "params": {"items": [1, 2, 3]},
+      "expect": {"stdout": "6\n"}
+    },
+    {
+      "name": "empty_list_zero_iterations",
+      "params": {"items": []},
+      "expect": {"stdout": "0\n"}
+    },
+    {
+      "name": "single_element",
+      "params": {"items": [42]},
+      "expect": {"stdout": "42\n"}
+    }
+  ]
+}

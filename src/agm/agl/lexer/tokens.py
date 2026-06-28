@@ -78,6 +78,8 @@ KW_UNTIL = "until"
 KW_DONE = "done"
 KW_BREAK = "break"
 KW_CONTINUE = "continue"
+KW_FOR = "for"
+KW_WHILE = "while"
 KW_IF = "if"
 KW_ELSE = "else"
 KW_CASE = "case"
@@ -120,6 +122,8 @@ KEYWORDS: frozenset[str] = frozenset(
         KW_DONE,
         KW_BREAK,
         KW_CONTINUE,
+        KW_FOR,
+        KW_WHILE,
         KW_IF,
         KW_ELSE,
         KW_CASE,

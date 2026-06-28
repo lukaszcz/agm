@@ -18,26 +18,31 @@ The IR has exactly one loop kind: `IrLoop(body)`, which repeats `body` unconditi
 
 All richer loop features are desugared by the lowerer (`lower/lowerer.py` → `_lower_loop`) before the evaluator sees them:
 
-- **`[n]` bound**: emitted as two synthetic pre-loop bindings (`__n` = bound expression evaluated once, `__count` = 0 mutable counter) in an enclosing `IrSequence`. Inside the loop body: (4) a bound-check `IrIf(__count >= __n)` that either breaks (if `__count == 0`, for zero-or-negative bounds) or raises `MaxIterationsExceeded` via a fully desugared `IrRaise(IrMakeException(...))`, then (5) `__count += 1`. No bound → no counter, no comparison, no exception node.
-- **`until E`**: appended as an `IrIf(lower(E)) => IrBreak` at the end of the loop body. Absent (for `done`/omitted terminators) → no guard; the bound's raise is the only exit.
-- **`for`/`while` clauses**: not yet desugared; `for`/`while` loop clause lowering is not yet implemented.
+- **`for EXPR` clause**: before the `IrLoop`, emits `IrBind(__it, IrIterInit(kind, lower(EXPR)))` where `kind` is `IterKind.LIST`, `DICT_KEYS`, or `TEXT` (chosen from the element type recorded by the typechecker). Inside the loop body, item 1 checks `IrIterHasNext(__it)` and breaks if false; item 2 binds the loop variable to `IrIterNext(__it)`.
+- **`while COND` guard**: emitted as item 3: `IrIf(NOT lower(COND)) => IrBreak`, after the for-variable bind (if present) and before the bound check.
+- **`[n]` bound**: emitted as two synthetic pre-loop bindings (`__n` = bound expression evaluated once, `__count` = 0 mutable counter) in an enclosing `IrSequence`. Item 4 inside the loop body checks the bound and raises `MaxIterationsExceeded` or breaks (for non-positive bounds); item 5 increments `__count`. No bound → no counter, no comparison, no exception node.
+- **`until E`**: appended as the final item: `IrIf(lower(E)) => IrBreak`. Absent (for `done`/omitted terminators) → no guard.
 
-`MaxIterationsExceeded` is constructed as a standard `IrMakeException` node, not a special IR primitive, keeping `IrLoop` a pure repeat node with no exception-raising logic of its own.
+`MaxIterationsExceeded` is constructed as a standard `IrMakeException` node, not a special IR primitive, keeping `IrLoop` a pure repeat node with no exception-raising logic of its own. The three iterator IR nodes (`IrIterInit`, `IrIterHasNext`, `IrIterNext`) are also fully typeless; the `IterKind` discriminant (an enum on `IrIterInit`) is the only runtime clue about collection shape.
 
 ### AST→IR Coverage
 
 | AST node | IR output |
 |---|---|
-| `Loop` (no bound, `until E`) | `IrLoop(body=[lower(body), IrIf(E)=>IrBreak])` |
-| `Loop` (bound `n`, `until E`) | `IrSequence(IrBind(__n), IrBind(__count), IrLoop(body=[bound_check, count_incr, lower(body), IrIf(E)=>IrBreak]))` |
+| `Loop` (no clauses, `until E`) | `IrLoop(body=[lower(body), IrIf(E)=>IrBreak])` |
+| `Loop` (bound `n`, `until E`) | `IrSequence(IrBind(__n,…), IrBind(__count,0), IrLoop(body=[bound_check, count_incr, lower(body), IrIf(E)=>IrBreak]))` |
 | `Loop` (bound `n`, done/omitted) | same but no `IrIf(E)` at end |
 | `Loop` (no bound, done/omitted) | `IrLoop(body=[lower(body)])` — infinite unless `break` |
+| `Loop` (for clause) | prefix `IrBind(__it, IrIterInit(kind, …))`, items 1–2 inside body |
+| `Loop` (while clause) | item 3 inside body: `IrIf(NOT lower(while_cond))=>IrBreak` |
 | `Break` | `IrBreak` |
 | `Continue` | `IrContinue` |
 
 ## Evaluator
 
 The evaluator interprets the linked program and nothing else. Its frame stack holds immutable bindings by value and mutable bindings in shared cells; the base frame is module scope, and function frames hold parameters and captured lexical bindings. Programs run under a pinned decimal arithmetic context so results never depend on the host's ambient precision.
+
+`IrIterInit` materializes an `IteratorValue` — a mutable cursor over a pre-built element list — that is stored as a regular immutable binding (the cell holds the same object throughout the loop). `IrIterHasNext` tests the position, and `IrIterNext` reads the current element and advances the position in place. `IteratorValue` is intentionally not a user-visible value type: it cannot be printed, serialized, or returned from a function.
 
 Host-backed operations are dispatched by contract identity:
 

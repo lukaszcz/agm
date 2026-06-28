@@ -1,0 +1,25 @@
+{
+  "scenarios": [
+    {
+      "name": "continue_counts_raises_after_k",
+      "params": {"items": [1, 2, 3, 4, 5], "k": 2},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "MaxIterationsExceeded", "fields": {"limit": 2}}
+      }
+    },
+    {
+      "name": "continue_with_k_1_raises_after_1",
+      "params": {"items": [10, 20, 30], "k": 1},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "MaxIterationsExceeded", "fields": {"limit": 1}}
+      }
+    },
+    {
+      "name": "list_exhausted_before_bound_normal_completion",
+      "params": {"items": [1, 2, 3], "k": 5},
+      "expect": {"stdout": ""}
+    }
+  ]
+}

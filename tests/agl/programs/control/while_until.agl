@@ -1,0 +1,8 @@
+# while COND do body until E — while loop with an until terminator.
+# Exercises: while + until terminator, both conditions evaluated each iteration.
+param limit: int
+var n: int = 0
+while n < limit do
+  n := n + 1
+until n >= limit
+print n

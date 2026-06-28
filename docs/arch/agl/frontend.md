@@ -10,6 +10,8 @@ The lexer is hand-written because AgL is indentation-sensitive: it produces INDE
 
 The AST is plain frozen dataclasses with no parser types — the firewall the rest of the implementation depends on. Because AgL is expression-oriented, there is no statement/expression split: a single unified node family covers blocks, bindings, assignment, control flow (`if`/`case`/`do`/`try`), and a single call node for every kind of invocation (user functions, built-ins, and function values, with the bare-argument call sugar desugaring to the same node). Casts (`as` / `as?`), indexing, lambdas and named function definitions, the unit literal, divergence (`raise`), and loop-control (`break`/`continue`) are all expression nodes. Type-level nodes describe the surface type syntax, including generic type applications.
 
+The `Loop` node carries four optional header fields — `for_var` (the loop variable name), `for_iter` (the collection expression), `while_cond` (the per-iteration boolean guard), and `bound` (the iteration-count expression) — plus a `body` and `until_cond`. Absent fields are `None`. `Break` and `Continue` are leaf nodes with no children.
+
 Each node carries a stable id assigned at build time. Later passes never mutate nodes; they record their conclusions in side tables keyed by that id (carried in the resolved and checked program objects). This is the universal annotation convention — it is why nodes can be frozen and shared, and why `id()`-based identity is never used.
 
 ## Scope and Name Resolution
@@ -22,7 +24,7 @@ Resolution is namespace- and scope-directed, never spelling-directed — a direc
 - Constructors live in the value namespace; an ambiguous unqualified constructor name is a static error, disambiguated by type qualification.
 - A bare name in a `case` pattern is treated as a constructor pattern when it names an in-scope constructor and otherwise as a variable binder — decided by resolution, not capitalization.
 
-Agents must be declared in source; the scope pass binds each declared agent as a first-class value of agent type. The resolver also tracks a loop-context flag, reset at function/lambda boundaries, to catch `break`/`continue` used outside any enclosing loop at resolution time. Graph-mode resolution extends this pass across modules; see [modules.md](modules.md).
+Agents must be declared in source; the scope pass binds each declared agent as a first-class value of agent type. The resolver tracks a loop-context flag, reset at function/lambda boundaries, to catch `break`/`continue` used outside any enclosing loop at resolution time. For-loop variables are bound with `BinderKind.loop_var_binding` (immutable, `:=` is a static error) and are visible in the `while` guard, the body, and the `until` condition, but not outside the loop. Graph-mode resolution extends this pass across modules; see [modules.md](modules.md).
 
 ## Type System
 
@@ -33,6 +35,7 @@ The pass selects concrete behavior that the evaluator later relies on:
 - **Built-in typing rules** are dispatched from the resolver's built-in classification — for example `print` accepts anything and yields unit; `exec` chooses between returning a structured result and parsing stdout into a target type; `ask` takes its result type from context.
 - **Casts** are validated against a table of permitted source/target pairs, each classified as total or fallible; `as?` always types as a boolean.
 - **Generics** use rank-1 parametric polymorphism. A generic definition is checked with its type parameters as rigid, opaque variables (enforcing parametricity), and a small one-sided matching solver infers type arguments for both explicit and inferred calls. Type arguments exist only during checking — they are erased before execution.
+- **For-loop iterable typing** derives the loop-variable element type from the collection type: `list[T]` → `T`, `dict[text, V]` → `text`, `text` → `text`. Any other type for the collection is a static error. The element type is recorded in the checker's binding-type side table under the `Loop` node's id, where lowering later reads it to determine the iterator kind.
 
 Output contracts (the schema and format metadata that agent/`exec` calls need) are computed here while types are available, then compiled into the typeless execution layer described in [execution.md](execution.md).
 

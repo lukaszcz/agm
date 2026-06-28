@@ -1,0 +1,15 @@
+# while loop with break and continue:
+# Counts n from 0; skips values <= skip_below via continue;
+# breaks when n >= stop_at.
+# Accumulates the sum of values that pass both filters.
+param skip_below: int
+param stop_at: int
+var n: int = 0
+var total: int = 0
+while n < stop_at do
+  n := n + 1
+  if n <= skip_below => continue
+  if n >= stop_at => break
+  total := total + n
+done
+print total

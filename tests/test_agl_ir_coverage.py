@@ -26,6 +26,7 @@ from agm.agl.semantics.values import (
     ExceptionValue,
     IntValue,
     IrClosureValue,
+    IteratorValue,
     JsonValue,
     ListValue,
     RecordValue,
@@ -98,6 +99,8 @@ def test_constructor_render_and_serialization_edges() -> None:
     assert render_value(variant) == "<constructor Thing.Case>"
     with pytest.raises(TypeError, match="ConstructorValue"):
         value_to_json_obj(record)
+    with pytest.raises(TypeError, match="IteratorValue"):
+        value_to_json_obj(IteratorValue(elements=[]))
 
 
 def test_param_conversion_direct_success_edges() -> None:

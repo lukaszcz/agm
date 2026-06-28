@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "sentinel_mid_list",
+      "params": {"items": [1, 2, 5, 3], "sentinel": 5},
+      "expect": {"stdout": "8\n"}
+    },
+    {
+      "name": "sentinel_absent_full_sum",
+      "params": {"items": [1, 2, 3], "sentinel": 99},
+      "expect": {"stdout": "6\n"}
+    },
+    {
+      "name": "sentinel_first_element",
+      "params": {"items": [1, 5, 10], "sentinel": 1},
+      "expect": {"stdout": "1\n"}
+    }
+  ]
+}

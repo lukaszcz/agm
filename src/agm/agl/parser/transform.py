@@ -1257,6 +1257,43 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
+    def for_clause(self, meta: Meta, args: _Args) -> tuple[str, syntax.Expr]:
+        """for_clause: "for" name "in" or_expr _NEWLINE?
+
+        ``name`` is transparent (``?name``), so args contains the NAME Token
+        and the transformed ``or_expr`` result.
+        """
+        name_tok = next(a for a in args if isinstance(a, Token))
+        iter_expr = cast(syntax.Expr, _find_non_token(args))
+        return (str(name_tok), iter_expr)
+
+    def while_clause(self, meta: Meta, args: _Args) -> syntax.Expr:
+        """while_clause: "while" or_expr _NEWLINE?
+
+        Returns the condition expression.
+        """
+        return cast(syntax.Expr, _find_non_token(args))
+
+    def loop_clauses(
+        self, meta: Meta, args: _Args
+    ) -> tuple[tuple[str, syntax.Expr] | None, syntax.Expr | None]:
+        """loop_clauses: for_clause? while_clause?
+
+        Returns a 2-tuple (for_result_or_None, while_result_or_None).
+        Detection is type-based (for_clause returns a tuple, while_clause
+        returns an Expr) so this is robust to maybe_placeholders behaviour.
+        """
+        for_result: tuple[str, syntax.Expr] | None = None
+        while_result: syntax.Expr | None = None
+        for a in args:
+            if a is None:  # pragma: no cover  # LALR never injects None for optional rules
+                continue
+            if isinstance(a, tuple):
+                for_result = cast("tuple[str, syntax.Expr]", a)
+            else:
+                while_result = cast(syntax.Expr, a)
+        return (for_result, while_result)
+
     def loop_bound(self, meta: Meta, args: _Args) -> syntax.Expr:
         """loop_bound: DO_LSQB or_expr RSQB — return the bound expression.
 
@@ -1301,30 +1338,46 @@ class AstBuilder(Transformer):
         return None
 
     def loop_expr(self, meta: Meta, args: _Args) -> syntax.Loop:
-        """loop_expr: "do" loop_bound? do_body loop_end
+        """loop_expr: loop_clauses "do" loop_bound? do_body loop_end
 
-        Children after transformation:
-          - optional bound (Expr, from loop_bound)
-          - body (Expr, from do_body)
-          - loop_end result: Expr for loop_until, None for loop_done
+        In LALR mode, absent optional rules are simply not included in the
+        tree (maybe_placeholders does not insert None).  Non-Token children:
+          0    : loop_clauses result  — always present (tuple)
+          1    : loop_bound result    — present only when loop_bound is given
+          last : loop_end result      — always present last (Expr or None)
+          last-1: do_body result      — always present second-to-last (Expr)
 
-        loop_end is always the last child.
+        String terminal ``"do"`` is stripped by Lark and never appears.
         """
-        # Collect non-Token children; loop_done returns None explicitly.
+        # String terminals ("do") are stripped by Lark; loop_end returns Expr|None
+        # (loop_until → Expr, loop_done → None) — neither is a Token, so don't
+        # filter on isinstance(Token).  Only the terminal tokens (DO_LSQB, RSQB
+        # etc.) inside sub-rules are filtered by *those* rules' transformers.
         children = [a for a in args if not isinstance(a, Token)]
-        # Last child is the loop_end result (Expr | None).
-        until_cond: syntax.Expr | None = cast(
-            "syntax.Expr | None", children[-1]
+        # Invariant: 3 or 4 children (loop_bound? is the variable one).
+        assert len(children) in (3, 4), f"loop_expr: unexpected children count {len(children)}"
+
+        clauses = cast(
+            "tuple[tuple[str, syntax.Expr] | None, syntax.Expr | None]", children[0]
         )
-        # Remaining children: optional bound then body.
-        rest = [cast(syntax.Expr, c) for c in children[:-1] if c is not None]
-        assert len(rest) in (1, 2), f"loop_expr: unexpected children count {len(rest)}"
-        bound: syntax.Expr | None = rest[0] if len(rest) == 2 else None
-        body = rest[-1]
+        for_var: str | None = None
+        for_iter: syntax.Expr | None = None
+        if clauses[0] is not None:
+            for_var, for_iter = clauses[0]
+        while_cond: syntax.Expr | None = clauses[1]
+
+        # loop_end is always the last child; do_body is second-to-last.
+        until_cond: syntax.Expr | None = cast("syntax.Expr | None", children[-1])
+        body = cast(syntax.Expr, children[-2])
+        # loop_bound is present only when len == 4.
+        bound: syntax.Expr | None = (
+            cast("syntax.Expr | None", children[1]) if len(children) == 4 else None
+        )
+
         return syntax.Loop(
-            for_var=None,
-            for_iter=None,
-            while_cond=None,
+            for_var=for_var,
+            for_iter=for_iter,
+            while_cond=while_cond,
             bound=bound,
             body=body,
             until_cond=until_cond,

@@ -1,0 +1,11 @@
+# for x in dict do body — iterate dict keys; use d[x] for values.
+# Exercises: for over dict, key binding, value access via index.
+param d: dict[text, int]
+var count: int = 0
+var key_sum: int = 0
+for k in d do
+  count := count + 1
+  key_sum := key_sum + d[k]
+done
+print count
+print key_sum

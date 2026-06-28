@@ -153,6 +153,7 @@ _IMMUTABLE_BINDER_PHRASES: dict[BinderKind, str] = {
     BinderKind.agent_binding: "it is an agent binding",
     BinderKind.param_binding: "it is a parameter binding",
     BinderKind.constructor_binding: "it is a constructor binding",
+    BinderKind.loop_var_binding: "it is a for-loop variable binding",
 }
 
 
@@ -1518,9 +1519,20 @@ class _Resolver:
             self._resolve_expr(node.bound)
         if node.for_iter is not None:
             self._resolve_expr(node.for_iter)
-        with self._child_scope(node.node_id):
+        with self._child_scope(node.node_id) as loop_scope:
             with self._loop_body_ctx():
-                # while_cond resolved before body; for_var is bound here when present.
+                # Bind for_var (immutable) before resolving while_cond/body/until_cond.
+                if node.for_var is not None:
+                    self._check_not_reserved(node.for_var, node.span)
+                    ref = BindingRef(
+                        name=node.for_var,
+                        mutable=False,
+                        decl_span=node.span,
+                        decl_node_id=node.node_id,
+                        kind=BinderKind.loop_var_binding,
+                        module_id=self._module_id,
+                    )
+                    loop_scope.define(node.for_var, ref)
                 if node.while_cond is not None:
                     self._resolve_expr(node.while_cond)
                 if isinstance(node.body, Block):

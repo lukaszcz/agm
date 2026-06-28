@@ -1492,33 +1492,37 @@ class _Resolver:
     def _resolve_loop(self, node: Loop) -> None:
         """Resolve a unified loop expression.
 
-        Resolution order:
-        - ``bound`` (if any) is resolved in the ENCLOSING scope — evaluated at
-          loop entry, before any body bindings exist, so it cannot see them.
-        - ``for_iter`` (if any) is resolved in the ENCLOSING scope (same reason).
-        - Opens ONE child scope; ``for_var`` is bound here when present.
-        - ``while_cond`` (if any) is resolved in the child scope, inside the
-          loop-body context so ``break``/``continue`` are valid.
-        - If the body is a ``Block``, its items are resolved DIRECTLY in the
-          child scope so bindings are visible to ``until_cond``.
-        - ``until_cond`` (if present) is resolved in the child scope.
+        Resolution order (all in the ENCLOSING scope, before the loop variable
+        is bound, so none of these can reference the loop variable):
+        - ``bound`` (if any)
+        - ``for_iter`` (if any) — the range start value for a range ``for``
+        - ``for_range_to`` (if any) — the range upper/lower bound
+        - ``for_range_by`` (if any) — the range step
 
-        ``_in_loop`` is set to ``True`` for while_cond/body/until_cond (the
-        loop interior), then restored on exit.  It is intentionally left at
-        its enclosing value when resolving ``bound`` and ``for_iter`` (both
-        evaluated before the loop starts, in the enclosing frame — a ``break``
-        in a bound is only valid if the loop itself is nested in an outer loop
-        body, which the inherited ``_in_loop`` state already encodes).
+        Then a single child scope is opened and ``for_var`` (if any) is bound
+        immutably into it.  The loop interior (``while_cond``, body,
+        ``until_cond``) is resolved in that child scope with ``_in_loop``
+        set to ``True``.  If the body is a ``Block``, its items are resolved
+        directly in the child scope so body bindings are visible to
+        ``until_cond``.
 
-        When adding ``for_var`` binding, bind it into the child scope before
-        resolving ``while_cond`` (the for variable must be in scope for
-        while_cond, body, and until_cond).
+        ``_in_loop`` is left at its enclosing value when resolving ``bound``
+        and the range-clause expressions (all evaluated before loop entry, in
+        the enclosing frame — ``break`` there is valid only if an outer loop
+        already has ``_in_loop`` set).
         """
-        # Resolve bound and for_iter in the enclosing scope (and context).
+        # Resolve bound, for_iter, and the range-clause expressions in the enclosing
+        # scope (before the loop variable is bound), so none of them can see the
+        # loop variable.  Range expressions are resolved in source order: start (a),
+        # then to/downto bound (b), then by step (k).
         if node.bound is not None:
             self._resolve_expr(node.bound)
         if node.for_iter is not None:
             self._resolve_expr(node.for_iter)
+        if node.for_range_to is not None:
+            self._resolve_expr(node.for_range_to)
+        if node.for_range_by is not None:
+            self._resolve_expr(node.for_range_by)
         with self._child_scope(node.node_id) as loop_scope:
             with self._loop_body_ctx():
                 # Bind for_var (immutable) before resolving while_cond/body/until_cond.

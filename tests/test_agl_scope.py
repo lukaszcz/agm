@@ -3062,3 +3062,240 @@ class TestImportDeclScope:
     def test_import_hiding_does_not_raise(self) -> None:
         r = parse_and_resolve("import foo hiding secret\n1")
         assert r
+
+
+# ---------------------------------------------------------------------------
+# Integer-range for loop scope tests
+# ---------------------------------------------------------------------------
+
+
+class TestRangeForScope:
+    """Scope resolution for integer-range for loops (for i in a to/downto b [by k])."""
+
+    def _make_range_loop(
+        self,
+        *,
+        for_var: str,
+        start: Expr,
+        to_bound: Expr,
+        down: bool = False,
+        by_step: Expr | None = None,
+        while_cond: Expr | None = None,
+        bound: Expr | None = None,
+        body: Expr | None = None,
+        until_cond: Expr | None = None,
+    ) -> Loop:
+        """Build a range Loop AST node with the given components."""
+        return Loop(
+            for_var=for_var,
+            for_iter=start,
+            for_range_to=to_bound,
+            for_range_down=down,
+            for_range_by=by_step,
+            while_cond=while_cond,
+            bound=bound,
+            body=body if body is not None else _make_unitlit(),
+            until_cond=until_cond,
+            span=_sp(),
+            node_id=_nid(),
+        )
+
+    def test_range_for_to_bound_resolves_in_enclosing_scope(self) -> None:
+        """The to-bound expression resolves names from the enclosing scope."""
+        let_b = _make_let("b", _make_intlit(10))
+        b_ref = _make_varref("b")
+        loop = self._make_range_loop(
+            for_var="i",
+            start=_make_intlit(1),
+            to_bound=b_ref,
+        )
+        r = resolve_program(let_b, loop)
+        assert r.resolution[b_ref.node_id].kind == BinderKind.let_binding
+
+    def test_range_for_by_step_resolves_in_enclosing_scope(self) -> None:
+        """The by-step expression resolves names from the enclosing scope."""
+        let_k = _make_let("k", _make_intlit(2))
+        k_ref = _make_varref("k")
+        loop = self._make_range_loop(
+            for_var="i",
+            start=_make_intlit(1),
+            to_bound=_make_intlit(10),
+            by_step=k_ref,
+        )
+        r = resolve_program(let_k, loop)
+        assert r.resolution[k_ref.node_id].kind == BinderKind.let_binding
+
+    def test_range_for_to_bound_cannot_see_loop_var(self) -> None:
+        """The to-bound resolves before the loop variable is bound, so it cannot use it."""
+        i_ref = _make_varref("i")
+        loop = self._make_range_loop(
+            for_var="i",
+            start=_make_intlit(1),
+            to_bound=i_ref,
+        )
+        with pytest.raises(AglScopeError):
+            resolve_program(loop)
+
+    def test_range_for_by_step_cannot_see_loop_var(self) -> None:
+        """The by-step resolves before the loop variable is bound, so it cannot use it."""
+        i_ref = _make_varref("i")
+        loop = self._make_range_loop(
+            for_var="i",
+            start=_make_intlit(1),
+            to_bound=_make_intlit(10),
+            by_step=i_ref,
+        )
+        with pytest.raises(AglScopeError):
+            resolve_program(loop)
+
+    def test_range_for_loop_var_visible_in_body(self) -> None:
+        """The loop variable is bound immutable and visible in the loop body."""
+        i_body_ref = _make_varref("i")
+        loop = self._make_range_loop(
+            for_var="i",
+            start=_make_intlit(1),
+            to_bound=_make_intlit(5),
+            body=i_body_ref,
+        )
+        r = resolve_program(loop)
+        assert r.resolution[i_body_ref.node_id].kind == BinderKind.loop_var_binding
+
+    def test_range_for_loop_var_visible_in_while_cond(self) -> None:
+        """The loop variable is in scope for the while condition."""
+        i_while_ref = _make_varref("i")
+        loop = self._make_range_loop(
+            for_var="i",
+            start=_make_intlit(1),
+            to_bound=_make_intlit(5),
+            while_cond=i_while_ref,
+        )
+        r = resolve_program(loop)
+        assert r.resolution[i_while_ref.node_id].kind == BinderKind.loop_var_binding
+
+    def test_range_for_loop_var_visible_in_until_cond(self) -> None:
+        """The loop variable is in scope for the until condition."""
+        i_until_ref = _make_varref("i")
+        loop = self._make_range_loop(
+            for_var="i",
+            start=_make_intlit(1),
+            to_bound=_make_intlit(5),
+            until_cond=i_until_ref,
+        )
+        r = resolve_program(loop)
+        assert r.resolution[i_until_ref.node_id].kind == BinderKind.loop_var_binding
+
+    def test_range_for_loop_var_assign_rejected(self) -> None:
+        """Assigning to the range-for loop variable via := is a static scope error.
+
+        The diagnostic must point at the assignment statement (the assign span),
+        not at the loop declaration.
+        """
+        assign_span = _sp(line=3)
+        assign = AssignStmt(
+            target=NameTarget(name="i", span=assign_span, node_id=_nid()),
+            value=_make_intlit(99),
+            span=assign_span,
+            node_id=_nid(),
+        )
+        # Wrap in a block so the body is a Block (AssignStmt is an Item, not Expr).
+        body = _make_block(assign)
+        loop = Loop(
+            for_var="i",
+            for_iter=_make_intlit(1),
+            for_range_to=_make_intlit(5),
+            for_range_down=False,
+            for_range_by=None,
+            while_cond=None,
+            bound=None,
+            body=body,
+            until_cond=None,
+            span=_sp(),
+            node_id=_nid(),
+        )
+        err = reject_program(loop)
+        line, msg = diag(err)
+        assert line == assign_span.start_line
+        assert "i" in msg
+
+    def test_range_for_downto_bound_resolves_in_enclosing_scope(self) -> None:
+        """The downto bound expression resolves names from the enclosing scope."""
+        let_b = _make_let("b", _make_intlit(1))
+        b_ref = _make_varref("b")
+        loop = self._make_range_loop(
+            for_var="i",
+            start=_make_intlit(10),
+            to_bound=b_ref,
+            down=True,
+        )
+        r = resolve_program(let_b, loop)
+        assert r.resolution[b_ref.node_id].kind == BinderKind.let_binding
+
+    def test_range_for_downto_with_by_both_resolve_in_enclosing_scope(self) -> None:
+        """Both the downto bound and by step resolve from the enclosing scope."""
+        let_b = _make_let("b", _make_intlit(1))
+        let_k = _make_let("k", _make_intlit(2))
+        b_ref = _make_varref("b")
+        k_ref = _make_varref("k")
+        loop = self._make_range_loop(
+            for_var="i",
+            start=_make_intlit(10),
+            to_bound=b_ref,
+            down=True,
+            by_step=k_ref,
+        )
+        r = resolve_program(let_b, let_k, loop)
+        assert r.resolution[b_ref.node_id].kind == BinderKind.let_binding
+        assert r.resolution[k_ref.node_id].kind == BinderKind.let_binding
+
+    def test_range_for_with_while_clause_and_bound(self) -> None:
+        """Range for composes with a while clause and a [n] safety bound at scope level."""
+        let_n = _make_let("n", _make_intlit(100))
+        n_ref_while = _make_varref("n")
+        n_ref_bound = _make_varref("n")
+        loop = Loop(
+            for_var="i",
+            for_iter=_make_intlit(1),
+            for_range_to=_make_intlit(50),
+            for_range_down=False,
+            for_range_by=None,
+            while_cond=n_ref_while,
+            bound=n_ref_bound,
+            body=_make_unitlit(),
+            until_cond=None,
+            span=_sp(),
+            node_id=_nid(),
+        )
+        r = resolve_program(let_n, loop)
+        # while_cond resolves in the loop (inner) scope but n is still visible from enclosing
+        assert r.resolution[n_ref_while.node_id].kind == BinderKind.let_binding
+        # bound resolves in enclosing scope
+        assert r.resolution[n_ref_bound.node_id].kind == BinderKind.let_binding
+
+    def test_range_for_to_bound_cannot_see_body_local(self) -> None:
+        """The to-bound resolves in the enclosing scope and cannot see names bound inside the body.
+
+        A body-local ``let`` is not in scope when ``for_range_to`` is evaluated, so
+        any reference to it from the bound expression is a scope error.
+        """
+        # body_local_ref appears in the to-bound, but "body_local" is only defined
+        # inside the loop body.  The bound resolves before the child scope is opened.
+        body_local_ref = _make_varref("body_local")
+        body = _make_block(
+            _make_let("body_local", _make_intlit(5)),
+            _make_unitlit(),
+        )
+        loop = Loop(
+            for_var="i",
+            for_iter=_make_intlit(1),
+            for_range_to=body_local_ref,
+            for_range_down=False,
+            for_range_by=None,
+            while_cond=None,
+            bound=None,
+            body=body,
+            until_cond=None,
+            span=_sp(),
+            node_id=_nid(),
+        )
+        with pytest.raises(AglScopeError):
+            resolve_program(loop)

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import os
-import re
 from dataclasses import dataclass
 from pathlib import Path
 
 from agm.core.env import agm_installation_prefix
 from agm.core.fs import mkdir, write_text
+from agm.core.parse import parse_timeout as parse_timeout
 from agm.core.toml import (
     TomlDict,
     dumps_toml,
@@ -305,31 +305,6 @@ def load_run_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> RunConfi
         default_swap_limit=default_swap_limit,
         command_swap_limits=command_swap_limits,
     )
-
-
-def parse_timeout(value: str) -> float:
-    """Parse a human-readable timeout string into seconds.
-
-    Supports plain numbers (treated as seconds) and durations with
-    suffixes: ``s`` (seconds), ``m`` (minutes), ``h`` (hours).
-
-    Examples::
-
-        parse_timeout("30")    -> 30.0
-        parse_timeout("30s")   -> 30.0
-        parse_timeout("10m")   -> 600.0
-        parse_timeout("2h")    -> 7200.0
-    """
-    match = re.fullmatch(r"(\d+(?:\.\d+)?)(s|m|h)?", value.strip())
-    if match is None:
-        raise ValueError(f"invalid timeout format: {value!r}")
-    amount = float(match.group(1))
-    unit: str = match.group(2) or ""
-    if unit == "m":
-        return amount * 60
-    if unit == "h":
-        return amount * 3600
-    return amount
 
 
 def load_loop_config(

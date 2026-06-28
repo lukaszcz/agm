@@ -22,7 +22,11 @@ Agents must be declared in source; the host backs declared names but never owns 
 
 ## Config Declarations
 
-`config KEY = VALUE` declarations let a program carry its own execution options. Each names a fixed engine key (`semantics/engine_keys.py`) and binds it as an immutable, runtime-resolved **readable value** — the unification of `config` and `param` into one declared-binding mechanism. The scope pass enforces root placement and creates the binding; typecheck validates the value against the engine-key type (an `Option[T]` key also accepts a bare inner `T`); the lowerer emits an `IrConfigBind` initializer whose evaluator resolves it as CLI override > source value > host default. `agm exec` folds source literal constants into engine-setting resolution and passes the CLI/base value maps to the runtime (see [config.md](../config.md)). Config is an exec/program feature; the REPL rejects it and takes its options from flags and config instead.
+`config KEY = VALUE` declarations let a program carry its own execution options. Each names a fixed engine key (`semantics/engine_keys.py`) and binds it as an immutable, runtime-resolved **readable value** — the unification of `config` and `param` into one declared-binding mechanism. The scope pass enforces root placement and creates the binding; typecheck validates the value against the engine-key type (an `Option[T]` key also accepts a bare inner `T`); the lowerer emits an `IrConfigBind` initializer whose evaluator resolves it as CLI override > source value > host default.
+
+Three engine keys — `strict-json`, `max-iters`, `timeout` — have **D6 effect-at-binding**: when `IrConfigBind` executes for one of these keys, the evaluator immediately updates the corresponding live interpreter field (`_strict_json`, `_loop_limit`, `_shell_exec_timeout`). The resolved value takes effect from that point forward, so subsequent `ask`, `do`, and `exec` calls within the program see the updated setting. The remaining keys (`runner`, `log`, `log-file`) are start-resolved by `agm exec` before the program runs.
+
+`agm exec` passes the CLI/base value maps to the runtime (see [config.md](../config.md)). Config is an exec/program feature; the REPL rejects it and takes its options from flags and config instead.
 
 ## Console and Confirmation
 

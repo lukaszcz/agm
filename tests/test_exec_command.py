@@ -2351,15 +2351,18 @@ class TestExecPragmaPrecedence:
     def test_pragma_strict_json_flows_into_runtime(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``config strict-json = true`` in source sets ``default_strict_json=True``
-        on the PipelineDriver (observable via the spy pattern)."""
+        """``config strict-json = true`` in source does NOT pre-fold into the
+        PipelineDriver constructor; it is applied via D6 at runtime instead.
+        The constructor receives the config-file value (False by default)."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text("config strict-json = true\nlet x = 1\nx\n")
 
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
         assert result is None
-        assert captured["default_strict_json"] is True
+        # D6: constructor gets the config-file default; the source pragma
+        # applies the live change at the point of the IrConfigBind execution.
+        assert captured["default_strict_json"] is False
 
     def test_cli_strict_json_overrides_pragma_strict_json(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2376,7 +2379,9 @@ class TestExecPragmaPrecedence:
     def test_pragma_strict_json_overrides_config_strict_json(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Source pragma ``config strict-json = false`` overrides ``[exec] strict_json = true``."""
+        """Source ``config strict-json = false`` overrides ``[exec] strict_json = true``
+        at runtime via D6.  The PipelineDriver constructor still receives the
+        config-file value (True); the source pragma takes effect at binding time."""
         from agm.config.general import ExecConfig
 
         strict_config = ExecConfig(
@@ -2396,7 +2401,9 @@ class TestExecPragmaPrecedence:
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
         assert result is None
-        assert captured["default_strict_json"] is False
+        # D6: constructor gets config-file value (True); the source pragma (False)
+        # overrides it at runtime via IrConfigBind → _apply_config_effect.
+        assert captured["default_strict_json"] is True
 
     # ------------------------------------------------------------------
     # timeout pragma
@@ -2405,14 +2412,18 @@ class TestExecPragmaPrecedence:
     def test_pragma_timeout_flows_into_runtime(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``config timeout = "30s"`` in source sets shell_exec_timeout=30.0."""
+        """``config timeout = "30s"`` in source does NOT pre-fold into the
+        PipelineDriver constructor; it is applied via D6 at runtime.
+        The constructor receives the config-file value (None by default)."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text('config timeout = "30s"\nlet x = 1\nx\n')
 
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
         assert result is None
-        assert captured["shell_exec_timeout"] == 30.0
+        # D6: constructor gets the config-file default (None); the source
+        # pragma updates shell_exec_timeout at binding time.
+        assert captured["shell_exec_timeout"] is None
 
     def test_pragma_timeout_integer_rejected(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -2428,7 +2439,9 @@ class TestExecPragmaPrecedence:
     def test_pragma_timeout_overrides_config_timeout(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Source pragma timeout overrides ``[exec] timeout`` from config."""
+        """Source ``config timeout = "30s"`` overrides ``[exec] timeout = 999``
+        at runtime via D6.  The PipelineDriver constructor still receives the
+        config-file value (999.0); the source pragma takes effect at binding time."""
         from agm.config.general import ExecConfig
 
         config_with_timeout = ExecConfig(
@@ -2448,26 +2461,26 @@ class TestExecPragmaPrecedence:
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
         assert result is None
-        assert captured["shell_exec_timeout"] == 30.0
+        # D6: constructor gets config-file value (999.0); the source pragma (30s)
+        # overrides it at runtime via IrConfigBind → _apply_config_effect.
+        assert captured["shell_exec_timeout"] == pytest.approx(999.0)
 
-    def test_pragma_timeout_invalid_string_exits_1(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    def test_pragma_timeout_invalid_string_raises_runtime_error(
+        self, tmp_path: Path
     ) -> None:
-        """A source timeout string that type-checks but fails parse_timeout exits 1.
+        """A source timeout string that type-checks but fails parse_timeout raises
+        a clean AgL-level ValueError at the config decl point (exit 2).
 
-        ``config timeout = "forever"`` is a valid ``Option[text]`` value, so it
-        passes scope and typecheck, but ``parse_timeout`` rejects it as a duration
-        string — exit 1 before any statement runs.
+        ``config timeout = "forever"`` is a valid ``Option[text]`` value so it
+        passes scope and typecheck; the D6 handler converts the parse_timeout
+        ValueError to an AglRaise (uncaught AgL exception → exit 2).
         """
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text('config timeout = "forever"\nlet x = 1\nx\n')
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args_no_log(agl_file))
-        assert exc_info.value.code == 1
-        captured = capsys.readouterr()
-        assert "Error:" in captured.err
-        assert "timeout" in captured.err.lower()
+        assert exc_info.value.code == 2
 
     # ------------------------------------------------------------------
     # log pragma

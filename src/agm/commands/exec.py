@@ -65,7 +65,6 @@ from agm.config.general import (
     load_exec_config,
     load_merged_config,
     params_config_from_merged,
-    parse_timeout,
 )
 from agm.config.module_roots import load_module_roots, resolve_lib_root, resolve_stdlib_root
 from agm.core import dry_run
@@ -152,9 +151,9 @@ def run(args: ExecArgs) -> None:
     )
 
     # Source ``config KEY = LITERAL`` declarations contribute compile-time
-    # constants that fold into engine-setting resolution
-    # (CLI > source constant > config-file > default).  Bare/non-literal config
-    # declarations contribute no static constant here; they resolve at runtime.
+    # constants for start-resolved keys (``runner``, ``log``, ``log-file``).
+    # The three D6 keys (``strict-json``, ``max-iters``, ``timeout``) are NOT
+    # folded here; they take effect at the point of the config binding at runtime.
     if prepared.resolved_graph is not None and (
         (entry_mod := prepared.resolved_graph.modules.get(ENTRY_ID)) is not None
     ):
@@ -162,35 +161,22 @@ def run(args: ExecArgs) -> None:
     else:
         static_consts = {}
 
-    # Resolve strict_json: CLI > source constant > config.
-    strict_json = _first(
-        args.strict_json,
-        _typed_const(static_consts, "strict-json", bool),
-        config.strict_json,
-    )
+    # Resolve strict_json: CLI > config.  Source config strict-json = VALUE
+    # is applied at runtime by the D6 effect (IrConfigBind → _apply_config_effect).
+    strict_json = _first(args.strict_json, config.strict_json)
     # config.strict_json is always a bool, so _first always returns a bool here.
     assert strict_json is not None
     resolved_strict_json: bool = strict_json
 
-    # Resolve loop limit: CLI > source constant > config.
-    loop_limit = _first(
-        args.max_iters,
-        _typed_const(static_consts, "max-iters", int),
-        config.default_loop_limit,
-    )
+    # Resolve loop limit: CLI > config.  Source config max-iters = VALUE is
+    # applied at runtime by the D6 effect.
+    loop_limit = _first(args.max_iters, config.default_loop_limit)
     assert loop_limit is not None
     resolved_loop_limit: int = loop_limit
 
-    # Resolve timeout: source constant > config (no CLI flag for timeout).
-    const_timeout_raw = static_consts.get("timeout")
-    if const_timeout_raw is not None:
-        try:
-            resolved_timeout: float | None = parse_timeout(str(const_timeout_raw))
-        except ValueError as exc:
-            print(f"Error: invalid config timeout: {exc}", file=sys.stderr)
-            raise SystemExit(1) from exc
-    else:
-        resolved_timeout = config.timeout
+    # Resolve timeout: config only (no CLI flag; source config timeout = VALUE
+    # is applied at runtime by the D6 effect).
+    resolved_timeout: float | None = config.timeout
 
     # Resolve + validate the trace log file up front (F2a/F6).  --dry-run is
     # side-effect-free: no trace is written regardless of --log-file (plan §10.1).
@@ -266,6 +252,13 @@ def run(args: ExecArgs) -> None:
     # to the default runner (the floor).  ``command_with_prompt_target``
     # substitutes ``%%`` / ``%{PROMPT_FILE}`` for source hints and config
     # commands alike.
+    # The agent idle-timeout is start-resolved from CLI > [exec] config > engine
+    # default and fixed for the lifetime of this factory.  A source
+    # ``config timeout = e`` declaration updates ONLY the live shell-exec timeout
+    # (via effect-at-binding, D6) from its declaration point onward; it does NOT
+    # retroactively reconfigure the already-constructed agent factory, because the
+    # factory is established before evaluation begins and cannot be reopened
+    # mid-run.  This is the §15-sanctioned compromise for the ``timeout`` key.
     factory = runner_backed_agent_factory(
         default_runner_cmd=runner_cmd,
         per_agent_cmds=per_agent_cmds,

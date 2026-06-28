@@ -139,6 +139,7 @@ from agm.agl.semantics.values import (
     UnitValue,
     Value,
 )
+from agm.core.parse import parse_timeout as _parse_timeout
 
 if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract
@@ -1150,10 +1151,49 @@ class IrInterpreter:
                         " config_base entry; the host must supply a config_base default"
                     )
                 self._frame[sym] = config_value
+                try:
+                    self._apply_config_effect(public_name, config_value)
+                except AglRaise as exc:
+                    exc.span = node.location
+                    raise
                 return UnitValue()
 
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
+
+    # ------------------------------------------------------------------
+    # D6 engine-setting effect
+    # ------------------------------------------------------------------
+
+    def _apply_config_effect(self, public_name: str, config_value: Value) -> None:
+        """Apply the live engine-setting effect for a D6 config binding.
+
+        Called after every ``IrConfigBind`` resolves its value.  Only the three
+        D6 keys update live interpreter state; all other keys are inert here.
+        """
+        if public_name == "strict-json":
+            if isinstance(config_value, BoolValue):
+                self._strict_json = config_value.value
+        elif public_name == "max-iters":
+            if isinstance(config_value, IntValue):
+                self._loop_limit = config_value.value
+        elif public_name == "timeout":
+            if isinstance(config_value, EnumValue):
+                if config_value.variant == "None":
+                    self._shell_exec_timeout = None
+                elif config_value.variant == "Some":
+                    raw = config_value.fields.get("value")
+                    if isinstance(raw, TextValue):
+                        try:
+                            self._shell_exec_timeout = _parse_timeout(raw.value)
+                        except ValueError as exc:
+                            raise AglRaise(
+                                _make_exc_value(
+                                    "ValueError",
+                                    f"invalid config timeout: {exc}",
+                                    trace_id=self._trace.new_event_id(),
+                                )
+                            ) from exc
 
     # ------------------------------------------------------------------
     # Pattern matching helper (M3f-B)

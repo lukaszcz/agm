@@ -3113,15 +3113,12 @@ class TestFieldAssignmentSyntax:
         assert call.named_args[0].name == "y"
 
     def test_constructor_call_shorthand_after_named_arg(self) -> None:
-        """A bare-name shorthand may follow a named arg (PLAN §3 default):
-        it still parses as a trailing positional VarRef."""
-        call = first(parse("B(r = 1, x)"))
-        assert isinstance(call, Call)
-        assert len(call.named_args) == 1
-        assert call.named_args[0].name == "r"
-        assert len(call.args) == 1
-        assert isinstance(call.args[0], VarRef)
-        assert call.args[0].name == "x"
+        """Positional args (incl. bare-name shorthands) must precede named args.
+        B(r = 1, x) is rejected at parse time."""
+        from agm.agl.parser.errors import AglSyntaxError
+
+        with pytest.raises(AglSyntaxError):
+            parse("B(r = 1, x)")
 
     def test_pattern_field_full_form_eq(self) -> None:
         """Full-form pattern fields use '=' (was ':')."""

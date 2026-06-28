@@ -1153,9 +1153,10 @@ class TestM4aLowerDefensivePaths:
         with pytest.raises(AssertionError, match="compiler bug"):
             lowerer._lower_call(fake_call, 10001, span)
 
-    def test_missing_required_arg_raises_assertion_error(self) -> None:
-        """_lower_direct_call raises AssertionError when call is missing a required arg."""
+    def test_missing_required_arg_raises_type_error(self) -> None:
+        """_lower_direct_call raises AglTypeError when call is missing a required arg."""
         from agm.agl.syntax.nodes import Call, FuncDef, VarRef
+        from agm.agl.typecheck import AglTypeError
 
         source = "def f(x: int) -> int = x + 1\nlet result = f(1)\n()"
         checked = _check(source)
@@ -1185,7 +1186,7 @@ class TestM4aLowerDefensivePaths:
         varref = VarRef(name="f", node_id=9999, span=span, module_qualifier=None)
         fake_call = Call(callee=varref, args=(), named_args=(), node_id=10001, span=span)
 
-        with pytest.raises(AssertionError, match="compiler bug"):
+        with pytest.raises(AglTypeError, match="Missing required argument"):
             lowerer._lower_direct_call(fake_call, callee_ref, 10001, span)
 
     def test_scan_captures_stops_at_nested_lambda_boundary(self) -> None:

@@ -1,0 +1,2 @@
+def g(x: int, *, z: int) -> int = x + z
+g(1, 2 + 0)

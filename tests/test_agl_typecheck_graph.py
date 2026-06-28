@@ -2792,3 +2792,24 @@ def test_cross_module_generic_func_call_wrong_type_rejected(tmp_path: Path) -> N
     }
     with pytest.raises(AglTypeError):
         _check_graph(tmp_path, modules)
+
+
+# ---------------------------------------------------------------------------
+# Named-only parameters in graph context
+# ---------------------------------------------------------------------------
+
+
+def test_named_only_param_in_graph_function(tmp_path: Path) -> None:
+    """check_graph handles a function with a named-only param (*, z) correctly."""
+    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
+
+    modules = {
+        "lib": "def add_named(x: int, *, z: int) -> int = x + z",
+        "entry": (
+            "import lib\n"
+            "let z = 5\n"
+            "add_named(3, z)"
+        ),
+    }
+    cg: object = _check_graph(tmp_path, modules)
+    assert isinstance(cg, CheckedModuleGraph)

@@ -69,7 +69,15 @@ from agm.agl.semantics.types import (
     FunctionType,
     Type,
 )
-from agm.agl.syntax.nodes import EnumDef, ExceptionDef, FuncDef, Program, RecordDef, TypeAlias
+from agm.agl.syntax.nodes import (
+    EnumDef,
+    ExceptionDef,
+    FuncDef,
+    ParamKind,
+    Program,
+    RecordDef,
+    TypeAlias,
+)
 from agm.agl.typecheck.builder import _TypeBuilder
 from agm.agl.typecheck.checker import _Checker
 from agm.agl.typecheck.env import (
@@ -78,6 +86,7 @@ from agm.agl.typecheck.env import (
     FunctionSignature,
     GenericTypeDef,
     OutputContractSpec,
+    ParamSpec,
     TypeEnvironment,
 )
 from agm.util.graph import GraphCycleError, toposort
@@ -665,21 +674,26 @@ def _build_graph_func_sig_table(
                 continue
 
             type_vars: frozenset[str] = frozenset(item.type_params)
-            params: list[tuple[str, Type, bool]] = []
-            seen_required = True
+            params: list[ParamSpec] = []
+            # D6b: required-after-defaulted check (positional-fillable zone only).
+            seen_pos_default = False
             for p in item.params:
                 pt = env.resolve_type_expr(p.type_expr, span=p.span, type_vars=type_vars)
                 has_default = p.default is not None
-                if seen_required and has_default:
-                    seen_required = False
-                elif not seen_required and not has_default:
-                    raise AglTypeError(
-                        f"Parameter '{p.name}' has no default but follows a defaulted "
-                        "parameter. Required parameters must come before parameters with "
-                        "defaults.",
-                        span=p.span,
-                    )
-                params.append((p.name, pt, has_default))
+                is_pos_fillable = p.kind in (ParamKind.POSITIONAL_ONLY, ParamKind.STANDARD)
+                if is_pos_fillable:
+                    if has_default:
+                        seen_pos_default = True
+                    elif seen_pos_default:
+                        raise AglTypeError(
+                            f"Parameter '{p.name}' has no default but follows a defaulted "
+                            "positional parameter. Required positional parameters must come "
+                            "before parameters with defaults.",
+                            span=p.span,
+                        )
+                params.append(
+                    ParamSpec(name=p.name, type=pt, kind=p.kind, has_default=has_default)
+                )
 
             result_type = env.resolve_type_expr(
                 item.return_type, span=item.span, type_vars=type_vars
@@ -688,7 +702,7 @@ def _build_graph_func_sig_table(
                 params=tuple(params), result=result_type, type_params=item.type_params
             )
             func_type = FunctionType(
-                params=tuple(pt for _, pt, _ in params),
+                params=tuple(p.type for p in params),
                 result=result_type,
             )
             result[item.node_id] = (item.name, sig, func_type)

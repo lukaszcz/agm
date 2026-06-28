@@ -205,6 +205,7 @@ from agm.agl.type_schema import (
     build_param_decoder,
     derive_schema,
 )
+from agm.agl.typecheck.arguments import BindParam, BoundName, bind_arguments
 from agm.agl.typecheck.constructors import merge_constructor_args
 from agm.agl.typecheck.env import CheckedProgram
 from agm.agl.typecheck.graph import CheckedModule
@@ -560,7 +561,7 @@ class _Lowerer:
             module_id=self._module_id,
             params=tuple(ir_params),
             body=body_ir,
-            param_labels=tuple(repr(param_type) for _, param_type, _ in sig.params),
+            param_labels=tuple(repr(p.type) for p in sig.params),
             result_label=repr(sig.result),
         )
         self._link.functions[fn_id] = desc
@@ -1312,24 +1313,28 @@ class _Lowerer:
             f"compiler bug: no signature for function {callee_ref.name!r}"
         )
 
-        pos_args = list(call_node.args)
-        named_args: dict[str, Expr] = {na.name: na.value for na in call_node.named_args}
+        bind_params = tuple(
+            BindParam(name=p.name, kind=p.kind, has_default=p.has_default) for p in sig.params
+        )
+        named = [
+            BoundName(name=na.name, value=na.value, span=na.span) for na in call_node.named_args
+        ]
+        binding = bind_arguments(
+            bind_params,
+            call_node.args,
+            named,
+            bare_name=lambda e: e.name if isinstance(e, VarRef) else None,
+            span_of=lambda e: e.span,
+            call_span=span,
+            context_desc=f"call to '{callee_ref.name}'",
+        )
 
         ir_args: list[IrExpr | UseDefault] = []
-        pos_idx = 0
-        for i, (pname, ptype, has_default) in enumerate(sig.params):
-            if pname in named_args:
-                ir_args.append(self.lower_coerced(named_args[pname], ptype))
-            elif pos_idx < len(pos_args):
-                ir_args.append(self.lower_coerced(pos_args[pos_idx], ptype))
-                pos_idx += 1
-            elif has_default:
+        for i, (spec, bound_expr) in enumerate(zip(sig.params, binding)):
+            if bound_expr is None:
                 ir_args.append(UseDefault(param_index=i))
             else:
-                raise AssertionError(
-                    f"compiler bug: missing required arg for param {pname!r} in call to"
-                    f" {callee_ref.name!r} (checker should have caught this)"
-                )
+                ir_args.append(self.lower_coerced(bound_expr, spec.type))
 
         return IrDirectCall(
             location=self._loc(span),

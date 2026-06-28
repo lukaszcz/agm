@@ -1127,10 +1127,12 @@ class AstBuilder(Transformer):
 
         Returns (pos_args, named_args) pair for the call builder.
         Duplicate named arg names are rejected with the span of the duplicate.
+        Positional args after named args are rejected as a syntax error.
         """
         pos_args: list[syntax.Expr] = []
         named_args: list[syntax.NamedArg] = []
         seen_names: dict[str, SourceSpan] = {}
+        seen_named = False
         for a in args:
             if isinstance(a, syntax.NamedArg):
                 if a.name in seen_names:
@@ -1140,9 +1142,16 @@ class AstBuilder(Transformer):
                     )
                 seen_names[a.name] = a.span
                 named_args.append(a)
+                seen_named = True
             elif a is not None and not isinstance(a, Token):
                 # pos_arg (transparent ?) — the expr itself
-                pos_args.append(cast(syntax.Expr, a))
+                pos_expr = cast(syntax.Expr, a)
+                if seen_named:
+                    raise AglSyntaxError(
+                        "positional argument after named argument is not allowed.",
+                        span=pos_expr.span,
+                    )
+                pos_args.append(pos_expr)
         return (pos_args, named_args)
 
     def pos_arg(self, meta: Meta, args: _Args) -> syntax.Expr:

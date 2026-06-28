@@ -39,7 +39,29 @@ from agm.agl.semantics.types import (
     TypeVarType,
     UnitType,
 )
+from agm.agl.syntax.nodes import ParamKind
 from agm.agl.syntax.spans import SourceSpan
+
+# ---------------------------------------------------------------------------
+# ParamSpec — per-parameter descriptor in a FunctionSignature
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ParamSpec:
+    """Full descriptor for one parameter in a ``FunctionSignature``.
+
+    ``name``        — the declared parameter name.
+    ``type``        — the resolved semantic type.
+    ``kind``        — positional-only, standard, or named-only (from the AST).
+    ``has_default`` — whether a default expression was provided.
+    """
+
+    name: str
+    type: Type
+    kind: ParamKind
+    has_default: bool
+
 
 # ---------------------------------------------------------------------------
 # FunctionSignature — full declared signature of a top-level def
@@ -50,16 +72,16 @@ from agm.agl.syntax.spans import SourceSpan
 class FunctionSignature:
     """Full declared signature of a top-level ``def``.
 
-    Carries named/default information needed for declared-name call sites.
-    The value type (FunctionType) erases names/defaults (plan R7).
+    Carries named/default/kind information needed for declared-name call sites.
+    The value type (FunctionType) erases names/defaults/kinds (plan R7).
 
-    ``params``      — ordered list of (name, type, has_default).
+    ``params``      — ordered list of ``ParamSpec`` (name, type, kind, has_default).
     ``result``      — the declared return type.
     ``type_params`` — tuple of type-parameter names for generic functions
                       (empty for non-generic functions).
     """
 
-    params: tuple[tuple[str, Type, bool], ...]  # (name, type, has_default)
+    params: tuple[ParamSpec, ...]
     result: Type
     type_params: tuple[str, ...] = ()
 

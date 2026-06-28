@@ -1,0 +1,35 @@
+# Generic functions with named-only parameters: inference must use bind_arguments
+# so that bare-name shorthands in named-only position are matched by NAME, not
+# by raw positional index.  All three call forms exercise that path.
+#
+# g[T, U] has two named-only params z:T and w:U, and returns T (the value of z).
+# The repro cases from Finding 1 are:
+#   g(1, z, w)      — in-order shorthands (already worked, must keep working)
+#   g(1, w, z = v)  — shorthand w + named z, out of declaration order
+#   g(1, w, z)      — two shorthands, out of declaration order (w before z)
+
+def g[T, U](x: int, *, z: T, w: U) -> T = z
+
+# h exercises inference of a named-only shorthand combined with a container return.
+def h[A](n: int, *, label: A) -> list[A] = [label]
+
+param zval: text
+param wval: int
+
+# Bind locals whose names match the param names so that bare-name shorthand works.
+let z = zval
+let w = wval
+
+# In-order shorthands: z then w.
+print(g(1, z, w))
+
+# Out-of-order: shorthand w first, then named z.
+print(g(1, w, z = zval))
+
+# Two out-of-order shorthands: w first, then z.  The same locals are in scope.
+print(g(1, w, z))
+
+# Combine with h: label shorthand (named-only) drives list[text] inference.
+let label = zval
+let ls = h(42, label)
+print(ls[0])

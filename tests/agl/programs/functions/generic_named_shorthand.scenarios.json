@@ -1,0 +1,25 @@
+{
+  "scenarios": [
+    {
+      "name": "hello_world",
+      "params": {"zval": "hello", "wval": 7},
+      "expect": {
+        "stdout": "hello\nhello\nhello\nhello\n"
+      }
+    },
+    {
+      "name": "different_text",
+      "params": {"zval": "world", "wval": 0},
+      "expect": {
+        "stdout": "world\nworld\nworld\nworld\n"
+      }
+    },
+    {
+      "name": "negative_wval",
+      "params": {"zval": "abc", "wval": -1},
+      "expect": {
+        "stdout": "abc\nabc\nabc\nabc\n"
+      }
+    }
+  ]
+}

@@ -1236,7 +1236,7 @@ class TestFuncDef:
         r = accept_type("def f(x: int, y: int = 0) -> int = x + y\nf(1)")
         assert "f" in r.function_signatures
         sig = r.function_signatures["f"]
-        assert sig.params[1][2] is True  # has_default
+        assert sig.params[1].has_default is True  # y has a default
 
     def test_funcdef_required_after_defaulted_raises(self) -> None:
         err = reject_type("def f(x: int = 0, y: int) -> int = x\nf(1, 2)")
@@ -1277,7 +1277,11 @@ class TestFuncDef:
 
     def test_funcdef_param_supplied_positionally_and_by_name(self) -> None:
         err = reject_type("def f(x: int) -> int = x\nf(1, x = 2)")
-        assert "positionally" in str(err).lower() or "both" in str(err).lower()
+        assert (
+            "positionally" in str(err).lower()
+            or "both" in str(err).lower()
+            or "duplicate" in str(err).lower()
+        )
 
     def test_funcdef_default_wrong_type_raises(self) -> None:
         err = reject_type('def f(x: int = "bad") -> int = x')
@@ -2655,8 +2659,8 @@ class TestMisc:
     def test_function_signature_ordering_valid(self) -> None:
         r = accept_type('def f(x: int, y: text = "ok") -> int = x\nf(1)')
         sig = r.function_signatures["f"]
-        assert sig.params[0][2] is False   # x: not defaulted
-        assert sig.params[1][2] is True    # y: has default
+        assert sig.params[0].has_default is False   # x: not defaulted
+        assert sig.params[1].has_default is True    # y: has default
 
     def test_ask_strict_json_false(self) -> None:
         r = accept_type('let n: int = ask("Q", format = "json", strict_json = false)\nn')
@@ -3566,7 +3570,7 @@ class TestDefensiveGuards:
             resolution={callee_nid: binding_ref},
             declared_functions={"g": fd},
         )
-        with pytest.raises(AglTypeError, match="Duplicate named argument"):
+        with pytest.raises(AglTypeError, match="Duplicate argument"):
             check(resolved, default_capabilities())
 
     def test_duplicate_named_arg_in_constructor_rejected(self) -> None:
@@ -4672,6 +4676,7 @@ class TestGenerics:
             or "parameter" in str(err).lower()
             or "name" in str(err).lower()
             or "both" in str(err).lower()
+            or "duplicate" in str(err).lower()
         )
 
     # ------------------------------------------------------------------
@@ -4689,6 +4694,12 @@ class TestGenerics:
     def test_generic_missing_required_arg_error(self) -> None:
         err = reject_type("def f[T](x: T, y: T) -> T = x\nf(1)")
         assert "missing" in str(err).lower() or "required" in str(err).lower()
+
+    def test_generic_call_with_defaulted_param_omitted(self) -> None:
+        # Covers the bound_expr-is-None branch in the new inference loop
+        # (a defaulted param is omitted at the call site).
+        r = accept_type("def f[T](x: T, y: int = 5) -> T = x\nf(\"hello\")")
+        assert r.resolved.program is not None
 
     # ------------------------------------------------------------------
     # Non-generic function rejects explicit type args
@@ -5977,15 +5988,17 @@ class TestFieldAssignmentSyntaxChecks:
         assert "duplicate" in str(err).lower()
 
     def test_reversed_order_shorthand_after_named_arg(self) -> None:
-        """A bare-name shorthand may follow a named arg (PLAN §3 default):
-        B(r = ..., x) is accepted just like B(x, r = ...)."""
-        r = accept_type(
-            "record R\n  x: int\n"
-            "enum E\n  | B(x: int, r: R)\n"
-            "let x = 1\n"
-            "let e = B(r = R(x = 9), x)\ne"
-        )
-        assert r.resolved.program is not None
+        """Positional args (including bare-name shorthands) must precede named args.
+        B(r = ..., x) is rejected because positional 'x' follows named arg 'r = ...'."""
+        from agm.agl.parser.errors import AglSyntaxError
+
+        with pytest.raises(AglSyntaxError):
+            accept_type(
+                "record R\n  x: int\n"
+                "enum E\n  | B(x: int, r: R)\n"
+                "let x = 1\n"
+                "let e = B(r = R(x = 9), x)\ne"
+            )
 
     def test_positional_literal_to_constructor_rejected(self) -> None:
         """A non-VarRef positional arg (a literal) is not shorthand — rejected."""
@@ -6016,3 +6029,65 @@ class TestFieldAssignmentSyntaxChecks:
         items = r.resolved.program.body.items
         assert r.node_types[items[3].node_id] == BoolType()
         assert r.node_types[items[4].node_id] == BoolType()
+
+
+# ---------------------------------------------------------------------------
+# Finding 1 regression: generic inference for named-only shorthand out-of-order
+# ---------------------------------------------------------------------------
+
+
+class TestGenericNamedOnlyShorthandInference:
+    """Regression tests for Finding 1: generic inference must use bind_arguments
+    so that named-only shorthand positional args are matched to their param by
+    NAME rather than by raw positional index.
+
+    def g[T, U](x: int, *, z: T, w: U) -> T = z
+
+    All three call forms must be accepted and infer correctly.
+    """
+
+    _DEF = "def g[T, U](x: int, *, z: T, w: U) -> T = z\n"
+
+    def test_named_only_shorthands_in_order_accepted(self) -> None:
+        """g(1, z, w) — in-order shorthands (already worked before fix)."""
+        src = self._DEF + "let z: text = \"hi\"\nlet w = 0\ng(1, z, w)"
+        r = accept_type(src)
+        assert r.resolved.program is not None
+
+    def test_named_only_shorthand_and_named_arg_out_of_order_accepted(self) -> None:
+        """g(1, w, z = myv) — shorthand w + named z, out of declaration order."""
+        src = self._DEF + "let myv: text = \"hi\"\nlet w = 0\ng(1, w, z = myv)"
+        r = accept_type(src)
+        assert r.resolved.program is not None
+
+    def test_named_only_two_shorthands_out_of_order_accepted(self) -> None:
+        """g(1, w, z) — two shorthands, out of declaration order."""
+        src = self._DEF + "let z: text = \"hi\"\nlet w = 0\ng(1, w, z)"
+        r = accept_type(src)
+        assert r.resolved.program is not None
+
+
+# ---------------------------------------------------------------------------
+# Finding 2 regression: lambda D6b required-after-defaulted check
+# ---------------------------------------------------------------------------
+
+
+class TestLambdaRequiredAfterDefaulted:
+    """Regression tests for Finding 2: the D6b required-after-defaulted check
+    must apply to lambdas, not just def declarations.
+    """
+
+    def test_lambda_required_after_defaulted_rejected(self) -> None:
+        """fn(x: int = 5, y: int) -> int => x + y must be rejected."""
+        err = reject_type("fn(x: int = 5, y: int) -> int => x + y")
+        assert "default" in str(err).lower() or "required" in str(err).lower()
+
+    def test_lambda_valid_defaulted_after_required_accepted(self) -> None:
+        """fn(x: int, y: int = 5) -> int => x + y is fine (required before default)."""
+        r = accept_type("fn(x: int, y: int = 5) -> int => x + y")
+        assert r.resolved.program is not None
+
+    def test_lambda_named_only_any_default_order_accepted(self) -> None:
+        """Named-only params are order-free: fn(*, x: int = 0, y: int) -> int => y is ok."""
+        r = accept_type("fn(*, x: int = 0, y: int) -> int => y")
+        assert r.resolved.program is not None

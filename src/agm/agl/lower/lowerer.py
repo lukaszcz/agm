@@ -417,6 +417,8 @@ class _Lowerer:
                         local_ids.add(clause.node_id)
                     self._scan_captures(clause.body, local_ids, captured)
             case Do():
+                if node.limit is not None:
+                    self._scan_captures(node.limit, local_ids, captured)
                 self._scan_captures(node.body, local_ids, captured)
                 self._scan_captures(node.condition, local_ids, captured)
             case BinaryOp():

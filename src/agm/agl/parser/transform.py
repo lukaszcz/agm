@@ -1286,12 +1286,11 @@ class AstBuilder(Transformer):
         explicit bound; a 2-element list is an unbounded loop (``limit=None``).
         """
         exprs = [cast(syntax.Expr, a) for a in args if not isinstance(a, Token)]
-        if len(exprs) == 3:
-            limit: syntax.Expr | None = exprs[0]
-            body, condition = exprs[1], exprs[2]
-        else:
-            assert len(exprs) == 2, "do_expr: expected optional bound, body, condition"
-            limit, body, condition = None, exprs[0], exprs[1]
+        assert len(exprs) in (2, 3), "do_expr: expected optional bound, body, condition"
+        # body and condition are always the last two children; a leading third
+        # child is the explicit bound (unbounded loops have none → limit=None).
+        limit: syntax.Expr | None = exprs[0] if len(exprs) == 3 else None
+        body, condition = exprs[-2], exprs[-1]
         return syntax.Do(
             limit=limit, body=body, condition=condition,
             span=self._span_from_meta(meta), node_id=self._next_id(),

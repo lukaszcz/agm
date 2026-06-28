@@ -1,0 +1,17 @@
+# An escaping closure whose do-loop bound references a captured binding. `make`
+# returns a lambda using its parameter `b` as the loop bound; the lambda is
+# called after `make` has returned, so `b` resolves only through the closure's
+# captures. This exercises capturing free variables that appear in the bound
+# expression (not just in the body/condition). The loop counts a module-level
+# var up to `target`, either converging below the bound or exhausting it.
+param bound: int
+param target: int
+
+var count: int = 0
+
+def make(b: int) -> () -> unit =
+  fn() => do[b] count := count + 1 until count >= target
+
+let stepper = make(bound)
+stepper()
+print count

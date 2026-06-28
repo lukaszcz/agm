@@ -304,14 +304,17 @@ class IrInterpreter:
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _eval_render_bool_option(self, expr: IrExpr, option_name: str) -> bool:
+    def _eval_expecting_bool(self, expr: IrExpr, context: str) -> bool:
+        """Evaluate ``expr`` and require its result to be a ``BoolValue``."""
         value = self._eval(expr)
         if not isinstance(value, BoolValue):
             raise InvalidIrError(
-                f"IrRenderValue: {option_name} expected BoolValue, "
-                f"got {type(value).__name__}"
+                f"{context} expected BoolValue, got {type(value).__name__}"
             )
         return value.value
+
+    def _eval_render_bool_option(self, expr: IrExpr, option_name: str) -> bool:
+        return self._eval_expecting_bool(expr, f"IrRenderValue: {option_name}")
 
     def _index_failure(self, err: AglIndexOutOfRange | AglMissingKey) -> AglRaise:
         """Convert an index/key sentinel into an ``AglRaise`` with the appropriate fields.
@@ -438,16 +441,6 @@ class IrInterpreter:
                     limit=IntValue(self._max_call_depth),
                 )
             )
-
-    def _eval_loop_condition(self, cond_expr: "IrExpr") -> bool:
-        """Evaluate a do…until condition, requiring a ``BoolValue`` result."""
-        cond_val = self._eval(cond_expr)
-        if not isinstance(cond_val, BoolValue):
-            raise InvalidIrError(
-                f"IrLoop: condition evaluated to"
-                f" {type(cond_val).__name__}, expected BoolValue"
-            )
-        return cond_val.value
 
     def _execute_direct_call(
         self,
@@ -998,7 +991,7 @@ class IrInterpreter:
                 if limit_expr is None:
                     while True:
                         self._eval(body_expr)
-                        if self._eval_loop_condition(cond_expr):
+                        if self._eval_expecting_bool(cond_expr, "IrLoop: condition"):
                             return UnitValue()
                 # Bounded loop: evaluate the bound once at entry.
                 limit_val = self._eval(limit_expr)
@@ -1009,14 +1002,12 @@ class IrInterpreter:
                     )
                 limit = limit_val.value
                 # A non-positive bound runs the body zero times.
-                last_cond = False
-                for _iteration in range(limit):
-                    self._eval(body_expr)
-                    last_cond = self._eval_loop_condition(cond_expr)
-                    if last_cond:
-                        return UnitValue()
                 if limit <= 0:
                     return UnitValue()
+                for _iteration in range(limit):
+                    self._eval(body_expr)
+                    if self._eval_expecting_bool(cond_expr, "IrLoop: condition"):
+                        return UnitValue()
                 raise AglRaise(
                     _make_exc_value(
                         "MaxIterationsExceeded",
@@ -1024,7 +1015,9 @@ class IrInterpreter:
                         trace_id=self._trace.new_event_id(),
                         limit=IntValue(limit),
                         condition=TextValue(node.condition_source),
-                        last_condition_value=BoolValue(last_cond),
+                        # The raise is only reachable when no iteration's
+                        # condition held, so the last condition value is False.
+                        last_condition_value=BoolValue(False),
                         metadata=JsonValue(None),
                     )
                 )

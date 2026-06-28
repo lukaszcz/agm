@@ -56,6 +56,7 @@ from agm.agl.ir.nodes import (
     IrBind,
     IrBindPlan,
     IrBlock,
+    IrBreak,
     IrCase,
     IrCatchHandler,
     IrCoerce,
@@ -68,6 +69,7 @@ from agm.agl.ir.nodes import (
     IrConstText,
     IrConstUnit,
     IrContains,
+    IrContinue,
     IrConvert,
     IrDirectCall,
     IrExec,
@@ -579,12 +581,15 @@ def _validate_expr(node: IrExpr, ctx: _Context) -> None:
                 _validate_match_plan(arm.plan, ctx)
                 _validate_expr(arm.body, ctx)
 
-        case IrLoop(limit=limit, body=body, condition=condition):
+        case IrLoop(body=body):
             _validate_location(node.location, ctx)
-            if limit is not None:
-                _validate_expr(limit, ctx)
             _validate_expr(body, ctx)
-            _validate_expr(condition, ctx)
+
+        case IrBreak():
+            _validate_location(node.location, ctx)
+
+        case IrContinue():
+            _validate_location(node.location, ctx)
 
         case IrMakeClosure(function_id=fn_id, captures=captures):
             _validate_location(node.location, ctx)

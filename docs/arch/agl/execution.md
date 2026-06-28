@@ -12,6 +12,29 @@ The point of lowering is to make the evaluator simple: every decision that neede
 
 The IR is a runtime-neutral data model: program-local identities and source locations, a closed family of expression nodes (constants and construction, binding/load/assignment, arithmetic and comparison, control flow and matching, closures and calls, conversions, and host operations), and the program container holding modules, symbols, functions, sources, nominals, contracts, and the dry-run inventory. Host operations carry typeless contract requests — codec selection, format instructions, JSON schema, and a decode walk — compiled from checker types during lowering. A structural validation gate exists for the IR but runs only when explicitly requested, not in production evaluation.
 
+### Single-Loop Primitive and Desugar
+
+The IR has exactly one loop kind: `IrLoop(body)`, which repeats `body` unconditionally. The only loop exits are `IrBreak` (leave the loop, yielding unit) and `IrContinue` (start the next iteration). Both propagate through `IrTry` bodies — which catch only `AglRaise` — so a `break`/`continue` inside a `try` block exits the loop, not the `try`. The loop evaluator is a simple `while True:` that catches `_BreakSignal`/`_ContinueSignal` (internal Python exceptions, not `AglRaise`).
+
+All richer loop features are desugared by the lowerer (`lower/lowerer.py` → `_lower_loop`) before the evaluator sees them:
+
+- **`[n]` bound**: emitted as two synthetic pre-loop bindings (`__n` = bound expression evaluated once, `__count` = 0 mutable counter) in an enclosing `IrSequence`. Inside the loop body: (4) a bound-check `IrIf(__count >= __n)` that either breaks (if `__count == 0`, for zero-or-negative bounds) or raises `MaxIterationsExceeded` via a fully desugared `IrRaise(IrMakeException(...))`, then (5) `__count += 1`. No bound → no counter, no comparison, no exception node.
+- **`until E`**: appended as an `IrIf(lower(E)) => IrBreak` at the end of the loop body. Absent (for `done`/omitted terminators) → no guard; the bound's raise is the only exit.
+- **`for`/`while` clauses**: not yet desugared; `for`/`while` loop clause lowering is not yet implemented.
+
+`MaxIterationsExceeded` is constructed as a standard `IrMakeException` node, not a special IR primitive, keeping `IrLoop` a pure repeat node with no exception-raising logic of its own.
+
+### AST→IR Coverage
+
+| AST node | IR output |
+|---|---|
+| `Loop` (no bound, `until E`) | `IrLoop(body=[lower(body), IrIf(E)=>IrBreak])` |
+| `Loop` (bound `n`, `until E`) | `IrSequence(IrBind(__n), IrBind(__count), IrLoop(body=[bound_check, count_incr, lower(body), IrIf(E)=>IrBreak]))` |
+| `Loop` (bound `n`, done/omitted) | same but no `IrIf(E)` at end |
+| `Loop` (no bound, done/omitted) | `IrLoop(body=[lower(body)])` — infinite unless `break` |
+| `Break` | `IrBreak` |
+| `Continue` | `IrContinue` |
+
 ## Evaluator
 
 The evaluator interprets the linked program and nothing else. Its frame stack holds immutable bindings by value and mutable bindings in shared cells; the base frame is module scope, and function frames hold parameters and captured lexical bindings. Programs run under a pinned decimal arithmetic context so results never depend on the host's ambient precision.

@@ -49,6 +49,7 @@ from agm.agl.ir.nodes import (
     IrBind,
     IrBindPlan,
     IrBlock,
+    IrBreak,
     IrCase,
     IrCoerce,
     IrCompare,
@@ -60,6 +61,7 @@ from agm.agl.ir.nodes import (
     IrConstText,
     IrConstUnit,
     IrContains,
+    IrContinue,
     IrConvert,
     IrDirectCall,
     IrExec,
@@ -143,6 +145,29 @@ if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract
 
 __all__ = ["IrInterpreter", "_apply_coercion", "_make_exc_value"]
+
+
+# ---------------------------------------------------------------------------
+# Internal loop-control signals (not AglRaise — bypass IrTry catch handlers)
+# ---------------------------------------------------------------------------
+
+
+class _BreakSignal(Exception):
+    """Raised by ``IrBreak`` evaluation; caught only by the enclosing ``IrLoop``.
+
+    Propagates through ``IrTry`` bodies unchanged because those catch only
+    ``AglRaise``.  This ensures a ``break`` inside a ``try`` block exits the
+    loop, not the ``try``.
+    """
+
+
+class _ContinueSignal(Exception):
+    """Raised by ``IrContinue`` evaluation; caught only by the enclosing ``IrLoop``.
+
+    Propagates through ``IrTry`` bodies unchanged.  The ``IrLoop`` evaluator
+    catches this and executes ``continue`` on its Python ``while True`` loop to
+    start the next iteration.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -985,42 +1010,25 @@ class IrInterpreter:
                     _make_match_error(subject_val, trace_id=self._trace.new_event_id())
                 )
 
-            case IrLoop(limit=limit_expr, body=body_expr, condition=cond_expr):
-                # No bound → unbounded loop: iterate until the condition holds,
-                # never raising MaxIterationsExceeded.
-                if limit_expr is None:
-                    while True:
+            case IrLoop(body=body_expr):
+                # Unconditional repeat — all loop logic (bound checks, until
+                # guards, for/while clauses) is desugared into the body by the
+                # lowerer.  The only exits are IrBreak (leave the loop)
+                # and IrContinue (next iteration).  Both signals propagate through
+                # IrTry bodies (which catch only AglRaise) to reach this handler.
+                while True:
+                    try:
                         self._eval(body_expr)
-                        if self._eval_expecting_bool(cond_expr, "IrLoop: condition"):
-                            return UnitValue()
-                # Bounded loop: evaluate the bound once at entry.
-                limit_val = self._eval(limit_expr)
-                if not isinstance(limit_val, IntValue):
-                    raise InvalidIrError(
-                        f"IrLoop: bound evaluated to"
-                        f" {type(limit_val).__name__}, expected IntValue"
-                    )
-                limit = limit_val.value
-                # A non-positive bound runs the body zero times.
-                if limit <= 0:
-                    return UnitValue()
-                for _iteration in range(limit):
-                    self._eval(body_expr)
-                    if self._eval_expecting_bool(cond_expr, "IrLoop: condition"):
+                    except _BreakSignal:
                         return UnitValue()
-                raise AglRaise(
-                    _make_exc_value(
-                        "MaxIterationsExceeded",
-                        f"Loop exhausted after {limit} iterations",
-                        trace_id=self._trace.new_event_id(),
-                        limit=IntValue(limit),
-                        condition=TextValue(node.condition_source),
-                        # The raise is only reachable when no iteration's
-                        # condition held, so the last condition value is False.
-                        last_condition_value=BoolValue(False),
-                        metadata=JsonValue(None),
-                    )
-                )
+                    except _ContinueSignal:
+                        continue
+
+            case IrBreak():
+                raise _BreakSignal()
+
+            case IrContinue():
+                raise _ContinueSignal()
 
             case IrMakeClosure(function_id=fn_id, captures=captures):
                 cap_slots: list[tuple[SymbolId, Value | Cell]] = []

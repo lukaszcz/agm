@@ -23,6 +23,7 @@ from agm.agl.ir.nodes import (
     IrBind,
     IrBindPlan,
     IrBlock,
+    IrBreak,
     IrCapture,
     IrCase,
     IrCoerce,
@@ -36,8 +37,10 @@ from agm.agl.ir.nodes import (
     IrContains,
     IrConvert,
     IrDirectCall,
+    IrIf,
     IrIndirectCall,
     IrLoad,
+    IrLoop,
     IrMakeClosure,
     IrMakeDict,
     IrMakeException,
@@ -2312,3 +2315,238 @@ class TestIrMakeExceptionLowering:
         # Only the omitted field gets an AutoTraceField; the provided 'message' does not.
         auto_fields = [v for _, v in exc.fields if isinstance(v, AutoTraceField)]
         assert len(auto_fields) == 1
+
+
+# ---------------------------------------------------------------------------
+# Golden lowering: loop desugar (§6.3)
+# ---------------------------------------------------------------------------
+
+
+def _get_loop_ir(source: str) -> "IrLoop | IrSequence":
+    """Lower *source* and return the top-level loop IR node (IrSequence or IrLoop)."""
+    from agm.agl.modules.ids import ENTRY_ID
+
+    executable = _lower(source)
+    # Find the loop/sequence node; skip IrBind for var declarations.
+    for node in executable.modules[ENTRY_ID].initializers:
+        if isinstance(node, (IrLoop, IrSequence)):
+            return node
+    raise AssertionError("No IrLoop or IrSequence found in initializers")
+
+
+class TestLoopDesugar:
+    """Golden lowering tests for loop desugaring (§6.3)."""
+
+    def test_unbounded_do_until_no_preloop(self) -> None:
+        """``do … until E`` lowers to a bare IrLoop with body + until guard.
+
+        No pre-loop IrSequence; items 4/5 absent (no bound).
+        """
+        source = "var n = 0\ndo\n  n := n + 1\nuntil n >= 3\n"
+        node = _get_loop_ir(source)
+        # Unbounded: no pre-loop wrapping IrSequence
+        assert isinstance(node, IrLoop), f"expected IrLoop, got {type(node).__name__}"
+        body = node.body
+        assert isinstance(body, IrBlock)
+        # Body has 2 items: item 6 (body) + item 7 (until guard)
+        assert len(body.items) == 2, f"expected 2 body items, got {len(body.items)}"
+        # Item 7: IrIf (until guard) — last item
+        assert isinstance(body.items[1], IrIf), (
+            f"item 7 must be IrIf (until guard), got {type(body.items[1]).__name__}"
+        )
+        until_if = body.items[1]
+        assert len(until_if.branches) == 1
+        assert until_if.has_else is False
+        # The until-guard branch body is IrBreak
+        assert isinstance(until_if.branches[0].body, IrBreak), (
+            "until guard branch body must be IrBreak"
+        )
+
+    def test_bounded_do_n_until_preloop_and_all_items(self) -> None:
+        """``do[N] … until E`` lowers to IrSequence(__n bind, __count bind, IrLoop).
+
+        The IrLoop body contains items 4 (bound check), 5 (count incr),
+        6 (body), 7 (until guard).
+        """
+        source = "var x = 0\ndo[7]\n  x := x + 1\nuntil x >= 3\n"
+        node = _get_loop_ir(source)
+        # Bounded: wraps in IrSequence
+        assert isinstance(node, IrSequence), f"expected IrSequence, got {type(node).__name__}"
+        # pre_items: IrBind(__n), IrBind(__count); last item: IrLoop
+        assert len(node.items) == 3, f"expected 3 IrSequence items, got {len(node.items)}"
+        n_bind = node.items[0]
+        count_bind = node.items[1]
+        loop = node.items[2]
+        # __n: immutable bind to the bound expression (lower_coerced(7, IntType) → IrConstInt(7))
+        assert isinstance(n_bind, IrBind), f"item 0 must be IrBind, got {type(n_bind).__name__}"
+        assert isinstance(n_bind.value, IrConstInt), (
+            f"__n value must be IrConstInt, got {type(n_bind.value).__name__}"
+        )
+        assert n_bind.value.value == 7
+        # __count: mutable bind to 0
+        assert isinstance(count_bind, IrBind)
+        assert isinstance(count_bind.value, IrConstInt)
+        assert count_bind.value.value == 0
+        # IrLoop with 4-item body (items 4, 5, 6, 7)
+        assert isinstance(loop, IrLoop), f"item 2 must be IrLoop, got {type(loop).__name__}"
+        body = loop.body
+        assert isinstance(body, IrBlock)
+        assert len(body.items) == 4, f"expected 4 loop body items, got {len(body.items)}"
+        # Item ordering: 4 (bound check IrIf), 5 (count incr IrAssign),
+        #                6 (body), 7 (until guard IrIf)
+        assert isinstance(body.items[0], IrIf), "item 4 must be IrIf (bound check)"
+        assert isinstance(body.items[1], IrAssign), "item 5 must be IrAssign (count incr)"
+        assert isinstance(body.items[3], IrIf), "item 7 must be IrIf (until guard)"
+
+    def test_bounded_do_n_until_bound_check_structure(self) -> None:
+        """Item 4 bound-check structure: outer GE if → inner EQ-or-raise if."""
+        source = "var x = 0\ndo[5]\n  x := x + 1\nuntil x >= 5\n"
+        node = _get_loop_ir(source)
+        assert isinstance(node, IrSequence)
+        loop = node.items[2]
+        assert isinstance(loop, IrLoop)
+        body = loop.body
+        assert isinstance(body, IrBlock)
+        bound_check = body.items[0]
+        assert isinstance(bound_check, IrIf)
+        # Outer if: single branch with GE comparison, has_else=False
+        assert len(bound_check.branches) == 1
+        assert bound_check.has_else is False
+        outer_branch = bound_check.branches[0]
+        assert isinstance(outer_branch.cond, IrCompare)
+        assert outer_branch.cond.op is CmpOp.GE
+        # Inner if: two branches (EQ=0 → IrBreak, else → IrRaise), has_else=True
+        inner_if = outer_branch.body
+        assert isinstance(inner_if, IrIf)
+        assert len(inner_if.branches) == 2
+        assert inner_if.has_else is True
+        # First branch: count == 0 → IrBreak
+        first_branch = inner_if.branches[0]
+        assert isinstance(first_branch.cond, IrCompare)
+        assert first_branch.cond.op is CmpOp.EQ
+        assert first_branch.cond.kind is CompareKind.STRUCTURAL
+        assert isinstance(first_branch.body, IrBreak)
+        # Second branch (else): → IrRaise(MaxIterationsExceeded)
+        else_branch = inner_if.branches[1]
+        assert else_branch.cond is None
+        assert isinstance(else_branch.body, IrRaise)
+        exc_node = else_branch.body.exc
+        assert isinstance(exc_node, IrMakeException)
+        assert exc_node.display_name == "MaxIterationsExceeded"
+
+    def test_max_iterations_exception_field_order(self) -> None:
+        """MaxIterationsExceeded IrMakeException has fields in declaration order."""
+        source = "var x = 0\ndo[5]\n  x := x + 1\nuntil x >= 5\n"
+        node = _get_loop_ir(source)
+        assert isinstance(node, IrSequence)
+        loop = node.items[2]
+        assert isinstance(loop, IrLoop)
+        body = loop.body
+        assert isinstance(body, IrBlock)
+        outer_if = body.items[0]
+        assert isinstance(outer_if, IrIf)
+        inner_if = outer_if.branches[0].body
+        assert isinstance(inner_if, IrIf)
+        raise_node = inner_if.branches[1].body
+        assert isinstance(raise_node, IrRaise)
+        exc = raise_node.exc
+        assert isinstance(exc, IrMakeException)
+        fields = exc.fields
+        # Declaration order: message, trace_id, limit, condition,
+        #                    last_condition_value, metadata
+        assert len(fields) == 6
+        assert fields[0][0] == "message"
+        assert isinstance(fields[0][1], IrRenderTemplate)
+        assert fields[1][0] == "trace_id"
+        assert isinstance(fields[1][1], AutoTraceField)
+        assert fields[2][0] == "limit"
+        assert isinstance(fields[2][1], IrLoad)  # IrLoad(__n_sym)
+        assert fields[3][0] == "condition"
+        assert isinstance(fields[3][1], IrConstText)
+        assert fields[4][0] == "last_condition_value"
+        assert isinstance(fields[4][1], IrConstBool)
+        assert fields[4][1].value is False
+        assert fields[5][0] == "metadata"
+        assert isinstance(fields[5][1], IrConstJsonNull)
+
+    def test_done_terminator_condition_source_is_false(self) -> None:
+        """``do[n] … done`` sets ``condition="false"`` in MaxIterationsExceeded."""
+        source = "var x = 0\ndo[2]\n  x := x + 1\ndone\n"
+        node = _get_loop_ir(source)
+        assert isinstance(node, IrSequence)
+        loop = node.items[2]
+        assert isinstance(loop, IrLoop)
+        body = loop.body
+        assert isinstance(body, IrBlock)
+        # Body has 3 items (4, 5, 6) — no item 7 for done
+        assert len(body.items) == 3
+        outer_if = body.items[0]
+        inner_if = outer_if.branches[0].body
+        raise_node = inner_if.branches[1].body
+        exc = raise_node.exc
+        assert isinstance(exc, IrMakeException)
+        condition_field = dict(exc.fields)["condition"]
+        assert isinstance(condition_field, IrConstText)
+        assert condition_field.value == "false"
+
+    def test_bounded_done_no_until_guard(self) -> None:
+        """``do[n] … done`` body has 3 items (4, 5, 6) — no item 7 until guard."""
+        source = "var y = 0\ndo[3]\n  y := y + 1\ndone\n"
+        node = _get_loop_ir(source)
+        assert isinstance(node, IrSequence)
+        loop = node.items[2]
+        assert isinstance(loop, IrLoop)
+        body = loop.body
+        assert isinstance(body, IrBlock)
+        assert len(body.items) == 3, (
+            f"do[n] done body must have 3 items (4, 5, 6), got {len(body.items)}"
+        )
+        # No until-guard IrIf at the end
+        assert not isinstance(body.items[-1], IrIf) or (
+            # If it happens to be IrIf (item 4), that's the bound check, which is fine
+            # as long as it's at position 0.  Position 2 (last) should NOT be an IrIf.
+            True
+        )
+        # Position 2 is the body (item 6), not an until guard
+        assert not isinstance(body.items[2], IrIf), (
+            "item 2 (last) must NOT be an until-guard IrIf for done terminator"
+        )
+
+    def test_unbounded_done_only_body_item(self) -> None:
+        """``do … done`` (no bound, done terminator): bare IrLoop with 1 body item."""
+        source = "var z = 0\ndo\n  z := z + 1\ndone\n"
+        node = _get_loop_ir(source)
+        # No bound → no pre-loop IrSequence
+        assert isinstance(node, IrLoop), (
+            f"unbounded done: expected IrLoop directly, got {type(node).__name__}"
+        )
+        body = node.body
+        assert isinstance(body, IrBlock)
+        # Only item 6 (body) — no items 4/5 (no bound), no item 7 (done = until false)
+        assert len(body.items) == 1, (
+            f"unbounded done body must have 1 item, got {len(body.items)}"
+        )
+
+    def test_n_bound_evaluated_once(self) -> None:
+        """The bound expression is bound to ``__n`` ONCE via a single IrBind in the IrSequence."""
+        source = "var budget = 3\ndo[budget]\n  budget := budget + 100\ndone\n"
+        node = _get_loop_ir(source)
+        assert isinstance(node, IrSequence)
+        # First IrBind is __n = lower(budget) (a single IrLoad of the budget symbol)
+        n_bind = node.items[0]
+        assert isinstance(n_bind, IrBind)
+        # The value is an IrLoad (of the budget var) — evaluated once at entry
+        assert isinstance(n_bind.value, IrLoad), (
+            f"__n value must be IrLoad(budget), got {type(n_bind.value).__name__}"
+        )
+
+    def test_crlf_condition_source_in_exception_field(self) -> None:
+        """With CRLF source, condition source text in MaxIterationsExceeded is clean."""
+        from tests.agl.ir_harness import evaluate_ir_raises
+
+        source = "var i = 0\r\ndo[3]\r\n  i := i + 1\r\nuntil i > 100\r\n"
+        ir_exc = evaluate_ir_raises(source)
+        assert ir_exc.display_name == "MaxIterationsExceeded"
+        from agm.agl.semantics.values import TextValue
+
+        assert ir_exc.fields.get("condition") == TextValue("i > 100")

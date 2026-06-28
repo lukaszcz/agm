@@ -45,6 +45,7 @@ from agm.agl.ir.nodes import (
     IrBind,
     IrBindPlan,
     IrBlock,
+    IrBreak,
     IrCapture,
     IrCase,
     IrCaseArm,
@@ -126,6 +127,7 @@ from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
 from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
+    BoolType,
     CastKind,
     DecimalType,
     DictType,
@@ -293,6 +295,24 @@ class _Lowerer:
             mutable=mutable,
             public_name=name if public else None,
             owner=owner if owner is not None else self._module_id,
+        )
+        return sym
+
+    def _alloc_synthetic_sym(self, *, mutable: bool) -> SymbolId:
+        """Allocate a fresh ``SymbolId`` for a lowering-internal synthetic binding.
+
+        Unlike ``_alloc_sym``, this does NOT register an entry in ``decl_to_sym``
+        (there is no AST declaration node).  ``public_name`` is ``None`` so the
+        symbol is never exposed in ``_collect_results``.  Used for loop desugaring
+        counters (``__count``, ``__n``) that must not be user-visible.
+        """
+        sym = SymbolId(self._link.next_sym)
+        self._link.next_sym += 1
+        self._link.symbols[sym] = SymbolDescriptor(
+            symbol_id=sym,
+            mutable=mutable,
+            public_name=None,
+            owner=self._module_id,
         )
         return sym
 
@@ -679,9 +699,9 @@ class _Lowerer:
     def _source_slice(self, span: SourceSpan) -> str:
         """Return the source-text covered by *span*.
 
-        Captures the source slice used in runtime diagnostics; used to
-        capture the condition-expression source text for ``IrLoop.condition_source``
-        (the ``MaxIterationsExceeded`` ``condition`` field).
+        Used to capture expression source text for runtime diagnostics, such as
+        the ``condition`` field of ``MaxIterationsExceeded`` built during loop
+        desugaring.
         """
         return self._source_text[span.start_offset : span.end_offset]
 
@@ -949,32 +969,12 @@ class _Lowerer:
                 )
 
             # ----------------------------------------------------------
-            # loop expression → IrLoop
+            # loop expression → IrLoop (desugared by _lower_loop)
             # ----------------------------------------------------------
             case Loop(
                 bound=bound_expr, body=body_expr, until_cond=until_cond_expr, span=span
             ):
-                limit_ir = (
-                    self.lower_coerced(bound_expr, IntType())
-                    if bound_expr is not None
-                    else None
-                )
-                if until_cond_expr is not None:
-                    condition_ir = self.lower_expr(until_cond_expr)
-                    condition_source = self._source_slice(until_cond_expr.span)
-                else:
-                    # `done` or omitted terminator ≡ `until false`
-                    condition_ir = IrConstBool(
-                        location=self._loc(span), value=False
-                    )
-                    condition_source = "false"
-                return IrLoop(
-                    location=self._loc(span),
-                    limit=limit_ir,
-                    body=self.lower_expr(body_expr),
-                    condition=condition_ir,
-                    condition_source=condition_source,
-                )
+                return self._lower_loop(bound_expr, body_expr, until_cond_expr, span)
 
             # ----------------------------------------------------------
             # Lambda expression — M4b
@@ -984,6 +984,187 @@ class _Lowerer:
 
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
+
+    # ------------------------------------------------------------------
+    # Loop desugar
+    # ------------------------------------------------------------------
+
+    def _lower_loop(
+        self,
+        bound_expr: "Expr | None",
+        body_expr: "Expr",
+        until_cond_expr: "Expr | None",
+        span: "SourceSpan",
+    ) -> IrExpr:
+        """Desugar a ``Loop`` AST node to ``IrLoop(body)``.
+
+        ``for_var``/``for_iter``/``while_cond`` clauses are not yet desugared.
+        This method handles the bound check (4), count increment (5), body (6),
+        and until guard (7) items only.
+
+        **Pre-loop** (emitted ONLY when ``bound_expr`` is present):
+        - ``IrBind(__n, lower_coerced(bound_expr, IntType()))``   — immutable
+        - ``IrBind(__count, IrConstInt(0))``                      — mutable
+
+        **``IrLoop(body = IrBlock([…]))``** with:
+        4. Bound check   (only if bounded)
+        5. Count incr    (only if bounded)
+        6. Body          (always)
+        7. Until guard   (only if ``until_cond_expr`` is not ``None``)
+
+        Returns ``IrSequence(pre_items..., IrLoop)`` when bounded; the plain
+        ``IrLoop`` when unbounded.
+        """
+        loc = self._loc(span)
+        pre_items: list[IrExpr] = []
+        n_sym: SymbolId | None = None
+        count_sym: SymbolId | None = None
+
+        if bound_expr is not None:
+            # __n = bound  (immutable — evaluated once before the loop)
+            n_sym = self._alloc_synthetic_sym(mutable=False)
+            pre_items.append(
+                IrBind(
+                    location=loc,
+                    symbol=n_sym,
+                    value=self.lower_coerced(bound_expr, IntType()),
+                )
+            )
+            # __count = 0  (mutable — counts body entries)
+            count_sym = self._alloc_synthetic_sym(mutable=True)
+            pre_items.append(
+                IrBind(
+                    location=loc,
+                    symbol=count_sym,
+                    value=IrConstInt(location=loc, value=0),
+                )
+            )
+
+        body_items: list[IrExpr] = []
+
+        # Item 4: bound check — if __count >= __n => inner_if
+        if n_sym is not None and count_sym is not None:
+            condition_source = (
+                self._source_slice(until_cond_expr.span)
+                if until_cond_expr is not None
+                else "false"
+            )
+            # Inner if: if __count == 0 => IrBreak else => IrRaise(MaxIterationsExceeded)
+            inner_if = IrIf(
+                location=loc,
+                branches=(
+                    IrIfBranch(
+                        cond=IrCompare(
+                            location=loc,
+                            op=CmpOp.EQ,
+                            kind=CompareKind.STRUCTURAL,
+                            lhs=IrLoad(location=loc, symbol=count_sym),
+                            rhs=IrConstInt(location=loc, value=0),
+                        ),
+                        body=IrBreak(location=loc),
+                    ),
+                    IrIfBranch(
+                        cond=None,
+                        body=IrRaise(
+                            location=loc,
+                            exc=IrMakeException(
+                                location=loc,
+                                nominal=NominalId(PRELUDE_ID, "MaxIterationsExceeded"),
+                                display_name="MaxIterationsExceeded",
+                                fields=(
+                                    (
+                                        "message",
+                                        IrRenderTemplate(
+                                            location=loc,
+                                            segments=(
+                                                IrTemplateText("Loop exhausted after "),
+                                                IrTemplateValue(
+                                                    IrLoad(location=loc, symbol=n_sym)
+                                                ),
+                                                IrTemplateText(" iterations"),
+                                            ),
+                                        ),
+                                    ),
+                                    ("trace_id", AutoTraceField()),
+                                    ("limit", IrLoad(location=loc, symbol=n_sym)),
+                                    (
+                                        "condition",
+                                        IrConstText(location=loc, value=condition_source),
+                                    ),
+                                    (
+                                        "last_condition_value",
+                                        IrConstBool(location=loc, value=False),
+                                    ),
+                                    ("metadata", IrConstJsonNull(location=loc)),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+                has_else=True,
+            )
+            # Outer if: if __count >= __n => inner_if   (has_else=False → yields unit)
+            body_items.append(
+                IrIf(
+                    location=loc,
+                    branches=(
+                        IrIfBranch(
+                            cond=IrCompare(
+                                location=loc,
+                                op=CmpOp.GE,
+                                kind=CompareKind.INT,
+                                lhs=IrLoad(location=loc, symbol=count_sym),
+                                rhs=IrLoad(location=loc, symbol=n_sym),
+                            ),
+                            body=inner_if,
+                        ),
+                    ),
+                    has_else=False,
+                )
+            )
+
+            # Item 5: count increment — __count := __count + 1
+            body_items.append(
+                IrAssign(
+                    location=loc,
+                    symbol=count_sym,
+                    path=(),
+                    value=IrArith(
+                        location=loc,
+                        op=ArithOp.ADD,
+                        kind=ArithKind.INT,
+                        lhs=IrLoad(location=loc, symbol=count_sym),
+                        rhs=IrConstInt(location=loc, value=1),
+                    ),
+                )
+            )
+
+        # Item 6: body (value discarded)
+        body_items.append(self.lower_expr(body_expr))
+
+        # Item 7: until guard (only when until_cond is present)
+        if until_cond_expr is not None:
+            body_items.append(
+                IrIf(
+                    location=loc,
+                    branches=(
+                        IrIfBranch(
+                            cond=self.lower_coerced(until_cond_expr, BoolType()),
+                            body=IrBreak(location=loc),
+                        ),
+                    ),
+                    has_else=False,
+                )
+            )
+
+        loop = IrLoop(
+            location=loc,
+            body=IrBlock(location=loc, items=tuple(body_items)),
+        )
+
+        if pre_items:
+            return IrSequence(location=loc, items=(*pre_items, loop))
+        return loop
 
     # ------------------------------------------------------------------
     # Container literal helpers

@@ -77,6 +77,7 @@ __all__ = [
     "IrBind",
     "IrBindPlan",
     "IrBlock",
+    "IrBreak",
     "IrCapture",
     "IrCase",
     "IrCaseArm",
@@ -91,6 +92,7 @@ __all__ = [
     "IrConstUnit",
     "IrConstructorPlan",
     "IrContains",
+    "IrContinue",
     "IrConvert",
     "IrDirectCall",
     "IrExpr",
@@ -753,40 +755,44 @@ class IrCase:
 
 @dataclass(frozen=True, slots=True)
 class IrLoop:
-    """IR do…until loop (M3f-C).
+    """Unconditional repeat of ``body``.
 
-    Evaluates ``body`` then ``condition`` up to ``limit`` times.  When
-    ``condition`` evaluates to ``BoolValue(True)`` the loop exits and yields
-    ``UnitValue``.
-
-    ``limit`` is the loop bound:
-
-    - ``limit=None`` means the loop is unbounded (written without ``[...]``):
-      it iterates until ``condition`` becomes ``True`` and never raises
-      ``MaxIterationsExceeded``.
-    - otherwise ``limit`` is an ``int``-typed ``IrExpr`` evaluated ONCE at loop
-      entry to an integer ``n``.  A non-positive ``n`` runs the body zero times
-      and yields ``UnitValue``.  A positive ``n`` runs the body up to ``n``
-      times; if ``condition`` is still ``False`` after the ``n``-th execution,
-      raises ``AglRaise`` with a ``MaxIterationsExceeded`` exception carrying
-      the language-defined diagnostic fields.
-
-    ``condition_source`` is the pre-sliced source-text of the condition
-    expression (mirrors ``_source_slice(expr.condition.span)`` in the legacy
-    interpreter).  The IR evaluator has no AST spans, so the lowerer captures
-    this string and embeds it here for use in the ``MaxIterationsExceeded``
-    ``condition`` field.
+    Repeats ``body`` forever.  The only exits are ``IrBreak`` (leave the loop,
+    yielding ``UnitValue``) and ``IrContinue`` (start the next iteration).
+    All richer loop features (``for``/``while``/``until``/``[n]`` bound) are
+    **desugared into** ``body`` by the lowerer.
 
     Per D5 there are NO per-iteration frames: body bindings reuse the same
-    single frame slots across iterations, matching legacy observable behaviour
-    (only the ``until`` condition reads body-bound vars).
+    single frame slots across iterations.
     """
 
     location: Location
-    limit: "IrExpr | None"
     body: "IrExpr"
-    condition: "IrExpr"
-    condition_source: str
+
+
+@dataclass(frozen=True, slots=True)
+class IrBreak:
+    """Exit the nearest enclosing ``IrLoop``, yielding ``UnitValue``.
+
+    Implemented by raising an internal ``_BreakSignal`` Python exception in the
+    evaluator; the signal propagates through ``IrTry`` bodies (which catch only
+    ``AglRaise``) to the enclosing ``IrLoop`` handler.
+    """
+
+    location: Location
+
+
+@dataclass(frozen=True, slots=True)
+class IrContinue:
+    """Proceed to the next iteration of the nearest enclosing ``IrLoop``.
+
+    Implemented by raising an internal ``_ContinueSignal`` Python exception in
+    the evaluator; the signal propagates through ``IrTry`` bodies to the
+    enclosing ``IrLoop`` handler where it is caught and used to ``continue``
+    the Python ``while True`` loop.
+    """
+
+    location: Location
 
 
 # ---------------------------------------------------------------------------
@@ -997,6 +1003,8 @@ IrExpr = (
     | IrTry
     | IrCase
     | IrLoop
+    | IrBreak
+    | IrContinue
     | IrMakeClosure
     | IrDirectCall
     | IrIndirectCall

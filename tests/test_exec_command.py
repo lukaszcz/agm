@@ -902,8 +902,9 @@ class TestExecCommandM1:
     def test_param_flag_collision_exits_1(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
+        # 'timeout' is an engine key name (kebab); param timeout → --timeout collides.
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("param max_iters: int = 1\nprint max_iters\n")
+        agl_file.write_text('param timeout: text = "30s"\nprint timeout\n')
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args(agl_file))
@@ -922,7 +923,7 @@ class TestExecCommandM1:
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
         (home / ".agm" / "config.toml").write_text(
-            "\n".join(["[params.demo]", 'typo = "ignored"'])
+            "\n".join(["[demo]", 'typo = "ignored"'])
         )
         agl_file = tmp_path / "test.agl"
         agl_file.write_text('program demo\nparam msg: text = "ok"\nprint msg\n')
@@ -1075,13 +1076,13 @@ def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
 
 
 class TestExecConfigWiring:
-    """F12: [exec] config (strict_json/default_loop_limit) flows into the runtime."""
+    """F12: [exec] config (strict-json/max-iters) flows into the runtime."""
 
     def _config_home(self, tmp_path: Path) -> Path:
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
         (home / ".agm" / "config.toml").write_text(
-            "[exec]\nstrict_json = true\ndefault_loop_limit = 9\n"
+            "[exec]\nstrict-json = true\nmax-iters = 9\n"
         )
         return home
 
@@ -1622,10 +1623,11 @@ class TestUncaughtExceptionOutputFormat:
             ),
         )
         with patch("agm.commands.exec.PipelineDriver") as mock_rt:
-            # prepare_program() must return a fake PreparedGraph with empty pragmas so
-            # the pragma-resolution logic does not choke on MagicMock values.
+            # prepare_program() must return a fake PreparedGraph with no resolved
+            # graph so the static-config-resolution logic does not choke on
+            # MagicMock values.
             fake_prepared = MagicMock()
-            fake_prepared.config_pragmas = {}
+            fake_prepared.resolved_graph = None
             fake_prepared.declared_agents = ()
             mock_rt.prepare_program.return_value = fake_prepared
             mock_rt.return_value.discover_params_graph.return_value = MagicMock(
@@ -1829,7 +1831,7 @@ class TestExecPerAgentRunnerValidation:
             log=False,
             log_file=None,
         )
-        monkeypatch.setattr(exec_command, "load_exec_config", lambda **_: bad_config)
+        monkeypatch.setattr(exec_command, "exec_config_from_merged", lambda *_, **__: bad_config)
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text('print "ran"\n')
         # Must not raise (the inert ghost command is never validated/dispatched).
@@ -2213,7 +2215,7 @@ class TestExecAgentPrecedence:
 
 
 # ---------------------------------------------------------------------------
-# M3: config pragma wiring — CLI > pragma > config precedence
+# M3: source config declaration wiring — CLI > source > config precedence
 # ---------------------------------------------------------------------------
 
 
@@ -2227,7 +2229,7 @@ def _exec_args_no_log(
     log_file: str | None = None,
     log: bool = False,
 ) -> ExecArgs:
-    """Build a minimal ExecArgs for M3 pragma-precedence tests."""
+    """Build a minimal ExecArgs for M3 source-config-precedence tests."""
     return ExecArgs(
         file=str(agl_file),
         param_tokens=[],
@@ -2240,21 +2242,111 @@ def _exec_args_no_log(
     )
 
 
-class TestExecPragmaPrecedence:
-    """M3: ``config`` pragmas in source (CLI > pragma > config precedence).
+class TestExecStartupConfigPrepass:
+    def test_startup_diagnostics_exit_1_and_print_warnings(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from agm.agl.diagnostics import Diagnostic
+        from agm.agl.pipeline import PipelineDriver, StartupConfigResult
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("config log = true\nprint 1\n")
+        warning = Diagnostic(message="startup warning", line=1, severity="warning")
+        error = Diagnostic(message="startup error", line=1)
+
+        def fake_collect(
+            self: PipelineDriver,
+            prepared: object,
+            *,
+            names: set[str],
+            checked_graph: object = None,
+            config_cli: object = None,
+            config_base: object = None,
+        ) -> StartupConfigResult:
+            return StartupConfigResult(
+                ok=False,
+                diagnostics=[error],
+                error=None,
+                warnings=[warning],
+            )
+
+        monkeypatch.setattr(PipelineDriver, "collect_startup_config_graph", fake_collect)
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "warning: startup warning" in captured.err
+        assert "error: startup error" in captured.err
+
+    def test_startup_error_exits_2_and_prints_warnings(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from agm.agl.diagnostics import Diagnostic
+        from agm.agl.pipeline import PipelineDriver, RunError, StartupConfigResult
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("config runner = \"runner\"\nprint 1\n")
+        warning = Diagnostic(message="startup warning", line=1, severity="warning")
+        error = RunError(type_name="Abort", fields={"message": "boom"}, line=1, col=1)
+
+        def fake_collect(
+            self: PipelineDriver,
+            prepared: object,
+            *,
+            names: set[str],
+            checked_graph: object = None,
+            config_cli: object = None,
+            config_base: object = None,
+        ) -> StartupConfigResult:
+            return StartupConfigResult(
+                ok=False,
+                diagnostics=[],
+                error=error,
+                warnings=[warning],
+            )
+
+        monkeypatch.setattr(PipelineDriver, "collect_startup_config_graph", fake_collect)
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+
+        assert exc_info.value.code == 2
+        captured = capsys.readouterr()
+        assert "warning: startup warning" in captured.err
+        assert "AgL exception: Abort: boom" in captured.err
+
+    def test_option_text_value_ignores_non_text_some_payload(self) -> None:
+        from agm.agl.ir.ids import NominalId
+        from agm.agl.modules.ids import STD_CORE_ID
+        from agm.agl.semantics.values import EnumValue, IntValue
+
+        value = EnumValue(
+            nominal=NominalId(STD_CORE_ID, "Option"),
+            display_name="Option",
+            variant="Some",
+            fields={"value": IntValue(1)},
+        )
+
+        assert exec_command._option_text_value({"log-file": value}, "log-file") is None
+
+
+class TestExecSourceConfigPrecedence:
+    """M3: source ``config`` declarations (CLI > source > config precedence).
 
     Each test uses behavioral assertions — observable exit codes and output —
     rather than internal call counts, following the testing policy.
     """
 
     # ------------------------------------------------------------------
-    # max_iters pragma
+    # max_iters source declaration
     # ------------------------------------------------------------------
 
-    def test_pragma_max_iters_caps_loop_at_pragma_value(
+    def test_source_max_iters_caps_loop_at_source_value(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """``config max_iters = 3`` in source caps the do loop at 3 iterations.
+        """``config max-iters = 3`` in source caps the do loop at 3 iterations.
 
         The loop ``until n >= 100`` cannot complete in 3 iterations (n starts at
         0 and increments by 1), so the runtime raises a LoopLimitExceeded and
@@ -2262,7 +2354,7 @@ class TestExecPragmaPrecedence:
         """
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            "config max_iters = 3\n"
+            "config max-iters = 3\n"
             "var n = 0\n"
             "do\n"
             "  n := n + 1\n"
@@ -2272,13 +2364,13 @@ class TestExecPragmaPrecedence:
             exec_command.run(_exec_args_no_log(agl_file))
         assert exc_info.value.code == 2
 
-    def test_pragma_max_iters_allows_completion_when_sufficient(
+    def test_source_max_iters_allows_completion_when_sufficient(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """``config max_iters = 100`` allows a do loop that needs exactly 100 iterations."""
+        """``config max-iters = 100`` allows a do loop that needs exactly 100 iterations."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            "config max_iters = 100\n"
+            "config max-iters = 100\n"
             "var n = 0\n"
             "do\n"
             "  n := n + 1\n"
@@ -2289,17 +2381,35 @@ class TestExecPragmaPrecedence:
         assert result is None  # exit 0
         assert capsys.readouterr().out == "done\n"
 
-    def test_cli_max_iters_overrides_pragma_max_iters(
+    def test_source_max_iters_zero_is_rejected(self, tmp_path: Path) -> None:
+        """``config max-iters = 0`` is rejected instead of becoming a live loop limit."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("config max-iters = 0\nprint 1\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+        assert exc_info.value.code == 2
+
+    def test_source_max_iters_negative_expression_is_rejected(self, tmp_path: Path) -> None:
+        """A computed negative ``max-iters`` value is rejected at the config binding."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("let bad = 0 - 1\nconfig max-iters = bad\nprint 1\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+        assert exc_info.value.code == 2
+
+    def test_cli_max_iters_overrides_source_max_iters(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """CLI ``--max-iters 100`` overrides ``config max_iters = 3`` in source.
+        """CLI ``--max-iters 100`` overrides ``config max-iters = 3`` in source.
 
         With --max-iters 100 the loop completes in 100 iterations (exits 0);
-        with pragma max_iters=3 it would fail (exit 2).
+        with source config max-iters=3 it would fail (exit 2).
         """
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            "config max_iters = 3\n"
+            "config max-iters = 3\n"
             "var n = 0\n"
             "do\n"
             "  n := n + 1\n"
@@ -2307,15 +2417,15 @@ class TestExecPragmaPrecedence:
             'print "done"\n'
         )
         result = exec_command.run(_exec_args_no_log(agl_file, max_iters=100))
-        assert result is None  # exit 0 — CLI 100 overrides pragma 3
+        assert result is None  # exit 0 — CLI 100 overrides source 3
         assert capsys.readouterr().out == "done\n"
 
-    def test_pragma_max_iters_overrides_config_max_iters(
+    def test_source_max_iters_overrides_config_max_iters(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """Source pragma ``config max_iters = 100`` overrides ``[exec] default_loop_limit = 3``.
+        """Source ``config max-iters = 100`` overrides ``[exec] max-iters = 3`` in config.
 
-        Config says 3 (loop would fail); pragma says 100 (loop completes).
+        Config says 3 (loop would fail); source declaration says 100 (loop completes).
         """
         from agm.config.general import ExecConfig
 
@@ -2328,11 +2438,13 @@ class TestExecPragmaPrecedence:
             log=False,
             log_file=None,
         )
-        monkeypatch.setattr(exec_command, "load_exec_config", lambda **_: low_limit_config)
+        monkeypatch.setattr(
+            exec_command, "exec_config_from_merged", lambda *_, **__: low_limit_config
+        )
 
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            "config max_iters = 100\n"
+            "config max-iters = 100\n"
             "var n = 0\n"
             "do\n"
             "  n := n + 1\n"
@@ -2340,42 +2452,47 @@ class TestExecPragmaPrecedence:
             'print "done"\n'
         )
         result = exec_command.run(_exec_args_no_log(agl_file))
-        assert result is None  # exit 0 — pragma 100 overrides config 3
+        assert result is None  # exit 0 — source 100 overrides config 3
         assert capsys.readouterr().out == "done\n"
 
     # ------------------------------------------------------------------
-    # strict_json pragma
+    # strict-json source declaration
     # ------------------------------------------------------------------
 
-    def test_pragma_strict_json_flows_into_runtime(
+    def test_source_strict_json_flows_into_runtime(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``config strict_json = true`` in source sets ``default_strict_json=True``
-        on the PipelineDriver (observable via the spy pattern)."""
+        """``config strict-json = true`` in source does NOT pre-fold into the
+        PipelineDriver constructor; it is applied via D6 at runtime instead.
+        The constructor receives the config-file value (False by default)."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("config strict_json = true\nlet x = 1\nx\n")
+        agl_file.write_text("config strict-json = true\nlet x = 1\nx\n")
 
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
         assert result is None
-        assert captured["default_strict_json"] is True
+        # D6: constructor gets the config-file default; the source declaration
+        # applies the live change at the point of the IrConfigBind execution.
+        assert captured["default_strict_json"] is False
 
-    def test_cli_strict_json_overrides_pragma_strict_json(
+    def test_cli_strict_json_overrides_source_strict_json(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """CLI ``--no-strict-json`` (strict_json=False) overrides ``config strict_json = true``."""
+        """CLI ``--no-strict-json`` (strict_json=False) overrides ``config strict-json = true``."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("config strict_json = true\nlet x = 1\nx\n")
+        agl_file.write_text("config strict-json = true\nlet x = 1\nx\n")
 
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file, strict_json=False))
         assert result is None
         assert captured["default_strict_json"] is False
 
-    def test_pragma_strict_json_overrides_config_strict_json(
+    def test_source_strict_json_overrides_config_strict_json(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Source pragma ``config strict_json = false`` overrides ``[exec] strict_json = true``."""
+        """Source ``config strict-json = false`` overrides ``[exec] strict-json = true``
+        at runtime via D6.  The PipelineDriver constructor still receives the
+        config-file value (True); the source declaration takes effect at binding time."""
         from agm.config.general import ExecConfig
 
         strict_config = ExecConfig(
@@ -2387,48 +2504,55 @@ class TestExecPragmaPrecedence:
             log=False,
             log_file=None,
         )
-        monkeypatch.setattr(exec_command, "load_exec_config", lambda **_: strict_config)
+        monkeypatch.setattr(exec_command, "exec_config_from_merged", lambda *_, **__: strict_config)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("config strict_json = false\nlet x = 1\nx\n")
+        agl_file.write_text("config strict-json = false\nlet x = 1\nx\n")
 
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
         assert result is None
-        assert captured["default_strict_json"] is False
+        # D6: constructor gets config-file value (True); the source declaration (False)
+        # overrides it at runtime via IrConfigBind → _apply_config_effect.
+        assert captured["default_strict_json"] is True
 
     # ------------------------------------------------------------------
-    # timeout pragma
+    # timeout source declaration
     # ------------------------------------------------------------------
 
-    def test_pragma_timeout_flows_into_runtime(
+    def test_source_timeout_flows_into_runtime(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``config timeout = "30s"`` in source sets shell_exec_timeout=30.0."""
+        """``config timeout = "30s"`` in source does NOT pre-fold into the
+        PipelineDriver constructor; it is applied via D6 at runtime.
+        The constructor receives the config-file value (None by default)."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text('config timeout = "30s"\nlet x = 1\nx\n')
 
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
         assert result is None
-        assert captured["shell_exec_timeout"] == 30.0
+        # D6: constructor gets the config-file default (None); the source
+        # declaration updates shell_exec_timeout at binding time.
+        assert captured["shell_exec_timeout"] is None
 
-    def test_pragma_timeout_integer_seconds(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_source_timeout_integer_rejected(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """``config timeout = 60`` (integer) in source sets shell_exec_timeout=60.0."""
+        """``config timeout = 60`` (integer) is a type error: timeout is Option[text]."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text("config timeout = 60\nlet x = 1\nx\n")
 
-        captured = _spy_runtime(monkeypatch)
-        result = exec_command.run(_exec_args_no_log(agl_file))
-        assert result is None
-        assert captured["shell_exec_timeout"] == 60.0
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+        assert exc_info.value.code == 1
 
-    def test_pragma_timeout_overrides_config_timeout(
+    def test_source_timeout_overrides_config_timeout(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Source pragma timeout overrides ``[exec] timeout`` from config."""
+        """Source ``config timeout = "30s"`` overrides ``[exec] timeout = 999``
+        at runtime via D6.  The PipelineDriver constructor still receives the
+        config-file value (999.0); the source declaration takes effect at binding time."""
         from agm.config.general import ExecConfig
 
         config_with_timeout = ExecConfig(
@@ -2440,7 +2564,9 @@ class TestExecPragmaPrecedence:
             log=False,
             log_file=None,
         )
-        monkeypatch.setattr(exec_command, "load_exec_config", lambda **_: config_with_timeout)
+        monkeypatch.setattr(
+            exec_command, "exec_config_from_merged", lambda *_, **__: config_with_timeout
+        )
 
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text('config timeout = "30s"\nlet x = 1\nx\n')
@@ -2448,67 +2574,32 @@ class TestExecPragmaPrecedence:
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
         assert result is None
-        assert captured["shell_exec_timeout"] == 30.0
+        # D6: constructor gets config-file value (999.0); the source declaration (30s)
+        # overrides it at runtime via IrConfigBind → _apply_config_effect.
+        assert captured["shell_exec_timeout"] == pytest.approx(999.0)
 
-    def test_pragma_timeout_invalid_string_exits_1(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    def test_source_timeout_invalid_string_raises_runtime_error(
+        self, tmp_path: Path
     ) -> None:
-        """A pragma timeout string that passes the scope check but fails parse_timeout exits 1.
+        """A source timeout string that type-checks but fails parse_timeout raises
+        a clean AgL-level ValueError at the config decl point (exit 2).
 
-        The pragma validator accepts any non-empty string; parse_timeout rejects
-        values like "forever" that are not valid duration strings.  We inject the
-        invalid value via a patched prepare_program() to bypass the scope pass.
+        ``config timeout = "forever"`` is a valid ``Option[text]`` value so it
+        passes scope and typecheck; the D6 handler converts the parse_timeout
+        ValueError to an AglRaise (uncaught AgL exception → exit 2).
         """
-        from unittest.mock import MagicMock
-
-        from agm.agl.modules.roots import RootSet
-        from agm.agl.pipeline import PipelineDriver as RealRuntime
-
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("let x = 1\n")
-
-        real_prepare_program = RealRuntime.prepare_program
-
-        def fake_prepare_program(
-            source: str,
-            *,
-            entry_path: Path | None,
-            roots: RootSet,
-            default_stdlib: bool = True,
-        ) -> object:
-            real_pg = real_prepare_program(
-                source,
-                entry_path=entry_path,
-                roots=roots,
-                default_stdlib=default_stdlib,
-            )
-            # Wrap the real PreparedGraph with an invalid timeout in config_pragmas.
-            fake_pg = MagicMock()
-            fake_pg.config_pragmas = {"timeout": "forever"}
-            fake_pg.declared_agents = real_pg.declared_agents
-            fake_pg.resolved_graph = real_pg.resolved_graph
-            fake_pg.diagnostics = real_pg.diagnostics
-            fake_pg.warnings = real_pg.warnings
-            return fake_pg
-
-        monkeypatch.setattr(
-            exec_command.PipelineDriver,
-            "prepare_program",
-            staticmethod(fake_prepare_program),
-        )
+        agl_file.write_text('config timeout = "forever"\nlet x = 1\nx\n')
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args_no_log(agl_file))
-        assert exc_info.value.code == 1
-        captured = capsys.readouterr()
-        assert "Error:" in captured.err
-        assert "timeout" in captured.err.lower()
+        assert exc_info.value.code == 2
 
     # ------------------------------------------------------------------
-    # log pragma
+    # log source declaration
     # ------------------------------------------------------------------
 
-    def test_pragma_log_true_creates_trace_file(self, tmp_path: Path) -> None:
+    def test_source_log_true_creates_trace_file(self, tmp_path: Path) -> None:
         """``config log = true`` in source enables trace logging (creates a file)."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text('config log = true\nprint "hi"\n')
@@ -2537,11 +2628,36 @@ class TestExecPragmaPrecedence:
         log_files = list(agent_files.glob("exec-*.log"))
         assert log_files, "Expected a trace log file to be created by config log = true"
 
-    def test_pragma_log_file_writes_to_specified_path(self, tmp_path: Path) -> None:
-        """``config log_file = "path"`` in source writes the trace to that path."""
+    def test_source_log_non_literal_creates_trace_file(self, tmp_path: Path) -> None:
+        """``config log = enabled`` is honored for startup trace resolution."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('let enabled = true\nconfig log = enabled\nprint "hi"\n')
+
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            exec_command.run(
+                ExecArgs(
+                    file=str(agl_file),
+                    param_tokens=[],
+                    strict_json=None,
+                    max_iters=None,
+                    runner=None,
+                    no_log=False,
+                    log_file=None,
+                )
+            )
+        finally:
+            os.chdir(old_cwd)
+
+        log_files = list((tmp_path / ".agent-files").glob("exec-*.log"))
+        assert log_files, "Expected a trace log file from computed config log=true"
+
+    def test_source_log_file_writes_to_specified_path(self, tmp_path: Path) -> None:
+        """``config log-file = "path"`` in source writes the trace to that path."""
         log_path = tmp_path / "trace.log"
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(f'config log_file = "{log_path}"\nprint "hi"\n')
+        agl_file.write_text(f'config log-file = "{log_path}"\nprint "hi"\n')
 
         exec_command.run(
             ExecArgs(
@@ -2554,9 +2670,9 @@ class TestExecPragmaPrecedence:
                 log_file=None,
             )
         )
-        assert log_path.exists(), "Expected trace log at pragma-specified path"
+        assert log_path.exists(), "Expected trace log at source-specified path"
 
-    def test_cli_no_log_overrides_pragma_log_true(self, tmp_path: Path) -> None:
+    def test_cli_no_log_overrides_source_log_true(self, tmp_path: Path) -> None:
         """CLI ``--no-log`` overrides ``config log = true`` — no trace file created."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text('config log = true\nprint "hi"\n')
@@ -2570,19 +2686,19 @@ class TestExecPragmaPrecedence:
         finally:
             os.chdir(old_cwd)
 
-        # --no-log must prevent trace creation even when the pragma says log=true.
+        # --no-log must prevent trace creation even when the source says log=true.
         agent_files = tmp_path / ".agent-files"
         if agent_files.exists():
             log_files = list(agent_files.glob("exec-*.log"))
-            assert not log_files, "Expected no trace log when --no-log overrides pragma log=true"
+            assert not log_files, "Expected no trace log when --no-log overrides source log=true"
 
-    def test_pragma_log_file_overrides_config_log(
+    def test_source_log_file_overrides_config_log(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``config log_file`` pragma overrides ``[exec] log = false`` in config."""
-        log_path = tmp_path / "pragma_trace.log"
+        """``config log-file`` source declaration overrides ``[exec] log = false`` in config."""
+        log_path = tmp_path / "source_trace.log"
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(f'config log_file = "{log_path}"\nprint "hi"\n')
+        agl_file.write_text(f'config log-file = "{log_path}"\nprint "hi"\n')
 
         from agm.config.general import ExecConfig
 
@@ -2595,7 +2711,7 @@ class TestExecPragmaPrecedence:
             log=False,
             log_file=None,
         )
-        monkeypatch.setattr(exec_command, "load_exec_config", lambda **_: no_log_config)
+        monkeypatch.setattr(exec_command, "exec_config_from_merged", lambda *_, **__: no_log_config)
 
         exec_command.run(
             ExecArgs(
@@ -2609,17 +2725,17 @@ class TestExecPragmaPrecedence:
             )
         )
         assert log_path.exists(), (
-            "Expected trace log at pragma-specified path despite config log=false"
+            "Expected trace log at source-specified path despite config log=false"
         )
 
     # ------------------------------------------------------------------
-    # runner pragma
+    # runner source declaration
     # ------------------------------------------------------------------
 
-    def test_pragma_runner_flows_into_agent_factory(
+    def test_source_runner_flows_into_agent_factory(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``config runner = "..."`` pragma sets the default runner command.
+        """``config runner = "..."`` source declaration sets the default runner command.
 
         We capture the runner command passed to runner_backed_agent_factory
         because it is the single user-observable boundary between exec.py and
@@ -2653,12 +2769,44 @@ class TestExecPragmaPrecedence:
         exec_command.run(_exec_args_no_log(agl_file))
         assert captured_runner == ["my-runner"]
 
-    def test_cli_runner_overrides_pragma_runner(
+    def test_source_runner_non_literal_flows_into_agent_factory(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """CLI ``--runner`` overrides ``config runner`` pragma."""
+        """``config runner = name`` is honored for startup runner resolution."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('config runner = "pragma-runner"\nlet x = 1\nx\n')
+        agl_file.write_text('let name = "computed-runner"\nconfig runner = name\nlet x = 1\nx\n')
+
+        captured_runner: list[str] = []
+
+        import agm.agl.runtime.agents as agents_mod
+        from agm.agl.runtime.agents import AgentFn
+
+        real_factory = agents_mod.runner_backed_agent_factory
+
+        def spy_factory(
+            *,
+            default_runner_cmd: str,
+            per_agent_cmds: dict[str, str],
+            idle_timeout: float | None = None,
+        ) -> AgentFn:
+            captured_runner.append(default_runner_cmd)
+            return real_factory(
+                default_runner_cmd=default_runner_cmd,
+                per_agent_cmds=per_agent_cmds,
+                idle_timeout=idle_timeout,
+            )
+
+        monkeypatch.setattr(exec_command, "runner_backed_agent_factory", spy_factory)
+
+        exec_command.run(_exec_args_no_log(agl_file))
+        assert captured_runner == ["computed-runner"]
+
+    def test_cli_runner_overrides_source_runner(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """CLI ``--runner`` overrides ``config runner`` source declaration."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('config runner = "source-runner"\nlet x = 1\nx\n')
 
         captured_runner: list[str] = []
 
@@ -3093,3 +3241,390 @@ class TestExecCliModulePaths:
         exec_command.run(args)
         captured = capsys.readouterr()
         assert "Hello!" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# F1: config_base carries [exec] timeout / log-file floor (not hardcoded none)
+# ---------------------------------------------------------------------------
+
+
+class TestConfigBaseOptionKeys:
+    """F1: bare ``config timeout`` / ``config log-file`` respect [exec] config."""
+
+    def _spy_config_base(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> dict[str, object]:
+        """Patch PipelineDriver.run_prepared_graph to capture the config_base kwarg."""
+        from collections.abc import Mapping
+
+        from agm.agl.pipeline import PipelineDriver as RealRuntime
+        from agm.agl.pipeline import PreparedGraph, RunResult
+        from agm.agl.semantics.values import Value
+        from agm.agl.typecheck.graph import CheckedModuleGraph
+
+        captured: dict[str, object] = {}
+
+        class CapturingRuntime(RealRuntime):
+            def run_prepared_graph(
+                self,
+                prepared: PreparedGraph,
+                *,
+                param_values: Mapping[str, object] | None = None,
+                check_only: bool = False,
+                log_file: Path | None = None,
+                checked_graph: CheckedModuleGraph | None = None,
+                config_cli: Mapping[str, Value] | None = None,
+                config_base: Mapping[str, Value] | None = None,
+            ) -> RunResult:
+                captured["config_base"] = config_base
+                # Proceed with actual execution so exec.py sees a proper result.
+                return super().run_prepared_graph(
+                    prepared,
+                    param_values=param_values,
+                    check_only=check_only,
+                    log_file=log_file,
+                    checked_graph=checked_graph,
+                    config_cli=config_cli,
+                    config_base=config_base,
+                )
+
+        monkeypatch.setattr(exec_command, "PipelineDriver", CapturingRuntime)
+        return captured
+
+    def test_bare_config_timeout_with_exec_config_binds_some(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Bare ``config timeout`` with [exec].timeout set must bind some(...), not none."""
+        from agm.agl.semantics.values import EnumValue
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[exec]\ntimeout = "60s"\n')
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("config timeout\nlet x = 1\nx\n")
+
+        captured = self._spy_config_base(monkeypatch)
+        result = exec_command.run(_exec_args_no_log(agl_file))
+        assert result is None
+
+        config_base = captured["config_base"]
+        assert isinstance(config_base, dict)
+        timeout_val = config_base["timeout"]
+        assert isinstance(timeout_val, EnumValue)
+        assert timeout_val.variant == "Some"
+
+    def test_bare_config_log_file_with_exec_config_binds_some(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Bare ``config log-file`` with [exec].log_file set must bind some(path), not none."""
+        from agm.agl.semantics.values import EnumValue, TextValue
+        from agm.config.general import ExecConfig
+
+        expected_path = "/var/log/agent.jsonl"
+        config_with_log_file = ExecConfig(
+            runner=None,
+            strict_json=False,
+            default_loop_limit=5,
+            timeout=None,
+            agents={},
+            log=False,
+            log_file=expected_path,
+        )
+        monkeypatch.setattr(
+            exec_command, "exec_config_from_merged", lambda *_, **__: config_with_log_file
+        )
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("config log-file\nlet x = 1\nx\n")
+
+        captured = self._spy_config_base(monkeypatch)
+        result = exec_command.run(_exec_args_no_log(agl_file))
+        assert result is None
+
+        config_base = captured["config_base"]
+        assert isinstance(config_base, dict)
+        log_file_val = config_base["log-file"]
+        assert isinstance(log_file_val, EnumValue)
+        assert log_file_val.variant == "Some"
+        assert log_file_val.fields == {"value": TextValue(expected_path)}
+
+
+class TestReservedFileStem:
+    """§15: a file stem matching a reserved AGM section name must exit 1."""
+
+    def test_reserved_stem_no_program_decl_exits_1(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """File 'loop.agl' with no ``program`` decl uses stem 'loop' (reserved) → exit 1."""
+        agl_file = tmp_path / "loop.agl"
+        agl_file.write_text("let x = 1\nx\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+
+        assert exc_info.value.code == 1
+
+    def test_exec_stem_no_program_decl_exits_1(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """File 'exec.agl' with no ``program`` decl uses stem 'exec' (reserved) → exit 1."""
+        agl_file = tmp_path / "exec.agl"
+        agl_file.write_text("let x = 1\nx\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+
+        assert exc_info.value.code == 1
+
+    def test_reserved_stem_with_program_decl_ok(self, tmp_path: Path) -> None:
+        """A file named 'loop.agl' with an explicit ``program myapp`` decl runs fine."""
+        agl_file = tmp_path / "loop.agl"
+        agl_file.write_text("program myapp\nlet x = 1\nx\n")
+
+        # Should succeed (program decl provides a non-reserved key).
+        result = exec_command.run(_exec_args_no_log(agl_file))
+        assert result is None
+
+    def test_non_reserved_stem_runs_fine(self, tmp_path: Path) -> None:
+        """A file with a non-reserved stem works normally."""
+        agl_file = tmp_path / "myworkflow.agl"
+        agl_file.write_text("let x = 1\nx\n")
+
+        result = exec_command.run(_exec_args_no_log(agl_file))
+        assert result is None
+
+    def test_inline_c_with_reserved_name_unaffected(self, tmp_path: Path) -> None:
+        """Inline -c programs have no file stem and are never affected."""
+        from agm.cli_support.args import ExecArgs
+
+        args = ExecArgs(
+            file=None,
+            command="let x = 1\nx\n",
+            param_tokens=[],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=True,
+            log_file=None,
+            log=False,
+        )
+        result = exec_command.run(args)
+        assert result is None
+
+
+class TestRawStringRoundTrip:
+    """Task 5 carry-forward: timeout raw string in config_base (no str(float) loss)."""
+
+    def _spy_config_base(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> dict[str, object]:
+        from collections.abc import Mapping
+
+        from agm.agl.pipeline import PipelineDriver as RealRuntime
+        from agm.agl.pipeline import PreparedGraph, RunResult
+        from agm.agl.semantics.values import Value
+        from agm.agl.typecheck.graph import CheckedModuleGraph
+
+        captured: dict[str, object] = {}
+
+        class CapturingRuntime(RealRuntime):
+            def run_prepared_graph(
+                self,
+                prepared: PreparedGraph,
+                *,
+                param_values: Mapping[str, object] | None = None,
+                check_only: bool = False,
+                log_file: Path | None = None,
+                checked_graph: CheckedModuleGraph | None = None,
+                config_cli: Mapping[str, Value] | None = None,
+                config_base: Mapping[str, Value] | None = None,
+            ) -> RunResult:
+                captured["config_base"] = config_base
+                return super().run_prepared_graph(
+                    prepared,
+                    param_values=param_values,
+                    check_only=check_only,
+                    log_file=log_file,
+                    checked_graph=checked_graph,
+                    config_cli=config_cli,
+                    config_base=config_base,
+                )
+
+        monkeypatch.setattr(exec_command, "PipelineDriver", CapturingRuntime)
+        return captured
+
+    def test_exec_timeout_string_preserved_in_config_base(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """[exec].timeout = \"30s\" must produce config_base[\"timeout\"] = some(\"30s\"),
+        not some(\"30.0\") (the str(float) approximation must be fixed)."""
+        from agm.agl.semantics.values import EnumValue, TextValue
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[exec]\ntimeout = "30s"\n')
+
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("config timeout\nlet x = 1\nx\n")
+
+        captured = self._spy_config_base(monkeypatch)
+        result = exec_command.run(_exec_args_no_log(agl_file))
+        assert result is None
+
+        config_base = captured["config_base"]
+        assert isinstance(config_base, dict)
+        timeout_val = config_base["timeout"]
+        assert isinstance(timeout_val, EnumValue)
+        assert timeout_val.variant == "Some"
+        # The raw string "30s" must be preserved, not "30.0".
+        assert timeout_val.fields == {"value": TextValue("30s")}
+
+    def test_program_timeout_override_string_preserved(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """[<program>].timeout = \"60m\" overrides [exec].timeout and preserves string."""
+        from agm.agl.semantics.values import EnumValue, TextValue
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            '[exec]\ntimeout = "30s"\n\n[myprog]\ntimeout = "60m"\n'
+        )
+
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        agl_file = tmp_path / "myprog.agl"
+        agl_file.write_text("config timeout\nlet x = 1\nx\n")
+
+        captured = self._spy_config_base(monkeypatch)
+        result = exec_command.run(_exec_args_no_log(agl_file))
+        assert result is None
+
+        config_base = captured["config_base"]
+        assert isinstance(config_base, dict)
+        timeout_val = config_base["timeout"]
+        assert isinstance(timeout_val, EnumValue)
+        assert timeout_val.variant == "Some"
+        # Program override "60m" must be preserved.
+        assert timeout_val.fields == {"value": TextValue("60m")}
+
+
+class TestF1StemVsProgramNameBug:
+    """F1 regression: file stem != program NAME decl must not split engine/param key."""
+
+    def test_program_name_decl_used_for_both_engine_config_and_config_base(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """File foo.agl with 'program bar': [bar].timeout must win for engine AND config_base.
+
+        With the bug, stem 'foo' is used for engine config -> [foo] (empty) -> 30s
+        and 'bar' is used for params. The fix makes both use 'bar' -> 60m.
+        """
+        from collections.abc import Mapping
+
+        from agm.agl.pipeline import PipelineDriver as RealRuntime
+        from agm.agl.pipeline import PreparedGraph, RunResult
+        from agm.agl.semantics.values import EnumValue, TextValue, Value
+        from agm.agl.typecheck.graph import CheckedModuleGraph
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        # [exec] has 30s; [bar] (the declared program name) overrides with 60m.
+        (home / ".agm" / "config.toml").write_text(
+            '[exec]\ntimeout = "30s"\n\n[bar]\ntimeout = "60m"\n'
+        )
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        # File stem is 'foo', but program declares 'bar'.
+        agl_file = tmp_path / "foo.agl"
+        agl_file.write_text("program bar\nconfig timeout\nlet x = 1\nx\n")
+
+        captured: dict[str, object] = {}
+
+        class CapturingRuntime(RealRuntime):
+            def run_prepared_graph(
+                self,
+                prepared: PreparedGraph,
+                *,
+                param_values: Mapping[str, object] | None = None,
+                check_only: bool = False,
+                log_file: Path | None = None,
+                checked_graph: CheckedModuleGraph | None = None,
+                config_cli: Mapping[str, Value] | None = None,
+                config_base: Mapping[str, Value] | None = None,
+            ) -> RunResult:
+                captured["config_base"] = config_base
+                captured["shell_exec_timeout"] = self._shell_exec_timeout
+                return super().run_prepared_graph(
+                    prepared,
+                    param_values=param_values,
+                    check_only=check_only,
+                    log_file=log_file,
+                    checked_graph=checked_graph,
+                    config_cli=config_cli,
+                    config_base=config_base,
+                )
+
+        monkeypatch.setattr(exec_command, "PipelineDriver", CapturingRuntime)
+
+        result = exec_command.run(_exec_args_no_log(agl_file))
+        assert result is None
+
+        # Both config_base timeout and engine shell_exec_timeout must come from [bar] (60m),
+        # not [exec] (30s).
+        config_base_val = captured["config_base"]
+        assert isinstance(config_base_val, dict)
+        timeout_binding = config_base_val["timeout"]
+        assert isinstance(timeout_binding, EnumValue)
+        assert timeout_binding.variant == "Some"
+        assert timeout_binding.fields == {"value": TextValue("60m")}
+
+        # Engine shell-exec timeout: 60 minutes = 3600 seconds.
+        shell_timeout = captured["shell_exec_timeout"]
+        assert shell_timeout == pytest.approx(3600.0)
+
+
+class TestProgramLogFilePathResolution:
+    """F2: [<program>].log-file relative path is anchored to the config directory."""
+
+    def test_program_log_file_relative_resolved_to_config_dir(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.config.general import load_merged_config, program_config_from_merged
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[myprog]\nlog-file = "my.log"\n')
+
+        merged = load_merged_config(home=home, proj_dir=None, cwd=tmp_path)
+        prog = program_config_from_merged(merged, "myprog")
+
+        log_file_val = prog.get("log-file")
+        assert isinstance(log_file_val, str)
+        # Must be absolute (anchored to ~/.agm/ where the config lives)
+        assert Path(log_file_val).is_absolute()
+        assert log_file_val.endswith("my.log")

@@ -1,1 +1,1 @@
-{"diagnostic": {"message_contains": ["Equality operands"]}}
+{"diagnostic": {"message_contains": ["Equality operands"], "line": 7}}

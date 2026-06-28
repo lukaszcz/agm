@@ -1,4 +1,4 @@
-"""M3b differential ir_semantic — operator node proof corpus.
+"""IR evaluation tests for operator nodes.
 
 Tests all operator node types: IrArith, IrCompare, IrContains, IrAnd, IrOr, IrUnary.
 
@@ -27,18 +27,18 @@ from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises
 
 def test_int_add() -> None:
     source = "let x: int = 2 + 3\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == IntValue(5)
+    ir = evaluate_ir(source)
+    assert ir["x"] == IntValue(5)
 
 def test_int_sub() -> None:
     source = "let x: int = 10 - 3\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == IntValue(7)
+    ir = evaluate_ir(source)
+    assert ir["x"] == IntValue(7)
 
 def test_int_mul() -> None:
     source = "let x: int = 4 * 5\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == IntValue(20)
+    ir = evaluate_ir(source)
+    assert ir["x"] == IntValue(20)
 
 # ---------------------------------------------------------------------------
 # Arithmetic: decimal operations
@@ -46,18 +46,18 @@ def test_int_mul() -> None:
 
 def test_decimal_add() -> None:
     source = "let x: decimal = 1.5 + 2.5\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == DecimalValue(decimal.Decimal("4.0"))
+    ir = evaluate_ir(source)
+    assert ir["x"] == DecimalValue(decimal.Decimal("4.0"))
 
 def test_decimal_sub() -> None:
     source = "let x: decimal = 5.0 - 2.5\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == DecimalValue(decimal.Decimal("2.5"))
+    ir = evaluate_ir(source)
+    assert ir["x"] == DecimalValue(decimal.Decimal("2.5"))
 
 def test_decimal_mul() -> None:
     source = "let x: decimal = 2.0 * 3.0\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == DecimalValue(decimal.Decimal("6.00"))
+    ir = evaluate_ir(source)
+    assert ir["x"] == DecimalValue(decimal.Decimal("6.00"))
 
 # ---------------------------------------------------------------------------
 # Arithmetic: text concatenation
@@ -65,8 +65,8 @@ def test_decimal_mul() -> None:
 
 def test_text_concat() -> None:
     source = 'let x: text = "hello" + " world"\n()'
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == TextValue("hello world")
+    ir = evaluate_ir(source)
+    assert ir["x"] == TextValue("hello world")
 
 # ---------------------------------------------------------------------------
 # Arithmetic: mixed int + decimal widening
@@ -74,13 +74,13 @@ def test_text_concat() -> None:
 
 def test_mixed_int_decimal_add() -> None:
     source = "let x: decimal = 1 + 2.5\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == DecimalValue(decimal.Decimal("3.5"))
+    ir = evaluate_ir(source)
+    assert ir["x"] == DecimalValue(decimal.Decimal("3.5"))
 
 def test_mixed_decimal_int_add() -> None:
     source = "let x: decimal = 2.5 + 1\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == DecimalValue(decimal.Decimal("3.5"))
+    ir = evaluate_ir(source)
+    assert ir["x"] == DecimalValue(decimal.Decimal("3.5"))
 
 # ---------------------------------------------------------------------------
 # Division: always decimal result
@@ -88,13 +88,13 @@ def test_mixed_decimal_int_add() -> None:
 
 def test_div_decimal_result() -> None:
     source = "let x: decimal = 10 / 4\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == DecimalValue(decimal.Decimal("2.5"))
+    ir = evaluate_ir(source)
+    assert ir["x"] == DecimalValue(decimal.Decimal("2.5"))
 
 def test_div_decimal_decimal() -> None:
     source = "let x: decimal = 9.0 / 3.0\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == DecimalValue(decimal.Decimal("3"))
+    ir = evaluate_ir(source)
+    assert ir["x"] == DecimalValue(decimal.Decimal("3"))
 
 # ---------------------------------------------------------------------------
 # Division by zero
@@ -102,10 +102,8 @@ def test_div_decimal_decimal() -> None:
 
 def test_div_by_zero_raises() -> None:
     source = "let x: decimal = 1 / 0\n()"
-    ir_reference_exc, ir_exc = evaluate_ir_raises(source)
-    assert ir_reference_exc.display_name == "ArithmeticError"
+    ir_exc = evaluate_ir_raises(source)
     assert ir_exc.display_name == "ArithmeticError"
-    assert ir_reference_exc.fields["message"] == TextValue("Division by zero")
     assert ir_exc.fields["message"] == TextValue("Division by zero")
 
 # ---------------------------------------------------------------------------
@@ -114,33 +112,33 @@ def test_div_by_zero_raises() -> None:
 
 def test_eq_int() -> None:
     source = "let x: bool = 3 == 3\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(True)
 
 def test_neq_int() -> None:
     source = "let x: bool = 3 != 4\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(True)
 
 def test_eq_text() -> None:
     source = 'let x: bool = "a" == "a"\n()'
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(True)
 
 def test_neq_text() -> None:
     source = 'let x: bool = "a" != "b"\n()'
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(True)
 
 def test_eq_bool() -> None:
     source = "let x: bool = true == true\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(True)
 
 def test_eq_int_decimal_widening() -> None:
     source = "let x: bool = 2 == 2.0\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(True)
 
 # ---------------------------------------------------------------------------
 # Comparisons: ordering
@@ -148,68 +146,68 @@ def test_eq_int_decimal_widening() -> None:
 
 def test_lt_int() -> None:
     source = "let x: bool = 2 < 3\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(True)
 
 def test_le_int() -> None:
     source = "let x: bool = 3 <= 3\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(True)
 
 def test_gt_int() -> None:
     source = "let x: bool = 5 > 3\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(True)
 
 def test_ge_int() -> None:
     source = "let x: bool = 3 >= 3\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(True)
 
 def test_lt_decimal() -> None:
     source = "let x: bool = 1.5 < 2.5\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(True)
 
 def test_le_decimal() -> None:
     source = "let x: bool = 2.5 <= 2.5\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(True)
 
 def test_gt_decimal() -> None:
     source = "let x: bool = 3.0 > 2.5\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(True)
 
 def test_ge_decimal() -> None:
     source = "let x: bool = 2.5 >= 2.5\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(True)
 
 def test_lt_text() -> None:
     source = 'let x: bool = "abc" < "abd"\n()'
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(True)
 
 def test_le_text() -> None:
     source = 'let x: bool = "abc" <= "abc"\n()'
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(True)
 
 def test_gt_text() -> None:
     source = 'let x: bool = "abd" > "abc"\n()'
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(True)
 
 def test_ge_text() -> None:
     source = 'let x: bool = "abc" >= "abc"\n()'
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(True)
 
 def test_ordering_mixed_int_decimal() -> None:
     source = "let x: bool = 1 < 1.5\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(True)
 
 # ---------------------------------------------------------------------------
 # In operator
@@ -217,33 +215,38 @@ def test_ordering_mixed_int_decimal() -> None:
 
 def test_in_list() -> None:
     source = "let xs: list[int] = [1, 2, 3]\nlet x: bool = 2 in xs\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(True)
 
 def test_not_in_list() -> None:
     source = "let xs: list[int] = [1, 2, 3]\nlet x: bool = 5 in xs\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(False)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(False)
+
+def test_membership_in_empty_list_is_false() -> None:
+    """`x in xs` on an empty list evaluates to false."""
+    ir = evaluate_ir("let xs: list[int] = []\nlet has = 5 in xs\nhas\n")
+    assert ir["has"] == BoolValue(False)
 
 def test_in_dict() -> None:
     source = 'let m: dict[text, int] = {"a": 1}\nlet x: bool = "a" in m\n()'
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(True)
 
 def test_not_in_dict() -> None:
     source = 'let m: dict[text, int] = {"a": 1}\nlet x: bool = "b" in m\n()'
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(False)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(False)
 
 def test_in_text() -> None:
     source = 'let x: bool = "ell" in "hello"\n()'
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(True)
 
 def test_not_in_text() -> None:
     source = 'let x: bool = "xyz" in "hello"\n()'
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(False)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(False)
 
 # ---------------------------------------------------------------------------
 # Short-circuit and/or
@@ -251,47 +254,47 @@ def test_not_in_text() -> None:
 
 def test_and_true_true() -> None:
     source = "let x: bool = true and true\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(True)
 
 def test_and_true_false() -> None:
     source = "let x: bool = true and false\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(False)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(False)
 
 def test_and_false_short_circuit() -> None:
     source = "let x: bool = false and true\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(False)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(False)
 
 def test_or_false_false() -> None:
     source = "let x: bool = false or false\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(False)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(False)
 
 def test_or_false_true() -> None:
     source = "let x: bool = false or true\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(True)
 
 def test_or_true_short_circuit() -> None:
     source = "let x: bool = true or false\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(True)
 
 def test_and_short_circuit_rhs_not_evaluated() -> None:
     """false and <div-by-zero> must short-circuit: rhs must NOT be evaluated."""
     # If the rhs were evaluated, 1/0 would raise ArithmeticError.
     source = "let x: bool = false and (1 / 0 == 0.0)\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(False)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(False)
 
 def test_or_short_circuit_rhs_not_evaluated() -> None:
     """true or <div-by-zero> must short-circuit: rhs must NOT be evaluated."""
     # If the rhs were evaluated, 1/0 would raise ArithmeticError.
     source = "let y: bool = true or (1 / 0 == 0.0)\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["y"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["y"] == BoolValue(True)
 
 # ---------------------------------------------------------------------------
 # Unary NOT
@@ -299,13 +302,13 @@ def test_or_short_circuit_rhs_not_evaluated() -> None:
 
 def test_unary_not_true() -> None:
     source = "let x: bool = not true\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(False)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(False)
 
 def test_unary_not_false() -> None:
     source = "let x: bool = not false\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == BoolValue(True)
+    ir = evaluate_ir(source)
+    assert ir["x"] == BoolValue(True)
 
 # ---------------------------------------------------------------------------
 # Unary NEG
@@ -313,13 +316,13 @@ def test_unary_not_false() -> None:
 
 def test_unary_neg_int() -> None:
     source = "let x: int = -5\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == IntValue(-5)
+    ir = evaluate_ir(source)
+    assert ir["x"] == IntValue(-5)
 
 def test_unary_neg_decimal() -> None:
     source = "let x: decimal = -3.14\n()"
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == DecimalValue(decimal.Decimal("-3.14"))
+    ir = evaluate_ir(source)
+    assert ir["x"] == DecimalValue(decimal.Decimal("-3.14"))
 
 # ---------------------------------------------------------------------------
 # Defensive coverage: arith.py invalid kind branches

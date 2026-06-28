@@ -52,6 +52,7 @@ from agm.agl.ir.nodes import (
     IrCase,
     IrCoerce,
     IrCompare,
+    IrConfigBind,
     IrConstBool,
     IrConstDecimal,
     IrConstInt,
@@ -138,6 +139,7 @@ from agm.agl.semantics.values import (
     UnitValue,
     Value,
 )
+from agm.core.parse import parse_timeout as _parse_timeout
 
 if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract
@@ -259,9 +261,13 @@ class IrInterpreter:
         shell_exec_timeout: float | None = None,
         host_contracts: Mapping[ContractId, "OutputContract"] | None = None,
         base_frame: Frame | None = None,
+        config_cli: Mapping[str, Value] | None = None,
+        config_base: Mapping[str, Value] | None = None,
     ) -> None:
         self._program = program
         self._frames: list[Frame] = [base_frame if base_frame is not None else {}]
+        self._config_cli: Mapping[str, Value] = config_cli if config_cli is not None else {}
+        self._config_base: Mapping[str, Value] = config_base if config_base is not None else {}
         self.initializer_values: list[Value] = []
         self.module_initializer_values: dict[ModuleId, list[Value]] = {}
         self._call_depth: int = 0
@@ -304,6 +310,25 @@ class IrInterpreter:
     def _frame(self) -> Frame:
         """Return the current (top-of-stack) frame."""
         return self._frames[-1]
+
+    # ------------------------------------------------------------------
+    # Post-run engine-setting accessors
+    # ------------------------------------------------------------------
+
+    @property
+    def strict_json(self) -> bool:
+        """Current strict-JSON setting (may have been updated by a config binding)."""
+        return self._strict_json
+
+    @property
+    def loop_limit(self) -> int:
+        """Current loop-iteration limit (may have been updated by a config binding)."""
+        return self._loop_limit
+
+    @property
+    def shell_exec_timeout(self) -> float | None:
+        """Current shell-exec timeout (may have been updated by a config binding)."""
+        return self._shell_exec_timeout
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -593,6 +618,53 @@ class IrInterpreter:
                             exc.span = node.location
                         raise
         return self._collect_results()
+
+    def collect_entry_config_values(self, names: set[str]) -> dict[str, Value]:
+        """Evaluate initializers until entry-module config values for *names* are bound.
+
+        This supports host settings that must be known before the normal program
+        run starts (currently ``runner``, ``log``, and ``log-file``).  The caller
+        is responsible for using this only for top-of-program startup config.
+        """
+        found: dict[str, Value] = {}
+        entry_module = self._program.modules[self._program.entry_module]
+        target_count = sum(
+            1
+            for node in entry_module.initializers
+            if isinstance(node, IrConfigBind) and node.public_name in names
+        )
+        if target_count == 0:
+            return found
+
+        seen_targets = 0
+        with decimal.localcontext(AGL_DECIMAL_CONTEXT):
+            self._install_entry_function_closures()
+            for mod in self._program.modules.values():
+                module_values = self.module_initializer_values.setdefault(mod.module_id, [])
+                for node in mod.initializers:
+                    try:
+                        value = self._eval_initializer(node)
+                        self.initializer_values.append(value)
+                        module_values.append(value)
+                    except AglRaise as exc:
+                        if exc.span is None:
+                            exc.span = node.location
+                        raise
+                    if mod.module_id == self._program.entry_module:
+                        for sym, desc in self._program.symbols.items():
+                            if desc.owner != self._program.entry_module:
+                                continue
+                            public_name = desc.public_name
+                            if public_name in names and sym in self._frame:
+                                bound = self._frame[sym]
+                                found[public_name] = (
+                                    bound.value if isinstance(bound, Cell) else bound
+                                )
+                        if isinstance(node, IrConfigBind) and node.public_name in names:
+                            seen_targets += 1
+                        if seen_targets >= target_count:
+                            return found
+        return found
 
     def _eval_initializer(self, node: IrExpr) -> Value:
         match node:
@@ -1130,8 +1202,72 @@ class IrInterpreter:
                         exc.span = node.location
                     raise
 
+            case IrConfigBind(symbol=sym, public_name=public_name, value=value_expr):
+                # Config precedence: CLI --X > source value > config_base[X].
+                config_value: Value
+                if public_name in self._config_cli:
+                    config_value = self._config_cli[public_name]
+                elif value_expr is not None:
+                    config_value = self._eval(value_expr)
+                elif public_name in self._config_base:
+                    config_value = self._config_base[public_name]
+                else:
+                    raise InvalidIrError(
+                        f"IrConfigBind for {public_name!r} has no source value and no"
+                        " config_base entry; the host must supply a config_base default"
+                    )
+                self._frame[sym] = config_value
+                try:
+                    self._apply_config_effect(public_name, config_value)
+                except AglRaise as exc:
+                    exc.span = node.location
+                    raise
+                return UnitValue()
+
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
+
+    # ------------------------------------------------------------------
+    # D6 engine-setting effect
+    # ------------------------------------------------------------------
+
+    def _apply_config_effect(self, public_name: str, config_value: Value) -> None:
+        """Apply the live engine-setting effect for a D6 config binding.
+
+        Called after every ``IrConfigBind`` resolves its value.  Only the three
+        D6 keys update live interpreter state; all other keys are inert here.
+        """
+        if public_name == "strict-json":
+            if isinstance(config_value, BoolValue):
+                self._strict_json = config_value.value
+        elif public_name == "max-iters":
+            if isinstance(config_value, IntValue):
+                if config_value.value <= 0:
+                    raise AglRaise(
+                        _make_exc_value(
+                            "ValueError",
+                            "invalid config max-iters: expected a positive integer",
+                            trace_id=self._trace.new_event_id(),
+                        )
+                    )
+                self._loop_limit = config_value.value
+        elif public_name == "timeout":
+            if isinstance(config_value, EnumValue):
+                if config_value.variant == "None":
+                    self._shell_exec_timeout = None
+                elif config_value.variant == "Some":
+                    raw = config_value.fields.get("value")
+                    if isinstance(raw, TextValue):
+                        try:
+                            self._shell_exec_timeout = _parse_timeout(raw.value)
+                        except ValueError as exc:
+                            raise AglRaise(
+                                _make_exc_value(
+                                    "ValueError",
+                                    f"invalid config timeout: {exc}",
+                                    trace_id=self._trace.new_event_id(),
+                                )
+                            ) from exc
 
     # ------------------------------------------------------------------
     # Pattern matching helper (M3f-B)

@@ -35,7 +35,7 @@ from lark.tree import Meta
 
 import agm.agl.syntax as syntax
 from agm.agl.parser.errors import AglSyntaxError
-from agm.agl.syntax.nodes import ELSE, PragmaValue
+from agm.agl.syntax.nodes import ELSE
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceId, SourceSpan
 from agm.agl.syntax.types import (
     AgentT,
@@ -299,43 +299,17 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
-    def config_pragma(self, meta: Meta, args: _Args) -> syntax.ConfigPragma:
-        """config_pragma: "config" name EQ pragma_value"""
-        key_tok = _find_name_token(args)
-        raw_value = next(
-            a for a in args
-            if a is not None and not isinstance(a, Token)
-        )
+    def config_decl(self, meta: Meta, args: _Args) -> syntax.ConfigDecl:
+        """config_decl: "config" name (EQ expr)?"""
+        name_tok = _find_name_token(args)
+        _, value = _extract_ann_and_optional_expr(args[1:])
         span = self._span_from_meta(meta)
-        return syntax.ConfigPragma(
-            key=str(key_tok),
-            value=cast(PragmaValue, raw_value),
+        return syntax.ConfigDecl(
+            name=str(name_tok),
+            value=value,
             span=span,
             node_id=self._next_id(),
         )
-
-    def pragma_true(self, meta: Meta, args: _Args) -> bool:
-        return True
-
-    def pragma_false(self, meta: Meta, args: _Args) -> bool:
-        return False
-
-    def pragma_int(self, meta: Meta, args: _Args) -> int:
-        tok = args[0]
-        assert isinstance(tok, Token)
-        return int(str(tok))
-
-    def pragma_decimal(self, meta: Meta, args: _Args) -> decimal.Decimal:
-        tok = args[0]
-        assert isinstance(tok, Token)
-        return decimal.Decimal(str(tok))
-
-    def pragma_str(self, meta: Meta, args: _Args) -> str:
-        lit = _require_literal_string(
-            args[0],
-            "config pragma value must be a literal string with no interpolation.",
-        )
-        return lit.value
 
     # ------------------------------------------------------------------
     # record_def / field_def

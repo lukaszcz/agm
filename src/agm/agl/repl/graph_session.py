@@ -64,6 +64,18 @@ class GraphSessionCtx(Protocol):
         self, program: Program, checked: CheckedProgram, warnings: list[Diagnostic]
     ) -> tuple[EntryResult | None, dict[str, Value], str | None, dict[str, object]]: ...
 
+    def _build_config_base(
+        self, effective_config: dict[str, object]
+    ) -> dict[str, Value]: ...
+
+    def _update_engine_settings(
+        self,
+        *,
+        strict_json: bool,
+        loop_limit: int,
+        shell_exec_timeout: float | None,
+    ) -> None: ...
+
     def _promote_ir_state(
         self,
         *,
@@ -312,6 +324,7 @@ class GraphSession:
         host_contracts, _ = _materialize_ir_contracts(lowered.program, host_env.codecs)
         trace = TraceStore(path=self._ctx._trace_path)
         trace.run_start()
+        config_base = self._ctx._build_config_base(entry_active_config)
         interp = IrInterpreter(
             lowered.program,
             registry=host_env.registry,
@@ -322,6 +335,8 @@ class GraphSession:
             param_values=ir_params,
             host_contracts=host_contracts,
             base_frame=self._ctx._ir_base_frame,
+            config_cli={},
+            config_base=config_base,
         )
         try:
             interp.run()
@@ -386,6 +401,12 @@ class GraphSession:
                 installed=installed,
             )
         trace.run_end(ok=True)
+        # Promote engine settings BEFORE static state, mirroring session.py.
+        self._ctx._update_engine_settings(
+            strict_json=interp.strict_json,
+            loop_limit=interp.loop_limit,
+            shell_exec_timeout=interp.shell_exec_timeout,
+        )
         self._ctx._promote_ir_state(
             text=text,
             program=orig_program,

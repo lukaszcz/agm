@@ -1,4 +1,4 @@
-"""IR semantic tests for M3f-C: do…until loop → IrLoop.
+"""IR evaluation tests for do…until loops (IrLoop).
 
 Covers:
 - A do loop with an explicit small limit that terminates via until (body
@@ -95,11 +95,11 @@ def _make_minimal_program(
 
 
 # ---------------------------------------------------------------------------
-# IR semantic: loop terminates via until (explicit limit, body mutates var)
+# Loop terminates via until (explicit limit, body mutates var)
 # ---------------------------------------------------------------------------
 
 
-def test_ir_semantic_loop_terminates_explicit_limit() -> None:
+def test_loop_terminates_explicit_limit() -> None:
     """do[10] body until cond — terminates after body mutates var; yields unit.
 
     AgL uses `=` for equality, `:=` for assignment, `>=` for ordering.
@@ -113,18 +113,18 @@ def test_ir_semantic_loop_terminates_explicit_limit() -> None:
         "until counter >= 3\n"
         "counter\n"
     )
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     # The loop runs 3 iterations: counter goes 1 → 2 → 3; condition true at end of
     # iteration 3 → loop exits.
     assert ir["counter"] == IntValue(3)
 
 
 # ---------------------------------------------------------------------------
-# IR semantic: loop terminates via until, body-bound var readable by condition
+# Loop terminates via until, body-bound var readable by condition
 # ---------------------------------------------------------------------------
 
 
-def test_ir_semantic_loop_body_bindings_visible_to_condition() -> None:
+def test_loop_body_bindings_visible_to_condition() -> None:
     """Condition reads a var declared before the loop; body updates it."""
     source = (
         "var x = 0\n"
@@ -133,16 +133,16 @@ def test_ir_semantic_loop_body_bindings_visible_to_condition() -> None:
         "until x >= 4\n"
         "x\n"
     )
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     assert ir["x"] == IntValue(4)
 
 
 # ---------------------------------------------------------------------------
-# IR semantic: loop terminates without explicit limit (uses evaluator default)
+# Loop terminates without explicit limit (uses evaluator default)
 # ---------------------------------------------------------------------------
 
 
-def test_ir_semantic_loop_no_explicit_limit_terminates() -> None:
+def test_loop_no_explicit_limit_terminates() -> None:
     """do body until cond (no explicit limit) — terminates before the default 100."""
     source = (
         "var n = 0\n"
@@ -151,24 +151,22 @@ def test_ir_semantic_loop_no_explicit_limit_terminates() -> None:
         "until n >= 5\n"
         "n\n"
     )
-    ir_reference, ir = evaluate_ir(source)
+    ir = evaluate_ir(source)
     assert ir["n"] == IntValue(5)
 
 
 # ---------------------------------------------------------------------------
-# IR semantic: loop exhaustion → MaxIterationsExceeded with matching fields
+# Loop exhaustion → MaxIterationsExceeded with matching fields
 # ---------------------------------------------------------------------------
 
 
-def test_ir_semantic_loop_exhaustion_raises() -> None:
+def test_loop_exhaustion_raises() -> None:
     """do[3] body until false raises MaxIterationsExceeded; all fields match."""
     # Use a small explicit limit so the test is fast.
     # Top level: must end in an expression, but the loop raises before we get there.
     source = "var dummy = 0\ndo[3]\n  dummy := 1\nuntil false\n"
-    ir_reference_exc, ir_exc = evaluate_ir_raises(source)
+    ir_exc = evaluate_ir_raises(source)
 
-    # Both sides raise MaxIterationsExceeded.
-    assert ir_reference_exc.display_name == "MaxIterationsExceeded"
     assert ir_exc.display_name == "MaxIterationsExceeded"
 
     # The condition field must be the source-text slice of the condition expression.
@@ -178,24 +176,19 @@ def test_ir_semantic_loop_exhaustion_raises() -> None:
         f"condition source text mismatch: {cond_field.value!r}"
     )
 
-    # limit field must be IntValue(3) on both sides.
     assert ir_exc.fields.get("limit") == IntValue(3)
-    assert ir_reference_exc.fields.get("limit") == IntValue(3)
-
-    # last_condition_value must be BoolValue(False) on both sides.
     assert ir_exc.fields.get("last_condition_value") == BoolValue(False)
-    assert ir_reference_exc.fields.get("last_condition_value") == BoolValue(False)
 
     # metadata must be JsonValue(None).
     assert ir_exc.fields.get("metadata") == JsonValue(None)
 
 
 # ---------------------------------------------------------------------------
-# IR semantic: condition source-text slice matches ir_reference _source_slice
+# Condition source-text slice
 # ---------------------------------------------------------------------------
 
 
-def test_ir_semantic_condition_source_slice_complex() -> None:
+def test_condition_source_slice_complex() -> None:
     """Condition source text captures the exact condition expression text."""
     source = (
         "var i = 0\n"
@@ -204,17 +197,44 @@ def test_ir_semantic_condition_source_slice_complex() -> None:
         "until i > 10\n"
     )
     # This loop exhausts (i goes 1, 2 — never > 10 within 2 iterations).
-    ir_reference_exc, ir_exc = evaluate_ir_raises(source)
+    ir_exc = evaluate_ir_raises(source)
 
     cond_field = ir_exc.fields.get("condition")
     assert isinstance(cond_field, TextValue)
     # The condition expression text should be "i > 10".
     assert cond_field.value == "i > 10", f"got: {cond_field.value!r}"
 
-    # Both sides agree.
-    ir_reference_cond = ir_reference_exc.fields.get("condition")
-    assert isinstance(ir_reference_cond, TextValue)
-    assert ir_reference_cond.value == cond_field.value
+
+
+# ---------------------------------------------------------------------------
+# Loop-limit boundary — exact limit succeeds / one-short exhausts
+# ---------------------------------------------------------------------------
+
+
+def test_loop_succeeds_at_exact_limit() -> None:
+    """do[3] until counter>=3 succeeds at exactly the limit (no MaxIterationsExceeded)."""
+    source = (
+        "var counter = 0\n"
+        "do[3]\n"
+        "  counter := counter + 1\n"
+        "until counter >= 3\n"
+        "counter\n"
+    )
+    ir = evaluate_ir(source)
+    assert ir["counter"] == IntValue(3)
+
+
+def test_loop_exhausts_one_short_of_condition() -> None:
+    """do[2] until counter>=3 needs 3 iterations but the limit is 2 → MaxIterationsExceeded."""
+    exc = evaluate_ir_raises(
+        "var counter = 0\n"
+        "do[2]\n"
+        "  counter := counter + 1\n"
+        "until counter >= 3\n"
+        "counter\n"
+    )
+    assert exc.display_name == "MaxIterationsExceeded"
+    assert exc.fields.get("limit") == IntValue(2)
 
 
 # ---------------------------------------------------------------------------
@@ -378,7 +398,7 @@ def test_crlf_condition_source_is_normalized() -> None:
 
     Spans are computed by the lexer against newline-normalized source; the
     lowerer must normalize too, else the slice is offset by the stripped \\r
-    bytes.  Both pipelines must still agree (the ir_reference interpreter normalizes).
+    bytes.  The lowerer normalizes the source text before slicing.
     """
     source = "var i = 0\r\ndo[3]\r\n  i := i + 1\r\nuntil i > 100\r\n"
     executable = _lower(source)
@@ -391,9 +411,7 @@ def test_crlf_condition_source_is_normalized() -> None:
     # Clean slice — no stray '\r' and the exact condition text.
     assert ir_loops[0].condition_source == "i > 100"
 
-    # And both evaluators raise an identical MaxIterationsExceeded (modulo trace_id),
-    # including the condition source-text field.
-    ir_reference_exc, ir_exc = evaluate_ir_raises(source)
-    assert ir_reference_exc.display_name == "MaxIterationsExceeded"
+    # The IR pipeline raises MaxIterationsExceeded with the condition source-text field.
+    ir_exc = evaluate_ir_raises(source)
+    assert ir_exc.display_name == "MaxIterationsExceeded"
     assert ir_exc.fields.get("condition") == TextValue("i > 100")
-    assert ir_reference_exc.fields.get("condition") == TextValue("i > 100")

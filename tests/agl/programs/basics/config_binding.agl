@@ -1,0 +1,4 @@
+# Test: config binding is readable at runtime
+config max-iters = 5
+let n = max-iters
+print n

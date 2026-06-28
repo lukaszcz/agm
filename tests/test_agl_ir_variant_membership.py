@@ -1,4 +1,4 @@
-"""M3e-1 differential ir_semantic — `is` / `is not` enum-variant membership (IrVariantIs).
+"""IR evaluation tests for `is` / `is not` enum-variant membership (IrVariantIs).
 
 """
 
@@ -53,7 +53,7 @@ def _lower(source: str) -> ExecutableProgram:
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — is / is not
+# IR evaluation tests — is / is not
 # ---------------------------------------------------------------------------
 
 
@@ -65,8 +65,7 @@ let c = Color.Red()
 let r = c is Red
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["r"] == BoolValue(True)
+    ir = evaluate_ir(source)
     assert ir["r"] == BoolValue(True)
 
 
@@ -78,8 +77,7 @@ let c = Color.Red()
 let r = c is Blue
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["r"] == BoolValue(False)
+    ir = evaluate_ir(source)
     assert ir["r"] == BoolValue(False)
 
 
@@ -92,9 +90,7 @@ let r = c is not Red
 let s = c is not Blue
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["r"] == BoolValue(False)
-    assert ir_reference["s"] == BoolValue(True)
+    ir = evaluate_ir(source)
     assert ir["r"] == BoolValue(False)
     assert ir["s"] == BoolValue(True)
 
@@ -108,9 +104,7 @@ let is_circle = s is Circle
 let is_rect = s is Rectangle
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["is_circle"] == BoolValue(True)
-    assert ir_reference["is_rect"] == BoolValue(False)
+    ir = evaluate_ir(source)
     assert ir["is_circle"] == BoolValue(True)
     assert ir["is_rect"] == BoolValue(False)
 
@@ -123,8 +117,7 @@ let c = Color.Blue()
 let r = c is Color.Blue
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["r"] == BoolValue(True)
+    ir = evaluate_ir(source)
     assert ir["r"] == BoolValue(True)
 
 

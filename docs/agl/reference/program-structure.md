@@ -14,7 +14,7 @@ expression-oriented sequence.
 program    ::= block EOF
 block      ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
 item       ::= import_decl                        (* header position only *)
-             | config_pragma                      (* header position only *)
+             | config_decl                        (* root only *)
              | "private"? record_def              (* root only *)
              | "private"? enum_def                (* root only *)
              | "private"? type_alias              (* root only *)
@@ -70,43 +70,63 @@ y              # the program's value is y
 Side-effecting forms (`print`, `:=`, loops, else-less `if`) yield `unit`
 and are commonly followed by another expression.
 
-## Config pragmas
+## Config declarations
 
-A **config pragma** sets a program-level option:
+A **config declaration** names a fixed engine-setting key and binds it as an
+immutable, runtime-resolved **readable value** — like `param`, but for the
+program's own engine options:
 
 ```ebnf
-config_pragma ::= "config" KEY "=" VALUE
-VALUE         ::= "true" | "false" | INT | DECIMAL | string_literal
+config_decl ::= "config" NAME ("=" expr)?
 ```
 
-Pragmas must appear **before every other item** at the program root (the
-*header* position). A pragma after any non-pragma item is a static error.
-Pragmas nested inside a block are also static errors.
+Config declarations may appear **anywhere at the program root** — before or
+after other items. Nesting inside a block is a static error. Each key may
+appear at most once; duplicate keys are an error. Entry-module only.
 
-Each key may appear at most once; duplicate keys are an error.
+The value expression, when present, must have the key's declared type. A bare
+`config KEY` (no value) resolves from the host's configured default.
 
-| Key | Value type | Meaning |
-|-----|------------|---------|
+| Key | Type | Meaning |
+|-----|------|---------|
 | `log` | `bool` | Enable/disable trace logging. |
-| `log_file` | non-empty string | Path to the trace log file. |
-| `strict_json` | `bool` | Parse agent JSON output strictly. |
-| `max_iters` | positive integer | Maximum iterations for `do` loops. |
-| `runner` | non-empty string | Default agent runner command. |
-| `timeout` | string or positive integer | Shell execution timeout. |
+| `log-file` | `Option[text]` | Path to the trace log file. |
+| `strict-json` | `bool` | Parse agent JSON output strictly. |
+| `max-iters` | `int` | Maximum iterations for `do` loops. |
+| `runner` | `text` | Default agent runner command. |
+| `timeout` | `Option[text]` | Shell execution timeout. |
+
+For an `Option[T]` key (`log-file`, `timeout`) a bare `T` value is accepted and
+projected into `Some(value)`; an `Option[T]` value may also be given directly.
+
+A config key is a normal readable binding: it can be used in any expression.
+The binding is immutable — assigning to it is a static error.
 
 ```agl
-config log = true
-config max_iters = 10
+config max-iters = 10
+config timeout = "30s"        # projected into Some("30s")
 config runner = "claude -p"
-param spec
-let result = ask "Process ${spec}"
-print result
+let budget = max-iters        # config keys are readable
+print budget
 ```
 
-**Precedence.** CLI flags override pragma values, which override config-file
-settings.
+**Precedence.** The bound value is resolved per key as:
+`CLI flag > source value (if given) > [<program>].KEY > [exec].KEY > engine default`.
 
-**String values** must be static literals — no interpolation.
+A bare `config KEY` (no `=` value) contributes no source value and falls through
+to the program-section / exec-section / engine-default layers.
+
+**Effect-at-binding.** The three eval-consumed keys (`strict-json`, `max-iters`,
+`timeout`) take effect at the point the declaration executes in declaration order;
+expressions that follow see the updated setting. The remaining keys (`runner`,
+`log`, `log-file`) are start-resolved before the program runs; place them near the
+top of the program so the agent factory and trace infrastructure see them.
+
+**Error surface.** A source `config timeout = "…"` value is a runtime-evaluated
+expression; a bad value raises a runtime error (exit 2). A bad `--timeout` or
+`[exec].timeout` value is caught before execution (exit 1). The source `config
+timeout` controls the **shell-exec** timeout only; the agent idle timeout is always
+start-resolved from the CLI or `[exec]`.
 
 ## Binders: `let` and `var`
 

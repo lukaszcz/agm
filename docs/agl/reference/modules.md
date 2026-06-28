@@ -217,6 +217,10 @@ private def internal_helper(x: int) -> int = x * 2
 def public_api(x: int) -> int = internal_helper(x)
 ```
 
+`private` is a declaration modifier that behaves like a decorator: it may
+precede the declaration on the same line or on the line directly above it (the
+newline after the modifier is insignificant).
+
 Private names are never included in import environments. Attempting qualified
 access to a private name is a static error with a clear message.
 
@@ -230,7 +234,7 @@ modules may only contain declarations:
 - `import` — import declarations (header only, before all other items)
 
 Statements, binders (`let`/`var`), expressions, agent declarations, `param`
-declarations, `program` declarations, and config pragmas are all **static
+declarations, `program` declarations, and config declarations are all **static
 errors** in a library module.
 
 ## Cross-module mutual recursion

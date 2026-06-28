@@ -69,8 +69,8 @@ or two or more distinct files, are static errors (exit 1 with a diagnostic).
 - `--log` / `--log-file PATH` / `--no-log`: Control trace logging, which is **off by
   default**. `--log` enables it with an auto-generated timestamped path under
   `.agent-files/`; `--log-file PATH` writes a structured JSONL trace to `PATH`;
-  `--no-log` disables it, overriding a `config log = true` pragma or `[exec] log = true`
-  setting. The three are mutually exclusive (at most one may be given).
+  `--no-log` disables it, overriding a `config log = true` source declaration or
+  `[exec] log = true` setting. The three are mutually exclusive (at most one may be given).
 - `--dry-run`: Run the full static pipeline, param validation, and contract
   materialization, then stop before evaluating any expression (static errors exit 1; a
   clean check exits 0 with no program output). When the check succeeds and one or more
@@ -102,7 +102,7 @@ precedence (highest to lowest):
 | 1 | `[exec.agents.<name>]` (config, per-agent) — backs a declared name, overriding any source hint |
 | 2 | the source `agent NAME = "…"` runner string |
 | 3 | `--runner COMMAND` (CLI flag) |
-| 4 | `config runner = "…"` source pragma (default runner for all agents) |
+| 4 | `config runner = "…"` source declaration (default runner for all agents) |
 | 5 | `[exec] runner` (config) |
 | 6 | `[loop] runner` (config) |
 | 7 | `claude -p` (built-in default) |
@@ -115,17 +115,17 @@ the rendered prompt-file path.
 
 ### Configuration
 
-The `[exec]` section in `config.toml` supplies the defaults that CLI flags and source
-pragmas override:
+The `[exec]` section in `config.toml` supplies the engine defaults that CLI flags and
+source config declarations can override:
 
 ```toml
 [exec]
 runner = "claude -p"        # default agent runner
-strict_json = false         # lenient JSON recovery is the default
-default_loop_limit = 5      # do[] default iteration bound
-timeout = "30m"             # idle timeout
+strict-json = false         # lenient JSON recovery is the default
+max-iters = 5               # do[] default iteration bound
+timeout = "30m"             # shell-exec idle timeout
 log = false                 # trace logging off by default; set true to enable
-# log_file = "trace.jsonl"  # explicit trace path (omit for auto timestamped path)
+# log-file = "trace.jsonl" # explicit trace path (omit for auto timestamped path)
 
 [exec.agents]
 reviewer = "claude -p"      # per-agent runner commands; the name must be
@@ -137,27 +137,49 @@ reviewer = "claude -p"      # per-agent runner commands; the name must be
 settings. The name `agents` is reserved for the structural `[exec.agents]` map and is
 never treated as a per-command override.
 
-#### Source-level config pragmas
+#### Source-level config declarations
 
-An AgL program may set exec options as **config pragmas** in the header (before any
-other item):
+An AgL program may set exec options as **config declarations** at the program root.
+Each declaration is also a **readable immutable binding** usable in any expression:
 
 ```agl
 config log = true             # enable trace logging for this program
-config log_file = "trace.log" # explicit trace path
-config strict_json = true     # require bare JSON from agents
-config max_iters = 10         # do[] iteration cap
+config log-file = "trace.log" # explicit trace path
+config strict-json = true     # require bare JSON from agents
+config max-iters = 10         # do[] iteration cap
 config runner = "claude -p"   # default agent runner
-config timeout = "30s"        # shell exec idle timeout
+config timeout = "30s"        # shell-exec idle timeout
 param spec
 let result = ask "Process ${spec}"
 print result
 ```
 
-Precedence is **CLI > pragma > config file**. For example, `--no-log` overrides
-`config log = true`, and `config max_iters = 10` overrides `[exec] default_loop_limit = 5`.
-Pragmas are an `agm exec` feature; the REPL rejects a `config` line entered at the
-prompt (see [`agm repl`](#agm-repl-interactive-session)).
+Precedence differs by key type:
+
+- **Engine keys** (`runner`, `log`, `strict-json`, `max-iters`, `log-file`, `timeout`):
+  `CLI > source value > [<program>].X > [exec].X > engine default`
+- **Param values** (`param NAME`):
+  `CLI > [<program>].NAME > source default > required error`
+
+For example, `--no-log` overrides `config log = true`, and `config max-iters = 10`
+overrides `[exec] max-iters = 5`.
+
+The three eval-consumed keys (`strict-json`, `max-iters`, `timeout`) take effect at
+their declaration point (**effect-at-binding**): expressions after the declaration see
+the updated setting. The remaining keys (`runner`, `log`, `log-file`) are
+**start-resolved** — declare them at the top of the program so the agent factory and
+trace infrastructure see the chosen values before anything runs.
+
+Note: `config timeout` governs only the **shell-exec** timeout. The agent idle timeout
+is start-resolved from CLI / `[exec]` and cannot be changed mid-program.
+
+A bad `config timeout = "…"` source value is a runtime AgL error (exit 2), because
+source config declarations are runtime-evaluated expressions. A bad `--timeout` or
+`[exec].timeout` value is a pre-execution error (exit 1).
+
+`--no-log-file` clears only the in-program `config log-file` binding; a log-file path
+set via `[exec] log-file` or auto-assigned by `--log` still applies. Use `--no-log` to
+disable tracing entirely.
 
 ### Exit codes
 
@@ -282,9 +304,11 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
   `<type: int>`) instead of reporting ``'X' is not defined.``. This is a REPL
   convenience only — the language is unchanged, and names that are also values (a record
   constructor, a binding) keep evaluating normally.
-- **Config pragmas** (`config KEY = VALUE`) entered at the prompt are rejected with a
-  diagnostic: config pragmas are an `agm exec` / batch-program feature. Set REPL session
-  options via CLI flags or `[exec]` config instead.
+- **Config declarations** (`config KEY = VALUE`) are fully supported at the REPL prompt.
+  Effect-at-binding applies immediately: the eval-consumed keys (`strict-json`, `max-iters`,
+  `timeout`) take effect from the next entry; the start-resolved keys (`runner`, `log`,
+  `log-file`) are set for subsequent entries in the session. `:reset` clears all config
+  bindings. CLI flags and `[exec]` config set session-wide defaults before the loop starts.
 
 ### Exit codes
 

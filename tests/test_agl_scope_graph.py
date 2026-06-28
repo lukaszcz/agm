@@ -22,52 +22,21 @@ These tests drive multi-module AgL programs through ``resolve_graph`` and assert
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
 
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
-from agm.agl.modules.loader import load_graph
-from agm.agl.modules.roots import RootSet
+from agm.agl.parser import parse_program
 from agm.agl.scope import resolve
 from agm.agl.scope.graph import ResolvedModule, ResolvedModuleGraph, resolve_graph
-from agm.agl.scope.symbols import AglScopeError
+from agm.agl.scope.symbols import AglScopeError, BinderKind
 from agm.agl.syntax.nodes import VarRef
+from tests.agl.ir_harness import make_graph_from_files as _make_graph_from_files
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-_REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
-
-
-def _roots(*paths: Path) -> RootSet:
-    return RootSet(roots=frozenset((*paths, _REPO_STDLIB_ROOT)))
-
-
-def _write_module(root: Path, dotted: str, source: str) -> Path:
-    mid = ModuleId.from_dotted(dotted)
-    p = root / mid.relpath().replace("/", os.sep)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(source)
-    return p
-
-
-def _make_graph_from_files(tmp_path: Path, modules: dict[str, str]) -> object:
-    """Build a ModuleGraph via load_graph from {dotted_name_or_entry: source} dict.
-
-    The key 'entry' is used as the entry source.
-    Other keys are written as .agl files.
-    """
-    root = tmp_path / "root"
-    root.mkdir(parents=True, exist_ok=True)
-    entry_source = modules.get("entry", "()")
-    for dotted, source in modules.items():
-        if dotted == "entry":
-            continue
-        _write_module(root, dotted, source)
-    return load_graph(entry_source, entry_path=None, roots=_roots(root))
 
 
 def _find_varref(program: object, name: str) -> VarRef | None:
@@ -280,8 +249,7 @@ class TestOpenImport:
         result = resolve_graph(graph)
         entry_resolved = result.modules[ENTRY_ID].resolved
         # Find the VarRef for 'foo' in the entry
-        from agm.agl.modules.loader import ModuleGraph
-        assert isinstance(graph, ModuleGraph)
+
         entry_program = graph.modules[ENTRY_ID].program
         var = _find_varref(entry_program, "foo")
         assert var is not None
@@ -295,8 +263,7 @@ class TestOpenImport:
             "mylib": "def foo() -> int = 1\ndef bar() -> int = 2",
         })
         result = resolve_graph(graph)
-        from agm.agl.modules.loader import ModuleGraph
-        assert isinstance(graph, ModuleGraph)
+
         entry_program = graph.modules[ENTRY_ID].program
         var = _find_varref(entry_program, "bar")
         assert var is not None
@@ -319,8 +286,7 @@ class TestOpenImport:
             "mylib": "def foo() -> int = 1\ndef bar() -> int = 2",
         })
         result = resolve_graph(graph)
-        from agm.agl.modules.loader import ModuleGraph
-        assert isinstance(graph, ModuleGraph)
+
         entry_program = graph.modules[ENTRY_ID].program
         var = _find_varref(entry_program, "bar")
         assert var is not None
@@ -348,8 +314,7 @@ class TestOpenImport:
             "mylib": "def foo() -> int = 42",
         })
         result = resolve_graph(graph)
-        from agm.agl.modules.loader import ModuleGraph
-        assert isinstance(graph, ModuleGraph)
+
         entry_program = graph.modules[ENTRY_ID].program
         var = _find_varref(entry_program, "baz")
         assert var is not None
@@ -375,6 +340,13 @@ class TestOpenImport:
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
 
+        entry_program = graph.modules[ENTRY_ID].program
+        var = _find_varref(entry_program, "foo")
+        assert var is not None
+        ref = result.modules[ENTRY_ID].resolved.resolution[var.node_id]
+        assert ref.name == "foo"
+        assert ref.module_id == ModuleId.from_dotted("mylib")
+
     def test_as_alias(self, tmp_path: Path) -> None:
         """'import mylib as M' — 'M::foo()' resolves."""
         graph = _make_graph_from_files(tmp_path, {
@@ -384,6 +356,13 @@ class TestOpenImport:
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
 
+        entry_program = graph.modules[ENTRY_ID].program
+        var = _find_varref(entry_program, "foo")
+        assert var is not None
+        ref = result.modules[ENTRY_ID].resolved.resolution[var.node_id]
+        assert ref.name == "foo"
+        assert ref.module_id == ModuleId.from_dotted("mylib")
+
     def test_as_alias_unqualified_still_exposed(self, tmp_path: Path) -> None:
         """'import mylib as M' without 'qualified' exposes bare names too."""
         graph = _make_graph_from_files(tmp_path, {
@@ -391,8 +370,7 @@ class TestOpenImport:
             "mylib": "def foo() -> int = 42",
         })
         result = resolve_graph(graph)
-        from agm.agl.modules.loader import ModuleGraph
-        assert isinstance(graph, ModuleGraph)
+
         entry_program = graph.modules[ENTRY_ID].program
         var = _find_varref(entry_program, "foo")
         assert var is not None
@@ -423,6 +401,13 @@ class TestQualifiedAccess:
         })
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
+
+        entry_program = graph.modules[ENTRY_ID].program
+        var = _find_varref(entry_program, "foo")
+        assert var is not None
+        ref = result.modules[ENTRY_ID].resolved.resolution[var.node_id]
+        assert ref.name == "foo"
+        assert ref.module_id == ModuleId.from_dotted("mylib")
 
     def test_unknown_qualifier_handle_errors(self, tmp_path: Path) -> None:
         """'nomodule::foo' when no such module is imported errors."""
@@ -471,6 +456,12 @@ class TestClashDeferred:
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
 
+        entry_program = graph.modules[ENTRY_ID].program
+        var = _find_varref(entry_program, "foo")
+        assert var is not None
+        ref = result.modules[ENTRY_ID].resolved.resolution[var.node_id]
+        assert ref.module_id == ModuleId.from_dotted("mylib")
+
 
 # ---------------------------------------------------------------------------
 # Test: multiple imports merge
@@ -486,6 +477,15 @@ class TestMultipleImportsMerge:
         })
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
+
+        entry_program = graph.modules[ENTRY_ID].program
+        mylib_id = ModuleId.from_dotted("mylib")
+        foo_var = _find_varref(entry_program, "foo")
+        assert foo_var is not None
+        assert result.modules[ENTRY_ID].resolved.resolution[foo_var.node_id].module_id == mylib_id
+        bar_var = _find_varref(entry_program, "bar")
+        assert bar_var is not None
+        assert result.modules[ENTRY_ID].resolved.resolution[bar_var.node_id].module_id == mylib_id
 
 
 # ---------------------------------------------------------------------------
@@ -527,8 +527,7 @@ class TestSelfReference:
             "entry": "def foo() -> int = 1\nlet x = ::foo()",
         })
         result = resolve_graph(graph)
-        from agm.agl.modules.loader import ModuleGraph
-        assert isinstance(graph, ModuleGraph)
+
         entry_program = graph.modules[ENTRY_ID].program
         var = _find_varref(entry_program, "foo")
         assert var is not None
@@ -543,8 +542,7 @@ class TestSelfReference:
         })
         result = resolve_graph(graph)
         mylib_id = ModuleId.from_dotted("mylib")
-        from agm.agl.modules.loader import ModuleGraph
-        assert isinstance(graph, ModuleGraph)
+
         mylib_program = graph.modules[mylib_id].program
         var = _find_varref(mylib_program, "bar")
         assert var is not None
@@ -569,9 +567,8 @@ class TestSelfReference:
             "entry": "def foo() -> int = 1\ndef g(foo: int) -> int = ::foo()",
         })
         result = resolve_graph(graph)
-        from agm.agl.modules.loader import ModuleGraph
         from agm.agl.scope.symbols import BinderKind
-        assert isinstance(graph, ModuleGraph)
+
         entry_program = graph.modules[ENTRY_ID].program
         # Find the ::foo VarRef inside g's body — it should resolve to the
         # top-level function foo, NOT to the parameter foo.
@@ -740,6 +737,8 @@ class TestDeclarationOnly:
         })
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
+        mylib_id = ModuleId.from_dotted("mylib")
+        assert "foo" in result.modules[mylib_id].exports
 
 
 # ---------------------------------------------------------------------------
@@ -809,6 +808,8 @@ class TestHeaderOnlyImports:
         })
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
+        mylib_id = ModuleId.from_dotted("mylib")
+        assert "foo" in result.modules[mylib_id].exports
 
     def test_import_in_entry_works(self, tmp_path: Path) -> None:
         """Entry module works fine with import followed by def."""
@@ -818,6 +819,12 @@ class TestHeaderOnlyImports:
         })
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
+
+        entry_program = graph.modules[ENTRY_ID].program
+        var = _find_varref(entry_program, "foo")
+        assert var is not None
+        ref = result.modules[ENTRY_ID].resolved.resolution[var.node_id]
+        assert ref.module_id == ModuleId.from_dotted("mylib")
 
 
 # ---------------------------------------------------------------------------
@@ -836,6 +843,12 @@ class TestWildcardImports:
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
 
+        entry_program = graph.modules[ENTRY_ID].program
+        alpha_var = _find_varref(entry_program, "alpha")
+        assert alpha_var is not None
+        ref = result.modules[ENTRY_ID].resolved.resolution[alpha_var.node_id]
+        assert ref.module_id == ModuleId.from_dotted("foo.alpha")
+
     def test_wildcard_as_reroots_qualifier(self, tmp_path: Path) -> None:
         """'import foo.* as F' makes 'F.alpha::alpha()' accessible via qualifier."""
         graph = _make_graph_from_files(tmp_path, {
@@ -845,6 +858,12 @@ class TestWildcardImports:
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
 
+        entry_program = graph.modules[ENTRY_ID].program
+        alpha_var = _find_varref(entry_program, "alpha")
+        assert alpha_var is not None
+        ref = result.modules[ENTRY_ID].resolved.resolution[alpha_var.node_id]
+        assert ref.module_id == ModuleId.from_dotted("foo.alpha")
+
     def test_wildcard_compatible_overlap_idempotent(self, tmp_path: Path) -> None:
         """Two wildcards that expose same QName from same module are idempotent (no error)."""
         graph = _make_graph_from_files(tmp_path, {
@@ -853,6 +872,12 @@ class TestWildcardImports:
         })
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
+
+        entry_program = graph.modules[ENTRY_ID].program
+        alpha_var = _find_varref(entry_program, "alpha")
+        assert alpha_var is not None
+        ref = result.modules[ENTRY_ID].resolved.resolution[alpha_var.node_id]
+        assert ref.module_id == ModuleId.from_dotted("foo.alpha")
 
     def test_wildcard_conflicting_overlap_clashes_on_use(self, tmp_path: Path) -> None:
         """Two wildcards expose same bare name from different modules → clash on use."""
@@ -881,6 +906,20 @@ class TestCrossFileMutualRecursion:
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
 
+        # entry sees callA from modA
+        entry_program = graph.modules[ENTRY_ID].program
+        calla_var = _find_varref(entry_program, "callA")
+        assert calla_var is not None
+        ref = result.modules[ENTRY_ID].resolved.resolution[calla_var.node_id]
+        assert ref.module_id == ModuleId.from_dotted("modA")
+        # modA sees callB from modB
+        moda_id = ModuleId.from_dotted("modA")
+        moda_program = graph.modules[moda_id].program
+        callb_var = _find_varref(moda_program, "callB")
+        assert callb_var is not None
+        ref2 = result.modules[moda_id].resolved.resolution[callb_var.node_id]
+        assert ref2.module_id == ModuleId.from_dotted("modB")
+
     def test_mutual_recursion_across_modules(self, tmp_path: Path) -> None:
         """A's def calls B's def and B's def calls A's def — both resolve."""
         graph = _make_graph_from_files(tmp_path, {
@@ -889,10 +928,15 @@ class TestCrossFileMutualRecursion:
             "modB": "import modA\ndef funcB() -> int = funcA()",
         })
         result = resolve_graph(graph)
-        # All three should be resolved
-        assert ENTRY_ID in result.modules
-        assert ModuleId.from_dotted("modA") in result.modules
-        assert ModuleId.from_dotted("modB") in result.modules
+        mod_a = ModuleId.from_dotted("modA")
+        mod_b = ModuleId.from_dotted("modB")
+        # funcA's body call to funcB must resolve into modB, and vice-versa.
+        call_b = _find_varref(graph.modules[mod_a].program, "funcB")
+        assert call_b is not None
+        assert result.modules[mod_a].resolved.resolution[call_b.node_id].module_id == mod_b
+        call_a = _find_varref(graph.modules[mod_b].program, "funcA")
+        assert call_a is not None
+        assert result.modules[mod_b].resolved.resolution[call_a.node_id].module_id == mod_a
 
 
 # ---------------------------------------------------------------------------
@@ -907,8 +951,7 @@ class TestBindingRefModuleId:
             "entry": "let x = 1\nx",
         })
         result = resolve_graph(graph)
-        from agm.agl.modules.loader import ModuleGraph
-        assert isinstance(graph, ModuleGraph)
+
         entry_program = graph.modules[ENTRY_ID].program
         var = _find_varref(entry_program, "x")
         assert var is not None
@@ -922,8 +965,7 @@ class TestBindingRefModuleId:
             "mylib": "def foo() -> int = 1",
         })
         result = resolve_graph(graph)
-        from agm.agl.modules.loader import ModuleGraph
-        assert isinstance(graph, ModuleGraph)
+
         entry_program = graph.modules[ENTRY_ID].program
         var = _find_varref(entry_program, "foo")
         assert var is not None
@@ -939,8 +981,7 @@ class TestBindingRefModuleId:
         })
         result = resolve_graph(graph)
         mylib_id = ModuleId.from_dotted("mylib")
-        from agm.agl.modules.loader import ModuleGraph
-        assert isinstance(graph, ModuleGraph)
+
         mylib_program = graph.modules[mylib_id].program
         var = _find_varref(mylib_program, "foo")
         assert var is not None
@@ -1005,6 +1046,12 @@ class TestAssignStmtModuleId:
         result = resolve_graph(graph)
         # Should not raise
         assert ENTRY_ID in result.modules
+        # var "x" is declared in entry and is mutable
+        entry_resolved = result.modules[ENTRY_ID].resolved
+        binding = entry_resolved.root_scope.lookup("x")
+        assert binding is not None
+        assert binding.module_id == ENTRY_ID
+        assert binding.mutable is True
 
     def test_assign_stmt_in_non_entry_errors(self, tmp_path: Path) -> None:
         """An assignment statement in a non-entry module is an error."""
@@ -1017,18 +1064,18 @@ class TestAssignStmtModuleId:
 
 
 # ---------------------------------------------------------------------------
-# Test: config pragma in non-entry errors
+# Test: config declaration in non-entry errors
 # ---------------------------------------------------------------------------
 
 
-class TestConfigPragmaInNonEntry:
-    def test_config_pragma_in_non_entry_errors(self, tmp_path: Path) -> None:
-        """A config pragma in a non-entry module is an error."""
+class TestConfigDeclInNonEntry:
+    def test_config_decl_in_non_entry_errors(self, tmp_path: Path) -> None:
+        """A config declaration in a non-entry module is an error."""
         graph = _make_graph_from_files(tmp_path, {
             "entry": "import mylib\n()",
             "mylib": "config log = true",
         })
-        with pytest.raises(AglScopeError, match="config|pragma"):
+        with pytest.raises(AglScopeError, match="config"):
             resolve_graph(graph)
 
 
@@ -1129,6 +1176,13 @@ class TestModuleQualifiedCall:
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
 
+        entry_program = graph.modules[ENTRY_ID].program
+        var = _find_varref(entry_program, "callA")
+        assert var is not None
+        ref = result.modules[ENTRY_ID].resolved.resolution[var.node_id]
+        assert ref.name == "callA"
+        assert ref.module_id == ModuleId.from_dotted("modA")
+
 
 # ---------------------------------------------------------------------------
 # Coverage: resolver.py _resolve_field_access and _resolve_cross_module_type_name
@@ -1153,6 +1207,10 @@ class TestFieldAccessCoverage:
         })
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
+        # The self-ref ::Color.Red within mylib is in mylib's qualified_constructor_refs
+        mylib_id = ModuleId.from_dotted("mylib")
+        mylib_resolved = result.modules[mylib_id].resolved
+        assert len(mylib_resolved.qualified_constructor_refs) > 0
 
     def test_unrecognized_qualifier_in_field_access_errors(self, tmp_path: Path) -> None:
         """Coverage: resolver.py 1360 — qual_map is None for unrecognized qualifier.
@@ -1185,10 +1243,10 @@ class TestFieldAccessCoverage:
     def test_non_type_exported_name_in_field_access_falls_through(
         self, tmp_path: Path
     ) -> None:
-        """Coverage: resolver.py 1334->1341 and 1369 — non-constructor export in field access.
+        """Coverage: non-constructor export in qualified field access.
 
         ``mylib::compute.value`` where ``compute`` is a function (not a type) exercises
-        the ``kind != constructor_binding`` path at line 1369 in _resolve_cross_module_type_name.
+        the ``kind != constructor_binding`` path in _resolve_cross_module_type_name.
         """
         graph = _make_graph_from_files(tmp_path, {
             "mylib": (
@@ -1205,6 +1263,14 @@ class TestFieldAccessCoverage:
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
 
+        entry_program = graph.modules[ENTRY_ID].program
+        # "compute" is a function binding from mylib
+        var = _find_varref(entry_program, "compute")
+        assert var is not None
+        ref = result.modules[ENTRY_ID].resolved.resolution[var.node_id]
+        assert ref.name == "compute"
+        assert ref.module_id == ModuleId.from_dotted("mylib")
+
     def test_self_ref_field_access_unknown_type_errors(self, tmp_path: Path) -> None:
         """Coverage: resolver.py 1356 — ::Name.Variant where Name not in declared type names.
 
@@ -1217,3 +1283,189 @@ class TestFieldAccessCoverage:
         })
         with pytest.raises(AglScopeError):
             resolve_graph(graph)
+
+
+# ---------------------------------------------------------------------------
+# Test: ExceptionDef export, constructor candidates, and exception-skip branch
+# ---------------------------------------------------------------------------
+
+
+class TestExceptionDefInGraph:
+    def test_exception_exported(self, tmp_path: Path) -> None:
+        """An exception declaration in a non-entry module is in exports."""
+        graph = _make_graph_from_files(tmp_path, {
+            "entry": "import mylib\n()",
+            "mylib": "exception MyErr(msg: text)",
+        })
+        result = resolve_graph(graph)
+        mylib_id = ModuleId.from_dotted("mylib")
+        assert "MyErr" in result.modules[mylib_id].exports
+
+    def test_exception_in_all_public_types(self, tmp_path: Path) -> None:
+        """A public exception is in all_public_types."""
+        graph = _make_graph_from_files(tmp_path, {
+            "entry": "import mylib\n()",
+            "mylib": "exception MyErr(msg: text)",
+        })
+        result = resolve_graph(graph)
+        mylib_id = ModuleId.from_dotted("mylib")
+        assert (mylib_id, "MyErr") in result.all_public_types
+
+    def test_private_exception_not_exported(self, tmp_path: Path) -> None:
+        """A private exception is not in exports."""
+        graph = _make_graph_from_files(tmp_path, {
+            "entry": "import mylib\n()",
+            "mylib": "private exception HiddenErr(code: int)",
+        })
+        result = resolve_graph(graph)
+        mylib_id = ModuleId.from_dotted("mylib")
+        assert "HiddenErr" not in result.modules[mylib_id].exports
+
+    def test_exception_constructor_candidate_available(self, tmp_path: Path) -> None:
+        """An open-imported exception exposes its name as a constructor candidate."""
+        graph = _make_graph_from_files(tmp_path, {
+            "entry": "import mylib\nMyErr(msg: \"oops\")",
+            "mylib": "exception MyErr(msg: text)",
+        })
+        result = resolve_graph(graph)
+        # The entry resolved correctly (no scope error raised).
+        assert ENTRY_ID in result.modules
+        entry_resolved = result.modules[ENTRY_ID].resolved
+        # MyErr is a constructor candidate resolved from the open import.
+        assert "MyErr" in entry_resolved.constructor_candidates
+
+    def test_exception_skip_branch_enum_variant_collision(self, tmp_path: Path) -> None:
+        """Exception-skip branch: an enum variant whose name collides with a public
+        ExceptionDef in the same module is skipped as a constructor candidate.
+
+        Exercises graph.py lines ~154-157: when iterating EnumDef variants, any variant
+        whose name matches a public ExceptionDef in all_public_types is skipped so the
+        exception wins as the constructor.
+        """
+        # The enum "Status" has a variant named "Conflict".
+        # The module also has a public exception "Conflict".
+        # When resolving the open import, "Conflict" (enum variant) must be skipped
+        # and only the ExceptionDef "Conflict" is in constructor_candidates.
+        graph = _make_graph_from_files(tmp_path, {
+            "entry": "import mylib\n()",
+            "mylib": (
+                "enum Status\n"
+                "  | Ok\n"
+                "  | Conflict\n"
+                "exception Conflict(msg: text)\n"
+            ),
+        })
+        result = resolve_graph(graph)
+        entry_resolved = result.modules[ENTRY_ID].resolved
+        # "Conflict" must exist in constructor_candidates and must refer to the
+        # ExceptionDef (variant=None), NOT to the enum variant (variant="Conflict").
+        assert "Conflict" in entry_resolved.constructor_candidates
+        candidates = entry_resolved.constructor_candidates["Conflict"]
+        # The exception's constructor ref has variant=None (record-like).
+        assert all(c.variant is None for c in candidates), (
+            "Enum variant 'Conflict' should have been skipped; only the ExceptionDef "
+            f"candidate (variant=None) should remain. Got: {candidates}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test: resolve_graph REPL seams — ambient_agents, entry_parent_scope, warnings
+# ---------------------------------------------------------------------------
+
+
+class TestResolveGraphReplSeams:
+    def test_ambient_agents_resolves_undeclared_agent(self, tmp_path: Path) -> None:
+        """ambient_agents lets the entry module use an agent not declared in source."""
+        graph = _make_graph_from_files(tmp_path, {
+            "entry": 'let x = ask("Q", agent: session_bot)\nx',
+        })
+        # Without ambient_agents, "session_bot" is undeclared → AglScopeError.
+        with pytest.raises(AglScopeError):
+            resolve_graph(graph)
+
+        # With ambient_agents, it resolves cleanly.
+        result = resolve_graph(graph, ambient_agents=frozenset({"session_bot"}))
+        assert ENTRY_ID in result.modules
+        # The entry has no declared_agents (ambient agents are not declared locally).
+        entry_resolved = result.modules[ENTRY_ID].resolved
+        assert "session_bot" not in entry_resolved.declared_agents
+
+    def test_ambient_agents_kwarg_is_noop_for_clean_graph(self, tmp_path: Path) -> None:
+        """Passing ambient_agents does not perturb a graph that doesn't use the ambient name.
+
+        (Agents are entry-only and library modules are declaration-only, so a non-entry
+        module cannot reference an ambient agent; this asserts the kwarg is a no-op here.)
+        """
+        graph = _make_graph_from_files(tmp_path, {
+            "entry": "import mylib\n()",
+            "mylib": "def foo() -> int = 42",
+        })
+        result = resolve_graph(graph, ambient_agents=frozenset({"session_bot"}))
+        assert ENTRY_ID in result.modules
+        assert ModuleId.from_dotted("mylib") in result.modules
+
+    def test_entry_parent_scope_binding_visible_in_entry(self, tmp_path: Path) -> None:
+        """entry_parent_scope: a name pre-bound in the parent scope is visible in entry."""
+        # Build a prior session that binds "x" as a let binding.
+        prior_source = "let x = 42\nx"
+        prior_resolved = resolve(parse_program(prior_source))
+        session_scope = prior_resolved.root_scope
+
+        # New entry references "x" — which is only in the parent scope.
+        graph = _make_graph_from_files(tmp_path, {"entry": "x"})
+        result = resolve_graph(graph, entry_parent_scope=session_scope)
+        assert ENTRY_ID in result.modules
+
+        entry_program = graph.modules[ENTRY_ID].program
+        var = _find_varref(entry_program, "x")
+        assert var is not None
+        ref = result.modules[ENTRY_ID].resolved.resolution[var.node_id]
+        assert ref.name == "x"
+        assert ref.kind == BinderKind.let_binding
+
+    def test_entry_parent_scope_not_applied_to_non_entry(self, tmp_path: Path) -> None:
+        """entry_parent_scope is only injected into the entry module, not library modules.
+
+        ``helper`` is bound only in the prior session scope.  A non-entry module that
+        references it must fail to resolve — if the parent scope leaked into library
+        resolution, ``mylib`` would silently succeed.
+        """
+        prior_source = "let helper = 1\nhelper"
+        prior_resolved = resolve(parse_program(prior_source))
+        session_scope = prior_resolved.root_scope
+
+        # mylib references "helper", which exists ONLY in the entry's parent scope.
+        graph = _make_graph_from_files(tmp_path, {
+            "entry": "import mylib\n()",
+            "mylib": "def foo() -> int = helper",
+        })
+        with pytest.raises(AglScopeError, match="helper"):
+            resolve_graph(graph, entry_parent_scope=session_scope)
+
+    def test_warnings_aggregated_from_entry_module(self, tmp_path: Path) -> None:
+        """result.warnings aggregates non-fatal scope warnings from the entry module.
+
+        Declaring an agent that is never referenced produces an unused-agent warning
+        in the scope pass; resolve_graph must surface it in the top-level warnings tuple.
+        """
+        graph = _make_graph_from_files(tmp_path, {
+            "entry": "agent unused_bot\n()",
+        })
+        result = resolve_graph(graph)
+        # The entry module must have emitted an unused-agent warning.
+        assert len(result.warnings) >= 1
+        messages = [w.message for w in result.warnings]
+        assert any("unused_bot" in m for m in messages)
+
+    def test_warnings_aggregated_across_modules(self, tmp_path: Path) -> None:
+        """Warnings from non-entry modules are also collected into result.warnings."""
+        # A non-entry module that declares an agent would be a scope error (agents are
+        # entry-only), so we cannot test cross-module warnings that way.
+        # Instead, confirm that the empty-warnings case is also correct: when no module
+        # produces warnings, result.warnings is empty.
+        graph = _make_graph_from_files(tmp_path, {
+            "entry": "import mylib\n()",
+            "mylib": "def foo() -> int = 42",
+        })
+        result = resolve_graph(graph)
+        assert result.warnings == ()

@@ -126,7 +126,7 @@ _sep: _NEWLINE | SEMICOLON
             | param_decl
             | program_decl
             | agent_decl
-            | config_pragma
+            | config_decl
             | func_def
             | builtin_record_def
             | builtin_enum_def
@@ -216,15 +216,9 @@ program_decl: "program" name
 // The optional runner string must be a static literal (checked in transformer).
 agent_decl: AGENT name (EQ template)?
 
-// config_pragma: "config" KEY = VALUE (header-only; enforced in scope pass).
-// pragma_value covers bool, int, decimal, and static string literals.
-config_pragma: "config" name EQ pragma_value
-
-pragma_value: "true"     -> pragma_true
-            | "false"    -> pragma_false
-            | INT        -> pragma_int
-            | DECIMAL    -> pragma_decimal
-            | template   -> pragma_str
+// config_decl: "config" NAME [= expr] — root-only engine-key binding;
+// the optional value is a general expression resolved at runtime.
+config_decl: "config" name (EQ expr)?
 
 // ---------------------------------------------------------------------------
 // Function definition
@@ -238,11 +232,14 @@ pragma_value: "true"     -> pragma_true
 func_def: "def" name type_params? LPAR param_list? RPAR THIN_ARROW type_expr EQ func_body
 
 // Host-implemented builtin function declaration. It has a signature but no body.
-builtin_func_def: "builtin" "def" name type_params? LPAR param_list? RPAR THIN_ARROW type_expr
+// `builtin` is a decorator-style modifier: the `_NEWLINE?` makes the newline
+// after it insignificant, so the modifier may sit on its own line above the
+// declaration (`builtin\nenum …`) or on the same line (`builtin enum …`).
+builtin_func_def: "builtin" _NEWLINE? "def" name type_params? LPAR param_list? RPAR THIN_ARROW type_expr
 
-builtin_record_def: "builtin" record_def
-builtin_enum_def: "builtin" enum_def
-builtin_exception_def: "builtin" exception_def
+builtin_record_def: "builtin" _NEWLINE? record_def
+builtin_enum_def: "builtin" _NEWLINE? enum_def
+builtin_exception_def: "builtin" _NEWLINE? exception_def
 
 // param_list: comma-separated parameter entries (defs and/or zone markers).
 // ?param_entry is transparent so the children reach param_list directly.
@@ -661,12 +658,14 @@ import_clause : USING import_item (COMMA import_item)*  -> import_clause_using
 import_item : name "as" name    -> import_item_rename
             | name               -> import_item_plain
 
-// Private declaration wrappers
-private_record_def  : PRIVATE record_def
-private_enum_def    : PRIVATE enum_def
-private_exception_def : PRIVATE exception_def
-private_type_alias  : PRIVATE type_alias
-private_func_def    : PRIVATE func_def
+// Private declaration wrappers.  `private` is a decorator-style modifier: the
+// `_NEWLINE?` makes the newline after it insignificant, so the modifier may sit
+// on its own line above the declaration (`private\nenum …`) or on the same line.
+private_record_def  : PRIVATE _NEWLINE? record_def
+private_enum_def    : PRIVATE _NEWLINE? enum_def
+private_exception_def : PRIVATE _NEWLINE? exception_def
+private_type_alias  : PRIVATE _NEWLINE? type_alias
+private_func_def    : PRIVATE _NEWLINE? func_def
 
 // ---------------------------------------------------------------------------
 // Qualified references in expressions, types, and patterns

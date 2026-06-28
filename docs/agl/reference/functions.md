@@ -49,6 +49,10 @@ The declared name and signature must match a recognized built-in exactly. This
 form is used by `std.core`; ordinary programs normally call those declarations
 through the default standard-library import instead of redeclaring them.
 
+`builtin` is a declaration modifier: it may precede `def` on the same line or
+on the line directly above it (the newline after the modifier is
+insignificant).
+
 ### Parameters
 
 Parameters are listed with explicit types. Each parameter belongs to one of

@@ -87,7 +87,7 @@ from agm.agl.syntax.nodes import (
     Case,
     Cast,
     CatchClause,
-    ConfigPragma,
+    ConfigDecl,
     ConstructorPattern,
     DecimalLit,
     DictLit,
@@ -419,7 +419,10 @@ class _Checker:
             # Signature already registered in pre-pass; check body now.
             self._check_funcdef_body(item)
             return UnitType()
-        if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias, ConfigPragma)):
+        if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
+            return UnitType()
+        if isinstance(item, ConfigDecl):
+            self._check_config(item)
             return UnitType()
         if isinstance(item, AgentDecl):
             self._env.set_binding_type(item.node_id, AgentType())
@@ -494,6 +497,37 @@ class _Checker:
                 declared_type = val_type
         else:
             declared_type = ann_type if ann_type is not None else TextType()
+        self._env.set_binding_type(stmt.node_id, declared_type)
+
+    def _check_config(self, stmt: ConfigDecl) -> None:
+        """Check a ``config`` declaration against the engine-key registry.
+
+        For ``Option[T]`` engine keys (``log-file``, ``timeout``) the value
+        expression may be either an ``Option[T]`` or the inner type ``T``: a bare
+        ``T`` value is projected into ``some(value)`` by the lowerer.  For all
+        other keys the value, if present, must be assignable to the engine-key
+        type.  The engine-key type is recorded as the binding type either way.
+        """
+        from agm.agl.semantics.engine_keys import get_engine_key_type
+
+        declared_type = get_engine_key_type(stmt.name)
+        if declared_type is None:
+            return  # pragma: no cover — unknown keys rejected earlier by scope
+        if stmt.value is not None:
+            val_type = self._check_expr(stmt.value, expected=declared_type)
+            if isinstance(declared_type, EnumType) and declared_type.type_args:
+                inner = declared_type.type_args[0]
+                if not (
+                    is_assignable(val_type, declared_type)
+                    or is_assignable(val_type, inner)
+                ):
+                    raise AglTypeError(
+                        f"config '{stmt.name}' expects '{declared_type!r}' or "
+                        f"'{inner!r}', got '{val_type!r}'.",
+                        span=stmt.span,
+                    )
+            else:
+                self._assert_assignable(val_type, declared_type, stmt.span)
         self._env.set_binding_type(stmt.node_id, declared_type)
 
     def _check_binding(self, stmt: LetDecl | VarDecl) -> None:
@@ -685,10 +719,7 @@ class _Checker:
 
     def _require_binding_type(self, ref: BindingRef) -> Type:
         typ = self._env.resolve_binding(ref)
-        if typ is None:
-            raise AssertionError(
-                f"Binding {ref!r} has no recorded type; checker invariant violated."
-            )
+        assert typ is not None, f"Binding {ref!r} has no recorded type; checker invariant violated."
         return typ
 
     # --- Cast ---
@@ -1016,8 +1047,10 @@ class _Checker:
         # signatures, which would cause the name-keyed table to return the wrong
         # signature for a qualified cross-module call.
         sig = self._env.get_function_signature_by_node_id(callee_node_id)
-        if sig is None:
-            return self._check_value_call(node, expected=expected)
+        assert sig is not None, (
+            f"no signature for function-binding callee node_id={callee_node_id!r}; "
+            "checker invariant violated."
+        )
 
         # Dispatch to the generic path when the function has type parameters.
         if sig.type_params:
@@ -1123,9 +1156,6 @@ class _Checker:
             bt = self._check_expr(branch.body, expected=expected)
             branch_types.append(bt)
         self._warn_non_exhaustive(subj_type, [b.pattern for b in node.branches], node.span)
-
-        if not branch_types:
-            return expected if expected is not None else TextType()
 
         return self._unify_branch_types(branch_types, node.span, "Case expression")
 

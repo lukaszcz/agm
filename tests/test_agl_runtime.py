@@ -2054,7 +2054,7 @@ class TestRuntimeErrorPaths:
 
     def test_is_json_shaped_dict_with_non_str_key_is_false(self) -> None:
         """_is_json_shaped: a dict with non-str keys is not JSON-shaped (covers
-        the dict branch of _is_json_shaped, line 790).
+        the dict branch of _is_json_shaped).
         """
         from agm.agl.runtime.params import _is_json_shaped
 
@@ -2552,6 +2552,145 @@ class TestDeriveSchema:
 
 
 # ---------------------------------------------------------------------------
+# Coverage: type_schema.py — build_param_decoder and build_format_instructions
+# ---------------------------------------------------------------------------
+
+
+class TestBuildParamDecoder:
+    """Direct tests for build_param_decoder (previously zero direct references)."""
+
+    def test_text_type_is_verbatim(self) -> None:
+        """TextType params are taken verbatim — text_verbatim is True."""
+        from agm.agl.semantics.types import TextType
+        from agm.agl.type_schema import build_param_decoder
+
+        decoder = build_param_decoder(TextType())
+        assert decoder.text_verbatim is True
+
+    def test_text_type_target_label(self) -> None:
+        """target_type_label is repr(TextType())."""
+        from agm.agl.semantics.types import TextType
+        from agm.agl.type_schema import build_param_decoder
+
+        decoder = build_param_decoder(TextType())
+        assert decoder.target_type_label == repr(TextType())
+
+    def test_int_type_not_verbatim(self) -> None:
+        """Non-text types are NOT verbatim."""
+        from agm.agl.semantics.types import IntType
+        from agm.agl.type_schema import build_param_decoder
+
+        decoder = build_param_decoder(IntType())
+        assert decoder.text_verbatim is False
+
+    def test_int_type_json_schema_matches_derive_schema(self) -> None:
+        """json_schema is json.dumps(derive_schema(typ), sort_keys=True)."""
+        import json
+
+        from agm.agl.semantics.types import IntType
+        from agm.agl.type_schema import build_param_decoder, derive_schema
+
+        typ = IntType()
+        decoder = build_param_decoder(typ)
+        expected_schema = json.dumps(derive_schema(typ), sort_keys=True)
+        assert decoder.json_schema == expected_schema
+        # Parses as valid JSON
+        parsed = json.loads(decoder.json_schema)
+        assert parsed == {"type": "integer"}
+
+    def test_record_type_json_schema_matches_derive_schema(self) -> None:
+        """A record type's json_schema embeds the full record schema."""
+        import json
+
+        from agm.agl.semantics.types import RecordType, TextType
+        from agm.agl.type_schema import build_param_decoder, derive_schema
+
+        typ = RecordType(name="Point", fields={"x": TextType()})
+        decoder = build_param_decoder(typ)
+        expected_schema = json.dumps(derive_schema(typ), sort_keys=True)
+        assert decoder.json_schema == expected_schema
+        # Sanity: the schema is valid JSON with expected structure
+        parsed = json.loads(decoder.json_schema)
+        assert parsed["type"] == "object"
+        assert "x" in parsed["required"]
+
+    def test_int_type_target_label_is_repr(self) -> None:
+        """target_type_label is repr(typ) for int."""
+        from agm.agl.semantics.types import IntType
+        from agm.agl.type_schema import build_param_decoder
+
+        typ = IntType()
+        decoder = build_param_decoder(typ)
+        assert decoder.target_type_label == repr(typ)
+
+    def test_undecodable_type_raises_type_error(self) -> None:
+        """Unit/agent/exception types raise TypeError (via derive_schema)."""
+        from agm.agl.semantics.types import UnitType
+        from agm.agl.type_schema import build_param_decoder
+
+        with pytest.raises(TypeError):
+            build_param_decoder(UnitType())
+
+    def test_agent_type_raises_type_error(self) -> None:
+        from agm.agl.semantics.types import AgentType
+        from agm.agl.type_schema import build_param_decoder
+
+        with pytest.raises(TypeError):
+            build_param_decoder(AgentType())
+
+    def test_exception_type_raises_type_error(self) -> None:
+        from agm.agl.semantics.types import ExceptionType
+        from agm.agl.type_schema import build_param_decoder
+
+        with pytest.raises(TypeError):
+            build_param_decoder(ExceptionType(name="MyErr", fields={}))
+
+
+class TestBuildFormatInstructions:
+    """Direct tests for build_format_instructions (previously zero direct references)."""
+
+    def test_empty_schema_returns_no_schema_message(self) -> None:
+        """An empty schema dict produces the 'Return exactly one JSON value.' message."""
+        from agm.agl.type_schema import build_format_instructions
+
+        result = build_format_instructions({})
+        assert "Return exactly one JSON value." in result
+
+    def test_empty_schema_no_code_fence(self) -> None:
+        """Empty schema message must NOT contain a JSON code fence."""
+        from agm.agl.type_schema import build_format_instructions
+
+        result = build_format_instructions({})
+        assert "```json" not in result
+
+    def test_non_empty_schema_embeds_json_fence(self) -> None:
+        """A non-empty schema dict produces output with a ```json code fence."""
+        from agm.agl.type_schema import build_format_instructions
+
+        schema: dict[str, object] = {"type": "object", "required": ["x"]}
+        result = build_format_instructions(schema)
+        assert "```json" in result
+
+    def test_non_empty_schema_embeds_schema_content(self) -> None:
+        """The schema JSON is embedded verbatim in the output."""
+        import json
+
+        from agm.agl.type_schema import build_format_instructions
+
+        schema: dict[str, object] = {"type": "integer"}
+        result = build_format_instructions(schema)
+        schema_text = json.dumps(schema, indent=2, ensure_ascii=False)
+        assert schema_text in result
+
+    def test_non_empty_schema_contains_json_value_instruction(self) -> None:
+        """Non-empty output also says 'Return exactly one JSON value conforming…'."""
+        from agm.agl.type_schema import build_format_instructions
+
+        result = build_format_instructions({"type": "string"})
+        assert "Return exactly one JSON value" in result
+
+
+# ---------------------------------------------------------------------------
 # Coverage: serialize.py — v2 opaque value TypeError branches
 # ---------------------------------------------------------------------------
 
@@ -2930,20 +3069,23 @@ class TestPrepareProgram:
         assert prepared.resolved_graph is not None
         assert any(d.name == "reviewer" for d in prepared.declared_agents)
 
-    def test_prepare_program_config_pragmas_from_entry(
+    def test_prepare_program_configs_from_entry(
         self, tmp_path: pathlib.Path
     ) -> None:
-        """config_pragmas reads from the entry module."""
+        """Config declarations are discovered from the entry module."""
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = PipelineDriver.prepare_program(
-            "config max_iters = 7\nlet x = 1\nx",
+        rt = PipelineDriver()
+        prepared = rt.prepare_program(
+            "config max-iters = 7\nlet x = 1\nx",
             entry_path=None,
             roots=roots,
         )
         assert prepared.resolved_graph is not None
-        assert prepared.config_pragmas.get("max_iters") == 7
+        discovery = rt.discover_params_graph(prepared)
+        names = {c.name for c in discovery.configs}
+        assert "max-iters" in names
 
     def test_prepare_program_failure_returns_empty_declared_agents(
         self, tmp_path: pathlib.Path
@@ -3165,30 +3307,6 @@ class TestDiscoverParamsGraph:
 
 class TestPreparedGraphDefensivePaths:
     """Edge-case coverage for PreparedGraph properties and prepare_program error paths."""
-
-    def test_config_pragmas_no_entry_module_in_graph(self, tmp_path: pathlib.Path) -> None:
-        """config_pragmas returns {} when resolved_graph has no ENTRY_ID module."""
-        from unittest.mock import MagicMock
-
-        from agm.agl.modules.ids import ENTRY_ID
-        from agm.agl.modules.roots import RootSet
-        from agm.agl.pipeline import PreparedGraph
-
-        # Build a fake resolved_graph with no ENTRY_ID key.
-        fake_graph = MagicMock()
-        fake_graph.modules = {}  # empty — no ENTRY_ID
-        assert ENTRY_ID not in fake_graph.modules
-
-        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        pg = PreparedGraph(
-            source="let x = 1",
-            entry_path=None,
-            roots=roots,
-            resolved_graph=fake_graph,
-            diagnostics=(),
-            warnings=(),
-        )
-        assert pg.config_pragmas == {}
 
     def test_program_name_no_entry_module_in_graph(self, tmp_path: pathlib.Path) -> None:
         """program_name returns None when resolved_graph has no ENTRY_ID module."""

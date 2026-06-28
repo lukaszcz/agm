@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import os
-import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from agm.config.engine_keys import ENGINE_KEY_KINDS
 from agm.core.env import agm_installation_prefix
 from agm.core.fs import mkdir, write_text
+from agm.core.parse import parse_timeout as parse_timeout
 from agm.core.toml import (
     TomlDict,
     dumps_toml,
@@ -39,7 +40,7 @@ class ConfigCommandNotFound(ValueError):
 # not exist, cwd is used as a fallback.
 _CONFIG_PATH_FIELDS: dict[str, list[str]] = {
     "exec": [
-        "log_file",
+        "log-file",
     ],
     "loop": [
         "tasks_dir",
@@ -262,6 +263,16 @@ def _resolve_config_file_paths(config: TomlDict, config_dir: Path, cwd: Path) ->
                 cwd,
                 sentinels=_CONFIG_PATH_SENTINELS.get(section_name, {}),
             )
+    # Resolve log-file in any top-level section that contains that key.
+    # AGM's own sections don't carry a top-level log-file key (exec's is already
+    # handled above and is idempotent on the now-absolute value), so they are
+    # naturally skipped.  For program sections the path is anchored to the
+    # config-file directory, matching [exec].log-file behaviour.
+    for section_name, section in resolved.items():
+        if isinstance(section, dict) and "log-file" in section:
+            resolved[section_name] = _resolve_section_paths(
+                toml_dict(section), ["log-file"], config_dir, cwd, sentinels={}
+            )
     return resolved
 
 
@@ -305,31 +316,6 @@ def load_run_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> RunConfi
         default_swap_limit=default_swap_limit,
         command_swap_limits=command_swap_limits,
     )
-
-
-def parse_timeout(value: str) -> float:
-    """Parse a human-readable timeout string into seconds.
-
-    Supports plain numbers (treated as seconds) and durations with
-    suffixes: ``s`` (seconds), ``m`` (minutes), ``h`` (hours).
-
-    Examples::
-
-        parse_timeout("30")    -> 30.0
-        parse_timeout("30s")   -> 30.0
-        parse_timeout("10m")   -> 600.0
-        parse_timeout("2h")    -> 7200.0
-    """
-    match = re.fullmatch(r"(\d+(?:\.\d+)?)(s|m|h)?", value.strip())
-    if match is None:
-        raise ValueError(f"invalid timeout format: {value!r}")
-    amount = float(match.group(1))
-    unit: str = match.group(2) or ""
-    if unit == "m":
-        return amount * 60
-    if unit == "h":
-        return amount * 3600
-    return amount
 
 
 def load_loop_config(
@@ -569,13 +555,21 @@ def load_exec_config(
 
 
 def exec_config_from_merged(
-    merged: TomlDict, *, command_name: str | None = None
+    merged: TomlDict,
+    *,
+    command_name: str | None = None,
+    program_table: dict[str, object] | None = None,
 ) -> ExecConfig:
     """Build :class:`ExecConfig` from an already-merged config dict.
 
     Split out from :func:`load_exec_config` so a caller that already holds a
-    merged config (e.g. ``agm exec``, which also needs ``[params.<key>]``) can
+    merged config (e.g. ``agm exec``, which also needs ``[<program>]``) can
     derive the ``[exec]`` section without re-reading and re-merging the files.
+
+    When *program_table* is supplied (the ``[<program>]`` table for the running
+    program), each engine key present in that table overrides the global
+    ``[exec]`` value.  Engine keys use kebab-case names: ``strict-json``,
+    ``max-iters``, ``log-file``.
     """
     # ``agents`` is a reserved structural sub-table, not a workflow override:
     # selecting it as a command would merge the agent map in as scalar config.
@@ -587,11 +581,19 @@ def exec_config_from_merged(
         require_command=False,
     )
 
-    resolved_runner = _optional_str(exec_table, "runner")
-    resolved_strict_json = _optional_bool(exec_table, "strict_json")
-    resolved_loop_limit = _optional_positive_int(exec_table, "default_loop_limit", default=5)
+    # Per-program engine-key overrides: [<program>].KEY wins over [exec].KEY.
+    # Engine keys use kebab-case names.
+    effective: TomlDict = dict(exec_table)
+    if program_table is not None:
+        for key, _ in ENGINE_KEY_KINDS:
+            if key in program_table:
+                effective[key] = program_table[key]
 
-    resolved_timeout = _optional_timeout(exec_table, "timeout")
+    resolved_runner = _optional_str(effective, "runner")
+    resolved_strict_json = _optional_bool(effective, "strict-json")
+    resolved_loop_limit = _optional_positive_int(effective, "max-iters", default=5)
+
+    resolved_timeout = _optional_timeout(effective, "timeout")
 
     agents_raw = exec_table.get("agents")
     resolved_agents: dict[str, str] = {}
@@ -600,8 +602,8 @@ def exec_config_from_merged(
             if isinstance(k, str) and isinstance(v, str) and v.strip():
                 resolved_agents[k] = v
 
-    resolved_log = _optional_bool(exec_table, "log")
-    resolved_log_file = _optional_str(exec_table, "log_file")
+    resolved_log = _optional_bool(effective, "log")
+    resolved_log_file = _optional_str(effective, "log-file")
 
     return ExecConfig(
         runner=resolved_runner,
@@ -649,47 +651,37 @@ def load_refine_config(
     )
 
 
-def load_params_config(
+def program_config_from_merged(
+    merged: TomlDict, program_name: str
+) -> dict[str, object]:
+    """Return the top-level ``[<program_name>]`` table from an already-merged config.
+
+    Returns an empty dict when the section is absent or not a table.  Both
+    engine-key overrides (e.g. ``timeout``) and param values (e.g. ``scope``)
+    live directly under ``[<program_name>]``; callers are responsible for
+    separating the two.
+    """
+    program_section = merged.get(program_name)
+    if isinstance(program_section, dict):
+        return dict(program_section)
+    return {}
+
+
+def load_program_config(
     program_name: str,
     *,
     home: Path,
     proj_dir: Path | None,
     cwd: Path,
 ) -> dict[str, object]:
-    """Return the ``[params.<program_name>]`` table from the merged config.
+    """Load and return the top-level ``[<program_name>]`` table from merged config.
 
     Loads the merged config across all config-file layers (home → project → cwd)
-    and returns the ``[params.<program_name>]`` sub-table as a dict of TOML-native
-    values.  Returns an empty dict when the table is absent.
-
-    Values are returned as-is (TOML-native Python objects) so that
-    ``convert_param_value`` in the runtime can coerce them to AgL types.  In
-    particular, ``bool`` values must NOT be stringified (``str(True)`` → ``"True"``
-    which the bool coercion path rejects).
-
-    Note for decimal params: TOML has no decimal type; a TOML float (e.g.
-    ``3.14``) is a Python ``float`` and AgL rejects binary floats.  Decimal param
-    values in config must be written as TOML strings (e.g. ``ratio = "3.14"``);
-    ``convert_param_value`` will parse them correctly via ``json.loads(parse_float=Decimal)``.
+    and returns the ``[<program_name>]`` table as a dict of TOML-native values.
+    Returns an empty dict when the section is absent.
     """
     merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
-    return params_config_from_merged(merged, program_name)
-
-
-def params_config_from_merged(
-    merged: TomlDict, program_name: str
-) -> dict[str, object]:
-    """Return the ``[params.<program_name>]`` table from an already-merged config.
-
-    Split out from :func:`load_params_config` so ``agm exec`` can derive the
-    param table from the same merged config it already loaded for ``[exec]``,
-    rather than re-reading and re-merging every config file.
-    """
-    params_section = toml_dict(merged.get("params"))
-    program_table = params_section.get(program_name)
-    if isinstance(program_table, dict):
-        return dict(program_table)
-    return {}
+    return program_config_from_merged(merged, program_name)
 
 
 @dataclass(frozen=True)

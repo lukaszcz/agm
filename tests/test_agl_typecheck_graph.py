@@ -1,58 +1,43 @@
-"""Tests for M4: module-aware type checking (``check_graph`` and ``module_id`` on types).
+"""Graph-level typechecking tests over multi-module AgL programs.
 
-These tests are intentionally FAILING on a pre-M4 codebase:
-
-1. ``RecordType`` and ``EnumType`` do not yet have a ``module_id`` field.
-2. ``check_graph`` / ``CheckedModuleGraph`` / ``CheckedModule`` do not exist yet.
-
-Each test imports the new symbols *inside the test body* so that pytest can
-still collect the suite (no module-level ``ImportError``).  The tests will fail
-with ``AttributeError`` or ``ImportError`` until M4 is implemented.
-
-Test list
----------
-1.  test_module_id_on_record_type_default_entry_id
-2.  test_module_id_on_enum_type_default_entry_id
-3.  test_distinct_module_qualified_type_identity
-4.  test_same_module_same_type_identity
-5.  test_single_module_equivalence
-6.  test_check_graph_basic
-7.  test_cross_module_type_not_assignable
-8.  test_qualified_type_ref_in_annotation
-9.  test_qualified_type_ref_in_constructor
-10. test_qualified_type_ref_in_cast
-11. test_qualified_type_ref_in_constructor_pattern
-12. test_unqualified_open_import_type
-13. test_unqualified_type_clash_on_use
-14. test_qualified_access_bounded_by_s
-15. test_private_type_not_importable
-16. test_whole_graph_type_pre_pass_with_cycles
-17. test_enum_variant_qualification
-18. test_self_ref_type
-19. test_agent_typed_arg_in_imported_function
-20. test_unqualified_constructor_from_open_import
-"""
+Covers ``check_graph`` / ``CheckedModuleGraph`` / ``CheckedModule``, the
+``module_id`` field on ``RecordType`` / ``EnumType``, cross-module type
+identity, generic types, mutual recursion, and the structural type-dependency
+pre-pass."""
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
-from agm.agl.modules.loader import load_graph
-from agm.agl.modules.roots import RootSet
 from agm.agl.scope.graph import resolve_graph
 from agm.agl.scope.symbols import AglScopeError
-from agm.agl.typecheck import AglTypeError, CheckedProgram, EnumType, RecordType, check
+from agm.agl.typecheck import (
+    AgentType,
+    AglTypeError,
+    BoolType,
+    CheckedModule,
+    CheckedModuleGraph,
+    CheckedProgram,
+    EnumType,
+    ExceptionType,
+    FunctionType,
+    IntType,
+    RecordType,
+    TextType,
+    Type,
+    TypeVarType,
+    check,
+    check_graph,
+)
+from tests.agl.ir_harness import make_graph_from_files as _make_graph_from_files
 
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
-
-_REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 
 _CAPS = HostCapabilities(
     agent_names=frozenset(),
@@ -67,34 +52,6 @@ _CAPS = HostCapabilities(
 )
 
 
-def _roots(*paths: Path) -> RootSet:
-    return RootSet(roots=frozenset((*paths, _REPO_STDLIB_ROOT)))
-
-
-def _write_module(root: Path, dotted: str, source: str) -> Path:
-    mid = ModuleId.from_dotted(dotted)
-    p = root / mid.relpath().replace("/", os.sep)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(source)
-    return p
-
-
-def _make_graph_from_files(tmp_path: Path, modules: dict[str, str]) -> object:
-    """Build a ModuleGraph via load_graph from {dotted_name_or_entry: source} dict.
-
-    The key ``'entry'`` is used as the entry source.
-    Other keys are written as .agl files under a temp root.
-    """
-    root = tmp_path / "root"
-    root.mkdir(parents=True, exist_ok=True)
-    entry_source = modules.get("entry", "()")
-    for dotted, source in modules.items():
-        if dotted == "entry":
-            continue
-        _write_module(root, dotted, source)
-    return load_graph(entry_source, entry_path=None, roots=_roots(root))
-
-
 def _check(src: str) -> CheckedProgram:
     """Parse + resolve + check a single-module AgL program."""
     from agm.agl.parser import parse_program
@@ -104,13 +61,35 @@ def _check(src: str) -> CheckedProgram:
     return check(resolved, _CAPS)
 
 
-def _check_graph(tmp_path: Path, modules: dict[str, str]) -> object:
+def _check_graph(tmp_path: Path, modules: dict[str, str]) -> CheckedModuleGraph:
     """Build and typecheck a multi-module graph; returns CheckedModuleGraph."""
-    from agm.agl.typecheck.graph import check_graph  # type: ignore[import-untyped]
-
     mg = _make_graph_from_files(tmp_path, modules)
-    rg = resolve_graph(mg)  # type: ignore[arg-type]
+    rg = resolve_graph(mg)
     return check_graph(rg, _CAPS)
+
+
+def _binding_value_type(cg: CheckedModuleGraph, module_id: ModuleId, name: str) -> Type:
+    """Inferred type of the RHS of the top-level ``let``/``var <name> = ...`` in ``module_id``."""
+    from agm.agl.syntax.nodes import LetDecl, VarDecl
+
+    module = cg.modules[module_id]
+    for item in module.resolved.program.body.items:
+        if isinstance(item, (LetDecl, VarDecl)) and item.name == name:
+            return module.node_types[item.value.node_id]
+    raise AssertionError(f"no top-level binding named {name!r} in {module_id}")
+
+
+def _agent_binding_type(cg: CheckedModuleGraph, module_id: ModuleId, name: str) -> Type:
+    """Inferred type of the agent declaration ``agent <name> = ...`` in ``module_id``."""
+    from agm.agl.syntax.nodes import AgentDecl
+
+    module = cg.modules[module_id]
+    for item in module.resolved.program.body.items:
+        if isinstance(item, AgentDecl) and item.name == name:
+            t = module.type_env.get_binding_type(item.node_id)
+            assert t is not None, f"no binding type for agent {name!r} in {module_id}"
+            return t
+    raise AssertionError(f"no agent declaration named {name!r} in {module_id}")
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +99,7 @@ def _check_graph(tmp_path: Path, modules: dict[str, str]) -> object:
 
 def test_check_graph_importable() -> None:
     """check_graph and CheckedModuleGraph are importable from agm.agl.typecheck.graph."""
-    from agm.agl.typecheck.graph import (  # type: ignore[import-untyped]
+    from agm.agl.typecheck.graph import (
         CheckedModule,
         CheckedModuleGraph,
         check_graph,
@@ -165,8 +144,8 @@ def test_distinct_module_qualified_type_identity() -> None:
     """RecordType('Color', {}, module_id=mid_foo) != RecordType('Color', {}, module_id=mid_bar)."""
     mid_foo = ModuleId.from_dotted("foo")
     mid_bar = ModuleId.from_dotted("bar")
-    rt_foo = RecordType("Color", {}, module_id=mid_foo)  # type: ignore[call-arg]
-    rt_bar = RecordType("Color", {}, module_id=mid_bar)  # type: ignore[call-arg]
+    rt_foo = RecordType("Color", {}, module_id=mid_foo)
+    rt_bar = RecordType("Color", {}, module_id=mid_bar)
     assert rt_foo != rt_bar, (
         "Same-name record types from different modules must be distinct types"
     )
@@ -180,10 +159,8 @@ def test_distinct_module_qualified_type_identity() -> None:
 def test_same_module_same_type_identity() -> None:
     """Two RecordType instances with identical name+fields+module_id are equal."""
     mid = ModuleId.from_dotted("mylib")
-    from agm.agl.typecheck import IntType
-
-    rt1 = RecordType("Point", {"x": IntType(), "y": IntType()}, module_id=mid)  # type: ignore[call-arg]
-    rt2 = RecordType("Point", {"x": IntType(), "y": IntType()}, module_id=mid)  # type: ignore[call-arg]
+    rt1 = RecordType("Point", {"x": IntType(), "y": IntType()}, module_id=mid)
+    rt2 = RecordType("Point", {"x": IntType(), "y": IntType()}, module_id=mid)
     assert rt1 == rt2
 
 
@@ -194,25 +171,20 @@ def test_same_module_same_type_identity() -> None:
 
 def test_single_module_equivalence(tmp_path: Path) -> None:
     """check_graph on a single-module graph gives the same type results as check()."""
-    from agm.agl.typecheck.graph import (  # type: ignore[import-untyped]
-        CheckedModuleGraph,
-        check_graph,
-    )
-
     source = "def foo() -> int = 1\nlet x = foo()\nx"
     mg = _make_graph_from_files(tmp_path, {"entry": source})
-    rg = resolve_graph(mg)  # type: ignore[arg-type]
-    cg: object = check_graph(rg, _CAPS)
+    rg = resolve_graph(mg)
+    cg = check_graph(rg, _CAPS)
 
     assert isinstance(cg, CheckedModuleGraph)
     # The graph must have the entry module
-    assert ENTRY_ID in cg.modules  # type: ignore[attr-defined]
+    assert ENTRY_ID in cg.modules
 
     # node_types in graph-checked entry should equal single-module check
     single = _check(source)
-    entry_checked = cg.modules[ENTRY_ID]  # type: ignore[attr-defined, index]
+    entry_checked = cg.modules[ENTRY_ID]
     # Both should have the same number of typed expression nodes
-    assert len(entry_checked.node_types) == len(single.node_types)  # type: ignore[attr-defined]
+    assert len(entry_checked.node_types) == len(single.node_types)
 
 
 # ---------------------------------------------------------------------------
@@ -222,8 +194,6 @@ def test_single_module_equivalence(tmp_path: Path) -> None:
 
 def test_check_graph_basic(tmp_path: Path) -> None:
     """Entry imports mylib with a record; annotated let binding typechecks successfully."""
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             "import mylib\n"
@@ -238,9 +208,10 @@ def test_check_graph_basic(tmp_path: Path) -> None:
             "def makePoint() -> Point = Point(x = 0, y = 0)"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
-    assert ENTRY_ID in cg.modules  # type: ignore[attr-defined]
+    cg = _check_graph(tmp_path, modules)
+    assert ENTRY_ID in cg.modules
+    mylib_id = ModuleId.from_dotted("mylib")
+    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Point", {}, module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -284,8 +255,6 @@ def test_cross_module_type_not_assignable(tmp_path: Path) -> None:
 
 def test_qualified_type_ref_in_annotation(tmp_path: Path) -> None:
     """'let p: mylib::Point = ...' resolves mylib::Point through ImportEnv."""
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             "import mylib qualified\n"
@@ -300,8 +269,11 @@ def test_qualified_type_ref_in_annotation(tmp_path: Path) -> None:
             "def mkPoint() -> Point = Point(x = 1, y = 2)"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    mylib_id = ModuleId.from_dotted("mylib")
+    cg = _check_graph(tmp_path, modules)
+    # Pin the specific binding type — not any(t == point_type) over all nodes,
+    # which could pass spuriously via an intermediate call node of the same type.
+    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Point", {}, module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -311,8 +283,6 @@ def test_qualified_type_ref_in_annotation(tmp_path: Path) -> None:
 
 def test_qualified_type_ref_in_constructor(tmp_path: Path) -> None:
     """'foo::Color.Red' constructor resolves through ImportEnv correctly."""
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             "import mylib qualified\n"
@@ -325,8 +295,9 @@ def test_qualified_type_ref_in_constructor(tmp_path: Path) -> None:
             "  | Blue"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    mylib_id = ModuleId.from_dotted("mylib")
+    cg = _check_graph(tmp_path, modules)
+    assert _binding_value_type(cg, ENTRY_ID, "c") == EnumType("Color", {}, module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -336,8 +307,6 @@ def test_qualified_type_ref_in_constructor(tmp_path: Path) -> None:
 
 def test_qualified_type_ref_in_cast(tmp_path: Path) -> None:
     """'x as mylib::Point' cast resolves the target type through ImportEnv."""
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             "import mylib qualified\n"
@@ -351,8 +320,9 @@ def test_qualified_type_ref_in_cast(tmp_path: Path) -> None:
             "  y: int"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    mylib_id = ModuleId.from_dotted("mylib")
+    cg = _check_graph(tmp_path, modules)
+    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Point", {}, module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -362,8 +332,6 @@ def test_qualified_type_ref_in_cast(tmp_path: Path) -> None:
 
 def test_qualified_type_ref_in_constructor_pattern(tmp_path: Path) -> None:
     """'mylib::Color.Red' in a case pattern resolves through ImportEnv."""
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             "import mylib qualified\n"
@@ -378,8 +346,10 @@ def test_qualified_type_ref_in_constructor_pattern(tmp_path: Path) -> None:
             "  | Blue"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    mylib_id = ModuleId.from_dotted("mylib")
+    cg = _check_graph(tmp_path, modules)
+    # Pin c's binding type as mylib::Color — not an any(TextType) scan over "red"/"blue".
+    assert _binding_value_type(cg, ENTRY_ID, "c") == EnumType("Color", {}, module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -389,8 +359,6 @@ def test_qualified_type_ref_in_constructor_pattern(tmp_path: Path) -> None:
 
 def test_unqualified_open_import_type(tmp_path: Path) -> None:
     """Open import brings record type name into scope for unqualified use."""
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             "import mylib\n"
@@ -405,8 +373,9 @@ def test_unqualified_open_import_type(tmp_path: Path) -> None:
             "def mkPoint() -> Point = Point(x = 0, y = 0)"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    mylib_id = ModuleId.from_dotted("mylib")
+    cg = _check_graph(tmp_path, modules)
+    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Point", {}, module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -435,8 +404,7 @@ def test_unqualified_type_clash_on_use(tmp_path: Path) -> None:
             "  | Yellow"
         ),
     }
-    # Should raise either AglScopeError (ambiguous at scope) or AglTypeError
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglTypeError, match="Ambiguous type"):
         _check_graph(tmp_path, modules)
 
 
@@ -463,7 +431,7 @@ def test_qualified_access_bounded_by_s(tmp_path: Path) -> None:
             "def mkRect() -> Rect = Rect(w = 10, h = 5)"
         ),
     }
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglScopeError, match="not in the imported set"):
         _check_graph(tmp_path, modules)
 
 
@@ -487,7 +455,7 @@ def test_private_type_not_importable(tmp_path: Path) -> None:
             "def mkHidden() -> Hidden = Hidden(x = 1)"
         ),
     }
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglTypeError, match="Unknown type"):
         _check_graph(tmp_path, modules)
 
 
@@ -498,8 +466,6 @@ def test_private_type_not_importable(tmp_path: Path) -> None:
 
 def test_whole_graph_type_pre_pass_with_cycles(tmp_path: Path) -> None:
     """Mutual imports of types between A and B both typecheck (cycles allowed D8)."""
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             "import modA\n"
@@ -522,19 +488,17 @@ def test_whole_graph_type_pre_pass_with_cycles(tmp_path: Path) -> None:
             "def wrapA(f: modA::Foo) -> text = \"ok\""
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    cg = _check_graph(tmp_path, modules)
     mid_a = ModuleId.from_dotted("modA")
     mid_b = ModuleId.from_dotted("modB")
-    assert mid_a in cg.modules  # type: ignore[attr-defined]
-    assert mid_b in cg.modules  # type: ignore[attr-defined]
+    assert mid_a in cg.modules
+    assert mid_b in cg.modules
+    assert _binding_value_type(cg, ENTRY_ID, "fa") == TextType()
+    assert _binding_value_type(cg, ENTRY_ID, "fb") == TextType()
 
 
 def test_imported_exception_base_is_built_before_child(tmp_path: Path) -> None:
     """A child exception inherits fields from an open-imported base exception."""
-    from agm.agl.semantics.types import ExceptionType
-    from agm.agl.typecheck.graph import CheckedModuleGraph
-
     modules = {
         "entry": (
             "import a\n"
@@ -554,11 +518,11 @@ def test_imported_exception_base_is_built_before_child(tmp_path: Path) -> None:
             "  detail: text"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    cg = _check_graph(tmp_path, modules)
     child_type = cg.graph_type_table[(ModuleId.from_dotted("a"), "Child")]
     assert isinstance(child_type, ExceptionType)
     assert "detail" in child_type.fields
+    assert _binding_value_type(cg, ENTRY_ID, "value") == TextType()
 
 
 def test_imported_exception_base_ignores_non_type_export(tmp_path: Path) -> None:
@@ -583,8 +547,6 @@ def test_imported_exception_base_ignores_non_type_export(tmp_path: Path) -> None
 
 def test_enum_variant_qualification(tmp_path: Path) -> None:
     """'mylib::Color.Red' where Color is an enum in module mylib resolves correctly."""
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             "import mylib qualified\n"
@@ -598,16 +560,13 @@ def test_enum_variant_qualification(tmp_path: Path) -> None:
             "  | Blue"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
-
-    # Verify the type stamped on the Color type in the graph type table has the
-    # right module_id
+    cg = _check_graph(tmp_path, modules)
     mylib_id = ModuleId.from_dotted("mylib")
-    assert (mylib_id, "Color") in cg.graph_type_table  # type: ignore[attr-defined]
-    color_type = cg.graph_type_table[(mylib_id, "Color")]  # type: ignore[attr-defined, index]
+    assert (mylib_id, "Color") in cg.graph_type_table
+    color_type = cg.graph_type_table[(mylib_id, "Color")]
     assert isinstance(color_type, EnumType)
-    assert color_type.module_id == mylib_id  # type: ignore[attr-defined]
+    assert color_type.module_id == mylib_id
+    assert _binding_value_type(cg, ENTRY_ID, "c") == EnumType("Color", {}, module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -617,8 +576,6 @@ def test_enum_variant_qualification(tmp_path: Path) -> None:
 
 def test_self_ref_type(tmp_path: Path) -> None:
     """'::Point' in a module references its own module's Point record."""
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             "import mylib\n"
@@ -633,8 +590,9 @@ def test_self_ref_type(tmp_path: Path) -> None:
             "def origin() -> ::Point = Point(x = 0, y = 0)"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    mylib_id = ModuleId.from_dotted("mylib")
+    cg = _check_graph(tmp_path, modules)
+    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Point", {}, module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -644,11 +602,6 @@ def test_self_ref_type(tmp_path: Path) -> None:
 
 def test_agent_typed_arg_in_imported_function(tmp_path: Path) -> None:
     """An imported function accepting agent-typed arg can be called from entry."""
-    from agm.agl.typecheck.graph import (  # type: ignore[import-untyped]
-        CheckedModuleGraph,
-        check_graph,
-    )
-
     caps_with_agent = HostCapabilities(
         agent_names=frozenset({"bot"}),
         has_default_agent=True,
@@ -672,9 +625,12 @@ def test_agent_typed_arg_in_imported_function(tmp_path: Path) -> None:
         ),
     }
     mg = _make_graph_from_files(tmp_path, modules)
-    rg = resolve_graph(mg)  # type: ignore[arg-type]
-    cg: object = check_graph(rg, caps_with_agent)
-    assert isinstance(cg, CheckedModuleGraph)
+    rg = resolve_graph(mg)
+    cg = check_graph(rg, caps_with_agent)
+    # Verify the agent-typed-arg path is exercised: bot must be agent-typed
+    assert _agent_binding_type(cg, ENTRY_ID, "bot") == AgentType()
+    # Verify the greet call returns text
+    assert _binding_value_type(cg, ENTRY_ID, "result") == TextType()
 
 
 # ---------------------------------------------------------------------------
@@ -684,8 +640,6 @@ def test_agent_typed_arg_in_imported_function(tmp_path: Path) -> None:
 
 def test_unqualified_constructor_from_open_import(tmp_path: Path) -> None:
     """When Color is open-imported from foo, 'Color.Red' (bare variant) resolves to foo::Color."""
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             "import mylib\n"
@@ -699,15 +653,14 @@ def test_unqualified_constructor_from_open_import(tmp_path: Path) -> None:
             "  | Blue"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
-
-    # The type of 'c' should have module_id == mylib (not ENTRY_ID)
     mylib_id = ModuleId.from_dotted("mylib")
-    assert (mylib_id, "Color") in cg.graph_type_table  # type: ignore[attr-defined]
-    color_type = cg.graph_type_table[(mylib_id, "Color")]  # type: ignore[attr-defined, index]
+    cg = _check_graph(tmp_path, modules)
+    assert (mylib_id, "Color") in cg.graph_type_table
+    color_type = cg.graph_type_table[(mylib_id, "Color")]
     assert isinstance(color_type, EnumType)
-    assert color_type.module_id == mylib_id  # type: ignore[attr-defined]
+    assert color_type.module_id == mylib_id
+    # Pin c's binding type: must be mylib::Color, not ENTRY_ID::Color
+    assert _binding_value_type(cg, ENTRY_ID, "c") == EnumType("Color", {}, module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -717,8 +670,6 @@ def test_unqualified_constructor_from_open_import(tmp_path: Path) -> None:
 
 def test_graph_type_table_populated(tmp_path: Path) -> None:
     """graph_type_table in CheckedModuleGraph contains all public types stamped with module_id."""
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             "import mylib\n"
@@ -733,20 +684,18 @@ def test_graph_type_table_populated(tmp_path: Path) -> None:
             "  | South"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
-
+    cg = _check_graph(tmp_path, modules)
     mylib_id = ModuleId.from_dotted("mylib")
-    assert (mylib_id, "Point") in cg.graph_type_table  # type: ignore[attr-defined]
-    assert (mylib_id, "Direction") in cg.graph_type_table  # type: ignore[attr-defined]
+    assert (mylib_id, "Point") in cg.graph_type_table
+    assert (mylib_id, "Direction") in cg.graph_type_table
 
-    pt = cg.graph_type_table[(mylib_id, "Point")]  # type: ignore[attr-defined, index]
+    pt = cg.graph_type_table[(mylib_id, "Point")]
     assert isinstance(pt, RecordType)
-    assert pt.module_id == mylib_id  # type: ignore[attr-defined]
+    assert pt.module_id == mylib_id
 
-    dir_type = cg.graph_type_table[(mylib_id, "Direction")]  # type: ignore[attr-defined, index]
+    dir_type = cg.graph_type_table[(mylib_id, "Direction")]
     assert isinstance(dir_type, EnumType)
-    assert dir_type.module_id == mylib_id  # type: ignore[attr-defined]
+    assert dir_type.module_id == mylib_id
 
 
 # ---------------------------------------------------------------------------
@@ -756,11 +705,6 @@ def test_graph_type_table_populated(tmp_path: Path) -> None:
 
 def test_checked_module_shape(tmp_path: Path) -> None:
     """CheckedModule has node_types, contract_specs, warnings, function_signatures."""
-    from agm.agl.typecheck.graph import (  # type: ignore[import-untyped]
-        CheckedModule,
-        CheckedModuleGraph,
-    )
-
     modules = {
         "entry": (
             "import mylib\n"
@@ -772,15 +716,14 @@ def test_checked_module_shape(tmp_path: Path) -> None:
             "def getValue() -> int = 42"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
-
-    entry_mod = cg.modules[ENTRY_ID]  # type: ignore[attr-defined, index]
+    cg = _check_graph(tmp_path, modules)
+    entry_mod = cg.modules[ENTRY_ID]
     assert isinstance(entry_mod, CheckedModule)
     assert hasattr(entry_mod, "node_types")
     assert hasattr(entry_mod, "contract_specs")
     assert hasattr(entry_mod, "warnings")
     assert hasattr(entry_mod, "function_signatures")
+    assert _binding_value_type(cg, ENTRY_ID, "x") == IntType()
 
 
 # ---------------------------------------------------------------------------
@@ -790,11 +733,8 @@ def test_checked_module_shape(tmp_path: Path) -> None:
 
 def test_checked_module_graph_entry_id(tmp_path: Path) -> None:
     """CheckedModuleGraph.entry_id == ENTRY_ID."""
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
-    cg: object = _check_graph(tmp_path, {"entry": "()"})
-    assert isinstance(cg, CheckedModuleGraph)
-    assert cg.entry_id == ENTRY_ID  # type: ignore[attr-defined]
+    cg = _check_graph(tmp_path, {"entry": "()"})
+    assert cg.entry_id == ENTRY_ID
 
 
 # ---------------------------------------------------------------------------
@@ -804,9 +744,6 @@ def test_checked_module_graph_entry_id(tmp_path: Path) -> None:
 
 def test_type_alias_in_module_graph(tmp_path: Path) -> None:
     """A type alias in a library module is stored in the graph type table."""
-    from agm.agl.typecheck import IntType
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             "import mylib\n"
@@ -815,14 +752,13 @@ def test_type_alias_in_module_graph(tmp_path: Path) -> None:
         ),
         "mylib": "type Number = int",
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
-
+    cg = _check_graph(tmp_path, modules)
     mylib_id = ModuleId.from_dotted("mylib")
-    assert (mylib_id, "Number") in cg.graph_type_table  # type: ignore[attr-defined]
+    assert (mylib_id, "Number") in cg.graph_type_table
     # The alias should resolve to int
-    t = cg.graph_type_table[(mylib_id, "Number")]  # type: ignore[attr-defined, index]
+    t = cg.graph_type_table[(mylib_id, "Number")]
     assert isinstance(t, IntType)
+    assert _binding_value_type(cg, ENTRY_ID, "n") == IntType()
 
 
 # ---------------------------------------------------------------------------
@@ -840,7 +776,7 @@ def test_qualified_ref_to_function_is_type_error(tmp_path: Path) -> None:
         ),
         "mylib": "def getValue() -> int = 42",
     }
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglTypeError, match="does not name a type"):
         _check_graph(tmp_path, modules)
 
 
@@ -863,7 +799,7 @@ def test_unknown_module_qualifier_error(tmp_path: Path) -> None:
             "def mkPoint() -> Point = Point(x = 1)"
         ),
     }
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglTypeError, match="Unknown module qualifier"):
         _check_graph(tmp_path, modules)
 
 
@@ -885,7 +821,7 @@ def test_module_qualified_constructor_not_enum_error(tmp_path: Path) -> None:
             "  x: int"
         ),
     }
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglTypeError, match="not a known enum type"):
         _check_graph(tmp_path, modules)
 
 
@@ -908,7 +844,7 @@ def test_module_qualified_constructor_missing_variant_error(tmp_path: Path) -> N
             "  | Blue"
         ),
     }
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglTypeError, match="does not exist in enum"):
         _check_graph(tmp_path, modules)
 
 
@@ -919,8 +855,6 @@ def test_module_qualified_constructor_missing_variant_error(tmp_path: Path) -> N
 
 def test_module_qualified_record_constructor(tmp_path: Path) -> None:
     """'mylib::Point(x = 1, y = 2)' constructs a record from an imported module."""
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             "import mylib qualified\n"
@@ -933,8 +867,9 @@ def test_module_qualified_record_constructor(tmp_path: Path) -> None:
             "  y: int"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    mylib_id = ModuleId.from_dotted("mylib")
+    cg = _check_graph(tmp_path, modules)
+    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Point", {}, module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -944,8 +879,6 @@ def test_module_qualified_record_constructor(tmp_path: Path) -> None:
 
 def test_self_ref_type_graph_mode(tmp_path: Path) -> None:
     """'::Point' self-reference resolves to the current module's own Point type."""
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             "import mylib\n"
@@ -959,8 +892,9 @@ def test_self_ref_type_graph_mode(tmp_path: Path) -> None:
             "def origin() -> ::Point = Point(x = 0, y = 0)"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    mylib_id = ModuleId.from_dotted("mylib")
+    cg = _check_graph(tmp_path, modules)
+    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Point", {}, module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -990,7 +924,7 @@ def test_module_qualified_variant_qualifier_mismatch(tmp_path: Path) -> None:
             "  | Blue"
         ),
     }
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglTypeError, match="resolves to enum"):
         _check_graph(tmp_path, modules)
 
 
@@ -1015,12 +949,12 @@ def test_name_not_in_s_qualified_lookup(tmp_path: Path) -> None:
             "def mkPoint() -> Point = Point(x = 1)"
         ),
     }
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglScopeError, match="not in the imported set"):
         _check_graph(tmp_path, modules)
 
 
 # ---------------------------------------------------------------------------
-# Coverage: _check_module_qualified_variant: resolved is not an enum (line 1634)
+# Coverage: _check_module_qualified_variant: resolved is not an enum type.
 # ---------------------------------------------------------------------------
 
 
@@ -1042,12 +976,12 @@ def test_module_qualified_variant_qualifier_is_not_enum(tmp_path: Path) -> None:
             "  | Blue"
         ),
     }
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglTypeError, match="not a known enum type"):
         _check_graph(tmp_path, modules)
 
 
 # ---------------------------------------------------------------------------
-# Coverage: _check_module_qualified_variant: resolve_type_expr raises (line 1627)
+# Coverage: _check_module_qualified_variant: resolve_type_expr raises on unknown type.
 # ---------------------------------------------------------------------------
 
 
@@ -1067,12 +1001,12 @@ def test_module_qualified_variant_unknown_enum_in_pattern(tmp_path: Path) -> Non
             "  | Blue"
         ),
     }
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglTypeError, match="not a known enum type"):
         _check_graph(tmp_path, modules)
 
 
 # ---------------------------------------------------------------------------
-# Coverage: _check_module_qualified_constructor: enum used as constructor (line 1768)
+# Coverage: _check_module_qualified_constructor: enum used as constructor without a variant.
 # ---------------------------------------------------------------------------
 
 
@@ -1090,12 +1024,12 @@ def test_module_qualified_enum_as_constructor_error(tmp_path: Path) -> None:
             "  | Blue"
         ),
     }
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglTypeError, match="is a type name, not a value"):
         _check_graph(tmp_path, modules)
 
 
 # ---------------------------------------------------------------------------
-# Coverage: _check_module_qualified_constructor: unknown name (line 1775)
+# Coverage: _check_module_qualified_constructor: unknown name in qualified access.
 # ---------------------------------------------------------------------------
 
 
@@ -1113,19 +1047,17 @@ def test_module_qualified_unknown_constructor_error(tmp_path: Path) -> None:
             "  | Blue"
         ),
     }
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglScopeError, match="not in the imported set"):
         _check_graph(tmp_path, modules)
 
 
 # ---------------------------------------------------------------------------
-# Coverage: env.py get_open_imported_enum_candidates: matching variant (line 562)
+# Coverage: get_open_imported_enum_candidates returns the matching enum for a bare variant.
 # ---------------------------------------------------------------------------
 
 
 def test_open_imported_enum_variant_unqualified_bare(tmp_path: Path) -> None:
     """Open-imported enum variant used as bare constructor resolves correctly."""
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             "import mylib\n"
@@ -1139,19 +1071,18 @@ def test_open_imported_enum_variant_unqualified_bare(tmp_path: Path) -> None:
             "  | Blue"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    mylib_id = ModuleId.from_dotted("mylib")
+    cg = _check_graph(tmp_path, modules)
+    assert _binding_value_type(cg, ENTRY_ID, "c") == EnumType("Color", {}, module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
-# Coverage: env.py _resolve_qualified_name_type: ::Name fallback when not in graph table (line 509)
+# Coverage: _resolve_qualified_name_type falls back to built-in type when not in graph table.
 # ---------------------------------------------------------------------------
 
 
 def test_self_ref_type_builtin_exception_fallback(tmp_path: Path) -> None:
     """'::Abort' self-reference in a module falls back to built-in exception type."""
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             "import mylib\n"
@@ -1164,12 +1095,14 @@ def test_self_ref_type_builtin_exception_fallback(tmp_path: Path) -> None:
             "def boom() -> ::Abort = raise Abort(message = \"oops\")"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    cg = _check_graph(tmp_path, modules)
+    t = _binding_value_type(cg, ENTRY_ID, "e")
+    assert isinstance(t, ExceptionType)
+    assert t.name == "Abort"
 
 
 # ---------------------------------------------------------------------------
-# Coverage: env.py _resolve_qualified_name_type: qname is None (name not in S) (line 523)
+# Coverage: _resolve_qualified_name_type raises when the qualified name is inaccessible.
 # ---------------------------------------------------------------------------
 
 
@@ -1187,12 +1120,12 @@ def test_qualified_type_not_in_s_error(tmp_path: Path) -> None:
             "def pub() -> int = 1"
         ),
     }
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglTypeError, match="not accessible via qualifier"):
         _check_graph(tmp_path, modules)
 
 
 # ---------------------------------------------------------------------------
-# Coverage: env.py _resolve_name_type: ambiguous open import (line 494)
+# Coverage: _resolve_name_type raises for an ambiguous open import.
 # ---------------------------------------------------------------------------
 
 
@@ -1216,19 +1149,17 @@ def test_ambiguous_open_import_type_error(tmp_path: Path) -> None:
             "  | Yellow"
         ),
     }
-    with pytest.raises((AglScopeError, AglTypeError)):
+    with pytest.raises(AglTypeError, match="Ambiguous type"):
         _check_graph(tmp_path, modules)
 
 
 # ---------------------------------------------------------------------------
-# Coverage: env.py get_open_imported_enum_candidates: non-enum type in loop (566->560)
+# Coverage: get_open_imported_enum_candidates skips non-enum types during variant lookup.
 # ---------------------------------------------------------------------------
 
 
 def test_open_import_non_enum_type_skipped_in_variant_lookup(tmp_path: Path) -> None:
     """Open import has a Record and Enum; searching for a variant skips the Record."""
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             "import mylib\n"
@@ -1245,8 +1176,9 @@ def test_open_import_non_enum_type_skipped_in_variant_lookup(tmp_path: Path) -> 
             "  | Blue"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    mylib_id = ModuleId.from_dotted("mylib")
+    cg = _check_graph(tmp_path, modules)
+    assert _binding_value_type(cg, ENTRY_ID, "c") == EnumType("Color", {}, module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1256,13 +1188,11 @@ def test_open_import_non_enum_type_skipped_in_variant_lookup(tmp_path: Path) -> 
 
 def test_open_import_dedup_in_variant_lookup(tmp_path: Path) -> None:
     """When a type is open-imported under two names, it is deduplicated in variant lookup."""
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             # Two import declarations expose (mylib, "Color") under two unqualified names:
             # "Color" (via using Color) and "C" (via using Color as C).
-            # The seen-set dedup at env.py line 562–563 fires on the second iteration.
+            # The seen-set dedup fires when the same type is open-imported under two names.
             "import mylib using Color\n"
             "import mylib using Color as C\n"
             "let x: Color = Red\n"
@@ -1274,8 +1204,9 @@ def test_open_import_dedup_in_variant_lookup(tmp_path: Path) -> None:
             "  | Blue"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    mylib_id = ModuleId.from_dotted("mylib")
+    cg = _check_graph(tmp_path, modules)
+    assert _binding_value_type(cg, ENTRY_ID, "x") == EnumType("Color", {}, module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1299,9 +1230,6 @@ def test_cross_module_field_type_single_direction(tmp_path: Path) -> None:
     After the fix: 'w.c' returns payload::Data (with n: int field accessible),
     and the whole program typechecks successfully.
     """
-    from agm.agl.typecheck import IntType
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             "import lib\n"
@@ -1320,19 +1248,18 @@ def test_cross_module_field_type_single_direction(tmp_path: Path) -> None:
             "  n: int"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    cg = _check_graph(tmp_path, modules)
 
     payload_id = ModuleId.from_dotted("payload")
     lib_id = ModuleId.from_dotted("lib")
 
-    data_type = cg.graph_type_table[(payload_id, "Data")]  # type: ignore[attr-defined, index]
+    data_type = cg.graph_type_table[(payload_id, "Data")]
     assert isinstance(data_type, RecordType)
     assert data_type.fields == {"n": IntType()}, (
         f"payload::Data must have field 'n: int', got {data_type.fields}"
     )
 
-    wrapper_type = cg.graph_type_table[(lib_id, "Wrapper")]  # type: ignore[attr-defined, index]
+    wrapper_type = cg.graph_type_table[(lib_id, "Wrapper")]
     assert isinstance(wrapper_type, RecordType)
     # Wrapper.c must hold the CANONICAL (fully built) Data type, not an empty shell
     assert wrapper_type.fields.get("c") == data_type, (
@@ -1352,8 +1279,6 @@ def test_cross_module_field_type_mutual_import_cycle(tmp_path: Path) -> None:
     After the fix: both records are fully built, round-trip field access
     and assignability work correctly.
     """
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             "import modA\n"
@@ -1381,15 +1306,14 @@ def test_cross_module_field_type_mutual_import_cycle(tmp_path: Path) -> None:
             "def makeBar() -> Bar = Bar(f = modA::makeFoo())"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    cg = _check_graph(tmp_path, modules)
 
     mod_a = ModuleId.from_dotted("modA")
     mod_b = ModuleId.from_dotted("modB")
 
-    foo_type = cg.graph_type_table[(mod_a, "Foo")]  # type: ignore[attr-defined, index]
-    color_type = cg.graph_type_table[(mod_b, "Color")]  # type: ignore[attr-defined, index]
-    bar_type = cg.graph_type_table[(mod_b, "Bar")]  # type: ignore[attr-defined, index]
+    foo_type = cg.graph_type_table[(mod_a, "Foo")]
+    color_type = cg.graph_type_table[(mod_b, "Color")]
+    bar_type = cg.graph_type_table[(mod_b, "Bar")]
 
     assert isinstance(foo_type, RecordType)
     assert isinstance(color_type, EnumType)
@@ -1414,9 +1338,6 @@ def test_cross_module_enum_variant_field_type(tmp_path: Path) -> None:
     After the fix the variant field type captures the fully-built Data type
     (with fields populated), not an empty shell.
     """
-    from agm.agl.typecheck import IntType
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             "import carrier\n"
@@ -1436,14 +1357,13 @@ def test_cross_module_enum_variant_field_type(tmp_path: Path) -> None:
             "  n: int"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    cg = _check_graph(tmp_path, modules)
 
     payload_id = ModuleId.from_dotted("payload")
     carrier_id = ModuleId.from_dotted("carrier")
 
-    data_type = cg.graph_type_table[(payload_id, "Data")]  # type: ignore[attr-defined, index]
-    envelope_type = cg.graph_type_table[(carrier_id, "Envelope")]  # type: ignore[attr-defined, index]
+    data_type = cg.graph_type_table[(payload_id, "Data")]
+    envelope_type = cg.graph_type_table[(carrier_id, "Envelope")]
 
     assert isinstance(data_type, RecordType)
     assert data_type.fields == {"n": IntType()}
@@ -1541,8 +1461,6 @@ def test_cross_module_mismatch_message_qualifies_type(tmp_path: Path) -> None:
 
 def test_type_expr_deps_self_ref_qualifier(tmp_path: Path) -> None:
     """A field typed '::OwnType' creates a self-dep (::Name qualifier path)."""
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             "import mylib\n"
@@ -1558,14 +1476,13 @@ def test_type_expr_deps_self_ref_qualifier(tmp_path: Path) -> None:
             "def mk() -> Wrapper = Wrapper(c = Inner(n = 1))"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    mylib_id = ModuleId.from_dotted("mylib")
+    cg = _check_graph(tmp_path, modules)
+    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Wrapper", {}, module_id=mylib_id)
 
 
 def test_type_expr_deps_qualified_field(tmp_path: Path) -> None:
     """A field typed 'other::Type' creates a cross-module dep (qualified path)."""
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             "import mylib qualified\n"
@@ -1583,14 +1500,13 @@ def test_type_expr_deps_qualified_field(tmp_path: Path) -> None:
             "  n: int"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    mylib_id = ModuleId.from_dotted("mylib")
+    cg = _check_graph(tmp_path, modules)
+    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Wrapper", {}, module_id=mylib_id)
 
 
 def test_type_expr_deps_unqualified_open_import_field(tmp_path: Path) -> None:
     """A field typed with an open-imported name creates a dep (unqualified path)."""
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             "import mylib\n"
@@ -1609,14 +1525,13 @@ def test_type_expr_deps_unqualified_open_import_field(tmp_path: Path) -> None:
             "  n: int"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    mylib_id = ModuleId.from_dotted("mylib")
+    cg = _check_graph(tmp_path, modules)
+    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Wrapper", {}, module_id=mylib_id)
 
 
 def test_type_expr_deps_list_field(tmp_path: Path) -> None:
     """A field typed 'list[other::Type]' recurses into the elem type for deps."""
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             "import mylib\n"
@@ -1634,14 +1549,13 @@ def test_type_expr_deps_list_field(tmp_path: Path) -> None:
             "  n: int"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    mylib_id = ModuleId.from_dotted("mylib")
+    cg = _check_graph(tmp_path, modules)
+    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Wrapper", {}, module_id=mylib_id)
 
 
 def test_type_expr_deps_dict_field(tmp_path: Path) -> None:
     """A field typed 'dict[text, other::Type]' recurses into the value type."""
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             "import mylib\n"
@@ -1659,15 +1573,13 @@ def test_type_expr_deps_dict_field(tmp_path: Path) -> None:
             "  n: int"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    mylib_id = ModuleId.from_dotted("mylib")
+    cg = _check_graph(tmp_path, modules)
+    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Wrapper", {}, module_id=mylib_id)
 
 
 def test_type_expr_deps_alias_to_cross_module(tmp_path: Path) -> None:
     """A type alias whose target is a cross-module type creates a dep (alias path)."""
-    from agm.agl.typecheck import IntType
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             "import mylib\n"
@@ -1684,16 +1596,16 @@ def test_type_expr_deps_alias_to_cross_module(tmp_path: Path) -> None:
             "  n: int"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    cg = _check_graph(tmp_path, modules)
     mylib_id = ModuleId.from_dotted("mylib")
-    t = cg.graph_type_table[(mylib_id, "MyNum")]  # type: ignore[attr-defined, index]
+    t = cg.graph_type_table[(mylib_id, "MyNum")]
     assert isinstance(t, IntType)
+    assert _binding_value_type(cg, ENTRY_ID, "n") == IntType()
 
 
 # ---------------------------------------------------------------------------
-# Coverage: graph.py _topological_sort_types cycle detection (lines 412-413)
-# and _build_graph_type_table cross-module cycle error (lines 527-537)
+# Coverage: _topological_sort_types cycle detection
+# and _build_graph_type_table cross-module cycle error.
 # This is different from the existing test (which tests same-module recursion)
 # and exercises the cross-module structural cycle path.
 # ---------------------------------------------------------------------------
@@ -1730,7 +1642,7 @@ def test_cross_module_structural_cycle_raises_error(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: types.py RecordType.__repr__ with non-ENTRY_ID module_id (line 179)
+# Coverage: RecordType.__repr__ renders as 'module::Name' for non-entry module types.
 # ---------------------------------------------------------------------------
 
 
@@ -1779,12 +1691,10 @@ def test_type_alias_with_cross_module_dep_creates_dep(tmp_path: Path) -> None:
     """A TypeAlias whose target is a cross-module user type creates a dep entry.
 
     This exercises the 'elif isinstance(item, TypeAlias)' branch in
-    _compute_type_deps (line 347) with a dep that actually appears in
+    _compute_type_deps with a dep that actually appears in
     all_type_keys, and also exercises the branch where in_degree is decremented
     but does not reach 0 (diamond dependency pattern for Kahn's algorithm).
     """
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             "import mylib\n"
@@ -1805,19 +1715,18 @@ def test_type_alias_with_cross_module_dep_creates_dep(tmp_path: Path) -> None:
             "  n: int"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    mylib_id = ModuleId.from_dotted("mylib")
+    cg = _check_graph(tmp_path, modules)
+    assert _binding_value_type(cg, ENTRY_ID, "w") == RecordType("Wrapper", {}, module_id=mylib_id)
 
 
 def test_type_expr_deps_func_field(tmp_path: Path) -> None:
     """A field typed with a function type recursing into params and result.
 
-    This exercises the FuncT branch in _collect_type_expr_deps (lines 298-300).
+    This exercises the FuncT branch in _collect_type_expr_deps.
     The function type's param type is a cross-module user type, so the FuncT
     walker must descend into the param to find the dependency.
     """
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             "import mylib\n"
@@ -1837,8 +1746,9 @@ def test_type_expr_deps_func_field(tmp_path: Path) -> None:
             "  n: int"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    mylib_id = ModuleId.from_dotted("mylib")
+    cg = _check_graph(tmp_path, modules)
+    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Wrapper", {}, module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1851,11 +1761,9 @@ def test_type_expr_deps_func_field(tmp_path: Path) -> None:
 def test_type_expr_deps_self_ref_to_builtin(tmp_path: Path) -> None:
     """A '::BuiltinType' self-ref in a field creates NO dep (key not in all_type_keys).
 
-    This exercises the 272->exit branch in _collect_type_expr_deps where the
+    This exercises the path in _collect_type_expr_deps where the
     self-ref target is a built-in type (not in all_type_keys), so no dep is added.
     """
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     modules = {
         "entry": (
             "import mylib\n"
@@ -1869,18 +1777,17 @@ def test_type_expr_deps_self_ref_to_builtin(tmp_path: Path) -> None:
             "def mk() -> Wrapper = Wrapper(c = exec(\"echo hi\"))"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    mylib_id = ModuleId.from_dotted("mylib")
+    cg = _check_graph(tmp_path, modules)
+    assert _binding_value_type(cg, ENTRY_ID, "w") == RecordType("Wrapper", {}, module_id=mylib_id)
 
 
 def test_type_expr_deps_open_import_to_builtin_variant(tmp_path: Path) -> None:
     """An unqualified name that's a builtin creates NO dep (key not in all_type_keys).
 
-    This exercises the 292->290 branch in _collect_type_expr_deps where the
+    This exercises the path in _collect_type_expr_deps where the
     candidate key (from open-import unqualified lookup) is not in all_type_keys.
     """
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
     # When no open-imported name matches a NameT, the loop finds no candidates
     # and all_type_keys guard is not exercised. Here we use a record field
     # with an unqualified name that resolves through open import to a user type.
@@ -1900,8 +1807,9 @@ def test_type_expr_deps_open_import_to_builtin_variant(tmp_path: Path) -> None:
             "def mk() -> Wrapper = Wrapper(n = 42)"
         ),
     }
-    cg: object = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    mylib_id = ModuleId.from_dotted("mylib")
+    cg = _check_graph(tmp_path, modules)
+    assert _binding_value_type(cg, ENTRY_ID, "w") == RecordType("Wrapper", {}, module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -2070,8 +1978,6 @@ def test_cross_file_mutual_recursion_qualified(tmp_path: Path) -> None:
     before any body is checked.  This test MUST FAIL before the pre-pass is
     added and MUST PASS after.
     """
-    from agm.agl.typecheck.graph import CheckedModuleGraph
-
     modules = {
         "even": (
             "import odd\n"
@@ -2092,12 +1998,12 @@ def test_cross_file_mutual_recursion_qualified(tmp_path: Path) -> None:
         ),
     }
     cg = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
     mid_even = ModuleId.from_dotted("even")
     mid_odd = ModuleId.from_dotted("odd")
     assert mid_even in cg.modules
     assert mid_odd in cg.modules
     assert ENTRY_ID in cg.modules
+    assert _binding_value_type(cg, ENTRY_ID, "result") == BoolType()
 
 
 def test_cross_file_mutual_recursion_open_import(tmp_path: Path) -> None:
@@ -2108,8 +2014,6 @@ def test_cross_file_mutual_recursion_open_import(tmp_path: Path) -> None:
 
     This test MUST FAIL before the function-signature pre-pass and MUST PASS after.
     """
-    from agm.agl.typecheck.graph import CheckedModuleGraph
-
     modules = {
         "even": (
             "import odd\n"
@@ -2130,12 +2034,12 @@ def test_cross_file_mutual_recursion_open_import(tmp_path: Path) -> None:
         ),
     }
     cg = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
     mid_even = ModuleId.from_dotted("even")
     mid_odd = ModuleId.from_dotted("odd")
     assert mid_even in cg.modules
     assert mid_odd in cg.modules
     assert ENTRY_ID in cg.modules
+    assert _binding_value_type(cg, ENTRY_ID, "result") == BoolType()
 
 
 # ---------------------------------------------------------------------------
@@ -2146,18 +2050,16 @@ def test_cross_file_mutual_recursion_open_import(tmp_path: Path) -> None:
 def test_graph_func_def_with_defaulted_param(tmp_path: Path) -> None:
     """A library function with a defaulted parameter typechecks successfully.
 
-    Covers the ``seen_required = False`` branch (line 652) in
+    Covers the ``seen_required = False`` branch in
     ``_build_graph_func_sig_table``, which is only reached when a FuncDef in a
     non-entry module has at least one defaulted parameter.
     """
-    from agm.agl.typecheck.graph import CheckedModuleGraph
-
     modules = {
         "lib": "def add(a: int, b: int = 0) -> int = a + b",
         "entry": "import lib\nlet r = lib::add(10)\nr",
     }
     cg = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    assert _binding_value_type(cg, ENTRY_ID, "r") == IntType()
 
 
 def test_graph_func_def_required_after_default_error(tmp_path: Path) -> None:
@@ -2227,7 +2129,7 @@ def test_cross_module_same_name_qualified_call_false_reject(tmp_path: Path) -> N
     }
     # Must NOT raise — the qualified call uses lib's signature (int param).
     cg = _check_graph(tmp_path, modules)
-    assert cg is not None
+    assert _binding_value_type(cg, ENTRY_ID, "r") == IntType()
 
 
 def test_cross_module_same_name_qualified_call_false_accept(tmp_path: Path) -> None:
@@ -2286,7 +2188,8 @@ def test_two_library_functions_same_name_different_signatures(tmp_path: Path) ->
         ),
     }
     cg = _check_graph(tmp_path, modules_ok)
-    assert cg is not None
+    assert _binding_value_type(cg, ENTRY_ID, "ra") == IntType()
+    assert _binding_value_type(cg, ENTRY_ID, "rb") == TextType()
 
     # Swapped: pass text to a::helper (expects int) → type error
     tmp_path2 = tmp_path.parent / (tmp_path.name + "_bad")
@@ -2313,7 +2216,7 @@ def test_two_library_functions_same_name_different_signatures(tmp_path: Path) ->
 
 
 def test_cross_module_constructor_call_positional_args_rejected(tmp_path: Path) -> None:
-    """Coverage: checker.py _check_cross_module_constructor_call line 2639.
+    """Coverage: _check_cross_module_constructor_call rejects positional arguments.
 
     Calling a cross-module record constructor with positional arguments raises AglTypeError.
     """
@@ -2327,36 +2230,52 @@ def test_cross_module_constructor_call_positional_args_rejected(tmp_path: Path) 
 
 def test_cross_module_generic_constructor_call_explicit_type_args(tmp_path: Path) -> None:
     """Cross-module generic constructor with explicit type args: lib::Box::[int](value = 1)."""
+    lib_id = ModuleId.from_dotted("lib")
     modules = {
         "lib": "record Box[T]\n  value: T",
-        "entry": "import lib qualified\nlib::Box::[int](value = 1)",
+        "entry": "import lib qualified\nlet r = lib::Box::[int](value = 1)\nr",
     }
-    _check_graph(tmp_path, modules)
+    cg = _check_graph(tmp_path, modules)
+    assert _binding_value_type(cg, ENTRY_ID, "r") == RecordType(
+        "Box", {}, module_id=lib_id, type_args=(IntType(),)
+    )
 
 
 def test_cross_module_generic_constructor_call_inferred_type_args(tmp_path: Path) -> None:
     """Cross-module generic constructor with inferred type args: lib::Box(value = 1)."""
+    lib_id = ModuleId.from_dotted("lib")
     modules = {
         "lib": "record Box[T]\n  value: T",
-        "entry": "import lib qualified\nlib::Box(value = 1)",
+        "entry": "import lib qualified\nlet r = lib::Box(value = 1)\nr",
     }
-    _check_graph(tmp_path, modules)
+    cg = _check_graph(tmp_path, modules)
+    assert _binding_value_type(cg, ENTRY_ID, "r") == RecordType(
+        "Box", {}, module_id=lib_id, type_args=(IntType(),)
+    )
 
 
 def test_open_imported_generic_type_in_annotation(tmp_path: Path) -> None:
+    lib_id = ModuleId.from_dotted("lib")
     modules = {
         "lib": "record Box[T]\n  value: T",
         "entry": "import lib\nlet x: Box[int] = Box(value = 1)\nx",
     }
-    _check_graph(tmp_path, modules)
+    cg = _check_graph(tmp_path, modules)
+    assert _binding_value_type(cg, ENTRY_ID, "x") == RecordType(
+        "Box", {}, module_id=lib_id, type_args=(IntType(),)
+    )
 
 
 def test_qualified_generic_type_in_annotation(tmp_path: Path) -> None:
+    lib_id = ModuleId.from_dotted("lib")
     modules = {
         "lib": "record Box[T]\n  value: T",
         "entry": "import lib qualified\nlet x: lib::Box[int] = lib::Box(value = 1)\nx",
     }
-    _check_graph(tmp_path, modules)
+    cg = _check_graph(tmp_path, modules)
+    assert _binding_value_type(cg, ENTRY_ID, "x") == RecordType(
+        "Box", {}, module_id=lib_id, type_args=(IntType(),)
+    )
 
 
 def test_ambiguous_open_imported_generic_type_rejected(tmp_path: Path) -> None:
@@ -2423,11 +2342,15 @@ def test_unknown_applied_type_with_import_environment_rejected(tmp_path: Path) -
 
 
 def test_cross_module_qualified_generic_enum_explicit_type_args(tmp_path: Path) -> None:
+    lib_id = ModuleId.from_dotted("lib")
     modules = {
         "lib": "enum Option[T]\n  | none\n  | some(value: T)",
-        "entry": "import lib qualified\nlib::Option.some::[int](value = 1)",
+        "entry": "import lib qualified\nlet r = lib::Option.some::[int](value = 1)\nr",
     }
-    _check_graph(tmp_path, modules)
+    cg = _check_graph(tmp_path, modules)
+    assert _binding_value_type(cg, ENTRY_ID, "r") == EnumType(
+        "Option", {}, module_id=lib_id, type_args=(IntType(),)
+    )
 
 
 def test_cross_module_non_generic_constructor_type_args_rejected(tmp_path: Path) -> None:
@@ -2453,16 +2376,23 @@ def test_qualified_same_named_exceptions_keep_module_field_kinds(tmp_path: Path)
 
 
 def test_cross_module_generic_enum_body_resolved(tmp_path: Path) -> None:
-    """Coverage: graph.py _resolve_body_for_one EnumDef branch with generic enum (t is None).
+    """Coverage: _resolve_body_for_one EnumDef branch with generic enum (t is None).
 
     A cross-module generic enum causes ensure_built_enum to register in _generic_types
-    and unregister from _types, so get_type returns None (205->207 branch in graph.py).
+    and unregister from _types, so get_type returns None.
+    The graph_type_table retains the shell (EnumType with module_id set) from Step A.
     """
+    lib_id = ModuleId.from_dotted("lib")
     modules = {
         "lib": "enum Opt[T]\n  | None\n  | Wrap(value: T)",
         "entry": "import lib qualified\n()",
     }
-    _check_graph(tmp_path, modules)
+    cg = _check_graph(tmp_path, modules)
+    # The shell for Opt is in graph_type_table with the correct module_id.
+    opt_type = cg.graph_type_table[(lib_id, "Opt")]
+    assert isinstance(opt_type, EnumType)
+    assert opt_type.name == "Opt"
+    assert opt_type.module_id == lib_id
 
 
 # ---------------------------------------------------------------------------
@@ -2482,15 +2412,15 @@ def test_cross_module_generic_record_template_has_module_id(tmp_path: Path) -> N
     Tested via the internal _build_graph_type_table function to access the
     graph_generic_table, which is not exposed on the public CheckedModuleGraph API.
     """
-    from agm.agl.typecheck.graph import _build_graph_type_table  # type: ignore[import-untyped]
+    from agm.agl.typecheck.graph import _build_graph_type_table
 
     modules = {
         "lib": "record Box[T]\n  value: T",
         "entry": "import lib qualified\n()",
     }
     mg = _make_graph_from_files(tmp_path, modules)
-    rg = resolve_graph(mg)  # type: ignore[arg-type]
-    _gtt, graph_generic_table, _gcts, _gckft = _build_graph_type_table(rg)  # type: ignore[arg-type]
+    rg = resolve_graph(mg)
+    _gtt, graph_generic_table, _gcts, _gckft = _build_graph_type_table(rg)
 
     lib_id = ModuleId.from_dotted("lib")
     gdef = graph_generic_table.get((lib_id, "Box"))
@@ -2512,15 +2442,15 @@ def test_cross_module_generic_enum_template_has_module_id(tmp_path: Path) -> Non
     Tested via the internal _build_graph_type_table function to access the
     graph_generic_table, which is not exposed on the public CheckedModuleGraph API.
     """
-    from agm.agl.typecheck.graph import _build_graph_type_table  # type: ignore[import-untyped]
+    from agm.agl.typecheck.graph import _build_graph_type_table
 
     modules = {
         "lib": "enum Opt[T]\n  | None\n  | Some(value: T)",
         "entry": "import lib qualified\n()",
     }
     mg = _make_graph_from_files(tmp_path, modules)
-    rg = resolve_graph(mg)  # type: ignore[arg-type]
-    _gtt, graph_generic_table, _gcts, _gckft = _build_graph_type_table(rg)  # type: ignore[arg-type]
+    rg = resolve_graph(mg)
+    _gtt, graph_generic_table, _gcts, _gckft = _build_graph_type_table(rg)
 
     lib_id = ModuleId.from_dotted("lib")
     gdef = graph_generic_table.get((lib_id, "Opt"))
@@ -2548,8 +2478,7 @@ def test_parameterized_alias_in_graph_mode(tmp_path: Path) -> None:
     After the fix, type_params are threaded through collect_shells_only and the
     parameterized alias resolves correctly.
     """
-    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
-
+    lib_id = ModuleId.from_dotted("lib")
     modules = {
         # lib declares Pair[A,B] and uses it in a record field —
         # this goes through _resolve_body_for_one → _ensure_built_record →
@@ -2565,7 +2494,11 @@ def test_parameterized_alias_in_graph_mode(tmp_path: Path) -> None:
         ),
     }
     cg = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    # Wrapper is in the graph type table with the correct module_id
+    assert (lib_id, "Wrapper") in cg.graph_type_table
+    wrapper = cg.graph_type_table[(lib_id, "Wrapper")]
+    assert isinstance(wrapper, RecordType)
+    assert wrapper.module_id == lib_id
 
 
 # ---------------------------------------------------------------------------
@@ -2627,7 +2560,6 @@ def test_d5_generic_def_as_value_single_module(tmp_path: Path) -> None:
     # env level: verify that get_function_signature_by_node_id takes priority.
     # This is the path the fixed checker takes; before the fix it only called
     # get_function_signature(ref.name) which returns wrong/None cross-module.
-    from agm.agl.semantics.types import IntType, TypeVarType
     from agm.agl.typecheck.env import FunctionSignature as FS
     from agm.agl.typecheck.env import TypeEnvironment
 
@@ -2670,9 +2602,6 @@ def test_cross_module_generic_func_call_inferred(tmp_path: Path) -> None:
     type_params is threaded into FunctionSignature, so lib::id(5) typechecks and
     infers result type int.
     """
-    from agm.agl.semantics.types import IntType
-    from agm.agl.typecheck.graph import CheckedModuleGraph
-
     modules = {
         "lib": "def id[T](x: T) -> T = x",
         "entry": (
@@ -2682,19 +2611,7 @@ def test_cross_module_generic_func_call_inferred(tmp_path: Path) -> None:
         ),
     }
     cg = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
-
-    # The result of 'let r = lib::id(5)' should be int.
-    entry_mod = cg.modules[ENTRY_ID]
-    # Verify the graph checked without error (the assertion above suffices, but
-    # we also check the result type via the entry module node_types).
-    assert entry_mod is not None
-    # Find the type of the final expression 'r' by checking node_types for IntType.
-    has_int = any(isinstance(t, IntType) for t in entry_mod.node_types.values())
-    assert has_int, (
-        f"Expected IntType in node_types after lib::id(5), "
-        f"got: {list(entry_mod.node_types.values())}"
-    )
+    assert _binding_value_type(cg, ENTRY_ID, "r") == IntType()
 
 
 def test_cross_module_generic_func_call_open_import_inferred(tmp_path: Path) -> None:
@@ -2706,9 +2623,6 @@ def test_cross_module_generic_func_call_open_import_inferred(tmp_path: Path) -> 
     This exercises the same _build_graph_func_sig_table fix but via open import,
     ensuring the inferred result type is int.
     """
-    from agm.agl.semantics.types import IntType
-    from agm.agl.typecheck.graph import CheckedModuleGraph
-
     modules = {
         "lib": "def id[T](x: T) -> T = x",
         "entry": (
@@ -2718,15 +2632,7 @@ def test_cross_module_generic_func_call_open_import_inferred(tmp_path: Path) -> 
         ),
     }
     cg = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
-
-    entry_mod = cg.modules[ENTRY_ID]
-    assert entry_mod is not None
-    has_int = any(isinstance(t, IntType) for t in entry_mod.node_types.values())
-    assert has_int, (
-        f"Expected IntType in node_types after id(5), "
-        f"got: {list(entry_mod.node_types.values())}"
-    )
+    assert _binding_value_type(cg, ENTRY_ID, "r") == IntType()
 
 
 def test_cross_module_generic_func_call_explicit_type_args(tmp_path: Path) -> None:
@@ -2740,8 +2646,6 @@ def test_cross_module_generic_func_call_explicit_type_args(tmp_path: Path) -> No
     After the fix: type_params=("T",) is set, the explicit instantiation is
     accepted and the result type is int.
     """
-    from agm.agl.typecheck.graph import CheckedModuleGraph
-
     modules = {
         "lib": "def id[T](x: T) -> T = x",
         "entry": (
@@ -2751,7 +2655,7 @@ def test_cross_module_generic_func_call_explicit_type_args(tmp_path: Path) -> No
         ),
     }
     cg = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    assert _binding_value_type(cg, ENTRY_ID, "r") == IntType()
 
 
 def test_cross_module_generic_func_as_value_d5(tmp_path: Path) -> None:
@@ -2770,8 +2674,6 @@ def test_cross_module_generic_func_as_value_d5(tmp_path: Path) -> None:
     We use open import so 'id' (unqualified) is in scope — the D5 varref path
     triggers on unqualified as well as qualified names.
     """
-    from agm.agl.typecheck.graph import CheckedModuleGraph
-
     modules = {
         "lib": "def id[T](x: T) -> T = x",
         "entry": (
@@ -2781,7 +2683,9 @@ def test_cross_module_generic_func_as_value_d5(tmp_path: Path) -> None:
         ),
     }
     cg = _check_graph(tmp_path, modules)
-    assert isinstance(cg, CheckedModuleGraph)
+    assert _binding_value_type(cg, ENTRY_ID, "f") == FunctionType(
+        params=(IntType(),), result=IntType()
+    )
 
 
 def test_cross_module_generic_func_call_wrong_type_rejected(tmp_path: Path) -> None:

@@ -329,11 +329,9 @@ class ConstructorChecker:
         owner: Type | None = self._ctx._env.get_type(ref.owner_name)
         if owner is None:
             owner = self._ctx._env.resolve_named_type(ref.owner_name)
-        if not isinstance(owner, (RecordType, EnumType, ExceptionType)):
-            raise AglTypeError(
-                f"'{ref.owner_name}' is not a known constructible type.",
-                span=span,
-            )
+        assert isinstance(owner, (RecordType, EnumType, ExceptionType)), (
+            f"'{ref.owner_name}' is not a known constructible type."
+        )
         return owner
 
     def _resolve_constructor_owner_module_id(self, ref: ConstructorRef) -> ModuleId | None:

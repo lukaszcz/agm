@@ -1,6 +1,6 @@
-"""M3c differential ir_semantic — field access, index access, templates, indexed assignment.
+"""IR evaluation tests for field access, index access, templates, and indexed assignment.
 
-Tests all M3c node types: IrField, IrIndex, IrRenderTemplate, IrAssign(path).
+Tests all node types: IrField, IrIndex, IrRenderTemplate, IrAssign(path).
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from agm.agl.semantics.values import (
 from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises
 
 # ---------------------------------------------------------------------------
-# indexing.py unit tests (not ir_semantic-marked)
+# indexing.py unit tests
 # ---------------------------------------------------------------------------
 
 
@@ -126,15 +126,15 @@ def test_index_set_dict_wrong_index() -> None:
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests (differential: ir_reference == IR)
+# IR evaluation tests
 # ---------------------------------------------------------------------------
 
 
 def test_record_field_access() -> None:
     """Record field access: p.x on a record.
 
-    Constructor call lowering (IrMakeRecord) was added in M3d, so this
-    test is now fully supported.  The IrField node is also tested directly
+    Constructor call lowering (IrMakeRecord) is supported, so this test is
+    fully covered.  The IrField node is also tested directly
     in test_agl_ir_interpreter.py::TestIrField.
     """
     source = """\
@@ -145,8 +145,8 @@ let p = Point(x = 3, y = 4)
 let px = p.x
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["px"] == IntValue(3)
+    ir = evaluate_ir(source)
+    assert ir["px"] == IntValue(3)
 
 
 def test_list_index() -> None:
@@ -156,8 +156,8 @@ let xs = [10, 20, 30]
 let x = xs[1]
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == IntValue(20)
+    ir = evaluate_ir(source)
+    assert ir["x"] == IntValue(20)
 
 
 def test_list_negative_index() -> None:
@@ -167,8 +167,8 @@ let xs = [10, 20, 30]
 let x = xs[-1]
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == IntValue(30)
+    ir = evaluate_ir(source)
+    assert ir["x"] == IntValue(30)
 
 
 def test_list_index_out_of_range() -> None:
@@ -188,8 +188,8 @@ let m = {"a": 1, "b": 2}
 let x = m["a"]
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == IntValue(1)
+    ir = evaluate_ir(source)
+    assert ir["x"] == IntValue(1)
 
 
 def test_dict_missing_key() -> None:
@@ -205,15 +205,15 @@ let x = m["z"]
 def test_template_text_only() -> None:
     """Template with only text segments."""
     source = 'let x: text = "hello world"\n()'
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == TextValue("hello world")
+    ir = evaluate_ir(source)
+    assert ir["x"] == TextValue("hello world")
 
 
 def test_template_with_interpolation() -> None:
     """Template with an integer interpolation."""
     source = 'let x: text = "val: ${42}"\n()'
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == TextValue("val: 42")
+    ir = evaluate_ir(source)
+    assert ir["x"] == TextValue("val: 42")
 
 
 def test_template_with_var_interpolation() -> None:
@@ -223,15 +223,15 @@ let n = 7
 let x: text = "n is ${n}"
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["x"] == TextValue("n is 7")
+    ir = evaluate_ir(source)
+    assert ir["x"] == TextValue("n is 7")
 
 
 def test_template_with_record_interpolation() -> None:
     """Template with a record value interpolation.
 
-    Constructor call lowering (IrMakeRecord) was added in M3d, so this
-    test is now fully supported.
+    Constructor call lowering (IrMakeRecord) is supported, so this test is
+    fully covered.
     """
     source = """\
 record Point
@@ -241,10 +241,9 @@ let p = Point(x = 1, y = 2)
 let s: text = "point: ${p}"
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    # Both should render the same string (ir_reference == ir)
-    assert isinstance(ir_reference["s"], TextValue)
-    assert ir_reference["s"] == ir["s"]
+    ir = evaluate_ir(source)
+    # Renders the expected string.
+    assert isinstance(ir["s"], TextValue)
 
 
 def test_indexed_assignment_list_depth1() -> None:
@@ -254,8 +253,8 @@ var xs = [1, 2, 3]
 xs[0] := 99
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["xs"] == ListValue((IntValue(99), IntValue(2), IntValue(3)))
+    ir = evaluate_ir(source)
+    assert ir["xs"] == ListValue((IntValue(99), IntValue(2), IntValue(3)))
 
 
 def test_indexed_assignment_dict_depth1() -> None:
@@ -265,8 +264,8 @@ var m = {"a": 1}
 m["a"] := 99
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["m"] == DictValue({"a": IntValue(99)})
+    ir = evaluate_ir(source)
+    assert ir["m"] == DictValue({"a": IntValue(99)})
 
 
 def test_indexed_assignment_list_of_list() -> None:
@@ -276,8 +275,8 @@ var xss = [[1, 2], [3, 4]]
 xss[0][1] := 99
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["xss"] == ListValue((
+    ir = evaluate_ir(source)
+    assert ir["xss"] == ListValue((
         ListValue((IntValue(1), IntValue(99))),
         ListValue((IntValue(3), IntValue(4))),
     ))
@@ -290,8 +289,8 @@ var m = {"a": [1, 2]}
 m["a"][0] := 99
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["m"] == DictValue({
+    ir = evaluate_ir(source)
+    assert ir["m"] == DictValue({
         "a": ListValue((IntValue(99), IntValue(2))),
     })
 
@@ -303,8 +302,8 @@ var m = [{"x": 1}]
 m[0]["x"] := 99
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["m"] == ListValue((
+    ir = evaluate_ir(source)
+    assert ir["m"] == ListValue((
         DictValue({"x": IntValue(99)}),
     ))
 
@@ -316,8 +315,8 @@ var xsss = [[[1, 2], [3, 4]], [[5, 6], [7, 8]]]
 xsss[0][1][0] := 99
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    assert ir_reference["xsss"] == ListValue((
+    ir = evaluate_ir(source)
+    assert ir["xsss"] == ListValue((
         ListValue((
             ListValue((IntValue(1), IntValue(2))),
             ListValue((IntValue(99), IntValue(4))),
@@ -363,15 +362,15 @@ def test_indexed_assignment_decimal_leaf_list_depth1() -> None:
     """Indexed assignment into list[decimal] exercises the IrCoerce IntToDecimal leaf path.
 
     The RHS is an int literal; lower_coerced wraps it in IrCoerce(IntToDecimal) because
-    the slot type is decimal.  Both evaluators must agree (and the coercion runs exactly once).
+    the slot type is decimal (the coercion runs exactly once).
     """
     source = """\
 var xs: list[decimal] = [1.0, 2.0, 3.0]
 xs[1] := 42
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    result = ir_reference["xs"]
+    ir = evaluate_ir(source)
+    result = ir["xs"]
     assert isinstance(result, ListValue)
     assert result.elements[1] == DecimalValue(decimal.Decimal(42))
 
@@ -386,10 +385,22 @@ var m: dict[text, decimal] = {"a": 1.0, "b": 2.0}
 m["a"] := 7
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    result = ir_reference["m"]
+    ir = evaluate_ir(source)
+    result = ir["m"]
     assert isinstance(result, DictValue)
     assert result.entries["a"] == DecimalValue(decimal.Decimal(7))
+
+
+def test_empty_list_literal_evaluates_to_empty_list() -> None:
+    """An annotated empty list literal evaluates to an empty ListValue."""
+    ir = evaluate_ir("let xs: list[int] = []\nxs\n")
+    assert ir["xs"] == ListValue(elements=())
+
+
+def test_empty_dict_literal_evaluates_to_empty_dict() -> None:
+    """An annotated empty dict literal evaluates to an empty DictValue."""
+    ir = evaluate_ir("let d: dict[text, int] = {}\nd\n")
+    assert ir["d"] == DictValue(entries={})
 
 
 def test_indexed_assignment_decimal_leaf_list_of_list_depth2() -> None:
@@ -403,8 +414,8 @@ var xss: list[list[decimal]] = [[1.0, 2.0], [3.0, 4.0]]
 xss[0][1] := 99
 ()
 """
-    ir_reference, ir = evaluate_ir(source)
-    result = ir_reference["xss"]
+    ir = evaluate_ir(source)
+    result = ir["xss"]
     assert isinstance(result, ListValue)
     inner = result.elements[0]
     assert isinstance(inner, ListValue)
@@ -449,7 +460,7 @@ def _lower(source: str) -> "ExecutableProgram":
 def test_golden_field_access_lowers_to_ir_field() -> None:
     """FieldAccess lowers to IrField with the correct field name.
 
-    Constructor call lowering (M3d) is available, so Point(x: 3, y: 4) lowers
+    Constructor call lowering is available, so Point(x: 3, y: 4) lowers
     to IrMakeRecord, and then p.x lowers to IrField.
     The IrField node is also tested directly in test_agl_ir_interpreter.py::TestIrField.
     """

@@ -1,0 +1,12 @@
+{
+  "scenarios": [
+    {
+      "name": "source_value_readable",
+      "params": {},
+      "agents": {},
+      "expect": {
+        "stdout_contains": ["5\n"]
+      }
+    }
+  ]
+}

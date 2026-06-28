@@ -18,20 +18,28 @@ program    ::= block EOF
 block      ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
 
 item       ::= import_decl                  (* header position only *)
-             | config_pragma                (* header position only *)
-             | "private"? record_def        (* root only *)
-             | "private"? enum_def          (* root only *)
-             | "private"? type_alias        (* root only *)
+             | config_decl                  (* root only *)
+             | modifier? record_def         (* root only *)
+             | modifier? enum_def           (* root only *)
+             | modifier? type_alias         (* root only; "builtin" not allowed *)
              | param_decl                   (* root only *)
              | program_decl                 (* root only *)
              | agent_decl                   (* root only *)
-             | "private"? func_def          (* root only *)
+             | modifier? func_def           (* root only *)
              | let_decl | var_decl
              | expr
+
+modifier   ::= ("private" | "builtin") NEWLINE?
 ```
 
 A block's value is its last item. A `let_decl` or `var_decl` as the final
 item (with no continuation) is a static error.
+
+`"private"` and `"builtin"` are **declaration modifiers** that behave like
+decorators: a modifier may sit on the same line as the declaration it adorns
+(`builtin enum …`) or on the line directly above it (`builtin` then `enum …`)
+— the newline after the modifier is insignificant. `"builtin"` is not allowed
+on a `type_alias`.
 
 ## Import declarations
 
@@ -365,12 +373,15 @@ interpolation ::= "${" expr "}"
 Newlines are not permitted inside `${…}`. Triple-quoted templates are
 dedented as described in [Lexical structure](lexical-structure.md).
 
-## Config pragmas
+## Config declarations
 
 ```ebnf
-config_pragma ::= "config" NAME "=" config_value
-config_value  ::= "true" | "false" | INT | DECIMAL | STRING
+config_decl ::= "config" NAME ("=" expr)?
 ```
+
+The value expression is optional (a bare `config NAME` resolves from the host
+default) and must have the engine-key's declared type; see
+[Program structure](program-structure.md).
 
 ## Deterministic-parse notes
 

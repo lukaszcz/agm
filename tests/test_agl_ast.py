@@ -23,6 +23,7 @@ Covers:
 from __future__ import annotations
 
 import decimal
+import importlib
 from dataclasses import FrozenInstanceError
 
 import pytest
@@ -49,7 +50,7 @@ from agm.agl.syntax import (
     CaseBranch,
     Cast,
     CatchClause,
-    ConfigPragma,
+    ConfigDecl,
     ConstructorPattern,
     DecimalLit,
     DecimalT,
@@ -60,6 +61,7 @@ from agm.agl.syntax import (
     Do,
     ElseSentinel,
     EnumDef,
+    ExceptionDef,
     Expr,
     FieldAccess,
     FuncDef,
@@ -439,7 +441,7 @@ class TestExpressions:
         ops = {BinOp.EQ, BinOp.NEQ, BinOp.LT, BinOp.LE, BinOp.GT, BinOp.GE,
                BinOp.IN, BinOp.AND, BinOp.OR, BinOp.ADD, BinOp.SUB,
                BinOp.MUL, BinOp.DIV}
-        assert len(ops) == 13
+        assert ops == set(BinOp)
 
     def test_unary_not(self) -> None:
         operand = BoolLit(value=True, span=self._s(), node_id=2)
@@ -1023,10 +1025,68 @@ class TestDeclarations:
         args = typing.get_args(Declaration)
         assert FuncDef in args
 
-    def test_config_pragma(self) -> None:
-        node = ConfigPragma(key="log", value=True, span=self._s(), node_id=1)
-        assert node.key == "log"
-        assert node.value is True
+    def test_config_decl(self) -> None:
+        val = BoolLit(value=True, span=self._s(), node_id=2)
+        node = ConfigDecl(name="log", value=val, span=self._s(), node_id=1)
+        assert node.name == "log"
+        assert isinstance(node.value, BoolLit)
+        assert node.value.value is True
+
+    def test_exception_def_fields(self) -> None:
+        """ExceptionDef stores name, fields, base, and privacy/builtin flags."""
+        t = TextT(span=self._s(), node_id=3)
+        f = Param(
+            name="msg", type_expr=t, kind=ParamKind.NAMED_ONLY,
+            default=None, span=self._s(), node_id=2,
+        )
+        node = ExceptionDef(name="MyErr", fields=(f,), base=None, span=self._s(), node_id=1)
+        assert node.name == "MyErr"
+        assert isinstance(node.fields, tuple)
+        assert len(node.fields) == 1
+        assert node.fields[0].name == "msg"
+        assert node.base is None
+        assert node.is_private is False
+        assert node.is_builtin is False
+
+    def test_exception_def_with_base(self) -> None:
+        node = ExceptionDef(
+            name="DerivedErr", fields=(), base="BaseErr", span=self._s(), node_id=1
+        )
+        assert node.base == "BaseErr"
+
+    def test_exception_def_equality_ignores_span(self) -> None:
+        t = IntT(span=self._s(), node_id=3)
+        f = Param(
+            name="code", type_expr=t, kind=ParamKind.NAMED_ONLY,
+            default=None, span=self._s(), node_id=2,
+        )
+        a = ExceptionDef(name="E", fields=(f,), base=None, span=span(1, 0, 1, 1), node_id=1)
+        b = ExceptionDef(name="E", fields=(f,), base=None, span=span(9, 0, 9, 1), node_id=99)
+        assert a == b
+
+    def test_exception_def_is_declaration(self) -> None:
+        """ExceptionDef is part of the Declaration union."""
+        import typing
+        args = typing.get_args(Declaration)
+        assert ExceptionDef in args
+
+    def test_exception_def_walk_visits_fields(self) -> None:
+        """walk(ExceptionDef) visits the node and each Param in its fields."""
+        from agm.agl.syntax.visitor import walk
+
+        s = self._s()
+        t = IntT(span=s, node_id=3)
+        field = Param(
+            name="code", type_expr=t, kind=ParamKind.NAMED_ONLY, default=None, span=s, node_id=2
+        )
+        exc = ExceptionDef(name="MyErr", fields=(field,), base=None, span=s, node_id=1)
+
+        visited: list[object] = []
+        walk(exc, visited.append)
+
+        assert exc in visited
+        assert field in visited
+        assert t in visited
 
 
 # ---------------------------------------------------------------------------
@@ -1188,9 +1248,25 @@ class TestVisitorWalk:
         enum_def = EnumDef(name="Opt", variants=(variant_def,), span=s, node_id=213)
 
         type_alias = TypeAlias(name="Names", type_expr=list_t, span=s, node_id=214)
+        exc_field = Param(
+            name="msg", type_expr=text_t, kind=ParamKind.NAMED_ONLY,
+            default=None, span=s, node_id=2140,
+        )
+        exception_def = ExceptionDef(
+            name="MyErr",
+            fields=(exc_field,),
+            base=None,
+            span=s,
+            node_id=2141,
+        )
         param_decl = ParamDecl(name="spec", annotation=text_t, default=None, span=s, node_id=215)
         agent_decl = AgentDecl(name="reviewer", runner=None, span=s, node_id=216)
-        config_pragma = ConfigPragma(key="log", value=True, span=s, node_id=217)
+        config_decl = ConfigDecl(
+            name="log",
+            value=BoolLit(value=True, span=s, node_id=2170),
+            span=s,
+            node_id=217,
+        )
 
         # FuncDef — exercises UnitT, AgentT, FuncT via type annotations + Param
         _std = ParamKind.STANDARD
@@ -1340,8 +1416,8 @@ class TestVisitorWalk:
         # Block at the top level
         top_block = Block(
             items=(
-                record_def, enum_def, type_alias, param_decl, input_no_ann,
-                agent_decl, config_pragma, func_def,
+                record_def, enum_def, exception_def, type_alias, param_decl, input_no_ann,
+                agent_decl, config_decl, func_def,
                 let_decl, let_with_type, let_applied, var_decl, var_with_type,
                 assign_stmt, indexed_assign_stmt,
                 # expressions directly in block
@@ -1386,8 +1462,8 @@ class TestVisitorWalk:
         kinds = {type(n) for n in visited}
 
         decl_kinds = {
-            RecordDef, EnumDef, TypeAlias, ParamDecl, Param, VariantDef,
-            AgentDecl, FuncDef, ConfigPragma,
+            RecordDef, EnumDef, ExceptionDef, TypeAlias, ParamDecl, Param, VariantDef,
+            AgentDecl, FuncDef, ConfigDecl,
         }
         for kind in decl_kinds:
             assert kind in kinds, f"Expected {kind.__name__} to be visited"
@@ -1698,6 +1774,25 @@ class TestVisitorWalk:
         # AgentDecl is a leaf — only itself is visited.
         assert visited == [node]
 
+    def test_walk_config_decl_with_value(self) -> None:
+        from agm.agl.syntax.visitor import walk
+
+        s = span()
+        val = BoolLit(value=True, span=s, node_id=2)
+        node = ConfigDecl(name="log", value=val, span=s, node_id=1)
+        visited: list[object] = []
+        walk(node, visited.append)
+        assert visited == [node, val]
+
+    def test_walk_config_decl_no_value(self) -> None:
+        from agm.agl.syntax.visitor import walk
+
+        s = span()
+        node = ConfigDecl(name="log", value=None, span=s, node_id=1)
+        visited: list[object] = []
+        walk(node, visited.append)
+        assert visited == [node]
+
     def test_walk_param_decl_without_annotation(self) -> None:
         from agm.agl.syntax.visitor import walk
 
@@ -1982,7 +2077,7 @@ class TestUnionAliases:
     def test_declaration_union_members(self) -> None:
         import typing
         args = typing.get_args(Declaration)
-        for cls in (FuncDef, RecordDef, EnumDef, TypeAlias, ParamDecl, AgentDecl, ConfigPragma):
+        for cls in (FuncDef, RecordDef, EnumDef, TypeAlias, ParamDecl, AgentDecl, ConfigDecl):
             assert cls in args, f"{cls.__name__} missing from Declaration union"
 
     def test_item_contains_declaration_binder_expr(self) -> None:
@@ -2002,57 +2097,27 @@ class TestUnionAliases:
 class TestRemovedNodes:
     """Verify that v1-only nodes are no longer part of the public API."""
 
-    def test_agent_call_not_importable(self) -> None:
-        with pytest.raises((ImportError, AttributeError)):
-            from agm.agl.syntax import AgentCall  # type: ignore[attr-defined]  # noqa: F401
-
-    def test_pass_stmt_not_importable(self) -> None:
-        with pytest.raises((ImportError, AttributeError)):
-            from agm.agl.syntax import PassStmt  # type: ignore[attr-defined]  # noqa: F401
-
-    def test_print_stmt_not_importable(self) -> None:
-        with pytest.raises((ImportError, AttributeError)):
-            from agm.agl.syntax import PrintStmt  # type: ignore[attr-defined]  # noqa: F401
-
-    def test_expr_stmt_not_importable(self) -> None:
-        with pytest.raises((ImportError, AttributeError)):
-            from agm.agl.syntax import ExprStmt  # type: ignore[attr-defined]  # noqa: F401
-
-    def test_do_until_not_importable(self) -> None:
-        with pytest.raises((ImportError, AttributeError)):
-            from agm.agl.syntax import DoUntil  # type: ignore[attr-defined]  # noqa: F401
-
-    def test_if_stmt_not_importable(self) -> None:
-        with pytest.raises((ImportError, AttributeError)):
-            from agm.agl.syntax import IfStmt  # type: ignore[attr-defined]  # noqa: F401
-
-    def test_case_stmt_not_importable(self) -> None:
-        with pytest.raises((ImportError, AttributeError)):
-            from agm.agl.syntax import CaseStmt  # type: ignore[attr-defined]  # noqa: F401
-
-    def test_case_expr_not_importable(self) -> None:
-        with pytest.raises((ImportError, AttributeError)):
-            from agm.agl.syntax import CaseExpr  # type: ignore[attr-defined]  # noqa: F401
-
-    def test_if_expr_not_importable(self) -> None:
-        with pytest.raises((ImportError, AttributeError)):
-            from agm.agl.syntax import IfExpr  # type: ignore[attr-defined]  # noqa: F401
-
-    def test_try_catch_not_importable(self) -> None:
-        with pytest.raises((ImportError, AttributeError)):
-            from agm.agl.syntax import TryCatch  # type: ignore[attr-defined]  # noqa: F401
-
-    def test_call_options_not_importable(self) -> None:
-        with pytest.raises((ImportError, AttributeError)):
-            from agm.agl.syntax import CallOptions  # type: ignore[attr-defined]  # noqa: F401
-
-    def test_constructor_not_importable(self) -> None:
-        with pytest.raises((ImportError, AttributeError)):
-            from agm.agl.syntax import Constructor  # type: ignore[attr-defined]  # noqa: F401
-
-    def test_stmt_union_not_importable(self) -> None:
-        with pytest.raises((ImportError, AttributeError)):
-            from agm.agl.syntax import Stmt  # type: ignore[attr-defined]  # noqa: F401
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "AgentCall",
+            "PassStmt",
+            "PrintStmt",
+            "ExprStmt",
+            "DoUntil",
+            "IfStmt",
+            "CaseStmt",
+            "CaseExpr",
+            "IfExpr",
+            "TryCatch",
+            "CallOptions",
+            "Constructor",
+            "Stmt",
+        ],
+    )
+    def test_v1_node_not_exported(self, name: str) -> None:
+        module = importlib.import_module("agm.agl.syntax")
+        assert not hasattr(module, name)
 
 
 # ---------------------------------------------------------------------------
@@ -2102,7 +2167,7 @@ class TestCastNode:
         target = BoolT(span=self._sp(), node_id=1)
         node = Cast(expr=expr, target_type=target, test_only=False, span=self._sp(), node_id=2)
         with pytest.raises((FrozenInstanceError, AttributeError)):
-            node.test_only = True  # type: ignore[misc]
+            setattr(node, "test_only", True)
 
     def test_cast_target_uses_type_expr(self) -> None:
         """target_type accepts any TypeExpr, including generic forms."""
@@ -2161,7 +2226,7 @@ class TestModuleSystemNodes:
         from agm.agl.syntax import Qualifier
         q = Qualifier(segments=("a",), span=self._sp(), node_id=0)
         with pytest.raises((FrozenInstanceError, AttributeError)):
-            q.segments = ("b",)  # type: ignore[misc]
+            setattr(q, "segments", ("b",))
 
     def test_import_item_with_rename(self) -> None:
         from agm.agl.syntax import ImportItem

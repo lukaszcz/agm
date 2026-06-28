@@ -51,6 +51,7 @@ from agm.agl.scope.symbols import (
     ResolvedProgram,
     ScopeNode,
 )
+from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES, RESERVED_PROGRAM_NAMES
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPES,
@@ -71,7 +72,7 @@ from agm.agl.syntax.nodes import (
     Case,
     Cast,
     CatchClause,
-    ConfigPragma,
+    ConfigDecl,
     ConstructorPattern,
     DecimalLit,
     DictLit,
@@ -96,7 +97,6 @@ from agm.agl.syntax.nodes import (
     ParamDecl,
     Pattern,
     PatternField,
-    PragmaValue,
     Program,
     ProgramDecl,
     Raise,
@@ -131,17 +131,6 @@ _BUILTIN_CONSTRUCTOR_NODE_ID = -1
 # The set of names that may NOT be used as any kind of binding.
 _RESERVED_NAMES: frozenset[str] = frozenset(_BUILTIN_CALL_NAMES)
 
-# Allowed config pragma keys and their expected value kinds.
-_PRAGMA_KEY_KINDS: dict[str, str] = {
-    "log": "bool",
-    "strict_json": "bool",
-    "max_iters": "int_pos",
-    "runner": "str_nonempty",
-    "log_file": "str_nonempty",
-    "timeout": "str_or_int",
-}
-_ALLOWED_PRAGMA_KEYS: frozenset[str] = frozenset(_PRAGMA_KEY_KINDS)
-
 # Per-binder phrasing for the ``:=``-on-immutable rejection.
 _IMMUTABLE_BINDER_PHRASES: dict[BinderKind, str] = {
     BinderKind.let_binding: "it was declared with 'let'",
@@ -150,6 +139,7 @@ _IMMUTABLE_BINDER_PHRASES: dict[BinderKind, str] = {
     BinderKind.function_binding: "it is a function (def) binding",
     BinderKind.agent_binding: "it is an agent binding",
     BinderKind.param_binding: "it is a parameter binding",
+    BinderKind.config_binding: "it is a config binding",
     BinderKind.constructor_binding: "it is a constructor binding",
 }
 
@@ -157,63 +147,6 @@ _IMMUTABLE_BINDER_PHRASES: dict[BinderKind, str] = {
 def _immutable_binder_phrase(kind: BinderKind) -> str:
     """Return the ``:=``-rejection phrase naming *kind*'s binder."""
     return _IMMUTABLE_BINDER_PHRASES[kind]
-
-
-# ---------------------------------------------------------------------------
-# Config pragma value validation
-# ---------------------------------------------------------------------------
-
-
-def _validate_pragma_value(key: str, value: PragmaValue, span: object) -> None:
-    """Validate that *value* matches the expected kind for *key*.
-
-    Raises ``AglScopeError`` on a mismatch.
-    """
-    sp = span if isinstance(span, SourceSpan) else None
-    kind = _PRAGMA_KEY_KINDS[key]
-
-    if kind == "bool":
-        if not isinstance(value, bool):
-            raise AglScopeError(
-                f"config pragma '{key}' requires a bool value (true or false), "
-                f"got {type(value).__name__!r}.",
-                span=sp,
-            )
-    elif kind == "int_pos":
-        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-            raise AglScopeError(
-                f"config pragma '{key}' requires a positive integer value (> 0), "
-                f"got {value!r}.",
-                span=sp,
-            )
-    elif kind == "str_nonempty":
-        if not isinstance(value, str) or not value:
-            raise AglScopeError(
-                f"config pragma '{key}' requires a non-empty string value, "
-                f"got {value!r}.",
-                span=sp,
-            )
-    else:
-        # kind == "str_or_int": string or positive integer (e.g. timeout)
-        if isinstance(value, bool):
-            raise AglScopeError(
-                f"config pragma '{key}' requires a string or positive integer value, "
-                f"got {value!r}.",
-                span=sp,
-            )
-        if isinstance(value, int):
-            if value <= 0:
-                raise AglScopeError(
-                    f"config pragma '{key}' requires a positive integer value (> 0), "
-                    f"got {value!r}.",
-                    span=sp,
-                )
-        elif not isinstance(value, str) or not value:
-            raise AglScopeError(
-                f"config pragma '{key}' requires a non-empty string or positive "
-                f"integer value, got {value!r}.",
-                span=sp,
-            )
 
 
 # ---------------------------------------------------------------------------
@@ -275,10 +208,8 @@ class _Resolver:
         self._declared_functions: dict[str, FuncDef] = {}
         # Program-declared agent names that have been referenced as a VarRef.
         self._referenced_agents: set[str] = set()
-        # Validated config pragmas.
-        self._config_pragmas: dict[str, PragmaValue] = {}
-        # Header-only tracking for config pragmas.
-        self._seen_non_pragma: bool = False
+        # Names of config keys declared so far (duplicate detection).
+        self._declared_config_names: set[str] = set()
         # Header-only tracking for imports in non-entry modules (graph mode).
         self._seen_non_import_item: bool = False
         # Source-declared program name.
@@ -374,7 +305,6 @@ class _Resolver:
             root_scope=root,
             declared_agents=dict(self._declared_agents),
             declared_functions=dict(self._declared_functions),
-            config_pragmas=dict(self._config_pragmas),
             program_name=self._program_name,
             warnings=self._unused_agent_warnings(),
             declared_type_names=frozenset(self._declared_type_names),
@@ -707,37 +637,53 @@ class _Resolver:
         return tuple(warnings)
 
     # ------------------------------------------------------------------
-    # Config pragmas
+    # Config declarations
     # ------------------------------------------------------------------
 
-    def _resolve_config_pragma(self, node: ConfigPragma) -> None:
-        """Validate a ``config`` pragma and collect it."""
+    def _resolve_config(self, node: ConfigDecl) -> None:
+        """Resolve a ``config`` declaration into a readable runtime binding.
+
+        A ``config`` declaration names a fixed engine key (kebab-case) and binds
+        it as an immutable, runtime-resolved value (like ``param``).  The value
+        expression — when present — is resolved here so any names it references
+        are checked; an absent value (bare ``config KEY``) is also legal and
+        resolves from the host's configured default at runtime.  Type checking of
+        the value against the engine-key type happens in the typecheck pass.
+        """
         if not self._at_root:
             raise AglScopeError(
-                f"'config' pragmas are only allowed at the program root, "
-                f"not inside a nested block (found 'config {node.key}' here).",
+                f"'config' declarations are only allowed at the program root, "
+                f"not inside a nested block (found 'config {node.name}' here).",
                 span=node.span,
             )
-        if self._seen_non_pragma:
+        if node.name not in ENGINE_KEY_NAMES:
+            allowed = ", ".join(sorted(ENGINE_KEY_NAMES))
             raise AglScopeError(
-                f"'config' pragmas must appear before any other statements "
-                f"(found 'config {node.key}' after a non-pragma statement).",
-                span=node.span,
-            )
-        if node.key not in _ALLOWED_PRAGMA_KEYS:
-            allowed = ", ".join(sorted(_ALLOWED_PRAGMA_KEYS))
-            raise AglScopeError(
-                f"Unknown config pragma key '{node.key}'. "
+                f"Unknown config key '{node.name}'. "
                 f"Allowed keys: {allowed}.",
                 span=node.span,
             )
-        if node.key in self._config_pragmas:
+        if node.name in self._declared_config_names:
             raise AglScopeError(
-                f"Duplicate config pragma '{node.key}'.",
+                f"Duplicate config declaration '{node.name}'.",
                 span=node.span,
             )
-        _validate_pragma_value(node.key, node.value, node.span)
-        self._config_pragmas[node.key] = node.value
+        self._declared_config_names.add(node.name)
+        # Resolve the value expression (if any) before defining the binding, so a
+        # config value cannot reference the binding it introduces.
+        if node.value is not None:
+            self._resolve_expr(node.value)
+        # Define an immutable readable binding so the config key is visible in
+        # the surrounding scope and resolved at runtime.
+        ref = BindingRef(
+            name=node.name,
+            mutable=False,
+            decl_span=node.span,
+            decl_node_id=node.node_id,
+            kind=BinderKind.config_binding,
+            module_id=self._module_id,
+        )
+        self._define(node.name, ref)
 
     # ------------------------------------------------------------------
     # Scope helpers
@@ -827,16 +773,16 @@ class _Resolver:
         is_non_entry_root = is_graph_mode and not self._is_entry and self._at_root
 
         for item in items:
-            if isinstance(item, ConfigPragma):
+            if isinstance(item, ConfigDecl):
                 if is_non_entry_root:
-                    # config pragmas are not allowed in non-entry modules.
+                    # config declarations are not allowed in non-entry modules.
                     raise AglScopeError(
-                        f"'config' pragmas are only allowed in the entry module, "
-                        f"not inside a library module (found 'config {item.key}' here).",
+                        f"'config' declarations are only allowed in the entry module, "
+                        f"not inside a library module (found 'config {item.name}' here).",
                         span=item.span,
                     )
-                self._resolve_config_pragma(item)
-                # A pragma is not a non-pragma item.
+                self._resolve_config(item)
+                # A config declaration is not a non-config item.
                 continue
             if isinstance(item, ImportDecl):
                 if is_non_entry_root and self._seen_non_import_item:
@@ -917,9 +863,6 @@ class _Resolver:
                         span=item.span,
                     )
                 self._resolve_expr(item)
-            # Track that we've seen a non-pragma item.
-            if self._at_root:
-                self._seen_non_pragma = True
 
     # ------------------------------------------------------------------
     # Declaration handlers
@@ -1060,6 +1003,12 @@ class _Resolver:
             raise AglScopeError(
                 f"'program' declarations are only allowed at the program root, "
                 f"not inside a nested block (found 'program {node.name}' here).",
+                span=node.span,
+            )
+        if node.name in RESERVED_PROGRAM_NAMES:
+            raise AglScopeError(
+                f"'program {node.name}' is not allowed: '{node.name}' is a reserved AGM "
+                f"command or config-section name.",
                 span=node.span,
             )
         if self._program_name is not None:

@@ -1,0 +1,20 @@
+{
+  "scenarios": [
+    {
+      "name": "loud",
+      "params": {"loud": true},
+      "expect": {
+        "stdout": "core#3\ncore#3!\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "quiet",
+      "params": {"loud": false},
+      "expect": {
+        "stdout": "core#3\ncore#3\n",
+        "calls": {}
+      }
+    }
+  ]
+}

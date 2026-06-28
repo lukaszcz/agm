@@ -1141,7 +1141,6 @@ class TestPipelineDriverRunnerWiring:
             original_init(self, **kwargs)
 
         # Patch config to return a runner
-        import agm.config.general as cfg_mod
         from agm.config.general import ExecConfig
 
         fake_config = ExecConfig(
@@ -1157,10 +1156,10 @@ class TestPipelineDriverRunnerWiring:
         import agm.agl.pipeline as rt_mod
 
         agl_file = Path("/tmp/nonexistent_test.agl")
-        # Just check that load_exec_config is called and runner is used; we
+        # Just check that exec_config_from_merged is called and runner is used; we
         # don't need to run the full pipeline.
         with (
-            patch.object(cfg_mod, "load_exec_config", return_value=fake_config),
+            patch.object(exec_mod, "exec_config_from_merged", return_value=fake_config),
             patch.object(
                 exec_mod,
                 "read_text_arg",

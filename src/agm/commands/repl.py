@@ -29,10 +29,13 @@ from agm.agl.repl import ReplSession
 from agm.agl.repl.agentmode import AgentMode
 from agm.agl.repl.agents import ConfirmingAgent
 from agm.agl.runtime.agents import runner_backed_agent_factory
+from agm.agl.runtime.params import _raw_option_str, build_engine_config_base
+from agm.agl.semantics.values import Value
 from agm.cli_support.args import ReplArgs
 from agm.config.context import current_config_context
 from agm.config.general import (
-    load_exec_config,
+    exec_config_from_merged,
+    load_merged_config,
     load_program_config,
     load_repl_config,
     save_repl_theme,
@@ -40,13 +43,15 @@ from agm.config.general import (
 from agm.config.module_roots import load_module_roots, resolve_lib_root, resolve_stdlib_root
 from agm.core import dry_run
 from agm.core.log import prepare_trace_log_from_layers
+from agm.core.toml import toml_dict
 
 
 def run(args: ReplArgs) -> None:
     """Run the ``agm repl`` command."""
     ctx = current_config_context()
     try:
-        config = load_exec_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
+        merged_config = load_merged_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
+        config = exec_config_from_merged(merged_config)
     except ValueError as exc:
         print(f"Error: invalid exec configuration: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
@@ -96,6 +101,27 @@ def run(args: ReplArgs) -> None:
     stdlib_root = resolve_stdlib_root(home=ctx.home)
     lib_root = resolve_lib_root(mod_roots_cfg)
 
+    # Build the [exec] engine base for the four start-resolved engine keys
+    # (runner, log, log-file, timeout) that the session uses as the config_base
+    # floor for bare ``config KEY`` bindings.  strict-json and max-iters are
+    # tracked by the session's own persisted settings and override these values
+    # in _build_config_base; they are included here so the dict is complete for
+    # any consumer that reads all six keys.
+    #
+    # The raw timeout string is read from the TOML table via _raw_option_str so
+    # the binding holds the original written value (e.g. "30s") rather than a
+    # parsed float (e.g. "30.0").
+    exec_raw_table = toml_dict(merged_config.get("exec"))
+    raw_timeout_str = _raw_option_str(exec_raw_table, {}, "timeout")
+    engine_base: dict[str, Value] = build_engine_config_base({
+        "strict-json": strict_json,
+        "max-iters": loop_limit,
+        "runner": runner_cmd,
+        "log": config.log,
+        "timeout": raw_timeout_str,
+        "log-file": config.log_file,
+    })
+
     session = ReplSession(
         default_loop_limit=loop_limit,
         default_strict_json=strict_json,
@@ -103,6 +129,7 @@ def run(args: ReplArgs) -> None:
         shell_exec_timeout=config.timeout,
         trace_path=trace_path,
         params_config_loader=_params_config_loader,
+        engine_base=engine_base,
         cwd=ctx.cwd,
         stdlib_root=stdlib_root,
         lib_root=lib_root,

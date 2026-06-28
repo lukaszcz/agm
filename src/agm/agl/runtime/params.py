@@ -20,6 +20,64 @@ if TYPE_CHECKING:
 __all__ = ["convert_config_value", "convert_param_value"]
 
 
+def _raw_option_str(
+    primary: "Mapping[str, object]",
+    fallback: "Mapping[str, object]",
+    key: str,
+) -> str | None:
+    """Return the raw TOML value for *key* as a string, checking primary then fallback.
+
+    Preserves the exact string written in the config file (e.g. ``"30s"``).
+    For numeric values (int/float), converts to string (e.g. ``60`` → ``"60"``),
+    but only when the value is positive (a zero/negative numeric config value is
+    treated as absent).
+    Returns ``None`` when the key is absent or empty/invalid in both tables.
+
+    Used by ``commands/exec.py`` and ``commands/repl.py`` to extract the raw
+    timeout/log-file strings before passing them to :func:`convert_config_value`.
+    """
+    for table in (primary, fallback):
+        val = table.get(key)
+        if isinstance(val, str) and val.strip():
+            return val
+        if isinstance(val, (int, float)) and not isinstance(val, bool) and val > 0:
+            return str(val)
+    return None
+
+
+# Engine defaults for build_engine_config_base when a key is absent from raw_values.
+_ENGINE_DEFAULTS: dict[str, object] = {
+    "log": False,
+    "strict-json": False,
+    "max-iters": 5,
+    "runner": "claude",  # callers providing a resolved runner override this
+    "log-file": None,
+    "timeout": None,
+}
+
+
+def build_engine_config_base(raw_values: "Mapping[str, object]") -> "dict[str, Value]":
+    """Build the engine config base dict from raw host values.
+
+    Decodes each of the six engine keys via :func:`convert_config_value`.
+    Keys absent from *raw_values* fall back to the engine defaults
+    (``false``/``false``/``5``/``"claude"``/``none``/``none``).
+
+    Each caller is responsible for constructing *raw_values* with its own
+    layering (CLI/program/exec config).  This helper performs only the
+    decoding step, keeping the layering logic in the callers.
+    """
+    from agm.agl.semantics.engine_keys import get_engine_key_type
+
+    result: dict[str, Value] = {}
+    for key_name, default_raw in _ENGINE_DEFAULTS.items():
+        raw = raw_values.get(key_name, default_raw)
+        key_type = get_engine_key_type(key_name)
+        assert key_type is not None, f"unknown engine key: {key_name!r}"
+        result[key_name] = convert_config_value(key_name, raw, key_type)
+    return result
+
+
 def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":
     """Decode a raw host param value against *decoder* into a typed ``Value``.
 

@@ -312,6 +312,25 @@ class IrInterpreter:
         return self._frames[-1]
 
     # ------------------------------------------------------------------
+    # Post-run engine-setting accessors
+    # ------------------------------------------------------------------
+
+    @property
+    def strict_json(self) -> bool:
+        """Current strict-JSON setting (may have been updated by a config binding)."""
+        return self._strict_json
+
+    @property
+    def loop_limit(self) -> int:
+        """Current loop-iteration limit (may have been updated by a config binding)."""
+        return self._loop_limit
+
+    @property
+    def shell_exec_timeout(self) -> float | None:
+        """Current shell-exec timeout (may have been updated by a config binding)."""
+        return self._shell_exec_timeout
+
+    # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
 

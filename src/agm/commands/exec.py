@@ -52,7 +52,7 @@ from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.modules.roots import assemble_roots
 from agm.agl.pipeline import static_config_values
 from agm.agl.runtime.agents import runner_backed_agent_factory
-from agm.agl.runtime.params import convert_config_value
+from agm.agl.runtime.params import _raw_option_str, convert_config_value
 from agm.agl.semantics.engine_keys import (
     ENGINE_KEY_NAMES,
     RESERVED_PROGRAM_NAMES,
@@ -89,25 +89,6 @@ def _first(*values: _T | None) -> _T | None:
     """Return the first non-None value, or None if all are None."""
     return next((v for v in values if v is not None), None)
 
-
-def _raw_option_str(
-    primary: dict[str, object],
-    fallback: dict[str, object],
-    key: str,
-) -> str | None:
-    """Return the raw TOML value for *key* as a string, checking primary then fallback.
-
-    Preserves the exact string written in the config file (e.g. ``"30s"``).
-    For numeric values (int/float), converts to string (e.g. ``60`` → ``"60"``).
-    Returns ``None`` when the key is absent or empty/invalid in both tables.
-    """
-    for table in (primary, fallback):
-        val = table.get(key)
-        if isinstance(val, str) and val.strip():
-            return val
-        if isinstance(val, (int, float)) and not isinstance(val, bool) and val > 0:
-            return str(val)
-    return None
 
 
 def _typed_const(consts: dict[str, bool | int | str], key: str, typ: type[_T]) -> _T | None:

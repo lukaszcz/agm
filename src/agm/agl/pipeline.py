@@ -1070,6 +1070,24 @@ class PipelineDriver:
         """Maximum call depth for recursive functions."""
         return self._default_call_depth_limit
 
+    def update_defaults(
+        self,
+        *,
+        strict_json: bool,
+        loop_limit: int,
+        shell_exec_timeout: float | None,
+    ) -> None:
+        """Update the three D6 engine defaults in place without losing registrations.
+
+        Called by ``ReplSession`` after a successful entry that contains a
+        ``config`` binding, to persist the effect-at-binding for subsequent
+        entries.  Agent/codec registrations and the call-depth limit are
+        preserved — only the three eval-consumed settings are updated.
+        """
+        self._default_strict_json = strict_json
+        self._default_loop_limit = loop_limit
+        self._shell_exec_timeout = shell_exec_timeout
+
 
 # ---------------------------------------------------------------------------
 # Helpers

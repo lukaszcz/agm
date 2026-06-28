@@ -1153,42 +1153,6 @@ class TestM4aLowerDefensivePaths:
         with pytest.raises(AssertionError, match="compiler bug"):
             lowerer._lower_call(fake_call, 10001, span)
 
-    def test_missing_required_arg_raises_type_error(self) -> None:
-        """_lower_direct_call raises AglTypeError when call is missing a required arg."""
-        from agm.agl.syntax.nodes import Call, FuncDef, VarRef
-        from agm.agl.typecheck import AglTypeError
-
-        source = "def f(x: int) -> int = x + 1\nlet result = f(1)\n()"
-        checked = _check(source)
-        lowerer = _make_lowerer(checked, source)
-
-        # Pre-allocate funcdef
-        funcdef = next(
-            item for item in checked.resolved.program.body.items if isinstance(item, FuncDef)
-        )
-        lowerer._prealloc_funcdef(funcdef)
-
-        # Get a callee_ref for the function binding
-        from agm.agl.scope.symbols import BinderKind, BindingRef
-        span = funcdef.span
-        from agm.agl.modules.ids import ENTRY_ID
-
-        callee_ref = BindingRef(
-            name="f",
-            mutable=False,
-            decl_span=span,
-            decl_node_id=funcdef.node_id,
-            kind=BinderKind.function_binding,
-            module_id=ENTRY_ID,
-        )
-
-        # Create a fake call with NO args (f requires 1 arg)
-        varref = VarRef(name="f", node_id=9999, span=span, module_qualifier=None)
-        fake_call = Call(callee=varref, args=(), named_args=(), node_id=10001, span=span)
-
-        with pytest.raises(AglTypeError, match="Missing required argument"):
-            lowerer._lower_direct_call(fake_call, callee_ref, 10001, span)
-
     def test_scan_captures_stops_at_nested_lambda_boundary(self) -> None:
         """_scan_captures returns early at Lambda boundary without descending into it.
 

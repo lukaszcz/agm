@@ -205,7 +205,6 @@ from agm.agl.type_schema import (
     build_param_decoder,
     derive_schema,
 )
-from agm.agl.typecheck.arguments import BindParam, BoundName, bind_arguments, bind_constructor_args
 from agm.agl.typecheck.env import CheckedProgram
 from agm.agl.typecheck.graph import CheckedModule
 from agm.util.text import normalize_newlines
@@ -1254,8 +1253,6 @@ class _Lowerer:
                     nid,
                     cref.owner_name,
                     cref.variant,
-                    call_node.args,
-                    call_node.named_args,
                     span,
                 )
             # (b) VarRef callee resolving via BinderKind.constructor_binding (M5).
@@ -1268,8 +1265,6 @@ class _Lowerer:
                     nid,
                     callee.name,
                     None,
-                    call_node.args,
-                    call_node.named_args,
                     span,
                 )
             # (c) Direct user function call
@@ -1287,8 +1282,6 @@ class _Lowerer:
                     nid,
                     owner_name,
                     variant_name,
-                    call_node.args,
-                    call_node.named_args,
                     span,
                 )
 
@@ -1317,21 +1310,8 @@ class _Lowerer:
             f"compiler bug: no signature for function {callee_ref.name!r}"
         )
 
-        bind_params = tuple(
-            BindParam(name=p.name, kind=p.kind, has_default=p.has_default) for p in sig.params
-        )
-        named = [
-            BoundName(name=na.name, value=na.value, span=na.span) for na in call_node.named_args
-        ]
-        binding = bind_arguments(
-            bind_params,
-            call_node.args,
-            named,
-            bare_name=lambda e: e.name if isinstance(e, VarRef) else None,
-            span_of=lambda e: e.span,
-            call_span=span,
-            context_desc=f"call to '{callee_ref.name}'",
-        )
+        # The checker already bound the call; reuse its result (never re-bind).
+        binding = self._checked.argument_bindings.function_calls[result_node_id]
 
         ir_args: list[IrExpr | UseDefault] = []
         for i, (spec, bound_expr) in enumerate(zip(sig.params, binding)):
@@ -1391,48 +1371,15 @@ class _Lowerer:
         result_node_id: int,
         owner_name: str,
         variant: str | None,
-        positional: "tuple[Expr, ...]",
-        named: "tuple[NamedArg, ...]",
         span: "SourceSpan",
     ) -> IrExpr:
         """Lower a constructor call to an IrMake* node.
 
-        Routes positional and named arguments through ``bind_arguments`` using the
-        constructor's field-kinds registry, then builds the ordered field→expr mapping
-        for ``_lower_constructor_from_type``.
+        Reuses the field→expr binding the checker already computed (never re-binds),
+        then builds the Ir node via ``_lower_constructor_from_type``.
         """
         typ = self._checked.node_types.get(result_node_id)
-
-        # Determine module_id for cross-module field-kinds lookup.
-        # RecordType and EnumType carry their own module_id.
-        # ExceptionType carries no module_id (exception names are globally unique)
-        # and is indexed under PRELUDE_ID in both the local registry and the
-        # cross-module graph table.
-        if isinstance(typ, (RecordType, EnumType)):
-            module_id: ModuleId | None = typ.module_id
-        else:
-            # ExceptionType (and, unreachably, any unexpected type).  The type
-            # checker always maps constructor-call result nodes to one of
-            # RecordType / EnumType / ExceptionType, so the else is ExceptionType
-            # in practice.
-            module_id = PRELUDE_ID
-
-        field_kinds = self._checked.type_env.get_constructor_field_kinds(
-            owner_name, variant, module_id=module_id
-        )
-        assert field_kinds is not None, (
-            f"compiler bug: no field-kinds for constructor '{owner_name}'"
-        )
-
-        # Bind args to fields via the shared helper; build the ordered field→expr map.
-        arg_exprs = bind_constructor_args(
-            field_kinds,
-            positional,
-            named,
-            call_span=span,
-            context_desc=f"constructor '{owner_name}'",
-        )
-
+        arg_exprs = self._checked.argument_bindings.constructor_calls[result_node_id]
         return self._lower_constructor_from_type(typ, owner_name, variant, arg_exprs, span)
 
     def _lower_constructor_from_type(
@@ -1649,7 +1596,7 @@ class _Lowerer:
                 field_plans: list[tuple[str, IrMatchPlan]] = [
                     (fname, self._compile_plan(sub_pat))
                     for fname, sub_pat
-                    in self._checked.constructor_pattern_bindings[pattern.node_id]
+                    in self._checked.argument_bindings.constructor_patterns[pattern.node_id]
                 ]
                 return IrConstructorPlan(
                     variant=variant_name,

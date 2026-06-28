@@ -134,13 +134,14 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import TypeExpr
-from agm.agl.typecheck.arguments import BindParam, BoundName, bind_arguments
+from agm.agl.typecheck.arguments import bind_call_args, bind_pattern_args
 from agm.agl.typecheck.builder import _BUILTIN_TYPE_NAMES as _BUILTIN_TYPE_NAMES
 from agm.agl.typecheck.builder import _TypeBuilder
 from agm.agl.typecheck.builtins import BuiltinCallChecker
 from agm.agl.typecheck.constructors import ConstructorChecker
 from agm.agl.typecheck.env import (
     AglTypeError,
+    ArgumentBindings,
     CallSiteRecord,
     CheckedProgram,
     FunctionSignature,
@@ -282,6 +283,10 @@ class _Checker:
         # Type variables currently in scope (non-empty inside a generic def body).
         self._current_type_vars: frozenset[str] = frozenset()
         self._cast_specs: dict[int, CastSpec] = {}
+        # Argument bindings computed during the check, reused by the lowerer so it
+        # never re-binds.  Keyed by Call/Pattern node_id (see ``ArgumentBindings``).
+        self._function_call_bindings: dict[int, tuple[Expr | None, ...]] = {}
+        self._constructor_call_bindings: dict[int, dict[str, Expr]] = {}
         self._constructor_pattern_bindings: dict[int, tuple[tuple[str, Pattern], ...]] = {}
         self._builtins = BuiltinCallChecker(self)
         self._constructors = ConstructorChecker(self)
@@ -885,16 +890,10 @@ class _Checker:
         matched to its parameter by NAME rather than by raw positional index.
         Raises ``AglTypeError`` on any binding violation.
         """
-        bind_params = tuple(
-            BindParam(name=p.name, kind=p.kind, has_default=p.has_default) for p in params
-        )
-        named = [BoundName(name=na.name, value=na.value, span=na.span) for na in node.named_args]
-        return bind_arguments(
-            bind_params,
+        return bind_call_args(
+            params,
             node.args,
-            named,
-            bare_name=lambda e: e.name if isinstance(e, VarRef) else None,
-            span_of=lambda e: e.span,
+            node.named_args,
             call_span=node.span,
             context_desc=f"call to '{func_name}'",
         )
@@ -915,6 +914,9 @@ class _Checker:
         type-variable inference before calling this helper with the substituted params.
         """
         binding = self._bind_call_args(params, node, func_name)
+        # Record the binding for the lowerer (binding is type-independent, so the
+        # generic path's pre- and post-substitution calls produce the same tuple).
+        self._function_call_bindings[node.node_id] = binding
 
         # Type-check each bound expression.  A ``None`` binding means "use default";
         # the default's type was checked at definition time, so skip it here.
@@ -1754,25 +1756,11 @@ class _Checker:
                 f"field kinds not registered for {subj_type.name}.{variant_name}"
             )
 
-            # Build BindParam list with has_default=True (partial patterns allowed).
-            bind_params = tuple(
-                BindParam(name=fname, kind=fkind, has_default=True)
-                for fname, fkind in field_kinds
-            )
-
-            # Build named list from named PatternField items.
-            named_bns: list[BoundName[Pattern]] = [
-                BoundName(name=pf.name, value=pf.pattern, span=pf.span)
-                for pf in pattern.named
-            ]
-
-            # Route through bind_arguments (handles zones, duplicates, unknowns).
-            binding = bind_arguments(
-                bind_params,
+            # Route through the shared binder (handles zones, duplicates, unknowns).
+            binding = bind_pattern_args(
+                field_kinds,
                 pattern.positional,
-                named_bns,
-                bare_name=lambda p: p.name if isinstance(p, VarPattern) else None,
-                span_of=lambda p: p.span,
+                pattern.named,
                 call_span=pattern.span,
                 context_desc=f"pattern for variant '{variant_name}'",
             )
@@ -1925,7 +1913,11 @@ class _Checker:
             type_env=self._env,
             function_signatures=self._env.all_function_signatures(),
             cast_specs=self._cast_specs,
-            constructor_pattern_bindings=self._constructor_pattern_bindings,
+            argument_bindings=ArgumentBindings(
+                function_calls=self._function_call_bindings,
+                constructor_calls=self._constructor_call_bindings,
+                constructor_patterns=self._constructor_pattern_bindings,
+            ),
         )
 
 

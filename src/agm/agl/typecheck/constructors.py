@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Protocol
 
-from agm.agl.modules.ids import PRELUDE_ID, ModuleId
+from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.symbols import BindingRef, ConstructorRef, ResolvedProgram
 from agm.agl.semantics.types import (
     EnumType,
@@ -42,6 +42,7 @@ class ConstructorCheckCtx(Protocol):
     _env: TypeEnvironment
     _resolved: ResolvedProgram
     _current_type_vars: frozenset[str]
+    _constructor_call_bindings: dict[int, dict[str, Expr]]
 
     def _check_expr(self, expr: Expr, *, expected: Type | None) -> Type: ...
 
@@ -213,6 +214,7 @@ class ConstructorChecker:
         positional: tuple[Expr, ...],
         named: tuple[NamedArg, ...],
         span: SourceSpan,
+        node_id: int,
         expected: Type | None,
         sig: ConstructorSignature | None = None,
         gdef: GenericTypeDef | None = None,
@@ -310,7 +312,8 @@ class ConstructorChecker:
             concrete_type = self._ctx._env.instantiate_nominal(owner_name, concrete_args, span=span)
         # Validate the constructor call.
         return self._check_constructor_call(
-            owner=concrete_type, variant=variant, positional=positional, named=named, span=span
+            owner=concrete_type, variant=variant, positional=positional, named=named, span=span,
+            node_id=node_id,
         )
 
     # --- Resolve constructor owner (public entry point) ---
@@ -445,6 +448,7 @@ class ConstructorChecker:
         positional: tuple[Expr, ...],
         named: tuple[NamedArg, ...],
         span: SourceSpan,
+        node_id: int,
         expected: Type | None = None,
         type_args: tuple[object, ...] = (),
     ) -> Type:
@@ -476,6 +480,7 @@ class ConstructorChecker:
                 positional=positional,
                 named=named,
                 span=span,
+                node_id=node_id,
                 expected=expected,
                 sig=sig,
                 gdef=gdef,
@@ -490,7 +495,8 @@ class ConstructorChecker:
             owner_name, variant, span, owner_module_id=owner_module_id
         )
         return self._check_constructor_call(
-            owner=enum_type, variant=variant, positional=positional, named=named, span=span
+            owner=enum_type, variant=variant, positional=positional, named=named, span=span,
+            node_id=node_id,
         )
 
     # --- Cross-module constructor call (public entry point) ---
@@ -531,6 +537,7 @@ class ConstructorChecker:
                 positional=node.args,
                 named=node.named_args,
                 span=node.span,
+                node_id=node.node_id,
                 expected=expected,
                 sig=ctor_sig,
                 gdef=gdef,
@@ -551,7 +558,7 @@ class ConstructorChecker:
         )
         return self._check_constructor_call(
             owner=owner_type, variant=None, positional=node.args, named=node.named_args,
-            span=node.span
+            span=node.span, node_id=node.node_id,
         )
 
     # --- Unqualified constructor callee call (public entry point) ---
@@ -580,6 +587,7 @@ class ConstructorChecker:
                 positional=node.args,
                 named=node.named_args,
                 span=node.span,
+                node_id=node.node_id,
                 expected=expected,
                 sig=sig,
                 gdef=gdef,
@@ -599,7 +607,7 @@ class ConstructorChecker:
             )
         return self._check_constructor_call(
             owner=owner, variant=ctor_ref.variant, positional=node.args, named=node.named_args,
-            span=node.span
+            span=node.span, node_id=node.node_id,
         )
 
     # --- Qualified constructor callee call (public entry point) ---
@@ -615,7 +623,7 @@ class ConstructorChecker:
         return self._resolve_qualified_constructor_and_call(
             owner_name=owner_name, variant=variant, owner_module_id=owner_module_id,
             positional=node.args, named=node.named_args, span=node.span,
-            expected=expected, type_args=node.type_args,
+            node_id=node.node_id, expected=expected, type_args=node.type_args,
         )
 
     # --- Constructor call validation (private helper) ---
@@ -628,33 +636,23 @@ class ConstructorChecker:
         positional: tuple[Expr, ...],
         named: tuple[NamedArg, ...],
         span: SourceSpan,
+        node_id: int | None = None,
     ) -> RecordType | EnumType | ExceptionType:
-        lookup_variant: str | None
         if isinstance(owner, EnumType):
             assert variant is not None, "variant is required for EnumType"
             fields = owner.variants[variant]
             context_desc = f"variant '{owner.name}.{variant}'"
-            module_id: ModuleId = owner.module_id
-            lookup_variant = variant
         elif isinstance(owner, RecordType):
             fields = owner.fields
             context_desc = f"constructor '{owner.name}'"
-            module_id = owner.module_id
-            lookup_variant = None
         else:
             fields = owner.fields
             context_desc = f"exception '{owner.name}'"
-            # Exceptions carry no module_id (ExceptionType has no such field).
-            # They are globally unique, so their field-kinds are indexed under
-            # PRELUDE_ID in both the local registry and the cross-module graph
-            # table — ensuring cross-module exception construction can find them.
-            module_id = PRELUDE_ID
-            lookup_variant = None
 
         # Get field kinds from the registry (excludes trace_id for exceptions).
-        # For records and exceptions, field kinds are always stored under variant=None.
-        field_kinds = self._ctx._env.get_constructor_field_kinds(
-            owner.name, lookup_variant, module_id=module_id
+        # The env helper owns the registry-key convention (module_id / variant).
+        field_kinds = self._ctx._env.get_constructor_field_kinds_for_type(
+            owner, owner.name, variant
         )
         assert field_kinds is not None, (
             f"compiler bug: no field-kinds registered for {context_desc}"
@@ -666,6 +664,11 @@ class ConstructorChecker:
         bound_exprs = bind_constructor_args(
             field_kinds, positional, named, call_span=span, context_desc=context_desc
         )
+
+        # Record the field→expr binding for the lowerer (call-position only; value
+        # position passes no node_id and is lowered without a binding lookup).
+        if node_id is not None:
+            self._ctx._constructor_call_bindings[node_id] = bound_exprs
 
         # Type-check each user field (exceptions skip trace_id, which is excluded
         # from field_kinds at registration time).

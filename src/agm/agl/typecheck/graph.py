@@ -75,7 +75,6 @@ from agm.agl.syntax.nodes import (
     ExceptionDef,
     FuncDef,
     ParamKind,
-    Pattern,
     Program,
     RecordDef,
     TypeAlias,
@@ -83,6 +82,7 @@ from agm.agl.syntax.nodes import (
 from agm.agl.typecheck.builder import _TypeBuilder
 from agm.agl.typecheck.checker import _Checker
 from agm.agl.typecheck.env import (
+    ArgumentBindings,
     CallSiteRecord,
     ConstructorSignature,
     FunctionSignature,
@@ -139,7 +139,7 @@ class CheckedModule:
     cast_specs: dict[int, CastSpec]
     type_env: TypeEnvironment
     source_text: str
-    constructor_pattern_bindings: dict[int, tuple[tuple[str, Pattern], ...]]
+    argument_bindings: ArgumentBindings
 
 
 @dataclass(frozen=True, slots=True)
@@ -657,7 +657,6 @@ def _build_graph_func_sig_table(
     path — the exact same path used in the real per-module check.
     """
     from agm.agl.typecheck.checker import _BUILTIN_FUNC_NAMES, _BUILTIN_TYPE_NAMES
-    from agm.agl.typecheck.env import AglTypeError
 
     result: dict[int, tuple[str, FunctionSignature, FunctionType]] = {}
 
@@ -696,23 +695,11 @@ def _build_graph_func_sig_table(
             type_vars: frozenset[str] = frozenset(item.type_params)
             params: list[ParamSpec] = []
             # D6b: required-after-defaulted check (positional-fillable zone only).
-            seen_pos_default = False
+            _Checker._check_required_after_defaulted(item.params)
             for p in item.params:
                 pt = env.resolve_type_expr(p.type_expr, span=p.span, type_vars=type_vars)
-                has_default = p.default is not None
-                is_pos_fillable = p.kind in (ParamKind.POSITIONAL_ONLY, ParamKind.STANDARD)
-                if is_pos_fillable:
-                    if has_default:
-                        seen_pos_default = True
-                    elif seen_pos_default:
-                        raise AglTypeError(
-                            f"Parameter '{p.name}' has no default but follows a defaulted "
-                            "positional parameter. Required positional parameters must come "
-                            "before parameters with defaults.",
-                            span=p.span,
-                        )
                 params.append(
-                    ParamSpec(name=p.name, type=pt, kind=p.kind, has_default=has_default)
+                    ParamSpec(name=p.name, type=pt, kind=p.kind, has_default=p.default is not None)
                 )
 
             result_type = env.resolve_type_expr(
@@ -836,7 +823,7 @@ def _check_module(
         cast_specs=cp.cast_specs,
         type_env=cp.type_env,
         source_text=source_text,
-        constructor_pattern_bindings=cp.constructor_pattern_bindings,
+        argument_bindings=cp.argument_bindings,
     )
 
 

@@ -16,7 +16,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from agm.agl.diagnostics import AglError, Diagnostic
-from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
 from agm.agl.scope.imports import ImportEnv, QName
 from agm.agl.scope.symbols import BindingRef, ResolvedProgram
 from agm.agl.semantics.types import (
@@ -39,7 +39,7 @@ from agm.agl.semantics.types import (
     TypeVarType,
     UnitType,
 )
-from agm.agl.syntax.nodes import ParamKind, Pattern
+from agm.agl.syntax.nodes import Expr, ParamKind, Pattern
 from agm.agl.syntax.spans import SourceSpan
 
 # ---------------------------------------------------------------------------
@@ -207,6 +207,37 @@ class OutputContractSpec:
 
 
 # ---------------------------------------------------------------------------
+# ArgumentBindings — checker-computed call/pattern argument bindings
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ArgumentBindings:
+    """Checker-computed argument bindings for call-like constructs, keyed by node_id.
+
+    The checker is the single source of truth for how each construct's
+    positional, named, and bare-name-shorthand arguments map onto declared
+    parameters or fields.  The lowerer reads these instead of re-running the
+    binder.
+
+    ``function_calls``
+        Direct user-function ``Call.node_id`` → declaration-order argument tuple
+        (one entry per parameter; ``None`` means "use the parameter's default").
+    ``constructor_calls``
+        Record/enum/exception constructor ``Call.node_id`` → ordered
+        ``{field_name: expr}`` mapping (every field bound; constructors have no
+        defaults).
+    ``constructor_patterns``
+        Constructor-pattern ``Pattern.node_id`` → ordered ``(field_name,
+        sub_pattern)`` pairs (partial patterns omit unmentioned fields).
+    """
+
+    function_calls: dict[int, tuple[Expr | None, ...]]
+    constructor_calls: dict[int, dict[str, Expr]]
+    constructor_patterns: dict[int, tuple[tuple[str, Pattern], ...]]
+
+
+# ---------------------------------------------------------------------------
 # CheckedProgram — output of the type-checking pass
 # ---------------------------------------------------------------------------
 
@@ -250,7 +281,7 @@ class CheckedProgram:
     type_env: TypeEnvironment
     function_signatures: dict[str, FunctionSignature]
     cast_specs: dict[int, CastSpec]
-    constructor_pattern_bindings: dict[int, tuple[tuple[str, Pattern], ...]]
+    argument_bindings: ArgumentBindings
 
 
 # ---------------------------------------------------------------------------
@@ -1048,6 +1079,31 @@ class TypeEnvironment:
         if module_id is not None and self._graph_ctor_field_kinds_table is not None:
             return self._graph_ctor_field_kinds_table.get((module_id, owner_name, variant))
         return None
+
+    def get_constructor_field_kinds_for_type(
+        self,
+        typ: Type | None,
+        owner_name: str,
+        variant: str | None,
+    ) -> tuple[tuple[str, ParamKind], ...] | None:
+        """Return field-kinds for a constructor identified by its resolved owner *typ*.
+
+        Encapsulates the registry-key convention in one place: ``RecordType`` and
+        ``EnumType`` carry their own ``module_id``; an ``ExceptionType`` (and any
+        unexpected/``None`` type) is globally unique and indexed under
+        ``PRELUDE_ID``.  Enum variants are keyed by *variant*; records and
+        exceptions are keyed under ``variant=None``.
+        """
+        if isinstance(typ, EnumType):
+            module_id: ModuleId = typ.module_id
+            lookup_variant = variant
+        elif isinstance(typ, RecordType):
+            module_id = typ.module_id
+            lookup_variant = None
+        else:
+            module_id = PRELUDE_ID
+            lookup_variant = None
+        return self.get_constructor_field_kinds(owner_name, lookup_variant, module_id=module_id)
 
     def all_constructor_field_kinds(
         self,

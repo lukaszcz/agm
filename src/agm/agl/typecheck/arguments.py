@@ -11,13 +11,16 @@ The routine is PURE: it does not resolve types, does not lower expressions, and
 does not mutate the checker state.  It raises ``AglTypeError`` on any binding
 violation.
 
-``bind_constructor_args`` is a convenience wrapper over ``bind_arguments`` for
-the common constructor case (record, enum variant, exception).  It builds the
-``BindParam`` list from a field-kinds tuple, applies the VarRef bare-name rule,
-asserts every field is bound (constructors have no defaults), and returns the
-``{field_name: expr}`` mapping in declaration order.  Used by the checker
-(both concrete and generic-inference paths) and the lowerer to avoid repeating
-the same boilerplate three times.
+``bind_constructor_args`` and ``bind_call_args`` are convenience wrappers over
+``bind_arguments`` for the two common cases.  ``bind_constructor_args`` builds
+the ``BindParam`` list from a field-kinds tuple (record, enum variant,
+exception), asserts every field is bound (constructors have no defaults), and
+returns the ``{field_name: expr}`` mapping in declaration order.
+``bind_call_args`` builds the ``BindParam`` list from a function's
+``ParamSpec`` sequence and returns the declaration-order binding tuple (a bound
+expression or ``None`` to use the parameter's default).  Both apply the VarRef
+bare-name rule and are used by the checker (concrete and generic-inference
+paths) and the lowerer to avoid repeating the same boilerplate at each site.
 
 Algorithm (positional-greedy with named-only shorthand)
 -------------------------------------------------------
@@ -45,9 +48,17 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
-from agm.agl.syntax.nodes import Expr, NamedArg, ParamKind, VarRef
+from agm.agl.syntax.nodes import (
+    Expr,
+    NamedArg,
+    ParamKind,
+    Pattern,
+    PatternField,
+    VarPattern,
+    VarRef,
+)
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.typecheck.env import AglTypeError
+from agm.agl.typecheck.env import AglTypeError, ParamSpec
 
 T = TypeVar("T")
 
@@ -299,3 +310,82 @@ def bind_constructor_args(
         )
         bound_exprs[fname] = bound_expr
     return bound_exprs
+
+
+# ---------------------------------------------------------------------------
+# Function-call convenience wrapper
+# ---------------------------------------------------------------------------
+
+
+def bind_call_args(
+    params: Sequence[ParamSpec],
+    positional: Sequence[Expr],
+    named: Sequence[NamedArg],
+    *,
+    call_span: SourceSpan,
+    context_desc: str,
+) -> tuple[Expr | None, ...]:
+    """Bind positional and named arguments for a function call against *params*.
+
+    Builds the :class:`BindParam` list from a function's :class:`ParamSpec`
+    sequence, applies the ``VarRef`` bare-name rule, and returns the
+    declaration-order binding tuple from :func:`bind_arguments` (each entry is
+    the bound expression, or ``None`` to use the parameter's default).
+
+    Shared by the checker (concrete check and generic-inference paths) and the
+    lowerer so the bare-name shorthand is always matched to its parameter by
+    NAME rather than by raw positional index.  Raises ``AglTypeError`` on any
+    binding violation.
+    """
+    bind_params = tuple(
+        BindParam(name=p.name, kind=p.kind, has_default=p.has_default) for p in params
+    )
+    named_bns = [BoundName(name=na.name, value=na.value, span=na.span) for na in named]
+    return bind_arguments(
+        bind_params,
+        positional,
+        named_bns,
+        bare_name=lambda e: e.name if isinstance(e, VarRef) else None,
+        span_of=lambda e: e.span,
+        call_span=call_span,
+        context_desc=context_desc,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Constructor-pattern convenience wrapper
+# ---------------------------------------------------------------------------
+
+
+def bind_pattern_args(
+    field_kinds: tuple[tuple[str, ParamKind], ...],
+    positional: Sequence[Pattern],
+    named: Sequence[PatternField],
+    *,
+    call_span: SourceSpan,
+    context_desc: str,
+) -> tuple[Pattern | None, ...]:
+    """Bind positional and named sub-patterns for a constructor pattern.
+
+    Builds the :class:`BindParam` list from *field_kinds*, applies the
+    ``VarPattern`` bare-name rule, and returns the declaration-order binding
+    tuple from :func:`bind_arguments`.  Unlike the call/constructor wrappers,
+    every field is treated as defaulted (``has_default=True``) because
+    constructor patterns may be partial — unmentioned fields stay ``None`` and
+    the caller treats them as wildcards.
+    """
+    bind_params = tuple(
+        BindParam(name=fname, kind=fkind, has_default=True) for fname, fkind in field_kinds
+    )
+    named_bns: list[BoundName[Pattern]] = [
+        BoundName(name=pf.name, value=pf.pattern, span=pf.span) for pf in named
+    ]
+    return bind_arguments(
+        bind_params,
+        positional,
+        named_bns,
+        bare_name=lambda p: p.name if isinstance(p, VarPattern) else None,
+        span_of=lambda p: p.span,
+        call_span=call_span,
+        context_desc=context_desc,
+    )

@@ -234,7 +234,7 @@ class GraphSession:
             type_env=entry.type_env,
             function_signatures=entry.function_signatures,
             cast_specs=entry.cast_specs,
-            constructor_pattern_bindings=entry.constructor_pattern_bindings,
+            argument_bindings=entry.argument_bindings,
         )
 
     def _inject_accumulated_imports(self, program: Program) -> Program:

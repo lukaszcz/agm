@@ -7,15 +7,12 @@ pre-pass."""
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
-from agm.agl.modules.loader import ModuleGraph, load_graph
-from agm.agl.modules.roots import RootSet
 from agm.agl.scope.graph import resolve_graph
 from agm.agl.scope.symbols import AglScopeError
 from agm.agl.typecheck import (
@@ -36,12 +33,11 @@ from agm.agl.typecheck import (
     check,
     check_graph,
 )
+from tests.agl.ir_harness import make_graph_from_files as _make_graph_from_files
 
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
-
-_REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 
 _CAPS = HostCapabilities(
     agent_names=frozenset(),
@@ -54,34 +50,6 @@ _CAPS = HostCapabilities(
         ),
     },
 )
-
-
-def _roots(*paths: Path) -> RootSet:
-    return RootSet(roots=frozenset((*paths, _REPO_STDLIB_ROOT)))
-
-
-def _write_module(root: Path, dotted: str, source: str) -> Path:
-    mid = ModuleId.from_dotted(dotted)
-    p = root / mid.relpath().replace("/", os.sep)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(source)
-    return p
-
-
-def _make_graph_from_files(tmp_path: Path, modules: dict[str, str]) -> ModuleGraph:
-    """Build a ModuleGraph via load_graph from {dotted_name_or_entry: source} dict.
-
-    The key ``'entry'`` is used as the entry source.
-    Other keys are written as .agl files under a temp root.
-    """
-    root = tmp_path / "root"
-    root.mkdir(parents=True, exist_ok=True)
-    entry_source = modules.get("entry", "()")
-    for dotted, source in modules.items():
-        if dotted == "entry":
-            continue
-        _write_module(root, dotted, source)
-    return load_graph(entry_source, entry_path=None, roots=_roots(root))
 
 
 def _check(src: str) -> CheckedProgram:

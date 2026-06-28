@@ -16,7 +16,7 @@ from agm.agl.ir.program import ExecutableProgram
 from agm.agl.lower import lower_program
 from agm.agl.lower.graph import lower_graph
 from agm.agl.modules.ids import ModuleId
-from agm.agl.modules.loader import load_graph
+from agm.agl.modules.loader import ModuleGraph, load_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import parse_program
 from agm.agl.runtime.agents import AgentFn, AgentRegistry
@@ -30,6 +30,10 @@ from agm.agl.typecheck.graph import check_graph
 from agm.core.process import ProcessCaptureResult
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parents[2] / "stdlib"
+
+
+def _roots(*paths: Path) -> RootSet:
+    return RootSet(roots=frozenset((*paths, _REPO_STDLIB_ROOT)))
 
 
 def m2_caps() -> HostCapabilities:
@@ -93,10 +97,27 @@ def evaluate_ir_raises(
     raise AssertionError("IR pipeline did not raise AglRaise")
 
 
-def _write_module_file(root: Path, dotted: str, source: str) -> None:
+def write_module_file(root: Path, dotted: str, source: str) -> Path:
     path = root / ModuleId.from_dotted(dotted).relpath().replace("/", os.sep)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(source)
+    return path
+
+
+def make_graph_from_files(tmp_path: Path, modules: dict[str, str]) -> ModuleGraph:
+    """Build a ModuleGraph via ``load_graph`` from a ``{name: source}`` dict.
+
+    The key ``'entry'`` is used as the entry source; all other keys are written
+    as ``.agl`` module files under a temp root.
+    """
+    root = tmp_path / "root"
+    root.mkdir(parents=True, exist_ok=True)
+    entry_source = modules.get("entry", "()")
+    for dotted, source in modules.items():
+        if dotted == "entry":
+            continue
+        write_module_file(root, dotted, source)
+    return load_graph(entry_source, entry_path=None, roots=_roots(root))
 
 
 def _checked_graph(
@@ -105,12 +126,8 @@ def _checked_graph(
     root = tmp_path / "root"
     root.mkdir(parents=True, exist_ok=True)
     for dotted, source in modules.items():
-        _write_module_file(root, dotted, source)
-    graph = load_graph(
-        entry_source,
-        entry_path=None,
-        roots=RootSet(roots=frozenset({root, _REPO_STDLIB_ROOT})),
-    )
+        write_module_file(root, dotted, source)
+    graph = load_graph(entry_source, entry_path=None, roots=_roots(root))
     return check_graph(resolve_graph(graph), m2_caps())
 
 

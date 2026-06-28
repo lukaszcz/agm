@@ -92,6 +92,7 @@ class ReplSession:
         self,
         *,
         default_strict_json: bool = False,
+        default_call_depth_limit: int | None = None,
         default_agent: "AgentFn | None" = None,
         shell_exec_timeout: float | None = None,
         trace_path: "Path | None" = None,
@@ -123,9 +124,14 @@ class ReplSession:
         # Internal runtime owns the registrations + host-environment assembly.
         self._runtime = PipelineDriver(
             default_strict_json=default_strict_json,
+            default_call_depth_limit=default_call_depth_limit,
             default_agent=default_agent,
             shell_exec_timeout=shell_exec_timeout,
         )
+        # Reuse the driver's resolved (default-applied) limit for the per-entry
+        # interpreters this session builds directly, so the canonical default
+        # lives in exactly one place.
+        self._default_call_depth_limit = self._runtime.default_call_depth_limit
         self._has_default_agent = default_agent is not None
 
         # Persistent session environment.
@@ -669,6 +675,7 @@ class ReplSession:
             lowered.program,
             registry=host_env.registry,
             strict_json=self._default_strict_json,
+            max_call_depth=self._default_call_depth_limit,
             shell_exec_timeout=self._shell_exec_timeout,
             trace=trace,
             param_values=ir_param_values,

@@ -53,6 +53,11 @@ def run(args: ReplArgs) -> None:
     repl_config = load_repl_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
 
     strict_json = args.strict_json if args.strict_json is not None else config.strict_json
+    # Resolve max call depth: CLI > [exec] config (config pragmas are not applied
+    # in the REPL).  ``None`` lets the session apply the canonical default.
+    call_depth_limit = (
+        args.max_call_depth if args.max_call_depth is not None else config.max_call_depth
+    )
 
     # Resolve the runner command: CLI flag > [exec] config > shared default,
     # exactly as ``agm exec`` does (the REPL shares the exec agent backing).
@@ -97,6 +102,7 @@ def run(args: ReplArgs) -> None:
 
     session = ReplSession(
         default_strict_json=strict_json,
+        default_call_depth_limit=call_depth_limit,
         default_agent=confirming_agent,
         shell_exec_timeout=config.timeout,
         trace_path=trace_path,

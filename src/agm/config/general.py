@@ -433,6 +433,18 @@ def _optional_str(table: TomlDict, key: str) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
 
 
+def _optional_positive_int(table: TomlDict, key: str) -> int | None:
+    """Return a positive int config value, or ``None`` when absent/invalid.
+
+    ``None`` lets the caller apply its own canonical default rather than baking a
+    default into the config layer.
+    """
+    value = table.get(key)
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return None
+
+
 def _optional_positive_int_or_unlimited(table: TomlDict, key: str) -> int | None:
     value = table.get(key)
     if isinstance(value, str) and value.strip().lower() == "unlimited":
@@ -535,6 +547,8 @@ class ExecConfig:
     agents: dict[str, str]
     log: bool
     log_file: str | None
+    # Optional recursion call-depth override (None = use the canonical default).
+    max_call_depth: int | None = None
 
 
 def load_exec_config(
@@ -581,6 +595,7 @@ def exec_config_from_merged(
 
     resolved_runner = _optional_str(exec_table, "runner")
     resolved_strict_json = _optional_bool(exec_table, "strict_json")
+    resolved_max_call_depth = _optional_positive_int(exec_table, "max_call_depth")
 
     resolved_timeout = _optional_timeout(exec_table, "timeout")
 
@@ -597,6 +612,7 @@ def exec_config_from_merged(
     return ExecConfig(
         runner=resolved_runner,
         strict_json=resolved_strict_json,
+        max_call_depth=resolved_max_call_depth,
         timeout=resolved_timeout,
         agents=resolved_agents,
         log=resolved_log,

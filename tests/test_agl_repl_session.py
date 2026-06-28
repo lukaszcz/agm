@@ -1762,6 +1762,26 @@ class TestReplConfigPragmaRejection:
             assert r.diagnostics  # has at least one error diagnostic
 
 
+class TestCallDepthLimit:
+    """The session's ``default_call_depth_limit`` bounds recursion in entries."""
+
+    _COUNTDOWN = "def countdown(x: int) -> int = if x <= 0 => 0 else => countdown(x - 1)"
+
+    def test_recursion_within_limit_completes(self) -> None:
+        s = ReplSession(default_call_depth_limit=50)
+        s.eval_entry(self._COUNTDOWN)
+        r = s.eval_entry("countdown(20)")
+        assert r.ok
+        assert r.value is not None and _int(r.value) == 0
+
+    def test_recursion_exceeding_limit_raises(self) -> None:
+        s = ReplSession(default_call_depth_limit=10)
+        s.eval_entry(self._COUNTDOWN)
+        r = s.eval_entry("countdown(100)")
+        assert not r.ok
+        assert r.error is not None
+
+
 # ---------------------------------------------------------------------------
 # has_runnable_statements — lexer-error defensive branch (Fix 2)
 # ---------------------------------------------------------------------------

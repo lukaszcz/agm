@@ -246,6 +246,29 @@ class TestLoadExecConfig:
         cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
         assert cfg.log_file is None
 
+    def test_max_call_depth_none_by_default(self, tmp_path: Path) -> None:
+        home = tmp_path / "home"
+        home.mkdir()
+        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
+        assert cfg.max_call_depth is None
+
+    def test_max_call_depth_loaded_from_config(self, tmp_path: Path) -> None:
+        home = tmp_path / "home"
+        home.mkdir()
+        (home / ".agm").mkdir()
+        (home / ".agm" / "config.toml").write_text("[exec]\nmax_call_depth = 128\n")
+        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
+        assert cfg.max_call_depth == 128
+
+    def test_max_call_depth_non_positive_ignored(self, tmp_path: Path) -> None:
+        """A non-positive config value falls back to None (canonical default applies)."""
+        home = tmp_path / "home"
+        home.mkdir()
+        (home / ".agm").mkdir()
+        (home / ".agm" / "config.toml").write_text("[exec]\nmax_call_depth = 0\n")
+        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
+        assert cfg.max_call_depth is None
+
 
 class TestParamsConfig:
     def test_load_params_config_from_toml(self, tmp_path: Path) -> None:

@@ -2,8 +2,8 @@
 
 | Command | Description |
 |---------|-------------|
-| `agm exec [--strict-json\|--no-strict-json] [--runner COMMAND] [--log\|--log-file PATH\|--no-log] [--no-stdlib] [-I DIR]... (FILE \| -c COMMAND) [--PARAM VALUE]...` | Execute an AgL workflow program |
-| `agm repl [--strict-json\|--no-strict-json] [--runner COMMAND] [--confirm-agents] [--quiet] [--log\|--log-file PATH\|--no-log]` | Start an interactive AgL REPL |
+| `agm exec [--strict-json\|--no-strict-json] [--max-call-depth N] [--runner COMMAND] [--log\|--log-file PATH\|--no-log] [--no-stdlib] [-I DIR]... (FILE \| -c COMMAND) [--PARAM VALUE]...` | Execute an AgL workflow program |
+| `agm repl [--strict-json\|--no-strict-json] [--max-call-depth N] [--runner COMMAND] [--confirm-agents] [--quiet] [--log\|--log-file PATH\|--no-log]` | Start an interactive AgL REPL |
 
 AGM runs AgL (Agent Language) workflow programs two ways: `agm exec` runs a whole
 program from a fresh environment, and `agm repl` evaluates entries interactively in a
@@ -14,6 +14,7 @@ documented in the [AgL language reference](../agl/reference/index.md).
 
 ```text
 agm exec [--strict-json|--no-strict-json]
+         [--max-call-depth N]
          [--runner COMMAND]
          [--log|--log-file PATH|--no-log]
          [--no-stdlib]
@@ -63,6 +64,9 @@ or two or more distinct files, are static errors (exit 1 with a diagnostic).
   exactly one JSON value from chatty output (stripping fences/prose, repairing
   trivially malformed JSON), then validates it strictly against the schema. The
   recovered (normalized) value is traced alongside the raw output.
+- `--max-call-depth N`: Override the maximum recursion call depth (a positive int;
+  default 256). Exceeding it raises `RecursionError`. Resolution is
+  CLI > `max_call_depth` source pragma > `[exec] max_call_depth` config.
 - `--runner COMMAND`: Override the default agent runner command (backs `ask` and any
   declared agent without its own command). See [runner precedence](#agents-and-runner-precedence).
 - `--log` / `--log-file PATH` / `--no-log`: Control trace logging, which is **off by
@@ -121,6 +125,7 @@ pragmas override:
 [exec]
 runner = "claude -p"        # default agent runner
 strict_json = false         # lenient JSON recovery is the default
+max_call_depth = 256        # recursion call-depth limit (omit for the default 256)
 timeout = "30m"             # idle timeout
 log = false                 # trace logging off by default; set true to enable
 # log_file = "trace.jsonl"  # explicit trace path (omit for auto timestamped path)
@@ -153,10 +158,9 @@ print result
 ```
 
 Precedence is **CLI > pragma > config file**. For example, `--no-log` overrides
-`config log = true`. The recursion call-depth limit is configurable only via the
-`max_call_depth` source pragma — there is no CLI flag or config-file key for it.
-Pragmas are an `agm exec` feature; the REPL rejects a `config` line entered at the
-prompt (see [`agm repl`](#agm-repl-interactive-session)).
+`config log = true`, and `--max-call-depth` overrides a `config max_call_depth`
+pragma. Pragmas are an `agm exec` feature; the REPL rejects a `config` line entered
+at the prompt (see [`agm repl`](#agm-repl-interactive-session)).
 
 ### Exit codes
 
@@ -181,6 +185,7 @@ prompt (see [`agm repl`](#agm-repl-interactive-session)).
 
 ```text
 agm repl [--strict-json|--no-strict-json]
+         [--max-call-depth N]
          [--runner COMMAND] [--confirm-agents]
          [--quiet] [--log|--log-file PATH|--no-log]
 ```
@@ -191,9 +196,9 @@ entry is parsed, type-checked, and evaluated once against an environment that
 accumulates bindings, types, and declarations across entries, so earlier results stay
 available and agent calls fire exactly once.
 
-The REPL reuses the `[exec]` configuration (runner, per-agent commands, JSON strictness,
-timeout), so an interactive session evaluates entries with the same agent backing a batch
-`agm exec` run would use.
+The REPL reuses the `[exec]` configuration (runner, per-agent commands, call-depth limit,
+JSON strictness, timeout), so an interactive session evaluates entries with the same agent
+backing a batch `agm exec` run would use.
 
 ### Entry editing
 
@@ -256,6 +261,9 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
 
 - `--strict-json` / `--no-strict-json`: Set JSON-codec strictness for agent output
   (lenient recovery is the default), as for `agm exec`.
+- `--max-call-depth N`: Override the maximum recursion call depth (default 256).
+  Resolution is CLI > `[exec] max_call_depth` config; config pragmas are not applied
+  in the REPL.
 - `--runner COMMAND`: As for `agm exec`.
 - `--confirm-agents`: Start in confirm mode, asking before each agent call (the default
   is auto; see [Agent-call confirmation](#agent-call-confirmation)).

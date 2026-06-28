@@ -476,7 +476,7 @@ _HELP_TEXTS: dict[str, str] = {
               Create the session with PANES panes.
     """),
     "exec": textwrap.dedent("""\
-        agm exec [--strict-json|--no-strict-json] [--runner COMMAND]
+        agm exec [--strict-json|--no-strict-json] [--max-call-depth N] [--runner COMMAND]
                  [--log|--log-file PATH|--no-log] [--no-stdlib] [-I DIR]...
                  (FILE | -c COMMAND) [--PARAM VALUE]...
 
@@ -496,6 +496,8 @@ _HELP_TEXTS: dict[str, str] = {
           -c, --command COMMAND  Execute the program given as COMMAND instead of FILE.
           --strict-json         Require bare JSON output from agents (no recovery).
           --no-strict-json      Use lenient JSON recovery (default).
+          --max-call-depth N    Override the maximum recursion call depth
+                                (CLI > source pragma > config).
           --runner COMMAND      Override the default agent runner command.
           --log                 Enable trace logging (auto timestamped path).
           --log-file PATH       Write trace log to PATH.
@@ -517,7 +519,7 @@ _HELP_TEXTS: dict[str, str] = {
           2  The workflow executed but ended with an uncaught AgL exception.
     """),
     "repl": textwrap.dedent("""\
-        agm repl [--strict-json|--no-strict-json]
+        agm repl [--strict-json|--no-strict-json] [--max-call-depth N]
                  [--runner COMMAND] [--confirm-agents]
                  [--quiet] [--log|--log-file PATH|--no-log]
 
@@ -526,7 +528,7 @@ _HELP_TEXTS: dict[str, str] = {
         that accumulates bindings, types, and declarations across entries, so
         earlier results stay available and agent calls fire exactly once.  The
         session reuses the [exec] configuration (runner, per-agent commands,
-        loop limit, JSON strictness, timeout).
+        call-depth limit, JSON strictness, timeout).
 
         Trace logging is OFF by default.  Config pragmas (config KEY = VALUE)
         entered at the prompt are rejected — set session options via CLI flags
@@ -540,6 +542,8 @@ _HELP_TEXTS: dict[str, str] = {
         Options:
           --strict-json         Require bare JSON output from agents (no recovery).
           --no-strict-json      Use lenient JSON recovery (default).
+          --max-call-depth N    Override the maximum recursion call depth
+                                (CLI > config; pragmas are not applied in the REPL).
           --runner COMMAND      Override the default agent runner command.
           --confirm-agents     Confirm each agent call before dispatching it
                                 (default: fire agent calls without confirming).

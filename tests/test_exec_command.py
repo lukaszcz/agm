@@ -1148,6 +1148,70 @@ class TestExecConfigWiring:
         assert exec_command.run(args) is None
         assert captured["default_call_depth_limit"] == 42
 
+    def test_cli_max_call_depth_overrides_pragma(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``--max-call-depth`` (CLI) wins over a ``config max_call_depth`` pragma."""
+        from agm.cli_support.args import ExecArgs
+        from agm.config.context import ConfigContext
+
+        home = self._config_home(tmp_path)
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("config max_call_depth = 42\nlet x = 1\nx\n")
+
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        captured = _spy_runtime(monkeypatch)
+
+        args = ExecArgs(
+            file=str(agl_file),
+            param_tokens=[],
+            strict_json=None,
+            runner=None,
+            no_log=False,
+            log_file=None,
+            max_call_depth=7,
+        )
+        assert exec_command.run(args) is None
+        assert captured["default_call_depth_limit"] == 7
+
+    def test_config_max_call_depth_flows_when_no_pragma_or_cli(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``[exec] max_call_depth`` is used when neither CLI nor pragma sets it."""
+        from agm.cli_support.args import ExecArgs
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text("[exec]\nmax_call_depth = 99\n")
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("let x = 1\nx\n")
+
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        captured = _spy_runtime(monkeypatch)
+
+        args = ExecArgs(
+            file=str(agl_file),
+            param_tokens=[],
+            strict_json=None,
+            runner=None,
+            no_log=False,
+            log_file=None,
+        )
+        assert exec_command.run(args) is None
+        assert captured["default_call_depth_limit"] == 99
+
     def test_timeout_config_flows_to_shell_exec_timeout(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -220,6 +220,8 @@ class ExecArgs:
     command: str | None = None
     module_paths: list[str] = field(default_factory=list)
     no_stdlib: bool = False
+    # Optional recursion call-depth override (None = no override).
+    max_call_depth: int | None = None
 
 
 @dataclass(slots=True)
@@ -231,3 +233,5 @@ class ReplArgs:
     no_log: bool
     log_file: str | None
     log: bool = False
+    # Optional recursion call-depth override (None = no override).
+    max_call_depth: int | None = None

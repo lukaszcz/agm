@@ -47,6 +47,7 @@ class GraphSessionCtx(Protocol):
     _type_env: TypeEnvironment
     _trace_path: Path | None
     _default_strict_json: bool
+    _default_call_depth_limit: int
     _shell_exec_timeout: float | None
 
     def _ensure_roots(self) -> RootSet: ...
@@ -314,6 +315,7 @@ class GraphSession:
             lowered.program,
             registry=host_env.registry,
             strict_json=self._ctx._default_strict_json,
+            max_call_depth=self._ctx._default_call_depth_limit,
             shell_exec_timeout=self._ctx._shell_exec_timeout,
             trace=trace,
             param_values=ir_params,

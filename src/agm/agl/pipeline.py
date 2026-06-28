@@ -311,8 +311,9 @@ class PipelineDriver:
     default_call_depth_limit : int or None
         Maximum call depth for recursive functions (design §D8).  Exceeding
         this limit raises a ``RecursionError`` in the AgL program.  ``None``
-        applies the canonical default (``IrInterpreter.DEFAULT_MAX_CALL_DEPTH``);
-        the ``max_call_depth`` config pragma feeds this value from source.
+        applies the canonical default (``IrInterpreter.DEFAULT_MAX_CALL_DEPTH``).
+        Resolved by the caller as ``--max-call-depth`` > ``max_call_depth``
+        source pragma > ``[exec] max_call_depth`` config.
     """
 
     def __init__(

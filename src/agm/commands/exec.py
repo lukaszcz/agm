@@ -31,9 +31,8 @@ Flag notes:
     - ``--runner COMMAND`` overrides the default agent runner command from config.
       When set, it is used as the default runner for all unnamed agents.
     - Source ``config KEY = VALUE`` pragmas (header-only) override config-file
-      settings for ``strict_json``, ``runner``, ``timeout``, ``log``, and
-      ``log_file``, and set ``max_call_depth`` (no config-file key).  CLI flags
-      always take precedence.
+      settings for ``strict_json``, ``max_call_depth``, ``runner``, ``timeout``,
+      ``log``, and ``log_file``.  CLI flags always take precedence.
     - ``--dry-run`` (global flag) runs only the static pipeline + contract
       materialization and never writes a trace (side-effect-free).
 """
@@ -158,11 +157,13 @@ def run(args: ExecArgs) -> None:
     assert strict_json is not None
     resolved_strict_json: bool = strict_json
 
-    # Resolve max call depth: the `max_call_depth` pragma overrides the host
-    # default; there is no CLI flag or config-file key (the recursion safety
-    # limit is configured only in source).  ``None`` lets the driver apply its
-    # canonical default.
-    resolved_call_depth_limit = _typed_pragma(pragmas, "max_call_depth", int)
+    # Resolve max call depth: CLI > pragma > config.  ``None`` (nothing set at
+    # any layer) lets the driver apply its canonical default.
+    resolved_call_depth_limit = _first(
+        args.max_call_depth,
+        _typed_pragma(pragmas, "max_call_depth", int),
+        config.max_call_depth,
+    )
 
     # Resolve timeout: pragma > config (no CLI flag for timeout).
     pragma_timeout_raw = pragmas.get("timeout")

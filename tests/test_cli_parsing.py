@@ -2262,6 +2262,55 @@ class TestExecModulePathOption:
         assert getattr(calls[0], "module_paths") == []
 
 
+class TestMaxCallDepthOption:
+    """Parser-contract tests for the --max-call-depth option on exec/repl."""
+
+    def test_exec_max_call_depth_passed_to_args(
+        self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import agm.commands.exec as exec_mod
+
+        calls: list[object] = []
+        monkeypatch.setattr(exec_mod, "run", lambda a: calls.append(a))
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("let x = 1\n")
+
+        result = invoke(runner, ["exec", str(agl_file), "--max-call-depth", "42"])
+        assert result.exit_code == 0, result.output
+        assert len(calls) == 1
+        assert getattr(calls[0], "max_call_depth") == 42
+
+    def test_exec_max_call_depth_defaults_to_none(
+        self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import agm.commands.exec as exec_mod
+
+        calls: list[object] = []
+        monkeypatch.setattr(exec_mod, "run", lambda a: calls.append(a))
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("let x = 1\n")
+
+        result = invoke(runner, ["exec", str(agl_file)])
+        assert result.exit_code == 0, result.output
+        assert len(calls) == 1
+        assert getattr(calls[0], "max_call_depth") is None
+
+    def test_repl_max_call_depth_passed_to_args(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import agm.commands.repl as repl_mod
+
+        calls: list[object] = []
+        monkeypatch.setattr(repl_mod, "run", lambda a: calls.append(a))
+
+        result = invoke(runner, ["repl", "--max-call-depth", "7"])
+        assert result.exit_code == 0, result.output
+        assert len(calls) == 1
+        assert getattr(calls[0], "max_call_depth") == 7
+
+
 class TestParseLoopSelectArgsExtraPromptMutualExclusion:
     def test_extra_prompt_and_extra_prompt_file_mutually_exclusive(self) -> None:
         with pytest.raises(SystemExit):

@@ -16,7 +16,7 @@ runner = "agm run pi -p '@%{PROMPT_FILE}'"
 # [exec]
 # runner = "claude -p"          # default agent runner (falls back to [loop] runner)
 # strict_json = false           # require bare JSON from agents (default: lenient recovery)
-# default_loop_limit = 5        # do[] iteration bound when not specified inline
+# max_call_depth = 256          # recursion call-depth limit (default: 256)
 # timeout = "30m"               # idle timeout for agent and exec() calls
 # log = false                   # trace logging; off by default — set true to enable
 # log_file = "trace.jsonl"      # explicit trace path (omit for auto timestamped path)

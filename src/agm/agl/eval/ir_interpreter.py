@@ -619,6 +619,53 @@ class IrInterpreter:
                         raise
         return self._collect_results()
 
+    def collect_entry_config_values(self, names: set[str]) -> dict[str, Value]:
+        """Evaluate initializers until entry-module config values for *names* are bound.
+
+        This supports host settings that must be known before the normal program
+        run starts (currently ``runner``, ``log``, and ``log-file``).  The caller
+        is responsible for using this only for top-of-program startup config.
+        """
+        found: dict[str, Value] = {}
+        entry_module = self._program.modules[self._program.entry_module]
+        target_count = sum(
+            1
+            for node in entry_module.initializers
+            if isinstance(node, IrConfigBind) and node.public_name in names
+        )
+        if target_count == 0:
+            return found
+
+        seen_targets = 0
+        with decimal.localcontext(AGL_DECIMAL_CONTEXT):
+            self._install_entry_function_closures()
+            for mod in self._program.modules.values():
+                module_values = self.module_initializer_values.setdefault(mod.module_id, [])
+                for node in mod.initializers:
+                    try:
+                        value = self._eval_initializer(node)
+                        self.initializer_values.append(value)
+                        module_values.append(value)
+                    except AglRaise as exc:
+                        if exc.span is None:
+                            exc.span = node.location
+                        raise
+                    if mod.module_id == self._program.entry_module:
+                        for sym, desc in self._program.symbols.items():
+                            if desc.owner != self._program.entry_module:
+                                continue
+                            public_name = desc.public_name
+                            if public_name in names and sym in self._frame:
+                                bound = self._frame[sym]
+                                found[public_name] = (
+                                    bound.value if isinstance(bound, Cell) else bound
+                                )
+                        if isinstance(node, IrConfigBind) and node.public_name in names:
+                            seen_targets += 1
+                        if seen_targets >= target_count:
+                            return found
+        return found
+
     def _eval_initializer(self, node: IrExpr) -> Value:
         match node:
             case IrBind(symbol=sym, value=IrMakeClosure(function_id=fn_id)):
@@ -1195,6 +1242,14 @@ class IrInterpreter:
                 self._strict_json = config_value.value
         elif public_name == "max-iters":
             if isinstance(config_value, IntValue):
+                if config_value.value <= 0:
+                    raise AglRaise(
+                        _make_exc_value(
+                            "ValueError",
+                            "invalid config max-iters: expected a positive integer",
+                            trace_id=self._trace.new_event_id(),
+                        )
+                    )
                 self._loop_limit = config_value.value
         elif public_name == "timeout":
             if isinstance(config_value, EnumValue):

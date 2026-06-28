@@ -2242,6 +2242,96 @@ def _exec_args_no_log(
     )
 
 
+class TestExecStartupConfigPrepass:
+    def test_startup_diagnostics_exit_1_and_print_warnings(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from agm.agl.diagnostics import Diagnostic
+        from agm.agl.pipeline import PipelineDriver, StartupConfigResult
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("config log = true\nprint 1\n")
+        warning = Diagnostic(message="startup warning", line=1, severity="warning")
+        error = Diagnostic(message="startup error", line=1)
+
+        def fake_collect(
+            self: PipelineDriver,
+            prepared: object,
+            *,
+            names: set[str],
+            checked_graph: object = None,
+            config_cli: object = None,
+            config_base: object = None,
+        ) -> StartupConfigResult:
+            return StartupConfigResult(
+                ok=False,
+                diagnostics=[error],
+                error=None,
+                warnings=[warning],
+            )
+
+        monkeypatch.setattr(PipelineDriver, "collect_startup_config_graph", fake_collect)
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "warning: startup warning" in captured.err
+        assert "error: startup error" in captured.err
+
+    def test_startup_error_exits_2_and_prints_warnings(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from agm.agl.diagnostics import Diagnostic
+        from agm.agl.pipeline import PipelineDriver, RunError, StartupConfigResult
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("config runner = \"runner\"\nprint 1\n")
+        warning = Diagnostic(message="startup warning", line=1, severity="warning")
+        error = RunError(type_name="Abort", fields={"message": "boom"}, line=1, col=1)
+
+        def fake_collect(
+            self: PipelineDriver,
+            prepared: object,
+            *,
+            names: set[str],
+            checked_graph: object = None,
+            config_cli: object = None,
+            config_base: object = None,
+        ) -> StartupConfigResult:
+            return StartupConfigResult(
+                ok=False,
+                diagnostics=[],
+                error=error,
+                warnings=[warning],
+            )
+
+        monkeypatch.setattr(PipelineDriver, "collect_startup_config_graph", fake_collect)
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+
+        assert exc_info.value.code == 2
+        captured = capsys.readouterr()
+        assert "warning: startup warning" in captured.err
+        assert "AgL exception: Abort: boom" in captured.err
+
+    def test_option_text_value_ignores_non_text_some_payload(self) -> None:
+        from agm.agl.ir.ids import NominalId
+        from agm.agl.modules.ids import STD_CORE_ID
+        from agm.agl.semantics.values import EnumValue, IntValue
+
+        value = EnumValue(
+            nominal=NominalId(STD_CORE_ID, "Option"),
+            display_name="Option",
+            variant="Some",
+            fields={"value": IntValue(1)},
+        )
+
+        assert exec_command._option_text_value({"log-file": value}, "log-file") is None
+
+
 class TestExecSourceConfigPrecedence:
     """M3: source ``config`` declarations (CLI > source > config precedence).
 
@@ -2290,6 +2380,24 @@ class TestExecSourceConfigPrecedence:
         result = exec_command.run(_exec_args_no_log(agl_file))
         assert result is None  # exit 0
         assert capsys.readouterr().out == "done\n"
+
+    def test_source_max_iters_zero_is_rejected(self, tmp_path: Path) -> None:
+        """``config max-iters = 0`` is rejected instead of becoming a live loop limit."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("config max-iters = 0\nprint 1\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+        assert exc_info.value.code == 2
+
+    def test_source_max_iters_negative_expression_is_rejected(self, tmp_path: Path) -> None:
+        """A computed negative ``max-iters`` value is rejected at the config binding."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("let bad = 0 - 1\nconfig max-iters = bad\nprint 1\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+        assert exc_info.value.code == 2
 
     def test_cli_max_iters_overrides_source_max_iters(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -2520,6 +2628,31 @@ class TestExecSourceConfigPrecedence:
         log_files = list(agent_files.glob("exec-*.log"))
         assert log_files, "Expected a trace log file to be created by config log = true"
 
+    def test_source_log_non_literal_creates_trace_file(self, tmp_path: Path) -> None:
+        """``config log = enabled`` is honored for startup trace resolution."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('let enabled = true\nconfig log = enabled\nprint "hi"\n')
+
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            exec_command.run(
+                ExecArgs(
+                    file=str(agl_file),
+                    param_tokens=[],
+                    strict_json=None,
+                    max_iters=None,
+                    runner=None,
+                    no_log=False,
+                    log_file=None,
+                )
+            )
+        finally:
+            os.chdir(old_cwd)
+
+        log_files = list((tmp_path / ".agent-files").glob("exec-*.log"))
+        assert log_files, "Expected a trace log file from computed config log=true"
+
     def test_source_log_file_writes_to_specified_path(self, tmp_path: Path) -> None:
         """``config log-file = "path"`` in source writes the trace to that path."""
         log_path = tmp_path / "trace.log"
@@ -2635,6 +2768,38 @@ class TestExecSourceConfigPrecedence:
 
         exec_command.run(_exec_args_no_log(agl_file))
         assert captured_runner == ["my-runner"]
+
+    def test_source_runner_non_literal_flows_into_agent_factory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``config runner = name`` is honored for startup runner resolution."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('let name = "computed-runner"\nconfig runner = name\nlet x = 1\nx\n')
+
+        captured_runner: list[str] = []
+
+        import agm.agl.runtime.agents as agents_mod
+        from agm.agl.runtime.agents import AgentFn
+
+        real_factory = agents_mod.runner_backed_agent_factory
+
+        def spy_factory(
+            *,
+            default_runner_cmd: str,
+            per_agent_cmds: dict[str, str],
+            idle_timeout: float | None = None,
+        ) -> AgentFn:
+            captured_runner.append(default_runner_cmd)
+            return real_factory(
+                default_runner_cmd=default_runner_cmd,
+                per_agent_cmds=per_agent_cmds,
+                idle_timeout=idle_timeout,
+            )
+
+        monkeypatch.setattr(exec_command, "runner_backed_agent_factory", spy_factory)
+
+        exec_command.run(_exec_args_no_log(agl_file))
+        assert captured_runner == ["computed-runner"]
 
     def test_cli_runner_overrides_source_runner(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -266,6 +266,18 @@ class RunResult:
     trace_path: Path | None = field(default=None)
 
 
+@dataclass(slots=True)
+class StartupConfigResult:
+    """Result of evaluating start-resolved source ``config`` declarations."""
+
+    ok: bool
+    diagnostics: list[Diagnostic]
+    error: RunError | None
+    warnings: list[Diagnostic] = field(default_factory=list)
+    values: dict[str, Value] = field(default_factory=dict)
+    checked_graph: "CheckedModuleGraph | None" = None
+
+
 class PipelineDriver:
     """Host API for the AgL interpreter.
 
@@ -963,6 +975,108 @@ class PipelineDriver:
             warnings=all_warnings,
             checked_graph=checked_graph,
             configs=configs,
+        )
+
+    def collect_startup_config_graph(
+        self,
+        prepared: PreparedGraph,
+        *,
+        names: set[str],
+        checked_graph: "CheckedModuleGraph | None" = None,
+        config_cli: "Mapping[str, Value] | None" = None,
+        config_base: "Mapping[str, Value] | None" = None,
+    ) -> StartupConfigResult:
+        """Evaluate entry-module source config declarations needed at startup.
+
+        ``runner``, ``log``, and ``log-file`` must be known before the normal
+        runtime creates its agent factory and trace sink.  This prepass reuses
+        the loaded graph, typechecks/lowers it once, and evaluates entry
+        initializers only until the requested config bindings are available.
+        """
+        warnings: list[Diagnostic] = list(prepared.warnings)
+
+        if prepared.resolved_graph is None:
+            return StartupConfigResult(
+                ok=False,
+                diagnostics=list(prepared.diagnostics),
+                error=None,
+                warnings=warnings,
+                checked_graph=None,
+            )
+
+        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.syntax.nodes import ConfigDecl
+
+        entry_mod = prepared.resolved_graph.modules.get(ENTRY_ID)
+        if entry_mod is None:
+            return StartupConfigResult(
+                ok=False,
+                diagnostics=[Diagnostic(message="Entry module not found in graph", line=1)],
+                error=None,
+                warnings=warnings,
+                checked_graph=None,
+            )
+        if not any(
+            isinstance(item, ConfigDecl) and item.name in names
+            for item in entry_mod.resolved.program.body.items
+        ):
+            return StartupConfigResult(
+                ok=True,
+                diagnostics=[],
+                error=None,
+                warnings=warnings,
+                values={},
+                checked_graph=checked_graph,
+            )
+
+        capabilities = self.host_environment().capabilities
+        if checked_graph is None:
+            checked_graph, tc_diagnostics = _run_typecheck_graph(
+                prepared.resolved_graph, capabilities
+            )
+        else:
+            tc_diagnostics = ()
+        if checked_graph is None:
+            return StartupConfigResult(
+                ok=False,
+                diagnostics=list(tc_diagnostics),
+                error=None,
+                warnings=warnings,
+                checked_graph=None,
+            )
+
+        warnings.extend(checked_graph.warnings)
+
+        from agm.agl.lower import lower_graph
+        from agm.agl.semantics.exceptions import AglRaise
+
+        executable = lower_graph(checked_graph, validate=True)
+        interp = IrInterpreter(
+            executable,
+            loop_limit=self._default_loop_limit,
+            strict_json=self._default_strict_json,
+            shell_exec_timeout=self._shell_exec_timeout,
+            max_call_depth=self._default_call_depth_limit,
+            config_cli=config_cli,
+            config_base=config_base,
+        )
+        try:
+            values = interp.collect_entry_config_values(names)
+        except AglRaise as exc:
+            return StartupConfigResult(
+                ok=False,
+                diagnostics=[],
+                error=exception_value_to_run_error(exc.exc, span=exc.span),
+                warnings=warnings,
+                checked_graph=checked_graph,
+            )
+        return StartupConfigResult(
+            ok=True,
+            diagnostics=[],
+            error=None,
+            warnings=warnings,
+            values=values,
+            checked_graph=checked_graph,
         )
 
     def run_prepared_graph(

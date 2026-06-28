@@ -16,10 +16,11 @@ from __future__ import annotations
 import pytest
 
 from agm.agl.modules.ids import STD_CORE_ID
-from agm.agl.pipeline import PipelineDriver, static_config_values
+from agm.agl.modules.roots import RootSet
+from agm.agl.pipeline import PipelineDriver, PreparedGraph, static_config_values
 from agm.agl.runtime.params import convert_config_value
 from agm.agl.semantics.types import OPTION_TEXT_TYPE
-from agm.agl.semantics.values import EnumValue, IntValue, TextValue, Value
+from agm.agl.semantics.values import BoolValue, EnumValue, IntValue, TextValue, Value
 
 
 def _run(
@@ -32,6 +33,14 @@ def _run(
     rt = PipelineDriver()
     prepared = rt.prepare(source)
     return rt.run_prepared(prepared, config_cli=config_cli, config_base=config_base)
+
+
+def _prepare_graph(source: str) -> PreparedGraph:
+    from pathlib import Path
+
+    stdlib = Path(__file__).resolve().parent.parent / "stdlib"
+    roots = RootSet(roots=frozenset({stdlib}))
+    return PipelineDriver.prepare_program(source, entry_path=None, roots=roots)
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +197,150 @@ class TestConfigHelpers:
         )
         statics = static_config_values(program)
         assert statics == {"max-iters": 5}
+
+
+class TestStartupConfigCollection:
+    def _interpreter_for(self, source: str) -> object:
+        from agm.agl.eval.ir_interpreter import IrInterpreter
+        from agm.agl.lower import lower_graph
+
+        rt = PipelineDriver()
+        prepared = _prepare_graph(source)
+        discovery = rt.discover_params_graph(prepared)
+        assert discovery.checked_graph is not None
+        executable = lower_graph(discovery.checked_graph, validate=True)
+        return IrInterpreter(executable)
+
+    def test_unresolved_prepared_graph_returns_diagnostic(self) -> None:
+        prepared = _prepare_graph("config log = ")
+        result = PipelineDriver().collect_startup_config_graph(prepared, names={"log"})
+        assert not result.ok
+        assert result.diagnostics
+
+    def test_missing_entry_module_returns_diagnostic(self) -> None:
+        from unittest.mock import MagicMock
+
+        prepared = MagicMock()
+        prepared.warnings = ()
+        prepared.resolved_graph.modules = {}
+
+        result = PipelineDriver().collect_startup_config_graph(prepared, names={"log"})
+
+        assert not result.ok
+        assert result.diagnostics[0].message == "Entry module not found in graph"
+
+    def test_no_startup_config_returns_without_typecheck(self) -> None:
+        prepared = _prepare_graph("let x = 1\n")
+        result = PipelineDriver().collect_startup_config_graph(prepared, names={"log"})
+        assert result.ok
+        assert result.values == {}
+
+    def test_startup_config_type_error_returns_diagnostic(self) -> None:
+        prepared = _prepare_graph("config log = 1\n")
+        result = PipelineDriver().collect_startup_config_graph(prepared, names={"log"})
+        assert not result.ok
+        assert result.diagnostics
+
+    def test_startup_config_uses_provided_checked_graph(self) -> None:
+        rt = PipelineDriver()
+        prepared = _prepare_graph("config log = true\n")
+        discovery = rt.discover_params_graph(prepared)
+        assert discovery.checked_graph is not None
+
+        result = rt.collect_startup_config_graph(
+            prepared,
+            names={"log"},
+            checked_graph=discovery.checked_graph,
+        )
+
+        assert result.ok
+        assert result.values["log"] == BoolValue(True)
+
+    def test_startup_config_runtime_error_returns_error(self) -> None:
+        prepared = _prepare_graph('config runner = raise Abort(message: "boom")\n')
+        result = PipelineDriver().collect_startup_config_graph(prepared, names={"runner"})
+        assert not result.ok
+        assert result.error is not None
+        assert result.error.type_name == "Abort"
+
+    def test_interpreter_collect_returns_empty_when_no_targets(self) -> None:
+        interp = self._interpreter_for("let x = 1\nx\n")
+        assert interp.collect_entry_config_values({"log"}) == {}
+
+    def test_interpreter_collect_skips_non_entry_symbols(self) -> None:
+        from agm.agl.ir.ids import SymbolId
+        from agm.agl.ir.program import SymbolDescriptor
+        from agm.agl.modules.ids import ModuleId
+
+        interp = self._interpreter_for("import std.core\nconfig log = true\n")
+        interp._program.symbols[SymbolId(999_001)] = SymbolDescriptor(
+            symbol_id=SymbolId(999_001),
+            mutable=False,
+            public_name="log",
+            owner=ModuleId(("not_entry",)),
+        )
+        assert interp.collect_entry_config_values({"log"}) == {"log": BoolValue(True)}
+
+    def test_interpreter_collect_returns_found_when_modules_disappear(self) -> None:
+        interp = self._interpreter_for("config log = true\n")
+        entry_module = interp._program.modules[interp._program.entry_module]
+
+        class EmptyValuesModules(dict):
+            def values(self) -> object:
+                return ()
+
+        object.__setattr__(
+            interp._program,
+            "modules",
+            EmptyValuesModules({interp._program.entry_module: entry_module}),
+        )
+
+        assert interp.collect_entry_config_values({"log"}) == {}
+
+    def test_interpreter_collect_handles_non_entry_modules_before_entry(self) -> None:
+        from agm.agl.ir.ids import Location, SourceId
+        from agm.agl.ir.nodes import IrConstUnit
+        from agm.agl.ir.program import ExecutableModule
+        from agm.agl.modules.ids import ModuleId
+
+        interp = self._interpreter_for("config log = true\n")
+        entry_module = interp._program.modules[interp._program.entry_module]
+        empty_id = ModuleId(("empty",))
+        init_id = ModuleId(("init",))
+        location = Location(
+            source_id=SourceId(0),
+            start_offset=0,
+            end_offset=0,
+            start_line=1,
+            start_col=0,
+        )
+        modules = {
+            empty_id: ExecutableModule(module_id=empty_id, initializers=()),
+            init_id: ExecutableModule(
+                module_id=init_id,
+                initializers=(IrConstUnit(location=location),),
+            ),
+            interp._program.entry_module: entry_module,
+        }
+        object.__setattr__(interp._program, "modules", modules)
+
+        assert interp.collect_entry_config_values({"log"}) == {"log": BoolValue(True)}
+
+    def test_interpreter_collect_sets_span_on_raised_config_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from agm.agl.semantics.exceptions import AglRaise, make_builtin_exception
+
+        interp = self._interpreter_for("config log = true\n")
+
+        def fail(_node: object) -> Value:
+            raise AglRaise(make_builtin_exception("Abort", "boom"))
+
+        monkeypatch.setattr(interp, "_eval_initializer", fail)
+
+        with pytest.raises(AglRaise) as exc_info:
+            interp.collect_entry_config_values({"log"})
+        assert exc_info.value.span is not None
 
 
 # ---------------------------------------------------------------------------

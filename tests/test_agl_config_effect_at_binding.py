@@ -157,7 +157,7 @@ class TestStrictJson:
         source = (
             "agent spy\n"
             "config strict-json = true\n"
-            'let r: int = ask("prompt", agent: spy)\n'
+            'let r: int = ask("prompt", agent = spy)\n'
             "print r\n"
         )
         result = _run(source, initial_strict_json=False, default_agent=self._stub_agent)
@@ -169,7 +169,7 @@ class TestStrictJson:
         """An ask before config strict-json = true uses the initial lenient mode."""
         source = (
             "agent spy\n"
-            'let r: int = ask("prompt", agent: spy)\n'
+            'let r: int = ask("prompt", agent = spy)\n'
             "config strict-json = true\n"
             "print r\n"
         )
@@ -181,7 +181,7 @@ class TestStrictJson:
         source = (
             "agent spy\n"
             "config strict-json = true\n"
-            'let r: int = ask("prompt", agent: spy)\n'
+            'let r: int = ask("prompt", agent = spy)\n'
             "print r\n"
         )
         # CLI says False → overrides source True via D6 at bind time → lenient → accepted.

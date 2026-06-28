@@ -132,7 +132,7 @@ class TestOptionProjection:
         roots = RootSet(roots=frozenset({stdlib}))
         rt = PipelineDriver()
         prep = rt.prepare_program(
-            'import std.core\nconfig timeout = Some(value: "45s")\nlet t = timeout\nprint t\n',
+            'import std.core\nconfig timeout = Some(value = "45s")\nlet t = timeout\nprint t\n',
             entry_path=None,
             roots=roots,
         )
@@ -257,7 +257,7 @@ class TestStartupConfigCollection:
         assert result.values["log"] == BoolValue(True)
 
     def test_startup_config_runtime_error_returns_error(self) -> None:
-        prepared = _prepare_graph('config runner = raise Abort(message: "boom")\n')
+        prepared = _prepare_graph('config runner = raise Abort(message = "boom")\n')
         result = PipelineDriver().collect_startup_config_graph(prepared, names={"runner"})
         assert not result.ok
         assert result.error is not None

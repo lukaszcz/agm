@@ -1324,7 +1324,7 @@ class TestExceptionDefInGraph:
     def test_exception_constructor_candidate_available(self, tmp_path: Path) -> None:
         """An open-imported exception exposes its name as a constructor candidate."""
         graph = _make_graph_from_files(tmp_path, {
-            "entry": "import mylib\nMyErr(msg: \"oops\")",
+            "entry": "import mylib\nMyErr(msg = \"oops\")",
             "mylib": "exception MyErr(msg: text)",
         })
         result = resolve_graph(graph)
@@ -1377,7 +1377,7 @@ class TestResolveGraphReplSeams:
     def test_ambient_agents_resolves_undeclared_agent(self, tmp_path: Path) -> None:
         """ambient_agents lets the entry module use an agent not declared in source."""
         graph = _make_graph_from_files(tmp_path, {
-            "entry": 'let x = ask("Q", agent: session_bot)\nx',
+            "entry": 'let x = ask("Q", agent = session_bot)\nx',
         })
         # Without ambient_agents, "session_bot" is undeclared → AglScopeError.
         with pytest.raises(AglScopeError):

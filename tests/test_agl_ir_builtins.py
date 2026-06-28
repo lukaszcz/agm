@@ -89,7 +89,7 @@ def test_print_record() -> None:
         ()
     """)
     out = evaluate_ir_output(source)
-    assert out == "Point(x: 10, y: 20)\n"
+    assert out == "Point(x = 10, y = 20)\n"
 
 
 def test_print_enum_variant() -> None:

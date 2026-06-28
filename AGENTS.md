@@ -49,7 +49,7 @@ Run the CLI locally with `uv run agm ...` when iterating on a command.
 - Make sure tests are not flaky.
 - Maintain 100% test coverage of `src/`.
 - Maintain 100% command coverage in e2e tests.
-- Group tests in `tests/` by meaningful categories.
+- Group the tests in `tests/` by meaningful categories and name the files meaningfully.
 - NEVER run real agents (claude, codex, pi, ...) in the tests - ALWAYS mock agent calls.
 
 ## Commit Guidelines

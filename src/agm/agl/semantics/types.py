@@ -755,6 +755,13 @@ BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
             "raw": TextType(),
         },
     ),
+    "RangeError": ExceptionType(
+        name="RangeError",
+        fields={
+            "message": TextType(),
+            "trace_id": TextType(),
+        },
+    ),
 }
 
 # Names of built-in exception types (cannot be redeclared as records/enums/aliases).

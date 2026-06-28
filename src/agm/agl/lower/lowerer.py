@@ -447,6 +447,10 @@ class _Lowerer:
             case Loop():
                 if node.for_iter is not None:
                     self._scan_captures(node.for_iter, local_ids, captured)
+                if node.for_range_to is not None:
+                    self._scan_captures(node.for_range_to, local_ids, captured)
+                if node.for_range_by is not None:
+                    self._scan_captures(node.for_range_by, local_ids, captured)
                 if node.bound is not None:
                     self._scan_captures(node.bound, local_ids, captured)
                 if node.for_var is not None:
@@ -1049,14 +1053,27 @@ class _Lowerer:
     ) -> IrExpr:
         """Desugar a ``Loop`` AST node to ``IrLoop(body)``.
 
-        **Pre-loop** (emitted as needed):
+        **Collection for — pre-loop** (emitted as needed):
         - ``IrBind(__it, IrIterInit(kind, lower(for_iter_expr)))``  — mutable; for ``for``
         - ``IrBind(__n, lower_coerced(bound_expr, IntType()))``      — immutable; for bound
         - ``IrBind(__count, IrConstInt(0))``                         — mutable; for bound
 
+        **Integer-range for — pre-loop** (when ``for_range_to_expr`` is not ``None``):
+        - ``IrBind(__cur, lower_coerced(for_iter_expr, IntType()))`` — mutable cursor (start ``a``)
+        - ``IrBind(__end, lower_coerced(for_range_to_expr, IntType()))`` — immutable (bound ``b``)
+        - ``IrBind(__step, lower_coerced(for_range_by_expr, IntType()))`` or ``IrConstInt(1)``
+        - ``IrIf(step <= 0 => IrRaise(RangeError))`` — step guard
+        - (followed by the optional ``[n]`` bound items as for collection)
+
         **``IrLoop(body = IrBlock([…]))``** with:
-        1. For exhaustion check  (only if ``for_iter_expr`` is not ``None``)
-        2. For variable bind     (only if ``for_var`` is not ``None``)
+        For collection ``for``:
+        1. For exhaustion check  (``if not IrIterHasNext(__it) => break``)
+        2. For variable bind     (``let for_var = IrIterNext(__it)``)
+        For integer-range ``for``:
+        1. Range termination check  (``if __cur > __end`` or ``__cur < __end`` => break)
+        2a. Loop variable bind      (``let for_var = IrLoad(__cur)``)
+        2b. Cursor advance          (``__cur := __cur + __step`` or ``… - …``)
+        Shared items 3–7:
         3. While guard           (only if ``while_cond_expr`` is not ``None``)
         4. Bound check           (only if bounded)
         5. Count increment       (only if bounded)
@@ -1069,37 +1086,107 @@ class _Lowerer:
         loc = self._loc(span)
         pre_items: list[IrExpr] = []
         it_sym: SymbolId | None = None
+        cur_sym: SymbolId | None = None
+        end_sym: SymbolId | None = None
+        step_sym: SymbolId | None = None
         n_sym: SymbolId | None = None
         count_sym: SymbolId | None = None
 
-        # Pre-loop: for iterator initialisation
-        if for_iter_expr is not None:
-            iter_type = self._node_type(for_iter_expr.node_id)
-            if isinstance(iter_type, ListType):
-                iter_kind = IterKind.LIST
-            elif isinstance(iter_type, DictType):
-                iter_kind = IterKind.DICT_KEYS
-            else:  # TextType
-                iter_kind = IterKind.TEXT
-            it_sym = self._alloc_synthetic_sym(mutable=True)
+        if for_range_to_expr is not None:
+            # ---- Integer-range for pre-loop ----
+            # assert for_iter_expr is not None is guaranteed by the parser/typechecker
+            assert for_iter_expr is not None  # lower bound is in for_iter
+            # __cur: mutable int cursor, initialised to start a
+            cur_sym = self._alloc_synthetic_sym(mutable=True)
             pre_items.append(
                 IrBind(
                     location=loc,
-                    symbol=it_sym,
-                    value=IrIterInit(
-                        location=loc,
-                        kind=iter_kind,
-                        collection=self.lower_expr(for_iter_expr),
-                    ),
+                    symbol=cur_sym,
+                    value=self.lower_coerced(for_iter_expr, IntType()),
                 )
             )
+            # __end: immutable int, the to/downto bound b
+            end_sym = self._alloc_synthetic_sym(mutable=False)
+            pre_items.append(
+                IrBind(
+                    location=loc,
+                    symbol=end_sym,
+                    value=self.lower_coerced(for_range_to_expr, IntType()),
+                )
+            )
+            # __step: immutable int; from by-expr or default 1
+            step_sym = self._alloc_synthetic_sym(mutable=False)
+            step_value: IrExpr
+            if for_range_by_expr is not None:
+                step_value = self.lower_coerced(for_range_by_expr, IntType())
+            else:
+                step_value = IrConstInt(location=loc, value=1)
+            pre_items.append(IrBind(location=loc, symbol=step_sym, value=step_value))
+            # Step guard: if __step <= 0 => raise RangeError(...)
+            pre_items.append(
+                IrIf(
+                    location=loc,
+                    branches=(
+                        IrIfBranch(
+                            cond=IrCompare(
+                                location=loc,
+                                op=CmpOp.LE,
+                                kind=CompareKind.INT,
+                                lhs=IrLoad(location=loc, symbol=step_sym),
+                                rhs=IrConstInt(location=loc, value=0),
+                            ),
+                            body=IrRaise(
+                                location=loc,
+                                exc=IrMakeException(
+                                    location=loc,
+                                    nominal=NominalId(PRELUDE_ID, "RangeError"),
+                                    display_name="RangeError",
+                                    fields=(
+                                        (
+                                            "message",
+                                            IrConstText(
+                                                location=loc,
+                                                value="loop step must be positive",
+                                            ),
+                                        ),
+                                        ("trace_id", AutoTraceField()),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                    has_else=False,
+                )
+            )
+        else:
+            # ---- Collection for pre-loop ----
+            if for_iter_expr is not None:
+                iter_type = self._node_type(for_iter_expr.node_id)
+                if isinstance(iter_type, ListType):
+                    iter_kind = IterKind.LIST
+                elif isinstance(iter_type, DictType):
+                    iter_kind = IterKind.DICT_KEYS
+                else:  # TextType
+                    iter_kind = IterKind.TEXT
+                it_sym = self._alloc_synthetic_sym(mutable=True)
+                pre_items.append(
+                    IrBind(
+                        location=loc,
+                        symbol=it_sym,
+                        value=IrIterInit(
+                            location=loc,
+                            kind=iter_kind,
+                            collection=self.lower_expr(for_iter_expr),
+                        ),
+                    )
+                )
 
         # Allocate for_var symbol in the loop frame (immutable let-by-value)
         for_var_sym: SymbolId | None = None
         if for_var is not None:
             for_var_sym = self._alloc_sym(loop_nid, name=for_var, mutable=False, public=False)
 
-        # Pre-loop: bound initialisation
+        # Pre-loop: bound initialisation (shared by both paths)
         if bound_expr is not None:
             n_sym = self._alloc_synthetic_sym(mutable=False)
             pre_items.append(
@@ -1120,21 +1207,23 @@ class _Lowerer:
 
         body_items: list[IrExpr] = []
 
-        # Item 1: for exhaustion check — if not IrIterHasNext(__it) then break
-        if it_sym is not None:
+        if cur_sym is not None:
+            # ---- Integer-range body items 1 and 2 ----
+            assert end_sym is not None
+            assert step_sym is not None
+            # Item 1: range termination — if __cur > __end (to) or __cur < __end (downto) => break
+            term_op = CmpOp.LT if for_range_down else CmpOp.GT
             body_items.append(
                 IrIf(
                     location=loc,
                     branches=(
                         IrIfBranch(
-                            cond=IrUnary(
+                            cond=IrCompare(
                                 location=loc,
-                                op=UnaryOp.NOT,
-                                kind=None,
-                                value=IrIterHasNext(
-                                    location=loc,
-                                    iterator=IrLoad(location=loc, symbol=it_sym),
-                                ),
+                                op=term_op,
+                                kind=CompareKind.INT,
+                                lhs=IrLoad(location=loc, symbol=cur_sym),
+                                rhs=IrLoad(location=loc, symbol=end_sym),
                             ),
                             body=IrBreak(location=loc),
                         ),
@@ -1142,19 +1231,69 @@ class _Lowerer:
                     has_else=False,
                 )
             )
-
-        # Item 2: for variable bind — let for_var = IrIterNext(__it)
-        if it_sym is not None and for_var_sym is not None:
+            # Item 2a: bind loop variable to current cursor value (read before advance).
+            # A range for always has a loop variable (guaranteed by the parser).
+            assert for_var_sym is not None, "compiler bug: range for has no loop variable symbol"
             body_items.append(
                 IrBind(
                     location=loc,
                     symbol=for_var_sym,
-                    value=IrIterNext(
+                    value=IrLoad(location=loc, symbol=cur_sym),
+                )
+            )
+            # Item 2b: advance cursor — __cur := __cur + __step (to) or __cur - __step (downto)
+            advance_op = ArithOp.SUB if for_range_down else ArithOp.ADD
+            body_items.append(
+                IrAssign(
+                    location=loc,
+                    symbol=cur_sym,
+                    path=(),
+                    value=IrArith(
                         location=loc,
-                        iterator=IrLoad(location=loc, symbol=it_sym),
+                        op=advance_op,
+                        kind=ArithKind.INT,
+                        lhs=IrLoad(location=loc, symbol=cur_sym),
+                        rhs=IrLoad(location=loc, symbol=step_sym),
                     ),
                 )
             )
+        else:
+            # ---- Collection for body items 1 and 2 ----
+            # Item 1: for exhaustion check — if not IrIterHasNext(__it) then break
+            if it_sym is not None:
+                body_items.append(
+                    IrIf(
+                        location=loc,
+                        branches=(
+                            IrIfBranch(
+                                cond=IrUnary(
+                                    location=loc,
+                                    op=UnaryOp.NOT,
+                                    kind=None,
+                                    value=IrIterHasNext(
+                                        location=loc,
+                                        iterator=IrLoad(location=loc, symbol=it_sym),
+                                    ),
+                                ),
+                                body=IrBreak(location=loc),
+                            ),
+                        ),
+                        has_else=False,
+                    )
+                )
+
+            # Item 2: for variable bind — let for_var = IrIterNext(__it)
+            if it_sym is not None and for_var_sym is not None:
+                body_items.append(
+                    IrBind(
+                        location=loc,
+                        symbol=for_var_sym,
+                        value=IrIterNext(
+                            location=loc,
+                            iterator=IrLoad(location=loc, symbol=it_sym),
+                        ),
+                    )
+                )
 
         # Item 3: while guard — if not while_cond then break
         if while_cond_expr is not None:

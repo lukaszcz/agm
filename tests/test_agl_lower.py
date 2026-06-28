@@ -2732,3 +2732,372 @@ class TestLoopDesugar:
         assert it_bind.value.kind is IterKind.TEXT, (
             f"expected IterKind.TEXT for text, got {it_bind.value.kind!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Golden lowering: range-for desugar
+# ---------------------------------------------------------------------------
+
+
+class TestRangeForDesugar:
+    """Golden lowering tests for integer-range for-loop desugaring."""
+
+    def test_to_default_step_preloop_items(self) -> None:
+        """``for i in 1 to 5`` pre-loop: IrSequence with __cur(mutable)/
+        __end/step/step-guard/IrLoop.
+
+        Pre-loop contains: IrBind(__cur, IrConstInt(1) mutable),
+        IrBind(__end, IrConstInt(5) immutable),
+        IrBind(__step, IrConstInt(1) immutable),
+        IrIf(step-guard), IrLoop.
+        """
+        source = "for i in 1 to 5 do\n  ()\ndone\n"
+        prog = _lower(source)
+        node = _get_loop_ir(source)
+        assert isinstance(node, IrSequence), (
+            f"range for: expected IrSequence, got {type(node).__name__}"
+        )
+        # 5 items: __cur bind, __end bind, __step bind, step guard IrIf, IrLoop
+        assert len(node.items) == 5, (
+            f"range for pre-loop: expected 5 items, got {len(node.items)}"
+        )
+        cur_bind, end_bind, step_bind, guard_if, loop = node.items
+        # __cur: mutable, value is IrConstInt(1)
+        assert isinstance(cur_bind, IrBind)
+        assert isinstance(cur_bind.value, IrConstInt)
+        assert cur_bind.value.value == 1
+        assert prog.symbols[cur_bind.symbol].mutable, "__cur must be mutable (var cursor)"
+        # __end: immutable, value is IrConstInt(5)
+        assert isinstance(end_bind, IrBind)
+        assert isinstance(end_bind.value, IrConstInt)
+        assert end_bind.value.value == 5
+        assert not prog.symbols[end_bind.symbol].mutable, "__end must be immutable"
+        # __step: immutable, value is IrConstInt(1) for default step
+        assert isinstance(step_bind, IrBind)
+        assert isinstance(step_bind.value, IrConstInt)
+        assert step_bind.value.value == 1
+        assert not prog.symbols[step_bind.symbol].mutable, "__step must be immutable"
+        # step guard: IrIf(LE, has_else=False) → IrRaise(RangeError)
+        assert isinstance(guard_if, IrIf)
+        assert guard_if.has_else is False
+        assert len(guard_if.branches) == 1
+        guard_cond = guard_if.branches[0].cond
+        assert isinstance(guard_cond, IrCompare)
+        assert guard_cond.op is CmpOp.LE
+        assert guard_cond.kind is CompareKind.INT
+        guard_body = guard_if.branches[0].body
+        assert isinstance(guard_body, IrRaise)
+        exc = guard_body.exc
+        assert isinstance(exc, IrMakeException)
+        assert exc.display_name == "RangeError"
+        fields_dict = dict(exc.fields)
+        assert "message" in fields_dict
+        assert isinstance(fields_dict["message"], IrConstText)
+        assert "trace_id" in fields_dict
+        assert isinstance(fields_dict["trace_id"], AutoTraceField)
+        # IrLoop is last
+        assert isinstance(loop, IrLoop)
+
+    def test_to_default_step_body_item1_gt_break(self) -> None:
+        """``for i in 1 to 5`` body item 1: IrIf(__cur > __end => IrBreak)."""
+        source = "for i in 1 to 5 do\n  ()\ndone\n"
+        node = _get_loop_ir(source)
+        assert isinstance(node, IrSequence)
+        loop = node.items[4]
+        assert isinstance(loop, IrLoop)
+        body = loop.body
+        assert isinstance(body, IrBlock)
+        # Item 1: IrIf GT comparison → IrBreak
+        item1 = body.items[0]
+        assert isinstance(item1, IrIf)
+        assert item1.has_else is False
+        assert len(item1.branches) == 1
+        cond = item1.branches[0].cond
+        assert isinstance(cond, IrCompare)
+        assert cond.op is CmpOp.GT
+        assert cond.kind is CompareKind.INT
+        assert isinstance(item1.branches[0].body, IrBreak)
+
+    def test_to_default_step_body_item2_bind_then_advance(self) -> None:
+        """``for i in 1 to 5`` body item 2: IrBind(i, IrLoad(__cur))
+        then IrAssign(__cur, __cur + __step).
+        """
+        source = "for i in 1 to 5 do\n  ()\ndone\n"
+        node = _get_loop_ir(source)
+        assert isinstance(node, IrSequence)
+        loop = node.items[4]
+        assert isinstance(loop, IrLoop)
+        body = loop.body
+        assert isinstance(body, IrBlock)
+        # Item 2a: IrBind(i, IrLoad(__cur))
+        item2a = body.items[1]
+        assert isinstance(item2a, IrBind)
+        assert isinstance(item2a.value, IrLoad)
+        # Item 2b: IrAssign(__cur, __cur + __step)
+        item2b = body.items[2]
+        assert isinstance(item2b, IrAssign)
+        advance = item2b.value
+        assert isinstance(advance, IrArith)
+        assert advance.op is ArithOp.ADD
+        assert advance.kind is ArithKind.INT
+
+    def test_downto_default_step_body_item1_lt_break(self) -> None:
+        """``for i in 5 downto 1`` body item 1: IrIf(__cur < __end => IrBreak)."""
+        source = "for i in 5 downto 1 do\n  ()\ndone\n"
+        node = _get_loop_ir(source)
+        assert isinstance(node, IrSequence)
+        loop = node.items[4]
+        assert isinstance(loop, IrLoop)
+        body = loop.body
+        assert isinstance(body, IrBlock)
+        item1 = body.items[0]
+        assert isinstance(item1, IrIf)
+        cond = item1.branches[0].cond
+        assert isinstance(cond, IrCompare)
+        assert cond.op is CmpOp.LT
+        assert cond.kind is CompareKind.INT
+        assert isinstance(item1.branches[0].body, IrBreak)
+
+    def test_downto_default_step_body_item2_advance_sub(self) -> None:
+        """``for i in 5 downto 1`` body item 2b: advance uses SUB."""
+        source = "for i in 5 downto 1 do\n  ()\ndone\n"
+        node = _get_loop_ir(source)
+        assert isinstance(node, IrSequence)
+        loop = node.items[4]
+        assert isinstance(loop, IrLoop)
+        body = loop.body
+        assert isinstance(body, IrBlock)
+        item2b = body.items[2]
+        assert isinstance(item2b, IrAssign)
+        advance = item2b.value
+        assert isinstance(advance, IrArith)
+        assert advance.op is ArithOp.SUB
+        assert advance.kind is ArithKind.INT
+
+    def test_to_by_k_step_bind_is_expr(self) -> None:
+        """``for i in 1 to 10 by 3`` __step bind comes from the ``by`` expression."""
+        source = "for i in 1 to 10 by 3 do\n  ()\ndone\n"
+        node = _get_loop_ir(source)
+        assert isinstance(node, IrSequence)
+        # Pre-loop: cur, end, step, guard, loop
+        _cur_bind, _end_bind, step_bind, _guard, _loop = node.items
+        assert isinstance(step_bind, IrBind)
+        assert isinstance(step_bind.value, IrConstInt)
+        assert step_bind.value.value == 3
+
+    def test_downto_by_k_advance_uses_sub(self) -> None:
+        """``for i in 10 downto 1 by 2`` advance is SUB with __step from ``by``."""
+        source = "for i in 10 downto 1 by 2 do\n  ()\ndone\n"
+        node = _get_loop_ir(source)
+        assert isinstance(node, IrSequence)
+        _cur_bind, _end_bind, step_bind, _guard, loop = node.items
+        assert isinstance(step_bind, IrBind)
+        assert isinstance(step_bind.value, IrConstInt)
+        assert step_bind.value.value == 2
+        assert isinstance(loop, IrLoop)
+        body = loop.body
+        assert isinstance(body, IrBlock)
+        item2b = body.items[2]
+        assert isinstance(item2b, IrAssign)
+        advance = item2b.value
+        assert isinstance(advance, IrArith)
+        assert advance.op is ArithOp.SUB
+
+    def test_step_guard_raises_range_error_ir(self) -> None:
+        """The step guard IrMakeException has nominal RangeError, message+trace_id fields."""
+        from agm.agl.modules.ids import PRELUDE_ID as _PRELUDE_ID
+
+        source = "for i in 1 to 5 do\n  ()\ndone\n"
+        node = _get_loop_ir(source)
+        assert isinstance(node, IrSequence)
+        guard_if = node.items[3]
+        assert isinstance(guard_if, IrIf)
+        raise_node = guard_if.branches[0].body
+        assert isinstance(raise_node, IrRaise)
+        exc = raise_node.exc
+        assert isinstance(exc, IrMakeException)
+        assert exc.nominal.module_id == _PRELUDE_ID
+        assert exc.nominal.declared_name == "RangeError"
+        assert exc.display_name == "RangeError"
+        fields_dict = dict(exc.fields)
+        assert set(fields_dict.keys()) == {"message", "trace_id"}
+        assert isinstance(fields_dict["message"], IrConstText)
+        assert isinstance(fields_dict["trace_id"], AutoTraceField)
+
+    def test_range_with_n_bound_preloop_order(self) -> None:
+        """``for i in 1 to 5 do[3]`` range pre-loop precedes __n/__count.
+
+        IrSequence items: __cur, __end, __step, guard, __n, __count, IrLoop.
+        """
+        source = "for i in 1 to 5 do[3]\n  ()\ndone\n"
+        node = _get_loop_ir(source)
+        assert isinstance(node, IrSequence)
+        assert len(node.items) == 7, (
+            f"range+bound: expected 7 pre-loop+loop items, got {len(node.items)}"
+        )
+        _cur, _end, _step, _guard, n_bind, count_bind, loop = node.items
+        # __n: IrConstInt(3)
+        assert isinstance(n_bind, IrBind)
+        assert isinstance(n_bind.value, IrConstInt)
+        assert n_bind.value.value == 3
+        # __count: IrConstInt(0)
+        assert isinstance(count_bind, IrBind)
+        assert isinstance(count_bind.value, IrConstInt)
+        assert count_bind.value.value == 0
+        # Loop body has range items 1+2a+2b, bound items 4+5, body 6: 6 items total
+        assert isinstance(loop, IrLoop)
+        body = loop.body
+        assert isinstance(body, IrBlock)
+        assert len(body.items) == 6, (
+            f"range+bound body: expected 6 items, got {len(body.items)}"
+        )
+        # Items: 1(IrIf range-break), 2a(IrBind i), 2b(IrAssign advance),
+        #        4(IrIf bound-check), 5(IrAssign count), 6(body)
+        assert isinstance(body.items[0], IrIf), "item 1 must be IrIf (range break)"
+        assert isinstance(body.items[1], IrBind), "item 2a must be IrBind (loop var)"
+        assert isinstance(body.items[2], IrAssign), "item 2b must be IrAssign (advance)"
+        assert isinstance(body.items[3], IrIf), "item 4 must be IrIf (bound check)"
+        assert isinstance(body.items[4], IrAssign), "item 5 must be IrAssign (count incr)"
+
+    def test_range_with_while_guard(self) -> None:
+        """``for i in 1 to 10 while i < 8`` body includes range items + while guard."""
+        source = "for i in 1 to 10 while i < 8 do\n  ()\ndone\n"
+        node = _get_loop_ir(source)
+        assert isinstance(node, IrSequence)
+        # Pre-loop: cur, end, step, guard, loop (5 items)
+        assert len(node.items) == 5
+        loop = node.items[4]
+        assert isinstance(loop, IrLoop)
+        body = loop.body
+        assert isinstance(body, IrBlock)
+        # Items: 1(range break), 2a(bind), 2b(advance), 3(while guard), 6(body) = 5
+        assert len(body.items) == 5, (
+            f"range+while body: expected 5 items, got {len(body.items)}"
+        )
+        # Item 3: while guard — IrIf(not cond)
+        item3 = body.items[3]
+        assert isinstance(item3, IrIf)
+        assert item3.has_else is False
+        cond3 = item3.branches[0].cond
+        assert isinstance(cond3, IrUnary)
+        assert cond3.op is UnaryOp.NOT
+
+    def test_range_with_until_guard(self) -> None:
+        """``for i in 1 to 10 until i > 7`` body includes range items + until guard."""
+        source = "for i in 1 to 10 do\n  ()\nuntil i > 7\n"
+        node = _get_loop_ir(source)
+        assert isinstance(node, IrSequence)
+        loop = node.items[4]
+        assert isinstance(loop, IrLoop)
+        body = loop.body
+        assert isinstance(body, IrBlock)
+        # Items: 1(range break), 2a(bind), 2b(advance), 6(body), 7(until guard) = 5
+        assert len(body.items) == 5, (
+            f"range+until body: expected 5 items, got {len(body.items)}"
+        )
+        item7 = body.items[4]
+        assert isinstance(item7, IrIf)
+        assert item7.has_else is False
+        assert isinstance(item7.branches[0].body, IrBreak)
+
+    def test_range_for_no_iterator_ops(self) -> None:
+        """A range ``for`` must NOT emit IrIterInit, IrIterHasNext, or IrIterNext."""
+        source = "for i in 1 to 100 by 2 do\n  ()\ndone\n"
+        prog = _lower(source)
+        # Serialise to a string and scan for iterator node class names
+        prog_repr = repr(prog)
+        assert "IrIterInit" not in prog_repr, "range for must not emit IrIterInit"
+        assert "IrIterHasNext" not in prog_repr, "range for must not emit IrIterHasNext"
+        assert "IrIterNext" not in prog_repr, "range for must not emit IrIterNext"
+
+    def test_range_scan_captures_outer_var(self) -> None:
+        """Range bounds/step from an enclosing function scope are captured in a nested lambda.
+
+        When a lambda contains a range ``for`` whose bounds/step reference parameters
+        of the enclosing function, ``_scan_captures`` must walk ``for_range_to`` and
+        ``for_range_by`` to detect those free variables.  The resulting
+        ``IrMakeClosure.captures`` must contain entries for both outer parameters.
+        """
+        source = (
+            "def make_fn(end_val: int, step_val: int) -> unit =\n"
+            "  let _g = fn() -> unit => for i in 1 to end_val by step_val do () done\n"
+            "  ()\n"
+            "make_fn(5, 1)\n"
+        )
+        prog = _lower(source)
+        # Find the FunctionDescriptor for ``make_fn``.
+        make_fn_desc = next(
+            d for d in prog.functions.values()
+            if prog.symbols[d.function_symbol].public_name == "make_fn"
+        )
+        body = make_fn_desc.body
+        assert isinstance(body, IrBlock)
+        # The nested lambda _g lowers to IrBind(_g, IrMakeClosure(...)).
+        g_closure: IrMakeClosure | None = None
+        for item in body.items:
+            if isinstance(item, IrBind) and isinstance(item.value, IrMakeClosure):
+                g_closure = item.value
+                break
+        assert g_closure is not None, "Expected IrMakeClosure for _g in make_fn body"
+        # _scan_captures must have walked for_range_to / for_range_by and found
+        # end_val and step_val as free variables captured from make_fn's params.
+        captures = g_closure.captures
+        assert len(captures) == 2, (
+            f"Expected 2 captures (end_val + step_val), got {captures!r}"
+        )
+        # Both are params (immutable) → by_cell=False for each capture.
+        for cap in captures:
+            assert isinstance(cap, IrCapture)
+            assert not cap.by_cell, "param captures must have by_cell=False"
+            assert not prog.symbols[cap.symbol].mutable, "captured params must be immutable"
+        # The captured symbol ids must exactly match make_fn's param symbols.
+        param_symbols = {p.symbol for p in make_fn_desc.params}
+        captured_symbols = {cap.symbol for cap in captures}
+        assert captured_symbols == param_symbols, (
+            f"Captured symbols {captured_symbols!r} must match make_fn params {param_symbols!r}"
+        )
+
+    def test_collection_for_regression(self) -> None:
+        """Collection ``for`` still lowers to IrIterInit / IrIterHasNext / IrIterNext."""
+        source = (
+            "param items: list[int]\n"
+            "var total: int = 0\n"
+            "for x in items do\n"
+            "  total := total + x\n"
+            "done\n"
+        )
+        node = _get_loop_ir(source)
+        assert isinstance(node, IrSequence)
+        it_bind = node.items[0]
+        assert isinstance(it_bind, IrBind)
+        assert isinstance(it_bind.value, IrIterInit), (
+            "collection for must still use IrIterInit"
+        )
+        loop = node.items[1]
+        assert isinstance(loop, IrLoop)
+        body = loop.body
+        assert isinstance(body, IrBlock)
+        item1 = body.items[0]
+        assert isinstance(item1, IrIf)
+        cond = item1.branches[0].cond
+        assert isinstance(cond, IrUnary)
+        assert isinstance(cond.value, IrIterHasNext), (
+            "collection for item 1 must use IrIterHasNext"
+        )
+        item2 = body.items[1]
+        assert isinstance(item2, IrBind)
+        assert isinstance(item2.value, IrIterNext), (
+            "collection for item 2 must use IrIterNext"
+        )
+
+    def test_range_error_in_builtin_exceptions(self) -> None:
+        """RangeError is present in BUILTIN_EXCEPTIONS with the expected fields."""
+        from agm.agl.semantics.types import BUILTIN_EXCEPTIONS
+        from agm.agl.semantics.types import TextType as _TextType
+
+        assert "RangeError" in BUILTIN_EXCEPTIONS
+        exc = BUILTIN_EXCEPTIONS["RangeError"]
+        assert exc.name == "RangeError"
+        assert set(exc.fields.keys()) == {"message", "trace_id"}
+        assert isinstance(exc.fields["message"], _TextType)
+        assert isinstance(exc.fields["trace_id"], _TextType)

@@ -29,7 +29,7 @@ from agm.agl.repl import ReplSession
 from agm.agl.repl.agentmode import AgentMode
 from agm.agl.repl.agents import ConfirmingAgent
 from agm.agl.runtime.agents import runner_backed_agent_factory
-from agm.agl.runtime.params import _raw_option_str, build_engine_config_base
+from agm.agl.runtime.params import build_engine_config_base, raw_option_str
 from agm.agl.semantics.values import Value
 from agm.cli_support.args import ReplArgs
 from agm.config.context import current_config_context
@@ -108,11 +108,11 @@ def run(args: ReplArgs) -> None:
     # in _build_config_base; they are included here so the dict is complete for
     # any consumer that reads all six keys.
     #
-    # The raw timeout string is read from the TOML table via _raw_option_str so
+    # The raw timeout string is read from the TOML table via raw_option_str so
     # the binding holds the original written value (e.g. "30s") rather than a
     # parsed float (e.g. "30.0").
     exec_raw_table = toml_dict(merged_config.get("exec"))
-    raw_timeout_str = _raw_option_str(exec_raw_table, {}, "timeout")
+    raw_timeout_str = raw_option_str(exec_raw_table, {}, "timeout")
     engine_base: dict[str, Value] = build_engine_config_base({
         "strict-json": strict_json,
         "max-iters": loop_limit,

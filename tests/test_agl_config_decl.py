@@ -449,7 +449,6 @@ class TestEngineKeys:
 
     def test_reserved_program_names_covers_all_commands(self) -> None:
         """Guard against drift: every agm command name must be in RESERVED_PROGRAM_NAMES."""
-        from agm import parser
         from agm.agl.semantics.engine_keys import RESERVED_PROGRAM_NAMES
-        command_names = {name for name, _ in parser._COMMAND_OVERVIEW}
-        assert command_names <= RESERVED_PROGRAM_NAMES
+        from agm.command_catalog import COMMAND_NAMES
+        assert set(COMMAND_NAMES) <= RESERVED_PROGRAM_NAMES

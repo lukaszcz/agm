@@ -17,10 +17,15 @@ if TYPE_CHECKING:
     from agm.agl.semantics.types import Type as AglType
     from agm.agl.semantics.values import Value
 
-__all__ = ["convert_config_value", "convert_param_value"]
+__all__ = [
+    "build_engine_config_base",
+    "convert_config_value",
+    "convert_param_value",
+    "raw_option_str",
+]
 
 
-def _raw_option_str(
+def raw_option_str(
     primary: "Mapping[str, object]",
     fallback: "Mapping[str, object]",
     key: str,
@@ -211,25 +216,14 @@ def convert_config_value(name: str, raw: object, key_type: "AglType") -> "Value"
     its inner ``T`` decoded via :func:`convert_param_value`, and ``None`` becomes
     ``none``.  Non-Option keys fall back to :func:`convert_param_value`.
     """
-    from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import STD_CORE_ID
+    from agm.agl.runtime.option import none_value, some_value
     from agm.agl.semantics.types import EnumType, TextType
-    from agm.agl.semantics.values import EnumValue
 
     if isinstance(key_type, EnumType) and key_type.name == "Option":
-        nominal = NominalId(STD_CORE_ID, "Option")
         if raw is None:
-            return EnumValue(
-                nominal=nominal, display_name="Option", variant="None", fields={}
-            )
+            return none_value()
         inner: AglType = key_type.type_args[0] if key_type.type_args else TextType()
-        inner_val = convert_param_value(name, raw, inner)
-        return EnumValue(
-            nominal=nominal,
-            display_name="Option",
-            variant="Some",
-            fields={"value": inner_val},
-        )
+        return some_value(convert_param_value(name, raw, inner))
     return convert_param_value(name, raw, key_type)
 
 

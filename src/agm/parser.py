@@ -7,6 +7,8 @@ import textwrap
 from collections.abc import Sequence
 from typing import NoReturn, Protocol
 
+from agm.command_catalog import COMMAND_OVERVIEW
+
 
 class _Writeable(Protocol):
     def write(self, data: str) -> object: ...
@@ -581,26 +583,6 @@ _HELP_ALIASES: dict[str, str] = {
     "copy": "config",
 }
 
-_COMMAND_OVERVIEW: list[tuple[str, str]] = [
-    ("open", "Open a workspace"),
-    ("close", "Close a workspace"),
-    ("workspace", "Manage AGM workspaces"),
-    ("init", "Initialize a project"),
-    ("sync", "Fetch and merge project repositories"),
-    ("dep", "Manage project dependency checkouts"),
-    ("loop", "Run the loop prompt until completion"),
-    ("review", "Run the review prompt"),
-    ("revise", "Run the revision prompt"),
-    ("refine", "Run review/revise refinement"),
-    ("exec", "Execute an AgL workflow program"),
-    ("repl", "Start an interactive AgL REPL"),
-    ("run", "Run a command in a sandbox"),
-    ("config", "Manage project configuration files"),
-    ("worktree", "Git worktree management"),
-    ("tmux", "Tmux session and layout management"),
-    ("help", "Show help for a command"),
-]
-
 _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
     ("workspace", "open"): textwrap.dedent("""\
         agm workspace open [-d|--detach] [-n|--num-panes PANES] [-p|--parent PARENT] TARGET
@@ -844,8 +826,8 @@ def _overview_text() -> str:
         "",
         "Commands:",
     ]
-    width = max(len(name) for name, _ in _COMMAND_OVERVIEW)
-    for name, desc in _COMMAND_OVERVIEW:
+    width = max(len(name) for name, _ in COMMAND_OVERVIEW)
+    for name, desc in COMMAND_OVERVIEW:
         lines.append(f"  {name:<{width + 2}} {desc}")
     lines.extend(
         [

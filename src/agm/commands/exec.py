@@ -41,7 +41,6 @@ Flag notes:
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar
 
@@ -53,7 +52,11 @@ from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.modules.roots import assemble_roots
 from agm.agl.pipeline import static_config_values
 from agm.agl.runtime.agents import runner_backed_agent_factory
-from agm.agl.runtime.params import _raw_option_str, convert_config_value
+from agm.agl.runtime.params import (
+    build_engine_config_base,
+    convert_config_value,
+    raw_option_str,
+)
 from agm.agl.semantics.engine_keys import (
     ENGINE_KEY_NAMES,
     RESERVED_PROGRAM_NAMES,
@@ -82,14 +85,11 @@ from agm.core.toml import toml_dict
 from agm.parser import exit_with_usage_error
 
 _T = TypeVar("_T")
-_S = TypeVar("_S")
-_V = TypeVar("_V", bound=Value)
 
 
 def _first(*values: _T | None) -> _T | None:
     """Return the first non-None value, or None if all are None."""
     return next((v for v in values if v is not None), None)
-
 
 
 def _typed_const(consts: dict[str, bool | int | str], key: str, typ: type[_T]) -> _T | None:
@@ -103,11 +103,6 @@ def _typed_const(consts: dict[str, bool | int | str], key: str, typ: type[_T]) -
 # ---------------------------------------------------------------------------
 # Each helper returns a ``Value`` when the CLI flag was supplied, or ``None``
 # when it was absent (the key should not appear in ``config_cli``).
-
-
-def _project_scalar(x: _S | None, ctor: Callable[[_S], _V]) -> _V | None:
-    """Project an optional scalar flag to a Value or None using *ctor* to wrap it."""
-    return None if x is None else ctor(x)
 
 
 def _project_bool_pair(positive: bool, negative: bool) -> Value | None:
@@ -137,7 +132,6 @@ def _project_option_text(
     if no_flag:
         return convert_config_value(key_name, None, key_type)
     return None
-
 
 
 def run(args: ExecArgs) -> None:
@@ -430,14 +424,14 @@ def run(args: ExecArgs) -> None:
 
     config_cli: dict[str, Value] = {}
     # strict-json: tri-state bool (None = absent)
-    if (bv := _project_scalar(args.strict_json, BoolValue)) is not None:
-        config_cli["strict-json"] = bv
+    if args.strict_json is not None:
+        config_cli["strict-json"] = BoolValue(args.strict_json)
     # max-iters: optional int (None = absent)
-    if (iv := _project_scalar(args.max_iters, IntValue)) is not None:
-        config_cli["max-iters"] = iv
+    if args.max_iters is not None:
+        config_cli["max-iters"] = IntValue(args.max_iters)
     # runner: optional text (None = absent)
-    if (tv := _project_scalar(args.runner, TextValue)) is not None:
-        config_cli["runner"] = tv
+    if args.runner is not None:
+        config_cli["runner"] = TextValue(args.runner)
     # log: --log/--no-log pair (both False = absent)
     if (v := _project_bool_pair(args.log, args.no_log)) is not None:
         config_cli["log"] = v
@@ -469,19 +463,15 @@ def run(args: ExecArgs) -> None:
     # For ``timeout``: prefer [<program>].timeout raw string over [exec].timeout.
     # For ``log-file``: config.log_file is already path-resolved from the exec table.
     exec_raw_table = toml_dict(merged_config.get("exec"))
-    raw_timeout = _raw_option_str(program_table, exec_raw_table, "timeout")
-    config_base: dict[str, Value] = {
-        "strict-json": BoolValue(config.strict_json),
-        "max-iters": IntValue(config.default_loop_limit),
-        "runner": TextValue(runner_cmd),
-        "log": BoolValue(config.log),
-        "timeout": convert_config_value("timeout", raw_timeout, _timeout_type),
-        "log-file": convert_config_value(
-            "log-file",
-            config.log_file,
-            _log_file_type,
-        ),
-    }
+    raw_timeout = raw_option_str(program_table, exec_raw_table, "timeout")
+    config_base = build_engine_config_base({
+        "strict-json": config.strict_json,
+        "max-iters": config.default_loop_limit,
+        "runner": runner_cmd,
+        "log": config.log,
+        "timeout": raw_timeout,
+        "log-file": config.log_file,
+    })
 
     # Reuse the ``PreparedGraph`` from above — no second parse/scope of the source.
     # Pass the already-computed checked_graph from discovery so the graph is

@@ -62,6 +62,7 @@ from agm.cli_support.args import (
     WorktreeNewArgs,
     WorktreeRemoveArgs,
 )
+from agm.command_catalog import COMMAND_OVERVIEW
 from agm.config.general import parse_timeout
 from agm.core import dry_run
 from agm.parser import (
@@ -73,7 +74,7 @@ from agm.parser import (
 
 _HELP_TEXTS = parser_helpers._HELP_TEXTS
 _HELP_ALIASES = parser_helpers._HELP_ALIASES
-_COMMAND_OVERVIEW = parser_helpers._COMMAND_OVERVIEW
+_COMMAND_OVERVIEW = COMMAND_OVERVIEW
 
 _BASE_CONTEXT_SETTINGS: dict[str, bool | list[str]] = {"help_option_names": []}
 _RUN_CONTEXT_SETTINGS: dict[str, bool | list[str]] = {

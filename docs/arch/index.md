@@ -36,7 +36,7 @@ AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-c
 
 ## Code Entry Points
 
-- `src/agm/cli.py` defines the Typer app and every command group; `src/agm/parser.py` holds help text and command-overview resolution; `src/agm/completion.py` provides shell completions.
+- `src/agm/cli.py` defines the Typer app and every command group; `src/agm/parser.py` holds help text and command-overview resolution; `src/agm/completion.py` provides shell completions. `src/agm/command_catalog.py` is the pure data-leaf source of truth for top-level command names, shared by the CLI help layer and the AgL reserved-program-name guard.
 - `src/agm/commands/` contains the command implementations, one subtree per command group.
 - `src/agm/cli_support/` holds the typed argument containers that bridge the CLI layer and command implementations.
 - `src/agm/core/` contains the cross-cutting process, environment, filesystem, and TOML primitives plus the dry-run facility; `src/agm/util/` holds pure, `agm`-import-free generic helpers (graph algorithms, text normalization).

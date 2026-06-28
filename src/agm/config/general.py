@@ -6,6 +6,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from agm.config.engine_keys import ENGINE_KEY_KINDS
 from agm.core.env import agm_installation_prefix
 from agm.core.fs import mkdir, write_text
 from agm.core.parse import parse_timeout as parse_timeout
@@ -584,7 +585,7 @@ def exec_config_from_merged(
     # Engine keys use kebab-case names.
     effective: TomlDict = dict(exec_table)
     if program_table is not None:
-        for key in ("log", "strict-json", "max-iters", "runner", "log-file", "timeout"):
+        for key, _ in ENGINE_KEY_KINDS:
             if key in program_table:
                 effective[key] = program_table[key]
 

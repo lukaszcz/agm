@@ -7,40 +7,33 @@ config keys and for program names reserved by AGM.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 from agm.agl.semantics.types import OPTION_TEXT_TYPE, BoolType, IntType, TextType, Type
+from agm.command_catalog import COMMAND_NAMES
+from agm.config.engine_keys import ENGINE_KEY_KINDS, EngineKeyKind
+from agm.config.sections import RESERVED_CONFIG_SECTIONS
 
+# Concrete AgL type for each engine-key value kind.  The kebab key names and
+# their kinds are the single source of truth in :mod:`agm.config.engine_keys`;
+# this layer only knows how each kind maps onto an AgL type.
+_TYPE_BY_KIND: dict[EngineKeyKind, Type] = {
+    EngineKeyKind.BOOL: BoolType(),
+    EngineKeyKind.INT: IntType(),
+    EngineKeyKind.TEXT: TextType(),
+    EngineKeyKind.OPTION_TEXT: OPTION_TEXT_TYPE,
+}
 
-@dataclass(frozen=True, slots=True)
-class EngineKeyEntry:
-    """Metadata for a single engine config key."""
-
-    name: str       # kebab-case key name
-    agl_type: Type  # resolved AgL type
-
-
-# Ordered catalog of all fixed config engine keys (plan _PLAN_CONTEXT.md §3.3).
-_ENGINE_KEY_CATALOG: tuple[EngineKeyEntry, ...] = (
-    EngineKeyEntry(name="log",         agl_type=BoolType()),
-    EngineKeyEntry(name="strict-json", agl_type=BoolType()),
-    EngineKeyEntry(name="max-iters",   agl_type=IntType()),
-    EngineKeyEntry(name="runner",      agl_type=TextType()),
-    EngineKeyEntry(name="log-file",    agl_type=OPTION_TEXT_TYPE),
-    EngineKeyEntry(name="timeout",     agl_type=OPTION_TEXT_TYPE),
-)
-
-# Lookup: kebab name → EngineKeyEntry
-_ENGINE_KEY_MAP: dict[str, EngineKeyEntry] = {e.name: e for e in _ENGINE_KEY_CATALOG}
+# Lookup: kebab key name → resolved AgL type.
+_ENGINE_KEY_TYPES: dict[str, Type] = {
+    name: _TYPE_BY_KIND[kind] for name, kind in ENGINE_KEY_KINDS
+}
 
 # Frozenset of all valid engine key names (kebab).
-ENGINE_KEY_NAMES: frozenset[str] = frozenset(_ENGINE_KEY_MAP)
+ENGINE_KEY_NAMES: frozenset[str] = frozenset(_ENGINE_KEY_TYPES)
 
 
 def get_engine_key_type(name: str) -> Type | None:
     """Return the AgL type for engine key *name*, or ``None`` if unknown."""
-    entry = _ENGINE_KEY_MAP.get(name)
-    return entry.agl_type if entry is not None else None
+    return _ENGINE_KEY_TYPES.get(name)
 
 
 # ---------------------------------------------------------------------------
@@ -52,28 +45,6 @@ def get_engine_key_type(name: str) -> Type | None:
 # error because it would conflict with an existing ``[NAME]`` section in the
 # config file schema (plan §15 / D7).
 #
-# Sources: top-level CLI command names (parser.py _COMMAND_OVERVIEW) and
-# TOML config section names (config/general.py).
-RESERVED_PROGRAM_NAMES: frozenset[str] = frozenset({
-    # Top-level AGM CLI commands (parser.py _COMMAND_OVERVIEW)
-    "open",
-    "close",
-    "workspace",
-    "init",
-    "sync",
-    "dep",
-    "loop",
-    "review",
-    "revise",
-    "refine",
-    "exec",
-    "repl",
-    "run",
-    "config",
-    "worktree",
-    "tmux",
-    "help",
-    # Additional TOML config section names (config/general.py)
-    "agents",
-    "params",
-})
+# Sources: the shared CLI command catalog (:mod:`agm.command_catalog`) plus the
+# reserved structural config-section names (:mod:`agm.config.sections`).
+RESERVED_PROGRAM_NAMES: frozenset[str] = frozenset(COMMAND_NAMES) | RESERVED_CONFIG_SECTIONS

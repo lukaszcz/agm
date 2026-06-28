@@ -48,7 +48,6 @@ def _find_varref(program: object, name: str) -> VarRef | None:
         Call,
         Cast,
         DictLit,
-        Do,
         FieldAccess,
         FuncDef,
         If,
@@ -58,6 +57,7 @@ def _find_varref(program: object, name: str) -> VarRef | None:
         Lambda,
         LetDecl,
         ListLit,
+        Loop,
         ParamDecl,
         Program,
         Raise,
@@ -113,11 +113,12 @@ def _find_varref(program: object, name: str) -> VarRef | None:
                 r = walk(branch.body)
                 if r is not None:
                     return r
-        if isinstance(node, Do):
+        if isinstance(node, Loop):
             r = walk(node.body)
             if r is not None:
                 return r
-            return walk(node.condition)
+            if node.until_cond is not None:
+                return walk(node.until_cond)
         if isinstance(node, Try):
             r = walk(node.body)
             if r is not None:

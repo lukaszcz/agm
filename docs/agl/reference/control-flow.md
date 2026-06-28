@@ -106,7 +106,7 @@ let next_prompt: text = case action of
 ## `do … until` loops
 
 ```ebnf
-do_until   ::= "do" ("[" expr "]")? block "until" or_expr
+do_loop    ::= "do" ("[" expr "]")? block ("until" or_expr | "done")
 ```
 
 AgL's loop is a **post-test** loop. An optional bound is written immediately
@@ -148,6 +148,29 @@ Semantics:
 
 The `do … until` loop always has type **`unit`**: it runs for effect and
 produces no value.
+
+### `done` terminator
+
+`done` is an alternative terminator equivalent to `until false` — the loop
+never exits on its own. This form is only useful with a bound `[n]`: when the
+bound is exhausted the loop raises `MaxIterationsExceeded`; with no bound it
+runs forever.
+
+```agl
+do[max_rounds]
+  artifact := ask("Implement ${spec}", agent: impl)
+done
+```
+
+When a multi-line `do` body is written without an explicit `until` or `done`,
+it is implicitly terminated as if `done` were written — so the two forms are
+identical:
+
+```agl
+# identical to the example above
+do[max_rounds]
+  artifact := ask("Implement ${spec}", agent: impl)
+```
 
 The bound:
 

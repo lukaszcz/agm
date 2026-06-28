@@ -1,0 +1,8 @@
+# do[n] with omitted terminator (multi-line body, layout injects `done`).
+# Behavior is identical to `done`: the bound is the only exit.
+param n: int
+
+var iters: int = 0
+do[n]
+  iters := iters + 1
+print iters

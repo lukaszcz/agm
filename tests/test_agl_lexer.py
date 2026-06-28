@@ -370,14 +370,15 @@ class TestIndexBracketRemap:
         ]
 
     def test_do_bound_lsqb_is_do_lsqb_not_index_lsqb(self) -> None:
-        assert lark_tok("do[3] tick until done") == [
+        # do[3] — the [ is retagged DO_LSQB (not INDEX_LSQB or plain LSQB).
+        # Use explicit `done` terminator; `done` is now a reserved keyword (DONE).
+        assert lark_tok("do[3] tick done") == [
             ("DO", "do"),
             ("DO_LSQB", "["),
             ("INT", "3"),
             ("RSQB", "]"),
             ("NAME", "tick"),
-            ("UNTIL", "until"),
-            ("NAME", "done"),
+            ("DONE", "done"),
         ]
 
     def test_qual_typed_call_lsqb_is_index_lsqb(self) -> None:
@@ -880,7 +881,7 @@ class TestPipeContinuation:
 
     def test_pipe_does_not_push_indent(self) -> None:
         # A | line never pushes an INDENT
-        source = "if a =>\n  pass\n| b =>\n  other\n| else =>\n  done"
+        source = "if a =>\n  pass\n| b =>\n  other\n| else =>\n  final"
         result = tok(source)
         types = [t for t, _ in result]
         # Only the branch bodies cause indents
@@ -1944,14 +1945,36 @@ class TestV2Keywords:
         assert types == ["def", "fn"]
 
     def test_still_reserved_keywords_unchanged(self) -> None:
-        # let/var/do/until/if/else/case/of/try/catch/raise/as/and/or/not
+        # let/var/do/until/done/if/else/case/of/try/catch/raise/as/and/or/not
         # are still reserved.
-        source = "let var set do until if else case of try catch raise as and or not"
+        source = "let var set do until done if else case of try catch raise as and or not"
         result = tok(source)
         types = [t for t, _ in result]
-        for kw in ("let", "var", "do", "until", "if", "else", "case",
+        for kw in ("let", "var", "do", "until", "done", "if", "else", "case",
                    "of", "try", "catch", "raise", "as", "and", "or", "not"):
             assert kw in types, f"keyword {kw!r} must still be reserved"
+
+    def test_done_lexes_as_keyword_token(self) -> None:
+        # `done` is now a reserved keyword (loop terminator).
+        result = tok("done")
+        assert result == [("done", "done")]
+
+    def test_done_is_reserved_not_var_name(self) -> None:
+        types = [t for t, _ in tok("done")]
+        assert "NAME" not in types
+        assert "done" in types
+
+    def test_done_remapped_to_uppercase_in_lark_interface(self) -> None:
+        lexer = AglLexer(None)
+        state = LexerState("done")
+        result = list(lexer.lex(state, None))
+        assert len(result) == 1
+        assert result[0].type == "DONE"
+
+    def test_done_prefix_identifier_is_var_name(self) -> None:
+        # "doneness" starts with "done" but must lex as a plain identifier.
+        result = tok("doneness")
+        assert result == [("NAME", "doneness")]
 
 
 class TestV2ThinArrow:
@@ -2309,3 +2332,86 @@ class TestModuleSystemLexer:
         # After remap, 'import' at item-start becomes IMPORT in the parser stream
         result = lark_tok("import foo")
         assert result[0] == ("IMPORT", "import")
+
+
+# ---------------------------------------------------------------------------
+# Synthetic DONE injection (plan §4.2)
+# ---------------------------------------------------------------------------
+
+
+class TestSyntheticDoneInjection:
+    """Layout injects a synthetic DONE token when a multi-line loop body
+    is closed without an explicit until/done terminator."""
+
+    def _toks(self, source: str) -> list[tuple[str, str]]:
+        """Return raw (lowercase) token-type pairs from the layout pass."""
+        return tok(source)
+
+    def test_suite_body_omitted_terminator_injects_done(self) -> None:
+        # A multi-line do body followed by a sibling statement at column 0
+        # should get a synthetic DONE after the DEDENT.
+        source = "do\n  x := 1\nprint x"
+        result = self._toks(source)
+        types = [t for t, _ in result]
+        assert "do" in types
+        assert "_INDENT" in types
+        assert "_DEDENT" in types
+        assert "done" in types
+        # DONE must come after DEDENT (not before)
+        done_idx = types.index("done")
+        dedent_idx = types.index("_DEDENT")
+        assert dedent_idx < done_idx
+
+    def test_suite_body_with_explicit_done_not_doubled(self) -> None:
+        # Explicit `done` in source → only one DONE in the stream (no synthetic copy).
+        source = "do\n  x := 1\ndone"
+        result = self._toks(source)
+        types = [t for t, _ in result]
+        assert types.count("done") == 1
+
+    def test_suite_body_with_explicit_until_no_synthetic_done(self) -> None:
+        # Explicit `until` terminator → no synthetic DONE injected.
+        source = "do\n  x := 1\nuntil false"
+        result = self._toks(source)
+        types = [t for t, _ in result]
+        assert "done" not in types
+        assert "until" in types
+
+    def test_bound_suite_body_omitted_terminator_injects_done(self) -> None:
+        # do[n] with suite body and omitted terminator gets synthetic DONE.
+        source = "do[3]\n  x := 1\nprint x"
+        result = lark_tok(source)
+        types = [t for t, _ in result]
+        assert "DO_LSQB" in types
+        assert "_DEDENT" in types
+        assert "DONE" in types
+        done_idx = types.index("DONE")
+        dedent_idx = types.index("_DEDENT")
+        assert dedent_idx < done_idx
+
+    def test_nested_loop_inner_omitted_outer_explicit_until(self) -> None:
+        # Inner loop: omitted terminator → synthetic DONE after inner DEDENT.
+        # Outer loop: explicit until → no synthetic DONE for outer.
+        source = "do\n  do\n    body\nuntil false"
+        result = lark_tok(source)
+        types = [t for t, _ in result]
+        # Should have exactly one DONE (synthetic for inner), no extra DONE for outer
+        assert types.count("DONE") == 1
+        # Outer loop is closed by UNTIL
+        assert "UNTIL" in types
+
+    def test_inline_body_no_synthetic_done(self) -> None:
+        # Inline body (do ... until cond all on one line) → no DONE injection.
+        source = "do x := 1 until false"
+        result = self._toks(source)
+        types = [t for t, _ in result]
+        # No INDENT means inline, no synthetic DONE either.
+        assert "_INDENT" not in types
+        assert "done" not in types
+
+    def test_eof_omitted_terminator_injects_done(self) -> None:
+        # A loop at EOF (no sibling statement) also gets synthetic DONE.
+        source = "do\n  x := 1"
+        result = self._toks(source)
+        types = [t for t, _ in result]
+        assert "done" in types

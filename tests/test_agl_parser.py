@@ -54,7 +54,6 @@ from agm.agl.syntax import (
     DecimalLit,
     DictEntry,
     DictLit,
-    Do,
     EnumDef,
     ExceptionDef,
     FieldAccess,
@@ -71,6 +70,7 @@ from agm.agl.syntax import (
     LetDecl,
     ListLit,
     LiteralPattern,
+    Loop,
     NamedArg,
     NameTarget,
     NullLit,
@@ -1552,34 +1552,71 @@ class TestCaseExpr:
 
 
 # ---------------------------------------------------------------------------
-# Control flow: do_expr
+# Control flow: loop_expr
 # ---------------------------------------------------------------------------
 
 
-class TestDoExpr:
-    def test_do_simple(self) -> None:
+class TestLoopExpr:
+    def test_loop_simple_until(self) -> None:
         e = first(parse("do x := 1 until x > 5"))
-        assert isinstance(e, Do)
-        assert e.limit is None
-        assert isinstance(e.condition, BinaryOp)
+        assert isinstance(e, Loop)
+        assert e.bound is None
+        assert isinstance(e.until_cond, BinaryOp)
 
-    def test_do_with_bound(self) -> None:
+    def test_loop_with_bound_until(self) -> None:
         e = first(parse("do[10] x := 1 until x > 5"))
-        assert isinstance(e, Do)
-        assert isinstance(e.limit, IntLit)
-        assert e.limit.value == 10
+        assert isinstance(e, Loop)
+        assert isinstance(e.bound, IntLit)
+        assert e.bound.value == 10
 
-    def test_do_expression_bound(self) -> None:
+    def test_loop_expression_bound(self) -> None:
         # The bound is an arbitrary int-typed expression, not just a literal.
         e = first(parse("do[n + 1] x := 1 until x > 5"))
-        assert isinstance(e, Do)
-        assert isinstance(e.limit, BinaryOp)
+        assert isinstance(e, Loop)
+        assert isinstance(e.bound, BinaryOp)
 
-    def test_do_suite_body(self) -> None:
+    def test_loop_suite_body_until(self) -> None:
         src = "do\n  x := 1\n  y := 2\nuntil x > 5"
         e = first(parse(src))
-        assert isinstance(e, Do)
+        assert isinstance(e, Loop)
         assert isinstance(e.body, Block)
+        assert isinstance(e.until_cond, BinaryOp)
+
+    def test_loop_done_terminator(self) -> None:
+        # Explicit `done` → until_cond is None
+        e = first(parse("do x := 1 done"))
+        assert isinstance(e, Loop)
+        assert e.until_cond is None
+
+    def test_loop_suite_done_terminator(self) -> None:
+        src = "do\n  x := 1\ndone"
+        e = first(parse(src))
+        assert isinstance(e, Loop)
+        assert isinstance(e.body, Block)
+        assert e.until_cond is None
+
+    def test_loop_suite_omitted_terminator(self) -> None:
+        # Omitted terminator in a multi-line body injects synthetic done
+        src = "do\n  x := 1\nprint x"
+        items = parse(src).body.items
+        loop = items[0]
+        assert isinstance(loop, Loop)
+        assert loop.until_cond is None
+        assert isinstance(loop.body, Block)
+
+    def test_loop_bound_done(self) -> None:
+        e = first(parse("do[5] x := 1 done"))
+        assert isinstance(e, Loop)
+        assert isinstance(e.bound, IntLit)
+        assert e.until_cond is None
+
+    def test_loop_bound_suite_omitted_terminator(self) -> None:
+        src = "do[3]\n  x := 1\nprint x"
+        items = parse(src).body.items
+        loop = items[0]
+        assert isinstance(loop, Loop)
+        assert isinstance(loop.bound, IntLit)
+        assert loop.until_cond is None
 
 
 # ---------------------------------------------------------------------------

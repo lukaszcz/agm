@@ -1,0 +1,25 @@
+{
+  "scenarios": [
+    {
+      "name": "zero_bound_completes_normally",
+      "params": {"n": 0},
+      "expect": {"stdout": "0\n"}
+    },
+    {
+      "name": "one_bound_raises_after_one_iteration",
+      "params": {"n": 1},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "MaxIterationsExceeded", "fields": {"limit": 1}}
+      }
+    },
+    {
+      "name": "three_bound_raises_after_three_iterations",
+      "params": {"n": 3},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "MaxIterationsExceeded", "fields": {"limit": 3}}
+      }
+    }
+  ]
+}

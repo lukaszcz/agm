@@ -41,11 +41,11 @@ from agm.agl.syntax.nodes import (
     AssignStmt,
     AssignTarget,
     Block,
+    BoolLit,
     Call,
     Cast,
     DictEntry,
     DictLit,
-    Do,
     FieldAccess,
     FuncDef,
     If,
@@ -56,6 +56,7 @@ from agm.agl.syntax.nodes import (
     Lambda,
     LetDecl,
     ListLit,
+    Loop,
     Param,
     ParamDecl,
     Program,
@@ -1476,17 +1477,61 @@ class TestCase:
 # ---------------------------------------------------------------------------
 
 
-class TestDo:
-    def test_do_yields_unit(self) -> None:
+class TestLoop:
+    def test_loop_until_yields_unit(self) -> None:
         r = accept_type("var i = 0\ndo\n  i := i + 1\nuntil i > 5")
-        do_node = r.resolved.program.body.items[1]
-        assert isinstance(do_node, Do)
-        t = r.node_types[do_node.node_id]
+        loop_node = r.resolved.program.body.items[1]
+        assert isinstance(loop_node, Loop)
+        t = r.node_types[loop_node.node_id]
         assert t == UnitType()
 
-    def test_do_condition_must_be_bool(self) -> None:
+    def test_loop_done_yields_unit(self) -> None:
+        r = accept_type("var i = 0\ndo\n  i := i + 1\ndone")
+        loop_node = r.resolved.program.body.items[1]
+        assert isinstance(loop_node, Loop)
+        assert loop_node.until_cond is None
+        t = r.node_types[loop_node.node_id]
+        assert t == UnitType()
+
+    def test_loop_until_condition_must_be_bool(self) -> None:
         err = reject_type("var i = 0\ndo\n  i := i + 1\nuntil i")
         assert "bool" in str(err).lower() or "condition" in str(err).lower()
+
+    def test_loop_while_cond_is_typechecked(self) -> None:
+        # Exercise the while_cond branch in the type checker by constructing a
+        # synthetic Loop with while_cond set, wrapping it in a minimal Program,
+        # and running check() on the resolved AST.
+        s = mk_span()
+        while_cond = BoolLit(value=True, span=s, node_id=9001)
+        body = UnitLit(span=s, node_id=9002)
+        loop = Loop(
+            for_var=None, for_iter=None, while_cond=while_cond,
+            bound=None, body=body, until_cond=None,
+            span=s, node_id=9003,
+        )
+        top_block = Block(items=(loop,), span=s, node_id=9000)
+        prog = Program(body=top_block, span=s, node_id=0)
+
+        resolved = resolve(prog)
+        result = check(resolved, default_capabilities())
+        assert result.node_types[loop.node_id] == UnitType()
+
+    def test_loop_while_cond_must_be_bool(self) -> None:
+        # while_cond that is not bool should raise AglTypeError.
+        s = mk_span()
+        while_cond = IntLit(value=1, span=s, node_id=9101)
+        body = UnitLit(span=s, node_id=9102)
+        loop = Loop(
+            for_var=None, for_iter=None, while_cond=while_cond,
+            bound=None, body=body, until_cond=None,
+            span=s, node_id=9103,
+        )
+        top_block = Block(items=(loop,), span=s, node_id=9100)
+        prog = Program(body=top_block, span=s, node_id=0)
+
+        resolved = resolve(prog)
+        with pytest.raises(AglTypeError):
+            check(resolved, default_capabilities())
 
 
 # ---------------------------------------------------------------------------
@@ -2631,11 +2676,11 @@ class TestMisc:
         err = reject_type('param x = raise Abort(message: "e")\nx')
         assert "Cannot infer type of param" in str(err)
 
-    def test_do_loop_yields_unit(self) -> None:
+    def test_loop_yields_unit(self) -> None:
         r = accept_type("var i = 0\ndo\n  i := i + 1\nuntil i > 5")
-        do_node = r.resolved.program.body.items[1]
-        assert isinstance(do_node, Do)
-        assert r.node_types[do_node.node_id] == UnitType()
+        loop_node = r.resolved.program.body.items[1]
+        assert isinstance(loop_node, Loop)
+        assert r.node_types[loop_node.node_id] == UnitType()
 
     def test_case_empty_branches_wildcard(self) -> None:
         r = accept_type('let x = 1\ncase x of | _ => "ok"')

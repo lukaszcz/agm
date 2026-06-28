@@ -231,15 +231,15 @@ def test_unit_typed_ask() -> None:
     source = """\
 agent notifier
 let _: unit = ask("Notify!", agent: notifier)
-let done: text = "done"
-done
+let result: text = "acknowledged"
+result
 """
     ir = evaluate_ir_with_agents(
         source,
         scripts={"notifier": ["acknowledged"]},
     )
-    # The `_` binding may or may not appear in the snapshot; check `done` which always does.
-    assert ir.get("done") == TextValue("done")
+    # The `_` binding may or may not appear in the snapshot; check `result` which always does.
+    assert ir.get("result") == TextValue("acknowledged")
 
 
 # ---------------------------------------------------------------------------

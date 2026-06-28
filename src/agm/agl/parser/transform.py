@@ -1278,22 +1278,44 @@ class AstBuilder(Transformer):
         inner = _find_non_token(args)
         return cast(syntax.Item, inner)
 
-    def do_expr(self, meta: Meta, args: _Args) -> syntax.Do:
-        """do_expr: "do" loop_bound? do_body "until" or_expr
+    def loop_until(self, meta: Meta, args: _Args) -> syntax.Expr:
+        """loop_until: "until" or_expr — return the condition expression."""
+        return cast(syntax.Expr, _find_non_token(args))
 
-        Children are all transformed expressions and the grammar fixes their
-        order: ``[bound,] body, condition``.  A 3-element list carries an
-        explicit bound; a 2-element list is an unbounded loop (``limit=None``).
+    def loop_done(self, meta: Meta, args: _Args) -> None:
+        """loop_done: "done" — return None sentinel meaning 'done' (≡ until false)."""
+        return None
+
+    def loop_expr(self, meta: Meta, args: _Args) -> syntax.Loop:
+        """loop_expr: "do" loop_bound? do_body loop_end
+
+        Children after transformation:
+          - optional bound (Expr, from loop_bound)
+          - body (Expr, from do_body)
+          - loop_end result: Expr for loop_until, None for loop_done
+
+        loop_end is always the last child.
         """
-        exprs = [cast(syntax.Expr, a) for a in args if not isinstance(a, Token)]
-        assert len(exprs) in (2, 3), "do_expr: expected optional bound, body, condition"
-        # body and condition are always the last two children; a leading third
-        # child is the explicit bound (unbounded loops have none → limit=None).
-        limit: syntax.Expr | None = exprs[0] if len(exprs) == 3 else None
-        body, condition = exprs[-2], exprs[-1]
-        return syntax.Do(
-            limit=limit, body=body, condition=condition,
-            span=self._span_from_meta(meta), node_id=self._next_id(),
+        # Collect non-Token children; loop_done returns None explicitly.
+        children = [a for a in args if not isinstance(a, Token)]
+        # Last child is the loop_end result (Expr | None).
+        until_cond: syntax.Expr | None = cast(
+            "syntax.Expr | None", children[-1]
+        )
+        # Remaining children: optional bound then body.
+        rest = [cast(syntax.Expr, c) for c in children[:-1] if c is not None]
+        assert len(rest) in (1, 2), f"loop_expr: unexpected children count {len(rest)}"
+        bound: syntax.Expr | None = rest[0] if len(rest) == 2 else None
+        body = rest[-1]
+        return syntax.Loop(
+            for_var=None,
+            for_iter=None,
+            while_cond=None,
+            bound=bound,
+            body=body,
+            until_cond=until_cond,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
         )
 
     # ------------------------------------------------------------------

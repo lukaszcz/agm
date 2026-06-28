@@ -12,11 +12,11 @@ Key rules
 - On a ``_NEWLINE`` token: compare the carried indentation width against the
   stack top.  Deeper → emit ``_INDENT``.  Same → emit ``_NEWLINE`` as-is.
   Shallower → emit one or more ``_DEDENT`` s and verify alignment.
-- ``|``/``else``/``catch``/``until``-continuation rule (§3.4): when the first
-  significant token on the next line is ``|``, ``else``, ``catch``, or
-  ``until``, the ``_NEWLINE`` is suppressed and only the ``_DEDENT`` s needed to
-  pop the stack to levels strictly greater than the keyword's column are
-  emitted.  These lines never push an indent.
+- ``|``/``else``/``catch``/``until``/``done``-continuation rule (§3.4): when the
+  first significant token on the next line is ``|``, ``else``, ``catch``,
+  ``until``, or ``done``, the ``_NEWLINE`` is suppressed and only the
+  ``_DEDENT`` s needed to pop the stack to levels strictly greater than the
+  keyword's column are emitted.  These lines never push an indent.
 - At EOF: unwind remaining indent levels with ``_DEDENT`` s.
 - Template tokens never produce ``_NEWLINE`` s (the scanner does not emit them
   inside templates).
@@ -24,6 +24,11 @@ Key rules
   offending line (i.e. the lookahead ``sig`` token), not at the ``_NEWLINE`` that
   precedes it.  This ensures the reported source line matches the line the user
   actually misindented.
+- Synthetic ``done`` injection (plan §4.2): when a multi-line loop body is
+  popped without an explicit ``until``/``done`` terminator, a synthetic DONE
+  token is emitted immediately after the ``_DEDENT``.  This lets the grammar
+  always require a terminator while still allowing the omitted-terminator form
+  for multi-line loops.
 """
 
 from __future__ import annotations
@@ -40,6 +45,8 @@ from agm.agl.lexer.tokens import (
     INTERP_END,
     INTERP_START,
     KW_CATCH,
+    KW_DO,
+    KW_DONE,
     KW_ELSE,
     KW_UNTIL,
     LBRACE,
@@ -97,11 +104,29 @@ def layout(tokens: Iterator[Token]) -> Iterator[Token]:
         The augmented token stream with layout tokens injected.
     """
     indent_stack: list[int] = [0]
+    # Parallel stack aligned with indent_stack: each entry is either the
+    # 0-based column of the `do` that opened a loop body at that indent level,
+    # or None if this level is not a loop body.  Seeded with [None] to match
+    # indent_stack's initial [0].
+    loop_do_col: list[int | None] = [None]
     paren_level = 0
 
     # One-token lookahead buffer for the branch/compound continuation rule.
     buffered: list[Token] = []
     stream = iter(tokens)
+
+    # Pending do-column: set when a KW_DO token is seen, carried across the
+    # bound bracket (if any), cleared on the first non-bound-bracket token on
+    # the same line (inline body) or on the _INDENT that opens the loop body.
+    pending_do_col: int | None = None
+    # When we see `do[`, track the paren_level AT which the bound `[` was
+    # opened (after incrementing paren_level for that bracket).  Reset to -1
+    # when the matching `]` is seen.  Keeps pending_do_col alive inside the
+    # bound expression so we can still tag the subsequent _INDENT.
+    # Note: the `do[` bracket arrives as plain LSQB in the layout pass;
+    # DO_LSQB is generated later by _remap_adjacent_brackets, so layout must
+    # detect the bound bracket itself using `pending_do_col`.
+    _do_bound_paren_level: int = -1
 
     def _next() -> Token | None:
         if buffered:
@@ -118,6 +143,33 @@ def layout(tokens: Iterator[Token]) -> Iterator[Token]:
             buffered.insert(0, tok)
         return tok
 
+    def _pop_level(ref: Token, triggering_tok: Token | None) -> Iterator[Token]:
+        """Pop one indent level, emit _DEDENT, and inject synthetic DONE if needed.
+
+        Parameters
+        ----------
+        ref:
+            The _NEWLINE (or synthetic EOF) token used for position borrowing.
+        triggering_tok:
+            The first significant token that caused the pop (peeked but not consumed),
+            or None at EOF.  Used to determine whether this pop is caused by an
+            explicit until/done aligned with the do.
+        """
+        do_col = loop_do_col.pop()
+        indent_stack.pop()
+        yield _synthetic(DEDENT, "", ref)
+        if do_col is not None:
+            # This is a loop-body level.  Inject a synthetic DONE unless
+            # the triggering token is an explicit until/done whose column
+            # equals the do's column (which means it's the explicit terminator).
+            is_explicit_terminator = (
+                triggering_tok is not None
+                and triggering_tok.type in (KW_UNTIL, KW_DONE)
+                and (triggering_tok.column or 1) - 1 == do_col
+            )
+            if not is_explicit_terminator:
+                yield _synthetic(KW_DONE, KW_DONE, ref)
+
     # Reference token for EOF dedents
     last_real: Token | None = None
 
@@ -130,17 +182,42 @@ def layout(tokens: Iterator[Token]) -> Iterator[Token]:
         if tok.type in _OPEN_BRACKETS:
             paren_level += 1
             last_real = tok
+            if pending_do_col is not None and _do_bound_paren_level == -1:
+                # First open bracket on the `do` line (before any body token).
+                if tok.type == LSQB:
+                    # This [ is the bound bracket of the loop — keep pending_do_col
+                    # and remember the paren_level at which the bound opened.
+                    _do_bound_paren_level = paren_level
+                else:
+                    # Any other open bracket (LPAR, LBRACE, …) means the body
+                    # starts inline.
+                    pending_do_col = None
             yield tok
             continue
 
         if tok.type in _CLOSE_BRACKETS:
             if paren_level > 0:
+                if _do_bound_paren_level == paren_level and tok.type == RSQB:
+                    # Closing the loop-bound bracket.  The bound is done;
+                    # the next significant token determines inline vs suite.
+                    _do_bound_paren_level = -1
                 paren_level -= 1
             last_real = tok
             yield tok
             continue
 
         if tok.type != NEWLINE:
+            # Track: if we see a non-layout token on the same line as a `do`
+            # (after the bound bracket, if any) that is NOT the DO_LSQB itself,
+            # the body is inline → clear pending_do_col.
+            if tok.type == KW_DO:
+                # New `do` token: record its 0-based column.
+                pending_do_col = (tok.column or 1) - 1
+                _do_bound_paren_level = -1
+            elif pending_do_col is not None and _do_bound_paren_level == -1:
+                # A significant token appeared on the `do` line after the bound
+                # (or without a bound) → body is inline, clear pending.
+                pending_do_col = None
             last_real = tok
             yield tok
             continue
@@ -151,38 +228,48 @@ def layout(tokens: Iterator[Token]) -> Iterator[Token]:
         if paren_level > 0:
             continue
 
+        # A newline while pending_do_col is set means the loop has a multi-line
+        # (suite) body — _do_bound_paren_level is already -1 here because
+        # paren_level == 0 (bound is closed) or there was no bound.
+        # The _INDENT will push the new level tagged with do_col.
         indent_width = int(str(tok))
 
         # Peek at the next token to check for the continuation rule.
         sig = _peek_next()
 
-        if sig is not None and sig.type in (PIPE, KW_ELSE, KW_CATCH, KW_UNTIL):
+        if sig is not None and sig.type in (PIPE, KW_ELSE, KW_CATCH, KW_UNTIL, KW_DONE):
             # Continuation rule: suppress the _NEWLINE and emit only the DEDENTs
             # needed to pop the stack to levels strictly greater than the
             # keyword's column.  These lines never push an indent.
             kw_col = (sig.column or 1) - 1  # convert 1-based column to 0-based
 
             while len(indent_stack) > 1 and indent_stack[-1] > kw_col:
-                indent_stack.pop()
-                yield _synthetic(DEDENT, "", tok)
+                yield from _pop_level(tok, sig)
 
             # Suppress the _NEWLINE — the keyword continues the current construct
+            # Clear any pending_do_col: the `do` body must have been inline
+            # (we already cleared it on the first significant token after `do`).
+            pending_do_col = None
             continue
 
         current_level = indent_stack[-1]
 
         if indent_width > current_level:
-            # Indent: push new level, emit _INDENT
+            # Indent: push new level, emit _INDENT.
+            # Tag this level with pending_do_col if a loop body is being opened.
             indent_stack.append(indent_width)
+            tag = pending_do_col
+            loop_do_col.append(tag)
+            pending_do_col = None
             yield _synthetic(INDENT, "", tok)
         elif indent_width == current_level:
             # Same level: emit _NEWLINE as-is
+            pending_do_col = None
             yield tok
         else:
             # Dedent: pop levels and emit _DEDENT for each
             while len(indent_stack) > 1 and indent_stack[-1] > indent_width:
-                indent_stack.pop()
-                yield _synthetic(DEDENT, "", tok)
+                yield from _pop_level(tok, sig)
 
             if indent_stack[-1] != indent_width:
                 # Misaligned dedent — the new indentation is not on the stack.
@@ -206,6 +293,7 @@ def layout(tokens: Iterator[Token]) -> Iterator[Token]:
                     span=span,
                 )
             # Emit _NEWLINE at the restored level
+            pending_do_col = None
             yield tok
 
     # EOF: unwind remaining indent levels with _DEDENT tokens.  ``last_real`` is
@@ -227,5 +315,4 @@ def layout(tokens: Iterator[Token]) -> Iterator[Token]:
         )
     )
     while len(indent_stack) > 1:
-        indent_stack.pop()
-        yield _synthetic(DEDENT, "", ref)
+        yield from _pop_level(ref, None)

@@ -6,7 +6,7 @@ Covers:
 - All AST node types: Program/Block, declarations (FuncDef), binders, expressions,
   patterns
 - New v2 nodes: UnitLit, Call, Param, FuncDef, Lambda, Block, If/IfBranch,
-  Case/CaseBranch, Do, Try/CatchClause
+  Case/CaseBranch, Loop, Try/CatchClause
 - Removed nodes are truly absent (AgentCall, PassStmt, PrintStmt, ExprStmt,
   DoUntil, IfStmt, CaseStmt, CaseExpr, IfExpr, TryCatch, CallOptions,
   AbortPolicy, RetryPolicy)
@@ -58,7 +58,6 @@ from agm.agl.syntax import (
     DictEntry,
     DictLit,
     DictT,
-    Do,
     ElseSentinel,
     EnumDef,
     ExceptionDef,
@@ -82,6 +81,7 @@ from agm.agl.syntax import (
     ListLit,
     ListT,
     LiteralPattern,
+    Loop,
     NamedArg,
     NameT,
     NameTarget,
@@ -785,46 +785,69 @@ class TestCaseNode:
         assert a == b
 
 
-class TestDoNode:
+class TestLoopNode:
     def _s(self) -> SourceSpan:
         return span()
 
-    def test_do_no_limit(self) -> None:
+    def test_loop_no_bound(self) -> None:
         body = UnitLit(span=self._s(), node_id=2)
-        cond = BoolLit(value=True, span=self._s(), node_id=3)
-        node = Do(limit=None, body=body, condition=cond, span=self._s(), node_id=1)
-        assert node.limit is None
+        node = Loop(
+            for_var=None, for_iter=None, while_cond=None,
+            bound=None, body=body, until_cond=None,
+            span=self._s(), node_id=1,
+        )
+        assert node.bound is None
         assert node.body is body
-        assert node.condition is cond
+        assert node.until_cond is None
 
-    def test_do_with_limit(self) -> None:
+    def test_loop_with_bound(self) -> None:
         body = UnitLit(span=self._s(), node_id=2)
         cond = BoolLit(value=False, span=self._s(), node_id=3)
-        limit = IntLit(value=10, span=self._s(), node_id=4)
-        node = Do(limit=limit, body=body, condition=cond, span=self._s(), node_id=1)
-        assert node.limit is limit
+        bound = IntLit(value=10, span=self._s(), node_id=4)
+        node = Loop(
+            for_var=None, for_iter=None, while_cond=None,
+            bound=bound, body=body, until_cond=cond,
+            span=self._s(), node_id=1,
+        )
+        assert node.bound is bound
 
-    def test_do_body_is_expr(self) -> None:
+    def test_loop_with_until_cond(self) -> None:
         # body is a single Expr (not a tuple of stmts)
         body = Block(items=(UnitLit(span=self._s(), node_id=3),), span=self._s(), node_id=2)
         cond = BoolLit(value=True, span=self._s(), node_id=4)
-        node = Do(limit=None, body=body, condition=cond, span=self._s(), node_id=1)
+        node = Loop(
+            for_var=None, for_iter=None, while_cond=None,
+            bound=None, body=body, until_cond=cond,
+            span=self._s(), node_id=1,
+        )
         assert isinstance(node.body, Block)
+        assert node.until_cond is cond
 
-    def test_do_equality_ignores_span_node_id(self) -> None:
+    def test_loop_equality_ignores_span_node_id(self) -> None:
         body = UnitLit(span=span(1, 0, 1, 2), node_id=5)
         cond = BoolLit(value=True, span=span(1, 0, 1, 4), node_id=6)
-        limit = IntLit(value=5, span=span(1, 0, 1, 1), node_id=7)
-        a = Do(limit=limit, body=body, condition=cond, span=span(1, 0, 1, 20), node_id=1)
-        b = Do(limit=limit, body=body, condition=cond, span=span(9, 0, 9, 20), node_id=99)
+        bound = IntLit(value=5, span=span(1, 0, 1, 1), node_id=7)
+        a = Loop(
+            for_var=None, for_iter=None, while_cond=None,
+            bound=bound, body=body, until_cond=cond,
+            span=span(1, 0, 1, 20), node_id=1,
+        )
+        b = Loop(
+            for_var=None, for_iter=None, while_cond=None,
+            bound=bound, body=body, until_cond=cond,
+            span=span(9, 0, 9, 20), node_id=99,
+        )
         assert a == b
 
-    def test_do_frozen(self) -> None:
+    def test_loop_frozen(self) -> None:
         body = UnitLit(span=span(), node_id=2)
-        cond = BoolLit(value=True, span=span(), node_id=3)
-        node = Do(limit=None, body=body, condition=cond, span=span(), node_id=1)
+        node = Loop(
+            for_var=None, for_iter=None, while_cond=None,
+            bound=None, body=body, until_cond=None,
+            span=span(), node_id=1,
+        )
         with pytest.raises((FrozenInstanceError, AttributeError)):
-            setattr(node, "limit", 5)
+            setattr(node, "bound", 5)
 
 
 class TestTryNode:
@@ -1333,10 +1356,14 @@ class TestVisitorWalk:
         if_branch_else = IfBranch(cond=ELSE, body=null_lit, span=s, node_id=510)
         if_node = If(branches=(if_branch_cond, if_branch_else), span=s, node_id=511)
 
-        # Do loop
+        # Loop node
         do_body = Block(items=(unit_lit,), span=s, node_id=512)
         do_limit = IntLit(value=5, span=s, node_id=5120)
-        do_node = Do(limit=do_limit, body=do_body, condition=bool_lit, span=s, node_id=513)
+        do_node = Loop(
+            for_var=None, for_iter=None, while_cond=None,
+            bound=do_limit, body=do_body, until_cond=bool_lit,
+            span=s, node_id=513,
+        )
 
         # Try/catch
         catch_body = unit_lit
@@ -1432,7 +1459,7 @@ class TestVisitorWalk:
             VarRef, FieldAccess, IndexAccess, NamedArg,
             BinaryOp, UnaryNot, UnaryNeg, IsTest,
             Call, Lambda, Block, If, IfBranch, Case, CaseBranch,
-            Do, Try, CatchClause, Raise,
+            Loop, Try, CatchClause, Raise,
             UnitLit, IntLit, DecimalLit, BoolLit, NullLit, StringLit,
             ListLit, DictLit, DictEntry, Template, TextSegment, InterpSegment,
         }
@@ -1632,14 +1659,18 @@ class TestVisitorWalk:
         assert visited[3] is pat
         assert visited[4] is body
 
-    def test_walk_do_visits_body_then_condition(self) -> None:
-        """walk(Do) visits body, then condition."""
+    def test_walk_loop_visits_body_then_until_cond(self) -> None:
+        """walk(Loop) visits body, then until_cond (when until_cond is set)."""
         from agm.agl.syntax.visitor import walk
 
         s = self._s()
         body = UnitLit(span=s, node_id=2)
         cond = BoolLit(value=True, span=s, node_id=3)
-        node = Do(limit=None, body=body, condition=cond, span=s, node_id=1)
+        node = Loop(
+            for_var=None, for_iter=None, while_cond=None,
+            bound=None, body=body, until_cond=cond,
+            span=s, node_id=1,
+        )
 
         visited: list[object] = []
         walk(node, visited.append)
@@ -1648,23 +1679,71 @@ class TestVisitorWalk:
         assert visited[1] is body
         assert visited[2] is cond
 
-    def test_walk_do_with_limit_visits_limit_expr(self) -> None:
-        """walk(Do) with non-None limit visits the limit expression before body."""
+    def test_walk_loop_done_visits_only_body(self) -> None:
+        """walk(Loop with done/omitted) visits only body when until_cond is None."""
         from agm.agl.syntax.visitor import walk
 
         s = self._s()
-        limit = IntLit(value=5, span=s, node_id=4)
         body = UnitLit(span=s, node_id=2)
-        cond = BoolLit(value=True, span=s, node_id=3)
-        node = Do(limit=limit, body=body, condition=cond, span=s, node_id=1)
+        node = Loop(
+            for_var=None, for_iter=None, while_cond=None,
+            bound=None, body=body, until_cond=None,
+            span=s, node_id=1,
+        )
 
         visited: list[object] = []
         walk(node, visited.append)
 
         assert visited[0] is node
-        assert visited[1] is limit
+        assert visited[1] is body
+        assert len(visited) == 2
+
+    def test_walk_loop_with_bound_visits_bound_before_body(self) -> None:
+        """walk(Loop) with bound visits the bound expression before body."""
+        from agm.agl.syntax.visitor import walk
+
+        s = self._s()
+        bound = IntLit(value=5, span=s, node_id=4)
+        body = UnitLit(span=s, node_id=2)
+        cond = BoolLit(value=True, span=s, node_id=3)
+        node = Loop(
+            for_var=None, for_iter=None, while_cond=None,
+            bound=bound, body=body, until_cond=cond,
+            span=s, node_id=1,
+        )
+
+        visited: list[object] = []
+        walk(node, visited.append)
+
+        assert visited[0] is node
+        assert visited[1] is bound
         assert visited[2] is body
         assert visited[3] is cond
+
+    def test_walk_loop_with_for_iter_and_while_cond(self) -> None:
+        """walk(Loop) with for_iter and while_cond visits them in order."""
+        from agm.agl.syntax.visitor import walk
+
+        s = self._s()
+        for_iter = IntLit(value=0, span=s, node_id=5)
+        while_cond = BoolLit(value=True, span=s, node_id=6)
+        body = UnitLit(span=s, node_id=2)
+        cond = BoolLit(value=False, span=s, node_id=3)
+        node = Loop(
+            for_var="i", for_iter=for_iter, while_cond=while_cond,
+            bound=None, body=body, until_cond=cond,
+            span=s, node_id=1,
+        )
+
+        visited: list[object] = []
+        walk(node, visited.append)
+
+        # Order: for_iter, while_cond, body, until_cond
+        assert visited[0] is node
+        assert visited[1] is for_iter
+        assert visited[2] is while_cond
+        assert visited[3] is body
+        assert visited[4] is cond
 
     def test_walk_try_visits_body_then_handlers(self) -> None:
         """walk(Try) visits body, then each CatchClause (which visits its body)."""
@@ -1955,10 +2034,10 @@ class TestUnionAliases:
         args = typing.get_args(Expr)
         assert Case in args
 
-    def test_do_is_expr(self) -> None:
+    def test_loop_is_expr(self) -> None:
         import typing
         args = typing.get_args(Expr)
-        assert Do in args
+        assert Loop in args
 
     def test_try_is_expr(self) -> None:
         import typing

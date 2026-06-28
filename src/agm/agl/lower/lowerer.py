@@ -156,7 +156,6 @@ from agm.agl.syntax.nodes import (
     ConstructorPattern,
     DecimalLit,
     DictLit,
-    Do,
     ElseSentinel,
     EnumDef,
     ExceptionDef,
@@ -176,6 +175,7 @@ from agm.agl.syntax.nodes import (
     LetDecl,
     ListLit,
     LiteralPattern,
+    Loop,
     NamedArg,
     NameTarget,
     NullLit,
@@ -416,11 +416,16 @@ class _Lowerer:
                     if clause.binding is not None:
                         local_ids.add(clause.node_id)
                     self._scan_captures(clause.body, local_ids, captured)
-            case Do():
-                if node.limit is not None:
-                    self._scan_captures(node.limit, local_ids, captured)
+            case Loop():
+                if node.for_iter is not None:
+                    self._scan_captures(node.for_iter, local_ids, captured)
+                if node.while_cond is not None:
+                    self._scan_captures(node.while_cond, local_ids, captured)
+                if node.bound is not None:
+                    self._scan_captures(node.bound, local_ids, captured)
                 self._scan_captures(node.body, local_ids, captured)
-                self._scan_captures(node.condition, local_ids, captured)
+                if node.until_cond is not None:
+                    self._scan_captures(node.until_cond, local_ids, captured)
             case BinaryOp():
                 self._scan_captures(node.left, local_ids, captured)
                 self._scan_captures(node.right, local_ids, captured)
@@ -944,20 +949,30 @@ class _Lowerer:
                 )
 
             # ----------------------------------------------------------
-            # do…until loop → IrLoop (M3f-C)
+            # loop expression → IrLoop
             # ----------------------------------------------------------
-            case Do(limit=limit_expr, body=body_expr, condition=cond_expr, span=span):
-                condition_source = self._source_slice(cond_expr.span)
+            case Loop(
+                bound=bound_expr, body=body_expr, until_cond=until_cond_expr, span=span
+            ):
                 limit_ir = (
-                    self.lower_coerced(limit_expr, IntType())
-                    if limit_expr is not None
+                    self.lower_coerced(bound_expr, IntType())
+                    if bound_expr is not None
                     else None
                 )
+                if until_cond_expr is not None:
+                    condition_ir = self.lower_expr(until_cond_expr)
+                    condition_source = self._source_slice(until_cond_expr.span)
+                else:
+                    # `done` or omitted terminator ≡ `until false`
+                    condition_ir = IrConstBool(
+                        location=self._loc(span), value=False
+                    )
+                    condition_source = "false"
                 return IrLoop(
                     location=self._loc(span),
                     limit=limit_ir,
                     body=self.lower_expr(body_expr),
-                    condition=self.lower_expr(cond_expr),
+                    condition=condition_ir,
                     condition_source=condition_source,
                 )
 

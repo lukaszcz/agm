@@ -1,0 +1,17 @@
+{
+  "scenarios": [
+    {
+      "name": "zero_bound_completes_normally",
+      "params": {"n": 0},
+      "expect": {"stdout": "0\n"}
+    },
+    {
+      "name": "two_bound_raises",
+      "params": {"n": 2},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "MaxIterationsExceeded", "fields": {"limit": 2}}
+      }
+    }
+  ]
+}

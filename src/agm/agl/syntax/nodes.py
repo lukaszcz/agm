@@ -19,7 +19,7 @@ v2 design notes
 ---------------
 - The statement category is removed: every former statement is an expression.
 - ``Block`` is the sequencing expression; its value is the last item.
-- ``If``, ``Case``, ``Do``, ``Try`` unify the former statement/expression variants.
+- ``If``, ``Case``, ``Loop``, ``Try`` unify the former statement/expression variants.
 - ``Call`` is the single call node for both paren-form and single-arg sugar.
 - ``FuncDef`` / ``Lambda`` / ``Param`` support first-class recursive functions.
 - ``UnitLit`` is the ``()`` unit-value literal.
@@ -379,18 +379,38 @@ class Case:
 
 
 @dataclass(frozen=True, slots=True)
-class Do:
-    """``do[limit] body until condition`` — loop expression.
+class Loop:
+    """Unified loop expression.
 
-    Yields ``unit``.  ``limit`` is the optional iteration bound: an arbitrary
-    ``int``-typed expression evaluated once at loop entry, or ``None`` when the
-    loop is written without ``[...]`` (an unbounded loop).  ``body`` is
-    typically a ``Block``.
+    Syntax: ``(for VAR in ITER)? (while COND)? do[BOUND]? body (until COND | done)?``.
+
+    Yields ``unit``.
+
+    Fields
+    ------
+    for_var:
+        The loop variable name for a ``for VAR in ITER`` clause, or ``None``.
+    for_iter:
+        The collection expression for the ``for`` clause, or ``None``.
+        Always ``None`` when ``for_var`` is ``None``.
+    while_cond:
+        The ``while`` guard expression, or ``None``.
+    bound:
+        The optional iteration bound ``[expr]`` (an ``int``-typed expression
+        evaluated once at loop entry), or ``None`` (unbounded).
+    body:
+        The loop body (typically a ``Block``).
+    until_cond:
+        The ``until`` exit condition expression, or ``None``.  ``None`` means
+        ``done`` or an omitted terminator, both equivalent to ``until false``.
     """
 
-    limit: Expr | None
+    for_var: str | None
+    for_iter: Expr | None
+    while_cond: Expr | None
+    bound: Expr | None
     body: Expr
-    condition: Expr
+    until_cond: Expr | None
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
 
@@ -523,7 +543,7 @@ class DictLit:
 
 # Closed union of all expression nodes.
 # NOTE: Raise is an Expr (bottom type — assignable to any expected type).
-# Block, If, Case, Do, Try are expressions (value-producing in v2).
+# Block, If, Case, Loop, Try are expressions (value-producing in v2).
 # Let/Var/Set are NOT Expr — they are binders (Item only, not directly usable
 # in expression position; they scope over the rest of a Block).
 Expr = (
@@ -541,7 +561,7 @@ Expr = (
     | Block
     | If
     | Case
-    | Do
+    | Loop
     | Try
     | Raise
     | UnitLit

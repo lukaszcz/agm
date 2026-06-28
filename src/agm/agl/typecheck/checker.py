@@ -26,7 +26,7 @@ Rules implemented
 12. Block typing — last item is the block's value; LetDecl/VarDecl at end is error.
 13. ``if`` with no ``else`` yields ``unit``; with ``else`` branches must unify.
 14. ``case`` — exhaustiveness warning on enum scrutinees.
-15. ``do-until`` — yields ``unit``; condition must be bool.
+15. ``loop`` — yields ``unit``; until/while conditions must be bool; bound must be int.
 16. ``try/catch`` — body and handler types must unify.
 17. ``raise`` — yields ``BottomType`` (bottom, assignable to any target).
 18. Assignability (design §5.8): ``int`` widens to ``decimal``; ``json``
@@ -91,7 +91,6 @@ from agm.agl.syntax.nodes import (
     ConstructorPattern,
     DecimalLit,
     DictLit,
-    Do,
     ElseSentinel,
     EnumDef,
     ExceptionDef,
@@ -110,6 +109,7 @@ from agm.agl.syntax.nodes import (
     LetDecl,
     ListLit,
     LiteralPattern,
+    Loop,
     NameTarget,
     NullLit,
     ParamDecl,
@@ -548,8 +548,8 @@ class _Checker:
             return self._check_if(expr, expected=expected)
         if isinstance(expr, Case):
             return self._check_case(expr, expected=expected)
-        if isinstance(expr, Do):
-            return self._check_do(expr)
+        if isinstance(expr, Loop):
+            return self._check_loop(expr)
         if isinstance(expr, Try):
             return self._check_try(expr, expected=expected)
         if isinstance(expr, Raise):
@@ -1079,19 +1079,24 @@ class _Checker:
 
         return self._unify_branch_types(branch_types, node.span, "Case expression")
 
-    # --- do ---
+    # --- loop ---
 
-    def _check_do(self, node: Do) -> Type:
-        if node.limit is not None:
-            limit_type = self._check_expr(node.limit, expected=None)
-            if not isinstance(limit_type, IntType):
+    def _check_loop(self, node: Loop) -> Type:
+        if node.bound is not None:
+            bound_type = self._check_expr(node.bound, expected=None)
+            if not isinstance(bound_type, IntType):
                 raise AglTypeError(
-                    f"do-loop bound must be int; got '{limit_type!r}'.",
-                    span=node.limit.span,
+                    f"do-loop bound must be int; got '{bound_type!r}'.",
+                    span=node.bound.span,
                 )
+        # while_cond is None this task (will be extended later).
+        if node.while_cond is not None:
+            while_type = self._check_expr(node.while_cond, expected=None)
+            self._require_bool_condition(while_type, node.while_cond.span, "while")
         self._check_expr(node.body, expected=None)
-        cond_type = self._check_expr(node.condition, expected=None)
-        self._require_bool_condition(cond_type, node.condition.span, "do-until")
+        if node.until_cond is not None:
+            cond_type = self._check_expr(node.until_cond, expected=None)
+            self._require_bool_condition(cond_type, node.until_cond.span, "do-until")
         return UnitType()
 
     # --- try ---

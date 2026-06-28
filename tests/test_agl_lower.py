@@ -1164,6 +1164,67 @@ class TestScanCapturesLambdaBoundary:
         )
 
 
+class TestScanCapturesLoopForIterWhileCond:
+    """_scan_captures visits for_iter and while_cond in a Loop node (None-safe branches)."""
+
+    def test_scan_captures_loop_for_iter_and_while_cond_detect_captures(self) -> None:
+        """_scan_captures detects free-var captures in for_iter and while_cond.
+
+        A Loop node with for_iter and while_cond referencing an outer binding must
+        have those references detected as captures.  This covers the None-safe
+        for_iter/while_cond branches in _scan_captures, which are exercised via
+        hand-constructed Loop nodes because the parser always produces
+        for_iter=None and while_cond=None from current syntax.
+        """
+        from agm.agl.scope.symbols import BindingRef
+        from agm.agl.syntax.nodes import Loop, UnitLit, VarRef
+        from agm.agl.syntax.spans import SourceSpan
+
+        # Minimal program with an outer var 'x' that is referenced so the
+        # resolution table contains a BindingRef for it.
+        source = "var x = 0\nvar _y = x\n()"
+        checked = _check(source)
+
+        # Locate x's BindingRef via any resolved reference to it.
+        x_ref = next(
+            ref for ref in checked.resolved.resolution.values() if ref.name == "x"
+        )
+
+        # Synthetic VarRef nodes for for_iter and while_cond, using fresh node_ids
+        # that don't collide with any real node in the checked program.
+        fake_span = SourceSpan(
+            start_line=1, start_col=1, end_line=1, end_col=2,
+            start_offset=0, end_offset=1,
+        )
+        for_iter_ref = VarRef(name="x", span=fake_span, node_id=88881)
+        while_cond_ref = VarRef(name="x", span=fake_span, node_id=88882)
+
+        # Inject resolutions for the synthetic node_ids so _record_capture can
+        # find them; the resolution dict is mutable even though ResolvedProgram is frozen.
+        checked.resolved.resolution[88881] = x_ref
+        checked.resolved.resolution[88882] = x_ref
+
+        # Synthetic Loop: for_iter and while_cond both reference x; body is unit.
+        body = UnitLit(span=fake_span, node_id=88883)
+        loop_node = Loop(
+            for_var="i", for_iter=for_iter_ref, while_cond=while_cond_ref,
+            bound=None, body=body, until_cond=None,
+            span=fake_span, node_id=88884,
+        )
+
+        lowerer = _make_lowerer(checked, source)
+        local_ids: set[int] = set()
+        captured: dict[int, BindingRef] = {}
+        lowerer._scan_captures(loop_node, local_ids, captured)
+
+        # Both for_iter and while_cond reference x: its decl_node_id must appear
+        # in captured (registered by _record_capture via the injected resolutions).
+        assert x_ref.decl_node_id in captured, (
+            f"x (decl_node_id={x_ref.decl_node_id!r}) must be detected as a capture "
+            f"via for_iter and while_cond; captured={captured!r}"
+        )
+
+
 # ===========================================================================
 # M4b — Lambda lowering and indirect call lowering (golden tests)
 # ===========================================================================

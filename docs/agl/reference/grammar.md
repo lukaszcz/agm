@@ -168,10 +168,13 @@ while `xs [0]` is not.
 ## Loops
 
 ```ebnf
-do_until   ::= "do" loop_bound? suite "until" or_expr
+do_loop    ::= "do" loop_bound? suite loop_end
              | "do" loop_bound? inline_body "until" or_expr
 
-loop_bound ::= "[" INT "]"            (* INT must be positive *)
+loop_end   ::= "until" or_expr        (* exit when condition is true *)
+             | "done"                  (* never exit; equivalent to until false *)
+
+loop_bound ::= "[" expr "]"
 
 inline_body ::= item (";" item)*
 ```
@@ -280,7 +283,7 @@ atom           ::= INT | DECIMAL | "true" | "false" | "null"
                | "(" expr ")"                      (* parenthesized expr *)
                | lambda_expr
                | assign_expr
-               | do_until
+               | do_loop
                | raise_expr
 
 atom_no_call   ::= (* same as atom but excludes "(" — prevents sugar conflict *)

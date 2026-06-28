@@ -75,6 +75,7 @@ KW_DEF = "def"  # v2: function declaration keyword
 KW_FN = "fn"  # v2: lambda keyword
 KW_DO = "do"
 KW_UNTIL = "until"
+KW_DONE = "done"
 KW_IF = "if"
 KW_ELSE = "else"
 KW_CASE = "case"
@@ -114,6 +115,7 @@ KEYWORDS: frozenset[str] = frozenset(
         KW_FN,
         KW_DO,
         KW_UNTIL,
+        KW_DONE,
         KW_IF,
         KW_ELSE,
         KW_CASE,

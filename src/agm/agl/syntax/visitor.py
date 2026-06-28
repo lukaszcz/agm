@@ -44,7 +44,6 @@ from agm.agl.syntax.nodes import (
     DecimalLit,
     DictEntry,
     DictLit,
-    Do,
     ElseSentinel,
     EnumDef,
     ExceptionDef,
@@ -64,6 +63,7 @@ from agm.agl.syntax.nodes import (
     LetDecl,
     ListLit,
     LiteralPattern,
+    Loop,
     NamedArg,
     NameTarget,
     NullLit,
@@ -216,7 +216,7 @@ class Visitor:
     def visit_If(self, node: If) -> None: ...
     def visit_CaseBranch(self, node: CaseBranch) -> None: ...
     def visit_Case(self, node: Case) -> None: ...
-    def visit_Do(self, node: Do) -> None: ...
+    def visit_Loop(self, node: Loop) -> None: ...
     def visit_CatchClause(self, node: CatchClause) -> None: ...
     def visit_Try(self, node: Try) -> None: ...
     def visit_Raise(self, node: Raise) -> None: ...
@@ -309,7 +309,7 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         If,
         CaseBranch,
         Case,
-        Do,
+        Loop,
         CatchClause,
         Try,
         Raise,
@@ -557,11 +557,16 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
         for case_branch in node.branches:
             walk(case_branch, callback)
 
-    elif isinstance(node, Do):
-        if node.limit is not None:
-            walk(node.limit, callback)
+    elif isinstance(node, Loop):
+        if node.for_iter is not None:
+            walk(node.for_iter, callback)
+        if node.while_cond is not None:
+            walk(node.while_cond, callback)
+        if node.bound is not None:
+            walk(node.bound, callback)
         walk(node.body, callback)
-        walk(node.condition, callback)
+        if node.until_cond is not None:
+            walk(node.until_cond, callback)
 
     elif isinstance(node, CatchClause):
         walk(node.body, callback)

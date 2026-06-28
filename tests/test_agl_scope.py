@@ -32,7 +32,6 @@ from agm.agl.syntax.nodes import (
     CaseBranch,
     CatchClause,
     ConstructorPattern,
-    Do,
     EnumDef,
     Expr,
     FieldAccess,
@@ -43,6 +42,7 @@ from agm.agl.syntax.nodes import (
     Item,
     Lambda,
     LetDecl,
+    Loop,
     NameTarget,
     Param,
     PatternField,
@@ -149,9 +149,10 @@ def _find_varref(program: object, name: str, occurrence: int = -1) -> VarRef:
             walk(node.subject)
             for cbranch in node.branches:
                 walk(cbranch.body)
-        elif isinstance(node, Do):
+        elif isinstance(node, Loop):
             walk(node.body)
-            walk(node.condition)
+            if node.until_cond is not None:
+                walk(node.until_cond)
         elif isinstance(node, Try):
             walk(node.body)
             for clause in node.handlers:
@@ -1502,35 +1503,67 @@ class TestDirectASTConstruction:
 
     # --- Do loop ---
 
-    def test_do_body_as_block_bindings_visible_in_condition(self) -> None:
+    def test_loop_body_as_block_bindings_visible_in_condition(self) -> None:
         var_n = _make_var("n", _make_intlit(0))
         let_probe = _make_let("probe", _make_varref("n"))
         assign_n = _make_assign("n", _make_varref("probe"))
         body = _make_block(let_probe, assign_n)
         cond_probe = _make_varref("probe")
-        do_node = Do(
-            limit=_make_intlit(5),
+        loop_node = Loop(
+            for_var=None, for_iter=None, while_cond=None,
+            bound=_make_intlit(5),
             body=body,
-            condition=cond_probe,
+            until_cond=cond_probe,
             span=_sp(),
             node_id=_nid(),
         )
-        r = resolve_program(var_n, do_node)
-        # "probe" is declared in the do body and is visible in the until condition
+        r = resolve_program(var_n, loop_node)
+        # "probe" is declared in the loop body and is visible in the until condition
         assert r.resolution[cond_probe.node_id].kind == BinderKind.let_binding
 
-    def test_do_body_single_expr_resolved(self) -> None:
+    def test_loop_body_single_expr_resolved(self) -> None:
         var_n = _make_var("n", _make_intlit(0))
         body_n = _make_varref("n")
-        do_node = Do(
-            limit=_make_intlit(5),
+        loop_node = Loop(
+            for_var=None, for_iter=None, while_cond=None,
+            bound=_make_intlit(5),
             body=body_n,
-            condition=_make_boollit(True),
+            until_cond=_make_boollit(True),
             span=_sp(),
             node_id=_nid(),
         )
-        r = resolve_program(var_n, do_node)
+        r = resolve_program(var_n, loop_node)
         assert r.resolution[body_n.node_id].kind == BinderKind.var_binding
+
+    def test_loop_for_iter_resolved_in_enclosing_scope(self) -> None:
+        # for_iter is resolved in the enclosing scope (exercises the for_iter branch).
+        var_n = _make_var("n", _make_intlit(0))
+        iter_ref = _make_varref("n")
+        loop_node = Loop(
+            for_var="i", for_iter=iter_ref, while_cond=None,
+            bound=None,
+            body=_make_intlit(1),
+            until_cond=_make_boollit(True),
+            span=_sp(),
+            node_id=_nid(),
+        )
+        r = resolve_program(var_n, loop_node)
+        assert r.resolution[iter_ref.node_id].kind == BinderKind.var_binding
+
+    def test_loop_while_cond_resolved_in_child_scope(self) -> None:
+        # while_cond is resolved in the child scope (exercises the while_cond branch).
+        var_n = _make_var("n", _make_intlit(0))
+        while_ref = _make_varref("n")
+        loop_node = Loop(
+            for_var=None, for_iter=None, while_cond=while_ref,
+            bound=None,
+            body=_make_intlit(1),
+            until_cond=_make_boollit(False),
+            span=_sp(),
+            node_id=_nid(),
+        )
+        r = resolve_program(var_n, loop_node)
+        assert r.resolution[while_ref.node_id].kind == BinderKind.var_binding
 
     # --- If with block bodies ---
 

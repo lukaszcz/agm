@@ -287,7 +287,7 @@ def test_function_with_try_in_body() -> None:
 
 
 def test_function_with_do_loop_in_body() -> None:
-    """Function body with do loop (exercises _walk_collect_locals for Do)."""
+    """Function body with do loop (exercises _walk_collect_locals for Loop)."""
     source = (
         "def count_to(n: int) -> int =\n"
         "  var i = 0\n"
@@ -299,6 +299,24 @@ def test_function_with_do_loop_in_body() -> None:
     )
     ir = evaluate_ir(source)
     assert ir["result"] == IntValue(5)
+
+
+def test_function_with_do_done_loop_in_body() -> None:
+    """Function body with do-done loop (exercises _scan_captures for until_cond=None).
+
+    `do[0] done` runs zero iterations (bound=0 ≤ 0 exits immediately).
+    """
+    source = (
+        "def run_nothing(n: int) -> int =\n"
+        "  var i = 0\n"
+        "  do[n]\n"
+        "    i := i + 1\n"
+        "  done\n"
+        "  i\n"
+        "let result = run_nothing(0)\n()"
+    )
+    ir = evaluate_ir(source)
+    assert ir["result"] == IntValue(0)
 
 
 def test_function_with_var_and_assignment_capture() -> None:

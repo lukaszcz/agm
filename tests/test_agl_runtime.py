@@ -2150,10 +2150,10 @@ class TestMaxIterationsExceededSchema:
         # proving the source text is recovered per-node rather than hard-coded.
         rt = PipelineDriver()
         program = (
-            "let done = false\n"
+            "let stop_flag = false\n"
             "try\n"
             "  do[1] ()\n"
-            "  until done\n"
+            "  until stop_flag\n"
             "catch MaxIterationsExceeded as e =>\n"
             "  print e.condition\n"
             "  print e.last_condition_value\n"
@@ -2161,7 +2161,7 @@ class TestMaxIterationsExceededSchema:
         result = rt.run(program)
         assert result.ok is True
         lines = capsys.readouterr().out.splitlines()
-        assert lines == ["done", "false"]
+        assert lines == ["stop_flag", "false"]
 
 
 class TestExhaustivenessWarningSurfaces:

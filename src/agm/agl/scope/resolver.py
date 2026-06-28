@@ -14,7 +14,7 @@ Scope rules
    immutable binding → error; ``:=`` on an undeclared name → error.
 3. Reading (``VarRef``) a name not visible in the current scope chain → error.
 4. Pattern variables and catch binders are immutable and branch-local.
-5. ``do`` body bindings are visible to the ``until`` condition but not after.
+5. ``loop`` body bindings are visible to the ``until`` condition but not after.
 6. ``param`` and ``program`` declarations are only valid at the program root.
 7. ``def`` declarations are only valid at the program root; a pre-pass
    collects them all first so every def is in scope for every other def
@@ -75,7 +75,6 @@ from agm.agl.syntax.nodes import (
     ConstructorPattern,
     DecimalLit,
     DictLit,
-    Do,
     EnumDef,
     ExceptionDef,
     Expr,
@@ -92,6 +91,7 @@ from agm.agl.syntax.nodes import (
     Lambda,
     LetDecl,
     ListLit,
+    Loop,
     NullLit,
     ParamDecl,
     Pattern,
@@ -1102,8 +1102,8 @@ class _Resolver:
             self._resolve_if(expr)
         elif isinstance(expr, Case):
             self._resolve_case(expr)
-        elif isinstance(expr, Do):
-            self._resolve_do(expr)
+        elif isinstance(expr, Loop):
+            self._resolve_loop(expr)
         elif isinstance(expr, Try):
             self._resolve_try(expr)
         elif isinstance(expr, Lambda):
@@ -1441,27 +1441,36 @@ class _Resolver:
                 self._bind_pattern_vars(branch.pattern, branch_scope)
                 self._resolve_expr_or_block(branch.body)
 
-    def _resolve_do(self, node: Do) -> None:
-        """Resolve a ``do[limit] body until condition`` loop.
+    def _resolve_loop(self, node: Loop) -> None:
+        """Resolve a unified loop expression.
 
-        The bound expression (if any) is resolved in the ENCLOSING scope — it is
-        evaluated at loop entry, before any body bindings exist, so it cannot
-        see them.  Then opens ONE child scope; if the body is a ``Block``,
-        resolves its items DIRECTLY in that scope (no nested block scope) so
-        bindings defined in the body are visible to the ``until`` condition.  A
-        non-Block body is resolved directly in the child scope.  The condition
-        is resolved in the same child scope.
+        Resolution order (D2/D4 scoping):
+        - ``bound`` (if any) is resolved in the ENCLOSING scope — evaluated at
+          loop entry, before any body bindings exist, so it cannot see them.
+        - ``for_iter`` (if any) is resolved in the ENCLOSING scope (same reason).
+        - Opens ONE child scope; ``for_var`` (future task) is bound here.
+        - ``while_cond`` (if any) is resolved in the child scope.
+        - If the body is a ``Block``, its items are resolved DIRECTLY in the
+          child scope so bindings are visible to ``until_cond``.
+        - ``until_cond`` (if present) is resolved in the child scope.
         """
-        if node.limit is not None:
-            self._resolve_expr(node.limit)
+        # Resolve bound and for_iter in the enclosing scope.
+        if node.bound is not None:
+            self._resolve_expr(node.bound)
+        if node.for_iter is not None:
+            self._resolve_expr(node.for_iter)
         with self._child_scope(node.node_id):
+            # while_cond resolved before body (future: for_var is already bound here).
+            if node.while_cond is not None:
+                self._resolve_expr(node.while_cond)
             if isinstance(node.body, Block):
                 # Inline block items directly — no extra block scope.
                 self._resolve_block_items(node.body.items)
             else:
                 self._resolve_expr(node.body)
-            # Condition sees all body bindings.
-            self._resolve_expr(node.condition)
+            # until_cond sees all body bindings.
+            if node.until_cond is not None:
+                self._resolve_expr(node.until_cond)
 
     def _resolve_try(self, node: Try) -> None:
         # Try body — its own scope.

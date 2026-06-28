@@ -1,0 +1,10 @@
+# do[n] ... done — bound loop with `done` terminator (≡ until false).
+# `done` means the bound is the only exit: after n iterations, raises
+# MaxIterationsExceeded.  n=0 runs zero times and completes normally.
+param n: int
+
+var iters: int = 0
+do[n]
+  iters := iters + 1
+done
+print iters

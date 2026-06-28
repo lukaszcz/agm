@@ -310,10 +310,10 @@ class TestReplRun:
     ) -> None:
         _isolated_home(monkeypatch, tmp_path)
 
-        def boom(**_kwargs: object) -> object:
+        def boom(*_args: object, **_kwargs: object) -> object:
             raise ValueError("bad config")
 
-        monkeypatch.setattr(repl_command, "load_exec_config", boom)
+        monkeypatch.setattr(repl_command, "exec_config_from_merged", boom)
         args = ReplArgs(
             strict_json=None,
             max_iters=None,
@@ -327,6 +327,34 @@ class TestReplRun:
             repl_command.run(args)
         assert excinfo.value.code == 1
         assert fake_console == []
+
+    def test_numeric_timeout_in_config_accepted(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        """An int-typed [exec].timeout in the TOML config is accepted."""
+        home = _isolated_home(monkeypatch, tmp_path)
+        agm_dir = home / ".agm"
+        agm_dir.mkdir(parents=True, exist_ok=True)
+        (agm_dir / "config.toml").write_text("[exec]\ntimeout = 30\nrunner = \"echo agent\"\n")
+        repl_command.run(_args())
+        assert len(fake_console) == 1
+
+    def test_string_timeout_in_config_accepted(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        """A string-typed [exec].timeout in the TOML config is accepted."""
+        home = _isolated_home(monkeypatch, tmp_path)
+        agm_dir = home / ".agm"
+        agm_dir.mkdir(parents=True, exist_ok=True)
+        (agm_dir / "config.toml").write_text('[exec]\ntimeout = "30s"\nrunner = "echo agent"\n')
+        repl_command.run(_args())
+        assert len(fake_console) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -389,18 +417,18 @@ class TestReplParamsConfigLoader:
         fake_console: list[dict[str, object]],
     ) -> None:
         # The loader closure must actually be called when a program decl is
-        # entered, exercising the load_params_config wiring.
+        # entered, exercising the load_program_config wiring.
         _isolated_home(monkeypatch, tmp_path)
-        # Patch load_params_config to track calls and return an empty table.
+        # Patch load_program_config to track calls and return an empty table.
         loader_calls: list[str] = []
 
-        def fake_load_params_config(
+        def fake_load_program_config(
             program_name: str, *, home: Path, proj_dir: object, cwd: Path
         ) -> dict[str, object]:
             loader_calls.append(program_name)
             return {}
 
-        monkeypatch.setattr(repl_command, "load_params_config", fake_load_params_config)
+        monkeypatch.setattr(repl_command, "load_program_config", fake_load_program_config)
         repl_command.run(_args())
         session = fake_console[0]["session"]
         assert isinstance(session, ReplSession)

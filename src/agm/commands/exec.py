@@ -25,14 +25,15 @@ Flag notes:
       A source-level ``strict_json`` call option overrides this default.
     - Trace logging is OFF by default.  ``--log`` enables it (auto-named path);
       ``--log-file PATH`` writes to PATH; ``--no-log`` disables it.  At most one
-      of these three flags may be given (mutually exclusive).  A source-level
-      ``config log = true`` pragma or ``[exec] log = true`` in config also enables
-      logging; CLI flags override pragmas (CLI > pragma > config).
+      of these three flags may be given (mutually exclusive).  A source
+      ``config log = true`` declaration or ``[exec] log = true`` in
+      config also enables logging; CLI flags override source declarations
+      (CLI > source > config).
     - ``--runner COMMAND`` overrides the default agent runner command from config.
       When set, it is used as the default runner for all unnamed agents.
-    - Source ``config KEY = VALUE`` pragmas (header-only) override config-file
-      settings for ``strict_json``, ``max_iters``, ``runner``, ``timeout``,
-      ``log``, and ``log_file``.  CLI flags always take precedence.
+    - Source ``config KEY = VALUE`` declarations override config-file settings for
+      ``strict-json``, ``max-iters``, ``runner``, ``timeout``, ``log``, and
+      ``log-file``.  CLI flags always take precedence.
     - ``--dry-run`` (global flag) runs only the static pipeline + contract
       materialization and never writes a trace (side-effect-free).
 """
@@ -49,7 +50,18 @@ from agm.agl import PipelineDriver
 from agm.agl.diagnostics import format_diagnostic
 from agm.agl.modules.roots import assemble_roots
 from agm.agl.runtime.agents import runner_backed_agent_factory
-from agm.agl.syntax.nodes import PragmaValue
+from agm.agl.runtime.params import (
+    build_engine_config_base,
+    convert_config_value,
+    raw_option_str,
+)
+from agm.agl.semantics.engine_keys import (
+    ENGINE_KEY_NAMES,
+    RESERVED_PROGRAM_NAMES,
+    get_engine_key_type,
+)
+from agm.agl.semantics.types import Type
+from agm.agl.semantics.values import BoolValue, EnumValue, IntValue, TextValue, Value
 from agm.cli_support.args import ExecArgs
 from agm.cli_support.exec_params import (
     check_param_collisions,
@@ -58,15 +70,16 @@ from agm.cli_support.exec_params import (
 )
 from agm.config.context import current_config_context
 from agm.config.general import (
-    load_exec_config,
+    exec_config_from_merged,
     load_merged_config,
-    params_config_from_merged,
-    parse_timeout,
+    program_config_from_merged,
 )
 from agm.config.module_roots import load_module_roots, resolve_lib_root, resolve_stdlib_root
 from agm.core import dry_run
 from agm.core.fs import read_text_arg
 from agm.core.log import prepare_trace_log_from_layers
+from agm.core.parse import parse_timeout
+from agm.core.toml import toml_dict
 from agm.parser import exit_with_usage_error
 
 _T = TypeVar("_T")
@@ -77,10 +90,66 @@ def _first(*values: _T | None) -> _T | None:
     return next((v for v in values if v is not None), None)
 
 
-def _typed_pragma(pragmas: dict[str, PragmaValue], key: str, typ: type[_T]) -> _T | None:
-    """Return the pragma value for *key* if present and of type *typ*, else None."""
-    value = pragmas.get(key)
-    return value if isinstance(value, typ) else None
+def _bool_value(values: dict[str, Value], key: str) -> bool | None:
+    """Return a bool source config value payload for *key*."""
+    value = values.get(key)
+    if isinstance(value, BoolValue):
+        return value.value
+    return None
+
+
+def _text_value(values: dict[str, Value], key: str) -> str | None:
+    """Return a text source config value payload for *key*."""
+    value = values.get(key)
+    if isinstance(value, TextValue):
+        return value.value
+    return None
+
+
+def _option_text_value(values: dict[str, Value], key: str) -> str | None:
+    """Return the ``some(text)`` payload for an Option[text] source config value."""
+    value = values.get(key)
+    if isinstance(value, EnumValue) and value.variant == "Some":
+        raw = value.fields.get("value")
+        if isinstance(raw, TextValue):
+            return raw.value
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Centralized config_cli projection helpers
+# ---------------------------------------------------------------------------
+# Each helper returns a ``Value`` when the CLI flag was supplied, or ``None``
+# when it was absent (the key should not appear in ``config_cli``).
+
+
+def _project_bool_pair(positive: bool, negative: bool) -> Value | None:
+    """Project a pair of exclusive bool flags (--X / --no-X) to a BoolValue or None.
+
+    Returns ``BoolValue(True)`` when *positive* is set, ``BoolValue(False)`` when
+    *negative* is set, and ``None`` when neither is set (absent from ``config_cli``).
+    """
+    if positive:
+        return BoolValue(True)
+    if negative:
+        return BoolValue(False)
+    return None
+
+
+def _project_option_text(
+    value: str | None, *, no_flag: bool, key_name: str, key_type: Type
+) -> Value | None:
+    """Project an Option[text] CLI flag pair to an EnumValue or None.
+
+    - *value* is set: ``some(value)`` via :func:`convert_config_value`.
+    - *no_flag* is ``True``: ``none`` via :func:`convert_config_value`.
+    - Both absent: returns ``None`` (key absent from ``config_cli``).
+    """
+    if value is not None:
+        return convert_config_value(key_name, value, key_type)
+    if no_flag:
+        return convert_config_value(key_name, None, key_type)
+    return None
 
 
 def run(args: ExecArgs) -> None:
@@ -100,19 +169,16 @@ def run(args: ExecArgs) -> None:
         print("Error: exec requires either a FILE or -c/--command", file=sys.stderr)
         raise SystemExit(1)
 
-    # Load the merged config once; derive [exec] and [params.<program>] from it.
+    # Load the merged config once; program_table and exec config are deferred until
+    # after prepare_program so the declared program name is available.
     ctx = current_config_context()
-    try:
-        merged_config = load_merged_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
-        config = load_exec_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
-    except ValueError as exc:
-        print(f"Error: invalid exec configuration: {exc}", file=sys.stderr)
-        raise SystemExit(1) from exc
+    raw_stem: str | None = Path(args.file).stem if args.file is not None else None
+    merged_config = load_merged_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
 
     # ----------------------------------------------------------------
-    # Assemble module roots and load + scope the graph ONCE to read config
-    # pragmas before resolving any runtime settings.  Pragma values override
-    # config; CLI overrides pragma (CLI > pragma > config).
+    # Assemble module roots and load + scope the graph ONCE to read source
+    # config declarations before resolving any runtime settings.  Source values
+    # override config; CLI overrides source (CLI > source > config).
     # ----------------------------------------------------------------
     try:
         mr_config = load_module_roots(
@@ -145,41 +211,150 @@ def run(args: ExecArgs) -> None:
     prepared = PipelineDriver.prepare_program(
         source, entry_path=entry_path, roots=roots, default_stdlib=not args.no_stdlib
     )
-    pragmas = prepared.config_pragmas
 
-    # Resolve strict_json: CLI > pragma > config.
-    strict_json = _first(
-        args.strict_json,
-        _typed_pragma(pragmas, "strict_json", bool),
-        config.strict_json,
+    # Resolve the single final program key for BOTH engine-key overrides and param
+    # resolution.  The declared ``program NAME`` takes precedence over the file stem;
+    # a stem that collides with an AGM reserved section name produces no key (and
+    # triggers the reserved-stem error below when no ``program NAME`` decl exists).
+    if prepared.program_name is not None:
+        program_key: str | None = prepared.program_name
+    elif raw_stem is not None and raw_stem not in RESERVED_PROGRAM_NAMES:
+        program_key = raw_stem
+    else:
+        program_key = None
+
+    # Reserved file-stem check (§15): when no ``program NAME`` decl is present,
+    # a file stem that matches an AGM config section name would silently shadow
+    # the global ``[exec]`` config.  Require an explicit ``program NAME`` decl
+    # with a non-reserved name instead.  Inline ``-c`` (no file stem) is unaffected.
+    if (
+        raw_stem is not None
+        and raw_stem in RESERVED_PROGRAM_NAMES
+        and prepared.program_name is None
+    ):
+        print(
+            f"Error: file stem '{raw_stem}' is a reserved AGM section name. "
+            "Add a 'program NAME' declaration with a non-reserved name.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    # Fetch the [<program_key>] table once.  The same table feeds both the
+    # engine-key overlay in exec_config_from_merged and param resolution in
+    # resolve_param_values, so both always read the same program section.
+    program_table: dict[str, object] = (
+        program_config_from_merged(merged_config, program_key) if program_key is not None else {}
     )
+    try:
+        config = exec_config_from_merged(merged_config, program_table=program_table)
+    except ValueError as exc:
+        print(f"Error: invalid exec configuration: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+    # Build the config-binding resolution maps consumed by ``IrConfigBind``.
+    # They are needed both for the startup-config prepass and for the normal run.
+    _timeout_type = get_engine_key_type("timeout")
+    assert _timeout_type is not None  # always a valid engine key
+    _log_file_type = get_engine_key_type("log-file")
+    assert _log_file_type is not None  # always a valid engine key
+
+    config_cli: dict[str, Value] = {}
+    if args.strict_json is not None:
+        config_cli["strict-json"] = BoolValue(args.strict_json)
+    if args.max_iters is not None:
+        config_cli["max-iters"] = IntValue(args.max_iters)
+    if args.runner is not None:
+        config_cli["runner"] = TextValue(args.runner)
+    if (v := _project_bool_pair(args.log, args.no_log)) is not None:
+        config_cli["log"] = v
+    if (
+        v := _project_option_text(
+            args.log_file,
+            no_flag=args.no_log_file,
+            key_name="log-file",
+            key_type=_log_file_type,
+        )
+    ) is not None:
+        config_cli["log-file"] = v
+    if (
+        v := _project_option_text(
+            args.timeout,
+            no_flag=args.no_timeout,
+            key_name="timeout",
+            key_type=_timeout_type,
+        )
+    ) is not None:
+        config_cli["timeout"] = v
+
+    base_runner_cmd = config.runner or default_agent_runner(merged=merged_config)
+    exec_raw_table = toml_dict(merged_config.get("exec"))
+    raw_timeout = raw_option_str(program_table, exec_raw_table, "timeout")
+    config_base = build_engine_config_base({
+        "strict-json": config.strict_json,
+        "max-iters": config.default_loop_limit,
+        "runner": base_runner_cmd,
+        "log": config.log,
+        "timeout": raw_timeout,
+        "log-file": config.log_file,
+    })
+
+    # Resolve strict_json: CLI > config.  Source config strict-json = VALUE
+    # is applied at runtime by the D6 effect (IrConfigBind → _apply_config_effect).
+    strict_json = _first(args.strict_json, config.strict_json)
     # config.strict_json is always a bool, so _first always returns a bool here.
     assert strict_json is not None
     resolved_strict_json: bool = strict_json
 
-    # Resolve loop limit: CLI > pragma > config.
-    loop_limit = _first(
-        args.max_iters,
-        _typed_pragma(pragmas, "max_iters", int),
-        config.default_loop_limit,
-    )
+    # Resolve loop limit: CLI > config.  Source config max-iters = VALUE is
+    # applied at runtime by the D6 effect.
+    loop_limit = _first(args.max_iters, config.default_loop_limit)
     assert loop_limit is not None
     resolved_loop_limit: int = loop_limit
 
-    # Resolve timeout: pragma > config (no CLI flag for timeout).
-    pragma_timeout_raw = pragmas.get("timeout")
-    if pragma_timeout_raw is not None:
+    # Resolve timeout: CLI > [exec] config.  Source config timeout = VALUE is
+    # applied at runtime by the D6 effect (effect-at-binding).
+    # ``--timeout VALUE`` overrides the config; ``--no-timeout`` clears it (None).
+    if args.timeout is not None:
         try:
-            resolved_timeout: float | None = parse_timeout(str(pragma_timeout_raw))
+            resolved_timeout: float | None = parse_timeout(args.timeout)
         except ValueError as exc:
-            print(f"Error: invalid pragma timeout: {exc}", file=sys.stderr)
+            print(f"Error: invalid --timeout value: {exc}", file=sys.stderr)
             raise SystemExit(1) from exc
+    elif args.no_timeout:
+        resolved_timeout = None
     else:
         resolved_timeout = config.timeout
 
+    startup_values: dict[str, Value] = {}
+    if prepared.resolved_graph is not None:
+        startup_runtime = PipelineDriver(
+            default_loop_limit=resolved_loop_limit,
+            default_strict_json=resolved_strict_json,
+            default_agent=lambda _request: "",
+            shell_exec_timeout=resolved_timeout,
+        )
+        startup_result = startup_runtime.collect_startup_config_graph(
+            prepared,
+            names={"runner", "log", "log-file"},
+            config_cli=config_cli,
+            config_base=config_base,
+        )
+        if startup_result.diagnostics:
+            for diag in startup_result.warnings:
+                print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
+            for diag in startup_result.diagnostics:
+                print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
+            raise SystemExit(1)
+        if startup_result.error is not None:
+            for diag in startup_result.warnings:
+                print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
+            print(startup_result.error.to_message(include_trace_id=True), file=sys.stderr)
+            raise SystemExit(2)
+        startup_values = startup_result.values if startup_result.ok else {}
+
     # Resolve + validate the trace log file up front (F2a/F6).  --dry-run is
     # side-effect-free: no trace is written regardless of --log-file (plan §10.1).
-    # Pragma log/log_file values are wired here (Milestone 3).
+    # Source config log/log-file values are wired here.
     if dry_run.enabled():
         log_file = None
     else:
@@ -188,21 +363,21 @@ def run(args: ExecArgs) -> None:
             cli_no_log=args.no_log,
             cli_log=args.log,
             cli_log_file=args.log_file,
-            pragma_log=_typed_pragma(pragmas, "log", bool),
-            pragma_log_file=_typed_pragma(pragmas, "log_file", str),
+            source_log=_bool_value(startup_values, "log"),
+            source_log_file=_option_text_value(startup_values, "log-file"),
             config_log=config.log,
             config_log_file=config.log_file,
         )
 
     # ----------------------------------------------------------------
-    # Resolve the runner command: CLI flag > pragma > [exec] config > shared
-    # loop default (the same default used by agm loop/review, per plan §9.5).
+    # Resolve the runner command: CLI flag > source constant > [exec] config >
+    # shared loop default (the same default used by agm loop/review, per §9.5).
     # ----------------------------------------------------------------
     runner_cmd = (
         args.runner
-        or _typed_pragma(pragmas, "runner", str)
+        or _text_value(startup_values, "runner")
         or config.runner
-        or default_agent_runner(merged=merged_config)
+        or base_runner_cmd
     )
 
     # Validate the resolved runner command eagerly: malformed quoting (e.g.
@@ -224,7 +399,7 @@ def run(args: ExecArgs) -> None:
     #     source `agent` runner hint
     #     resolved default runner (runner_cmd, the floor)
     #
-    # ``prepare_program`` was already called above to read config pragmas; the
+    # ``prepare_program`` was already called above to read source config declarations; the
     # same ``PreparedGraph`` is reused here and handed to ``run_prepared_graph``
     # below, so the source is never loaded or scoped twice.  On a source with
     # load/scope errors ``declared_agents`` is ``()`` and ``run_prepared_graph``
@@ -251,6 +426,13 @@ def run(args: ExecArgs) -> None:
     # to the default runner (the floor).  ``command_with_prompt_target``
     # substitutes ``%%`` / ``%{PROMPT_FILE}`` for source hints and config
     # commands alike.
+    # The agent idle-timeout is start-resolved from CLI > [exec] config > engine
+    # default and fixed for the lifetime of this factory.  A source
+    # ``config timeout = e`` declaration updates ONLY the live shell-exec timeout
+    # (via effect-at-binding, D6) from its declaration point onward; it does NOT
+    # retroactively reconfigure the already-constructed agent factory, because the
+    # factory is established before evaluation begins and cannot be reopened
+    # mid-run.  This is the §15-sanctioned compromise for the ``timeout`` key.
     factory = runner_backed_agent_factory(
         default_runner_cmd=runner_cmd,
         per_agent_cmds=per_agent_cmds,
@@ -289,24 +471,19 @@ def run(args: ExecArgs) -> None:
         except ValueError as exc:
             exit_with_usage_error(["exec"], f"error: {exc}")
 
-        if discovery.program_name is not None:
-            param_config_key: str | None = discovery.program_name
-        elif args.file is not None:
-            param_config_key = Path(args.file).stem
-        else:
-            param_config_key = None
-
-        config_param_values = (
-            params_config_from_merged(merged_config, param_config_key)
-            if param_config_key is not None
-            else {}
-        )
+        # Strip engine keys before param resolution: they were already applied to
+        # ExecConfig; leaving them in would trigger spurious "unknown param" warnings.
+        # program_key and program_table are shared with the engine-config path above,
+        # ensuring both always read the same [<program>] section.
+        config_param_values = {
+            k: v for k, v in program_table.items() if k not in ENGINE_KEY_NAMES
+        }
         declared_names = {p.name for p in discovery.params}
         resolved_params, config_warnings = resolve_param_values(
             declared_names,
             config_param_values,
             cli_params,
-            program_name=param_config_key,
+            program_name=program_key,
         )
         external_params.update(resolved_params)
         for msg in config_warnings:
@@ -321,6 +498,8 @@ def run(args: ExecArgs) -> None:
         check_only=dry_run.enabled(),
         log_file=log_file,
         checked_graph=discovery.checked_graph,
+        config_cli=config_cli,
+        config_base=config_base,
     )
 
     # Warnings live on their own channel and never affect the exit code;

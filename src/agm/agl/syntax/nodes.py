@@ -32,7 +32,6 @@ import decimal
 import enum
 from dataclasses import dataclass
 from dataclasses import field as dc_field
-from decimal import Decimal
 
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import ImportMode, Qualifier, TypeExpr
@@ -803,27 +802,25 @@ class AgentDecl:
 
 
 # ---------------------------------------------------------------------------
-# Config pragma
+# Config declaration
 # ---------------------------------------------------------------------------
-
-#: The set of value types a config pragma may carry.
-PragmaValue = bool | int | Decimal | str
 
 
 @dataclass(frozen=True, slots=True)
-class ConfigPragma:
-    """``config KEY = VALUE`` header pragma.
+class ConfigDecl:
+    """``config NAME [= expr]`` declaration (engine-setting key).
 
-    Must appear before any non-pragma item at the program root.
+    May appear anywhere at the program root (not inside a nested block).
     Enforced by the scope pass; grammatically it is a top-level item.
 
-    ``key``    — the pragma name (e.g. ``"log"``, ``"max_iters"``).
-    ``value``  — a statically-known scalar: ``bool``, ``int``,
-                 ``Decimal``, or ``str``.
+    ``name``   — the declared engine key in kebab-case (e.g. ``"log"``, ``"max-iters"``).
+    ``value``  — the optional value expression; ``None`` when omitted.  When
+                 present it is a runtime-evaluated readable binding; absent
+                 declarations resolve from the host's configured default.
     """
 
-    key: str
-    value: PragmaValue
+    name: str
+    value: Expr | None
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
 
@@ -839,7 +836,7 @@ Declaration = (
     | ParamDecl
     | ProgramDecl
     | AgentDecl
-    | ConfigPragma
+    | ConfigDecl
     | ImportDecl
 )
 

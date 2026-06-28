@@ -33,6 +33,7 @@ from agm.agl.ir import (
     IrCapture,
     IrCoerce,
     IrCompare,
+    IrConfigBind,
     IrConstBool,
     IrConstDecimal,
     IrConstInt,
@@ -506,6 +507,25 @@ class TestDeepTierSymbolResolution:
         node = IrAssign(location=LOC, symbol=dangling, path=(), value=_int())
         prog = _make_program(initializers=(node,))
         validate_ir(prog, deep=False)  # no exception
+
+    def test_ir_config_bind_dangling_symbol(self) -> None:
+        """IrConfigBind referencing a SymbolId not in program.symbols raises."""
+        dangling = SymbolId(value=555)
+        node = IrConfigBind(
+            location=LOC, symbol=dangling, public_name="max-iters", value=None
+        )
+        prog = _make_program(initializers=(node,))
+        with pytest.raises(InvalidIrError, match="555"):
+            validate_ir(prog)
+
+    def test_ir_config_bind_deep_false_skips_symbol_check(self) -> None:
+        """deep=False skips symbol resolution for IrConfigBind."""
+        dangling = SymbolId(value=555)
+        node = IrConfigBind(
+            location=LOC, symbol=dangling, public_name="max-iters", value=None
+        )
+        prog = _make_program(initializers=(node,))
+        validate_ir(prog, deep=False)  # dangling symbol not checked; no exception
 
 
 # ===========================================================================

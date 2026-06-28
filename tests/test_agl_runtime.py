@@ -3068,20 +3068,23 @@ class TestPrepareProgram:
         assert prepared.resolved_graph is not None
         assert any(d.name == "reviewer" for d in prepared.declared_agents)
 
-    def test_prepare_program_config_pragmas_from_entry(
+    def test_prepare_program_configs_from_entry(
         self, tmp_path: pathlib.Path
     ) -> None:
-        """config_pragmas reads from the entry module."""
+        """Config declarations are discovered from the entry module."""
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = PipelineDriver.prepare_program(
-            "config max_iters = 7\nlet x = 1\nx",
+        rt = PipelineDriver()
+        prepared = rt.prepare_program(
+            "config max-iters = 7\nlet x = 1\nx",
             entry_path=None,
             roots=roots,
         )
         assert prepared.resolved_graph is not None
-        assert prepared.config_pragmas.get("max_iters") == 7
+        discovery = rt.discover_params_graph(prepared)
+        names = {c.name for c in discovery.configs}
+        assert "max-iters" in names
 
     def test_prepare_program_failure_returns_empty_declared_agents(
         self, tmp_path: pathlib.Path
@@ -3303,30 +3306,6 @@ class TestDiscoverParamsGraph:
 
 class TestPreparedGraphDefensivePaths:
     """Edge-case coverage for PreparedGraph properties and prepare_program error paths."""
-
-    def test_config_pragmas_no_entry_module_in_graph(self, tmp_path: pathlib.Path) -> None:
-        """config_pragmas returns {} when resolved_graph has no ENTRY_ID module."""
-        from unittest.mock import MagicMock
-
-        from agm.agl.modules.ids import ENTRY_ID
-        from agm.agl.modules.roots import RootSet
-        from agm.agl.pipeline import PreparedGraph
-
-        # Build a fake resolved_graph with no ENTRY_ID key.
-        fake_graph = MagicMock()
-        fake_graph.modules = {}  # empty — no ENTRY_ID
-        assert ENTRY_ID not in fake_graph.modules
-
-        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        pg = PreparedGraph(
-            source="let x = 1",
-            entry_path=None,
-            roots=roots,
-            resolved_graph=fake_graph,
-            diagnostics=(),
-            warnings=(),
-        )
-        assert pg.config_pragmas == {}
 
     def test_program_name_no_entry_module_in_graph(self, tmp_path: pathlib.Path) -> None:
         """program_name returns None when resolved_graph has no ENTRY_ID module."""

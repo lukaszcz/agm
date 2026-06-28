@@ -169,6 +169,40 @@ default and the host does not supply a value. Supported param types are `text`,
 Runtime-only types such as `unit`, `agent`, and function types cannot be used as
 program param types.
 
+## `config` — engine-key bindings
+
+```ebnf
+config_decl ::= "config" NAME ("=" expr)?
+```
+
+`config` declarations are root-only and **entry-module only**. Each binds one of
+the fixed engine keys (`log`, `log-file`, `strict-json`, `max-iters`, `runner`,
+`timeout`) as an **immutable readable value** in the root scope — the type is
+fixed by the key registry, not declared in source.
+
+```agl
+config strict-json = true
+config max-iters = 10
+config timeout = "30s"           # projected into some("30s")
+let cap = max-iters              # config keys are readable bindings
+```
+
+A bare `config KEY` (no `= expr`) contributes no source value; the binding takes
+its value from the external resolution chain (`[<program>]` → `[exec]` → engine
+default). A `config KEY = expr` source value overrides the config-file layers but
+is itself overridden by a matching CLI flag.
+
+**Immutability.** Assigning to a config binding (`:=`) is a static error. The
+diagnostic names the binder kind — `config` — the same way it does for `let` and
+`param`.
+
+**Requiredness asymmetry.** Unlike `param X` (required when no default or external
+value), `config X` always resolves: a missing CLI flag and no source value cause the
+binding to fall back to the engine default, never to a required-value error.
+
+See [Program structure](program-structure.md) for the key table, types, and the
+full precedence chain.
+
 ## `agent` — declared agents
 
 ```ebnf

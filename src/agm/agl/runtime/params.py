@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from agm.agl.semantics.types import Type as AglType
     from agm.agl.semantics.values import Value
 
-__all__ = ["convert_param_value"]
+__all__ = ["convert_config_value", "convert_param_value"]
 
 
 def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":
@@ -143,6 +143,36 @@ def convert_param_value(name: str, raw: object, type_obj: "AglType") -> "Value":
         raise ValueError(
             f"Param {name!r}: could not parse as {type_obj!r}: {exc}"
         ) from exc
+
+
+def convert_config_value(name: str, raw: object, key_type: "AglType") -> "Value":
+    """Convert a raw host config value to the declared engine-key AgL type.
+
+    For ``Option[T]`` engine keys (``timeout``, ``log-file``) the raw value is
+    projected into the Option enum: a present *raw* becomes ``some(value)`` with
+    its inner ``T`` decoded via :func:`convert_param_value`, and ``None`` becomes
+    ``none``.  Non-Option keys fall back to :func:`convert_param_value`.
+    """
+    from agm.agl.ir.ids import NominalId
+    from agm.agl.modules.ids import STD_CORE_ID
+    from agm.agl.semantics.types import EnumType, TextType
+    from agm.agl.semantics.values import EnumValue
+
+    if isinstance(key_type, EnumType) and key_type.name == "Option":
+        nominal = NominalId(STD_CORE_ID, "Option")
+        if raw is None:
+            return EnumValue(
+                nominal=nominal, display_name="Option", variant="None", fields={}
+            )
+        inner: AglType = key_type.type_args[0] if key_type.type_args else TextType()
+        inner_val = convert_param_value(name, raw, inner)
+        return EnumValue(
+            nominal=nominal,
+            display_name="Option",
+            variant="Some",
+            fields={"value": inner_val},
+        )
+    return convert_param_value(name, raw, key_type)
 
 
 def _is_json_shaped(obj: object) -> bool:

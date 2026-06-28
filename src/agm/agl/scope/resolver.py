@@ -97,7 +97,6 @@ from agm.agl.syntax.nodes import (
     ParamDecl,
     Pattern,
     PatternField,
-    PragmaValue,
     Program,
     ProgramDecl,
     Raise,
@@ -132,18 +131,6 @@ _BUILTIN_CONSTRUCTOR_NODE_ID = -1
 # The set of names that may NOT be used as any kind of binding.
 _RESERVED_NAMES: frozenset[str] = frozenset(_BUILTIN_CALL_NAMES)
 
-# Config pragma bridge: key → expected literal-value kind (used by
-# ``_validate_pragma_value`` to enforce literal constraints during the
-# bridge period; kebab-case to match ENGINE_KEY_NAMES).
-_PRAGMA_KEY_KINDS: dict[str, str] = {
-    "log": "bool",
-    "strict-json": "bool",
-    "max-iters": "int_pos",
-    "runner": "str_nonempty",
-    "log-file": "str_nonempty",
-    "timeout": "str_or_int",
-}
-
 # Per-binder phrasing for the ``:=``-on-immutable rejection.
 _IMMUTABLE_BINDER_PHRASES: dict[BinderKind, str] = {
     BinderKind.let_binding: "it was declared with 'let'",
@@ -160,63 +147,6 @@ _IMMUTABLE_BINDER_PHRASES: dict[BinderKind, str] = {
 def _immutable_binder_phrase(kind: BinderKind) -> str:
     """Return the ``:=``-rejection phrase naming *kind*'s binder."""
     return _IMMUTABLE_BINDER_PHRASES[kind]
-
-
-# ---------------------------------------------------------------------------
-# Config pragma value validation
-# ---------------------------------------------------------------------------
-
-
-def _validate_pragma_value(key: str, value: PragmaValue, span: object) -> None:
-    """Validate that *value* matches the expected kind for *key*.
-
-    Raises ``AglScopeError`` on a mismatch.
-    """
-    sp = span if isinstance(span, SourceSpan) else None
-    kind = _PRAGMA_KEY_KINDS[key]
-
-    if kind == "bool":
-        if not isinstance(value, bool):
-            raise AglScopeError(
-                f"config pragma '{key}' requires a bool value (true or false), "
-                f"got {type(value).__name__!r}.",
-                span=sp,
-            )
-    elif kind == "int_pos":
-        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-            raise AglScopeError(
-                f"config pragma '{key}' requires a positive integer value (> 0), "
-                f"got {value!r}.",
-                span=sp,
-            )
-    elif kind == "str_nonempty":
-        if not isinstance(value, str) or not value:
-            raise AglScopeError(
-                f"config pragma '{key}' requires a non-empty string value, "
-                f"got {value!r}.",
-                span=sp,
-            )
-    else:
-        # kind == "str_or_int": string or positive integer (e.g. timeout)
-        if isinstance(value, bool):
-            raise AglScopeError(
-                f"config pragma '{key}' requires a string or positive integer value, "
-                f"got {value!r}.",
-                span=sp,
-            )
-        if isinstance(value, int):
-            if value <= 0:
-                raise AglScopeError(
-                    f"config pragma '{key}' requires a positive integer value (> 0), "
-                    f"got {value!r}.",
-                    span=sp,
-                )
-        elif not isinstance(value, str) or not value:
-            raise AglScopeError(
-                f"config pragma '{key}' requires a non-empty string or positive "
-                f"integer value, got {value!r}.",
-                span=sp,
-            )
 
 
 # ---------------------------------------------------------------------------
@@ -278,8 +208,8 @@ class _Resolver:
         self._declared_functions: dict[str, FuncDef] = {}
         # Program-declared agent names that have been referenced as a VarRef.
         self._referenced_agents: set[str] = set()
-        # Validated config pragmas.
-        self._config_pragmas: dict[str, PragmaValue] = {}
+        # Names of config keys declared so far (duplicate detection).
+        self._declared_config_names: set[str] = set()
         # Header-only tracking for imports in non-entry modules (graph mode).
         self._seen_non_import_item: bool = False
         # Source-declared program name.
@@ -375,7 +305,6 @@ class _Resolver:
             root_scope=root,
             declared_agents=dict(self._declared_agents),
             declared_functions=dict(self._declared_functions),
-            config_pragmas=dict(self._config_pragmas),
             program_name=self._program_name,
             warnings=self._unused_agent_warnings(),
             declared_type_names=frozenset(self._declared_type_names),
@@ -708,16 +637,18 @@ class _Resolver:
         return tuple(warnings)
 
     # ------------------------------------------------------------------
-    # Config pragmas
+    # Config declarations
     # ------------------------------------------------------------------
 
     def _resolve_config(self, node: ConfigDecl) -> None:
-        """Validate a ``config`` declaration and collect it.
+        """Resolve a ``config`` declaration into a readable runtime binding.
 
-        Bridge: the value is a general ``Expr`` in the AST, but this task only
-        allows literal scalar values (transitional restriction — runtime
-        evaluation comes in a later task).  Non-literal or absent values are
-        rejected with a clear error.
+        A ``config`` declaration names a fixed engine key (kebab-case) and binds
+        it as an immutable, runtime-resolved value (like ``param``).  The value
+        expression — when present — is resolved here so any names it references
+        are checked; an absent value (bare ``config KEY``) is also legal and
+        resolves from the host's configured default at runtime.  Type checking of
+        the value against the engine-key type happens in the typecheck pass.
         """
         if not self._at_root:
             raise AglScopeError(
@@ -732,20 +663,18 @@ class _Resolver:
                 f"Allowed keys: {allowed}.",
                 span=node.span,
             )
-        if node.name in self._config_pragmas:
+        if node.name in self._declared_config_names:
             raise AglScopeError(
                 f"Duplicate config declaration '{node.name}'.",
                 span=node.span,
             )
-        # Bridge: extract a literal Python scalar from the value expression.
-        # Missing value and non-literal expressions are rejected here
-        # (transitional restriction until config becomes a runtime binding).
-        value: PragmaValue = self._extract_config_literal(node)
-        _validate_pragma_value(node.name, value, node.span)
-        self._config_pragmas[node.name] = value
+        self._declared_config_names.add(node.name)
+        # Resolve the value expression (if any) before defining the binding, so a
+        # config value cannot reference the binding it introduces.
+        if node.value is not None:
+            self._resolve_expr(node.value)
         # Define an immutable readable binding so the config key is visible in
-        # the surrounding scope (Task 3 will add runtime evaluation; for now the
-        # binding exists statically but has no runtime value).
+        # the surrounding scope and resolved at runtime.
         ref = BindingRef(
             name=node.name,
             mutable=False,
@@ -755,41 +684,6 @@ class _Resolver:
             module_id=self._module_id,
         )
         self._define(node.name, ref)
-
-    def _extract_config_literal(self, node: ConfigDecl) -> PragmaValue:
-        """Extract a ``PragmaValue`` literal from ``node.value``.
-
-        Accepted literal AST node types:
-        - ``BoolLit``    → ``bool``
-        - ``IntLit``     → ``int``
-        - ``DecimalLit`` → ``decimal.Decimal``
-        - ``StringLit``  → ``str`` (plain, non-interpolated string)
-
-        A ``Template`` node (string with interpolation) and any other
-        expression are rejected.  A missing value (``None``) is also
-        rejected.  Both restrictions will be lifted in a later task
-        when config declarations become runtime-evaluated bindings.
-        """
-        val = node.value
-        if val is None:
-            raise AglScopeError(
-                f"'config {node.name}' requires a value (e.g. 'config {node.name} = true').",
-                span=node.span,
-            )
-        if isinstance(val, BoolLit):
-            return val.value
-        if isinstance(val, IntLit):
-            return val.value
-        if isinstance(val, DecimalLit):
-            return val.value
-        if isinstance(val, StringLit):
-            return val.value
-        # Template with interpolation, or any other non-literal expression.
-        raise AglScopeError(
-            f"'config {node.name}' value must be a literal (true/false, integer, "
-            f"decimal, or plain string with no interpolation).",
-            span=node.span,
-        )
 
     # ------------------------------------------------------------------
     # Scope helpers

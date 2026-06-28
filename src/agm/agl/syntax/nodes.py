@@ -32,7 +32,6 @@ import decimal
 import enum
 from dataclasses import dataclass
 from dataclasses import field as dc_field
-from decimal import Decimal
 
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import ImportMode, Qualifier, TypeExpr
@@ -806,11 +805,6 @@ class AgentDecl:
 # Config declaration
 # ---------------------------------------------------------------------------
 
-#: The set of value types a config declaration may carry after literal
-#: extraction.  This is a transitional bridge type used by the scope→exec
-#: pipeline; it will be retired when config becomes a full readable binding.
-PragmaValue = bool | int | Decimal | str
-
 
 @dataclass(frozen=True, slots=True)
 class ConfigDecl:
@@ -820,9 +814,9 @@ class ConfigDecl:
     Enforced by the scope pass; grammatically it is a top-level item.
 
     ``name``   — the declared engine key in kebab-case (e.g. ``"log"``, ``"max-iters"``).
-    ``value``  — the optional value expression; ``None`` when omitted.
-                 The scope pass currently requires a literal scalar value
-                 (transitional restriction; runtime evaluation comes later).
+    ``value``  — the optional value expression; ``None`` when omitted.  When
+                 present it is a runtime-evaluated readable binding; absent
+                 declarations resolve from the host's configured default.
     """
 
     name: str

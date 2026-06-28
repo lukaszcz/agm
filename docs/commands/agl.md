@@ -137,16 +137,16 @@ reviewer = "claude -p"      # per-agent runner commands; the name must be
 settings. The name `agents` is reserved for the structural `[exec.agents]` map and is
 never treated as a per-command override.
 
-#### Source-level config pragmas
+#### Source-level config declarations
 
-An AgL program may set exec options as **config pragmas** in the header (before any
-other item):
+An AgL program may set exec options as **config declarations** at the program
+root (a `config` key is also a readable binding usable in any expression):
 
 ```agl
 config log = true             # enable trace logging for this program
-config log_file = "trace.log" # explicit trace path
-config strict_json = true     # require bare JSON from agents
-config max_iters = 10         # do[] iteration cap
+config log-file = "trace.log" # explicit trace path
+config strict-json = true     # require bare JSON from agents
+config max-iters = 10         # do[] iteration cap
 config runner = "claude -p"   # default agent runner
 config timeout = "30s"        # shell exec idle timeout
 param spec
@@ -154,10 +154,11 @@ let result = ask "Process ${spec}"
 print result
 ```
 
-Precedence is **CLI > pragma > config file**. For example, `--no-log` overrides
-`config log = true`, and `config max_iters = 10` overrides `[exec] default_loop_limit = 5`.
-Pragmas are an `agm exec` feature; the REPL rejects a `config` line entered at the
-prompt (see [`agm repl`](#agm-repl-interactive-session)).
+Precedence is **CLI > source value > config file**. For example, `--no-log`
+overrides `config log = true`, and `config max-iters = 10` overrides
+`[exec] default_loop_limit = 5`. Config declarations are an `agm exec` feature;
+the REPL rejects a `config` line entered at the prompt (see
+[`agm repl`](#agm-repl-interactive-session)).
 
 ### Exit codes
 
@@ -282,8 +283,8 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
   `<type: int>`) instead of reporting ``'X' is not defined.``. This is a REPL
   convenience only — the language is unchanged, and names that are also values (a record
   constructor, a binding) keep evaluating normally.
-- **Config pragmas** (`config KEY = VALUE`) entered at the prompt are rejected with a
-  diagnostic: config pragmas are an `agm exec` / batch-program feature. Set REPL session
+- **Config declarations** (`config KEY = VALUE`) entered at the prompt are rejected with a
+  diagnostic: config declarations are an `agm exec` / batch-program feature. Set REPL session
   options via CLI flags or `[exec]` config instead.
 
 ### Exit codes

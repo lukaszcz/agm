@@ -28,6 +28,7 @@ from agm.agl.runtime.types import (
     CallSiteInfo as CallSiteInfo,
 )
 from agm.agl.runtime.types import (
+    ConfigDeclInfo,
     HostEnvironment,
     ParamDeclInfo,
 )
@@ -44,8 +45,9 @@ if TYPE_CHECKING:
     from agm.agl.scope.symbols import ResolvedProgram
     from agm.agl.semantics.values import ExceptionValue, Value
     from agm.agl.syntax.nodes import AgentDecl as AgentDeclNode
-    from agm.agl.syntax.nodes import PragmaValue, Program
+    from agm.agl.syntax.nodes import Program
     from agm.agl.typecheck.env import CheckedProgram as CheckedProgramType
+    from agm.agl.typecheck.env import TypeEnvironment
     from agm.agl.typecheck.graph import CheckedModuleGraph
 
 # Reserved agent names: cannot be registered by callers.
@@ -62,6 +64,7 @@ class ParamDiscovery:
     diagnostics: tuple[Diagnostic, ...]
     warnings: tuple[Diagnostic, ...]
     checked_graph: "CheckedModuleGraph | None" = None
+    configs: tuple[ConfigDeclInfo, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,18 +112,6 @@ class PreparedProgram:
         ]
         infos.sort(key=lambda info: (info.line, info.col))
         return tuple(infos)
-
-    @property
-    def config_pragmas(self) -> "dict[str, PragmaValue]":
-        """The validated ``config`` pragmas declared in source.
-
-        Returns a mapping of key → value for each pragma collected by the scope
-        pass.  Empty when parse or scope failed (``resolved is None``), or when
-        the program declares no ``config`` pragmas.
-        """
-        if self.resolved is None:
-            return {}
-        return dict(self.resolved.config_pragmas)
 
     @property
     def program_name(self) -> str | None:
@@ -174,21 +165,6 @@ class PreparedGraph:
         ]
         infos.sort(key=lambda info: (info.line, info.col))
         return tuple(infos)
-
-    @property
-    def config_pragmas(self) -> "dict[str, PragmaValue]":
-        """The validated ``config`` pragmas declared in the entry module.
-
-        Empty when load or scope failed (``resolved_graph is None``).
-        """
-        from agm.agl.modules.ids import ENTRY_ID
-
-        if self.resolved_graph is None:
-            return {}
-        entry_mod = self.resolved_graph.modules.get(ENTRY_ID)
-        if entry_mod is None:
-            return {}
-        return dict(entry_mod.resolved.config_pragmas)
 
     @property
     def program_name(self) -> str | None:
@@ -524,12 +500,14 @@ class PipelineDriver:
                     )
                 )
         infos.sort(key=lambda info: (info.line, info.col))
+        configs = _collect_config_infos(prepared.program, checked.type_env)
         return ParamDiscovery(
             params=tuple(infos),
             program_name=prepared.program_name,
             checked=checked,
             diagnostics=(),
             warnings=all_warnings,
+            configs=configs,
         )
 
     def run(
@@ -582,6 +560,8 @@ class PipelineDriver:
         check_only: bool = False,
         log_file: "Path | None" = None,
         checked: "CheckedProgramType | None" = None,
+        config_cli: "Mapping[str, Value] | None" = None,
+        config_base: "Mapping[str, Value] | None" = None,
     ) -> RunResult:
         """Execute an already parsed + scoped program (no re-parsing).
 
@@ -669,6 +649,8 @@ class PipelineDriver:
             check_only=check_only,
             log_file=log_file,
             warnings=warnings,
+            config_cli=config_cli,
+            config_base=config_base,
         )
 
     def _execute_ir(
@@ -680,6 +662,8 @@ class PipelineDriver:
         check_only: bool,
         log_file: "Path | None",
         warnings: list[Diagnostic],
+        config_cli: "Mapping[str, Value] | None" = None,
+        config_base: "Mapping[str, Value] | None" = None,
     ) -> RunResult:
         """Run a freshly lowered ``executable`` — the shared tail of the
         single-program and module-graph pipelines.
@@ -751,6 +735,8 @@ class PipelineDriver:
             max_call_depth=self._default_call_depth_limit,
             param_values=ir_param_values,
             host_contracts=host_contracts,
+            config_cli=config_cli,
+            config_base=config_base,
         )
 
         try:
@@ -968,6 +954,7 @@ class PipelineDriver:
                     )
                 )
         infos.sort(key=lambda info: (info.line, info.col))
+        configs = _collect_config_infos(entry_cm.resolved.program, entry_cm.type_env)
         return ParamDiscovery(
             params=tuple(infos),
             program_name=prepared.program_name,
@@ -975,6 +962,7 @@ class PipelineDriver:
             diagnostics=(),
             warnings=all_warnings,
             checked_graph=checked_graph,
+            configs=configs,
         )
 
     def run_prepared_graph(
@@ -985,6 +973,8 @@ class PipelineDriver:
         check_only: bool = False,
         log_file: "Path | None" = None,
         checked_graph: "CheckedModuleGraph | None" = None,
+        config_cli: "Mapping[str, Value] | None" = None,
+        config_base: "Mapping[str, Value] | None" = None,
     ) -> RunResult:
         """Execute an already loaded + scoped module graph (no re-loading).
 
@@ -1056,6 +1046,8 @@ class PipelineDriver:
             check_only=check_only,
             log_file=log_file,
             warnings=warnings,
+            config_cli=config_cli,
+            config_base=config_base,
         )
 
     @property
@@ -1098,6 +1090,63 @@ def _run_typecheck_graph(
         return None, (exc.to_diagnostic(),)
     except Exception as exc:
         return None, (Diagnostic(message=f"Type error: {exc}", line=1),)
+
+
+def static_config_values(program: "Program") -> dict[str, bool | int | str]:
+    """Collect compile-time-constant ``config`` values from the entry AST.
+
+    Walks *program*'s top-level items for ``ConfigDecl`` nodes whose value is a
+    literal scalar (``BoolLit``/``IntLit``/``StringLit``) and returns a mapping of
+    kebab engine-key → Python scalar.  Bare ``config KEY`` declarations and
+    non-literal value expressions are skipped (they have no static constant).
+    Used by ``agm exec`` to fold source ``config`` constants into engine-setting
+    resolution (CLI > source constant > config-file > default).
+    """
+    from agm.agl.syntax.nodes import BoolLit, ConfigDecl, IntLit, StringLit
+
+    result: dict[str, bool | int | str] = {}
+    for item in program.body.items:
+        if isinstance(item, ConfigDecl) and item.value is not None:
+            value = item.value
+            if isinstance(value, BoolLit):
+                result[item.name] = value.value
+            elif isinstance(value, IntLit):
+                result[item.name] = value.value
+            elif isinstance(value, StringLit):
+                result[item.name] = value.value
+    return result
+
+
+def _collect_config_infos(
+    program: "Program", type_env: "TypeEnvironment"
+) -> tuple[ConfigDeclInfo, ...]:
+    """Build the ``ConfigDeclInfo`` inventory for the entry program's config keys.
+
+    Reads each root-level ``ConfigDecl`` and its checker-recorded engine-key type.
+    Shared by :meth:`PipelineDriver.discover_params` and
+    :meth:`PipelineDriver.discover_params_graph`.
+    """
+    from agm.agl.syntax.nodes import ConfigDecl
+
+    infos: list[ConfigDeclInfo] = []
+    for item in program.body.items:
+        if isinstance(item, ConfigDecl):
+            cfg_type = type_env.get_binding_type(item.node_id)
+            assert cfg_type is not None, (
+                f"Config {item.name!r} has no recorded binding type; "
+                "checker invariant violated."
+            )
+            infos.append(
+                ConfigDeclInfo(
+                    name=item.name,
+                    type=cfg_type,
+                    has_value=item.value is not None,
+                    line=item.span.start_line,
+                    col=item.span.start_col,
+                )
+            )
+    infos.sort(key=lambda info: (info.line, info.col))
+    return tuple(infos)
 
 
 def _run_typecheck(

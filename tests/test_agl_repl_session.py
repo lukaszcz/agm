@@ -1714,7 +1714,7 @@ class TestReplConfigPragmaRejection:
         assert not r.ok
         assert len(r.diagnostics) == 1
         msg = r.diagnostics[0].message
-        assert "config pragmas" in msg.lower() or "config pragma" in msg.lower()
+        assert "config declarations" in msg.lower() or "config declaration" in msg.lower()
         assert "REPL" in msg or "repl" in msg.lower()
 
     def test_config_pragma_rejection_message_mentions_cli(self) -> None:

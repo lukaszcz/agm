@@ -462,20 +462,32 @@ class _Checker:
     def _check_config(self, stmt: ConfigDecl) -> None:
         """Check a ``config`` declaration against the engine-key registry.
 
-        For keys whose AgL type is ``EnumType`` (``log-file``, ``timeout``),
-        value-type checking is deferred to the runtime bridge (Task 3), since
-        existing callers may pass plain string literals via the pragma bridge.
-        For all other keys the value expression, if present, is type-checked
-        against the registry type and the result is recorded in the type env.
+        For ``Option[T]`` engine keys (``log-file``, ``timeout``) the value
+        expression may be either an ``Option[T]`` or the inner type ``T``: a bare
+        ``T`` value is projected into ``some(value)`` by the lowerer.  For all
+        other keys the value, if present, must be assignable to the engine-key
+        type.  The engine-key type is recorded as the binding type either way.
         """
         from agm.agl.semantics.engine_keys import get_engine_key_type
 
         declared_type = get_engine_key_type(stmt.name)
         if declared_type is None:
             return  # pragma: no cover — unknown keys rejected earlier by scope
-        if stmt.value is not None and not isinstance(declared_type, EnumType):
+        if stmt.value is not None:
             val_type = self._check_expr(stmt.value, expected=declared_type)
-            self._assert_assignable(val_type, declared_type, stmt.span)
+            if isinstance(declared_type, EnumType) and declared_type.type_args:
+                inner = declared_type.type_args[0]
+                if not (
+                    is_assignable(val_type, declared_type)
+                    or is_assignable(val_type, inner)
+                ):
+                    raise AglTypeError(
+                        f"config '{stmt.name}' expects '{declared_type!r}' or "
+                        f"'{inner!r}', got '{val_type!r}'.",
+                        span=stmt.span,
+                    )
+            else:
+                self._assert_assignable(val_type, declared_type, stmt.span)
         self._env.set_binding_type(stmt.node_id, declared_type)
 
     def _check_binding(self, stmt: LetDecl | VarDecl) -> None:

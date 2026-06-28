@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
-from agm.agl.syntax.nodes import AgentDecl, FuncDef, PragmaValue, Program
+from agm.agl.syntax.nodes import AgentDecl, FuncDef, Program
 from agm.agl.syntax.spans import SourceSpan
 
 # ---------------------------------------------------------------------------
@@ -241,8 +241,6 @@ class ResolvedProgram:
     ``declared_functions``
         Maps each top-level ``def`` name to its :class:`FuncDef` node.
         Populated in the pre-pass; useful for downstream typecheck and eval.
-    ``config_pragmas``
-        Validated config pragma key→value map collected in the header pass.
     ``program_name``
         The source-declared program name from a ``program NAME`` declaration,
         or ``None`` when undeclared.
@@ -283,7 +281,6 @@ class ResolvedProgram:
     root_scope: ScopeNode
     declared_agents: dict[str, AgentDecl] = field(default_factory=dict)
     declared_functions: dict[str, FuncDef] = field(default_factory=dict)
-    config_pragmas: dict[str, PragmaValue] = field(default_factory=dict)
     program_name: str | None = None
     warnings: tuple[Diagnostic, ...] = ()
     declared_type_names: frozenset[str] = frozenset()

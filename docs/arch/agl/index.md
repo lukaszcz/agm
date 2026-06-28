@@ -72,6 +72,6 @@ Package layering is enforced by a dependency-contract test (`tests/test_agl_depe
 - Read [frontend.md](frontend.md) for the lexer, parser, AST, scope, and type system.
 - Read [execution.md](execution.md) for lowering, the IR, the evaluator, value rendering, and the host runtime.
 - Read [modules.md](modules.md) for the file-based module system and the graph-aware passes.
-- Read [repl.md](repl.md) for the incremental REPL session, `agm exec` parameter/agent wiring, and config pragmas.
+- Read [repl.md](repl.md) for the incremental REPL session, `agm exec` parameter/agent wiring, and config declarations.
 
 The language grammar and surface syntax are documented separately in `docs/agl-grammar.md`.

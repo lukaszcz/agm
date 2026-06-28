@@ -52,6 +52,7 @@ from agm.agl.ir.nodes import (
     IrCase,
     IrCoerce,
     IrCompare,
+    IrConfigBind,
     IrConstBool,
     IrConstDecimal,
     IrConstInt,
@@ -259,9 +260,13 @@ class IrInterpreter:
         shell_exec_timeout: float | None = None,
         host_contracts: Mapping[ContractId, "OutputContract"] | None = None,
         base_frame: Frame | None = None,
+        config_cli: Mapping[str, Value] | None = None,
+        config_base: Mapping[str, Value] | None = None,
     ) -> None:
         self._program = program
         self._frames: list[Frame] = [base_frame if base_frame is not None else {}]
+        self._config_cli: Mapping[str, Value] = config_cli if config_cli is not None else {}
+        self._config_base: Mapping[str, Value] = config_base if config_base is not None else {}
         self.initializer_values: list[Value] = []
         self.module_initializer_values: dict[ModuleId, list[Value]] = {}
         self._call_depth: int = 0
@@ -1129,6 +1134,23 @@ class IrInterpreter:
                     if exc.span is None:
                         exc.span = node.location
                     raise
+
+            case IrConfigBind(symbol=sym, public_name=public_name, value=value_expr):
+                # Config precedence: CLI --X > source value > config_base[X].
+                config_value: Value
+                if public_name in self._config_cli:
+                    config_value = self._config_cli[public_name]
+                elif value_expr is not None:
+                    config_value = self._eval(value_expr)
+                elif public_name in self._config_base:
+                    config_value = self._config_base[public_name]
+                else:
+                    raise InvalidIrError(
+                        f"IrConfigBind for {public_name!r} has no source value and no"
+                        " config_base entry; the host must supply a config_base default"
+                    )
+                self._frame[sym] = config_value
+                return UnitValue()
 
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)

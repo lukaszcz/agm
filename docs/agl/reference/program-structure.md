@@ -14,7 +14,7 @@ expression-oriented sequence.
 program    ::= block EOF
 block      ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
 item       ::= import_decl                        (* header position only *)
-             | config_pragma                      (* header position only *)
+             | config_decl                        (* root only *)
              | "private"? record_def              (* root only *)
              | "private"? enum_def                (* root only *)
              | "private"? type_alias              (* root only *)
@@ -70,42 +70,48 @@ y              # the program's value is y
 Side-effecting forms (`print`, `:=`, loops, else-less `if`) yield `unit`
 and are commonly followed by another expression.
 
-## Config pragmas
+## Config declarations
 
-A **config pragma** sets a program-level option:
+A **config declaration** names a fixed engine-setting key and binds it as an
+immutable, runtime-resolved **readable value** — like `param`, but for the
+program's own engine options:
 
 ```ebnf
-config_pragma ::= "config" KEY "=" VALUE
-VALUE         ::= "true" | "false" | INT | DECIMAL | string_literal
+config_decl ::= "config" KEY ("=" expr)?
 ```
 
 Config declarations may appear **anywhere at the program root** — before or
-after other items. Nesting inside a block is a static error.
+after other items. Nesting inside a block is a static error. Each key may
+appear at most once; duplicate keys are an error. Entry-module only.
 
-Each key may appear at most once; duplicate keys are an error.
+The value expression, when present, must have the key's declared type. A bare
+`config KEY` (no value) resolves from the host's configured default.
 
-| Key | Value type | Meaning |
-|-----|------------|---------|
+| Key | Type | Meaning |
+|-----|------|---------|
 | `log` | `bool` | Enable/disable trace logging. |
-| `log-file` | non-empty string | Path to the trace log file. |
+| `log-file` | `Option[text]` | Path to the trace log file. |
 | `strict-json` | `bool` | Parse agent JSON output strictly. |
-| `max-iters` | positive integer | Maximum iterations for `do` loops. |
-| `runner` | non-empty string | Default agent runner command. |
-| `timeout` | string or positive integer | Shell execution timeout. |
+| `max-iters` | `int` | Maximum iterations for `do` loops. |
+| `runner` | `text` | Default agent runner command. |
+| `timeout` | `Option[text]` | Shell execution timeout. |
+
+For an `Option[T]` key (`log-file`, `timeout`) a bare `T` value is accepted and
+projected into `some(value)`; an `Option[T]` value may also be given directly.
+
+A config key is a normal readable binding: it can be used in any expression.
+The binding is immutable — assigning to it is a static error.
 
 ```agl
-config log = true
 config max-iters = 10
+config timeout = "30s"        # projected into some("30s")
 config runner = "claude -p"
-param spec
-let result = ask "Process ${spec}"
-print result
+let budget = max-iters        # config keys are readable
+print budget
 ```
 
-**Precedence.** CLI flags override pragma values, which override config-file
-settings.
-
-**String values** must be static literals — no interpolation.
+**Precedence.** The bound value is resolved per key as: a matching CLI flag,
+otherwise the source value (if given), otherwise the host's configured default.
 
 ## Binders: `let` and `var`
 

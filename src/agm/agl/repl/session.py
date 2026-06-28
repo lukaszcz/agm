@@ -313,13 +313,13 @@ class ReplSession:
                 return self._fail([exc.to_diagnostic()], list(tab_sink))
         tab_warnings: list[Diagnostic] = list(tab_sink)
 
-        # [1b] Reject config pragmas: they are an exec/program feature and cannot
-        # be applied to a live REPL session (session settings come from CLI flags
-        # or config files, not source pragmas).  Check here — after parse, before
-        # resolve — so no session state is mutated.
-        pragma_diag = self._check_no_config_pragmas(program)
-        if pragma_diag is not None:
-            return self._fail([pragma_diag], tab_warnings)
+        # [1b] Reject config declarations: they are an exec/program feature and
+        # cannot be applied to a live REPL session (session settings come from CLI
+        # flags or config files, not source declarations).  Check here — after
+        # parse, before resolve — so no session state is mutated.
+        config_diag = self._check_no_config_decls(program)
+        if config_diag is not None:
+            return self._fail([config_diag], tab_warnings)
 
         # [1c] REPL trailing-binder synthesis: in v2, a block ending in a
         # ``let``/``var`` is a static error (the binder needs a continuation
@@ -468,14 +468,13 @@ class ReplSession:
         )
         return new_program, next_start_id + 1
 
-    def _check_no_config_pragmas(self, program: "Program") -> Diagnostic | None:
-        """Return a diagnostic if the entry contains a ``config`` pragma.
+    def _check_no_config_decls(self, program: "Program") -> Diagnostic | None:
+        """Return a diagnostic if the entry contains a ``config`` declaration.
 
-        Config pragmas are an exec/program feature: they set options for a batch
-        ``agm exec`` run and cannot be applied to a live REPL session, whose
-        settings come from CLI flags and config files.  Entering a pragma line
-        is rejected with a clear message; the entry has no effect on session
-        state.
+        Config declarations are an exec/program feature: they set options for a
+        batch ``agm exec`` run and cannot be applied to a live REPL session, whose
+        settings come from CLI flags and config files.  Entering a config line is
+        rejected with a clear message; the entry has no effect on session state.
         """
         from agm.agl.syntax.nodes import ConfigDecl
 
@@ -483,7 +482,7 @@ class ReplSession:
             if isinstance(item, ConfigDecl):
                 return diagnostic_from_span(
                     (
-                        "config pragmas are not supported in the REPL; "
+                        "config declarations are not supported in the REPL; "
                         "set options via CLI flags or the config file"
                     ),
                     item.span,

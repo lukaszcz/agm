@@ -18,7 +18,7 @@ program    ::= block EOF
 block      ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
 
 item       ::= import_decl                  (* header position only *)
-             | config_pragma                (* header position only *)
+             | config_decl                  (* root only *)
              | "private"? record_def        (* root only *)
              | "private"? enum_def          (* root only *)
              | "private"? type_alias        (* root only *)
@@ -336,12 +336,15 @@ interpolation ::= "${" expr "}"
 Newlines are not permitted inside `${…}`. Triple-quoted templates are
 dedented as described in [Lexical structure](lexical-structure.md).
 
-## Config pragmas
+## Config declarations
 
 ```ebnf
-config_pragma ::= "config" NAME "=" config_value
-config_value  ::= "true" | "false" | INT | DECIMAL | STRING
+config_decl ::= "config" NAME ("=" expr)?
 ```
+
+The value expression is optional (a bare `config NAME` resolves from the host
+default) and must have the engine-key's declared type; see
+[Program structure](program-structure.md).
 
 ## Deterministic-parse notes
 

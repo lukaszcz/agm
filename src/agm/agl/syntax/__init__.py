@@ -61,7 +61,6 @@ from agm.agl.syntax.nodes import (
     ParamDecl,
     Pattern,
     PatternField,
-    PragmaValue,
     Program,
     ProgramDecl,
     Raise,
@@ -139,7 +138,6 @@ __all__ = [
     "FieldDef",
     "VariantDef",
     "ConfigDecl",
-    "PragmaValue",
     # binders
     "LetDecl",
     "VarDecl",

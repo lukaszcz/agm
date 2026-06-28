@@ -1130,14 +1130,19 @@ class TestTryScoping:
 # ---------------------------------------------------------------------------
 
 
-class TestConfigPragma:
+def _is_config_binding(r: ResolvedProgram, name: str) -> bool:
+    ref = r.root_scope.bindings.get(name)
+    return ref is not None and ref.kind is BinderKind.config_binding
+
+
+class TestConfigDecl:
     def test_config_at_header_accepted(self) -> None:
         r = parse_and_resolve("config log = true\n()")
-        assert r.config_pragmas == {"log": True}
+        assert _is_config_binding(r, "log")
 
     def test_config_after_statement_accepted(self) -> None:
         r = parse_and_resolve("let x = 1\nconfig log = true\nx")
-        assert r.config_pragmas == {"log": True}
+        assert _is_config_binding(r, "log")
 
     def test_config_nested_rejected(self) -> None:
         err = reject_scope("if true =>\n  config log = true\n| else =>\n  ()\n")
@@ -1154,18 +1159,13 @@ class TestConfigPragma:
         _, msg = diag(err)
         assert "duplicate" in msg.lower()
 
-    def test_config_wrong_value_type_rejected(self) -> None:
-        err = reject_scope('config log = "yes"\n()')
-        _, msg = diag(err)
-        assert "bool" in msg.lower()
-
     def test_config_max_iters_accepted(self) -> None:
         r = parse_and_resolve("config max-iters = 10\n()")
-        assert r.config_pragmas == {"max-iters": 10}
+        assert _is_config_binding(r, "max-iters")
 
     def test_config_creates_readable_binding(self) -> None:
         r = parse_and_resolve("config log = true\nlog")
-        assert r.config_pragmas == {"log": True}
+        assert _is_config_binding(r, "log")
 
     def test_config_binding_assign_rejected(self) -> None:
         err = reject_scope("config log = true\nlog := false")
@@ -1831,80 +1831,6 @@ class TestDeclaredFunctions:
         _, msg = diag(err)
         assert "foo" in msg
 
-
-# ---------------------------------------------------------------------------
-# Config pragma edge cases (coverage for pragma value validation)
-# ---------------------------------------------------------------------------
-
-
-class TestConfigPragmaValueValidation:
-    def test_int_pos_zero_rejected(self) -> None:
-        """config max-iters = 0 is rejected (must be > 0)."""
-        err = reject_scope("config max-iters = 0\n()")
-        _, msg = diag(err)
-        assert "positive" in msg.lower() or "greater" in msg.lower() or "> 0" in msg
-
-    def test_str_nonempty_non_string_rejected(self) -> None:
-        """config runner with an int value is rejected."""
-        err = reject_scope("config runner = 1\n()")
-        _, msg = diag(err)
-        assert "non-empty string" in msg or "string" in msg.lower()
-
-    def test_timeout_with_valid_int(self) -> None:
-        r = parse_and_resolve("config timeout = 30\n()")
-        assert r.config_pragmas.get("timeout") == 30
-
-    def test_timeout_zero_rejected(self) -> None:
-        err = reject_scope("config timeout = 0\n()")
-        _, msg = diag(err)
-        assert "positive" in msg.lower() or "> 0" in msg
-
-    def test_timeout_bool_rejected(self) -> None:
-        err = reject_scope("config timeout = true\n()")
-        _, msg = diag(err)
-        assert "timeout" in msg
-
-    def test_timeout_empty_string_rejected(self) -> None:
-        """An empty string for timeout is rejected."""
-        # We need to test via AST since the parser may not emit an empty string
-        # in a config declaration; use direct AST construction.
-        from agm.agl.syntax.nodes import ConfigDecl
-
-        decl = ConfigDecl(
-            name="timeout",
-            value=StringLit(value="", span=_sp(), node_id=_nid()),
-            span=_sp(),
-            node_id=_nid(),
-        )
-        err = reject_program(decl)
-        _, msg = diag(err)
-        assert "non-empty" in msg.lower() or "timeout" in msg.lower()
-
-    def test_runner_valid_string_accepted(self) -> None:
-        """config runner = 'claude' is accepted (covers str_nonempty valid branch)."""
-        from agm.agl.syntax.nodes import ConfigDecl
-
-        decl = ConfigDecl(
-            name="runner",
-            value=StringLit(value="claude", span=_sp(), node_id=_nid()),
-            span=_sp(),
-            node_id=_nid(),
-        )
-        r = resolve_program(decl)
-        assert r.config_pragmas.get("runner") == "claude"
-
-    def test_timeout_valid_string_accepted(self) -> None:
-        """config timeout = '30s' is accepted (covers str_or_int valid string branch)."""
-        from agm.agl.syntax.nodes import ConfigDecl
-
-        decl = ConfigDecl(
-            name="timeout",
-            value=StringLit(value="30s", span=_sp(), node_id=_nid()),
-            span=_sp(),
-            node_id=_nid(),
-        )
-        r = resolve_program(decl)
-        assert r.config_pragmas.get("timeout") == "30s"
 
 
 # ---------------------------------------------------------------------------

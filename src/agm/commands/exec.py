@@ -47,9 +47,13 @@ from agm.agent.config import default_agent_runner
 from agm.agent.runner import split_command
 from agm.agl import PipelineDriver
 from agm.agl.diagnostics import format_diagnostic
+from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.modules.roots import assemble_roots
+from agm.agl.pipeline import static_config_values
 from agm.agl.runtime.agents import runner_backed_agent_factory
-from agm.agl.syntax.nodes import PragmaValue
+from agm.agl.runtime.params import convert_config_value
+from agm.agl.semantics.engine_keys import get_engine_key_type
+from agm.agl.semantics.values import BoolValue, IntValue, TextValue, Value
 from agm.cli_support.args import ExecArgs
 from agm.cli_support.exec_params import (
     check_param_collisions,
@@ -77,10 +81,11 @@ def _first(*values: _T | None) -> _T | None:
     return next((v for v in values if v is not None), None)
 
 
-def _typed_pragma(pragmas: dict[str, PragmaValue], key: str, typ: type[_T]) -> _T | None:
-    """Return the pragma value for *key* if present and of type *typ*, else None."""
-    value = pragmas.get(key)
+def _typed_const(consts: dict[str, bool | int | str], key: str, typ: type[_T]) -> _T | None:
+    """Return the static config constant for *key* if present and of type *typ*."""
+    value = consts.get(key)
     return value if isinstance(value, typ) else None
+
 
 
 def run(args: ExecArgs) -> None:
@@ -145,41 +150,51 @@ def run(args: ExecArgs) -> None:
     prepared = PipelineDriver.prepare_program(
         source, entry_path=entry_path, roots=roots, default_stdlib=not args.no_stdlib
     )
-    pragmas = prepared.config_pragmas
 
-    # Resolve strict_json: CLI > pragma > config.
+    # Source ``config KEY = LITERAL`` declarations contribute compile-time
+    # constants that fold into engine-setting resolution
+    # (CLI > source constant > config-file > default).  Bare/non-literal config
+    # declarations contribute no static constant here; they resolve at runtime.
+    if prepared.resolved_graph is not None and (
+        (entry_mod := prepared.resolved_graph.modules.get(ENTRY_ID)) is not None
+    ):
+        static_consts = static_config_values(entry_mod.resolved.program)
+    else:
+        static_consts = {}
+
+    # Resolve strict_json: CLI > source constant > config.
     strict_json = _first(
         args.strict_json,
-        _typed_pragma(pragmas, "strict-json", bool),
+        _typed_const(static_consts, "strict-json", bool),
         config.strict_json,
     )
     # config.strict_json is always a bool, so _first always returns a bool here.
     assert strict_json is not None
     resolved_strict_json: bool = strict_json
 
-    # Resolve loop limit: CLI > pragma > config.
+    # Resolve loop limit: CLI > source constant > config.
     loop_limit = _first(
         args.max_iters,
-        _typed_pragma(pragmas, "max-iters", int),
+        _typed_const(static_consts, "max-iters", int),
         config.default_loop_limit,
     )
     assert loop_limit is not None
     resolved_loop_limit: int = loop_limit
 
-    # Resolve timeout: pragma > config (no CLI flag for timeout).
-    pragma_timeout_raw = pragmas.get("timeout")
-    if pragma_timeout_raw is not None:
+    # Resolve timeout: source constant > config (no CLI flag for timeout).
+    const_timeout_raw = static_consts.get("timeout")
+    if const_timeout_raw is not None:
         try:
-            resolved_timeout: float | None = parse_timeout(str(pragma_timeout_raw))
+            resolved_timeout: float | None = parse_timeout(str(const_timeout_raw))
         except ValueError as exc:
-            print(f"Error: invalid pragma timeout: {exc}", file=sys.stderr)
+            print(f"Error: invalid config timeout: {exc}", file=sys.stderr)
             raise SystemExit(1) from exc
     else:
         resolved_timeout = config.timeout
 
     # Resolve + validate the trace log file up front (F2a/F6).  --dry-run is
     # side-effect-free: no trace is written regardless of --log-file (plan §10.1).
-    # Pragma log/log_file values are wired here (Milestone 3).
+    # Source config log/log-file values are wired here.
     if dry_run.enabled():
         log_file = None
     else:
@@ -188,19 +203,19 @@ def run(args: ExecArgs) -> None:
             cli_no_log=args.no_log,
             cli_log=args.log,
             cli_log_file=args.log_file,
-            pragma_log=_typed_pragma(pragmas, "log", bool),
-            pragma_log_file=_typed_pragma(pragmas, "log-file", str),
+            pragma_log=_typed_const(static_consts, "log", bool),
+            pragma_log_file=_typed_const(static_consts, "log-file", str),
             config_log=config.log,
             config_log_file=config.log_file,
         )
 
     # ----------------------------------------------------------------
-    # Resolve the runner command: CLI flag > pragma > [exec] config > shared
-    # loop default (the same default used by agm loop/review, per plan §9.5).
+    # Resolve the runner command: CLI flag > source constant > [exec] config >
+    # shared loop default (the same default used by agm loop/review, per §9.5).
     # ----------------------------------------------------------------
     runner_cmd = (
         args.runner
-        or _typed_pragma(pragmas, "runner", str)
+        or _typed_const(static_consts, "runner", str)
         or config.runner
         or default_agent_runner(merged=merged_config)
     )
@@ -312,6 +327,49 @@ def run(args: ExecArgs) -> None:
         for msg in config_warnings:
             print(msg, file=sys.stderr)
 
+    # Build the config-binding resolution maps consumed by ``IrConfigBind``:
+    # ``config_cli`` carries explicitly-set CLI overrides (highest precedence),
+    # ``config_base`` carries the host's configured defaults (the fallback for a
+    # bare ``config KEY`` with no source value).  Option-typed keys
+    # (``timeout``/``log-file``) bind ``some(value)`` when the [exec] config
+    # supplies a value, else ``none`` (the engine default).
+    #
+    # ``log``/``log-file`` CLI→binding (and the tri-state ``--no-X`` → none
+    # projection) are intentionally deferred to Task 4, which owns the
+    # always-on flag projection.  Their binding falls to the config_base floor.
+    # ``timeout`` has no exec CLI flag; its absence from config_cli is correct.
+    config_cli: dict[str, Value] = {}
+    if args.strict_json is not None:
+        config_cli["strict-json"] = BoolValue(args.strict_json)
+    if args.max_iters is not None:
+        config_cli["max-iters"] = IntValue(args.max_iters)
+    if args.runner is not None:
+        config_cli["runner"] = TextValue(args.runner)
+
+    # For ``timeout``: config.timeout is pre-parsed to float seconds; the exact
+    # original raw string (e.g. "30s") is lost.  str(float) is used here as an
+    # acceptable approximation — round-trip fidelity is a Task 5 concern.
+    _timeout_type = get_engine_key_type("timeout")
+    assert _timeout_type is not None  # always a valid engine key
+    _log_file_type = get_engine_key_type("log-file")
+    assert _log_file_type is not None  # always a valid engine key
+    config_base: dict[str, Value] = {
+        "strict-json": BoolValue(config.strict_json),
+        "max-iters": IntValue(config.default_loop_limit),
+        "runner": TextValue(runner_cmd),
+        "log": BoolValue(config.log),
+        "timeout": convert_config_value(
+            "timeout",
+            None if config.timeout is None else str(config.timeout),
+            _timeout_type,
+        ),
+        "log-file": convert_config_value(
+            "log-file",
+            config.log_file,
+            _log_file_type,
+        ),
+    }
+
     # Reuse the ``PreparedGraph`` from above — no second parse/scope of the source.
     # Pass the already-computed checked_graph from discovery so the graph is
     # type-checked exactly once (mirroring the single-file run_prepared path).
@@ -321,6 +379,8 @@ def run(args: ExecArgs) -> None:
         check_only=dry_run.enabled(),
         log_file=log_file,
         checked_graph=discovery.checked_graph,
+        config_cli=config_cli,
+        config_base=config_base,
     )
 
     # Warnings live on their own channel and never affect the exit code;

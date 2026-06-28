@@ -65,7 +65,7 @@ variable, agent, or function names:
 ```text
 record enum type param program agent config def fn let var for while do until done
 if else case of try catch raise break continue exception extends builtin as as?
-and or not is in true false null
+and or not is in to downto by true false null
 ```
 
 **`as?`** is a single reserved keyword/token — the `?` is part of the
@@ -80,8 +80,14 @@ a reserved word.
 
 `agent` is reserved (it leads an `agent` declaration) but is still accepted
 as a **field name** (record/enum field definitions, named constructor
-arguments, dict shorthand keys, and postfix field access). It cannot be used
-as a variable binder, pattern binder, or catch binder.
+arguments, dict shorthand keys, postfix field access, and pattern field keys).
+It cannot be used as a variable binder, pattern binder, or catch binder.
+
+`to`, `downto`, and `by` are reserved (they introduce the range tail of a
+`for` clause) but are still accepted as **field names** (record/enum field
+definitions, named constructor arguments, dict shorthand keys, postfix field
+access, and pattern field keys). They cannot be used as variable, pattern, or
+catch binders. This preserves existing uses such as `tagged(by: value)`.
 
 **Contextual keywords** — `ask` and `exec` are NOT reserved; they lex as
 plain `NAME` tokens and are given their built-in meaning during scope

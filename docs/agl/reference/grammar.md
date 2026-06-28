@@ -171,7 +171,9 @@ while `xs [0]` is not.
 loop_expr    ::= for_clause? while_clause? "do" loop_bound? suite loop_end
                | for_clause? while_clause? "do" loop_bound? inline_body "until" or_expr
 
-for_clause   ::= "for" NAME "in" or_expr NEWLINE?
+for_clause   ::= "for" NAME "in" or_expr range_tail? NEWLINE?
+range_tail   ::= ("to" | "downto") or_expr ("by" or_expr)?
+
 while_clause ::= "while" or_expr NEWLINE?
 
 loop_end     ::= "until" or_expr        (* exit when condition is true *)
@@ -384,3 +386,8 @@ config_value  ::= "true" | "false" | INT | DECIMAL | STRING
   the `while_clause` in the header; `while before for` and duplicate clauses
   are parse errors. A `for` collection expression is parsed at `or_expr`
   level so that `for x in f(items) while cond do` parses correctly.
+- `to`, `downto`, and `by` are reserved keywords that appear in the optional
+  `range_tail` of a `for` clause. They are also admitted as field names
+  (record/enum field definitions, named constructor arguments, dict shorthand
+  keys, postfix field access, and pattern field keys), so existing uses such
+  as `tagged(by: value)` remain valid.

@@ -109,7 +109,9 @@ let next_prompt: text = case action of
 loop_expr    ::= for_clause? while_clause? "do" ("[" expr "]")? block loop_end
                | for_clause? while_clause? "do" ("[" expr "]")? inline_body "until" or_expr
 
-for_clause   ::= "for" NAME "in" or_expr NEWLINE?
+for_clause   ::= "for" NAME "in" or_expr range_tail? NEWLINE?
+range_tail   ::= ("to" | "downto") or_expr ("by" or_expr)?
+
 while_clause ::= "while" or_expr NEWLINE?
 
 loop_end     ::= "until" or_expr
@@ -146,6 +148,55 @@ done
 for key in settings do
   print "Key: ${key} = ${settings[key]}"
 done
+```
+
+### Range `for`
+
+When a `range_tail` follows the start expression, the `for` clause iterates an
+`int` counter instead of a collection. There are four forms:
+
+```agl
+for i in a to b do … done           # i = a, a+1, …, b        (inclusive)
+for i in a to b by k do … done      # i = a, a+k, …  (≤ b)
+for i in a downto b do … done       # i = a, a-1, …, b        (inclusive)
+for i in a downto b by k do … done  # i = a, a-k, …  (≥ b)
+```
+
+Semantics:
+
+- **Direction** comes from the keyword: `to` iterates upward; `downto` iterates
+  downward.
+- **Step** (`by k`) must be a **positive** `int` (default `1`). A non-positive
+  step raises [`RangeError`](exceptions.md#rangeerror) once at loop entry,
+  before the body runs. A literal non-positive step is also a static error.
+- **Bounds are inclusive**: `1 to 3` yields `1, 2, 3`; `3 downto 1` yields
+  `3, 2, 1`. With a step, the last value is the furthest one not past `b`:
+  `1 to 6 by 2` yields `1, 3, 5`.
+- **Degenerate range**: if `a > b` for `to`, or `a < b` for `downto`, the
+  body runs zero times and the loop completes normally.
+- **Bounds and step are evaluated once at loop entry**, in the enclosing scope
+  and in source order (`a`, then `b`, then `k`). They cannot reference the
+  loop variable.
+- The loop variable has type **`int`**, is **immutable** (`:=` to it is a
+  static error), and is visible in the `while` guard, the body, and the `until`
+  condition — identical rules to the collection `for`.
+
+The range `for` composes with `while`, `[n]`, `until`/`done`, `break`/
+`continue`, and nesting exactly like the collection `for`. The loop variable
+is not visible outside the loop.
+
+```agl
+# Sum 1 to n
+var total: int = 0
+for i in 1 to n do
+  total := total + i
+done
+
+# Countdown by threes
+for i in 9 downto 1 by 3 do
+  print "${i}"
+done
+# prints: 9, 6, 3
 ```
 
 ### `while` clause

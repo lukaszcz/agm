@@ -272,6 +272,15 @@ document ([Expressions](expressions.md#parse_json)).
 raw: text   # the input text that failed to parse
 ```
 
+### `RangeError`
+
+Raised when a range `for` step (`by k`) evaluates to a non-positive `int`
+(`k ≤ 0`) at loop entry. Carries only the base fields. It is catchable.
+
+```text
+(base fields only)
+```
+
 ### `Abort`
 
 The general-purpose user abort; carries only the base fields.
@@ -291,6 +300,7 @@ The general-purpose user abort; carries only the base fields.
 | Failing/timed-out shell command (parsed form) | `ExecError` |
 | Spawn failure (either exec form) | `ExecError` |
 | Loop bound exhausted | `MaxIterationsExceeded` |
+| Non-positive range `for` step (`by k` with `k ≤ 0`) | `RangeError` |
 | Call-depth limit exceeded | `RecursionError` |
 | Non-exhaustive `case` at runtime | `MatchError` |
 | Division by zero | `ArithmeticError` |

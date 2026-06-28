@@ -1114,7 +1114,7 @@ class _Checker:
         self._check_expr(node.body, expected=None)
         if node.until_cond is not None:
             cond_type = self._check_expr(node.until_cond, expected=None)
-            self._require_bool_condition(cond_type, node.until_cond.span, "do-until")
+            self._require_bool_condition(cond_type, node.until_cond.span, "until")
         return UnitType()
 
     # --- try ---

@@ -1169,7 +1169,7 @@ class _Lowerer:
 
         # Item 4: bound check — if __count >= __n => inner_if
         if n_sym is not None and count_sym is not None:
-            condition_source = (
+            until_source = (
                 self._source_slice(until_cond_expr.span)
                 if until_cond_expr is not None
                 else "false"
@@ -1214,7 +1214,7 @@ class _Lowerer:
                                     ("limit", IrLoad(location=loc, symbol=n_sym)),
                                     (
                                         "condition",
-                                        IrConstText(location=loc, value=condition_source),
+                                        IrConstText(location=loc, value=until_source),
                                     ),
                                     (
                                         "last_condition_value",

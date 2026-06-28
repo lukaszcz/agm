@@ -1,0 +1,31 @@
+{
+  "scenarios": [
+    {
+      "name": "break_via_case_arm",
+      "params": {"rounds": 10},
+      "agents": {"src": ["{\"$case\": \"Count\"}", "{\"$case\": \"Count\"}", "{\"$case\": \"Stop\"}"]},
+      "expect": {
+        "stdout": "3\n2\n",
+        "calls": {"src": 3}
+      }
+    },
+    {
+      "name": "continue_skips_until_in_case_arm",
+      "params": {"rounds": 1},
+      "agents": {"src": ["{\"$case\": \"Skip\"}", "{\"$case\": \"Count\"}"]},
+      "expect": {
+        "stdout": "2\n1\n",
+        "calls": {"src": 2}
+      }
+    },
+    {
+      "name": "count_only_exits_via_until",
+      "params": {"rounds": 3},
+      "agents": {"src": ["{\"$case\": \"Count\"}", "{\"$case\": \"Count\"}", "{\"$case\": \"Count\"}"]},
+      "expect": {
+        "stdout": "3\n3\n",
+        "calls": {"src": 3}
+      }
+    }
+  ]
+}

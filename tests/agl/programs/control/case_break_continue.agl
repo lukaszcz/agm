@@ -1,0 +1,27 @@
+# Loop body contains a case expression with break in one arm and continue in
+# another. Verifies that break exits the loop and continue skips the remaining
+# body (including the until condition).
+enum Cmd
+  | Stop
+  | Skip
+  | Count
+
+agent src
+
+param rounds: int
+var n: int = 0
+var total: int = 0
+
+do[rounds + 5]
+  let cmd: Cmd = ask("next", agent: src)
+  n := n + 1
+  case cmd of
+    | Stop =>
+        break
+    | Skip =>
+        continue
+    | Count =>
+        total := total + 1
+until n >= rounds
+print n
+print total

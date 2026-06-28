@@ -1240,7 +1240,7 @@ class AstBuilder(Transformer):
         )
 
     # ------------------------------------------------------------------
-    # Control flow: do_expr
+    # Control flow: loop_expr
     # ------------------------------------------------------------------
 
     def break_expr(self, meta: Meta, args: _Args) -> syntax.Break:

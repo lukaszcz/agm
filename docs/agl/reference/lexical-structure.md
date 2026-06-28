@@ -36,11 +36,12 @@ The layout rules:
    literals, constructor argument lists, and function call argument lists may
    therefore span multiple lines.
 4. **Branch-marker continuation.** When the first token of a line is `|`,
-   `else`, `catch`, or `until`, the line continues the enclosing construct
-   instead of starting a new item, and may align with the enclosing keyword
-   without opening a new block. This is what lets `if`/`case` branches, `else`
-   branches, `catch` clauses, enum variants, and the `until` clause of a loop
-   sit at the same indentation as the construct that owns them:
+   `else`, `catch`, `until`, or `done`, the line continues the enclosing
+   construct instead of starting a new item, and may align with the enclosing
+   keyword without opening a new block. This is what lets `if`/`case` branches,
+   `else` branches, `catch` clauses, enum variants, and the `until`/`done`
+   terminator of a loop sit at the same indentation as the construct that owns
+   them:
 
    ```agl
    if
@@ -62,9 +63,9 @@ The following words are **always reserved** and can never be used as
 variable, agent, or function names:
 
 ```text
-record enum type param program agent config def fn let var do until done if else
-case of try catch raise exception extends builtin as as? and or not is in
-true false null
+record enum type param program agent config def fn let var for while do until done
+if else case of try catch raise break continue exception extends builtin as as?
+and or not is in true false null
 ```
 
 **`as?`** is a single reserved keyword/token — the `?` is part of the

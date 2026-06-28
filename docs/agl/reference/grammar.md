@@ -287,7 +287,9 @@ atom           ::= INT | DECIMAL | "true" | "false" | "null"
                | "(" expr ")"                      (* parenthesized expr *)
                | lambda_expr
                | assign_expr
-               | do_loop
+               | loop_expr
+               | break_expr
+               | continue_expr
                | raise_expr
 
 atom_no_call   ::= (* same as atom but excludes "(" — prevents sugar conflict *)
@@ -297,7 +299,9 @@ atom_no_call   ::= (* same as atom but excludes "(" — prevents sugar conflict 
 
 qualified_constructor ::= NAME ("." NAME)?
 
-raise_expr ::= "raise" expr
+break_expr    ::= "break"
+continue_expr ::= "continue"
+raise_expr    ::= "raise" expr
 ```
 
 A bare `NAME` atom is resolved by scope and position: it may name a variable,

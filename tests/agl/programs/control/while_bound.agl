@@ -1,0 +1,11 @@
+# while-only loop with a bound:
+# – guard turns false before bound → normal completion
+# – bound exhausted before guard turns false → MaxIterationsExceeded
+# – zero bound → zero iterations / normal completion
+param limit: int
+param k: int
+var n: int = 0
+while n < limit do[k]
+  n := n + 1
+done
+print n

@@ -504,7 +504,7 @@ effect, not their value:
 | `print(e)` | `unit` | writes to stdout |
 | `x := e` | `unit` | mutates `x` |
 | `if c => body` (no `else`) | `unit` | branch body must be `unit` |
-| `do … until c` | `unit` | loops run for effect |
+| loop expressions | `unit` | loops run for effect |
 | `()` | `unit` | the unit literal itself |
 
 An `if` without `else` always has type `unit`, and each branch body must also

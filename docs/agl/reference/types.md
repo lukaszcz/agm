@@ -57,7 +57,7 @@ aliases, and `def` functions can declare type parameters. See
 `unit` is the type of expressions that exist only for their side effect and
 produce no meaningful value. Its single value is written `()` — the empty
 argument list. Side-effecting expressions such as `print(…)`, `:=`, an
-`if` without an `else` branch, and `do … until` loops all have type `unit`.
+`if` without an `else` branch, and loops all have type `unit`.
 
 ```agl
 let _: unit = print "hello"

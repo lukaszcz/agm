@@ -164,9 +164,9 @@ timed_out: bool
 
 ### `MaxIterationsExceeded`
 
-A **bounded** `do[n] … until` loop (with `n ≥ 1`) exhausted its bound without
-the condition becoming true ([Control flow](control-flow.md)). An unbounded
-`do … until` loop (no `[…]`) never raises this exception.
+A **bounded** loop (`[n]`, with `n ≥ 1`) exhausted its bound before an exit
+condition triggered ([Control flow](control-flow.md)). An unbounded loop (no
+`[n]`) never raises this exception.
 
 ```text
 limit: int                  # the bound in effect

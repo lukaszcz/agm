@@ -1,0 +1,22 @@
+{
+  "scenarios": [
+    {
+      "name": "guard_false_before_bound",
+      "params": {"limit": 3, "k": 10},
+      "expect": {"stdout": "3\n"}
+    },
+    {
+      "name": "bound_exhausted_before_guard_false",
+      "params": {"limit": 100, "k": 3},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "MaxIterationsExceeded", "fields": {"limit": 3}}
+      }
+    },
+    {
+      "name": "zero_bound_zero_iterations",
+      "params": {"limit": 5, "k": 0},
+      "expect": {"stdout": "0\n"}
+    }
+  ]
+}

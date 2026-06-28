@@ -3,8 +3,8 @@
 [← Index](index.md)
 
 Control flow in AgL is expression-oriented: every construct produces a
-value. `if` and `case` with branches unify to a common type; `do … until`
-and else-less `if` produce `unit`. Exception control flow — `try`, `catch`,
+value. `if` and `case` with branches unify to a common type; loops and
+else-less `if` produce `unit`. Exception control flow — `try`, `catch`,
 `raise` — is covered in [Exceptions](exceptions.md).
 
 ## `if`
@@ -143,8 +143,8 @@ for item in items do
   total := total + item
 done
 
-for key in config do
-  print "Key: ${key} = ${config[key]}"
+for key in settings do
+  print "Key: ${key} = ${settings[key]}"
 done
 ```
 

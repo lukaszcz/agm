@@ -336,6 +336,17 @@ class ConstructorChecker:
             )
         return owner
 
+    def _resolve_constructor_owner_module_id(self, ref: ConstructorRef) -> ModuleId | None:
+        """Return the defining module for an open-imported concrete constructor."""
+        if self._ctx._env.get_type(ref.owner_name) is not None:
+            return None
+        imported = self._ctx._env.get_open_imported_type(ref.owner_name)
+        assert imported is not None, (
+            f"constructor '{ref.owner_name}' resolved without a local or imported owner type"
+        )
+        module_id, _source_name, _typ = imported
+        return module_id
+
     # --- Qualified constructor as value (public entry point) ---
 
     def check_qualified_constructor_as_value(
@@ -558,7 +569,7 @@ class ConstructorChecker:
         )
         return self._check_constructor_call(
             owner=owner_type, variant=None, positional=node.args, named=node.named_args,
-            span=node.span, node_id=node.node_id,
+            span=node.span, node_id=node.node_id, owner_module_id=callee_ref.module_id,
         )
 
     # --- Unqualified constructor callee call (public entry point) ---
@@ -599,6 +610,7 @@ class ConstructorChecker:
                 span=node.span,
             )
         owner = self.resolve_constructor_owner(ctor_ref, node.span)
+        owner_module_id = self._resolve_constructor_owner_module_id(ctor_ref)
         if isinstance(owner, ExceptionType) and owner.abstract:
             raise AglTypeError(
                 "The abstract 'Exception' base type is not constructible. "
@@ -607,7 +619,7 @@ class ConstructorChecker:
             )
         return self._check_constructor_call(
             owner=owner, variant=ctor_ref.variant, positional=node.args, named=node.named_args,
-            span=node.span, node_id=node.node_id,
+            span=node.span, node_id=node.node_id, owner_module_id=owner_module_id,
         )
 
     # --- Qualified constructor callee call (public entry point) ---
@@ -637,6 +649,7 @@ class ConstructorChecker:
         named: tuple[NamedArg, ...],
         span: SourceSpan,
         node_id: int | None = None,
+        owner_module_id: ModuleId | None = None,
     ) -> RecordType | EnumType | ExceptionType:
         if isinstance(owner, EnumType):
             assert variant is not None, "variant is required for EnumType"
@@ -652,7 +665,7 @@ class ConstructorChecker:
         # Get field kinds from the registry (excludes trace_id for exceptions).
         # The env helper owns the registry-key convention (module_id / variant).
         field_kinds = self._ctx._env.get_constructor_field_kinds_for_type(
-            owner, owner.name, variant
+            owner, owner.name, variant, module_id=owner_module_id
         )
         assert field_kinds is not None, (
             f"compiler bug: no field-kinds registered for {context_desc}"

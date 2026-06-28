@@ -2440,6 +2440,16 @@ def test_cross_module_non_generic_constructor_type_args_rejected(tmp_path: Path)
         _check_graph(tmp_path, modules)
 
 
+def test_qualified_same_named_exceptions_keep_module_field_kinds(tmp_path: Path) -> None:
+    """Qualified exception construction uses the defining module's field kinds."""
+    modules = {
+        "a": "exception Boom extends Exception\n  a: int",
+        "b": "exception Boom extends Exception\n  b: text",
+        "entry": "import a qualified\nimport b qualified\na::Boom(message = \"x\", a = 1)",
+    }
+    _check_graph(tmp_path, modules)
+
+
 
 
 def test_cross_module_generic_enum_body_resolved(tmp_path: Path) -> None:

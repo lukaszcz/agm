@@ -60,13 +60,12 @@ from typing import Mapping
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
-from agm.agl.modules.ids import PRELUDE_ID, ModuleId
+from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.graph import ResolvedModuleGraph
 from agm.agl.scope.imports import ImportEnv
 from agm.agl.scope.symbols import ResolvedProgram
 from agm.agl.semantics.types import (
     CastSpec,
-    ExceptionType,
     FunctionType,
     Type,
 )
@@ -604,16 +603,6 @@ def _build_graph_type_table(
             graph_ctor_sig_table[(mid, owner_name, variant)] = sig
         for (owner_name, variant), kinds in cross_env.all_constructor_field_kinds():
             graph_ctor_field_kinds_table[(mid, owner_name, variant)] = kinds
-            # Exception types carry no module_id (ExceptionType has no such field)
-            # and are globally unique by name.  Also register their field-kinds under
-            # PRELUDE_ID so a consuming module can find them with module_id=PRELUDE_ID
-            # when the owner is an ExceptionType — regardless of which module defined
-            # the exception.  This is the cross-module counterpart of the local-registry
-            # entry built by _TypeBuilder._build_exception (which is always found first
-            # for same-module and built-in exceptions via _constructor_field_kinds).
-            typ = cross_env.get_type(owner_name)
-            if isinstance(typ, ExceptionType) and not typ.abstract:
-                graph_ctor_field_kinds_table[(PRELUDE_ID, owner_name, variant)] = kinds
 
     return graph_type_table, graph_generic_table, graph_ctor_sig_table, graph_ctor_field_kinds_table
 

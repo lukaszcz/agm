@@ -610,6 +610,39 @@ class TestTypeEnvironment:
         result = env.get_generic_type_from_module(ModuleId.from_dotted("lib"), "Box")
         assert result is None
 
+    def test_get_open_imported_type_no_graph_context(self) -> None:
+        env = TypeEnvironment()
+        assert env.get_open_imported_type("Point") is None
+
+    def test_get_open_imported_type_ignores_missing_graph_entries(self) -> None:
+        from agm.agl.modules.ids import ModuleId
+        from agm.agl.scope.imports import ImportEnv
+
+        mod = ModuleId.from_dotted("lib")
+        import_env = ImportEnv(
+            unqualified={"Point": frozenset({(mod, "Point")})},
+            qualified={},
+        )
+        env = TypeEnvironment(graph_type_table={}, import_env=import_env)
+        assert env.get_open_imported_type("Point") is None
+
+    def test_get_open_imported_type_ambiguous_returns_none(self) -> None:
+        from agm.agl.modules.ids import ModuleId
+        from agm.agl.scope.imports import ImportEnv
+
+        mod_a = ModuleId.from_dotted("a")
+        mod_b = ModuleId.from_dotted("b")
+        graph_table = {
+            (mod_a, "Point"): RecordType(name="Point", fields={}),
+            (mod_b, "Point"): RecordType(name="Point", fields={}),
+        }
+        import_env = ImportEnv(
+            unqualified={"Point": frozenset({(mod_a, "Point"), (mod_b, "Point")})},
+            qualified={},
+        )
+        env = TypeEnvironment(graph_type_table=graph_table, import_env=import_env)
+        assert env.get_open_imported_type("Point") is None
+
     def test_get_ctor_sig_from_module_no_graph_table(self) -> None:
         # Coverage: env.py get_ctor_sig_from_module — single-program mode returns None.
         from agm.agl.modules.ids import ModuleId

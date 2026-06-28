@@ -29,6 +29,7 @@ from agm.agl.semantics.types import (
     DecimalType,
     DictType,
     EnumType,
+    ExceptionType,
     FunctionType,
     IntType,
     JsonType,
@@ -1038,6 +1039,21 @@ class TypeEnvironment:
             return matches[0]
         return None
 
+    def get_open_imported_type(self, exposed_name: str) -> tuple[ModuleId, str, Type] | None:
+        """Return the unique concrete type exposed by an open-imported name."""
+        if self._import_env is None or self._graph_type_table is None:
+            return None
+        matches = []
+        for module_id, source_name in self._import_env.unqualified.get(
+            exposed_name, frozenset()
+        ):
+            typ = self._graph_type_table.get((module_id, source_name))
+            if typ is not None:
+                matches.append((module_id, source_name, typ))
+        if len(matches) == 1:
+            return matches[0]
+        return None
+
     def get_ctor_sig_from_module(
         self, module_id: ModuleId, owner_name: str, variant: str | None
     ) -> ConstructorSignature | None:
@@ -1085,25 +1101,33 @@ class TypeEnvironment:
         typ: Type | None,
         owner_name: str,
         variant: str | None,
+        *,
+        module_id: ModuleId | None = None,
     ) -> tuple[tuple[str, ParamKind], ...] | None:
         """Return field-kinds for a constructor identified by its resolved owner *typ*.
 
-        Encapsulates the registry-key convention in one place: ``RecordType`` and
-        ``EnumType`` carry their own ``module_id``; an ``ExceptionType`` (and any
-        unexpected/``None`` type) is globally unique and indexed under
-        ``PRELUDE_ID``.  Enum variants are keyed by *variant*; records and
-        exceptions are keyed under ``variant=None``.
+        Encapsulates the registry-key convention in one place. ``RecordType`` and
+        ``EnumType`` carry their own ``module_id``. ``ExceptionType`` does not, so
+        callers that resolved a cross-module exception must provide its defining
+        ``module_id``; built-in and same-module exceptions still resolve through
+        the local registry before any graph lookup. Enum variants are keyed by
+        *variant*; records and exceptions are keyed under ``variant=None``.
         """
         if isinstance(typ, EnumType):
-            module_id: ModuleId = typ.module_id
+            lookup_module_id: ModuleId = typ.module_id
             lookup_variant = variant
         elif isinstance(typ, RecordType):
-            module_id = typ.module_id
+            lookup_module_id = typ.module_id
+            lookup_variant = None
+        elif isinstance(typ, ExceptionType) and module_id is not None:
+            lookup_module_id = module_id
             lookup_variant = None
         else:
-            module_id = PRELUDE_ID
+            lookup_module_id = PRELUDE_ID
             lookup_variant = None
-        return self.get_constructor_field_kinds(owner_name, lookup_variant, module_id=module_id)
+        return self.get_constructor_field_kinds(
+            owner_name, lookup_variant, module_id=lookup_module_id
+        )
 
     def all_constructor_field_kinds(
         self,

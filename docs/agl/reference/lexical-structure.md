@@ -72,18 +72,13 @@ lexeme. There is no whitespace permitted between `as` and `?`; with
 whitespace, `as` is the cast keyword and `?` would start a separate (invalid)
 token. `as?` is always reserved and cannot be used as an identifier.
 
-**Removed from v1:** `pass` and `print` are **no longer reserved** in v2.
-`pass`'s role is taken by the unit literal `()`. `print` is a built-in
-function name, looked up like any variable — it is a contextual keyword, not
-a reserved word.
-
-`agent` is reserved (it leads an `agent` declaration) but is still accepted
+`agent` is reserved (it leads an `agent` declaration) but is accepted
 as a **field name** (record/enum field definitions, named constructor
 arguments, dict shorthand keys, and postfix field access). It cannot be used
 as a variable binder, pattern binder, or catch binder.
 
-**Contextual keywords** — `ask` and `exec` are NOT reserved; they lex as
-plain `NAME` tokens and are given their built-in meaning during scope
+**Contextual keywords** — `print`, `ask`, and `exec` are NOT reserved; they
+lex as plain `NAME` tokens and are given their built-in meaning during scope
 resolution. They may not be declared with `let`, `var`, or `param`, may not be
 declared as agents or functions, and may not appear as pattern or catch
 binders — but they remain legal as field names.
@@ -299,8 +294,7 @@ postfix call can be the single sugar argument, so `f g(x)` parses as
 `f(g(x))`.
 
 **Calls with parentheses (level 10)** are left-associative postfix and
-support multiple arguments: `f(a, b)`, `f(a)(b)` (curried — not yet
-supported, but syntactically the grammar allows it for future use).
+support multiple arguments: `f(a, b)`.
 
 `case` and `if` expressions sit **below all of this**: they are the loosest
 expression forms. In positions where a following `|` would be ambiguous

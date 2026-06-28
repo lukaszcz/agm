@@ -5,9 +5,9 @@
 ## Programs
 
 An AgL program is a **block** — a sequence of items executed top to bottom.
-Items are separated by newlines or semicolons. In v2, the syntactic
-distinction between *statements* and *expressions* is removed: every former
-statement is an expression with a well-defined type, and the program is an
+Items are separated by newlines or semicolons. There is no syntactic
+distinction between *statements* and *expressions*: every item is an
+expression with a well-defined type, and the program is an
 expression-oriented sequence.
 
 ```ebnf
@@ -150,11 +150,9 @@ def broken() -> int =
 ## Inline forms
 
 AgL is designed so that small workflows fit on one line. Items are separated
-by `;` inline. In v2, the bar-safe stratification that previously governed
-statement bodies is replaced by a simpler model: branch bodies, `until`
-conditions, and the right-hand sides of binders are **`or_expr`** — the
-operator-chain level — and a `case` or `if` expression in those positions
-must be parenthesized:
+by `;` inline. Branch bodies, `until` conditions, and the right-hand sides of
+binders are **`or_expr`** — the operator-chain level — and a `case` or `if`
+expression in those positions must be parenthesized:
 
 ```agl
 # Inline block: items separated by ';'
@@ -187,11 +185,6 @@ expression at the `or_expr` level. A branch body that begins a new `if` or
 A `try`/`catch` inline holds a sequence of items up to the first `catch`
 keyword; the `catch` body is a single expression at `or_expr` level or a
 suite.
-
-### A note on `pass`
-
-`pass` is no longer a keyword in v2. Its role is taken by the unit literal
-`()`. Existing code using `pass` should replace it with `()`.
 
 ## Expression statements
 

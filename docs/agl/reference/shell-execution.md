@@ -88,8 +88,8 @@ let data: dict[text, int] = exec(           # JSON parsed; raises on nonzero
 )
 ```
 
-This is the same behavior as v1: a nonzero exit raises `ExecError`, and
-unparseable output raises `AgentParseError` (with agent name `"exec"`).
+A nonzero exit raises `ExecError`, and unparseable output raises
+`AgentParseError` (with agent name `"exec"`).
 
 ## Execution semantics
 

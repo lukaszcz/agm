@@ -3,7 +3,7 @@
 [← Index](index.md)
 
 An agent call is the heart of AgL: an expression that sends a rendered
-prompt to a host-provided agent and yields a **typed** result. In v2 all
+prompt to a host-provided agent and yields a **typed** result. All
 agent invocations use the built-in `ask` function:
 
 ```agl
@@ -28,7 +28,7 @@ below). All parameters after `prompt` are optional and passed by name.
 `ask` is a **contextual keyword**: it cannot be declared with `let`, `var`,
 or `param`; it cannot be declared as an agent name; it may not be bound as a
 function value (`let f = ask` is a static error, because `ask`'s type is
-not yet a fully expressible monomorphic type in v1). It remains legal as a
+not a fully expressible monomorphic type). It remains legal as a
 record/enum **field name**.
 
 ### Single-argument sugar

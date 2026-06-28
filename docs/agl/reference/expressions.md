@@ -7,11 +7,11 @@ and `case`/`if` expressions, together with the static typing rules and runtime
 semantics of each. Operator precedence is tabulated in
 [Lexical structure](lexical-structure.md).
 
-In AgL v2 **everything is an expression**: there is no separate statement
-category. Former "statements" — bindings, `:=`, `print`, `if` without
-`else`, loops — are all expressions with well-defined types. A block
-(function body, branch body, or the program top level) is a sequence of
-items whose value is the value of its last item.
+In AgL **everything is an expression**: there is no separate statement
+category. Bindings, `:=`, `print`, `if` without `else`, and loops are all
+expressions with well-defined types. A block (function body, branch body, or
+the program top level) is a sequence of items whose value is the value of its
+last item.
 
 ## Literals
 
@@ -348,7 +348,7 @@ catch JsonParseError as e =>
 ```
 
 `parse_json` cannot be bound as a function value (`let f = parse_json` is a
-static error, because `parse_json`'s type is not yet fully expressible in v1).
+static error, because `parse_json`'s type is not fully expressible).
 
 ## Operators
 

@@ -303,7 +303,7 @@ let h: () -> bool = fn() => true
 
 Function types are assignable by **exact structural match**: the number of
 parameters, their types (in order), and the result type must all agree. No
-variance or subtyping applies in v1.
+variance or subtyping applies.
 
 Named and defaulted arguments are erased from the function *value* type.
 A `def` with optional parameters still has a fully positional function type;

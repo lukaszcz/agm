@@ -369,6 +369,5 @@ default) and must have the engine-key's declared type; see
   not cascade shift/reduce conflicts into every operator rule.
 - `()` is both the unit literal and the empty argument list of a zero-arg
   call — the two are syntactically unified.
-- The `bar_safe` stratification of v1 is **removed**. Branch bodies and
-  `until` conditions reference `or_expr` directly; a `case` or `if`
-  expression in those positions must be parenthesized.
+- Branch bodies and `until` conditions reference `or_expr` directly; a
+  `case` or `if` expression in those positions must be parenthesized.

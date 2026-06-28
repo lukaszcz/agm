@@ -95,7 +95,7 @@ Catch patterns:
 - `catch _` / `catch _ as e` — matches anything; `e` has type `Exception`.
 - `catch Exception as e` — equivalent to `catch _ as e`.
 
-There is no `finally` in v1.
+There is no `finally`.
 
 ## `raise`
 

@@ -424,7 +424,7 @@ Before any value checking, the following are rejected as static errors:
    declarations.
 4. Cyclic aliases.
 5. Directly or indirectly **recursive records or enums**. Recursive nominal
-   types are not part of v1.
+   types are not part of AgL.
 
 Type declarations are valid only at the program root.
 

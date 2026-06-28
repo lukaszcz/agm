@@ -151,8 +151,7 @@ The bound:
 - counts **body executions**, not agent calls — retries inside the body do
   not consume loop iterations;
 - when omitted, the host's default bound applies (portable default: **5**).
-  `do` without a bound does *not* mean unbounded — unbounded loops do not
-  exist in v1.
+  `do` without a bound does *not* mean unbounded — AgL has no unbounded loops.
 
 Because the condition is post-tested, the body always executes at least once.
 

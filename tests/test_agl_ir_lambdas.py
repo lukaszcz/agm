@@ -1,4 +1,4 @@
-"""IR semantic tests for M4b: lambdas, indirect (function-value) calls, first-class functions.
+"""IR evaluation tests for lambdas, indirect (function-value) calls, and first-class functions.
 
 Covers:
 1. Lambda with explicit return type bound to let, then called
@@ -210,7 +210,7 @@ def test_capture_through_var_by_cell() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 7. Indirect-call arg coercion (regression: BLOCKER bug in M4b)
+# 7. Indirect-call arg coercion (regression: indirect-call arg-coercion BLOCKER bug)
 # ---------------------------------------------------------------------------
 #
 # Root cause: indirect calls previously lowered args with lower_expr (no coercion)
@@ -454,7 +454,7 @@ def test_two_lambdas_independent_capture() -> None:
 
 
 def test_lambda_with_default_param() -> None:
-    """Lambda with a default parameter: lowerer lowers the default coerced (M4b).
+    """Lambda with a default parameter: lowerer lowers the default coerced.
 
     This exercises the ``param.default is not None`` branch in ``_lower_lambda``
     (lowerer.py lines 584-587).  The checker requires exact arity for value calls

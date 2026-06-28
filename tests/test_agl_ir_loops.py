@@ -1,4 +1,4 @@
-"""IR semantic tests for M3f-C: do…until loop → IrLoop.
+"""IR evaluation tests for do…until loops (IrLoop).
 
 Covers:
 - A do loop with an explicit small limit that terminates via until (body
@@ -95,11 +95,11 @@ def _make_minimal_program(
 
 
 # ---------------------------------------------------------------------------
-# IR semantic: loop terminates via until (explicit limit, body mutates var)
+# Loop terminates via until (explicit limit, body mutates var)
 # ---------------------------------------------------------------------------
 
 
-def test_ir_semantic_loop_terminates_explicit_limit() -> None:
+def test_loop_terminates_explicit_limit() -> None:
     """do[10] body until cond — terminates after body mutates var; yields unit.
 
     AgL uses `=` for equality, `:=` for assignment, `>=` for ordering.
@@ -120,11 +120,11 @@ def test_ir_semantic_loop_terminates_explicit_limit() -> None:
 
 
 # ---------------------------------------------------------------------------
-# IR semantic: loop terminates via until, body-bound var readable by condition
+# Loop terminates via until, body-bound var readable by condition
 # ---------------------------------------------------------------------------
 
 
-def test_ir_semantic_loop_body_bindings_visible_to_condition() -> None:
+def test_loop_body_bindings_visible_to_condition() -> None:
     """Condition reads a var declared before the loop; body updates it."""
     source = (
         "var x = 0\n"
@@ -138,11 +138,11 @@ def test_ir_semantic_loop_body_bindings_visible_to_condition() -> None:
 
 
 # ---------------------------------------------------------------------------
-# IR semantic: loop terminates without explicit limit (uses evaluator default)
+# Loop terminates without explicit limit (uses evaluator default)
 # ---------------------------------------------------------------------------
 
 
-def test_ir_semantic_loop_no_explicit_limit_terminates() -> None:
+def test_loop_no_explicit_limit_terminates() -> None:
     """do body until cond (no explicit limit) — terminates before the default 100."""
     source = (
         "var n = 0\n"
@@ -156,11 +156,11 @@ def test_ir_semantic_loop_no_explicit_limit_terminates() -> None:
 
 
 # ---------------------------------------------------------------------------
-# IR semantic: loop exhaustion → MaxIterationsExceeded with matching fields
+# Loop exhaustion → MaxIterationsExceeded with matching fields
 # ---------------------------------------------------------------------------
 
 
-def test_ir_semantic_loop_exhaustion_raises() -> None:
+def test_loop_exhaustion_raises() -> None:
     """do[3] body until false raises MaxIterationsExceeded; all fields match."""
     # Use a small explicit limit so the test is fast.
     # Top level: must end in an expression, but the loop raises before we get there.
@@ -184,11 +184,11 @@ def test_ir_semantic_loop_exhaustion_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
-# IR semantic: condition source-text slice
+# Condition source-text slice
 # ---------------------------------------------------------------------------
 
 
-def test_ir_semantic_condition_source_slice_complex() -> None:
+def test_condition_source_slice_complex() -> None:
     """Condition source text captures the exact condition expression text."""
     source = (
         "var i = 0\n"
@@ -207,11 +207,11 @@ def test_ir_semantic_condition_source_slice_complex() -> None:
 
 
 # ---------------------------------------------------------------------------
-# IR semantic: loop-limit boundary — exact limit succeeds / one-short exhausts
+# Loop-limit boundary — exact limit succeeds / one-short exhausts
 # ---------------------------------------------------------------------------
 
 
-def test_ir_semantic_loop_succeeds_at_exact_limit() -> None:
+def test_loop_succeeds_at_exact_limit() -> None:
     """do[3] until counter>=3 succeeds at exactly the limit (no MaxIterationsExceeded)."""
     source = (
         "var counter = 0\n"
@@ -224,7 +224,7 @@ def test_ir_semantic_loop_succeeds_at_exact_limit() -> None:
     assert ir["counter"] == IntValue(3)
 
 
-def test_ir_semantic_loop_exhausts_one_short_of_condition() -> None:
+def test_loop_exhausts_one_short_of_condition() -> None:
     """do[2] until counter>=3 needs 3 iterations but the limit is 2 → MaxIterationsExceeded."""
     exc = evaluate_ir_raises(
         "var counter = 0\n"

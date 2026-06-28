@@ -1,7 +1,4 @@
-"""ir_semantic for M5 — multi-module linking.
-
-All tests use the ``ir_semantic`` pytest mark so they can be run in isolation
-with ``uv run pytest -m ir_semantic``.
+"""IR evaluation tests for multi-module linking.
 """
 from __future__ import annotations
 

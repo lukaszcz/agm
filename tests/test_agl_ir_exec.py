@@ -1,4 +1,4 @@
-"""IR semantic tests for M6c: exec() builtin (shell execution).
+"""IR evaluation tests for the exec() builtin (shell execution).
 
 Each test evaluates an AgL program through the IR pipeline with scripted shell results
 and asserts the produced values, stdout, and raised exceptions.

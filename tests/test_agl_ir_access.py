@@ -1,6 +1,6 @@
-"""M3c ir_semantic — field access, index access, templates, indexed assignment.
+"""IR evaluation tests for field access, index access, templates, and indexed assignment.
 
-Tests all M3c node types: IrField, IrIndex, IrRenderTemplate, IrAssign(path).
+Tests all node types: IrField, IrIndex, IrRenderTemplate, IrAssign(path).
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from agm.agl.semantics.values import (
 from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises
 
 # ---------------------------------------------------------------------------
-# indexing.py unit tests (not ir_semantic-marked)
+# indexing.py unit tests
 # ---------------------------------------------------------------------------
 
 
@@ -126,15 +126,15 @@ def test_index_set_dict_wrong_index() -> None:
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests
+# IR evaluation tests
 # ---------------------------------------------------------------------------
 
 
 def test_record_field_access() -> None:
     """Record field access: p.x on a record.
 
-    Constructor call lowering (IrMakeRecord) was added in M3d, so this
-    test is now fully supported.  The IrField node is also tested directly
+    Constructor call lowering (IrMakeRecord) is supported, so this test is
+    fully covered.  The IrField node is also tested directly
     in test_agl_ir_interpreter.py::TestIrField.
     """
     source = """\
@@ -230,8 +230,8 @@ let x: text = "n is ${n}"
 def test_template_with_record_interpolation() -> None:
     """Template with a record value interpolation.
 
-    Constructor call lowering (IrMakeRecord) was added in M3d, so this
-    test is now fully supported.
+    Constructor call lowering (IrMakeRecord) is supported, so this test is
+    fully covered.
     """
     source = """\
 record Point
@@ -391,13 +391,13 @@ m["a"] := 7
     assert result.entries["a"] == DecimalValue(decimal.Decimal(7))
 
 
-def test_ir_semantic_empty_list_literal_evaluates_to_empty_list() -> None:
+def test_empty_list_literal_evaluates_to_empty_list() -> None:
     """An annotated empty list literal evaluates to an empty ListValue."""
     ir = evaluate_ir("let xs: list[int] = []\nxs\n")
     assert ir["xs"] == ListValue(elements=())
 
 
-def test_ir_semantic_empty_dict_literal_evaluates_to_empty_dict() -> None:
+def test_empty_dict_literal_evaluates_to_empty_dict() -> None:
     """An annotated empty dict literal evaluates to an empty DictValue."""
     ir = evaluate_ir("let d: dict[text, int] = {}\nd\n")
     assert ir["d"] == DictValue(entries={})
@@ -460,7 +460,7 @@ def _lower(source: str) -> "ExecutableProgram":
 def test_golden_field_access_lowers_to_ir_field() -> None:
     """FieldAccess lowers to IrField with the correct field name.
 
-    Constructor call lowering (M3d) is available, so Point(x: 3, y: 4) lowers
+    Constructor call lowering is available, so Point(x: 3, y: 4) lowers
     to IrMakeRecord, and then p.x lowers to IrField.
     The IrField node is also tested directly in test_agl_ir_interpreter.py::TestIrField.
     """

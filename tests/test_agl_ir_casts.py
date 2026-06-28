@@ -1,4 +1,4 @@
-"""M3e-2 ir_semantic — casts (`as` / `as?`) via IrConvert + ConversionRecipe.
+"""IR evaluation tests for casts (`as` / `as?`) via IrConvert and ConversionRecipe.
 
 Exercises the IR pipeline across the full conversion matrix.  Golden lowering tests pin
 the resolved recipe/strategy shapes.  Unit tests exercise the typeless decode walk directly
@@ -55,7 +55,7 @@ def _lower(source: str):
 
 
 # ---------------------------------------------------------------------------
-# IR semantic — total casts (`as`)
+# IR evaluation tests — total casts (`as`)
 # ---------------------------------------------------------------------------
 
 
@@ -93,7 +93,7 @@ let c_json = Color.Red() as json
 
 
 # ---------------------------------------------------------------------------
-# IR semantic — fallible casts (`as`), success paths (covers every scalar decode leaf)
+# IR evaluation tests — fallible casts (`as`), success paths (covers every scalar decode leaf)
 # ---------------------------------------------------------------------------
 
 
@@ -157,7 +157,7 @@ let x = j as int
 
 
 # ---------------------------------------------------------------------------
-# IR semantic — fallible casts that raise CastError (`as`)
+# IR evaluation tests — fallible casts that raise CastError (`as`)
 # ---------------------------------------------------------------------------
 
 
@@ -192,7 +192,7 @@ let x = "{\\"$case\\": \\"Purple\\"}" as Color
 
 
 # ---------------------------------------------------------------------------
-# IR semantic — `as?` booleans
+# IR evaluation tests — `as?` booleans
 # ---------------------------------------------------------------------------
 
 

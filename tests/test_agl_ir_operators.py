@@ -1,4 +1,4 @@
-"""M3b ir_semantic — operator node proof corpus.
+"""IR evaluation tests for operator nodes.
 
 Tests all operator node types: IrArith, IrCompare, IrContains, IrAnd, IrOr, IrUnary.
 
@@ -223,7 +223,7 @@ def test_not_in_list() -> None:
     ir = evaluate_ir(source)
     assert ir["x"] == BoolValue(False)
 
-def test_ir_semantic_membership_in_empty_list_is_false() -> None:
+def test_membership_in_empty_list_is_false() -> None:
     """`x in xs` on an empty list evaluates to false."""
     ir = evaluate_ir("let xs: list[int] = []\nlet has = 5 in xs\nhas\n")
     assert ir["has"] == BoolValue(False)

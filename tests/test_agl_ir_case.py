@@ -1,4 +1,4 @@
-"""M3f-B ir_semantic — case expressions and match plans.
+"""IR evaluation tests for case expressions and match plans.
 
 Covers IrCase with all pattern kinds:
 - literal patterns (int/decimal/bool/text/null)
@@ -120,11 +120,11 @@ def _make_enum_nom() -> tuple[NominalId, NominalDescriptor]:
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — literal patterns
+# IR evaluation tests — literal patterns
 # ---------------------------------------------------------------------------
 
 
-def test_ir_semantic_case_literal_int_match() -> None:
+def test_case_literal_int_match() -> None:
     """int literal pattern: first matching arm is taken."""
     src = """\
 let x: int = 2
@@ -137,7 +137,7 @@ r"""
     assert ir["r"] == TextValue("two")
 
 
-def test_ir_semantic_case_literal_int_fallthrough_wildcard() -> None:
+def test_case_literal_int_fallthrough_wildcard() -> None:
     """Wildcard default arm catches when no literal matches."""
     src = """\
 let x: int = 99
@@ -149,7 +149,7 @@ r"""
     assert ir["r"] == TextValue("other")
 
 
-def test_ir_semantic_case_literal_bool() -> None:
+def test_case_literal_bool() -> None:
     """bool literal pattern."""
     src = """\
 let x = true
@@ -161,7 +161,7 @@ r"""
     assert ir["r"] == TextValue("yes")
 
 
-def test_ir_semantic_case_literal_text() -> None:
+def test_case_literal_text() -> None:
     """text (string) literal pattern."""
     src = """\
 let x = "hello"
@@ -174,7 +174,7 @@ r"""
     assert ir["r"] == IntValue(1)
 
 
-def test_ir_semantic_case_literal_null() -> None:
+def test_case_literal_null() -> None:
     """null literal pattern."""
     src = """\
 let x: json = null
@@ -186,7 +186,7 @@ r"""
     assert ir["r"] == TextValue("got null")
 
 
-def test_ir_semantic_case_first_match_ordering() -> None:
+def test_case_first_match_ordering() -> None:
     """Earlier arm shadows a later arm that would also match."""
     src = """\
 let x: int = 1
@@ -200,11 +200,11 @@ r"""
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — binder and wildcard patterns
+# IR evaluation tests — binder and wildcard patterns
 # ---------------------------------------------------------------------------
 
 
-def test_ir_semantic_case_binder_pattern() -> None:
+def test_case_binder_pattern() -> None:
     """VarPattern binder captures value and body uses it."""
     src = """\
 let x: int = 42
@@ -215,7 +215,7 @@ r"""
     assert ir["r"] == IntValue(42)
 
 
-def test_ir_semantic_case_wildcard_pattern() -> None:
+def test_case_wildcard_pattern() -> None:
     """Wildcard pattern matches without binding."""
     src = """\
 let x: int = 7
@@ -226,7 +226,7 @@ r"""
     assert ir["r"] == TextValue("matched")
 
 
-def test_ir_semantic_case_binder_does_not_leak() -> None:
+def test_case_binder_does_not_leak() -> None:
     """Case binder symbol does not appear in top-level result names."""
     src = """\
 let x: int = 5
@@ -245,11 +245,11 @@ r"""
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — nullary bare-variant patterns
+# IR evaluation tests — nullary bare-variant patterns
 # ---------------------------------------------------------------------------
 
 
-def test_ir_semantic_case_nullary_variant_match() -> None:
+def test_case_nullary_variant_match() -> None:
     """VarPattern as bare-variant: bare name that resolves to a constructor."""
     # Using bare names (VarPattern classified as bare_variant_patterns by scope resolver)
     src = """\
@@ -263,7 +263,7 @@ r"""
     assert ir["r"] == IntValue(1)
 
 
-def test_ir_semantic_case_nullary_variant_no_binding() -> None:
+def test_case_nullary_variant_no_binding() -> None:
     """Nullary bare-variant match does not bind anything."""
     src = """\
 enum Flag | On | Off
@@ -276,7 +276,7 @@ r"""
     assert ir["r"] == TextValue("off")
 
 
-def test_ir_semantic_case_nullary_constructor_pattern() -> None:
+def test_case_nullary_constructor_pattern() -> None:
     """ConstructorPattern with no fields (Red()) matches the variant."""
     src = """\
 enum Color | Red | Blue
@@ -290,11 +290,11 @@ r"""
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — constructor patterns (with fields)
+# IR evaluation tests — constructor patterns (with fields)
 # ---------------------------------------------------------------------------
 
 
-def test_ir_semantic_case_constructor_field_destructure() -> None:
+def test_case_constructor_field_destructure() -> None:
     """ConstructorPattern destructures enum variant fields."""
     src = """\
 enum Shape | Circle(radius: int) | Square(side: int)
@@ -307,7 +307,7 @@ r"""
     assert ir["r"] == IntValue(5)
 
 
-def test_ir_semantic_case_constructor_field_no_match_fallback() -> None:
+def test_case_constructor_field_no_match_fallback() -> None:
     """Constructor pattern on wrong variant falls through to next arm."""
     src = """\
 enum Shape | Circle(radius: int) | Square(side: int)
@@ -320,7 +320,7 @@ r"""
     assert ir["r"] == IntValue(10)
 
 
-def test_ir_semantic_case_constructor_nested_literal() -> None:
+def test_case_constructor_nested_literal() -> None:
     """Constructor pattern with nested literal sub-pattern."""
     src = """\
 enum Shape | Circle(radius: int) | Square(side: int)
@@ -334,7 +334,7 @@ r"""
     assert ir["r"] == TextValue("three")
 
 
-def test_ir_semantic_case_constructor_nested_binder() -> None:
+def test_case_constructor_nested_binder() -> None:
     """Constructor pattern with nested binder sub-pattern captures field."""
     src = """\
 enum Shape | Circle(radius: int) | Square(side: int)
@@ -347,7 +347,7 @@ r"""
     assert ir["r"] == IntValue(7)
 
 
-def test_ir_semantic_case_constructor_nested_wildcard() -> None:
+def test_case_constructor_nested_wildcard() -> None:
     """Constructor pattern with nested wildcard sub-pattern."""
     src = """\
 enum Shape | Circle(radius: int) | Square(side: int)
@@ -360,7 +360,7 @@ r"""
     assert ir["r"] == TextValue("square")
 
 
-def test_ir_semantic_case_constructor_nested_constructor() -> None:
+def test_case_constructor_nested_constructor() -> None:
     """Nested: constructor pattern with nested bare-variant sub-pattern."""
     src = """\
 enum Color | Red | Blue
@@ -373,7 +373,7 @@ r"""
     assert ir["r"] == IntValue(10)
 
 
-def test_ir_semantic_case_constructor_multi_field() -> None:
+def test_case_constructor_multi_field() -> None:
     """Constructor pattern matching multiple fields, first field returned."""
     src = """\
 enum Point | Pt(x: int, y: int)
@@ -386,11 +386,11 @@ r"""
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — no-match raises MatchError
+# IR evaluation tests — no-match raises MatchError
 # ---------------------------------------------------------------------------
 
 
-def test_ir_semantic_case_no_match_raises_match_error() -> None:
+def test_case_no_match_raises_match_error() -> None:
     """Non-exhaustive case raises MatchError with scrutinee_type and scrutinee."""
     src = """\
 let x: int = 5
@@ -407,7 +407,7 @@ r"""
     assert ir_exc.fields["scrutinee"] == JsonValue(5)
 
 
-def test_ir_semantic_case_no_match_enum_scrutinee_type() -> None:
+def test_case_no_match_enum_scrutinee_type() -> None:
     """MatchError scrutinee_type for an enum value uses the enum display_name."""
     src = """\
 enum Color | Red | Blue
@@ -421,11 +421,11 @@ r"""
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — mixed arms, first-match ordering with constructors
+# IR evaluation tests — mixed arms, first-match ordering with constructors
 # ---------------------------------------------------------------------------
 
 
-def test_ir_semantic_case_first_match_constructor_then_wildcard() -> None:
+def test_case_first_match_constructor_then_wildcard() -> None:
     """Constructor arm first, then wildcard catches all others."""
     src = """\
 enum Shape | Circle(radius: int) | Square(side: int)
@@ -861,7 +861,7 @@ def test_validate_ircase_bind_plan_shallow_ok() -> None:
     validate_ir(prog, deep=False)
 
 
-def test_ir_semantic_case_constructor_nested_literal_no_match_fallback() -> None:
+def test_case_constructor_nested_literal_no_match_fallback() -> None:
     """Constructor arm matched but nested literal sub-plan fails; falls to next arm."""
     # s = Circle(radius: 7); arm 0: Circle(radius: 3) — variant matches, literal fails
     # arm 1: Circle(radius: n) — catches

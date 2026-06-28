@@ -1,4 +1,4 @@
-"""IR semantic tests for M4a: top-level user function calls through the IR.
+"""IR evaluation tests for top-level user function calls.
 
 Covers:
 - Simple positional args
@@ -28,7 +28,7 @@ from agm.agl.typecheck import check
 from tests.agl.ir_harness import evaluate_ir, m2_caps
 
 # ---------------------------------------------------------------------------
-# IR semantic tests
+# Basic function call tests
 # ---------------------------------------------------------------------------
 
 

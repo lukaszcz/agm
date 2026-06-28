@@ -1,4 +1,4 @@
-"""IR semantic tests for M6b — agent dispatch (ask / ask-request) in the IR pipeline.
+"""IR evaluation tests for agent dispatch (ask / ask-request).
 
 Each test evaluates an AgL program through the IR pipeline with scripted agent responses
 and asserts the produced values and stdout.
@@ -2265,11 +2265,11 @@ def test_classify_enum_failure_known_case_all_payload_present() -> None:
 
 
 # ---------------------------------------------------------------------------
-# M1 (MAJOR) — enum oneOf validation-error message ir_semantic tests
+# Enum oneOf validation-error message tests
 #
 # These tests verify that when ask() exhausts all attempts due to enum errors,
 # the IR pipeline produces AgentParseError with the expected validation_errors
-# (category, message, field) content.  Added per TDD mandate before the fix.
+# (category, message, field) content.
 # ---------------------------------------------------------------------------
 
 

@@ -1,4 +1,4 @@
-"""M3e-1 ir_semantic — `is` / `is not` enum-variant membership (IrVariantIs).
+"""IR evaluation tests for `is` / `is not` enum-variant membership (IrVariantIs).
 
 """
 
@@ -53,7 +53,7 @@ def _lower(source: str) -> ExecutableProgram:
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — is / is not
+# IR evaluation tests — is / is not
 # ---------------------------------------------------------------------------
 
 

@@ -1,22 +1,20 @@
-"""M2 ir_semantic — coercion round-trip proof corpus.
+"""IR evaluation tests for coercion round-trips.
 
-Each test evaluates a source program from the M2 node subset through the IR pipeline
+Each test evaluates a source program through the IR pipeline
 (lower_program → IrInterpreter) and asserts the final binding snapshots.
 
 Where noted, a test also structurally asserts that the lowered IR contains
-the expected ``IrCoerce``/``Coercion`` node (complementing the M2-A golden
+the expected ``IrCoerce``/``Coercion`` node (complementing the golden
 tests in ``test_agl_lower.py``).
-
-suite; the marker is for optional selection only (``pytest -m ir_semantic``).
 
 Coercion families covered
 --------------------------
 1. Identity (no coercion) — scalar, list, dict.
 2. ``IntToDecimal`` — scalar ``let d: decimal = 1``.
 3. ``IntToDecimal`` — nested in a list literal (element-level).
-4. ``IntToDecimal`` — not reachable in M2 as whole-value container coercion
-   (``list[int] → list[decimal]`` is rejected by the M2 type checker) — deferred.
-5. ``IntToDecimal`` — dict values whole-value coercion — not reachable in M2
+4. ``IntToDecimal`` — not reachable as whole-value container coercion
+   (``list[int] → list[decimal]`` is rejected by the type checker) — deferred.
+5. ``IntToDecimal`` — dict values whole-value coercion — not reachable
    (``dict[text, int] → dict[text, decimal]`` rejected by checker) — deferred.
 6. ``ToJson`` — scalar (``let j: json = 42``).
 7. ``ToJson`` — list literal (``let j: json = [1, 2]``).
@@ -24,11 +22,11 @@ Coercion families covered
 9. ``ToJson`` — via record-like dict (``let r: json = {"x": 1}``).
 10. ``MapList(ToJson)`` — whole-value via var ref (list[int] → json).
 11. ``MapDictValues(ToJson)`` — whole-value via var ref (dict[text, int] → json).
-12. ``MapDictValues(IntToDecimal)`` — not reachable in M2 — deferred (see #5).
+12. ``MapDictValues(IntToDecimal)`` — not reachable — deferred (see #5).
 13. Deeper nesting — ``list[dict[text, decimal]]``.
 14. Mutable assignment with coercion — ``var x: decimal = 0; x := 5``.
 15. Multiple bindings — several coercions in one program.
-16. "Effectful once" note — coercion does not duplicate evaluation (M2 trivial).
+16. "Effectful once" note — coercion does not duplicate evaluation (trivial for pure programs).
 """
 
 from __future__ import annotations
@@ -60,7 +58,7 @@ from tests.agl.ir_harness import evaluate_ir, m2_caps
 
 def _lower(source: str) -> ExecutableProgram:
     checked = check(resolve(parse_program(source)), m2_caps())
-    return lower_program(checked, source_text=source, source_label="<ir_semantic>", validate=True)
+    return lower_program(checked, source_text=source, source_label="<test>", validate=True)
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +171,7 @@ def test_list_decimal_element_coercion() -> None:
 # ---------------------------------------------------------------------------
 # 4. Whole-value container coercion via literal (MapList, MapDictValues)
 #
-# Note: the M2 type checker's ``is_assignable`` does NOT allow
+# Note: the current type checker's ``is_assignable`` does NOT allow
 # ``list[int] → list[decimal]`` or ``dict[text,int] → dict[text,decimal]``
 # at binding boundaries — those require exact structural match (or int→decimal
 # scalar widening, which is not extended to containers by ``is_assignable``).
@@ -181,7 +179,7 @@ def test_list_decimal_element_coercion() -> None:
 # the IR machinery and exercised by the lowerer unit tests; they do not arise
 # from valid programs that the current type checker accepts.
 #
-# What we CAN prove in M2 is that these coercions are correctly applied at
+# What we CAN prove is that these coercions are correctly applied at
 # literal-element boundaries (already covered in test 3 above) and via ToJson
 # (covered in tests 8–10 below).  The whole-value container widening path will
 # be exercised once the type checker is extended in a later milestone.
@@ -326,7 +324,7 @@ def test_to_json_dict_literal_as_json() -> None:
 # ---------------------------------------------------------------------------
 # 10. Dict[text, json] from dict[text, int] via ref — via ToJson (whole-value)
 #
-# The M2 type checker DOES allow dict[text, int] → json because a dict of
+# The current type checker DOES allow dict[text, int] → json because a dict of
 # ints is JSON-shaped.  However, dict[text, int] → dict[text, json] is not
 # allowed (requires exact structural match).  We prove the json-target path.
 # ---------------------------------------------------------------------------
@@ -457,17 +455,17 @@ def test_empty_dict() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 16. "Effectful once" note (trivial for M2, documents extension point)
+# 16. "Effectful once" note (trivial for pure programs, documents extension point)
 # ---------------------------------------------------------------------------
 
 
 def test_coercion_evaluates_operand_once() -> None:
     """Coercion does not duplicate evaluation of its operand.
 
-    In M2 all expressions are pure (no side effects), so the strong version
+    All current AgL expressions are pure (no side effects), so the strong version
     of this property (observable side effects fired exactly once) cannot be
     violated.  The IR pipeline produces the correct coercion result.  The stronger
-    test (with counters/exec side-effects) is deferred to M7.
+    test (with counters/exec side-effects) is deferred to a future milestone.
 
     We exercise this with a multi-step program where each binding's RHS is a
     constant; the IR pipeline must produce the correct value for each binding.

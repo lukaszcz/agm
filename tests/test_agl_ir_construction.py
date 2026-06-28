@@ -1,6 +1,6 @@
-"""M3d ir_semantic — record/enum/exception construction and constructor refs.
+"""IR evaluation tests for record/enum/exception construction and constructor refs.
 
-Tests all M3d node types: IrMakeRecord, IrMakeEnum, IrMakeException, IrMakeConstructor.
+Tests all node types: IrMakeRecord, IrMakeEnum, IrMakeException, IrMakeConstructor.
 """
 
 from __future__ import annotations
@@ -75,7 +75,7 @@ def _lower(source: str) -> ExecutableProgram:
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — record construction
+# IR evaluation tests — record construction
 # ---------------------------------------------------------------------------
 
 
@@ -98,7 +98,7 @@ let p = Point(x: 3, y: 4)
 
 
 def test_record_field_access_now_unblocked() -> None:
-    """Record construction + field access: p.x works end-to-end (un-skipped M3c case)."""
+    """Record construction + field access: p.x works end-to-end."""
     source = """\
 record Point
   x: int
@@ -162,7 +162,7 @@ let ne = p1 != p2
 
 
 def test_template_with_record_interpolation_now_unblocked() -> None:
-    """Template interpolation with a record value (un-skipped M3c case)."""
+    """Template interpolation with a record value."""
     source = """\
 record Point
   x: int
@@ -176,7 +176,7 @@ let s: text = "point: ${p}"
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — enum construction
+# IR evaluation tests — enum construction
 # ---------------------------------------------------------------------------
 
 
@@ -279,7 +279,7 @@ let s = Size.Big(amount: 7)
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — NominalId hashing (D2)
+# IR evaluation tests — NominalId hashing (D2)
 # ---------------------------------------------------------------------------
 
 
@@ -355,7 +355,7 @@ def test_nominal_id_hashing_enum_as_set_member() -> None:
 
     Two equal enum values (same variant, same nominal) must deduplicate in a set;
     a value from a different variant must be distinct.  Evaluation must produce
-    hash-identical results (ir_semantic agreement).
+    hash-identical results (IR evaluation agreement).
     """
     source = """\
 enum Color | Red | Blue
@@ -404,7 +404,7 @@ let c3 = Color.Blue()
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — exception construction
+# IR evaluation tests — exception construction
 # ---------------------------------------------------------------------------
 
 
@@ -447,7 +447,7 @@ let e2 = ArithmeticError(message: "two", operation: "+")
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — first-class constructor references
+# IR evaluation tests — first-class constructor references
 # ---------------------------------------------------------------------------
 
 

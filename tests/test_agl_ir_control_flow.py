@@ -1,4 +1,4 @@
-"""M3f-A ir_semantic — if/raise/try control flow.
+"""IR evaluation tests for if/raise/try control flow.
 
 Covers IrIf, IrRaise, IrTry with all cases:
 - if without else → UnitValue
@@ -92,7 +92,7 @@ def _make_program(
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — if without else
+# IR evaluation tests — if without else
 # ---------------------------------------------------------------------------
 
 
@@ -128,7 +128,7 @@ r
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — if with else (returns branch value)
+# IR evaluation tests — if with else (returns branch value)
 # ---------------------------------------------------------------------------
 
 
@@ -169,7 +169,7 @@ r
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — raise
+# IR evaluation tests — raise
 # ---------------------------------------------------------------------------
 
 
@@ -193,7 +193,7 @@ r
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — try body does not raise
+# IR evaluation tests — try body does not raise
 # ---------------------------------------------------------------------------
 
 
@@ -226,7 +226,7 @@ r
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — try with specific catch handler (no binding)
+# IR evaluation tests — try with specific catch handler (no binding)
 # ---------------------------------------------------------------------------
 
 
@@ -246,7 +246,7 @@ r
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — try with specific catch handler WITH binding
+# IR evaluation tests — try with specific catch handler WITH binding
 # ---------------------------------------------------------------------------
 
 
@@ -278,7 +278,7 @@ r
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — catch-all handlers
+# IR evaluation tests — catch-all handlers
 # ---------------------------------------------------------------------------
 
 
@@ -322,7 +322,7 @@ r
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — first-match ordering
+# IR evaluation tests — first-match ordering
 # ---------------------------------------------------------------------------
 
 
@@ -357,7 +357,7 @@ r
 
 
 # ---------------------------------------------------------------------------
-# IR semantic tests — no matching handler re-raises
+# IR evaluation tests — no matching handler re-raises
 # ---------------------------------------------------------------------------
 
 

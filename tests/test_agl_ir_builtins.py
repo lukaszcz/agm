@@ -1,4 +1,4 @@
-"""M6a ir_semantic — print, parse_json, and entry params.
+"""IR evaluation tests for print, parse_json, and entry params.
 
 Each test evaluates a program through the IR pipeline and asserts
 the produced bindings and stdout.
@@ -244,7 +244,7 @@ def test_parse_json_caught_by_try() -> None:
 
 
 def test_param_provided_value() -> None:
-    """param with provided value — ir_semantic uses it."""
+    """param with provided value — evaluated via the IR pipeline."""
     source = textwrap.dedent("""\
         param name: text
         let greeting = "Hello, " + name
@@ -255,7 +255,7 @@ def test_param_provided_value() -> None:
 
 
 def test_param_provided_int_value() -> None:
-    """param int provided — ir_semantic uses it."""
+    """param int provided — evaluated via the IR pipeline."""
     source = textwrap.dedent("""\
         param count: int
         let doubled = count * 2

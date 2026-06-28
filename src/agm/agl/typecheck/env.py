@@ -1123,6 +1123,13 @@ class TypeEnvironment:
             lookup_module_id = module_id
             lookup_variant = None
         else:
+            # ExceptionType without a caller-provided module_id (same-module or
+            # built-in exception) or an unexpected typ value.  Both same-module
+            # exceptions and built-in prelude exceptions are pre-registered in the
+            # LOCAL registry, so get_constructor_field_kinds() returns at the first
+            # check and never reaches the graph-table lookup.  PRELUDE_ID is used
+            # here only to satisfy the type; the graph lookup is always a no-op for
+            # this branch.
             lookup_module_id = PRELUDE_ID
             lookup_variant = None
         return self.get_constructor_field_kinds(

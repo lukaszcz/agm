@@ -75,6 +75,7 @@ from agm.agl.syntax.nodes import (
     ExceptionDef,
     FuncDef,
     ParamKind,
+    Pattern,
     Program,
     RecordDef,
     TypeAlias,
@@ -138,6 +139,7 @@ class CheckedModule:
     cast_specs: dict[int, CastSpec]
     type_env: TypeEnvironment
     source_text: str
+    constructor_pattern_bindings: dict[int, tuple[tuple[str, Pattern], ...]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -834,6 +836,7 @@ def _check_module(
         cast_specs=cp.cast_specs,
         type_env=cp.type_env,
         source_text=source_text,
+        constructor_pattern_bindings=cp.constructor_pattern_bindings,
     )
 
 

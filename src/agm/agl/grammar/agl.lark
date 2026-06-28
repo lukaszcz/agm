@@ -636,8 +636,8 @@ pattern: name DOT name (LPAR pattern_fields? RPAR)?         -> pat_qualified_con
 
 pattern_fields: pattern_field (COMMA pattern_field)* COMMA?
 
-pattern_field: name EQ pattern   -> pat_field_full
-             | name                 -> pat_field_shorthand
+pattern_field: name EQ pattern   -> pat_field_named
+             | pattern            -> pat_field_positional
 
 // ---------------------------------------------------------------------------
 // Module system: import declarations and private declarations

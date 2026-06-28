@@ -39,7 +39,7 @@ from agm.agl.semantics.types import (
     TypeVarType,
     UnitType,
 )
-from agm.agl.syntax.nodes import ParamKind
+from agm.agl.syntax.nodes import ParamKind, Pattern
 from agm.agl.syntax.spans import SourceSpan
 
 # ---------------------------------------------------------------------------
@@ -250,6 +250,7 @@ class CheckedProgram:
     type_env: TypeEnvironment
     function_signatures: dict[str, FunctionSignature]
     cast_specs: dict[int, CastSpec]
+    constructor_pattern_bindings: dict[int, tuple[tuple[str, Pattern], ...]]
 
 
 # ---------------------------------------------------------------------------

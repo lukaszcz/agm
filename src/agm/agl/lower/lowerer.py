@@ -353,7 +353,9 @@ class _Lowerer:
                 if pattern.node_id not in self._checked.resolved.bare_variant_patterns:
                     out.add(pattern.node_id)
             case ConstructorPattern():
-                for pf in pattern.fields:
+                for p in pattern.positional:
+                    self._pattern_binding_ids(p, out)
+                for pf in pattern.named:
                     self._pattern_binding_ids(pf.pattern, out)
             case WildcardPattern() | LiteralPattern():
                 pass
@@ -1643,9 +1645,11 @@ class _Lowerer:
                 # Lower the literal to its IrConst* node (re-use lower_expr).
                 return IrLiteralPlan(value=self.lower_expr(lit))
 
-            case ConstructorPattern(name=variant_name, fields=fields):
+            case ConstructorPattern(name=variant_name):
                 field_plans: list[tuple[str, IrMatchPlan]] = [
-                    (pf.name, self._compile_plan(pf.pattern)) for pf in fields
+                    (fname, self._compile_plan(sub_pat))
+                    for fname, sub_pat
+                    in self._checked.constructor_pattern_bindings[pattern.node_id]
                 ]
                 return IrConstructorPlan(
                     variant=variant_name,

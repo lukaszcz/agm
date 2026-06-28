@@ -1051,9 +1051,12 @@ class TestPatterns:
         assert p.name == "x"
 
     def test_constructor_pattern_no_fields(self) -> None:
-        p = ConstructorPattern(qualifier=None, name="None_", fields=(), span=self._s(), node_id=1)
+        p = ConstructorPattern(
+            qualifier=None, name="None_", positional=(), named=(), span=self._s(), node_id=1
+        )
         assert p.name == "None_"
-        assert p.fields == ()
+        assert p.positional == ()
+        assert p.named == ()
 
     def test_constructor_pattern_with_fields(self) -> None:
         pf = PatternField(
@@ -1065,12 +1068,13 @@ class TestPatterns:
         p = ConstructorPattern(
             qualifier=None,
             name="Some",
-            fields=(pf,),
+            positional=(),
+            named=(pf,),
             span=self._s(),
             node_id=1,
         )
-        assert isinstance(p.fields, tuple)
-        assert p.fields[0].name == "val"
+        assert isinstance(p.named, tuple)
+        assert p.named[0].name == "val"
 
     def test_pattern_equality_ignores_span_node_id(self) -> None:
         a = WildcardPattern(span=span(1, 0, 1, 1), node_id=1)
@@ -1283,7 +1287,7 @@ class TestVisitorWalk:
         var_pat = VarPattern(name="v", span=s, node_id=502)
         pat_field = PatternField(name="val", pattern=var_pat, span=s, node_id=503)
         ctor_pat = ConstructorPattern(
-            qualifier=None, name="Some", fields=(pat_field,), span=s, node_id=504
+            qualifier=None, name="Some", positional=(), named=(pat_field,), span=s, node_id=504
         )
 
         # Case with multiple patterns
@@ -1855,6 +1859,19 @@ class TestVisitorWalk:
             "Qualifier node not visited when walking a qualified ConstructorPattern"
         )
 
+    def test_walk_constructor_pattern_visits_positional(self) -> None:
+        """walk() on a ConstructorPattern with positional sub-patterns visits each one."""
+        from agm.agl.parser import parse_program
+        from agm.agl.syntax.visitor import walk
+
+        prog = parse_program("case x of | Some(v) => 1")
+        visited: list[object] = []
+        walk(prog, visited.append)
+        var_pats = [n for n in visited if isinstance(n, VarPattern)]
+        assert any(vp.name == "v" for vp in var_pats), (
+            "Positional sub-pattern VarPattern not visited in ConstructorPattern"
+        )
+
     def test_walk_known_node_without_branch_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A node in _KNOWN_NODE_TYPES but lacking a walk branch must fail loudly.
 
@@ -2345,5 +2362,7 @@ class TestModuleSystemNodes:
         assert t.module_qualifier is None
 
     def test_constructor_pattern_module_qualifier_default_none(self) -> None:
-        pat = ConstructorPattern(qualifier=None, name="Foo", fields=(), span=self._sp(), node_id=0)
+        pat = ConstructorPattern(
+            qualifier=None, name="Foo", positional=(), named=(), span=self._sp(), node_id=0
+        )
         assert pat.module_qualifier is None

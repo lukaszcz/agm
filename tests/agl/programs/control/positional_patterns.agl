@@ -1,0 +1,50 @@
+# Positional sub-patterns in constructor patterns (K4c).
+# Tests positional binding for STANDARD single-field variants (Some(x)),
+# named-only shorthand for NAMED_ONLY multi-field variants (Rect(w, h)),
+# named sub-patterns (Some(value = v)), nested positional (Some(Some(y))),
+# partial patterns, combined with construction and equality ==.
+enum Opt[T]
+  | None
+  | Some(value: T)
+
+enum Box2
+  | Dot
+  | Rect(w: int, h: int)
+
+agent src
+
+param n: int
+
+# Positional sub-pattern: 'x' binds the STANDARD single-field 'value' positionally.
+let opt: Opt[int] = ask("Give opt.", agent = src)
+let from_pos = case opt of
+  | Some(x) => x
+  | None => 0
+print from_pos
+
+# Named sub-pattern: 'value = v' binds the 'value' field by name.
+let from_named = case opt of
+  | Some(value = v) => v * 2
+  | None => -1
+print from_named
+
+# Named-only shorthand: 'w' and 'h' overflow to the NAMED_ONLY fields.
+let box: Box2 = ask("Give box.", agent = src)
+let area = case box of
+  | Rect(w, h) => w * h
+  | Dot => 0
+print area
+
+# Nested positional: Some(Some(y)) — inner Some(y) is also positional.
+let nested: Opt[Opt[int]] = ask("Give nested.", agent = src)
+let inner = case nested of
+  | Some(Some(y)) => y
+  | Some(None) => -1
+  | None => -2
+print inner
+
+# Partial pattern: omit 'h' from Rect, only bind 'w' by shorthand.
+let partial = case box of
+  | Rect(w) => w
+  | Dot => 0
+print partial

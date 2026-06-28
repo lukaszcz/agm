@@ -1552,7 +1552,9 @@ class _Resolver:
                 )
             scope.define(pattern.name, ref)
         elif isinstance(pattern, ConstructorPattern):
-            for pf in pattern.fields:
+            for p in pattern.positional:
+                self._bind_pattern_vars(p, scope)
+            for pf in pattern.named:
                 self._bind_pattern_field_vars(pf, scope)
         # WildcardPattern, LiteralPattern — no bindings introduced.
 

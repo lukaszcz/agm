@@ -1622,7 +1622,7 @@ class TestPatterns:
         pat = e.branches[0].pattern
         assert isinstance(pat, ConstructorPattern)
         assert pat.name == "Issue"
-        assert len(pat.fields) == 2
+        assert len(pat.named) == 2
 
     def test_constructor_pattern_shorthand(self) -> None:
         src = "case r of | Issue(title) => ok"
@@ -1630,8 +1630,9 @@ class TestPatterns:
         assert isinstance(e, Case)
         pat = e.branches[0].pattern
         assert isinstance(pat, ConstructorPattern)
-        assert isinstance(pat.fields[0], PatternField)
-        assert pat.fields[0].name == "title"
+        assert len(pat.positional) == 1
+        assert isinstance(pat.positional[0], VarPattern)
+        assert pat.positional[0].name == "title"
 
     def test_qualified_constructor_pattern(self) -> None:
         src = "case r of | Review.Pass => ok | Review.Fail => err"
@@ -2416,7 +2417,8 @@ class TestCaseNeutralPatterns:
         assert isinstance(pat, ConstructorPattern)
         assert pat.qualifier is None
         assert pat.name == "none"
-        assert pat.fields == ()
+        assert pat.positional == ()
+        assert pat.named == ()
 
     def test_uppercase_constructor_pattern_with_parens(self) -> None:
         prog = parse("case x of | None() => 1")
@@ -2442,8 +2444,8 @@ class TestCaseNeutralPatterns:
         pat = case.branches[0].pattern
         assert isinstance(pat, ConstructorPattern)
         assert pat.name == "some"
-        assert len(pat.fields) == 1
-        assert pat.fields[0].name == "value"
+        assert len(pat.named) == 1
+        assert pat.named[0].name == "value"
 
 
 # ---------------------------------------------------------------------------
@@ -2996,7 +2998,7 @@ class TestQualifiedTypeRefs:
         pat = expr.branches[0].pattern
         assert isinstance(pat, ConstructorPattern)
         assert pat.name == "Foo"
-        assert len(pat.fields) == 1
+        assert len(pat.named) == 1
         assert pat.module_qualifier is not None
 
 
@@ -3121,30 +3123,30 @@ class TestFieldAssignmentSyntax:
             parse("B(r = 1, x)")
 
     def test_pattern_field_full_form_eq(self) -> None:
-        """Full-form pattern fields use '=' (was ':')."""
+        """Named pattern fields use '=' (name = pattern form)."""
         src = "case r of | Issue(title = t) => ok"
         e = first(parse(src))
         assert isinstance(e, Case)
         pat = e.branches[0].pattern
         assert isinstance(pat, ConstructorPattern)
         assert pat.name == "Issue"
-        assert len(pat.fields) == 1
-        field0 = pat.fields[0]
+        assert len(pat.named) == 1
+        field0 = pat.named[0]
         assert isinstance(field0, PatternField)
         assert field0.name == "title"
         assert isinstance(field0.pattern, VarPattern)
         assert field0.pattern.name == "t"
 
     def test_pattern_field_shorthand_binds_field_name(self) -> None:
-        """Shorthand pattern field A(x) binds field 'x' to local 'x'."""
+        """Bare name in pattern position becomes a positional sub-pattern."""
         src = "case r of | Issue(title) => ok"
         e = first(parse(src))
         assert isinstance(e, Case)
         pat = e.branches[0].pattern
         assert isinstance(pat, ConstructorPattern)
-        assert pat.fields[0].name == "title"
-        assert isinstance(pat.fields[0].pattern, VarPattern)
-        assert pat.fields[0].pattern.name == "title"
+        assert len(pat.positional) == 1
+        assert isinstance(pat.positional[0], VarPattern)
+        assert pat.positional[0].name == "title"
 
     def test_pattern_field_full_form_nested(self) -> None:
         src = "case r of | Box(at = Pt(x = px)) => ok"
@@ -3152,10 +3154,10 @@ class TestFieldAssignmentSyntax:
         assert isinstance(e, Case)
         outer = e.branches[0].pattern
         assert isinstance(outer, ConstructorPattern)
-        inner = outer.fields[0].pattern
+        inner = outer.named[0].pattern
         assert isinstance(inner, ConstructorPattern)
         assert inner.name == "Pt"
-        assert inner.fields[0].name == "x"
+        assert inner.named[0].name == "x"
 
     def test_equality_parses_to_bin_eq(self) -> None:
         """'==' is the equality operator, mapping to BinOp.EQ."""

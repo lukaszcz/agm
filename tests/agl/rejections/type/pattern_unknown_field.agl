@@ -1,6 +1,6 @@
 enum R
   | Pass
-  | Fail(issues: list[text])
+  | Fail(issues: list[text], code: int)
 let r: R = Pass
 case r of
   | Fail(x) => ()

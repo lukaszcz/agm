@@ -1,0 +1,49 @@
+{
+  "scenarios": [
+    {
+      "name": "positional_some_rect_nested_some",
+      "params": {"n": 1},
+      "agents": {
+        "src": [
+          "{\"$case\": \"Some\", \"value\": 5}",
+          "{\"$case\": \"Rect\", \"w\": 3, \"h\": 4}",
+          "{\"$case\": \"Some\", \"value\": {\"$case\": \"Some\", \"value\": 7}}"
+        ]
+      },
+      "expect": {
+        "stdout": "5\n10\n12\n7\n3\n",
+        "calls": {"src": 3}
+      }
+    },
+    {
+      "name": "none_dot_none",
+      "params": {"n": 2},
+      "agents": {
+        "src": [
+          "{\"$case\": \"None\"}",
+          "{\"$case\": \"Dot\"}",
+          "{\"$case\": \"None\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "0\n-1\n0\n-2\n0\n",
+        "calls": {"src": 3}
+      }
+    },
+    {
+      "name": "some_two_rect_nested_none",
+      "params": {"n": 3},
+      "agents": {
+        "src": [
+          "{\"$case\": \"Some\", \"value\": 2}",
+          "{\"$case\": \"Rect\", \"w\": 5, \"h\": 6}",
+          "{\"$case\": \"Some\", \"value\": {\"$case\": \"None\"}}"
+        ]
+      },
+      "expect": {
+        "stdout": "2\n4\n30\n-1\n5\n",
+        "calls": {"src": 3}
+      }
+    }
+  ]
+}

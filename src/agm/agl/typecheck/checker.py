@@ -282,6 +282,7 @@ class _Checker:
         # Type variables currently in scope (non-empty inside a generic def body).
         self._current_type_vars: frozenset[str] = frozenset()
         self._cast_specs: dict[int, CastSpec] = {}
+        self._constructor_pattern_bindings: dict[int, tuple[tuple[str, Pattern], ...]] = {}
         self._builtins = BuiltinCallChecker(self)
         self._constructors = ConstructorChecker(self)
 
@@ -1744,22 +1745,46 @@ class _Checker:
                     span=pattern.span,
                 )
             vfields = subj_type.variants[variant_name]
-            seen_pf: set[str] = set()
-            for pf in pattern.fields:
-                if pf.name in seen_pf:
-                    raise AglTypeError(
-                        f"Duplicate field '{pf.name}' in pattern for variant "
-                        f"'{variant_name}' — each field may appear at most once.",
-                        span=pf.span,
-                    )
-                seen_pf.add(pf.name)
-                if pf.name not in vfields:
-                    raise AglTypeError(
-                        f"Variant '{variant_name}' has no field '{pf.name}'.",
-                        span=pf.span,
-                    )
-                field_type = vfields[pf.name]
-                self._bind_pattern_types(pf.pattern, field_type, pf)
+
+            # Retrieve the registered field kinds for this variant constructor.
+            field_kinds = self._env.get_constructor_field_kinds(
+                subj_type.name, variant_name, module_id=subj_type.module_id
+            )
+            assert field_kinds is not None, (
+                f"field kinds not registered for {subj_type.name}.{variant_name}"
+            )
+
+            # Build BindParam list with has_default=True (partial patterns allowed).
+            bind_params = tuple(
+                BindParam(name=fname, kind=fkind, has_default=True)
+                for fname, fkind in field_kinds
+            )
+
+            # Build named list from named PatternField items.
+            named_bns: list[BoundName[Pattern]] = [
+                BoundName(name=pf.name, value=pf.pattern, span=pf.span)
+                for pf in pattern.named
+            ]
+
+            # Route through bind_arguments (handles zones, duplicates, unknowns).
+            binding = bind_arguments(
+                bind_params,
+                pattern.positional,
+                named_bns,
+                bare_name=lambda p: p.name if isinstance(p, VarPattern) else None,
+                span_of=lambda p: p.span,
+                call_span=pattern.span,
+                context_desc=f"pattern for variant '{variant_name}'",
+            )
+
+            # Record the side-table entry and recursively check bound sub-patterns.
+            bound_pairs: list[tuple[str, Pattern]] = []
+            for (fname, _), bound_pat in zip(field_kinds, binding):
+                if bound_pat is not None:
+                    bound_pairs.append((fname, bound_pat))
+                    field_type = vfields[fname]
+                    self._bind_pattern_types(bound_pat, field_type, pattern)
+            self._constructor_pattern_bindings[pattern.node_id] = tuple(bound_pairs)
 
     def _check_bare_variant_pattern(self, pattern: VarPattern, subj_type: Type) -> None:
         """Validate a bare-name nullary variant pattern (``| Red =>``).
@@ -1900,6 +1925,7 @@ class _Checker:
             type_env=self._env,
             function_signatures=self._env.all_function_signatures(),
             cast_specs=self._cast_specs,
+            constructor_pattern_bindings=self._constructor_pattern_bindings,
         )
 
 

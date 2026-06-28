@@ -98,6 +98,18 @@ _AT_ZONE: dict[str, syntax.ParamKind] = {
 # Interleaved sequence type produced by field_list / param_list.
 _RawEntries: TypeAlias = tuple[syntax.Param | _ParamMarker, ...]
 
+
+@dataclass(frozen=True, slots=True)
+class _PatternFieldsSplit:
+    """Transformer-internal split of pattern_fields into positional and named.
+
+    Exists only during transformation; the AST receives the split as two
+    separate fields on ``ConstructorPattern``.
+    """
+
+    positional: tuple[syntax.Pattern, ...]
+    named: tuple[syntax.PatternField, ...]
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -106,6 +118,12 @@ _Args = list[object]  # Rule children after transformation (tokens + AST nodes)
 
 _ALL_TYPE_EXPRS = (
     TextT, JsonT, BoolT, IntT, DecimalT, NameT, ListT, DictT, UnitT, AgentT, FuncT, AppliedT
+)
+
+# The concrete pattern AST node types (used to pick a sub-pattern out of rule children).
+_PATTERN_NODE_TYPES = (
+    syntax.WildcardPattern, syntax.LiteralPattern,
+    syntax.VarPattern, syntax.ConstructorPattern,
 )
 
 
@@ -1326,13 +1344,9 @@ class AstBuilder(Transformer):
 
     def case_branch(self, meta: Meta, args: _Args) -> syntax.CaseBranch:
         """case_branch: pattern ARROW branch_body"""
-        _pat_types = (
-            syntax.WildcardPattern, syntax.LiteralPattern,
-            syntax.VarPattern, syntax.ConstructorPattern,
-        )
-        pat = next(a for a in args if isinstance(a, _pat_types))
-        body = _find_expr([a for a in args if not isinstance(a, _pat_types)])
-        assert isinstance(pat, _pat_types)
+        pat = next(a for a in args if isinstance(a, _PATTERN_NODE_TYPES))
+        body = _find_expr([a for a in args if not isinstance(a, _PATTERN_NODE_TYPES)])
+        assert isinstance(pat, _PATTERN_NODE_TYPES)
         return syntax.CaseBranch(
             pattern=pat, body=body,
             span=self._span_from_meta(meta), node_id=self._next_id(),
@@ -1544,12 +1558,14 @@ class AstBuilder(Transformer):
         assert len(name_toks) >= 2, "pat_qualified_constructor: expected 2 name tokens"
         qualifier: str | None = str(name_toks[0])
         name = str(name_toks[1])
-        fields: tuple[syntax.PatternField, ...] = ()
+        positional: tuple[syntax.Pattern, ...] = ()
+        named: tuple[syntax.PatternField, ...] = ()
         for a in args:
-            if isinstance(a, tuple) and all(isinstance(x, syntax.PatternField) for x in a):
-                fields = cast(tuple[syntax.PatternField, ...], a)
+            if isinstance(a, _PatternFieldsSplit):
+                positional = a.positional
+                named = a.named
         return syntax.ConstructorPattern(
-            qualifier=qualifier, name=name, fields=fields,
+            qualifier=qualifier, name=name, positional=positional, named=named,
             span=self._span_from_meta(meta), node_id=self._next_id(),
         )
 
@@ -1560,12 +1576,14 @@ class AstBuilder(Transformer):
         ]
         assert len(name_toks) >= 1, "pat_constructor: expected name token"
         name = str(name_toks[0])
-        fields: tuple[syntax.PatternField, ...] = ()
+        positional: tuple[syntax.Pattern, ...] = ()
+        named: tuple[syntax.PatternField, ...] = ()
         for a in args:
-            if isinstance(a, tuple) and all(isinstance(x, syntax.PatternField) for x in a):
-                fields = cast(tuple[syntax.PatternField, ...], a)
+            if isinstance(a, _PatternFieldsSplit):
+                positional = a.positional
+                named = a.named
         return syntax.ConstructorPattern(
-            qualifier=None, name=name, fields=fields,
+            qualifier=None, name=name, positional=positional, named=named,
             span=_span_from_meta(meta), node_id=self._next_id(),
         )
 
@@ -1618,37 +1636,45 @@ class AstBuilder(Transformer):
         )
         return self._literal_pattern(tmpl, meta)
 
-    def pattern_fields(self, meta: Meta, args: _Args) -> tuple[syntax.PatternField, ...]:
-        return tuple(a for a in args if isinstance(a, syntax.PatternField))
+    def pattern_fields(self, meta: Meta, args: _Args) -> _PatternFieldsSplit:
+        """Collect pattern_field children into a split of positional and named."""
+        positional: list[syntax.Pattern] = []
+        named: list[syntax.PatternField] = []
+        seen_named = False
+        for a in args:
+            if isinstance(a, syntax.PatternField):
+                seen_named = True
+                named.append(a)
+            elif isinstance(a, _PATTERN_NODE_TYPES):
+                if seen_named:
+                    raise AglSyntaxError(
+                        "Positional sub-pattern after a named field pattern.",
+                        span=_span_from_meta(meta),
+                    )
+                positional.append(a)
+        return _PatternFieldsSplit(positional=tuple(positional), named=tuple(named))
 
-    def pat_field_full(self, meta: Meta, args: _Args) -> syntax.PatternField:
+    def pat_field_named(self, meta: Meta, args: _Args) -> syntax.PatternField:
+        """pat_field_named: name EQ pattern"""
         name_tok = next(
             (a for a in args if isinstance(a, Token) and a.type == "NAME"),
             None,
         )
         assert name_tok is not None
-        _pat_types = (
-            syntax.WildcardPattern, syntax.LiteralPattern,
-            syntax.VarPattern, syntax.ConstructorPattern,
-        )
-        pat = next((a for a in args if isinstance(a, _pat_types)), None)
+        pat = next((a for a in args if isinstance(a, _PATTERN_NODE_TYPES)), None)
         assert pat is not None
-        assert isinstance(pat, _pat_types)
+        assert isinstance(pat, _PATTERN_NODE_TYPES)
         return syntax.PatternField(
             name=str(name_tok), pattern=pat,
             span=self._span_from_meta(meta), node_id=self._next_id(),
         )
 
-    def pat_field_shorthand(self, meta: Meta, args: _Args) -> syntax.PatternField:
-        name_tok = _find_name_token(args)
-        name = str(name_tok)
-        var_pat = syntax.VarPattern(
-            name=name, span=self._span_from_meta(meta), node_id=self._next_id()
-        )
-        return syntax.PatternField(
-            name=name, pattern=var_pat,
-            span=self._span_from_meta(meta), node_id=self._next_id(),
-        )
+    def pat_field_positional(self, meta: Meta, args: _Args) -> syntax.Pattern:
+        """pat_field_positional: pattern — return the sub-pattern directly."""
+        pat = next((a for a in args if isinstance(a, _PATTERN_NODE_TYPES)), None)
+        assert pat is not None
+        assert isinstance(pat, _PATTERN_NODE_TYPES)
+        return pat
 
     # ------------------------------------------------------------------
     # Import declaration
@@ -1913,14 +1939,17 @@ class AstBuilder(Transformer):
             name = str(name_toks[1])
         else:
             name = str(name_toks[0])
-        fields: tuple[syntax.PatternField, ...] = ()
+        positional: tuple[syntax.Pattern, ...] = ()
+        named: tuple[syntax.PatternField, ...] = ()
         for a in args:
-            if isinstance(a, tuple) and all(isinstance(x, syntax.PatternField) for x in a):
-                fields = cast(tuple[syntax.PatternField, ...], a)
+            if isinstance(a, _PatternFieldsSplit):
+                positional = a.positional
+                named = a.named
         return syntax.ConstructorPattern(
             qualifier=qualifier_str,
             name=name,
-            fields=fields,
+            positional=positional,
+            named=named,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
             module_qualifier=qual,

@@ -617,11 +617,21 @@ class PatternField:
 
 @dataclass(frozen=True, slots=True)
 class ConstructorPattern:
-    """A constructor (record/variant) destructuring pattern."""
+    """A constructor (record/variant) destructuring pattern.
+
+    ``positional`` holds positional sub-patterns (in source order); they bind
+    to positional-capable (POSITIONAL_ONLY or STANDARD) fields left to right, or
+    overflow to named-only shorthand when all positional-capable slots are full.
+    ``named`` holds named sub-patterns ``name = pattern`` (PatternField), each
+    bound to the field with that name.  Positional must precede named (enforced
+    by the transformer); the checker routes both through ``bind_arguments``.
+    Partial patterns are allowed — unmentioned fields are wildcards.
+    """
 
     qualifier: str | None
     name: str
-    fields: tuple[PatternField, ...]
+    positional: tuple[Pattern, ...]
+    named: tuple[PatternField, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     module_qualifier: Qualifier | None = None

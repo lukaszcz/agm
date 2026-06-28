@@ -1606,7 +1606,7 @@ class TestDirectASTConstruction:
         sub_pattern = VarPattern(name="issues", span=_sp(), node_id=_nid())
         pf = PatternField(name="issues", pattern=sub_pattern, span=_sp(), node_id=_nid())
         ctor_pattern = ConstructorPattern(
-            qualifier=None, name="Fail", fields=(pf,), span=_sp(), node_id=_nid()
+            qualifier=None, name="Fail", positional=(), named=(pf,), span=_sp(), node_id=_nid()
         )
         branch = CaseBranch(
             pattern=ctor_pattern,
@@ -1631,7 +1631,8 @@ class TestDirectASTConstruction:
         pf1 = PatternField(name="a", pattern=sub1, span=_sp(5), node_id=_nid())
         pf2 = PatternField(name="b", pattern=sub2, span=_sp(5), node_id=_nid())
         ctor_pat = ConstructorPattern(
-            qualifier=None, name="Pair", fields=(pf1, pf2), span=_sp(5), node_id=_nid()
+            qualifier=None, name="Pair", positional=(), named=(pf1, pf2),
+            span=_sp(5), node_id=_nid()
         )
         branch = CaseBranch(
             pattern=ctor_pat, body=_make_unitlit(), span=_sp(5), node_id=_nid()

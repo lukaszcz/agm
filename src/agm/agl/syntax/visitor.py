@@ -582,7 +582,9 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
     elif isinstance(node, ConstructorPattern):
         if node.module_qualifier is not None:
             walk(node.module_qualifier, callback)
-        for pf in node.fields:
+        for p in node.positional:
+            walk(p, callback)
+        for pf in node.named:
             walk(pf, callback)
 
     elif isinstance(node, ElseSentinel):

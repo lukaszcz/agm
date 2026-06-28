@@ -1,0 +1,7 @@
+enum Opt
+  | Some(value: int)
+  | None
+let o: Opt = Some(value = 3)
+case o of
+  | Some(x, value = y) => print x
+  | None => ()

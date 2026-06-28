@@ -1216,8 +1216,9 @@ class TestScanCapturesLoopForIterWhileCond:
         # Synthetic Loop: for_iter and while_cond both reference x; body is unit.
         body = UnitLit(span=fake_span, node_id=88883)
         loop_node = Loop(
-            for_var="i", for_iter=for_iter_ref, while_cond=while_cond_ref,
-            bound=None, body=body, until_cond=None,
+            for_var="i", for_iter=for_iter_ref,
+            for_range_to=None, for_range_down=False, for_range_by=None,
+            while_cond=while_cond_ref, bound=None, body=body, until_cond=None,
             span=fake_span, node_id=88884,
         )
 

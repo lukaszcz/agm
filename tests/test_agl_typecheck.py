@@ -1505,8 +1505,9 @@ class TestLoop:
         while_cond = BoolLit(value=True, span=s, node_id=9001)
         body = UnitLit(span=s, node_id=9002)
         loop = Loop(
-            for_var=None, for_iter=None, while_cond=while_cond,
-            bound=None, body=body, until_cond=None,
+            for_var=None, for_iter=None,
+            for_range_to=None, for_range_down=False, for_range_by=None,
+            while_cond=while_cond, bound=None, body=body, until_cond=None,
             span=s, node_id=9003,
         )
         top_block = Block(items=(loop,), span=s, node_id=9000)
@@ -1522,8 +1523,9 @@ class TestLoop:
         while_cond = IntLit(value=1, span=s, node_id=9101)
         body = UnitLit(span=s, node_id=9102)
         loop = Loop(
-            for_var=None, for_iter=None, while_cond=while_cond,
-            bound=None, body=body, until_cond=None,
+            for_var=None, for_iter=None,
+            for_range_to=None, for_range_down=False, for_range_by=None,
+            while_cond=while_cond, bound=None, body=body, until_cond=None,
             span=s, node_id=9103,
         )
         top_block = Block(items=(loop,), span=s, node_id=9100)

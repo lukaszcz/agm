@@ -382,7 +382,7 @@ class Case:
 class Loop:
     """Unified loop expression.
 
-    Syntax: ``(for VAR in ITER)? (while COND)? do[BOUND]? body (until COND | done)?``.
+    Syntax: ``(for VAR in ITER [range_tail])? (while COND)? do[BOUND]? body (until COND | done)?``.
 
     Yields ``unit``.
 
@@ -391,8 +391,20 @@ class Loop:
     for_var:
         The loop variable name for a ``for VAR in ITER`` clause, or ``None``.
     for_iter:
-        The collection expression for the ``for`` clause, or ``None``.
-        Always ``None`` when ``for_var`` is ``None``.
+        For a collection ``for``: the collection expression.
+        For a range ``for``: the lower bound expression (``a`` in ``for i in a to b``).
+        ``None`` when there is no ``for`` clause.
+    for_range_to:
+        The upper/lower bound expression (``b``) for an integer-range ``for``
+        clause (``to b`` or ``downto b``).  ``None`` means this is a collection
+        ``for`` (or there is no ``for`` clause at all).
+    for_range_down:
+        ``True`` for a ``downto`` range, ``False`` for a ``to`` range or when
+        there is no range clause.
+    for_range_by:
+        The step expression for an integer-range ``for`` clause (``by k``), or
+        ``None`` when the step is the default (1).  Always ``None`` when
+        ``for_range_to`` is ``None``.
     while_cond:
         The ``while`` guard expression, or ``None``.
     bound:
@@ -407,6 +419,9 @@ class Loop:
 
     for_var: str | None
     for_iter: Expr | None
+    for_range_to: Expr | None
+    for_range_down: bool
+    for_range_by: Expr | None
     while_cond: Expr | None
     bound: Expr | None
     body: Expr

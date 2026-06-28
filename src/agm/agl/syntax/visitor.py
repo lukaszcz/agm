@@ -566,6 +566,10 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
     elif isinstance(node, Loop):
         if node.for_iter is not None:
             walk(node.for_iter, callback)
+        if node.for_range_to is not None:
+            walk(node.for_range_to, callback)
+        if node.for_range_by is not None:
+            walk(node.for_range_by, callback)
         if node.while_cond is not None:
             walk(node.while_cond, callback)
         if node.bound is not None:

@@ -794,8 +794,9 @@ class TestLoopNode:
     def test_loop_no_bound(self) -> None:
         body = UnitLit(span=self._s(), node_id=2)
         node = Loop(
-            for_var=None, for_iter=None, while_cond=None,
-            bound=None, body=body, until_cond=None,
+            for_var=None, for_iter=None,
+            for_range_to=None, for_range_down=False, for_range_by=None,
+            while_cond=None, bound=None, body=body, until_cond=None,
             span=self._s(), node_id=1,
         )
         assert node.bound is None
@@ -807,8 +808,9 @@ class TestLoopNode:
         cond = BoolLit(value=False, span=self._s(), node_id=3)
         bound = IntLit(value=10, span=self._s(), node_id=4)
         node = Loop(
-            for_var=None, for_iter=None, while_cond=None,
-            bound=bound, body=body, until_cond=cond,
+            for_var=None, for_iter=None,
+            for_range_to=None, for_range_down=False, for_range_by=None,
+            while_cond=None, bound=bound, body=body, until_cond=cond,
             span=self._s(), node_id=1,
         )
         assert node.bound is bound
@@ -818,8 +820,9 @@ class TestLoopNode:
         body = Block(items=(UnitLit(span=self._s(), node_id=3),), span=self._s(), node_id=2)
         cond = BoolLit(value=True, span=self._s(), node_id=4)
         node = Loop(
-            for_var=None, for_iter=None, while_cond=None,
-            bound=None, body=body, until_cond=cond,
+            for_var=None, for_iter=None,
+            for_range_to=None, for_range_down=False, for_range_by=None,
+            while_cond=None, bound=None, body=body, until_cond=cond,
             span=self._s(), node_id=1,
         )
         assert isinstance(node.body, Block)
@@ -830,13 +833,15 @@ class TestLoopNode:
         cond = BoolLit(value=True, span=span(1, 0, 1, 4), node_id=6)
         bound = IntLit(value=5, span=span(1, 0, 1, 1), node_id=7)
         a = Loop(
-            for_var=None, for_iter=None, while_cond=None,
-            bound=bound, body=body, until_cond=cond,
+            for_var=None, for_iter=None,
+            for_range_to=None, for_range_down=False, for_range_by=None,
+            while_cond=None, bound=bound, body=body, until_cond=cond,
             span=span(1, 0, 1, 20), node_id=1,
         )
         b = Loop(
-            for_var=None, for_iter=None, while_cond=None,
-            bound=bound, body=body, until_cond=cond,
+            for_var=None, for_iter=None,
+            for_range_to=None, for_range_down=False, for_range_by=None,
+            while_cond=None, bound=bound, body=body, until_cond=cond,
             span=span(9, 0, 9, 20), node_id=99,
         )
         assert a == b
@@ -844,8 +849,9 @@ class TestLoopNode:
     def test_loop_frozen(self) -> None:
         body = UnitLit(span=span(), node_id=2)
         node = Loop(
-            for_var=None, for_iter=None, while_cond=None,
-            bound=None, body=body, until_cond=None,
+            for_var=None, for_iter=None,
+            for_range_to=None, for_range_down=False, for_range_by=None,
+            while_cond=None, bound=None, body=body, until_cond=None,
             span=span(), node_id=1,
         )
         with pytest.raises((FrozenInstanceError, AttributeError)):
@@ -1422,8 +1428,9 @@ class TestVisitorWalk:
         do_body = Block(items=(unit_lit,), span=s, node_id=512)
         do_limit = IntLit(value=5, span=s, node_id=5120)
         do_node = Loop(
-            for_var=None, for_iter=None, while_cond=None,
-            bound=do_limit, body=do_body, until_cond=bool_lit,
+            for_var=None, for_iter=None,
+            for_range_to=None, for_range_down=False, for_range_by=None,
+            while_cond=None, bound=do_limit, body=do_body, until_cond=bool_lit,
             span=s, node_id=513,
         )
 
@@ -1734,8 +1741,9 @@ class TestVisitorWalk:
         body = UnitLit(span=s, node_id=2)
         cond = BoolLit(value=True, span=s, node_id=3)
         node = Loop(
-            for_var=None, for_iter=None, while_cond=None,
-            bound=None, body=body, until_cond=cond,
+            for_var=None, for_iter=None,
+            for_range_to=None, for_range_down=False, for_range_by=None,
+            while_cond=None, bound=None, body=body, until_cond=cond,
             span=s, node_id=1,
         )
 
@@ -1753,8 +1761,9 @@ class TestVisitorWalk:
         s = self._s()
         body = UnitLit(span=s, node_id=2)
         node = Loop(
-            for_var=None, for_iter=None, while_cond=None,
-            bound=None, body=body, until_cond=None,
+            for_var=None, for_iter=None,
+            for_range_to=None, for_range_down=False, for_range_by=None,
+            while_cond=None, bound=None, body=body, until_cond=None,
             span=s, node_id=1,
         )
 
@@ -1774,8 +1783,9 @@ class TestVisitorWalk:
         body = UnitLit(span=s, node_id=2)
         cond = BoolLit(value=True, span=s, node_id=3)
         node = Loop(
-            for_var=None, for_iter=None, while_cond=None,
-            bound=bound, body=body, until_cond=cond,
+            for_var=None, for_iter=None,
+            for_range_to=None, for_range_down=False, for_range_by=None,
+            while_cond=None, bound=bound, body=body, until_cond=cond,
             span=s, node_id=1,
         )
 
@@ -1797,8 +1807,9 @@ class TestVisitorWalk:
         body = UnitLit(span=s, node_id=2)
         cond = BoolLit(value=False, span=s, node_id=3)
         node = Loop(
-            for_var="i", for_iter=for_iter, while_cond=while_cond,
-            bound=None, body=body, until_cond=cond,
+            for_var="i", for_iter=for_iter,
+            for_range_to=None, for_range_down=False, for_range_by=None,
+            while_cond=while_cond, bound=None, body=body, until_cond=cond,
             span=s, node_id=1,
         )
 
@@ -1811,6 +1822,39 @@ class TestVisitorWalk:
         assert visited[2] is while_cond
         assert visited[3] is body
         assert visited[4] is cond
+
+    def test_walk_loop_range_for_visits_range_fields(self) -> None:
+        """walk(Loop with range fields) visits start, range_to, range_by in order."""
+        from agm.agl.syntax.visitor import walk
+
+        s = self._s()
+        start = IntLit(value=1, span=s, node_id=10)
+        range_to = IntLit(value=10, span=s, node_id=11)
+        range_by = IntLit(value=2, span=s, node_id=12)
+        body = UnitLit(span=s, node_id=2)
+        node = Loop(
+            for_var="i",
+            for_iter=start,
+            for_range_to=range_to,
+            for_range_down=False,
+            for_range_by=range_by,
+            while_cond=None,
+            bound=None,
+            body=body,
+            until_cond=None,
+            span=s,
+            node_id=1,
+        )
+
+        visited: list[object] = []
+        walk(node, visited.append)
+
+        # Order: start (for_iter), range_to, range_by, body
+        assert visited[0] is node
+        assert visited[1] is start
+        assert visited[2] is range_to
+        assert visited[3] is range_by
+        assert visited[4] is body
 
     def test_walk_try_visits_body_then_handlers(self) -> None:
         """walk(Try) visits body, then each CatchClause (which visits its body)."""

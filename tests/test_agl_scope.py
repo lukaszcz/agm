@@ -1512,8 +1512,9 @@ class TestDirectASTConstruction:
         body = _make_block(let_probe, assign_n)
         cond_probe = _make_varref("probe")
         loop_node = Loop(
-            for_var=None, for_iter=None, while_cond=None,
-            bound=_make_intlit(5),
+            for_var=None, for_iter=None,
+            for_range_to=None, for_range_down=False, for_range_by=None,
+            while_cond=None, bound=_make_intlit(5),
             body=body,
             until_cond=cond_probe,
             span=_sp(),
@@ -1527,8 +1528,9 @@ class TestDirectASTConstruction:
         var_n = _make_var("n", _make_intlit(0))
         body_n = _make_varref("n")
         loop_node = Loop(
-            for_var=None, for_iter=None, while_cond=None,
-            bound=_make_intlit(5),
+            for_var=None, for_iter=None,
+            for_range_to=None, for_range_down=False, for_range_by=None,
+            while_cond=None, bound=_make_intlit(5),
             body=body_n,
             until_cond=_make_boollit(True),
             span=_sp(),
@@ -1542,8 +1544,9 @@ class TestDirectASTConstruction:
         var_n = _make_var("n", _make_intlit(0))
         iter_ref = _make_varref("n")
         loop_node = Loop(
-            for_var="i", for_iter=iter_ref, while_cond=None,
-            bound=None,
+            for_var="i", for_iter=iter_ref,
+            for_range_to=None, for_range_down=False, for_range_by=None,
+            while_cond=None, bound=None,
             body=_make_intlit(1),
             until_cond=_make_boollit(True),
             span=_sp(),
@@ -1557,8 +1560,9 @@ class TestDirectASTConstruction:
         var_n = _make_var("n", _make_intlit(0))
         while_ref = _make_varref("n")
         loop_node = Loop(
-            for_var=None, for_iter=None, while_cond=while_ref,
-            bound=None,
+            for_var=None, for_iter=None,
+            for_range_to=None, for_range_down=False, for_range_by=None,
+            while_cond=while_ref, bound=None,
             body=_make_intlit(1),
             until_cond=_make_boollit(False),
             span=_sp(),
@@ -1573,8 +1577,9 @@ class TestDirectASTConstruction:
         """break is accepted when lexically inside a loop body."""
         break_node = Break(span=_sp(), node_id=_nid())
         loop_node = Loop(
-            for_var=None, for_iter=None, while_cond=None,
-            bound=None, body=break_node, until_cond=None,
+            for_var=None, for_iter=None,
+            for_range_to=None, for_range_down=False, for_range_by=None,
+            while_cond=None, bound=None, body=break_node, until_cond=None,
             span=_sp(), node_id=_nid(),
         )
         # must not raise
@@ -1584,8 +1589,9 @@ class TestDirectASTConstruction:
         """continue is accepted when lexically inside a loop body."""
         continue_node = Continue(span=_sp(), node_id=_nid())
         loop_node = Loop(
-            for_var=None, for_iter=None, while_cond=None,
-            bound=None, body=continue_node, until_cond=None,
+            for_var=None, for_iter=None,
+            for_range_to=None, for_range_down=False, for_range_by=None,
+            while_cond=None, bound=None, body=continue_node, until_cond=None,
             span=_sp(), node_id=_nid(),
         )
         resolve_program(loop_node)
@@ -1613,8 +1619,9 @@ class TestDirectASTConstruction:
             node_id=_nid(),
         )
         loop_node = Loop(
-            for_var=None, for_iter=None, while_cond=None,
-            bound=None, body=lam, until_cond=None,
+            for_var=None, for_iter=None,
+            for_range_to=None, for_range_down=False, for_range_by=None,
+            while_cond=None, bound=None, body=lam, until_cond=None,
             span=_sp(), node_id=_nid(),
         )
         with pytest.raises(AglScopeError):
@@ -1624,13 +1631,15 @@ class TestDirectASTConstruction:
         """break nested in an inner loop is valid (targets the inner loop)."""
         break_node = Break(span=_sp(), node_id=_nid())
         inner_loop = Loop(
-            for_var=None, for_iter=None, while_cond=None,
-            bound=None, body=break_node, until_cond=None,
+            for_var=None, for_iter=None,
+            for_range_to=None, for_range_down=False, for_range_by=None,
+            while_cond=None, bound=None, body=break_node, until_cond=None,
             span=_sp(), node_id=_nid(),
         )
         outer_loop = Loop(
-            for_var=None, for_iter=None, while_cond=None,
-            bound=None, body=inner_loop, until_cond=None,
+            for_var=None, for_iter=None,
+            for_range_to=None, for_range_down=False, for_range_by=None,
+            while_cond=None, bound=None, body=inner_loop, until_cond=None,
             span=_sp(), node_id=_nid(),
         )
         # must not raise — break is inside the inner loop body
@@ -1640,8 +1649,9 @@ class TestDirectASTConstruction:
         """break inside until_cond is inside the loop interior (valid)."""
         break_node = Break(span=_sp(), node_id=_nid())
         loop_node = Loop(
-            for_var=None, for_iter=None, while_cond=None,
-            bound=None, body=_make_unitlit(),
+            for_var=None, for_iter=None,
+            for_range_to=None, for_range_down=False, for_range_by=None,
+            while_cond=None, bound=None, body=_make_unitlit(),
             until_cond=break_node,
             span=_sp(), node_id=_nid(),
         )
@@ -1673,8 +1683,9 @@ class TestDirectASTConstruction:
         let_f = _make_let("f", lam)
         loop_body = _make_block(let_f, _make_unitlit())
         loop_node = Loop(
-            for_var=None, for_iter=None, while_cond=None,
-            bound=None, body=loop_body, until_cond=None,
+            for_var=None, for_iter=None,
+            for_range_to=None, for_range_down=False, for_range_by=None,
+            while_cond=None, bound=None, body=loop_body, until_cond=None,
             span=sp, node_id=_nid(),
         )
         # must not raise — default references outer binding x, not break/continue
@@ -1704,8 +1715,9 @@ class TestDirectASTConstruction:
             node_id=_nid(),
         )
         loop_node = Loop(
-            for_var=None, for_iter=None, while_cond=None,
-            bound=None, body=lam, until_cond=None,
+            for_var=None, for_iter=None,
+            for_range_to=None, for_range_down=False, for_range_by=None,
+            while_cond=None, bound=None, body=lam, until_cond=None,
             span=_sp(), node_id=_nid(),
         )
         with pytest.raises(AglScopeError):

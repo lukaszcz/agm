@@ -1257,15 +1257,69 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
-    def for_clause(self, meta: Meta, args: _Args) -> tuple[str, syntax.Expr]:
-        """for_clause: "for" name "in" or_expr _NEWLINE?
+    # range_tail / range_dir / range_by transformers.
+    # These produce intermediate tuples consumed by for_clause.
 
-        ``name`` is transparent (``?name``), so args contains the NAME Token
-        and the transformed ``or_expr`` result.
+    def range_to(self, meta: Meta, args: _Args) -> bool:
+        """range_dir: TO -> range_to — direction flag False (ascending)."""
+        return False
+
+    def range_downto(self, meta: Meta, args: _Args) -> bool:
+        """range_dir: DOWNTO -> range_downto — direction flag True (descending)."""
+        return True
+
+    def range_by(self, meta: Meta, args: _Args) -> syntax.Expr:
+        """range_by: BY or_expr — return the step expression."""
+        return cast(syntax.Expr, _find_non_token(args))
+
+    def range_tail(
+        self, meta: Meta, args: _Args
+    ) -> tuple[bool, syntax.Expr, syntax.Expr | None]:
+        """range_tail: range_dir or_expr range_by?
+
+        Returns (is_downto, to_bound_expr, by_step_expr_or_None).
+        The grammar guarantees exactly: one bool (range_dir result) followed by
+        one or two Exprs (bound from or_expr, then optional step from range_by).
+        """
+        # Separate the direction flag from the expression arguments.
+        is_down: bool = next(a for a in args if isinstance(a, bool))
+        exprs = [cast(syntax.Expr, a) for a in args if _is_expr_node(a)]
+        assert len(exprs) in (1, 2), f"range_tail: unexpected expr count {len(exprs)}"
+        to_bound = exprs[0]
+        by_step: syntax.Expr | None = exprs[1] if len(exprs) == 2 else None
+        return (is_down, to_bound, by_step)
+
+    def for_clause(
+        self, meta: Meta, args: _Args
+    ) -> tuple[str, syntax.Expr, syntax.Expr | None, bool, syntax.Expr | None]:
+        """for_clause: "for" name "in" or_expr range_tail? _NEWLINE?
+
+        Returns a 5-tuple:
+          (var_name, start_expr, range_to_expr, range_down, range_by_expr)
+
+        For a collection for (no range_tail):
+          range_to_expr=None, range_down=False, range_by_expr=None.
+        For a range for (range_tail present):
+          range_to_expr is the upper/lower bound; range_down is True for downto;
+          range_by_expr is the step or None for default step.
         """
         name_tok = next(a for a in args if isinstance(a, Token))
-        iter_expr = cast(syntax.Expr, _find_non_token(args))
-        return (str(name_tok), iter_expr)
+        # Separate range_tail tuple (3-element tuple starting with bool) from
+        # the or_expr (the start/collection expression).
+        range_tail_result = next(
+            (
+                cast(tuple[bool, syntax.Expr, syntax.Expr | None], a)
+                for a in args
+                if isinstance(a, tuple) and len(a) == 3 and isinstance(a[0], bool)
+            ),
+            None,
+        )
+        start_expr = cast(syntax.Expr, next(a for a in args if _is_expr_node(a)))
+        if range_tail_result is not None:
+            range_down, range_to, range_by = range_tail_result
+        else:
+            range_down, range_to, range_by = False, None, None
+        return (str(name_tok), start_expr, range_to, range_down, range_by)
 
     def while_clause(self, meta: Meta, args: _Args) -> syntax.Expr:
         """while_clause: "while" or_expr _NEWLINE?
@@ -1274,24 +1328,43 @@ class AstBuilder(Transformer):
         """
         return cast(syntax.Expr, _find_non_token(args))
 
+    # Type alias for the extended for_clause result tuple.
+    _ForClauseResult = tuple[
+        str, syntax.Expr, "syntax.Expr | None", bool, "syntax.Expr | None"
+    ]
+
     def loop_clauses(
-        self, meta: Meta, args: _Args
-    ) -> tuple[tuple[str, syntax.Expr] | None, syntax.Expr | None]:
+        self,
+        meta: Meta,
+        args: _Args,
+    ) -> tuple[
+        tuple[str, syntax.Expr, syntax.Expr | None, bool, syntax.Expr | None] | None,
+        syntax.Expr | None,
+    ]:
         """loop_clauses: for_clause? while_clause?
 
         Returns a 2-tuple (for_result_or_None, while_result_or_None).
-        Detection is type-based (for_clause returns a tuple, while_clause
-        returns an Expr) so this is robust to maybe_placeholders behaviour.
+        Detection is type-based: for_clause returns a 5-tuple starting with a str,
+        while_clause returns an Expr directly.
         """
-        for_result: tuple[str, syntax.Expr] | None = None
-        while_result: syntax.Expr | None = None
-        for a in args:
-            if a is None:  # pragma: no cover  # LALR never injects None for optional rules
-                continue
-            if isinstance(a, tuple):
-                for_result = cast("tuple[str, syntax.Expr]", a)
-            else:
-                while_result = cast(syntax.Expr, a)
+        # for_clause returns a 5-tuple (str, Expr, Expr|None, bool, Expr|None).
+        # while_clause returns an Expr.  Distinguish by the 5-tuple signature.
+        for_result: (
+            tuple[str, syntax.Expr, syntax.Expr | None, bool, syntax.Expr | None] | None
+        ) = next(
+            (
+                cast(
+                    "tuple[str, syntax.Expr, syntax.Expr | None, bool, syntax.Expr | None]", a
+                )
+                for a in args
+                if isinstance(a, tuple) and len(a) == 5 and isinstance(a[0], str)
+            ),
+            None,
+        )
+        while_result: syntax.Expr | None = next(
+            (cast(syntax.Expr, a) for a in args if _is_expr_node(a)),
+            None,
+        )
         return (for_result, while_result)
 
     def loop_bound(self, meta: Meta, args: _Args) -> syntax.Expr:
@@ -1358,13 +1431,28 @@ class AstBuilder(Transformer):
         assert len(children) in (3, 4), f"loop_expr: unexpected children count {len(children)}"
 
         clauses = cast(
-            "tuple[tuple[str, syntax.Expr] | None, syntax.Expr | None]", children[0]
+            "tuple["
+            "  tuple[str, syntax.Expr, syntax.Expr | None, bool, syntax.Expr | None] | None,"
+            "  syntax.Expr | None"
+            "]",
+            children[0],
         )
         for_var: str | None = None
         for_iter: syntax.Expr | None = None
+        for_range_to: syntax.Expr | None = None
+        for_range_down: bool = False
+        for_range_by: syntax.Expr | None = None
         if clauses[0] is not None:
-            for_var, for_iter = clauses[0]
+            for_var, for_iter, for_range_to, for_range_down, for_range_by = clauses[0]
         while_cond: syntax.Expr | None = clauses[1]
+
+        # Invariants: range for requires var + start + bound; collection for has no bound.
+        if for_range_to is not None:
+            assert for_var is not None, "loop_expr: range for missing var"
+            assert for_iter is not None, "loop_expr: range for missing start expression"
+        else:
+            assert not for_range_down, "loop_expr: range_down set without range_to"
+            assert for_range_by is None, "loop_expr: range_by set without range_to"
 
         # loop_end is always the last child; do_body is second-to-last.
         until_cond: syntax.Expr | None = cast("syntax.Expr | None", children[-1])
@@ -1377,6 +1465,9 @@ class AstBuilder(Transformer):
         return syntax.Loop(
             for_var=for_var,
             for_iter=for_iter,
+            for_range_to=for_range_to,
+            for_range_down=for_range_down,
+            for_range_by=for_range_by,
             while_cond=while_cond,
             bound=bound,
             body=body,
@@ -1589,7 +1680,12 @@ class AstBuilder(Transformer):
 
     def pat_field_full(self, meta: Meta, args: _Args) -> syntax.PatternField:
         name_tok = next(
-            (a for a in args if isinstance(a, Token) and a.type == "NAME"),
+            (
+                a
+                for a in args
+                if isinstance(a, Token)
+                and a.type in ("NAME", "AGENT", "TO", "DOWNTO", "BY")
+            ),
             None,
         )
         assert name_tok is not None
@@ -2019,11 +2115,12 @@ def _find_type_expr(args: _Args) -> TypeExpr:
 def _find_name_token(args: _Args) -> Token:
     """Return the field/key name Token from a ``field_name``-bearing rule.
 
-    ``field_name`` matches either a ``NAME`` identifier or the
-    reserved word ``agent`` (token type ``AGENT``); all arrive here as plain name Tokens.
+    ``field_name`` matches a ``NAME`` identifier or any keyword admitted as a
+    field name: ``AGENT``, ``TO``, ``DOWNTO``, ``BY``.  All arrive here as
+    plain Tokens; callers treat ``str(token)`` as the field name string.
     """
     for a in args:
-        if isinstance(a, Token) and a.type in ("NAME", "AGENT"):
+        if isinstance(a, Token) and a.type in ("NAME", "AGENT", "TO", "DOWNTO", "BY"):
             return a
     raise AssertionError(f"_find_name_token: no name token found in {args!r}")  # pragma: no cover
 

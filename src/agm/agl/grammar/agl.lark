@@ -88,6 +88,11 @@
 // `agent` is the opaque agent type.  The custom lexer emits this token type
 // for the `agent` keyword.
 %declare AGENT
+// TO, DOWNTO, BY: declared so they can appear in `field_name` (a keyword
+// admitted as a record/key identifier) exactly as AGENT is.  Using declared
+// terminals (rather than string literals) is the mechanism that makes them
+// referenceable by name in field_name without grammar conflicts.
+%declare TO DOWNTO BY
 %declare INT DECIMAL
 %declare ASSIGN EQ NEQ LT LE GT GE
 %declare PLUS MINUS STAR SLASH
@@ -160,10 +165,12 @@ field_def: field_name COLON type_expr
 // field_name: a record/struct field or named-key reference.  The reserved word
 // `agent` (which leads an agent_decl and is also a type) is also a legitimate
 // field name on built-in exception records (AgentCallError.agent), so it is
-// admitted here alongside ordinary identifiers.
+// admitted here alongside ordinary identifiers.  `to`, `downto`, and `by` are
+// also admitted so that existing field uses like `tagged(by: T)` continue to
+// work after those words became reserved keywords.
 // Inlined (`?`): each alternative is a single token, so the parent rule
-// receives the name Token (type NAME or AGENT) directly.
-?field_name: NAME | AGENT
+// receives the name Token (type NAME, AGENT, TO, DOWNTO, or BY) directly.
+?field_name: NAME | AGENT | TO | DOWNTO | BY
 
 ?name: NAME
 
@@ -373,8 +380,17 @@ case_branch: pattern ARROW branch_body
 // fixed number of non-terminal children, avoiding maybe_placeholders issues.
 loop_expr    : loop_clauses "do" loop_bound? do_body loop_end
 loop_clauses : for_clause? while_clause?
-for_clause   : "for" name "in" or_expr _NEWLINE?
+for_clause   : "for" name "in" or_expr range_tail? _NEWLINE?
 while_clause : "while" or_expr _NEWLINE?
+
+// range_tail: the optional integer-range tail on a for clause.
+// When absent, the for clause iterates a collection (list/dict/text).
+// When present, the for clause iterates an integer counter from the
+// start expression (stored in for_iter) up or down to the bound expression.
+range_tail   : range_dir or_expr range_by?
+range_dir    : TO     -> range_to
+             | DOWNTO -> range_downto
+range_by     : BY or_expr
 
 // loop_bound: [expr] — an arbitrary int-typed expression as the iteration bound.
 loop_bound: DO_LSQB or_expr RSQB
@@ -640,8 +656,10 @@ pattern: name DOT name (LPAR pattern_fields? RPAR)?         -> pat_qualified_con
 
 pattern_fields: pattern_field (COMMA pattern_field)* COMMA?
 
-pattern_field: name COLON pattern   -> pat_field_full
-             | name                 -> pat_field_shorthand
+// pattern_field key uses field_name (not name) so keyword-admitted field names
+// such as `by`, `to`, `downto` are valid pattern key names.
+pattern_field: field_name COLON pattern   -> pat_field_full
+             | field_name                 -> pat_field_shorthand
 
 // ---------------------------------------------------------------------------
 // Module system: import declarations and private declarations

@@ -1646,6 +1646,142 @@ class TestLoopExpr:
 
 
 # ---------------------------------------------------------------------------
+# Control flow: integer-range for loops
+# ---------------------------------------------------------------------------
+
+
+class TestRangeForLoop:
+    """Parser tests for integer-range for clauses (to / downto / by)."""
+
+    def test_for_to_parses_range_fields(self) -> None:
+        """for i in a to b do … done → Loop with range fields set."""
+        e = first(parse("for i in 1 to 10 do x := i done"))
+        assert isinstance(e, Loop)
+        assert e.for_var == "i"
+        assert isinstance(e.for_iter, IntLit)
+        assert e.for_iter.value == 1
+        assert isinstance(e.for_range_to, IntLit)
+        assert e.for_range_to.value == 10
+        assert e.for_range_down is False
+        assert e.for_range_by is None
+
+    def test_for_downto_parses_range_fields(self) -> None:
+        """for i in a downto b do … done → Loop with downto direction."""
+        e = first(parse("for i in 5 downto 1 do x := i done"))
+        assert isinstance(e, Loop)
+        assert e.for_var == "i"
+        assert isinstance(e.for_iter, IntLit)
+        assert e.for_iter.value == 5
+        assert isinstance(e.for_range_to, IntLit)
+        assert e.for_range_to.value == 1
+        assert e.for_range_down is True
+        assert e.for_range_by is None
+
+    def test_for_to_by_parses_step(self) -> None:
+        """for i in a to b by k do … done → Loop with by step set."""
+        e = first(parse("for i in 0 to 9 by 2 do x := i done"))
+        assert isinstance(e, Loop)
+        assert e.for_range_down is False
+        assert isinstance(e.for_range_by, IntLit)
+        assert e.for_range_by.value == 2
+
+    def test_for_downto_by_parses_step(self) -> None:
+        """for i in a downto b by k do … done → Loop with downto + step."""
+        e = first(parse("for i in 10 downto 1 by 3 do x := i done"))
+        assert isinstance(e, Loop)
+        assert e.for_range_down is True
+        assert isinstance(e.for_range_by, IntLit)
+        assert e.for_range_by.value == 3
+
+    def test_collection_for_unchanged(self) -> None:
+        """Collection for (no range tail) still builds Loop with range fields None/False."""
+        e = first(parse("for x in items do print x done"))
+        assert isinstance(e, Loop)
+        assert e.for_var == "x"
+        assert e.for_range_to is None
+        assert e.for_range_down is False
+        assert e.for_range_by is None
+
+    def test_range_for_with_while_clause(self) -> None:
+        """Range for composes with while clause."""
+        src = "for i in 1 to 100 while i < limit do x := i done"
+        e = first(parse(src))
+        assert isinstance(e, Loop)
+        assert e.for_range_to is not None
+        assert e.while_cond is not None
+
+    def test_range_for_with_bound(self) -> None:
+        """Range for composes with [n] loop bound."""
+        e = first(parse("for i in 1 to 100 do[50] x := i done"))
+        assert isinstance(e, Loop)
+        assert e.for_range_to is not None
+        assert isinstance(e.bound, IntLit)
+        assert e.bound.value == 50
+
+    def test_range_for_with_until(self) -> None:
+        """Range for with until terminator."""
+        e = first(parse("for i in 1 to 100 do x := i until x > 5"))
+        assert isinstance(e, Loop)
+        assert e.for_range_to is not None
+        assert e.until_cond is not None
+
+    def test_range_for_expr_bounds(self) -> None:
+        """Range bounds can be arbitrary expressions."""
+        e = first(parse("for i in start to end + 1 do x := i done"))
+        assert isinstance(e, Loop)
+        assert isinstance(e.for_iter, VarRef)
+        assert e.for_iter.name == "start"
+        assert isinstance(e.for_range_to, BinaryOp)
+
+    def test_range_for_expr_step(self) -> None:
+        """Range step can be an arbitrary expression."""
+        e = first(parse("for i in 1 to 20 by step_size do x := i done"))
+        assert isinstance(e, Loop)
+        assert isinstance(e.for_range_by, VarRef)
+        assert e.for_range_by.name == "step_size"
+
+    def test_by_as_field_name_regression(self) -> None:
+        """'by' used as a record field name still parses."""
+        src = (
+            "record Tagged(by: int)\n"
+            "let t = Tagged(by: 7)\n"
+            "t.by"
+        )
+        prog = parse(src)
+        assert prog is not None
+
+    def test_to_as_field_name_regression(self) -> None:
+        """'to' used as a record field name still parses."""
+        src = (
+            "record Range(to: int)\n"
+            "let r = Range(to: 10)\n"
+            "r.to"
+        )
+        prog = parse(src)
+        assert prog is not None
+
+    def test_downto_as_field_name_regression(self) -> None:
+        """'downto' used as a record field name still parses."""
+        src = (
+            "record Step(downto: int)\n"
+            "let s = Step(downto: 1)\n"
+            "s.downto"
+        )
+        prog = parse(src)
+        assert prog is not None
+
+    def test_tagged_by_existing_program_regression(self) -> None:
+        """Existing tagged(by: …) patterns still parse correctly."""
+        src = (
+            "record Holder(by: int)\n"
+            "let h = Holder(by: 7)\n"
+            "h.by"
+        )
+        prog = parse(src)
+        assert prog is not None
+
+
+# ---------------------------------------------------------------------------
 # Control flow: try_expr
 # ---------------------------------------------------------------------------
 

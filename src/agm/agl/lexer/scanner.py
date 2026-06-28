@@ -110,8 +110,10 @@ _IDENT_STOP: frozenset[str] = frozenset({
     # a letter or _.
     # @ is a stop character so that @pos/@std/@named lex as two tokens (AT NAME)
     # rather than gluing into the preceding identifier.
+    # = is a stop character so that ``a=b`` lexes as NAME EQ NAME, not a single
+    # identifier — required for no-space named-arg syntax (``f(x=1)``).
     "(", ")", "[", "]", "{", "}",
-    ":", ",", ".", "|", ";", "/", "@",
+    ":", ",", ".", "|", ";", "/", "@", "=",
 })
 
 _TAB_LEN = 4

@@ -18,8 +18,13 @@ print(add3(a = 1, b = 2, c = 3))
 print(add3(c = 3, a = 1, b = 2))
 print(add3(1, c = 3, b = 2))
 
+# No-space '=' must parse identically to spaced ' = '.
+print(add3(a=1, b=2, c=3))
+print(add3(c=3, a=1, b=2))
+print(add3(1, c=3, b=2))
+
 # The severity level selects a different named-arg call path per scenario.
 if
-  | level >= 2 => print(tag(msg, prefix = "ERR", suffix = "!"))
-  | level == 1 => print(tag(msg, prefix = "WARN"))
+  | level >= 2 => print(tag(msg, prefix="ERR", suffix="!"))
+  | level == 1 => print(tag(msg, prefix="WARN"))
   | else => print(tag(msg))

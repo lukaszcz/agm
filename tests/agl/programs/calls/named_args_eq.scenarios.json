@@ -4,21 +4,21 @@
       "name": "error_level_takes_err_branch",
       "params": {"msg": "hello", "level": 3},
       "expect": {
-        "stdout": "6\n6\n6\n6\n[ERR] hello!\n"
+        "stdout": "6\n6\n6\n6\n6\n6\n6\n[ERR] hello!\n"
       }
     },
     {
       "name": "warn_level_takes_warn_branch",
       "params": {"msg": "problem", "level": 1},
       "expect": {
-        "stdout": "6\n6\n6\n6\n[WARN] problem\n"
+        "stdout": "6\n6\n6\n6\n6\n6\n6\n[WARN] problem\n"
       }
     },
     {
       "name": "low_level_takes_default_branch",
       "params": {"msg": "ok", "level": 0},
       "expect": {
-        "stdout": "6\n6\n6\n6\n[INFO] ok\n"
+        "stdout": "6\n6\n6\n6\n6\n6\n6\n[INFO] ok\n"
       }
     }
   ]

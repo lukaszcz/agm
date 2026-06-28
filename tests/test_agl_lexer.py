@@ -1567,13 +1567,14 @@ class TestIdentifierUnicodeAndSymbols:
         assert tok("do-it-now!") == [("NAME", "do-it-now!")]
 
     def test_operator_chars_in_identifier(self) -> None:
-        # <, >, =, +, * are identifier-continuation characters, so a run of
-        # them with no surrounding whitespace is one identifier.
+        # -, >, +, * (but NOT =) are identifier-continuation characters, so
+        # a run of them with no surrounding whitespace stays one identifier.
         assert tok("a->b") == [("NAME", "a->b")]
-        assert tok("x!=3") == [("NAME", "x!=3")]
         assert tok("a+b") == [("NAME", "a+b")]
         assert tok("n*x") == [("NAME", "n*x")]
-        assert tok("Pass=>()") == [("NAME", "Pass=>"), ("LPAR", "("), ("RPAR", ")")]
+        # = is a stop character: a=b lexes as NAME EQ NAME, not a single identifier.
+        assert tok("x!=3") == [("NAME", "x!"), ("EQ", "="), ("INT", "3")]
+        assert tok("Pass=>()") == [("NAME", "Pass"), ("ARROW", "=>"), ("LPAR", "("), ("RPAR", ")")]
 
     def test_spaces_break_identifier_before_operator(self) -> None:
         # Whitespace is a stop character, so the operator tokens re-emerge.

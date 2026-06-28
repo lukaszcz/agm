@@ -551,6 +551,24 @@ case status of
       raise Abort(message: reason)
 ```
 
+## `break` and `continue` as expressions
+
+`break` and `continue` are loop-control expressions. Both have the **bottom
+type** (assignable to any expected type), so they may appear in any expression
+position inside a loop:
+
+```agl
+let x: int = if done => break else => count
+```
+
+`break` exits the innermost enclosing loop immediately; the loop produces
+`unit`. `continue` skips the remainder of the current iteration's body —
+including the `until` condition — and restarts the loop body from the top.
+
+Both are checked to appear inside a loop body or `until` condition. Using
+`break` or `continue` outside a loop — including inside a `fn` or `lambda`
+that is defined inside a loop — is a static error.
+
 ## `try` as an expression
 
 `try … catch …` yields a value: the body and every handler must agree on a

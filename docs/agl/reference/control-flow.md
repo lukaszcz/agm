@@ -226,3 +226,35 @@ until review is Pass
 The `until` keyword may start its own line aligned with `do`, courtesy of the
 branch-marker continuation rule
 ([Lexical structure](lexical-structure.md)).
+
+## `break` and `continue`
+
+`break` and `continue` provide early loop-exit and iteration-skip control.
+Both are expressions with **bottom type** and may appear in any expression
+position inside a loop body or `until` condition:
+
+```agl
+do
+  let line: text = ask("Enter a value (or 'quit'):", agent: user)
+  if line = "quit" => break
+  print "Got: ${line}"
+done
+```
+
+`break` exits the innermost enclosing loop immediately. The loop expression
+then completes normally and yields `unit`.
+
+`continue` ends the current iteration, skipping the remainder of the loop body
+— including the `until` condition — and immediately restarts the body from the
+top (re-running the bound check and any header guards).
+
+```agl
+do
+  let n: int = ask("Enter a positive int:", agent: user)
+  if n <= 0 => continue
+  process(n)
+until done_processing(n)
+```
+
+Using `break` or `continue` outside any enclosing loop, or inside a `fn` or
+`lambda` definition nested inside a loop, is a static error.

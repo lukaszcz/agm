@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "limit_1",
+      "params": {"limit": 1},
+      "expect": {"stdout": "1\n"}
+    },
+    {
+      "name": "limit_5",
+      "params": {"limit": 5},
+      "expect": {"stdout": "5\n"}
+    },
+    {
+      "name": "limit_10",
+      "params": {"limit": 10},
+      "expect": {"stdout": "10\n"}
+    }
+  ]
+}

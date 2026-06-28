@@ -1,0 +1,14 @@
+{
+  "scenarios": [
+    {
+      "name": "break_bypasses_catch_at_1",
+      "params": {"n": 1},
+      "expect": {"stdout": "1\n"}
+    },
+    {
+      "name": "break_bypasses_catch_at_3",
+      "params": {"n": 3},
+      "expect": {"stdout": "3\n"}
+    }
+  ]
+}

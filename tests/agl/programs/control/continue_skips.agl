@@ -1,0 +1,13 @@
+# `continue` skips all items after it in the loop body.
+# Any code placed after `continue` in the body is unreachable on that iteration.
+# We verify by putting `i := i + 100` after the continue: if it were reached,
+# the observable `i` would be much larger than `n`.
+param n: int
+var i: int = 0
+do
+  i := i + 1
+  if i >= n => break
+  continue
+  i := i + 100
+done
+print i

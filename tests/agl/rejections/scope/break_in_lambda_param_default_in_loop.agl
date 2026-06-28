@@ -1,0 +1,6 @@
+var i: int = 0
+do
+  let f = fn(p: int = break) -> int => p
+  i := i + 1
+  if i >= 3 => break
+done

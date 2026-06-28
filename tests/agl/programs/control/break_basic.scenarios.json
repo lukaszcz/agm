@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "break_at_target_1",
+      "params": {"target": 1},
+      "expect": {"stdout": "1\n"}
+    },
+    {
+      "name": "break_at_target_3",
+      "params": {"target": 3},
+      "expect": {"stdout": "3\n"}
+    },
+    {
+      "name": "break_at_target_10",
+      "params": {"target": 10},
+      "expect": {"stdout": "10\n"}
+    }
+  ]
+}

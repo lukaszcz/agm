@@ -44,6 +44,7 @@ from agm.agl.syntax import (
     BinOp,
     Block,
     BoolLit,
+    Break,
     Call,
     Case,
     CaseBranch,
@@ -51,6 +52,7 @@ from agm.agl.syntax import (
     CatchClause,
     ConfigPragma,
     ConstructorPattern,
+    Continue,
     DecimalLit,
     DictEntry,
     DictLit,
@@ -1617,6 +1619,30 @@ class TestLoopExpr:
         assert isinstance(loop, Loop)
         assert isinstance(loop.bound, IntLit)
         assert loop.until_cond is None
+
+    def test_break_parses_to_Break_node(self) -> None:
+        """break inside a do…done body parses to a Break AST node."""
+        e = first(parse("do break done"))
+        assert isinstance(e, Loop)
+        assert isinstance(e.body, Block)
+        assert isinstance(e.body.items[0], Break)
+
+    def test_continue_parses_to_Continue_node(self) -> None:
+        """continue inside a do…done body parses to a Continue AST node."""
+        e = first(parse("do continue done"))
+        assert isinstance(e, Loop)
+        assert isinstance(e.body, Block)
+        assert isinstance(e.body.items[0], Continue)
+
+    def test_break_in_if_branch_parses(self) -> None:
+        """break in a conditional branch inside a loop body parses correctly."""
+        src = "do\n  if x => break\ndone"
+        e = first(parse(src))
+        assert isinstance(e, Loop)
+        assert isinstance(e.body, Block)
+        if_node = e.body.items[0]
+        assert isinstance(if_node, If)
+        assert isinstance(if_node.branches[0].body, Break)
 
 
 # ---------------------------------------------------------------------------

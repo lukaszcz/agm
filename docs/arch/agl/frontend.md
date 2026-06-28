@@ -8,7 +8,7 @@ The lexer is hand-written because AgL is indentation-sensitive: it produces INDE
 
 ## AST
 
-The AST is plain frozen dataclasses with no parser types — the firewall the rest of the implementation depends on. Because AgL is expression-oriented, there is no statement/expression split: a single unified node family covers blocks, bindings, assignment, control flow (`if`/`case`/`do`/`try`), and a single call node for every kind of invocation (user functions, built-ins, and function values, with the bare-argument call sugar desugaring to the same node). Casts (`as` / `as?`), indexing, lambdas and named function definitions, the unit literal, and divergence (`raise`) are all expression nodes. Type-level nodes describe the surface type syntax, including generic type applications.
+The AST is plain frozen dataclasses with no parser types — the firewall the rest of the implementation depends on. Because AgL is expression-oriented, there is no statement/expression split: a single unified node family covers blocks, bindings, assignment, control flow (`if`/`case`/`do`/`try`), and a single call node for every kind of invocation (user functions, built-ins, and function values, with the bare-argument call sugar desugaring to the same node). Casts (`as` / `as?`), indexing, lambdas and named function definitions, the unit literal, divergence (`raise`), and loop-control (`break`/`continue`) are all expression nodes. Type-level nodes describe the surface type syntax, including generic type applications.
 
 Each node carries a stable id assigned at build time. Later passes never mutate nodes; they record their conclusions in side tables keyed by that id (carried in the resolved and checked program objects). This is the universal annotation convention — it is why nodes can be frozen and shared, and why `id()`-based identity is never used.
 
@@ -22,11 +22,11 @@ Resolution is namespace- and scope-directed, never spelling-directed — a direc
 - Constructors live in the value namespace; an ambiguous unqualified constructor name is a static error, disambiguated by type qualification.
 - A bare name in a `case` pattern is treated as a constructor pattern when it names an in-scope constructor and otherwise as a variable binder — decided by resolution, not capitalization.
 
-Agents must be declared in source; the scope pass binds each declared agent as a first-class value of agent type. Graph-mode resolution extends this pass across modules; see [modules.md](modules.md).
+Agents must be declared in source; the scope pass binds each declared agent as a first-class value of agent type. The resolver also tracks a loop-context flag, reset at function/lambda boundaries, to catch `break`/`continue` used outside any enclosing loop at resolution time. Graph-mode resolution extends this pass across modules; see [modules.md](modules.md).
 
 ## Type System
 
-The semantic type model lives in the `semantics` foundation package and is consumed by the typecheck pass. Alongside the ordinary scalar, container, record, and enum types it carries the types the expression-oriented design needs: a unit type for side-effecting expressions, a positional function type, an opaque agent type, a bottom type for `raise`, and rigid type variables for generics. Records and enums have nominal identity by name (and, in graph mode, owning module), not by structure.
+The semantic type model lives in the `semantics` foundation package and is consumed by the typecheck pass. Alongside the ordinary scalar, container, record, and enum types it carries the types the expression-oriented design needs: a unit type for side-effecting expressions, a positional function type, an opaque agent type, a bottom type for `raise`/`break`/`continue`, and rigid type variables for generics. Records and enums have nominal identity by name (and, in graph mode, owning module), not by structure.
 
 The pass selects concrete behavior that the evaluator later relies on:
 

@@ -67,12 +67,14 @@ from agm.agl.syntax.nodes import (
     BinaryOp,
     Block,
     BoolLit,
+    Break,
     Call,
     Case,
     Cast,
     CatchClause,
     ConfigPragma,
     ConstructorPattern,
+    Continue,
     DecimalLit,
     DictLit,
     EnumDef,
@@ -294,6 +296,10 @@ class _Resolver:
         # VarPattern.node_id of bare names that denote a constructor (nullary
         # variant patterns), not variable binders.
         self._bare_variant_patterns: set[int] = set()
+        # Loop-context flag: True when resolving inside a loop body (while_cond,
+        # body, or until_cond). Reset to False across fn/def boundaries so that
+        # `break`/`continue` cannot cross a function boundary into an outer loop.
+        self._in_loop: bool = False
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -771,6 +777,35 @@ class _Resolver:
             self._at_root = was_root
             self._pop_scope()
 
+    @contextmanager
+    def _loop_body_ctx(self) -> Iterator[None]:
+        """Context manager that sets ``_in_loop`` to ``True`` for the duration.
+
+        Used when resolving a loop's interior (while_cond, body, until_cond)
+        so that ``break``/``continue`` inside are accepted.  Save/restore so
+        nested loops and post-loop scope both behave correctly.
+        """
+        prev = self._in_loop
+        self._in_loop = True
+        try:
+            yield
+        finally:
+            self._in_loop = prev
+
+    @contextmanager
+    def _fn_boundary_ctx(self) -> Iterator[None]:
+        """Context manager that resets ``_in_loop`` to ``False`` for the duration.
+
+        Used when resolving a ``fn``/``def`` body and parameter defaults so that
+        ``break``/``continue`` cannot cross a function boundary into an outer loop.
+        """
+        prev = self._in_loop
+        self._in_loop = False
+        try:
+            yield
+        finally:
+            self._in_loop = prev
+
     def _define(self, name: str, ref: BindingRef) -> None:
         """Define *name* in the current scope; error on redeclaration.
 
@@ -952,7 +987,7 @@ class _Resolver:
                 span=node.span,
             )
         # Defaults are resolved in the enclosing (root) scope — they are
-        # evaluated in the function's DEFINITION scope (plan D5).
+        # evaluated in the function's definition scope.
         self._resolve_params_and_body(node)
 
     def _resolve_type_decl(self, node: RecordDef | EnumDef | ExceptionDef | TypeAlias) -> None:
@@ -1110,6 +1145,18 @@ class _Resolver:
             self._resolve_lambda(expr)
         elif isinstance(expr, Raise):
             self._resolve_expr(expr.exc)
+        elif isinstance(expr, Break):
+            if not self._in_loop:
+                raise AglScopeError(
+                    "'break' used outside a loop.",
+                    span=expr.span,
+                )
+        elif isinstance(expr, Continue):
+            if not self._in_loop:
+                raise AglScopeError(
+                    "'continue' used outside a loop.",
+                    span=expr.span,
+                )
         elif isinstance(expr, FieldAccess):
             self._resolve_field_access(expr)
         elif isinstance(expr, IndexAccess):
@@ -1444,33 +1491,46 @@ class _Resolver:
     def _resolve_loop(self, node: Loop) -> None:
         """Resolve a unified loop expression.
 
-        Resolution order (D2/D4 scoping):
+        Resolution order:
         - ``bound`` (if any) is resolved in the ENCLOSING scope — evaluated at
           loop entry, before any body bindings exist, so it cannot see them.
         - ``for_iter`` (if any) is resolved in the ENCLOSING scope (same reason).
-        - Opens ONE child scope; ``for_var`` (future task) is bound here.
-        - ``while_cond`` (if any) is resolved in the child scope.
+        - Opens ONE child scope; ``for_var`` is bound here when present.
+        - ``while_cond`` (if any) is resolved in the child scope, inside the
+          loop-body context so ``break``/``continue`` are valid.
         - If the body is a ``Block``, its items are resolved DIRECTLY in the
           child scope so bindings are visible to ``until_cond``.
         - ``until_cond`` (if present) is resolved in the child scope.
+
+        ``_in_loop`` is set to ``True`` for while_cond/body/until_cond (the
+        loop interior), then restored on exit.  It is intentionally left at
+        its enclosing value when resolving ``bound`` and ``for_iter`` (both
+        evaluated before the loop starts, in the enclosing frame — a ``break``
+        in a bound is only valid if the loop itself is nested in an outer loop
+        body, which the inherited ``_in_loop`` state already encodes).
+
+        When adding ``for_var`` binding, bind it into the child scope before
+        resolving ``while_cond`` (the for variable must be in scope for
+        while_cond, body, and until_cond).
         """
-        # Resolve bound and for_iter in the enclosing scope.
+        # Resolve bound and for_iter in the enclosing scope (and context).
         if node.bound is not None:
             self._resolve_expr(node.bound)
         if node.for_iter is not None:
             self._resolve_expr(node.for_iter)
         with self._child_scope(node.node_id):
-            # while_cond resolved before body (future: for_var is already bound here).
-            if node.while_cond is not None:
-                self._resolve_expr(node.while_cond)
-            if isinstance(node.body, Block):
-                # Inline block items directly — no extra block scope.
-                self._resolve_block_items(node.body.items)
-            else:
-                self._resolve_expr(node.body)
-            # until_cond sees all body bindings.
-            if node.until_cond is not None:
-                self._resolve_expr(node.until_cond)
+            with self._loop_body_ctx():
+                # while_cond resolved before body; for_var is bound here when present.
+                if node.while_cond is not None:
+                    self._resolve_expr(node.while_cond)
+                if isinstance(node.body, Block):
+                    # Inline block items directly — no extra block scope.
+                    self._resolve_block_items(node.body.items)
+                else:
+                    self._resolve_expr(node.body)
+                # until_cond sees all body bindings.
+                if node.until_cond is not None:
+                    self._resolve_expr(node.until_cond)
 
     def _resolve_try(self, node: Try) -> None:
         # Try body — its own scope.
@@ -1509,29 +1569,36 @@ class _Resolver:
 
         Shared by ``def`` and ``fn`` — both evaluate defaults in their definition
         scope and bind params into a fresh child scope for the body.
+
+        ``_in_loop`` is reset to ``False`` for the entire method so that neither
+        a ``break``/``continue`` in a parameter default nor one in the body can
+        cross the function boundary into an outer loop.  Defaults are still
+        resolved in the enclosing scope (only ``_in_loop`` changes, not the
+        scope stack), so they can reference outer bindings but not the params.
         """
-        for param in node.params:
-            if param.default is not None:
-                self._resolve_expr(param.default)
-        with self._child_scope(node.node_id) as param_scope:
+        with self._fn_boundary_ctx():
             for param in node.params:
-                self._check_not_reserved(param.name, param.span)
-                ref = BindingRef(
-                    name=param.name,
-                    mutable=False,
-                    decl_span=param.span,
-                    decl_node_id=param.node_id,
-                    kind=BinderKind.param_binding,
-                    module_id=self._module_id,
-                )
-                if param.name in param_scope.bindings:
-                    raise AglScopeError(
-                        f"Name '{param.name}' is already declared in this scope.",
-                        span=param.span,
+                if param.default is not None:
+                    self._resolve_expr(param.default)
+            with self._child_scope(node.node_id) as param_scope:
+                for param in node.params:
+                    self._check_not_reserved(param.name, param.span)
+                    ref = BindingRef(
+                        name=param.name,
+                        mutable=False,
+                        decl_span=param.span,
+                        decl_node_id=param.node_id,
+                        kind=BinderKind.param_binding,
+                        module_id=self._module_id,
                     )
-                param_scope.define(param.name, ref)
-            if node.body is not None:
-                self._resolve_expr_or_block(node.body)
+                    if param.name in param_scope.bindings:
+                        raise AglScopeError(
+                            f"Name '{param.name}' is already declared in this scope.",
+                            span=param.span,
+                        )
+                    param_scope.define(param.name, ref)
+                if node.body is not None:
+                    self._resolve_expr_or_block(node.body)
 
     # ------------------------------------------------------------------
     # Pattern variable binding

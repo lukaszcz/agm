@@ -1243,6 +1243,20 @@ class AstBuilder(Transformer):
     # Control flow: do_expr
     # ------------------------------------------------------------------
 
+    def break_expr(self, meta: Meta, args: _Args) -> syntax.Break:
+        """break_expr: "break" — build a Break AST node."""
+        return syntax.Break(
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    def continue_expr(self, meta: Meta, args: _Args) -> syntax.Continue:
+        """continue_expr: "continue" — build a Continue AST node."""
+        return syntax.Continue(
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
     def loop_bound(self, meta: Meta, args: _Args) -> syntax.Expr:
         """loop_bound: DO_LSQB or_expr RSQB — return the bound expression.
 

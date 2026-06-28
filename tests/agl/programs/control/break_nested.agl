@@ -1,0 +1,17 @@
+# break targets only the INNERMOST enclosing loop.
+# Inner loop breaks after one step; outer loop runs `n` times.
+param n: int
+var outer: int = 0
+var inner_sum: int = 0
+do
+  outer := outer + 1
+  var inner: int = 0
+  do
+    inner := inner + 1
+    if inner >= 2 => break
+  done
+  inner_sum := inner_sum + inner
+  if outer >= n => break
+done
+print outer
+print inner_sum

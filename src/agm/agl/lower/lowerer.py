@@ -60,6 +60,7 @@ from agm.agl.ir.nodes import (
     IrConstText,
     IrConstUnit,
     IrContains,
+    IrContinue,
     IrConvert,
     IrDirectCall,
     IrExec,
@@ -149,6 +150,7 @@ from agm.agl.syntax.nodes import (
     BinOp,
     Block,
     BoolLit,
+    Break,
     Call,
     Case,
     CaseBranch,
@@ -156,6 +158,7 @@ from agm.agl.syntax.nodes import (
     CatchClause,
     ConfigPragma,
     ConstructorPattern,
+    Continue,
     DecimalLit,
     DictLit,
     ElseSentinel,
@@ -477,6 +480,8 @@ class _Lowerer:
                         self._scan_captures(seg.expr, local_ids, captured)
             case Raise():
                 self._scan_captures(node.exc, local_ids, captured)
+            case Break() | Continue():
+                pass  # leaf — no captures
             case UnitLit() | IntLit() | DecimalLit() | BoolLit() | NullLit() | StringLit():
                 pass
             case _ as unreachable:  # pragma: no cover
@@ -975,6 +980,15 @@ class _Lowerer:
                 bound=bound_expr, body=body_expr, until_cond=until_cond_expr, span=span
             ):
                 return self._lower_loop(bound_expr, body_expr, until_cond_expr, span)
+
+            # ----------------------------------------------------------
+            # break / continue — wire to the existing IR signals
+            # ----------------------------------------------------------
+            case Break(span=span):
+                return IrBreak(location=self._loc(span))
+
+            case Continue(span=span):
+                return IrContinue(location=self._loc(span))
 
             # ----------------------------------------------------------
             # Lambda expression — M4b

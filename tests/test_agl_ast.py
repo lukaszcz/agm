@@ -45,6 +45,7 @@ from agm.agl.syntax import (
     Block,
     BoolLit,
     BoolT,
+    Break,
     Call,
     Case,
     CaseBranch,
@@ -52,6 +53,7 @@ from agm.agl.syntax import (
     CatchClause,
     ConfigPragma,
     ConstructorPattern,
+    Continue,
     DecimalLit,
     DecimalT,
     Declaration,
@@ -850,6 +852,66 @@ class TestLoopNode:
             setattr(node, "bound", 5)
 
 
+class TestBreakContinueNodes:
+    """Tests for the Break and Continue AST nodes (leaf nodes with BottomType)."""
+
+    def _s(self) -> SourceSpan:
+        return span()
+
+    def test_break_construction(self) -> None:
+        node = Break(span=self._s(), node_id=1)
+        assert isinstance(node, Break)
+
+    def test_continue_construction(self) -> None:
+        node = Continue(span=self._s(), node_id=1)
+        assert isinstance(node, Continue)
+
+    def test_break_equality_ignores_span_node_id(self) -> None:
+        a = Break(span=span(1, 0, 1, 5), node_id=1)
+        b = Break(span=span(9, 0, 9, 5), node_id=99)
+        assert a == b
+
+    def test_continue_equality_ignores_span_node_id(self) -> None:
+        a = Continue(span=span(1, 0, 1, 8), node_id=1)
+        b = Continue(span=span(9, 0, 9, 8), node_id=99)
+        assert a == b
+
+    def test_break_frozen(self) -> None:
+        node = Break(span=self._s(), node_id=1)
+        with pytest.raises((FrozenInstanceError, AttributeError)):
+            setattr(node, "span", self._s())
+
+    def test_continue_frozen(self) -> None:
+        node = Continue(span=self._s(), node_id=1)
+        with pytest.raises((FrozenInstanceError, AttributeError)):
+            setattr(node, "span", self._s())
+
+    def test_break_in_expr_union(self) -> None:
+        # Break is a member of the Expr union (BottomType — assignable anywhere).
+        node: Expr = Break(span=self._s(), node_id=1)
+        assert isinstance(node, Break)
+
+    def test_continue_in_expr_union(self) -> None:
+        node: Expr = Continue(span=self._s(), node_id=1)
+        assert isinstance(node, Continue)
+
+    def test_walk_visits_break_as_leaf(self) -> None:
+        from agm.agl.syntax.visitor import walk
+
+        node = Break(span=self._s(), node_id=1)
+        visited: list[object] = []
+        walk(node, visited.append)
+        assert visited == [node]  # only the Break itself — no children
+
+    def test_walk_visits_continue_as_leaf(self) -> None:
+        from agm.agl.syntax.visitor import walk
+
+        node = Continue(span=self._s(), node_id=1)
+        visited: list[object] = []
+        walk(node, visited.append)
+        assert visited == [node]  # only the Continue itself — no children
+
+
 class TestTryNode:
     def _s(self) -> SourceSpan:
         return span()
@@ -1375,6 +1437,10 @@ class TestVisitorWalk:
         # Raise
         raise_node = Raise(exc=var_ref, span=s, node_id=516)
 
+        # Break / Continue (leaf nodes — no children)
+        break_node = Break(span=s, node_id=517)
+        continue_node = Continue(span=s, node_id=518)
+
         # --- Binders ---
         let_decl = LetDecl(name="a", type_ann=None, value=int_lit, span=s, node_id=600)
         let_with_type = LetDecl(name="c", type_ann=bool_t, value=bool_lit, span=s, node_id=601)
@@ -1404,6 +1470,7 @@ class TestVisitorWalk:
                 binary_op, unary_not, unary_neg, is_test,
                 call_node, lam, lam_no_ret,
                 case_node, if_node, do_node, try_node, raise_node,
+                break_node, continue_node,
                 dec_lit, dict_lit, list_lit,
             ),
             span=s,
@@ -1459,7 +1526,7 @@ class TestVisitorWalk:
             VarRef, FieldAccess, IndexAccess, NamedArg,
             BinaryOp, UnaryNot, UnaryNeg, IsTest,
             Call, Lambda, Block, If, IfBranch, Case, CaseBranch,
-            Loop, Try, CatchClause, Raise,
+            Loop, Try, CatchClause, Raise, Break, Continue,
             UnitLit, IntLit, DecimalLit, BoolLit, NullLit, StringLit,
             ListLit, DictLit, DictEntry, Template, TextSegment, InterpSegment,
         }

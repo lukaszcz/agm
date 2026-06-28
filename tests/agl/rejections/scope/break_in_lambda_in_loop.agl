@@ -1,0 +1,6 @@
+var n: int = 0
+do
+  n := n + 1
+  let f = fn() -> unit => break
+  if n >= 3 => break
+done

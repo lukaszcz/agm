@@ -1,0 +1,14 @@
+{
+  "scenarios": [
+    {
+      "name": "no_break_runs_all_5_iters",
+      "params": {"use_break": false},
+      "expect": {"stdout": "15\n"}
+    },
+    {
+      "name": "break_exits_at_i_3",
+      "params": {"use_break": true},
+      "expect": {"stdout": "3\n"}
+    }
+  ]
+}

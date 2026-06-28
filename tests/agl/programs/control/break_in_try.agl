@@ -1,0 +1,12 @@
+# break inside a try body exits the loop, not caught by the catch handler.
+# The catch handler must NOT intercept the break signal.
+param n: int
+var count: int = 0
+do
+  count := count + 1
+  try
+    if count >= n => break
+  catch _ =>
+    count := count + 100
+done
+print count

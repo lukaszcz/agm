@@ -1605,6 +1605,61 @@ class TestRaise:
 
 
 # ---------------------------------------------------------------------------
+# Break / Continue — BottomType
+# ---------------------------------------------------------------------------
+
+
+class TestBreakContinueType:
+    """break and continue have BottomType (assignable to any target)."""
+
+    def test_break_in_loop_body_has_bottom_type(self) -> None:
+        # `break` inside a loop body type-checks and yields BottomType.
+        from agm.agl.syntax.nodes import Break
+        from agm.agl.syntax.visitor import walk
+
+        r = accept_type("do\n  break\ndone")
+        nodes: list[object] = []
+        walk(r.resolved.program, nodes.append)
+        break_node = next(n for n in nodes if isinstance(n, Break))
+        assert isinstance(r.node_types[break_node.node_id], BottomType)
+
+    def test_continue_in_loop_body_has_bottom_type(self) -> None:
+        # `continue` inside a loop body type-checks and yields BottomType.
+        from agm.agl.syntax.nodes import Continue
+        from agm.agl.syntax.visitor import walk
+
+        r = accept_type("do\n  continue\ndone")
+        nodes: list[object] = []
+        walk(r.resolved.program, nodes.append)
+        cont_node = next(n for n in nodes if isinstance(n, Continue))
+        assert isinstance(r.node_types[cont_node.node_id], BottomType)
+
+    def test_break_bottom_assignable_to_int_in_loop(self) -> None:
+        # let v: int = if cond => break else => 5 type-checks inside a loop.
+        # break has BottomType, so it satisfies the `int` annotation.
+        r = accept_type(
+            "var c: bool = true\n"
+            "do\n"
+            "  let v: int = if c => break else => 5\n"
+            "  v\n"
+            "done"
+        )
+        assert r.resolved.program is not None
+
+    def test_continue_bottom_assignable_to_int_in_loop(self) -> None:
+        # let v: int = if cond => continue else => 5 type-checks inside a loop.
+        # continue has BottomType, so it satisfies the `int` annotation.
+        r = accept_type(
+            "var c: bool = true\n"
+            "do\n"
+            "  let v: int = if c => continue else => 5\n"
+            "  v\n"
+            "done"
+        )
+        assert r.resolved.program is not None
+
+
+# ---------------------------------------------------------------------------
 # Template interpolation
 # ---------------------------------------------------------------------------
 

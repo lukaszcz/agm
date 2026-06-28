@@ -416,6 +416,30 @@ class Loop:
 
 
 @dataclass(frozen=True, slots=True)
+class Break:
+    """``break`` — exit the innermost enclosing loop immediately.
+
+    Has the bottom type: assignable to any expected type because it never
+    produces a value (control does not continue past this expression).
+    """
+
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class Continue:
+    """``continue`` — proceed to the next iteration of the innermost enclosing loop.
+
+    Has the bottom type: assignable to any expected type because it never
+    produces a value (control does not continue past this expression).
+    """
+
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
 class CatchClause:
     """A ``catch`` handler in a ``try`` expression.
 
@@ -564,6 +588,8 @@ Expr = (
     | Loop
     | Try
     | Raise
+    | Break
+    | Continue
     | UnitLit
     | IntLit
     | DecimalLit

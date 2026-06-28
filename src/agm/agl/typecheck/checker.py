@@ -83,12 +83,14 @@ from agm.agl.syntax.nodes import (
     BinOp,
     Block,
     BoolLit,
+    Break,
     Call,
     Case,
     Cast,
     CatchClause,
     ConfigPragma,
     ConstructorPattern,
+    Continue,
     DecimalLit,
     DictLit,
     ElseSentinel,
@@ -554,6 +556,8 @@ class _Checker:
             return self._check_try(expr, expected=expected)
         if isinstance(expr, Raise):
             return self._infer_raise(expr)
+        if isinstance(expr, Break | Continue):
+            return BottomType()
         if isinstance(expr, BinaryOp):
             return self._check_binary_op(expr)
         if isinstance(expr, UnaryNot):
@@ -576,7 +580,7 @@ class _Checker:
             return self._check_list_lit(expr, expected=expected)
         if isinstance(expr, Cast):
             return self._check_cast(expr)
-        # DictLit is the last Expr union member.
+        # DictLit is the last literal Expr union member (Break/Continue handled above).
         assert isinstance(expr, DictLit), f"Unexpected expression kind: {type(expr).__name__}"
         return self._check_dict_lit(expr, expected=expected)
 

@@ -550,6 +550,11 @@ juxt_suffix: DOT field_name       -> juxt_field_suffix
      | var_ref
      | qual_var_ref
      | paren_expr_or_unit
+     | break_expr
+     | continue_expr
+
+break_expr    : "break"
+continue_expr : "continue"
 
 // Parenthesized expression or unit literal.
 // `()` is BOTH the unit literal and the empty argument list.

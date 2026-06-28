@@ -1,0 +1,13 @@
+# `break` has BottomType, assignable to any expected type.
+# `let v: int = if cond => break else => i` type-checks inside a loop.
+# When `use_break` is true, the loop exits early (at i=3) via break in the
+# type-int expression; the accumulated result reflects only completed iterations.
+param use_break: bool
+var result: int = 0
+var i: int = 0
+do
+  i := i + 1
+  let v: int = if use_break and i = 3 => break else => i
+  result := result + v
+until i >= 5
+print result

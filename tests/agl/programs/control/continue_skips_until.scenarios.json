@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "continue_at_n3_exits_at_n_plus_1",
+      "params": {"n": 3},
+      "expect": {"stdout": "4\n"}
+    },
+    {
+      "name": "continue_at_n5_exits_at_n_plus_1",
+      "params": {"n": 5},
+      "expect": {"stdout": "6\n"}
+    },
+    {
+      "name": "continue_at_n1_exits_at_n_plus_1",
+      "params": {"n": 1},
+      "expect": {"stdout": "2\n"}
+    }
+  ]
+}

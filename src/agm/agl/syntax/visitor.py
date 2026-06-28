@@ -34,6 +34,7 @@ from agm.agl.syntax.nodes import (
     BinaryOp,
     Block,
     BoolLit,
+    Break,
     Call,
     Case,
     CaseBranch,
@@ -41,6 +42,7 @@ from agm.agl.syntax.nodes import (
     CatchClause,
     ConfigPragma,
     ConstructorPattern,
+    Continue,
     DecimalLit,
     DictEntry,
     DictLit,
@@ -217,6 +219,8 @@ class Visitor:
     def visit_CaseBranch(self, node: CaseBranch) -> None: ...
     def visit_Case(self, node: Case) -> None: ...
     def visit_Loop(self, node: Loop) -> None: ...
+    def visit_Break(self, node: Break) -> None: ...
+    def visit_Continue(self, node: Continue) -> None: ...
     def visit_CatchClause(self, node: CatchClause) -> None: ...
     def visit_Try(self, node: Try) -> None: ...
     def visit_Raise(self, node: Raise) -> None: ...
@@ -310,6 +314,8 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         CaseBranch,
         Case,
         Loop,
+        Break,
+        Continue,
         CatchClause,
         Try,
         Raise,
@@ -578,6 +584,9 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
 
     elif isinstance(node, Raise):
         walk(node.exc, callback)
+
+    elif isinstance(node, Break | Continue):
+        pass  # leaf
 
     # --- Pattern nodes ---
     elif isinstance(node, WildcardPattern):

@@ -28,10 +28,12 @@ from agm.agl.syntax.nodes import (
     AssignTarget,
     Block,
     BoolLit,
+    Break,
     Call,
     CaseBranch,
     CatchClause,
     ConstructorPattern,
+    Continue,
     EnumDef,
     Expr,
     FieldAccess,
@@ -1564,6 +1566,150 @@ class TestDirectASTConstruction:
         )
         r = resolve_program(var_n, loop_node)
         assert r.resolution[while_ref.node_id].kind == BinderKind.var_binding
+
+    # --- break / continue placement validation ---
+
+    def test_break_inside_loop_body_accepted(self) -> None:
+        """break is accepted when lexically inside a loop body."""
+        break_node = Break(span=_sp(), node_id=_nid())
+        loop_node = Loop(
+            for_var=None, for_iter=None, while_cond=None,
+            bound=None, body=break_node, until_cond=None,
+            span=_sp(), node_id=_nid(),
+        )
+        # must not raise
+        resolve_program(loop_node)
+
+    def test_continue_inside_loop_body_accepted(self) -> None:
+        """continue is accepted when lexically inside a loop body."""
+        continue_node = Continue(span=_sp(), node_id=_nid())
+        loop_node = Loop(
+            for_var=None, for_iter=None, while_cond=None,
+            bound=None, body=continue_node, until_cond=None,
+            span=_sp(), node_id=_nid(),
+        )
+        resolve_program(loop_node)
+
+    def test_break_outside_loop_rejected(self) -> None:
+        """break at the top level (outside any loop) is a scope error."""
+        break_node = Break(span=_sp(), node_id=_nid())
+        with pytest.raises(AglScopeError):
+            resolve_program(break_node)
+
+    def test_continue_outside_loop_rejected(self) -> None:
+        """continue at the top level (outside any loop) is a scope error."""
+        continue_node = Continue(span=_sp(), node_id=_nid())
+        with pytest.raises(AglScopeError):
+            resolve_program(continue_node)
+
+    def test_break_in_lambda_inside_loop_rejected(self) -> None:
+        """break inside a lambda that is nested inside a loop is a scope error."""
+        break_node = Break(span=_sp(line=4), node_id=_nid())
+        lam = Lambda(
+            params=(),
+            return_type=None,
+            body=break_node,
+            span=_sp(),
+            node_id=_nid(),
+        )
+        loop_node = Loop(
+            for_var=None, for_iter=None, while_cond=None,
+            bound=None, body=lam, until_cond=None,
+            span=_sp(), node_id=_nid(),
+        )
+        with pytest.raises(AglScopeError):
+            resolve_program(loop_node)
+
+    def test_break_in_nested_loop_inside_outer_loop_accepted(self) -> None:
+        """break nested in an inner loop is valid (targets the inner loop)."""
+        break_node = Break(span=_sp(), node_id=_nid())
+        inner_loop = Loop(
+            for_var=None, for_iter=None, while_cond=None,
+            bound=None, body=break_node, until_cond=None,
+            span=_sp(), node_id=_nid(),
+        )
+        outer_loop = Loop(
+            for_var=None, for_iter=None, while_cond=None,
+            bound=None, body=inner_loop, until_cond=None,
+            span=_sp(), node_id=_nid(),
+        )
+        # must not raise — break is inside the inner loop body
+        resolve_program(outer_loop)
+
+    def test_break_in_until_cond_accepted(self) -> None:
+        """break inside until_cond is inside the loop interior (valid)."""
+        break_node = Break(span=_sp(), node_id=_nid())
+        loop_node = Loop(
+            for_var=None, for_iter=None, while_cond=None,
+            bound=None, body=_make_unitlit(),
+            until_cond=break_node,
+            span=_sp(), node_id=_nid(),
+        )
+        resolve_program(loop_node)
+
+    def test_lambda_param_default_outer_binding_in_loop_accepted(self) -> None:
+        """A lambda param default referencing an enclosing binding resolves fine inside a loop.
+
+        This tests that the fn-boundary reset of _in_loop does not break scope
+        visibility: defaults are still resolved in the enclosing scope, so outer
+        bindings are reachable — only the loop-context flag is cleared.
+        """
+        sp = _sp()
+        let_x = _make_let("x", _make_intlit(0))
+        param = Param(
+            name="p",
+            type_expr=IntT(span=sp, node_id=_nid()),
+            default=_make_varref("x"),
+            span=sp,
+            node_id=_nid(),
+        )
+        lam = Lambda(
+            params=(param,),
+            return_type=None,
+            body=_make_unitlit(),
+            span=sp,
+            node_id=_nid(),
+        )
+        let_f = _make_let("f", lam)
+        loop_body = _make_block(let_f, _make_unitlit())
+        loop_node = Loop(
+            for_var=None, for_iter=None, while_cond=None,
+            bound=None, body=loop_body, until_cond=None,
+            span=sp, node_id=_nid(),
+        )
+        # must not raise — default references outer binding x, not break/continue
+        resolve_program(let_x, loop_node)
+
+    def test_break_in_lambda_param_default_in_loop_rejected(self) -> None:
+        """break in a lambda param default inside a loop is rejected.
+
+        Param defaults are evaluated in the enclosing (definition) scope, not the
+        loop body, so break/continue there are invalid regardless of the surrounding
+        loop context.
+        """
+        sp = _sp(line=3)
+        break_node = Break(span=sp, node_id=_nid())
+        param = Param(
+            name="p",
+            type_expr=IntT(span=sp, node_id=_nid()),
+            default=break_node,
+            span=sp,
+            node_id=_nid(),
+        )
+        lam = Lambda(
+            params=(param,),
+            return_type=None,
+            body=_make_varref("p"),
+            span=_sp(),
+            node_id=_nid(),
+        )
+        loop_node = Loop(
+            for_var=None, for_iter=None, while_cond=None,
+            bound=None, body=lam, until_cond=None,
+            span=_sp(), node_id=_nid(),
+        )
+        with pytest.raises(AglScopeError):
+            resolve_program(loop_node)
 
     # --- If with block bodies ---
 

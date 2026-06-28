@@ -1,0 +1,7 @@
+# do[n] loop whose body always executes `continue`:
+# `continue` counts toward the iteration bound, so MaxIterationsExceeded is
+# raised after n iterations exactly as if the body had not used `continue`.
+param n: int
+do[n]
+  continue
+done

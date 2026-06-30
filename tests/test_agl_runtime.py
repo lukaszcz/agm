@@ -1092,9 +1092,10 @@ class TestRenderValue:
     def test_unit_value_renders_as_unit_literal(self) -> None:
         """Unit value renders as ``()``."""
         from agm.agl.runtime.render import render_value
-        from agm.agl.semantics.values import UnitValue
+        from agm.agl.semantics.values import VOID_VALUE, UnitValue
 
         assert render_value(UnitValue()) == "()"
+        assert render_value(VOID_VALUE) == "void"
 
     def test_agent_value_renders_as_angle_bracket_form(self) -> None:
         """AgentValue renders as ``<agent NAME>``."""

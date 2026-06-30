@@ -126,6 +126,8 @@ from agm.agl.runtime.trace import TraceStore, noop_trace
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.exceptions import make_builtin_exception as _make_exc_value
 from agm.agl.semantics.values import (
+    UNIT_VALUE,
+    VOID_VALUE,
     AgentValue,
     BoolValue,
     Cell,
@@ -142,7 +144,6 @@ from agm.agl.semantics.values import (
     ListValue,
     RecordValue,
     TextValue,
-    UnitValue,
     Value,
 )
 from agm.core.parse import parse_timeout as _parse_timeout
@@ -737,7 +738,7 @@ class IrInterpreter:
                 return TextValue(v)
 
             case IrConstUnit():
-                return UnitValue()
+                return UNIT_VALUE
 
             case IrConstJsonNull():
                 return JsonValue(None)
@@ -809,7 +810,7 @@ class IrInterpreter:
                         value=slot.value,
                         span=node.location,
                     )
-                    return UnitValue()
+                    return VOID_VALUE
                 # Indexed assignment with non-empty path
                 root = slot.value
                 # Traverse all intermediate steps, collecting (container, index_val, kind)
@@ -843,15 +844,15 @@ class IrInterpreter:
                     value=slot.value,
                     span=node.location,
                 )
-                # An assignment statement yields unit (parity with legacy).
-                return UnitValue()
+                # Assignment is statement-like: it yields the non-printable unit.
+                return VOID_VALUE
 
             case IrCoerce(value=val_expr, operation=op):
                 value = self._eval(val_expr)
                 return _apply_coercion(value, op)
 
             case IrSequence(items=items) | IrBlock(items=items):
-                last: Value = UnitValue()
+                last: Value = VOID_VALUE
                 for item in items:
                     last = self._eval(item)
                 return last
@@ -1046,7 +1047,7 @@ class IrInterpreter:
                     if branch.cond is None:
                         # Else branch — always taken.
                         branch_val = self._eval(branch.body)
-                        return branch_val if has_else else UnitValue()
+                        return branch_val if has_else else VOID_VALUE
                     cond_val = self._eval(branch.cond)
                     if not isinstance(cond_val, BoolValue):
                         raise InvalidIrError(
@@ -1055,9 +1056,9 @@ class IrInterpreter:
                         )
                     if cond_val.value:
                         branch_val = self._eval(branch.body)
-                        return branch_val if has_else else UnitValue()
-                # No branch matched and no else — yield unit.
-                return UnitValue()
+                        return branch_val if has_else else VOID_VALUE
+                # No branch matched and no else: return the non-printable unit.
+                return VOID_VALUE
 
             case IrRaise(exc=exc_expr):
                 exc_val = self._eval(exc_expr)
@@ -1125,7 +1126,7 @@ class IrInterpreter:
                     try:
                         self._eval(body_expr)
                     except _BreakSignal:
-                        return UnitValue()
+                        return VOID_VALUE
                     except _ContinueSignal:
                         iterations += 1
                         continue
@@ -1208,7 +1209,7 @@ class IrInterpreter:
                 rendered = render_value(val)
                 print(rendered)
                 self._trace.print_stmt(rendered=rendered, span=node.location)
-                return UnitValue()
+                return VOID_VALUE
 
             case IrRenderValue(
                 value=val_expr,
@@ -1306,7 +1307,7 @@ class IrInterpreter:
                 except AglRaise as exc:
                     exc.span = node.location
                     raise
-                return UnitValue()
+                return VOID_VALUE
 
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)

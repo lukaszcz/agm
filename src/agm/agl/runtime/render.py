@@ -120,6 +120,8 @@ def _render(value: Value, *, pretty: bool, quote_strings: bool, top_level: bool,
         return _quote_text(value.value)
 
     if isinstance(value, UnitValue):
+        if not value.printable_in_repl:
+            return "void"
         return "()"
 
     if isinstance(value, (IntValue, DecimalValue, BoolValue)):

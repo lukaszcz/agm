@@ -20,12 +20,14 @@ last item.
 1.5           # decimal
 true false    # bool
 null          # json
-()            # unit — the single value of type unit
+()            # unit — printable unit value
 "text ${x}"   # template (type text; see Strings and interpolation)
 ```
 
-The unit literal `()` is both the value of type `unit` and the empty
-argument list of a zero-argument call — the two are syntactically unified.
+The unit literal `()` is the printable unit value. `void` is the same unit
+value with REPL echo suppressed; it compares equal to `()`. `()` is also the
+empty argument list of a zero-argument call — the two are syntactically
+unified.
 
 ### List literals
 
@@ -298,7 +300,7 @@ For details on named arguments, defaults, and function types, see
 
 `print` is a built-in function that accepts one argument of any type, writes
 its rendered value (followed by a newline) to the host's standard output, and
-returns `unit`. It renders with `pretty = false` and `quote_strings = false`:
+returns `void`. It renders with `pretty = false` and `quote_strings = false`:
 
 ```agl
 print "Review round failed; retrying."
@@ -520,25 +522,27 @@ The `else` branch is **required** — an `if` without `else` is a
 **statement** (type `unit`, below), not an expression. All branch result
 types must agree after `int → decimal` widening.
 
-## Expressions that yield `unit`
+## Expressions with type `unit`
 
 The following expressions have type `unit` — they exist for their side
 effect, not their value:
 
 | Form | Type | Notes |
 |------|------|-------|
-| `print(e)` | `unit` | writes to stdout |
-| `x := e` | `unit` | mutates `x` |
-| `if c => body` (no `else`) | `unit` | branch body must be `unit` |
-| loop expressions | `unit` | loops run for effect |
-| `()` | `unit` | the unit literal itself |
+| `print(e)` | `unit` | writes to stdout and returns `void` |
+| `x := e` | `unit` | mutates `x` and returns `void` |
+| `if c => body` (no `else`) | `unit` | branch body must be `unit`; returns `void` |
+| loop expressions | `unit` | loops run for effect and return `void` |
+| `()` | `unit` | the printable unit literal |
 
 An `if` without `else` always has type `unit`, and each branch body must also
-have type `unit`. A `case` or `do` loop likewise yields `unit`.
+have type `unit`. A `case` or `do` loop likewise has type `unit` and returns
+`void`.
 
 `unit` values may appear anywhere in a block, including as the final
 expression. A function declared `-> unit` has its body checked against
-`unit`.
+`unit`. In the REPL, a final `void` result is not echoed; a final explicit
+`()` is echoed as `()`. `print(void)` still prints `void`.
 
 ## `let` and `var` as expressions
 

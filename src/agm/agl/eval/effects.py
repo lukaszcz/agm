@@ -27,13 +27,13 @@ from agm.agl.runtime.trace import TraceStore
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.exceptions import make_builtin_exception as _make_exc_value
 from agm.agl.semantics.values import (
+    VOID_VALUE,
     AgentValue,
     BoolValue,
     IntValue,
     JsonValue,
     RecordValue,
     TextValue,
-    UnitValue,
     Value,
 )
 
@@ -181,7 +181,7 @@ class EffectHandlers:
                 output_contract=None,
             )
             self._dispatch_agent(agent_name, request, _node)
-            return UnitValue()
+            return VOID_VALUE
 
         effective_strict = (
             contract.strict_json if contract.strict_json is not None else self._ctx._strict_json

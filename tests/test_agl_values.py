@@ -32,6 +32,7 @@ def test_leaf_tags_importable_from_values_module() -> None:
         "JsonValue",
         "UnitValue",
         "UNIT_VALUE",
+        "VOID_VALUE",
         "AgentValue",
         "Value",
         "_json_eq",
@@ -101,6 +102,16 @@ def test_unit_value_singleton() -> None:
 
     assert isinstance(UNIT_VALUE, UnitValue)
     assert UNIT_VALUE == UnitValue()
+
+
+def test_void_unit_equals_printable_unit() -> None:
+    """Printable unit and void compare equal; only REPL printability differs."""
+    from agm.agl.semantics.values import UNIT_VALUE, VOID_VALUE, UnitValue
+
+    assert UNIT_VALUE == VOID_VALUE
+    assert UnitValue(printable_in_repl=True) == UnitValue(printable_in_repl=False)
+    assert UNIT_VALUE.printable_in_repl is True
+    assert VOID_VALUE.printable_in_repl is False
 
 
 def test_primitive_values_constructible() -> None:
@@ -441,6 +452,7 @@ def test_semantics_values_exports_all_leaf_tags() -> None:
     """agm.agl.semantics.values exports all leaf primitive value tags."""
     from agm.agl.semantics.values import (
         UNIT_VALUE,
+        VOID_VALUE,
         AgentValue,
         BoolValue,
         DecimalValue,
@@ -457,6 +469,7 @@ def test_semantics_values_exports_all_leaf_tags() -> None:
     assert JsonValue is not None
     assert UnitValue is not None
     assert UNIT_VALUE is not None
+    assert VOID_VALUE is not None
     assert AgentValue is not None
 
 

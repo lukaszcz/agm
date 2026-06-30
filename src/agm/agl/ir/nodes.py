@@ -926,7 +926,8 @@ class IrPrint:
     """IR host-op: ``print(value)`` — render *value* and write a line to stdout.
 
     Evaluates ``value``, renders it with the default single-line, unquoted
-    options, then prints the rendered string. Returns ``UnitValue()``.
+    options, then prints the rendered string. Returns the non-printable unit
+    value.
     """
 
     location: Location

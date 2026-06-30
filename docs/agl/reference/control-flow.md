@@ -4,8 +4,8 @@
 
 Control flow in AgL is expression-oriented: every construct produces a
 value. `if` and `case` with branches unify to a common type; loops and
-else-less `if` produce `unit`. Exception control flow — `try`, `catch`,
-`raise` — is covered in [Exceptions](exceptions.md).
+else-less `if` have type `unit` and return `void`. Exception control flow —
+`try`, `catch`, `raise` — is covered in [Exceptions](exceptions.md).
 
 ## `if`
 
@@ -37,7 +37,7 @@ Semantics:
 1. Conditions are evaluated left to right; each must be `bool`.
 2. The first true condition's body executes in a fresh branch scope.
 3. With no matching condition, `else` runs if present; otherwise the
-   expression yields `unit`.
+   expression returns `void`.
 
 ### `if` with `else`: a value-producing expression
 
@@ -52,16 +52,16 @@ print(if status is Pass => "passed" else => "failed")
 
 ### `if` without `else`: type `unit`
 
-When `else` is absent, the `if` expression has type `unit`. All branch bodies
-must also have type `unit`:
+When `else` is absent, the `if` expression has type `unit` and returns `void`.
+All branch bodies must also have type `unit`:
 
 ```agl
 if res.exit_code != 0 =>
   print "command failed: ${res.stderr}"
 ```
 
-Because an `else`-less `if` always yields `unit`, it is for effectful control
-flow. A branch body that produces a non-`unit` value is a static error.
+Because an `else`-less `if` always has type `unit`, it is for effectful
+control flow. A branch body that produces a non-`unit` value is a static error.
 
 Branch bodies are suites (indented blocks) or single expressions at the
 `or_expr` level. Because branch bodies are `or_expr` positions, a `case` or
@@ -153,8 +153,8 @@ do
 until r is Pass
 ```
 
-Every loop expression has type **`unit`** — it runs for effect and produces
-no value.
+Every loop expression has type **`unit`** — it runs for effect and returns
+`void`.
 
 ### Clause semantics
 

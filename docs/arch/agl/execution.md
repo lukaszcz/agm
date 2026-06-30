@@ -57,7 +57,7 @@ Host-backed operations are dispatched by contract identity:
 
 ## Value Rendering
 
-All value display — string interpolation, `print`, `render`, `as text`, and REPL echo — goes through one recursive renderer that produces AgL-native syntax for every value kind, taking `pretty` and `quote_strings` options. Nominal fields are normalized into declaration order once, at construction, so the renderer needs no type information and every consumer (native rendering, `as json`, equality) agrees on field order. The renderer depends only on the value model — no semantic types, no parser types.
+All value display — string interpolation, `print`, `render`, `as text`, and REPL echo — goes through one recursive renderer that produces AgL-native syntax for every value kind, taking `pretty` and `quote_strings` options. Nominal fields are normalized into declaration order once, at construction, so the renderer needs no type information and every consumer (native rendering, `as json`, equality) agrees on field order. Unit values carry a small display flag: explicit `()` renders as `()`, while statement-like effects return `void`, which compares equal to `()` but lets the REPL suppress echo. The renderer depends only on the value model — no semantic types, no parser types.
 
 ## Host Runtime and Pipeline
 

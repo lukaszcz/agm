@@ -122,7 +122,7 @@ The target type drives the call's **output contract**:
   on success.
 
 `unit` is the exception: the call is dispatched once without an output
-contract, its response is ignored, and the expression evaluates to `()`.
+contract, its response is ignored, and the expression evaluates to `void`.
 Because nothing is parsed, `format`, `strict_json`, and `on_parse_error` are
 invalid for a `unit` target.
 

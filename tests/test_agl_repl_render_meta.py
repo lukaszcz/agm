@@ -148,6 +148,31 @@ class TestRenderEntryResult:
         result = _result(kind="statement", ok=True)
         assert render_mod.render_entry_result(result, echo=True) is None
 
+    def test_void_expression_echo_is_none(self) -> None:
+        from agm.agl.semantics.types import UnitType
+        from agm.agl.semantics.values import VOID_VALUE
+
+        result = _result(
+            kind="expression",
+            value=VOID_VALUE,
+            value_type=UnitType(),
+            ok=True,
+        )
+        assert render_mod.render_entry_result(result, echo=True) is None
+
+    def test_void_binding_echo_is_none(self) -> None:
+        from agm.agl.semantics.types import UnitType
+        from agm.agl.semantics.values import VOID_VALUE
+
+        result = _result(
+            kind="binding",
+            name="x",
+            value=VOID_VALUE,
+            value_type=UnitType(),
+            ok=True,
+        )
+        assert render_mod.render_entry_result(result, echo=True) is None
+
     def test_check_only_expression_shows_type(self) -> None:
         # In dry-run there is no value; the echo shows the inferred type.
         result = _result(kind="expression", value_type=IntType(), ok=True)

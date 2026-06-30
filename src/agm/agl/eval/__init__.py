@@ -5,6 +5,7 @@ from __future__ import annotations
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import (
     UNIT_VALUE,
+    VOID_VALUE,
     AgentValue,
     BoolValue,
     DecimalValue,
@@ -36,4 +37,5 @@ __all__ = [
     "UNIT_VALUE",
     "UnitValue",
     "Value",
+    "VOID_VALUE",
 ]

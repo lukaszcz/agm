@@ -33,6 +33,12 @@ if TYPE_CHECKING:
     from agm.agl.semantics.values import Value
 
 
+def _is_repl_printable_value(value: "Value") -> bool:
+    from agm.agl.semantics.values import UnitValue
+
+    return not isinstance(value, UnitValue) or value.printable_in_repl
+
+
 def format_typed_value(name: str, value_type: "Type", value: "Value") -> str:
     """Format a single ``name : Type = value`` line.
 
@@ -132,6 +138,8 @@ def _render_echo(result: "EntryResult") -> str | None:
         # A bare expression always carries a value and type on success.
         assert result.value is not None
         assert result.value_type is not None
+        if not _is_repl_printable_value(result.value):
+            return None
         return render_value(
             result.value,
             pretty=True,
@@ -143,6 +151,8 @@ def _render_echo(result: "EntryResult") -> str | None:
         assert result.name is not None
         assert result.value is not None
         assert result.value_type is not None
+        if not _is_repl_printable_value(result.value):
+            return None
         return format_typed_value(result.name, result.value_type, result.value)
     if result.kind == "declaration":
         assert result.name is not None

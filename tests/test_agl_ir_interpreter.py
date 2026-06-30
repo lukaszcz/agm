@@ -58,6 +58,7 @@ from agm.agl.ir import (
     IrMakeException,
     IrMakeList,
     IrMakeRecord,
+    IrPrint,
     IrRaise,
     IrSequence,
     Location,
@@ -77,6 +78,7 @@ from agm.agl.ir import (
 from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.semantics.values import (
+    VOID_VALUE,
     BoolValue,
     DecimalValue,
     DictValue,
@@ -339,6 +341,24 @@ class TestVarCell:
             {sym: desc},
         )
         assert result == {"counter": IntValue(42)}
+
+    def test_var_assign_returns_void(self) -> None:
+        """Assignment mutates the cell and yields unprintable unit."""
+        sym, desc = _var_sym(0, "counter")
+        prog = _make_program(
+            (
+                IrBind(_LOC, sym, IrConstInt(_LOC, 0)),
+                IrAssign(_LOC, sym, (), IrConstInt(_LOC, 42)),
+            ),
+            {sym: desc},
+        )
+        interp = IrInterpreter(prog)
+        interp.run()
+
+        assert interp.initializer_values[-1] == UnitValue()
+        assert interp.initializer_values[-1] == VOID_VALUE
+        assert isinstance(interp.initializer_values[-1], UnitValue)
+        assert not interp.initializer_values[-1].printable_in_repl
 
     def test_var_assign_multiple_times(self) -> None:
         sym, desc = _var_sym(0, "x")
@@ -1812,6 +1832,17 @@ class TestM6aPrintParseJsonParam:
         prog = _make_program(initializers=(node,), symbols={sym: desc})
         with pytest.raises(InvalidIrError, match="IrParseJson"):
             IrInterpreter(prog).run()
+
+    def test_ir_print_returns_void(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """IrPrint writes its argument and yields unprintable unit."""
+        node = IrPrint(_LOC, IrConstUnit(_LOC))
+        prog = _make_program(initializers=(node,))
+
+        interp = IrInterpreter(prog)
+        interp.run()
+
+        assert capsys.readouterr().out == "()\n"
+        assert interp.initializer_values == [VOID_VALUE]
 
     def test_ir_render_non_bool_option_raises_invalid_ir_error(self) -> None:
         """IrRenderValue with a non-bool option raises InvalidIrError (bad IR)."""

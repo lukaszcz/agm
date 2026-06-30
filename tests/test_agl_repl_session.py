@@ -18,7 +18,7 @@ from agm.agl.diagnostics import AglError
 from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.semantics.types import IntType, TextType
-from agm.agl.semantics.values import BoolValue, IntValue
+from agm.agl.semantics.values import VOID_VALUE, BoolValue, IntValue, UnitValue
 
 # ---------------------------------------------------------------------------
 # Fake agents
@@ -160,12 +160,31 @@ class TestEchoData:
         assert r.ok
 
     def test_print_call_echo_kind(self) -> None:
-        # In v2, ``print`` is a function call — its kind is "expression"
-        # (the result is UnitValue).
+        # ``print`` is a function call, but it yields void so REPL echo suppresses it.
         s = ReplSession()
         r = s.eval_entry("print 1")
         assert r.kind == "expression"
         assert r.ok
+        assert r.value == VOID_VALUE
+        assert isinstance(r.value, UnitValue)
+        assert not r.value.printable_in_repl
+
+    def test_unit_literal_echoes_printable_unit(self) -> None:
+        s = ReplSession()
+        r = s.eval_entry("()")
+        assert r.kind == "expression"
+        assert r.ok
+        assert isinstance(r.value, UnitValue)
+        assert r.value.printable_in_repl
+
+    def test_loop_echo_value_is_void(self) -> None:
+        s = ReplSession()
+        r = s.eval_entry("do[0] () done")
+        assert r.kind == "expression"
+        assert r.ok
+        assert r.value == VOID_VALUE
+        assert isinstance(r.value, UnitValue)
+        assert not r.value.printable_in_repl
 
 
 # ---------------------------------------------------------------------------
@@ -1139,12 +1158,13 @@ class TestIfExpr:
     def test_bare_if_expr_classified_as_expression(self) -> None:
         # In v2, ``if`` is a value-producing expression.  A bare ``if`` entry
         # at the prompt is classified as "expression" (it yields a value).
-        # The value is UNIT_VALUE when the branches yield unit (e.g. ``:=``).
+        # The value is void when the branches are statement-like (e.g. ``:=``).
         s = ReplSession()
         s.eval_entry("var x = 0")
         r = s.eval_entry("if true =>\n    x := 42\n| else =>\n    x := 0")
         assert r.ok
         assert r.kind == "expression"
+        assert r.value == VOID_VALUE
         # The side effect was applied.
         vals = {n: _int(v) for n, _t, v in s.bindings()}
         assert vals["x"] == 42

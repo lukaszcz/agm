@@ -67,8 +67,8 @@ let y = ask "B"
 y              # the program's value is y
 ```
 
-Side-effecting forms (`print`, `:=`, loops, else-less `if`) yield `unit`
-and are commonly followed by another expression.
+Side-effecting forms (`print`, `:=`, loops, else-less `if`) have type `unit`,
+return `void`, and are commonly followed by another expression.
 
 ## Config declarations
 

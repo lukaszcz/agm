@@ -48,9 +48,9 @@ assign_stmt ::= assign_target ":=" expr
 assign_target ::= NAME ("[" expr "]")*
 ```
 
-`:=` updates the nearest visible **mutable** binding and yields `unit`. It
-never creates a binding. The expected type of the right-hand side is the
-declared type of the binding being updated:
+`:=` updates the nearest visible **mutable** binding, has type `unit`, and
+returns `void`. It never creates a binding. The expected type of the
+right-hand side is the declared type of the binding being updated:
 
 ```agl
 var proposal: Turn = ask("Initial proposal.", agent = researcher)

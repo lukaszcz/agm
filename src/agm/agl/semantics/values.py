@@ -146,10 +146,17 @@ class JsonValue:
 
 @dataclass(frozen=True, slots=True)
 class UnitValue:
-    """The single value of the ``unit`` type: ``()``."""
+    """The ``unit`` value, with REPL printability metadata.
+
+    ``void`` and ``()`` compare equal; only the REPL echo policy observes
+    ``printable_in_repl``.
+    """
+
+    printable_in_repl: bool = field(default=True, compare=False)
 
 
 UNIT_VALUE: UnitValue = UnitValue()
+VOID_VALUE: UnitValue = UnitValue(printable_in_repl=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -409,6 +416,7 @@ Frame = dict[SymbolId, Slot]
 
 __all__ = [
     "UNIT_VALUE",
+    "VOID_VALUE",
     "AgentValue",
     "BoolValue",
     "Cell",

@@ -50,7 +50,14 @@ from agm.agl.ir.program import (
 from agm.agl.ir.validate import validate_ir
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
 from agm.agl.semantics.exceptions import AglRaise
-from agm.agl.semantics.values import BoolValue, IntValue, JsonValue, TextValue
+from agm.agl.semantics.values import (
+    VOID_VALUE,
+    BoolValue,
+    IntValue,
+    JsonValue,
+    TextValue,
+    UnitValue,
+)
 from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises
 
 # ---------------------------------------------------------------------------
@@ -334,6 +341,9 @@ def test_irloop_break_exits_immediately() -> None:
     result = interp.run()
     # The loop yields unit; no bindings → empty result
     assert result == {}
+    assert interp.initializer_values == [VOID_VALUE]
+    assert isinstance(interp.initializer_values[0], UnitValue)
+    assert not interp.initializer_values[0].printable_in_repl
 
 
 def test_irloop_break_exits_after_several_iterations() -> None:

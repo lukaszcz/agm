@@ -191,9 +191,9 @@ assign_expr ::= assign_target ":=" expr
 assign_target ::= NAME ("[" expr "]")*
 ```
 
-Assignment yields `unit`. In an indexed assignment target, each opening `[` must be
-adjacent to the target name or preceding index: `xs[0]` is indexed assignment,
-while `xs [0]` is not.
+Assignment has type `unit` and returns `void`. In an indexed assignment target,
+each opening `[` must be adjacent to the target name or preceding index:
+`xs[0]` is indexed assignment, while `xs [0]` is not.
 
 ## Loops
 
@@ -223,8 +223,9 @@ if_cond_branch ::= or_expr "=>" (suite | or_expr)
 if_else_branch ::= "|"? "else" "=>" (suite | or_expr)
 ```
 
-Without an `else` branch the `if` expression has type `unit`. With all
-branches returning a common type `T`, the `if` expression has type `T`.
+Without an `else` branch the `if` expression has type `unit` and returns
+`void`. With all branches returning a common type `T`, the `if` expression has
+type `T`.
 
 ## `case`
 

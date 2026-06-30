@@ -924,6 +924,10 @@ class AstBuilder(Transformer):
     def call(self, meta: Meta, args: _Args) -> syntax.Call:
         """postfix LPAR arg_list? RPAR → Call node."""
         callee = cast(syntax.Expr, args[0])
+        type_args: tuple[TypeExpr, ...] = ()
+        if isinstance(callee, syntax.TypeApply):
+            type_args = callee.type_args
+            callee = callee.expr
         pos_args: list[syntax.Expr] = []
         named_args: list[syntax.NamedArg] = []
         for a in args[1:]:
@@ -940,6 +944,7 @@ class AstBuilder(Transformer):
             named_args=tuple(named_args),
             span=span,
             node_id=self._next_id(),
+            type_args=type_args,
         )
 
     def field_access(self, meta: Meta, args: _Args) -> syntax.FieldAccess:
@@ -1076,9 +1081,9 @@ class AstBuilder(Transformer):
                 arg_lists = cast(_ArgLists, arg)
         return ("typed_call", (type_args_val, arg_lists))
 
-    def typed_postfix_call(self, meta: Meta, args: _Args) -> syntax.Call:
-        """Apply explicit type arguments to any postfix callee expression."""
-        callee = cast(syntax.Expr, args[0])
+    def type_apply(self, meta: Meta, args: _Args) -> syntax.TypeApply:
+        """Apply explicit type arguments to a value without calling it."""
+        expr = cast(syntax.Expr, args[0])
         type_args_val = cast(
             tuple[TypeExpr, ...],
             next(
@@ -1092,17 +1097,8 @@ class AstBuilder(Transformer):
                 (),
             ),
         )
-        pos_args: list[syntax.Expr] = []
-        named_args: list[syntax.NamedArg] = []
-        for arg in args:
-            if isinstance(arg, tuple) and len(arg) == 2 and isinstance(arg[0], list):
-                pos_args, named_args = cast(
-                    tuple[list[syntax.Expr], list[syntax.NamedArg]], arg
-                )
-        return syntax.Call(
-            callee=callee,
-            args=tuple(pos_args),
-            named_args=tuple(named_args),
+        return syntax.TypeApply(
+            expr=expr,
             type_args=type_args_val,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),

@@ -82,6 +82,7 @@ from agm.agl.syntax.nodes import (
     TextSegment,
     Try,
     TypeAlias,
+    TypeApply,
     UnaryNeg,
     UnaryNot,
     UnitLit,
@@ -212,6 +213,7 @@ class Visitor:
     def visit_UnaryNeg(self, node: UnaryNeg) -> None: ...
     def visit_Cast(self, node: Cast) -> None: ...
     def visit_IsTest(self, node: IsTest) -> None: ...
+    def visit_TypeApply(self, node: TypeApply) -> None: ...
     def visit_Call(self, node: Call) -> None: ...
     def visit_Param(self, node: Param) -> None: ...
     def visit_Lambda(self, node: Lambda) -> None: ...
@@ -308,6 +310,7 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         UnaryNeg,
         Cast,
         IsTest,
+        TypeApply,
         Call,
         Param,
         Lambda,
@@ -529,6 +532,11 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
 
     elif isinstance(node, IsTest):
         walk(node.expr, callback)
+
+    elif isinstance(node, TypeApply):
+        walk(node.expr, callback)
+        for ta in node.type_args:
+            walk(ta, callback)
 
     elif isinstance(node, Call):
         walk(node.callee, callback)

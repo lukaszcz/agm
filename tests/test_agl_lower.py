@@ -364,6 +364,20 @@ class TestLowerProgramValidateIr:
         prog = _lower(source)
         validate_ir(prog)
 
+    def test_type_apply_lowers_to_underlying_function_value(self) -> None:
+        prog = _lower("def id[T](x: T) -> T = x\nid::[int]")
+        inits = prog.modules[prog.entry_module].initializers
+        assert isinstance(inits[-1], IrLoad)
+
+    def test_type_apply_in_lambda_body_lowers_and_scans_captures(self) -> None:
+        source = "def id[T](x: T) -> T = x\nlet h = fn(x: int) -> (int) -> int => id::[int]\nh"
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        assert any(
+            isinstance(init, IrBind) and isinstance(init.value, IrMakeClosure)
+            for init in inits
+        )
+
 
 # ---------------------------------------------------------------------------
 # lower_program: literal lowering

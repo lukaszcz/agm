@@ -269,6 +269,16 @@ class IsTest:
 
 
 @dataclass(frozen=True, slots=True)
+class TypeApply:
+    """Explicit value-position type application: ``expr::[T]``."""
+
+    expr: Expr
+    type_args: tuple[TypeExpr, ...]
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
 class Call:
     """A uniform function/built-in call: ``callee(args, name: v)``.
 
@@ -687,6 +697,7 @@ Expr = (
     | UnaryNeg
     | Cast
     | IsTest
+    | TypeApply
     | Call
     | Lambda
     | Block

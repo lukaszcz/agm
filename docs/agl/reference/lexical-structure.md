@@ -133,8 +133,9 @@ name it qualifies. Module path segments are dot-separated lowercase names.
 A leading `::` with no preceding path is the **self-reference** form — it
 refers to the current module.
 
-The typed-call form `callee::[T](args)` (e.g. `ask-request::[Review](…)`) is
-a distinct construct — it is NOT a module qualifier.
+The type-argument form `callee::[T]` and typed-call form `callee::[T](args)`
+(e.g. `ask-request::[Review](…)`) are distinct constructs — they are NOT module
+qualifiers.
 
 ## Identifiers
 
@@ -251,12 +252,12 @@ in function type annotations (`(int) -> text`), `def` return type annotations
 separates a branch condition or pattern from its body.
 
 `::` serves two distinct roles: as the **module-qualifier separator** (see
-[Module qualifiers](#module-qualifiers) above) and as the **typed-call
-introducer** `callee::[Type](args)` (e.g. `ask-request::[Review](…)`). It is
+[Module qualifiers](#module-qualifiers) above) and as the **type-argument
+introducer** `callee::[Type]` / `callee::[Type](args)`. It is
 a maximal-munch token distinct from two `:` delimiters. The two uses are
 disambiguated by context: a `::` immediately preceded by a name or dotted path
 is the qualifier form; a `::` following a `NAME` and immediately followed
-by `[` is the typed-call form.
+by `[` is the type-argument form.
 
 `==` is the **equality operator** (with `!=` for inequality). A single `=` is
 never a comparison: it separates a binder or named argument from its value

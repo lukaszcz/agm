@@ -201,6 +201,7 @@ from agm.agl.syntax.nodes import (
     TextSegment,
     Try,
     TypeAlias,
+    TypeApply,
     UnaryNeg,
     UnaryNot,
     UnitLit,
@@ -471,6 +472,8 @@ class _Lowerer:
             case UnaryNot() | UnaryNeg():
                 self._scan_captures(node.operand, local_ids, captured)
             case Cast() | IsTest():
+                self._scan_captures(node.expr, local_ids, captured)
+            case TypeApply():
                 self._scan_captures(node.expr, local_ids, captured)
             case Call():
                 self._scan_captures(node.callee, local_ids, captured)
@@ -920,6 +923,9 @@ class _Lowerer:
             # ----------------------------------------------------------
             case Call(node_id=nid, span=span) as call_node:
                 return self._lower_call(call_node, nid, span)
+
+            case TypeApply(expr=applied_expr):
+                return self.lower_expr(applied_expr)
 
             case Cast(expr=operand, test_only=test_only, span=span, node_id=nid):
                 spec = self._checked.cast_specs[nid]

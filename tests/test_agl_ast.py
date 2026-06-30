@@ -106,6 +106,7 @@ from agm.agl.syntax import (
     TextT,
     Try,
     TypeAlias,
+    TypeApply,
     TypeExpr,
     UnaryNeg,
     UnaryNot,
@@ -1625,6 +1626,16 @@ class TestVisitorWalk:
         walk(call, visited.append)
         assert type_arg in visited
         assert callee in visited
+
+    def test_walk_visits_type_apply_children(self) -> None:
+        from agm.agl.syntax.visitor import walk
+
+        callee = VarRef(name="id", span=self._s(), node_id=710)
+        type_arg = IntT(span=self._s(), node_id=711)
+        node = TypeApply(expr=callee, type_args=(type_arg,), span=self._s(), node_id=712)
+        visited: list[object] = []
+        walk(node, visited.append)
+        assert visited == [node, callee, type_arg]
 
     def test_walk_visits_all_pattern_kinds(self) -> None:
         from agm.agl.syntax.visitor import walk

@@ -228,6 +228,13 @@ let f: (text) -> text = id      # T = text, fixed by the annotation
 print(f("via value"))
 ```
 
+You can also pin the instantiation explicitly without calling the function:
+
+```agl
+let g = id::[int]
+print(g(5))
+```
+
 A bare `let f = id` with no expected type is a **static error**: there is
 nothing to infer the type arguments from. (Calling `id` directly, where the
 arguments drive inference, needs no annotation.)

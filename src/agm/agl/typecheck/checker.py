@@ -127,6 +127,7 @@ from agm.agl.syntax.nodes import (
     Template,
     Try,
     TypeAlias,
+    TypeApply,
     UnaryNeg,
     UnaryNot,
     UnitLit,
@@ -680,6 +681,8 @@ class _Checker:
             return self._check_template(expr)
         if isinstance(expr, VarRef):
             return self._check_varref(expr, expected=expected)
+        if isinstance(expr, TypeApply):
+            return self._check_type_apply(expr)
         if isinstance(expr, Call):
             return self._check_call(expr, expected=expected)
         if isinstance(expr, Lambda):
@@ -789,6 +792,66 @@ class _Checker:
             )
         assert typ is not None, f"Binding {ref!r} has no recorded type; checker invariant violated."
         return typ
+
+    # --- Explicit value-position type application ---
+
+    def _resolve_explicit_type_args(
+        self,
+        *,
+        owner_name: str,
+        type_params: tuple[str, ...],
+        type_args: tuple[TypeExpr, ...],
+        span: SourceSpan,
+    ) -> dict[str, Type]:
+        if len(type_args) != len(type_params):
+            raise AglTypeError(
+                f"'{owner_name}' requires {len(type_params)} type argument(s), "
+                f"but {len(type_args)} were supplied.",
+                span=span,
+            )
+        return {
+            p: self._env.resolve_type_expr(ta, span=span, type_vars=self._current_type_vars)
+            for p, ta in zip(type_params, type_args)
+        }
+
+    def _check_type_apply(self, node: TypeApply) -> Type:
+        if not isinstance(node.expr, VarRef):
+            raise AglTypeError(
+                "Explicit type arguments can only be applied to a generic function value.",
+                span=node.span,
+            )
+
+        ref = self._resolved.resolution.get(node.expr.node_id)
+        if ref is None or ref.kind is not BinderKind.function_binding:
+            raise AglTypeError(
+                "Explicit type arguments can only be applied to a generic function value.",
+                span=node.span,
+            )
+
+        sig = self._env.get_function_signature_by_node_id(ref.decl_node_id)
+        if sig is None:
+            raise AglTypeError(
+                f"Cannot infer return type of function '{ref.name}' before it is checked. "
+                "Add a return type annotation.",
+                span=node.span,
+            )
+        if not sig.type_params:
+            raise AglTypeError(
+                f"'{ref.name}' is not a generic function and does not accept type arguments.",
+                span=node.span,
+            )
+
+        typ = self._require_binding_type(ref)
+        assert isinstance(typ, FunctionType)
+        subst = self._resolve_explicit_type_args(
+            owner_name=ref.name,
+            type_params=sig.type_params,
+            type_args=node.type_args,
+            span=node.span,
+        )
+        concrete = substitute(typ, subst)
+        self._node_types[node.expr.node_id] = concrete
+        return concrete
 
     # --- Cast ---
 

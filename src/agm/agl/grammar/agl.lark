@@ -542,7 +542,7 @@ juxt_suffix: DOT field_name       -> juxt_field_suffix
 ?postfix: postfix LPAR arg_list? RPAR  -> call
         | postfix DOT field_name       -> field_access
         | postfix INDEX_LSQB expr RSQB -> index_access
-        | postfix DCOLON LSQB type_arg_list RSQB LPAR arg_list? RPAR -> typed_postfix_call
+        | postfix DCOLON LSQB type_arg_list RSQB -> type_apply
         | atom
 
 // ---------------------------------------------------------------------------

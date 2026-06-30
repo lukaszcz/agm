@@ -112,6 +112,14 @@ let _r = apply::[int, int](10, fn(n: int) -> int => n + 1)
 print be.value
 ```
 
+The same `::[…]` suffix can instantiate a generic function as a value without
+calling it:
+
+```agl
+let int_id = id::[int]
+print(int_id(9))
+```
+
 A nullary variant can be inferred purely from the expected type:
 
 ```agl

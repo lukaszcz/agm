@@ -108,6 +108,7 @@ from agm.agl.syntax.nodes import (
     Template,
     Try,
     TypeAlias,
+    TypeApply,
     UnaryNeg,
     UnaryNot,
     UnitLit,
@@ -1123,6 +1124,8 @@ class _Resolver:
         elif isinstance(expr, IsTest):
             self._resolve_expr(expr.expr)
         elif isinstance(expr, Cast):
+            self._resolve_expr(expr.expr)
+        elif isinstance(expr, TypeApply):
             self._resolve_expr(expr.expr)
         elif isinstance(expr, ListLit):
             for elem in expr.elements:

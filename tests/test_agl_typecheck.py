@@ -65,6 +65,7 @@ from agm.agl.syntax.nodes import (
     Raise,
     StringLit,
     Try,
+    TypeApply,
     UnitLit,
     VarDecl,
     VarRef,
@@ -4451,6 +4452,38 @@ class TestGenerics:
     def test_explicit_type_args_multi(self) -> None:
         r = accept_type("def const[A, B](a: A, b: B) -> A = a\nconst::[int, text](1, \"x\")")
         assert r.resolved.program is not None
+
+    def test_explicit_type_args_function_value(self) -> None:
+        r = accept_type("def f[T](x: T) -> T = x\nf::[int]")
+        prog = r.resolved.program
+        expr = prog.body.items[1]
+        assert isinstance(expr, TypeApply)
+        assert r.node_types[expr.node_id] == FunctionType(params=(IntType(),), result=IntType())
+
+    def test_explicit_type_args_function_value_can_be_bound(self) -> None:
+        r = accept_type("def f[T](x: T) -> T = x\nlet g = f::[int]\ng(1)")
+        assert r.resolved.program is not None
+
+    def test_explicit_type_args_function_value_arity_error(self) -> None:
+        err = reject_type("def f[T](x: T) -> T = x\nf::[int, text]")
+        assert "type argument" in str(err).lower()
+
+    def test_explicit_type_args_function_value_requires_name(self) -> None:
+        err = reject_type("(fn(x: int) -> int => x)::[int]")
+        assert "generic function value" in str(err)
+
+    def test_explicit_type_args_function_value_requires_function_binding(self) -> None:
+        err = reject_type("let x = 1\nx::[int]")
+        assert "generic function value" in str(err)
+
+    def test_explicit_type_args_function_value_requires_generic_function(self) -> None:
+        err = reject_type("def f(x: int) -> int = x\nf::[int]")
+        assert "not a generic function" in str(err)
+
+    def test_explicit_type_args_function_value_requires_known_signature(self) -> None:
+        err = reject_type("f::[int]\ndef f[T](x: T) = x")
+        assert "return type" in str(err)
+        assert "annotation" in str(err)
 
     def test_explicit_type_args_arity_error(self) -> None:
         err = reject_type("def id[T](x: T) -> T = x\nid::[int, text](1)")

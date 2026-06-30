@@ -86,6 +86,7 @@ from agm.agl.syntax import (
     TextSegment,
     Try,
     TypeAlias,
+    TypeApply,
     UnaryNeg,
     UnaryNot,
     UnitLit,
@@ -1469,6 +1470,15 @@ class TestTypedCalls:
         assert isinstance(arg.args[0], IntLit)
         assert isinstance(arg.type_args[0], IntT)
 
+    def test_explicit_type_args_allowed_as_function_value(self) -> None:
+        prog = parse("f::[int]")
+        expr = first(prog)
+        assert isinstance(expr, TypeApply)
+        assert isinstance(expr.expr, VarRef)
+        assert expr.expr.name == "f"
+        assert len(expr.type_args) == 1
+        assert isinstance(expr.type_args[0], IntT)
+
     def test_dcolon_without_type_brackets_is_not_a_call(self) -> None:
         # ``ask-request::`` with no ``[...]`` is rejected.
         with pytest.raises(AglSyntaxError):
@@ -2073,13 +2083,9 @@ class TestNegativeCases:
         with pytest.raises(AglSyntaxError):
             parse("f a b")
 
-    def test_typed_call_missing_parens_has_targeted_error(self) -> None:
-        with pytest.raises(AglSyntaxError) as excinfo:
-            parse("None::[int]")
-
-        assert str(excinfo.value) == (
-            "Explicit type arguments must be followed by a call, e.g. `name::[T](...)`."
-        )
+    def test_explicit_type_args_without_parens_is_type_apply(self) -> None:
+        expr = first(parse("None::[int]"))
+        assert isinstance(expr, TypeApply)
 
     def test_double_eq_is_equality(self) -> None:
         """In v2, n == 2 is a BinaryOp(EQ) expression (not a mutation).

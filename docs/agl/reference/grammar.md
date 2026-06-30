@@ -334,7 +334,8 @@ an agent, a record constructor, an enum variant, or a generic `def`/constructor
 used as a first-class value. The typed postfix form carries explicit type
 arguments to a generic `def` or constructor (`id::[int](5)`,
 `some::[int](value = 1)`, `Option.some::[int](value = 1)`,
-`apply::[int, int](…)`); see [Generics](generics.md).
+`apply::[int, int](…)`), or instantiate a generic function value
+(`id::[int]`); see [Generics](generics.md).
 A `postfix "." NAME` is either a field access or a variant qualification,
 disambiguated by the resolved type of the left operand.
 

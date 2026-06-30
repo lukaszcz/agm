@@ -228,6 +228,9 @@ max-iters valve, call-depth limit, JSON strictness, timeout), so an interactive
 session evaluates entries with the same agent backing a batch `agm exec` run
 would use.
 
+Like `agm exec`, the REPL automatically opens `std.core`, so standard-library names
+such as `Option`, `Some`, and `None` are available unqualified from a fresh prompt.
+
 ### Entry editing
 
 - Multiline editing is **AgL-aware**: pressing Enter on an unterminated block

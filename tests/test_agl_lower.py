@@ -127,7 +127,11 @@ def test_lower_repl_entry_accumulates_tables_and_resolves_prior_symbols() -> Non
     first_checked = check(resolve(first_program), _caps())
 
     first = lower_repl_entry(
-        first_checked, image=image, source_text="let x = 41\n()", source_label="<repl:1>"
+        first_checked,
+        image=image,
+        source_text="let x = 41\n()",
+        source_label="<repl:1>",
+        validate=True,
     )
     first_symbols = set(first.program.symbols)
     first_sources = set(first.program.sources)

@@ -8,7 +8,7 @@ The REPL is a UI-free incremental driver that runs the full parse → resolve �
 
 Runtime failure is deliberately non-transactional: initializers completed before a failure remain installed (including mutations and new bindings), and the static environment advances only for the symbols that actually reached the runtime frame, keeping later name resolution aligned with the partially advanced image.
 
-When an entry imports modules — or earlier entries did — the session switches to the graph pipeline ([modules.md](modules.md)), caching library source and incrementally linking new modules into the persistent image. Open-imported names are made to persist across entries by accumulating the import declarations and replaying them into later entries.
+The REPL uses the graph pipeline ([modules.md](modules.md)) for entries by default so it can apply the same automatic `std.core` open import as `agm exec`. The graph resolver merges those imported stdlib names with the session's accumulated bindings, constructor candidates, and type names, preserving incremental REPL behavior while keeping stdlib types and constructors available from a fresh prompt. Library modules are cached and incrementally linked into the persistent image; open-imported names are made to persist across entries by accumulating import declarations and replaying them into later entries.
 
 ## Program Parameters
 

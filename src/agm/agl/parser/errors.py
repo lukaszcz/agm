@@ -53,6 +53,7 @@ _STMT_STARTERS: frozenset[str] = frozenset(
 )
 
 _ELSE_BEFORE_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_])else\s*$")
+_TYPED_CALL_WITHOUT_CALL_RE = re.compile(r"::\s*\[.*\]\s*$", re.DOTALL)
 
 
 class AglSyntaxError(AglError):
@@ -153,6 +154,13 @@ def _make_missing_else_arrow_error(span: SourceSpan) -> AglSyntaxError:
     return AglSyntaxError("Missing `=>` after `else`.", span=span)
 
 
+def _make_missing_typed_call_parens_error(span: SourceSpan) -> AglSyntaxError:
+    return AglSyntaxError(
+        "Explicit type arguments must be followed by a call, e.g. `name::[T](...)`.",
+        span=span,
+    )
+
+
 def _is_missing_arrow_after_else(
     *, source_text: str | None, token_pos: int, expected: set[str]
 ) -> bool:
@@ -197,6 +205,13 @@ def syntax_error_from_lark(
             source_text=source_text, token_pos=pos, expected=set(exc.expected)
         ):
             return _make_missing_else_arrow_error(span)
+        if (
+            source_text is not None
+            and tok.type == "$END"
+            and set(exc.expected) == {"LPAR"}
+            and _TYPED_CALL_WITHOUT_CALL_RE.search(source_text) is not None
+        ):
+            return _make_missing_typed_call_parens_error(span)
         # Chained comparison detection (design §4.3): the unexpected token is
         # a comparison operator AND that operator is NOT in the expected set.
         # When the operator IS expected, we are still before the first comparison

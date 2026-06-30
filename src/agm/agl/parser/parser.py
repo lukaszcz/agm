@@ -13,6 +13,7 @@ source string to ``_PARSER``, then passes the resulting Lark tree to
 from __future__ import annotations
 
 import importlib.resources
+import re
 from dataclasses import replace as dc_replace
 from typing import NoReturn
 
@@ -65,6 +66,8 @@ _PARSER: Lark = Lark(
     propagate_positions=True,
     maybe_placeholders=True,
 )
+
+_TYPED_CALL_WITHOUT_CALL_RE = re.compile(r"::\s*\[.*\]\s*$", re.DOTALL)
 
 # A second Lark instance rooted at the ``type_expr`` grammar rule, built lazily.
 # Used only by :func:`parse_type_expr` for the REPL's bare-type-entry fallback;
@@ -207,6 +210,7 @@ def is_incomplete_source(text: str) -> bool:
     LALR runs for the same source string.
     """
     global _incomplete_cache
+
     from lark.lexer import Token
 
     if _incomplete_cache is not None and _incomplete_cache[0] == text:
@@ -221,7 +225,11 @@ def is_incomplete_source(text: str) -> bool:
         # branch classifies every unterminated block / dangling operator.
         token: Token = exc.token
         if token.type == "$END":
-            result = True
+            typed_call_without_call = (
+                exc.expected == {"LPAR"}
+                and _TYPED_CALL_WITHOUT_CALL_RE.search(text) is not None
+            )
+            result = not typed_call_without_call
         else:
             result = "_INDENT" in exc.expected
     except (LarkError, LexError):

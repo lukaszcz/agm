@@ -85,7 +85,7 @@ suite ::= NEWLINE INDENT block DEDENT
 ## Type declarations
 
 ```ebnf
-record_def       ::= "record" NAME type_params? record_body
+record_def       ::= "record" NAME type_params? "="? record_body
 record_body      ::= param_marker? NEWLINE INDENT block_entry (NEWLINE block_entry)* NEWLINE? DEDENT
                    | "(" field_list? ")"
                    | field_list

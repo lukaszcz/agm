@@ -311,8 +311,6 @@ class ReplSession:
         """
         from agm.agl.lexer import tab_warning_collector
         from agm.agl.parser import AglSyntaxError, parse_program_seeded
-        from agm.agl.scope import AglScopeError, resolve
-        from agm.agl.typecheck import AglTypeError, check
 
         host_env = self._runtime.host_environment()
 
@@ -341,102 +339,18 @@ class ReplSession:
             program, next_start_id
         )
 
-        # [1d] Check whether this entry has import declarations or there are
-        # already cached library modules from a prior entry.  If so, use the
-        # graph-mode pipeline which handles cross-module resolution and execution.
-        from agm.agl.syntax.nodes import ImportDecl as _ImportDecl
-
-        has_imports = any(
-            isinstance(item, _ImportDecl) for item in pipeline_program.body.items
-        )
-        use_graph_mode = has_imports or bool(self._loaded_lib_modules)
-
-        if use_graph_mode:
-            return self._graph_session.eval_entry_graph_mode(
-                text=text,
-                orig_program=orig_program,
-                pipeline_program=pipeline_program,
-                host_env=host_env,
-                tab_warnings=tab_warnings,
-                next_start_id=next_start_id,
-                check_only=check_only,
-            )
-
-        # [2] Resolve against the session scope (refs fall through; new decls
-        # shadow).  resolve does NOT mutate the parent scope.  Host-registered
-        # agents and prior cross-entry ``agent`` declarations are ambient, so a
-        # call to them needs no in-entry declaration.  Constructor candidates
-        # and type names from prior entries are passed as ambient so that
-        # subsequent entries can reference constructors declared earlier.
-        try:
-            resolved = resolve(
-                pipeline_program,
-                parent_scope=self._session_scope,
-                ambient_agents=self._ambient_agents(host_env),
-                ambient_constructor_candidates=self._ambient_constructor_candidates,
-                ambient_type_names=self._ambient_type_names,
-            )
-        except AglScopeError as exc:
-            return self._fail([exc.to_diagnostic()], list(tab_warnings))
-
-        # [3] Type-check seeded with the session type env (check COPIES the seed
-        # into a fresh env, so self._type_env is not mutated here).
-        try:
-            checked = check(resolved, host_env.capabilities, seed_env=self._type_env)
-        except AglTypeError as exc:
-            return self._fail([exc.to_diagnostic()], list(tab_warnings))
-
-        # Surface TAB advisories ahead of the scope and type-checker warnings on
-        # every remaining path (typecheck-clean, eval success, or runtime raise).
-        # Scope warnings (e.g. an agent declared but never called) are routed the
-        # same way the checker's warnings are.
-        warnings: list[Diagnostic] = [
-            *tab_warnings,
-            *resolved.warnings,
-            *checked.warnings,
-        ]
-
-        # [4] check_only: type-only dry run — no eval, no promotion.
-        if check_only:
-            return self._build_check_only_result(orig_program, checked, warnings)
-
-        pre_eval_result, param_values, entry_program_name, entry_active_config = (
-            self._pre_eval_param_check(orig_program, checked, warnings)
-        )
-        if pre_eval_result is not None:
-            return pre_eval_result
-
-        # [5] Materialize output contracts for this entry.
-        from agm.agl.runtime.contract import materialize_contract
-
-        contract_errors: list[Diagnostic] = []
-        for spec in checked.contract_specs.values():
-            try:
-                materialize_contract(spec, host_env.codecs)
-            except ValueError as exc:
-                contract_errors.append(Diagnostic(message=f"Contract error: {exc}", line=1))
-        if contract_errors:
-            return self._fail(contract_errors, warnings)
-
-        # Build config resolution maps for this entry.  A REPL session has no
-        # CLI layer, so config_cli is always empty; config_base is derived from
-        # the session's current persisted engine settings and the active program
-        # config (for program-specific overrides).
-        config_base = self._build_config_base(entry_active_config)
-
-        # [7] Incrementally link and execute only this entry's IR initializers.
-        return self._evaluate_and_promote(
+        # [1d] REPL entries use the graph-mode pipeline by default because that
+        # is where the synthetic ``import std.core`` prelude is injected.  This
+        # keeps the REPL aligned with ``agm exec``: stdlib names are open unless
+        # a host explicitly opts out.
+        return self._graph_session.eval_entry_graph_mode(
             text=text,
             orig_program=orig_program,
-            checked=checked,
+            pipeline_program=pipeline_program,
             host_env=host_env,
-            warnings=warnings,
+            tab_warnings=tab_warnings,
             next_start_id=next_start_id,
-            param_values=param_values,
-            entry_program_name=entry_program_name,
-            entry_active_config=entry_active_config,
-            config_cli={},
-            config_base=config_base,
+            check_only=check_only,
         )
 
     # ------------------------------------------------------------------
@@ -680,181 +594,6 @@ class ReplSession:
             error=None,
             ok=True,
             quote_strings=self._quote_strings_for_entry(program),
-        )
-
-    def _evaluate_and_promote(
-        self,
-        *,
-        text: str,
-        orig_program: "Program",
-        checked: "CheckedProgram",
-        host_env: "HostEnvironment",
-        warnings: list[Diagnostic],
-        next_start_id: int,
-        param_values: "dict[str, Value]",
-        entry_program_name: str | None,
-        entry_active_config: "dict[str, object]",
-        config_cli: "dict[str, Value]",
-        config_base: "dict[str, Value]",
-    ) -> EntryResult:
-        """Lower and execute an entry against the persistent IR runtime image.
-
-        ``orig_program`` is the program as the user typed it (before any
-        trailing-binder synthesis); ``checked.resolved.program`` is the pipeline
-        program (potentially with a synthetic UnitLit appended).  Classification,
-        echo data, and promotion use ``orig_program`` so the user-visible outcome
-        is accurate.
-
-        ``config_cli`` carries explicitly-set overrides (always ``{}`` in a REPL
-        session — no CLI layer); ``config_base`` carries the host's configured
-        defaults and is threaded into the interpreter so ``IrConfigBind`` nodes
-        can resolve bare ``config KEY`` declarations.
-        """
-        from agm.agl.eval.ir_interpreter import IrInterpreter
-        from agm.agl.lower import lower_repl_entry
-        from agm.agl.pipeline import exception_value_to_run_error
-        from agm.agl.runtime.request import AgentCancelled
-        from agm.agl.runtime.trace import TraceStore
-        from agm.agl.semantics.exceptions import AglRaise
-
-        lowered = lower_repl_entry(
-            checked,
-            image=self._link_image,
-            source_text=text,
-            source_label=f"<repl:{len(self._source_log) + 1}>",
-            validate=True,
-        )
-        ir_param_values = {
-            param.symbol: param_values[param.public_name]
-            for param in lowered.program.params
-            if param.public_name in param_values
-        }
-        from agm.agl.runtime.params import _materialize_ir_contracts
-
-        host_contracts, _ = _materialize_ir_contracts(lowered.program, host_env.codecs)
-
-        # One trace run per entry: a fresh ``TraceStore`` (own ``run_id``)
-        # appends to the shared file, bracketed by ``run_start``/``run_end``.
-        # ``path=None`` (no ``--log-file``) makes every write a silent no-op.
-        trace = TraceStore(path=self._trace_path)
-        trace.run_start()
-
-        base_frame = self._ir_base_frame
-        assert isinstance(base_frame, dict)
-        interp = IrInterpreter(
-            lowered.program,
-            registry=host_env.registry,
-            strict_json=self._default_strict_json,
-            loop_limit=self._default_loop_limit,
-            max_call_depth=self._default_call_depth_limit,
-            shell_exec_timeout=self._shell_exec_timeout,
-            trace=trace,
-            param_values=ir_param_values,
-            host_contracts=host_contracts,
-            base_frame=base_frame,
-            config_cli=config_cli,
-            config_base=config_base,
-        )
-
-        try:
-            interp.run()
-        except AglRaise as exc:
-            error = exception_value_to_run_error(exc.exc, span=exc.span)
-            trace.exception(
-                type_name=error.type_name,
-                message=str(error.fields.get("message", "")),
-                trace_id=str(error.fields.get("trace_id", "")),
-                span=exc.span,
-            )
-            trace.run_end(ok=False)
-            installed = self._promote_ir_state(
-                text=text,
-                program=orig_program,
-                checked=checked,
-                next_start_id=next_start_id,
-                entry_program_name=entry_program_name,
-                entry_active_config=entry_active_config,
-                partial=True,
-                failure_span=exc.span,
-            )
-            kind, name = self._classify(orig_program)
-            return EntryResult(
-                kind=kind,
-                name=name,
-                value=None,
-                value_type=None,
-                diagnostics=[],
-                warnings=warnings,
-                error=error,
-                ok=False,
-                trace_path=self._trace_path,
-                installed=installed,
-            )
-        except (AgentCancelled, KeyboardInterrupt) as exc:
-            cancel_span = exc.span if isinstance(exc, AgentCancelled) else None
-            trace.run_end(ok=False)
-            installed = self._promote_ir_state(
-                text=text,
-                program=orig_program,
-                checked=checked,
-                next_start_id=next_start_id,
-                entry_program_name=entry_program_name,
-                entry_active_config=entry_active_config,
-                partial=True,
-                failure_span=cancel_span,
-            )
-            kind, name = self._classify(orig_program)
-            return EntryResult(
-                kind=kind,
-                name=name,
-                value=None,
-                value_type=None,
-                diagnostics=[
-                    Diagnostic(message="Agent call cancelled — entry aborted.", line=1)
-                ],
-                warnings=warnings,
-                error=None,
-                ok=False,
-                trace_path=self._trace_path,
-                installed=installed,
-            )
-
-        trace.run_end(ok=True)
-        # Promote engine settings BEFORE static state so any subsequent entry
-        # that queries session defaults sees the post-config-binding values.
-        self._update_engine_settings(
-            strict_json=interp.strict_json,
-            loop_limit=interp.loop_limit,
-            shell_exec_timeout=interp.shell_exec_timeout,
-        )
-        self._promote_ir_state(
-            text=text,
-            program=orig_program,
-            checked=checked,
-            next_start_id=next_start_id,
-            entry_program_name=entry_program_name,
-            entry_active_config=entry_active_config,
-            partial=False,
-            failure_span=None,
-        )
-        kind, name = self._classify(orig_program)
-        captured = (
-            interp.initializer_values[lowered.trailing_expression]
-            if lowered.trailing_expression is not None
-            else None
-        )
-        value, value_type = self._echo_data_ir(orig_program, checked, captured)
-        return EntryResult(
-            kind=kind,
-            name=name,
-            value=value,
-            value_type=value_type,
-            diagnostics=[],
-            warnings=warnings,
-            error=None,
-            ok=True,
-            trace_path=self._trace_path,
-            quote_strings=self._quote_strings_for_entry(orig_program),
         )
 
     def _promote_ir_state(

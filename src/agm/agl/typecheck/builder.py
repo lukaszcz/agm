@@ -202,6 +202,10 @@ class _TypeBuilder:
         """Public proxy for :meth:`_ensure_built_exception`."""
         self._ensure_built_exception(name)
 
+    def validate_alias(self, stmt: TypeAlias) -> None:
+        """Public proxy for :meth:`_validate_alias`."""
+        self._validate_alias(stmt)
+
     def _register_name(self, name: str, span: SourceSpan, *, is_builtin: bool = False) -> None:
         if is_builtin and name not in _BUILTIN_NOMINAL_NAMES:
             raise AglTypeError(

@@ -204,6 +204,7 @@ accumulates bindings, types, and declarations, so earlier results stay available
 calls fire exactly once. By default it fires agent calls immediately; `--confirm-agents`
 asks before each one. Multiline editing, syntax highlighting, tab-completion, and history are
 built in, and `:` meta-commands (`:help`, `:type`, `:bindings`, …) inspect the session.
+The core standard library is opened automatically, as in `agm exec`.
 
 ```bash
 agm repl                        # launch; type :help for commands, :quit to exit

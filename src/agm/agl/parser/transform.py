@@ -316,7 +316,7 @@ class AstBuilder(Transformer):
     # ------------------------------------------------------------------
 
     def record_def(self, meta: Meta, args: _Args) -> syntax.RecordDef:
-        # Grammar: "record" name type_params? record_body
+        # Grammar: "record" name type_params? EQ? record_body
         name_tok = _find_name_token(args)
         type_params_val: tuple[str, ...] = ()
         for a in args:

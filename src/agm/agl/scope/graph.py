@@ -322,6 +322,8 @@ def resolve_graph(
     graph: ModuleGraph,
     *,
     ambient_agents: frozenset[str] = frozenset(),
+    entry_ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
+    entry_ambient_type_names: frozenset[str] = frozenset(),
     entry_parent_scope: ScopeNode | None = None,
     entry_repl_session_scope: ScopeNode | None = None,
 ) -> ResolvedModuleGraph:
@@ -334,6 +336,12 @@ def resolve_graph(
     ambient_agents:
         Agent names the host already backs (passed through to the entry
         resolver; non-entry modules never declare agents).
+    entry_ambient_constructor_candidates:
+        Constructor candidates from prior REPL entries.  These are merged with
+        open-imported constructor candidates for the entry module.
+    entry_ambient_type_names:
+        Type names from prior REPL entries, used for qualified constructor
+        access in the entry module.
     entry_parent_scope:
         When given, the entry module's root scope is parented to this scope
         so name lookups fall through to session bindings (REPL incremental
@@ -441,6 +449,13 @@ def resolve_graph(
         cross_module_candidates, cross_module_type_names = (
             _build_cross_module_constructor_candidates(import_envs[mid], all_public_types)
         )
+        constructor_candidates = cross_module_candidates
+        type_names = cross_module_type_names
+        if is_entry:
+            constructor_candidates = dict(entry_ambient_constructor_candidates or {})
+            for name, refs in cross_module_candidates.items():
+                constructor_candidates[name] = (*constructor_candidates.get(name, ()), *refs)
+            type_names = entry_ambient_type_names | cross_module_type_names
         resolver = _Resolver(
             module_id=mid,
             import_env=import_envs[mid],
@@ -453,8 +468,8 @@ def resolve_graph(
             loaded.program,
             parent_scope=entry_parent_scope if is_entry else None,
             ambient_agents=ambient_agents if is_entry else frozenset(),
-            ambient_constructor_candidates=cross_module_candidates or None,
-            ambient_type_names=cross_module_type_names,
+            ambient_constructor_candidates=constructor_candidates or None,
+            ambient_type_names=type_names,
         )
         all_warnings.extend(resolved.warnings)
         resolved_modules[mid] = ResolvedModule(

@@ -502,6 +502,13 @@ class TestDeclarations:
         assert rec.name == "Point"
         assert [field.name for field in rec.fields] == ["x", "y"]
 
+    def test_record_def_with_optional_equals_before_parens(self) -> None:
+        prog = parse("record Point = (x: int, y: int)")
+        rec = first(prog)
+        assert isinstance(rec, RecordDef)
+        assert rec.name == "Point"
+        assert [field.name for field in rec.fields] == ["x", "y"]
+
     def test_record_def_empty_parens(self) -> None:
         prog = parse("record Empty()")
         rec = first(prog)
@@ -515,6 +522,13 @@ class TestDeclarations:
 
     def test_record_def_inline_without_braces(self) -> None:
         prog = parse("record Point x: int, y: int")
+        rec = first(prog)
+        assert isinstance(rec, RecordDef)
+        assert rec.name == "Point"
+        assert [field.name for field in rec.fields] == ["x", "y"]
+
+    def test_record_def_with_optional_equals_before_inline_fields(self) -> None:
+        prog = parse("record Point = x: int, y: int")
         rec = first(prog)
         assert isinstance(rec, RecordDef)
         assert rec.name == "Point"
@@ -2044,6 +2058,9 @@ class TestReplSeam:
         # == is a real error, not an incomplete source.
         assert not is_incomplete_source("x == y")
 
+    def test_is_incomplete_source_typed_call_missing_parens_is_real_error(self) -> None:
+        assert not is_incomplete_source("None::[int]")
+
 
 # ---------------------------------------------------------------------------
 # Negative cases (parse errors)
@@ -2055,6 +2072,14 @@ class TestNegativeCases:
         """f a b is a parse error — juxt does not chain."""
         with pytest.raises(AglSyntaxError):
             parse("f a b")
+
+    def test_typed_call_missing_parens_has_targeted_error(self) -> None:
+        with pytest.raises(AglSyntaxError) as excinfo:
+            parse("None::[int]")
+
+        assert str(excinfo.value) == (
+            "Explicit type arguments must be followed by a call, e.g. `name::[T](...)`."
+        )
 
     def test_double_eq_is_equality(self) -> None:
         """In v2, n == 2 is a BinaryOp(EQ) expression (not a mutation).

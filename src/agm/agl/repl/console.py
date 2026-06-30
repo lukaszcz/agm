@@ -267,6 +267,14 @@ def _styled_spans(
     try:
         tokens = list(tokenize(text))
     except Exception:
+        open_string_start = _open_string_start(text)
+        if open_string_start is not None:
+            prefix_spans = _styled_spans(
+                text[:open_string_start], type_names, constructor_names
+            )
+            return prefix_spans + [
+                (open_string_start, len(text), "class:agl.string")
+            ]
         return []
 
     forced, local_types, local_constructors = _decl_site_styles(text, tokens)
@@ -293,6 +301,39 @@ def _styled_spans(
             continue
         spans.append((start, end, style))
     return spans
+
+
+def _open_string_start(text: str) -> int | None:
+    """Return the opening quote offset when *text* ends inside a string."""
+    index = 0
+    length = len(text)
+    while index < length:
+        ch = text[index]
+        if ch == "#":
+            newline = text.find("\n", index + 1)
+            if newline == -1:
+                return None
+            index = newline + 1
+            continue
+        if ch not in ('"', "'"):
+            index += 1
+            continue
+
+        quote = ch
+        start = index
+        delimiter = quote * 3 if text.startswith(quote * 3, index) else quote
+        index += len(delimiter)
+        while index < length:
+            if text.startswith(delimiter, index):
+                index += len(delimiter)
+                break
+            if text[index] == "\\":
+                index += 2
+            else:
+                index += 1
+        else:
+            return start
+    return None
 
 
 def _trim_string_fragment_end(tokens: "list[Token]", index: int, end: int) -> int:
@@ -443,6 +484,8 @@ class AglCompleter(Completer):
                 yield Completion(name, start_position=-len(word))
 
     def _word_completions(self, document: Document) -> Iterable[Completion]:
+        if _open_string_start(document.text_before_cursor) is not None:
+            return
         word = _completion_word_before_cursor(document.text_before_cursor)
         if word is None:
             return

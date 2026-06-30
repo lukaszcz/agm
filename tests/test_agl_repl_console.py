@@ -316,6 +316,15 @@ class TestLexer:
         fragments = lexer.lex_document(Document("let x = ~bad"))(0)
         assert "".join(text for _style, text in fragments) == "let x = ~bad"
 
+    @pytest.mark.parametrize("quote", ['"""', "'''"])
+    def test_unterminated_triple_quoted_string_preserves_prefix_highlighting(
+        self, quote: str
+    ) -> None:
+        lexer = AglPromptLexer()
+        fragments = lexer.lex_document(Document(f"let x = {quote}"))(0)
+        assert ("class:agl.keyword", "let") in fragments
+        assert "".join(text for _style, text in fragments) == f"let x = {quote}"
+
     def test_string_literal_is_styled(self) -> None:
         lexer = AglPromptLexer()
         fragments = lexer.lex_document(Document('print "hello"'))(0)
@@ -570,6 +579,24 @@ class TestCompleter:
         # completion and leave `${${x}` in the buffer.
         completer = AglCompleter(ReplSession())
         assert _completions(completer, "${") == []
+
+    @pytest.mark.parametrize("quote", ['"""', "'''"])
+    def test_no_completion_inside_unterminated_triple_quoted_string(
+        self, quote: str
+    ) -> None:
+        completer = AglCompleter(ReplSession())
+        assert _completions(completer, f"let prompt = {quote}le") == []
+        assert _completions(completer, f"let prompt = {quote}first\n\nle") == []
+
+    @pytest.mark.parametrize("quote", ['"', "'"])
+    def test_no_completion_inside_unterminated_string(self, quote: str) -> None:
+        completer = AglCompleter(ReplSession())
+        assert _completions(completer, f"let prompt = {quote}le") == []
+        assert _completions(completer, f"let prompt = {quote}escaped \\le") == []
+
+    def test_comment_prefix_keeps_existing_word_completion_behavior(self) -> None:
+        completer = AglCompleter(ReplSession())
+        assert "let" in _completions(completer, '# "not a string" le')
 
 
 # ---------------------------------------------------------------------------

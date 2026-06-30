@@ -73,7 +73,7 @@ output is a valid empty response ([Exceptions](exceptions.md)).
 ## Codecs
 
 The built-in codecs are `text` and `json`. Hosts may register additional
-codecs (selectable per call with `format:`). Built-in names are reserved;
+codecs (selectable per call with `format`). Built-in names are reserved;
 duplicate registrations are host configuration errors.
 
 Each registration declares which type kinds it supports, and the
@@ -107,18 +107,85 @@ default is always used. Runtime-only values such as `unit`, agents, and
 functions are not valid program param types because the executable always
 includes external-decoder metadata for every declared param.
 
-## Host-configurable defaults
+## Host-configurable settings
+
+### Engine keys
+
+A program may declare any of the following fixed engine keys with `config`
+([Bindings and scope](bindings-and-scope.md)):
+
+| Key | AgL type | Portable default |
+| --- | -------- | ---------------- |
+| `log` | `bool` | `false` |
+| `strict-json` | `bool` | `false` (lenient recovery) |
+| `max-iters` | `int` | `5` |
+| `runner` | `text` | host floor runner |
+| `log-file` | `Option[text]` | `none` |
+| `timeout` | `Option[text]` | `none` |
+
+For an `Option[T]` key (`log-file`, `timeout`) a bare inner `T` value is
+accepted and projected into `some(value)` automatically.
+
+### Precedence chains
+
+The two declaration forms have distinct precedence rules:
+
+```
+config X:   CLI --X  >  source (config X = e)  >  [<program>].X  >  [exec].X  >  engine default
+param  Y:   CLI --Y  >  [<program>].Y           >  source default (param Y = e) >  required error
+```
+
+A bare `config KEY` (no value) contributes no source value and falls through
+to the program-section / exec-section / engine-default layers.
+
+### Config-file schema
+
+`[exec]` holds global engine defaults with kebab field names (`strict-json`,
+`max-iters`, `log-file`). A `[<program>]` top-level section — keyed by the
+`program NAME` declaration or the `.agl` file stem — overrides both engine-key
+values and param values for that program. A file stem that matches a reserved
+host section name (e.g. `exec`, `loop`) is an error unless an explicit `program
+NAME` declaration is present. Inline `-c` programs with no `program` declaration
+have no config section.
+
+### Effect-at-binding and start-resolved keys
+
+The six engine keys are divided into two groups:
+
+- **Effect-at-binding** (`strict-json`, `max-iters`, `timeout`): take effect
+  from the point the `config` declaration executes. Expressions after the
+  declaration see the updated setting; expressions before do not.
+- **Start-resolved** (`runner`, `log`, `log-file`): resolved before the program
+  runs. Declare them at the top so the agent factory and trace infrastructure
+  see the chosen values before any expression evaluates.
+
+### Error surface for `timeout`
+
+- A bad `--timeout` or `[exec].timeout` value is caught before execution
+  (exit 1 pre-execution error).
+- A bad source `config timeout = "…"` value is a runtime-evaluated expression;
+  a bad value raises a runtime error (exit 2).
+- Source `config timeout` governs only the **shell-exec** timeout. The agent
+  idle timeout is always start-resolved from the CLI or `[exec]` and cannot be
+  changed mid-program.
+
+### `--no-log-file` semantics
+
+`--no-log-file` sets the in-program `config log-file` binding to `none`. It
+does **not** suppress a trace configured elsewhere — a `[exec] log-file` path
+or an auto path from `--log` still applies to the trace infrastructure. Use
+`--no-log` to disable tracing entirely.
+
+### Other host-configurable defaults
 
 | Setting | Portable default | Used when |
 | ------- | ---------------- | --------- |
-| Default call-depth limit | `256` | recursion depth before `RecursionError` (set via `max_call_depth`) |
 | Default parse policy | `abort` | call without `on_parse_error` |
 | Default JSON parsing mode | lenient recovery | JSON-codec call without `strict_json` |
-| Shell `exec` timeout | none | every `exec` call |
 | Agent idle timeout | host-defined | every agent dispatch |
 
 Source-level call options always override host defaults — in both
-directions: `strict_json: false` forces lenient parsing even under a strict
+directions: `strict_json = false` forces lenient parsing even under a strict
 host default.
 
 ## Tracing

@@ -40,6 +40,7 @@ from agm.agl.lexer.errors import LexError
 from agm.agl.lexer.tokens import (
     ARROW,
     ASSIGN,
+    AT,
     COLON,
     COMMA,
     DCOLON,
@@ -85,7 +86,8 @@ from agm.util.text import normalize_newlines
 # a (Unicode) letter or ``_`` and then greedily consumes every character that
 # is NOT in this set.  Whitespace and the structural punctuators/operators
 # that must remain standalone delimiters (brackets, field access ``.``,
-# separators ``,` `` ``;``, type/arg ``:``, ``|``, and ``/``) are listed here.
+# separators ``,`` ``;``, type/arg ``:``, ``|``, ``/``, and ``@``) are listed
+# here.
 # Everything else — including ``-``, ``?``, ``!``, ``<``, ``>``, ``=``,
 # the string quotes ``"`` and ``'``, the arithmetic operators ``+`` and ``*``,
 # and arbitrary Unicode letters/digits — is an identifier-continuation
@@ -106,8 +108,12 @@ _IDENT_STOP: frozenset[str] = frozenset({
     # ``a+b``, ``n*x``).  A leading " or ' (or one after whitespace) still
     # starts a string template because the identifier-start predicate requires
     # a letter or _.
+    # @ is a stop character so that @pos/@std/@named lex as two tokens (AT NAME)
+    # rather than gluing into the preceding identifier.
+    # = is a stop character so that ``a=b`` lexes as NAME EQ NAME, not a single
+    # identifier — required for no-space named-arg syntax (``f(x=1)``).
     "(", ")", "[", "]", "{", "}",
-    ":", ",", ".", "|", ";", "/",
+    ":", ",", ".", "|", ";", "/", "@", "=",
 })
 
 _TAB_LEN = 4
@@ -136,6 +142,7 @@ _SINGLE_OPS: dict[str, str] = {
     "+": PLUS,
     "*": STAR,
     "/": SLASH,
+    "@": AT,
 }
 
 # JSON escape decoding table (excluding \uXXXX and \$, handled separately)

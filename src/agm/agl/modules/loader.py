@@ -4,9 +4,9 @@ This module provides :func:`load_graph`, which drives the full load-and-graph
 phase of the AgL module system:
 
 1. Parse the entry source (inline ``-c`` or a file on disk).
-2. Extract top-level :class:`~agm.agl.syntax.nodes.ImportDecl` nodes.
-3. BFS over transitive imports, resolving each module id to its canonical file
-   via :func:`~agm.agl.modules.resolver.resolve_module` (or
+2. Extract top-level import/export declarations.
+3. BFS over transitive import and export declarations, resolving each module id
+   to its canonical file via :func:`~agm.agl.modules.resolver.resolve_module` (or
    :func:`~agm.agl.modules.resolver.expand_wildcard` for ``.*`` imports),
    parsing each file with a monotonically growing ``start_id`` seed so that
    **node ids are disjoint across all modules in the graph**.
@@ -32,7 +32,7 @@ from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
 from agm.agl.modules.resolver import expand_wildcard, resolve_module
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser.parser import parse_program_seeded
-from agm.agl.syntax.nodes import ImportDecl
+from agm.agl.syntax.nodes import ExportDecl, ImportDecl
 from agm.agl.syntax.spans import SourceId, SourceSpan
 from agm.agl.syntax.types import ImportMode
 from agm.core import fs
@@ -59,6 +59,9 @@ class LoadedModule:
     imports:
         Top-level :class:`~agm.agl.syntax.nodes.ImportDecl` nodes extracted
         from ``program.body.items``.
+    export_decls:
+        Top-level :class:`~agm.agl.syntax.nodes.ExportDecl` nodes extracted
+        from ``program.body.items``.
     """
 
     module_id: ModuleId
@@ -66,6 +69,7 @@ class LoadedModule:
     path: Path | None
     source: SourceId
     imports: tuple[ImportDecl, ...]
+    export_decls: tuple[ExportDecl, ...]
     source_text: str
 
 
@@ -108,6 +112,18 @@ def _extract_imports(program: syntax.Program) -> tuple[ImportDecl, ...]:
     """
     return tuple(
         item for item in program.body.items if isinstance(item, ImportDecl)
+    )
+
+
+def _extract_exports(program: syntax.Program) -> tuple[ExportDecl, ...]:
+    """Return the top-level ExportDecl nodes from *program*.
+
+    Only nodes at the top level of ``program.body.items`` are included;
+    exports inside nested blocks are not valid and are ignored here (the scope
+    pass enforces the restriction).
+    """
+    return tuple(
+        item for item in program.body.items if isinstance(item, ExportDecl)
     )
 
 
@@ -157,8 +173,11 @@ def _mid_sort_key(mid: ModuleId) -> tuple[str, ...]:
     return mid.segments
 
 
-def _pair_sort_key(pair: tuple[ModuleId, ImportDecl]) -> tuple[str, ...]:
-    """Key function for sorting ``(ModuleId, ImportDecl)`` pairs by module id."""
+_ModuleDependencyDecl = ImportDecl | ExportDecl
+
+
+def _pair_sort_key(pair: tuple[ModuleId, _ModuleDependencyDecl]) -> tuple[str, ...]:
+    """Key function for sorting ``(ModuleId, decl)`` pairs by module id."""
     return pair[0].segments
 
 
@@ -216,17 +235,20 @@ def _load_into_graph(
     adj: dict[ModuleId, list[ModuleId]] = {}
     next_id = start_id
 
-    # BFS queue: (module id, the import decl that discovered it).  We sort each
+    # BFS queue: (module id, the import/export decl that discovered it).  We sort each
     # batch of newly-discovered ids before enqueuing so the traversal order —
     # and therefore the start_id seed assignments — are stable regardless of
     # dict/set ordering.
-    queue: deque[tuple[ModuleId, ImportDecl]] = deque()
+    queue: deque[tuple[ModuleId, _ModuleDependencyDecl]] = deque()
 
-    def _resolve_imports(source: ModuleId, imports: tuple[ImportDecl, ...]) -> None:
-        """Record *source*'s import targets in ``adj`` and enqueue new ones."""
+    def _resolve_dependencies(
+        source: ModuleId,
+        decls: tuple[_ModuleDependencyDecl, ...],
+    ) -> None:
+        """Record *source*'s module dependencies in ``adj`` and enqueue new ones."""
         targets: list[ModuleId] = []
-        new_pairs: list[tuple[ModuleId, ImportDecl]] = []
-        for decl in imports:
+        new_pairs: list[tuple[ModuleId, _ModuleDependencyDecl]] = []
+        for decl in decls:
             if decl.wildcard:
                 matched = expand_wildcard(tuple(decl.module_path), roots, span=decl.span)
                 target_ids: list[ModuleId] = list(matched)
@@ -240,7 +262,7 @@ def _load_into_graph(
         new_pairs.sort(key=_pair_sort_key)
         queue.extend(new_pairs)
 
-    _resolve_imports(ENTRY_ID, entry_loaded.imports)
+    _resolve_dependencies(ENTRY_ID, (*entry_loaded.imports, *entry_loaded.export_decls))
 
     while queue:
         mid, decl = queue.popleft()
@@ -271,18 +293,19 @@ def _load_into_graph(
             path=canon_path,
             source=file_source_id,
             imports=_extract_imports(program),
+            export_decls=_extract_exports(program),
             source_text=source_text,
         )
         modules[mid] = loaded
         newly_loaded[mid] = loaded
-        _resolve_imports(mid, loaded.imports)
+        _resolve_dependencies(mid, (*loaded.imports, *loaded.export_decls))
 
     # Seeded (cached) modules are reused as-is and were never re-walked above;
     # record their adjacency so SCCs cover the whole graph.  Their import targets
     # were all loaded when they were first discovered, so nothing new is queued.
     for mid, loaded in modules.items():
         if mid not in adj:
-            _resolve_imports(mid, loaded.imports)
+            _resolve_dependencies(mid, (*loaded.imports, *loaded.export_decls))
 
     sccs = _tarjan_sccs(adj)
     graph = ModuleGraph(modules=modules, entry_id=ENTRY_ID, sccs=sccs)
@@ -352,6 +375,7 @@ def load_graph(
         path=canonical_entry_path,
         source=entry_source_id,
         imports=_extract_imports(entry_program),
+        export_decls=_extract_exports(entry_program),
         source_text=normalize_newlines(entry_source),
     )
 
@@ -417,6 +441,7 @@ def build_repl_graph(
         path=canonical_entry_path,
         source=entry_source_id,
         imports=_extract_imports(program),
+        export_decls=_extract_exports(program),
         source_text="",
     )
 

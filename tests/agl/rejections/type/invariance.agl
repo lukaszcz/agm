@@ -1,5 +1,5 @@
 record Box[T]
   value: T
 
-let b: Box[text] = Box(value: 5)
+let b: Box[text] = Box(value = 5)
 b

@@ -4,9 +4,9 @@
 
 AgL has two value binders (`let` and `var`), destructive assignment, a param declaration, an
 agent declaration, and a function declaration (`def`). There is no bare
-assignment: `x = e` as an item is a static error with the guidance to use
-`let`, `var`, or `:=`. A single `=` in expression position is the equality
-operator ([Expressions](expressions.md)).
+assignment: `x = e` as an item is a syntax error — use `let`/`var` to bind or
+`:=` to reassign. The equality operator is `==`
+([Expressions](expressions.md)).
 
 ## `let` — immutable binding
 
@@ -22,8 +22,8 @@ self-contained; a block ending in a bare `let` is a static error:
 ```agl
 let review: Review = ask(
   "Review ${artifact}",
-  agent: reviewer,
-  on_parse_error: Retry(n: 2)
+  agent = reviewer,
+  on_parse_error = Retry(n = 2)
 )
 let count = 3
 ```
@@ -38,7 +38,7 @@ Identical to `let` except the binding is **mutable** — it may later be
 updated with `:=`:
 
 ```agl
-var artifact: text = ask("Implement ${spec}", agent: impl)
+var artifact: text = ask("Implement ${spec}", agent = impl)
 ```
 
 ## `:=` — destructive assignment
@@ -53,8 +53,8 @@ never creates a binding. The expected type of the right-hand side is the
 declared type of the binding being updated:
 
 ```agl
-var proposal: Turn = ask("Initial proposal.", agent: researcher)
-proposal := ask("Revise proposal.", agent: researcher)   # target type: Turn
+var proposal: Turn = ask("Initial proposal.", agent = researcher)
+proposal := ask("Revise proposal.", agent = researcher)   # target type: Turn
 ```
 
 `:=` can also update an element of a mutable list or an existing key of a
@@ -106,10 +106,10 @@ scoping within the same module.
 
 ```agl
 def is_even(n: int) -> bool =
-  if n = 0 => true else => is_odd(n - 1)
+  if n == 0 => true else => is_odd(n - 1)
 
 def is_odd(n: int) -> bool =
-  if n = 0 => false else => is_even(n - 1)
+  if n == 0 => false else => is_even(n - 1)
 ```
 
 A `def` may be **generic** — it can declare type parameters in a bracketed
@@ -169,6 +169,40 @@ default and the host does not supply a value. Supported param types are `text`,
 Runtime-only types such as `unit`, `agent`, and function types cannot be used as
 program param types.
 
+## `config` — engine-key bindings
+
+```ebnf
+config_decl ::= "config" NAME ("=" expr)?
+```
+
+`config` declarations are root-only and **entry-module only**. Each binds one of
+the fixed engine keys (`log`, `log-file`, `strict-json`, `max-iters`, `runner`,
+`timeout`) as an **immutable readable value** in the root scope — the type is
+fixed by the key registry, not declared in source.
+
+```agl
+config strict-json = true
+config max-iters = 10
+config timeout = "30s"           # projected into some("30s")
+let cap = max-iters              # config keys are readable bindings
+```
+
+A bare `config KEY` (no `= expr`) contributes no source value; the binding takes
+its value from the external resolution chain (`[<program>]` → `[exec]` → engine
+default). A `config KEY = expr` source value overrides the config-file layers but
+is itself overridden by a matching CLI flag.
+
+**Immutability.** Assigning to a config binding (`:=`) is a static error. The
+diagnostic names the binder kind — `config` — the same way it does for `let` and
+`param`.
+
+**Requiredness asymmetry.** Unlike `param X` (required when no default or external
+value), `config X` always resolves: a missing CLI flag and no source value cause the
+binding to fall back to the engine default, never to a required-value error.
+
+See [Program structure](program-structure.md) for the key table, types, and the
+full precedence chain.
+
 ## `agent` — declared agents
 
 ```ebnf
@@ -189,10 +223,10 @@ let agents: list[agent] = [reviewer, impl]
 ```
 
 A declared agent is a first-class value. It is passed to `ask` via the
-`agent:` parameter:
+`agent` parameter:
 
 ```agl
-let r: Review = ask("Review ${artifact}", agent: reviewer)
+let r: Review = ask("Review ${artifact}", agent = reviewer)
 ```
 
 Rules:
@@ -224,7 +258,7 @@ record Box[T]
   value: T
 # 'Box' the type lives in the type namespace;
 # 'Box' the constructor lives in the value namespace.
-let b: Box[int] = Box(value: 1)
+let b: Box[int] = Box(value = 1)
 ```
 
 ### Constructors are ordinary value bindings
@@ -237,12 +271,14 @@ let mk: (int) -> Box[int] = Box   # the constructor as a first-class value
 let one = mk(1)                    # called positionally, in field order
 ```
 
-Direct construction uses **named** arguments (`Box(value: 1)`,
-`some(value: x)`); a constructor reached **through a variable** is an ordinary
-function value invoked **positionally**, in declaration order. Nullary enum
-variants are ordinary values (`let e: Option[int] = none`). See
-[Generics](generics.md) for the full constructor-value story (including when a
-generic constructor needs an expected-type annotation).
+Direct construction uses positional-greedy binding — positional arguments fill
+positional-capable fields first, then named arguments follow (`Box(value = 1)`,
+`some(value = x)`, or `Ok(42)` for a single-standard-field variant). A
+constructor reached **through a variable** is an ordinary function value invoked
+**positionally**, in declaration order. Nullary enum variants are ordinary
+values (`let e: Option[int] = none`). See [Generics](generics.md) for the full
+constructor-value story (including when a generic constructor needs an
+expected-type annotation).
 
 ### Overload sets, shadowing, and ambiguity
 
@@ -259,7 +295,7 @@ enum Holder[T]
 enum Other
   | tagged(label: text)      # same unqualified name 'tagged'
 
-let h: Holder[int] = Holder.tagged(by: 7)   # qualified — unambiguous
+let h: Holder[int] = Holder.tagged(by = 7)   # qualified — unambiguous
 ```
 
 A **nearer ordinary binding shadows** a constructor (or an overload set): an
@@ -320,11 +356,11 @@ ask "Uses ${x}"      # outer
 `:=` reaches *through* scopes to the nearest visible mutable binding:
 
 ```agl
-var artifact: text = ask("Implement ${spec}", agent: impl)
+var artifact: text = ask("Implement ${spec}", agent = impl)
 
 case review of
   | Fail(issues) =>
-      artifact := ask("Fix ${issues} in ${artifact}", agent: impl)
+      artifact := ask("Fix ${issues} in ${artifact}", agent = impl)
   | Pass => ()
 ```
 
@@ -336,7 +372,7 @@ made by the body:
 
 ```agl
 do[5]
-  let review: Review = ask("Review ${artifact}", agent: reviewer)
+  let review: Review = ask("Review ${artifact}", agent = reviewer)
 until review is Pass
 ```
 

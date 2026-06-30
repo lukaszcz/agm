@@ -6,11 +6,11 @@ enum Review
 
 agent reviewer
 
-let strict_default: Review = ask("First review.", agent: reviewer)
+let strict_default: Review = ask("First review.", agent = reviewer)
 print "first ok"
 
-let with_retry: Review = ask("Second review.", agent: reviewer, on_parse_error: Retry(n: 2))
+let with_retry: Review = ask("Second review.", agent = reviewer, on_parse_error = Retry(n = 2))
 print "second ok"
 
-let aborting: Review = ask("Third review.", agent: reviewer, format: "json", on_parse_error: Abort)
+let aborting: Review = ask("Third review.", agent = reviewer, format = "json", on_parse_error = Abort)
 print "third ok"

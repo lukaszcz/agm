@@ -1,0 +1,53 @@
+# Parameter zone tests: positional-only (/), standard, and named-only (*) parameters.
+# Also tests @std / @named marker syntax and the named-only shorthand at call sites.
+
+# Positional-only (x) then standard (y): f(1, 2) and f(1, y=2) both valid.
+def add_po(x: int, /, y: int) -> int = x + y
+
+# Standard then named-only (z): g(1, z=2) and g(1, z) (shorthand) both valid.
+def mul_std_named(x: int, *, z: int) -> int = x * z
+
+# All three zones: a pos-only, b standard, c named-only.
+def triple(a: int, /, b: int, *, c: int) -> int = a + b + c
+
+# @std marker (equivalent to /): same as add_po but using @std.
+def add_atmarker(x: int, @std, y: int) -> int = x + y
+
+# Default in standard zone, named-only required.
+def with_default(x: int, y: int = 10, *, z: int) -> int = x + y + z
+
+# Generic function with pos-only and standard zones.
+def identity_po[T](x: T, /, y: T) -> list[T] =
+  let dummy = x
+  [dummy, y]
+
+param a_val: int
+param b_val: int
+param z_val: int
+
+# add_po: positional fill, then positional+named.
+print(add_po(a_val, b_val))
+print(add_po(a_val, y = b_val))
+
+# mul_std_named: positional + named arg.
+print(mul_std_named(a_val, z = z_val))
+
+# Named-only shorthand: z as bare name.
+let z = z_val
+print(mul_std_named(a_val, z))
+
+# triple: all three zones.
+print(triple(a_val, b_val, c = z_val))
+
+# add_atmarker: same as add_po but @std syntax.
+print(add_atmarker(a_val, b_val))
+print(add_atmarker(a_val, y = b_val))
+
+# with_default: omit y (uses default 10).
+print(with_default(a_val, z = z_val))
+
+# with_default: supply y explicitly.
+print(with_default(a_val, b_val, z = z_val))
+
+# identity_po with int.
+print(render(identity_po::[int](a_val, b_val)))

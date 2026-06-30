@@ -88,10 +88,15 @@ FOO_BAR_CHILD = _mid("foo", "bar", "child")
 CURRENT = _mid("current")
 
 
+def _exports(*names: str, mid: ModuleId) -> dict[str, tuple[ModuleId, str]]:
+    """Build a simple export map where all names are locally defined in *mid*."""
+    return {n: (mid, n) for n in names}
+
+
 def _build(
     decls: list[ImportDecl],
     targets: dict[int, ImportTarget],
-    exports: dict[ModuleId, frozenset[str]],
+    exports: dict[ModuleId, dict[str, tuple[ModuleId, str]]],
     *,
     current: ModuleId = CURRENT,
 ) -> ImportEnv:
@@ -116,7 +121,7 @@ class TestBareImport:
         env = _build(
             [d],
             {d.node_id: SingleTarget(FOO_BAR)},
-            {FOO_BAR: frozenset({"x", "y"})},
+            {FOO_BAR: _exports("x", "y", mid=FOO_BAR)},
         )
         assert env.unqualified["x"] == frozenset({(FOO_BAR, "x")})
         assert env.unqualified["y"] == frozenset({(FOO_BAR, "y")})
@@ -126,7 +131,7 @@ class TestBareImport:
         env = _build(
             [d],
             {d.node_id: SingleTarget(FOO_BAR)},
-            {FOO_BAR: frozenset({"x"})},
+            {FOO_BAR: _exports("x", mid=FOO_BAR)},
         )
         assert ("foo", "bar") in env.qualified
         assert env.qualified[("foo", "bar")]["x"] == (FOO_BAR, "x")
@@ -136,7 +141,7 @@ class TestBareImport:
         env = _build(
             [d],
             {d.node_id: SingleTarget(FOO_BAR)},
-            {FOO_BAR: frozenset()},
+            {FOO_BAR: {}},
         )
         assert "x" not in env.unqualified
         assert env.qualified.get(("foo", "bar"), {}) == {}
@@ -155,7 +160,7 @@ class TestQualifiedImport:
         env = _build(
             [d],
             {d.node_id: SingleTarget(FOO_BAR)},
-            {FOO_BAR: frozenset({"x"})},
+            {FOO_BAR: _exports("x", mid=FOO_BAR)},
         )
         assert "x" not in env.unqualified
 
@@ -164,7 +169,7 @@ class TestQualifiedImport:
         env = _build(
             [d],
             {d.node_id: SingleTarget(FOO_BAR)},
-            {FOO_BAR: frozenset({"x"})},
+            {FOO_BAR: _exports("x", mid=FOO_BAR)},
         )
         assert env.qualified[("foo", "bar")]["x"] == (FOO_BAR, "x")
 
@@ -182,7 +187,7 @@ class TestAliasImport:
         env = _build(
             [d],
             {d.node_id: SingleTarget(FOO_BAR)},
-            {FOO_BAR: frozenset({"x"})},
+            {FOO_BAR: _exports("x", mid=FOO_BAR)},
         )
         assert ("A",) in env.qualified
         assert env.qualified[("A",)]["x"] == (FOO_BAR, "x")
@@ -192,7 +197,7 @@ class TestAliasImport:
         env = _build(
             [d],
             {d.node_id: SingleTarget(FOO_BAR)},
-            {FOO_BAR: frozenset({"x"})},
+            {FOO_BAR: _exports("x", mid=FOO_BAR)},
         )
         assert ("foo", "bar") not in env.qualified
 
@@ -201,7 +206,7 @@ class TestAliasImport:
         env = _build(
             [d],
             {d.node_id: SingleTarget(FOO_BAR)},
-            {FOO_BAR: frozenset({"x"})},
+            {FOO_BAR: _exports("x", mid=FOO_BAR)},
         )
         assert env.unqualified["x"] == frozenset({(FOO_BAR, "x")})
 
@@ -219,7 +224,7 @@ class TestQualifiedAliasImport:
         env = _build(
             [d],
             {d.node_id: SingleTarget(FOO_BAR)},
-            {FOO_BAR: frozenset({"x"})},
+            {FOO_BAR: _exports("x", mid=FOO_BAR)},
         )
         assert "x" not in env.unqualified
         assert env.qualified[("A",)]["x"] == (FOO_BAR, "x")
@@ -246,7 +251,7 @@ class TestUsingImport:
         env = _build(
             [d],
             {d.node_id: SingleTarget(FOO_BAR)},
-            {FOO_BAR: frozenset({"x", "y", "z"})},
+            {FOO_BAR: _exports("x", "y", "z", mid=FOO_BAR)},
         )
         assert "x" in env.unqualified
         assert "y" in env.unqualified
@@ -261,7 +266,7 @@ class TestUsingImport:
         env = _build(
             [d],
             {d.node_id: SingleTarget(FOO_BAR)},
-            {FOO_BAR: frozenset({"x", "z"})},
+            {FOO_BAR: _exports("x", "z", mid=FOO_BAR)},
         )
         assert "x" in env.qualified[("foo", "bar")]
         assert "z" not in env.qualified.get(("foo", "bar"), {})
@@ -276,7 +281,7 @@ class TestUsingImport:
             _build(
                 [d],
                 {d.node_id: SingleTarget(FOO_BAR)},
-                {FOO_BAR: frozenset({"x"})},
+                {FOO_BAR: _exports("x", mid=FOO_BAR)},
             )
 
 
@@ -297,7 +302,7 @@ class TestHidingImport:
         env = _build(
             [d],
             {d.node_id: SingleTarget(FOO_BAR)},
-            {FOO_BAR: frozenset({"x", "y", "z"})},
+            {FOO_BAR: _exports("x", "y", "z", mid=FOO_BAR)},
         )
         assert "x" not in env.unqualified
         assert "y" in env.unqualified
@@ -312,7 +317,7 @@ class TestHidingImport:
         env = _build(
             [d],
             {d.node_id: SingleTarget(FOO_BAR)},
-            {FOO_BAR: frozenset({"x", "y"})},
+            {FOO_BAR: _exports("x", "y", mid=FOO_BAR)},
         )
         assert "x" not in env.qualified.get(("foo", "bar"), {})
         assert "y" in env.qualified[("foo", "bar")]
@@ -327,7 +332,7 @@ class TestHidingImport:
             _build(
                 [d],
                 {d.node_id: SingleTarget(FOO_BAR)},
-                {FOO_BAR: frozenset({"x"})},
+                {FOO_BAR: _exports("x", mid=FOO_BAR)},
             )
 
 
@@ -348,7 +353,7 @@ class TestUsingRename:
         env = _build(
             [d],
             {d.node_id: SingleTarget(FOO_BAR)},
-            {FOO_BAR: frozenset({"x"})},
+            {FOO_BAR: _exports("x", mid=FOO_BAR)},
         )
         # Original name not exposed
         assert "x" not in env.unqualified
@@ -364,7 +369,7 @@ class TestUsingRename:
         env = _build(
             [d],
             {d.node_id: SingleTarget(FOO_BAR)},
-            {FOO_BAR: frozenset({"x"})},
+            {FOO_BAR: _exports("x", mid=FOO_BAR)},
         )
         # Qualified access also uses the new name X
         assert "x" not in env.qualified.get(("foo", "bar"), {})
@@ -380,7 +385,7 @@ class TestUsingRename:
             _build(
                 [d],
                 {d.node_id: SingleTarget(FOO_BAR)},
-                {FOO_BAR: frozenset({"x"})},
+                {FOO_BAR: _exports("x", mid=FOO_BAR)},
             )
 
 
@@ -402,7 +407,7 @@ class TestQualifiedUsing:
         env = _build(
             [d],
             {d.node_id: SingleTarget(FOO_BAR)},
-            {FOO_BAR: frozenset({"x", "y"})},
+            {FOO_BAR: _exports("x", "y", mid=FOO_BAR)},
         )
         assert "x" not in env.unqualified
         assert "y" not in env.unqualified
@@ -417,7 +422,7 @@ class TestQualifiedUsing:
         env = _build(
             [d],
             {d.node_id: SingleTarget(FOO_BAR)},
-            {FOO_BAR: frozenset({"x", "y"})},
+            {FOO_BAR: _exports("x", "y", mid=FOO_BAR)},
         )
         h = env.qualified[("foo", "bar")]
         assert "x" in h
@@ -443,7 +448,7 @@ class TestQualifiedAliasUsing:
         env = _build(
             [d],
             {d.node_id: SingleTarget(FOO_BAR)},
-            {FOO_BAR: frozenset({"x", "y"})},
+            {FOO_BAR: _exports("x", "y", mid=FOO_BAR)},
         )
         assert "x" not in env.unqualified
         assert ("foo", "bar") not in env.qualified
@@ -469,7 +474,7 @@ class TestQualifiedHiding:
         env = _build(
             [d],
             {d.node_id: SingleTarget(FOO_BAR)},
-            {FOO_BAR: frozenset({"x", "y", "z"})},
+            {FOO_BAR: _exports("x", "y", "z", mid=FOO_BAR)},
         )
         assert "x" not in env.unqualified
         assert "y" not in env.unqualified
@@ -493,8 +498,8 @@ class TestWildcardAll:
             [d],
             {d.node_id: WildcardTarget(frozenset({FOO_BAR, FOO_BAZ}))},
             {
-                FOO_BAR: frozenset({"x"}),
-                FOO_BAZ: frozenset({"y"}),
+                FOO_BAR: _exports("x", mid=FOO_BAR),
+                FOO_BAZ: _exports("y", mid=FOO_BAZ),
             },
         )
         assert env.unqualified["x"] == frozenset({(FOO_BAR, "x")})
@@ -506,8 +511,8 @@ class TestWildcardAll:
             [d],
             {d.node_id: WildcardTarget(frozenset({FOO_BAR, FOO_BAZ}))},
             {
-                FOO_BAR: frozenset({"x"}),
-                FOO_BAZ: frozenset({"y"}),
+                FOO_BAR: _exports("x", mid=FOO_BAR),
+                FOO_BAZ: _exports("y", mid=FOO_BAZ),
             },
         )
         assert env.qualified[("foo", "bar")]["x"] == (FOO_BAR, "x")
@@ -520,8 +525,8 @@ class TestWildcardAll:
             [d],
             {d.node_id: WildcardTarget(frozenset({FOO_BAR, FOO_BAZ}))},
             {
-                FOO_BAR: frozenset({"x"}),
-                FOO_BAZ: frozenset({"x"}),
+                FOO_BAR: _exports("x", mid=FOO_BAR),
+                FOO_BAZ: _exports("x", mid=FOO_BAZ),
             },
         )
         assert env.unqualified["x"] == frozenset({(FOO_BAR, "x"), (FOO_BAZ, "x")})
@@ -538,7 +543,7 @@ class TestWildcardQualified:
         env = _build(
             [d],
             {d.node_id: WildcardTarget(frozenset({FOO_BAR}))},
-            {FOO_BAR: frozenset({"x"})},
+            {FOO_BAR: _exports("x", mid=FOO_BAR)},
         )
         assert "x" not in env.unqualified
         assert env.qualified[("foo", "bar")]["x"] == (FOO_BAR, "x")
@@ -558,8 +563,8 @@ class TestWildcardUsing:
             [d],
             {d.node_id: WildcardTarget(frozenset({FOO_BAR, FOO_BAZ}))},
             {
-                FOO_BAR: frozenset({"x", "y"}),
-                FOO_BAZ: frozenset({"y"}),  # does NOT export x
+                FOO_BAR: _exports("x", "y", mid=FOO_BAR),
+                FOO_BAZ: _exports("y", mid=FOO_BAZ),  # does NOT export x
             },
         )
         assert env.unqualified["x"] == frozenset({(FOO_BAR, "x")})
@@ -573,8 +578,8 @@ class TestWildcardUsing:
                 [d],
                 {d.node_id: WildcardTarget(frozenset({FOO_BAR, FOO_BAZ}))},
                 {
-                    FOO_BAR: frozenset({"x"}),
-                    FOO_BAZ: frozenset({"y"}),
+                    FOO_BAR: _exports("x", mid=FOO_BAR),
+                    FOO_BAZ: _exports("y", mid=FOO_BAZ),
                 },
             )
 
@@ -585,8 +590,8 @@ class TestWildcardUsing:
             [d],
             {d.node_id: WildcardTarget(frozenset({FOO_BAR, FOO_BAZ}))},
             {
-                FOO_BAR: frozenset({"x"}),
-                FOO_BAZ: frozenset(),  # doesn't export x — not an error
+                FOO_BAR: _exports("x", mid=FOO_BAR),
+                FOO_BAZ: {},  # doesn't export x — not an error
             },
         )
         assert env.unqualified["x"] == frozenset({(FOO_BAR, "x")})
@@ -605,7 +610,7 @@ class TestWildcardHiding:
         env = _build(
             [d],
             {d.node_id: WildcardTarget(frozenset({FOO_BAR}))},
-            {FOO_BAR: frozenset({"x", "y"})},
+            {FOO_BAR: _exports("x", "y", mid=FOO_BAR)},
         )
         assert "x" not in env.unqualified
         assert "y" in env.unqualified
@@ -617,7 +622,7 @@ class TestWildcardHiding:
             _build(
                 [d],
                 {d.node_id: WildcardTarget(frozenset({FOO_BAR}))},
-                {FOO_BAR: frozenset({"x"})},
+                {FOO_BAR: _exports("x", mid=FOO_BAR)},
             )
 
     def test_wildcard_hiding_partial_miss_not_error(self) -> None:
@@ -627,8 +632,8 @@ class TestWildcardHiding:
             [d],
             {d.node_id: WildcardTarget(frozenset({FOO_BAR, FOO_BAZ}))},
             {
-                FOO_BAR: frozenset({"x", "y"}),
-                FOO_BAZ: frozenset({"y"}),  # doesn't export x — fine
+                FOO_BAR: _exports("x", "y", mid=FOO_BAR),
+                FOO_BAZ: _exports("y", mid=FOO_BAZ),  # doesn't export x — fine
             },
         )
         assert "x" not in env.unqualified
@@ -649,7 +654,7 @@ class TestWildcardAlias:
         env = _build(
             [d],
             {d.node_id: WildcardTarget(frozenset({FOO_BAR}))},
-            {FOO_BAR: frozenset({"x"})},
+            {FOO_BAR: _exports("x", mid=FOO_BAR)},
         )
         assert ("A",) in env.qualified
         assert env.qualified[("A",)]["x"] == (FOO_BAR, "x")
@@ -662,7 +667,7 @@ class TestWildcardAlias:
         env = _build(
             [d],
             {d.node_id: WildcardTarget(frozenset({FOO_BAR_CHILD}))},
-            {FOO_BAR_CHILD: frozenset({"y"})},
+            {FOO_BAR_CHILD: _exports("y", mid=FOO_BAR_CHILD)},
         )
         assert ("A", "child") in env.qualified
         assert env.qualified[("A", "child")]["y"] == (FOO_BAR_CHILD, "y")
@@ -673,7 +678,7 @@ class TestWildcardAlias:
         env = _build(
             [d],
             {d.node_id: WildcardTarget(frozenset({FOO_BAR}))},
-            {FOO_BAR: frozenset({"x"})},
+            {FOO_BAR: _exports("x", mid=FOO_BAR)},
         )
         assert env.unqualified["x"] == frozenset({(FOO_BAR, "x")})
 
@@ -682,7 +687,7 @@ class TestWildcardAlias:
         env = _build(
             [d],
             {d.node_id: WildcardTarget(frozenset({FOO_BAR}))},
-            {FOO_BAR: frozenset({"x"})},
+            {FOO_BAR: _exports("x", mid=FOO_BAR)},
         )
         assert "x" not in env.unqualified
         assert env.qualified[("A",)]["x"] == (FOO_BAR, "x")
@@ -703,7 +708,7 @@ class TestMerge:
         env = _build(
             [d1, d2],
             {d1.node_id: SingleTarget(FOO_BAR), d2.node_id: SingleTarget(FOO_BAR)},
-            {FOO_BAR: frozenset({"x"})},
+            {FOO_BAR: _exports("x", mid=FOO_BAR)},
         )
         assert env.unqualified["x"] == frozenset({(FOO_BAR, "x")})
         assert env.qualified[("foo", "bar")]["x"] == (FOO_BAR, "x")
@@ -714,7 +719,7 @@ class TestMerge:
         env = _build(
             [d1, d2],
             {d1.node_id: SingleTarget(FOO), d2.node_id: SingleTarget(BAR)},
-            {FOO: frozenset({"a"}), BAR: frozenset({"b"})},
+            {FOO: _exports("a", mid=FOO), BAR: _exports("b", mid=BAR)},
         )
         assert env.unqualified["a"] == frozenset({(FOO, "a")})
         assert env.unqualified["b"] == frozenset({(BAR, "b")})
@@ -726,7 +731,7 @@ class TestMerge:
         env = _build(
             [d1, d2],
             {d1.node_id: SingleTarget(FOO), d2.node_id: SingleTarget(BAR)},
-            {FOO: frozenset({"x"}), BAR: frozenset({"x"})},
+            {FOO: _exports("x", mid=FOO), BAR: _exports("x", mid=BAR)},
         )
         assert env.unqualified["x"] == frozenset({(FOO, "x"), (BAR, "x")})
 
@@ -739,7 +744,7 @@ class TestMerge:
             _build(
                 [d1, d2],
                 {d1.node_id: SingleTarget(FOO), d2.node_id: SingleTarget(BAR)},
-                {FOO: frozenset({"x"}), BAR: frozenset({"x"})},
+                {FOO: _exports("x", mid=FOO), BAR: _exports("x", mid=BAR)},
             )
 
     def test_merge_different_handles_no_conflict(self) -> None:
@@ -749,7 +754,7 @@ class TestMerge:
         env = _build(
             [d1, d2],
             {d1.node_id: SingleTarget(FOO), d2.node_id: SingleTarget(FOO)},
-            {FOO: frozenset({"x"})},
+            {FOO: _exports("x", mid=FOO)},
         )
         assert env.qualified[("foo",)]["x"] == (FOO, "x")
         assert env.qualified[("F",)]["x"] == (FOO, "x")
@@ -761,7 +766,7 @@ class TestMerge:
         env = _build(
             [d1, d2],
             {d1.node_id: SingleTarget(FOO), d2.node_id: SingleTarget(FOO)},
-            {FOO: frozenset({"x"})},
+            {FOO: _exports("x", mid=FOO)},
         )
         assert env.unqualified["x"] == frozenset({(FOO, "x")})
         assert env.qualified[("foo",)]["x"] == (FOO, "x")
@@ -782,7 +787,7 @@ class TestDuplicateAlias:
             _build(
                 [d1, d2],
                 {d1.node_id: SingleTarget(FOO), d2.node_id: SingleTarget(BAR)},
-                {FOO: frozenset({"x"}), BAR: frozenset({"y"})},
+                {FOO: _exports("x", mid=FOO), BAR: _exports("y", mid=BAR)},
             )
 
     def test_same_alias_to_same_module_is_idempotent(self) -> None:
@@ -792,7 +797,7 @@ class TestDuplicateAlias:
         env = _build(
             [d1, d2],
             {d1.node_id: SingleTarget(FOO), d2.node_id: SingleTarget(FOO)},
-            {FOO: frozenset({"x"})},
+            {FOO: _exports("x", mid=FOO)},
         )
         assert env.qualified[("A",)]["x"] == (FOO, "x")
 
@@ -804,7 +809,7 @@ class TestDuplicateAlias:
             _build(
                 [d1, d2],
                 {d1.node_id: SingleTarget(FOO), d2.node_id: SingleTarget(BAR)},
-                {FOO: frozenset(), BAR: frozenset()},
+                {FOO: {}, BAR: {}},
             )
         msg = str(exc_info.value)
         assert "A" in msg
@@ -825,7 +830,7 @@ class TestAliasRootCollision:
             _build(
                 [d1, d2],
                 {d1.node_id: SingleTarget(FOO), d2.node_id: SingleTarget(BAR)},
-                {FOO: frozenset({"x"}), BAR: frozenset({"y"})},
+                {FOO: _exports("x", mid=FOO), BAR: _exports("y", mid=BAR)},
             )
 
     def test_no_collision_when_both_same_module(self) -> None:
@@ -835,7 +840,7 @@ class TestAliasRootCollision:
         env = _build(
             [d1, d2],
             {d1.node_id: SingleTarget(FOO), d2.node_id: SingleTarget(FOO)},
-            {FOO: frozenset({"x"})},
+            {FOO: _exports("x", mid=FOO)},
         )
         assert env.qualified[("foo",)]["x"] == (FOO, "x")
 
@@ -847,7 +852,7 @@ class TestAliasRootCollision:
             _build(
                 [d1, d2],
                 {d1.node_id: SingleTarget(BAR), d2.node_id: SingleTarget(FOO)},
-                {BAR: frozenset({"y"}), FOO: frozenset({"x"})},
+                {BAR: _exports("y", mid=BAR), FOO: _exports("x", mid=FOO)},
             )
 
     def test_sibling_imports_same_root_no_collision(self) -> None:
@@ -858,7 +863,7 @@ class TestAliasRootCollision:
         env = _build(
             [d1, d2],
             {d1.node_id: SingleTarget(FOO_BAR), d2.node_id: SingleTarget(FOO_BAZ)},
-            {FOO_BAR: frozenset({"x"}), FOO_BAZ: frozenset({"y"})},
+            {FOO_BAR: _exports("x", mid=FOO_BAR), FOO_BAZ: _exports("y", mid=FOO_BAZ)},
         )
         assert env.unqualified["x"] == frozenset({(FOO_BAR, "x")})
         assert env.unqualified["y"] == frozenset({(FOO_BAZ, "y")})
@@ -870,7 +875,7 @@ class TestAliasRootCollision:
         env = _build(
             [d1, d2],
             {d1.node_id: SingleTarget(FOO), d2.node_id: SingleTarget(FOO_BAR)},
-            {FOO: frozenset({"a"}), FOO_BAR: frozenset({"b"})},
+            {FOO: _exports("a", mid=FOO), FOO_BAR: _exports("b", mid=FOO_BAR)},
         )
         assert env.unqualified["a"] == frozenset({(FOO, "a")})
         assert env.unqualified["b"] == frozenset({(FOO_BAR, "b")})
@@ -896,7 +901,7 @@ class TestSBoundsQualified:
         env = _build(
             [d],
             {d.node_id: SingleTarget(FOO_BAR)},
-            {FOO_BAR: frozenset({"x", "z"})},
+            {FOO_BAR: _exports("x", "z", mid=FOO_BAR)},
         )
         assert "x" in env.qualified[("foo", "bar")]
         assert "z" not in env.qualified.get(("foo", "bar"), {})
@@ -910,7 +915,7 @@ class TestSBoundsQualified:
         env = _build(
             [d],
             {d.node_id: SingleTarget(FOO_BAR)},
-            {FOO_BAR: frozenset({"x", "y"})},
+            {FOO_BAR: _exports("x", "y", mid=FOO_BAR)},
         )
         h = env.qualified.get(("foo", "bar"), {})
         assert "x" not in h
@@ -951,8 +956,8 @@ class TestWildcardUsingRename:
             [d],
             {d.node_id: WildcardTarget(frozenset({FOO_BAR, FOO_BAZ}))},
             {
-                FOO_BAR: frozenset({"x"}),
-                FOO_BAZ: frozenset({"x", "y"}),
+                FOO_BAR: _exports("x", mid=FOO_BAR),
+                FOO_BAZ: _exports("x", "y", mid=FOO_BAZ),
             },
         )
         # Exposed name is X, original x not exposed
@@ -973,7 +978,7 @@ class TestWildcardUsingRename:
             _build(
                 [d],
                 {d.node_id: WildcardTarget(frozenset({FOO_BAR}))},
-                {FOO_BAR: frozenset({"x"})},
+                {FOO_BAR: _exports("x", mid=FOO_BAR)},
             )
 
 
@@ -1005,7 +1010,7 @@ class TestNoEmptySegmentHandle:
         env = _build(
             [d],
             {d.node_id: SingleTarget(FOO)},
-            {FOO: frozenset({"x"})},
+            {FOO: _exports("x", mid=FOO)},
         )
         assert () not in env.qualified
 
@@ -1026,7 +1031,7 @@ class TestMergeQualifiedConflict:
             _build(
                 [d1, d2],
                 {d1.node_id: SingleTarget(FOO), d2.node_id: SingleTarget(BAR)},
-                {FOO: frozenset({"x"}), BAR: frozenset({"x"})},
+                {FOO: _exports("x", mid=FOO), BAR: _exports("x", mid=BAR)},
             )
 
 
@@ -1042,7 +1047,7 @@ class TestWildcardAliasSuppressesOriginalHandle:
         env = _build(
             [d],
             {d.node_id: WildcardTarget(frozenset({FOO_BAR_CHILD}))},
-            {FOO_BAR_CHILD: frozenset({"z"})},
+            {FOO_BAR_CHILD: _exports("z", mid=FOO_BAR_CHILD)},
         )
         assert ("foo", "bar", "child") not in env.qualified
         assert ("A", "child") in env.qualified
@@ -1061,7 +1066,7 @@ class TestErrorMessageDeterminism:
             _build(
                 [d],
                 {d.node_id: SingleTarget(FOO_BAR)},
-                {FOO_BAR: frozenset({"x"})},
+                {FOO_BAR: _exports("x", mid=FOO_BAR)},
             )
         msg = str(exc_info.value)
         assert "ghost" in msg
@@ -1073,7 +1078,7 @@ class TestErrorMessageDeterminism:
             _build(
                 [d],
                 {d.node_id: SingleTarget(FOO_BAR)},
-                {FOO_BAR: frozenset({"x"})},
+                {FOO_BAR: _exports("x", mid=FOO_BAR)},
             )
         msg = str(exc_info.value)
         assert "ghost" in msg
@@ -1085,7 +1090,7 @@ class TestErrorMessageDeterminism:
             _build(
                 [d],
                 {d.node_id: WildcardTarget(frozenset({FOO_BAR, FOO_BAZ}))},
-                {FOO_BAR: frozenset({"x"}), FOO_BAZ: frozenset({"y"})},
+                {FOO_BAR: _exports("x", mid=FOO_BAR), FOO_BAZ: _exports("y", mid=FOO_BAZ)},
             )
         msg = str(exc_info.value)
         assert "ghost" in msg
@@ -1107,7 +1112,7 @@ class TestSingleQualifiedConflictViaRename:
             _build(
                 [d1, d2],
                 {d1.node_id: SingleTarget(FOO), d2.node_id: SingleTarget(FOO)},
-                {FOO: frozenset({"x", "y"})},
+                {FOO: _exports("x", "y", mid=FOO)},
             )
 
 
@@ -1133,5 +1138,5 @@ class TestWildcardQualifiedConflictAcrossDecls:
                     d1.node_id: WildcardTarget(frozenset({FOO_BAZ})),
                     d2.node_id: WildcardTarget(frozenset({bar_baz})),
                 },
-                {FOO_BAZ: frozenset({"x"}), bar_baz: frozenset({"x"})},
+                {FOO_BAZ: _exports("x", mid=FOO_BAZ), bar_baz: _exports("x", mid=bar_baz)},
             )

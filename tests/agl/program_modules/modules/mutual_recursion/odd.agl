@@ -2,4 +2,4 @@
 # from the imported module, which in turn calls back into `is_odd`.
 import even
 
-def is_odd(n: int) -> bool = if n = 0 => false else => is_even(n - 1)
+def is_odd(n: int) -> bool = if n == 0 => false else => is_even(n - 1)

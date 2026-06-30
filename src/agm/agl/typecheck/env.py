@@ -16,7 +16,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from agm.agl.diagnostics import AglError, Diagnostic
-from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
 from agm.agl.scope.imports import ImportEnv, QName
 from agm.agl.scope.symbols import BindingRef, ResolvedProgram
 from agm.agl.semantics.types import (
@@ -29,6 +29,7 @@ from agm.agl.semantics.types import (
     DecimalType,
     DictType,
     EnumType,
+    ExceptionType,
     FunctionType,
     IntType,
     JsonType,
@@ -39,7 +40,29 @@ from agm.agl.semantics.types import (
     TypeVarType,
     UnitType,
 )
+from agm.agl.syntax.nodes import Expr, ParamKind, Pattern
 from agm.agl.syntax.spans import SourceSpan
+
+# ---------------------------------------------------------------------------
+# ParamSpec — per-parameter descriptor in a FunctionSignature
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ParamSpec:
+    """Full descriptor for one parameter in a ``FunctionSignature``.
+
+    ``name``        — the declared parameter name.
+    ``type``        — the resolved semantic type.
+    ``kind``        — positional-only, standard, or named-only (from the AST).
+    ``has_default`` — whether a default expression was provided.
+    """
+
+    name: str
+    type: Type
+    kind: ParamKind
+    has_default: bool
+
 
 # ---------------------------------------------------------------------------
 # FunctionSignature — full declared signature of a top-level def
@@ -50,16 +73,16 @@ from agm.agl.syntax.spans import SourceSpan
 class FunctionSignature:
     """Full declared signature of a top-level ``def``.
 
-    Carries named/default information needed for declared-name call sites.
-    The value type (FunctionType) erases names/defaults (plan R7).
+    Carries named/default/kind information needed for declared-name call sites.
+    The value type (FunctionType) erases names/defaults/kinds (plan R7).
 
-    ``params``      — ordered list of (name, type, has_default).
+    ``params``      — ordered list of ``ParamSpec`` (name, type, kind, has_default).
     ``result``      — the declared return type.
     ``type_params`` — tuple of type-parameter names for generic functions
                       (empty for non-generic functions).
     """
 
-    params: tuple[tuple[str, Type, bool], ...]  # (name, type, has_default)
+    params: tuple[ParamSpec, ...]
     result: Type
     type_params: tuple[str, ...] = ()
 
@@ -185,6 +208,37 @@ class OutputContractSpec:
 
 
 # ---------------------------------------------------------------------------
+# ArgumentBindings — checker-computed call/pattern argument bindings
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ArgumentBindings:
+    """Checker-computed argument bindings for call-like constructs, keyed by node_id.
+
+    The checker is the single source of truth for how each construct's
+    positional, named, and bare-name-shorthand arguments map onto declared
+    parameters or fields.  The lowerer reads these instead of re-running the
+    binder.
+
+    ``function_calls``
+        Direct user-function ``Call.node_id`` → declaration-order argument tuple
+        (one entry per parameter; ``None`` means "use the parameter's default").
+    ``constructor_calls``
+        Record/enum/exception constructor ``Call.node_id`` → ordered
+        ``{field_name: expr}`` mapping (every field bound; constructors have no
+        defaults).
+    ``constructor_patterns``
+        Constructor-pattern ``Pattern.node_id`` → ordered ``(field_name,
+        sub_pattern)`` pairs (partial patterns omit unmentioned fields).
+    """
+
+    function_calls: dict[int, tuple[Expr | None, ...]]
+    constructor_calls: dict[int, dict[str, Expr]]
+    constructor_patterns: dict[int, tuple[tuple[str, Pattern], ...]]
+
+
+# ---------------------------------------------------------------------------
 # CheckedProgram — output of the type-checking pass
 # ---------------------------------------------------------------------------
 
@@ -228,6 +282,7 @@ class CheckedProgram:
     type_env: TypeEnvironment
     function_signatures: dict[str, FunctionSignature]
     cast_specs: dict[int, CastSpec]
+    argument_bindings: ArgumentBindings
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +327,9 @@ class TypeEnvironment:
         graph_ctor_sig_table: Mapping[
             tuple[ModuleId, str, str | None], ConstructorSignature
         ] | None = None,
+        graph_ctor_field_kinds_table: Mapping[
+            tuple[ModuleId, str, str | None], tuple[tuple[str, ParamKind], ...]
+        ] | None = None,
         import_env: ImportEnv | None = None,
         module_id: ModuleId = ENTRY_ID,
     ) -> None:
@@ -296,6 +354,17 @@ class TypeEnvironment:
         # bare name (which would pick the wrong signature when two modules define
         # functions with the same name but different signatures).
         self._function_signatures_by_node_id: dict[int, FunctionSignature] = {}
+        # Constructor field-kinds registry — (owner_name, variant | None) → ordered
+        # (field_name, ParamKind) pairs.  Populated by _TypeBuilder for every
+        # record/enum/exception; consumed by the checker and lowerer to build
+        # bind_arguments param lists without round-tripping through the AST.
+        self._constructor_field_kinds: dict[
+            tuple[str, str | None], tuple[tuple[str, ParamKind], ...]
+        ] = {}
+        # Cross-module constructor field-kinds table: (ModuleId, owner_name, variant) → kinds.
+        self._graph_ctor_field_kinds_table: Mapping[
+            tuple[ModuleId, str, str | None], tuple[tuple[str, ParamKind], ...]
+        ] | None = graph_ctor_field_kinds_table
         # Graph-mode context (M4): None in single-program path.
         self._graph_type_table: Mapping[tuple[ModuleId, str], Type] | None = graph_type_table
         # Cross-module generic type definitions: (ModuleId, name) → GenericTypeDef.
@@ -315,6 +384,15 @@ class TypeEnvironment:
         # Built-in prelude types (AgL v2: ExecResult, ParsePolicy) are always available.
         for prelude_name, prelude_type in BUILTIN_PRELUDE_TYPES.items():
             self._types[prelude_name] = prelude_type
+        # Pre-register builtin exception field kinds (all non-trace_id fields, NAMED_ONLY).
+        for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
+            if not exc_type.abstract:
+                _kinds: tuple[tuple[str, ParamKind], ...] = tuple(
+                    (fname, ParamKind.NAMED_ONLY)
+                    for fname in exc_type.fields
+                    if fname != "trace_id"
+                )
+                self._constructor_field_kinds[(exc_name, None)] = _kinds
 
     # --- Type namespace queries ---
 
@@ -961,6 +1039,21 @@ class TypeEnvironment:
             return matches[0]
         return None
 
+    def get_open_imported_type(self, exposed_name: str) -> tuple[ModuleId, str, Type] | None:
+        """Return the unique concrete type exposed by an open-imported name."""
+        if self._import_env is None or self._graph_type_table is None:
+            return None
+        matches = []
+        for module_id, source_name in self._import_env.unqualified.get(
+            exposed_name, frozenset()
+        ):
+            typ = self._graph_type_table.get((module_id, source_name))
+            if typ is not None:
+                matches.append((module_id, source_name, typ))
+        if len(matches) == 1:
+            return matches[0]
+        return None
+
     def get_ctor_sig_from_module(
         self, module_id: ModuleId, owner_name: str, variant: str | None
     ) -> ConstructorSignature | None:
@@ -973,6 +1066,81 @@ class TypeEnvironment:
         if self._graph_ctor_sig_table is None:
             return None
         return self._graph_ctor_sig_table.get((module_id, owner_name, variant))
+
+    def register_constructor_field_kinds(
+        self,
+        owner_name: str,
+        variant: str | None,
+        fields: tuple[tuple[str, ParamKind], ...],
+    ) -> None:
+        """Register ordered (field_name, ParamKind) pairs for a constructor."""
+        self._constructor_field_kinds[(owner_name, variant)] = fields
+
+    def get_constructor_field_kinds(
+        self,
+        owner_name: str,
+        variant: str | None,
+        *,
+        module_id: ModuleId | None = None,
+    ) -> tuple[tuple[str, ParamKind], ...] | None:
+        """Return the ordered field-kind pairs for a constructor, or ``None`` if unknown.
+
+        First checks the own-module registry; falls back to the cross-module graph table
+        when ``module_id`` is provided (used for cross-module constructor calls where the
+        owner type carries its declaring module's ``module_id``).
+        """
+        result = self._constructor_field_kinds.get((owner_name, variant))
+        if result is not None:
+            return result
+        if module_id is not None and self._graph_ctor_field_kinds_table is not None:
+            return self._graph_ctor_field_kinds_table.get((module_id, owner_name, variant))
+        return None
+
+    def get_constructor_field_kinds_for_type(
+        self,
+        typ: Type | None,
+        owner_name: str,
+        variant: str | None,
+        *,
+        module_id: ModuleId | None = None,
+    ) -> tuple[tuple[str, ParamKind], ...] | None:
+        """Return field-kinds for a constructor identified by its resolved owner *typ*.
+
+        Encapsulates the registry-key convention in one place. ``RecordType`` and
+        ``EnumType`` carry their own ``module_id``. ``ExceptionType`` does not, so
+        callers that resolved a cross-module exception must provide its defining
+        ``module_id``; built-in and same-module exceptions still resolve through
+        the local registry before any graph lookup. Enum variants are keyed by
+        *variant*; records and exceptions are keyed under ``variant=None``.
+        """
+        if isinstance(typ, EnumType):
+            lookup_module_id: ModuleId = typ.module_id
+            lookup_variant = variant
+        elif isinstance(typ, RecordType):
+            lookup_module_id = typ.module_id
+            lookup_variant = None
+        elif isinstance(typ, ExceptionType) and module_id is not None:
+            lookup_module_id = module_id
+            lookup_variant = None
+        else:
+            # ExceptionType without a caller-provided module_id (same-module or
+            # built-in exception) or an unexpected typ value.  Both same-module
+            # exceptions and built-in prelude exceptions are pre-registered in the
+            # LOCAL registry, so get_constructor_field_kinds() returns at the first
+            # check and never reaches the graph-table lookup.  PRELUDE_ID is used
+            # here only to satisfy the type; the graph lookup is always a no-op for
+            # this branch.
+            lookup_module_id = PRELUDE_ID
+            lookup_variant = None
+        return self.get_constructor_field_kinds(
+            owner_name, lookup_variant, module_id=lookup_module_id
+        )
+
+    def all_constructor_field_kinds(
+        self,
+    ) -> list[tuple[tuple[str, str | None], tuple[tuple[str, ParamKind], ...]]]:
+        """Return all own-module constructor field-kind entries as (key, kinds) pairs."""
+        return list(self._constructor_field_kinds.items())
 
     def all_generic_types(self) -> dict[str, GenericTypeDef]:
         """Return the own-module generic type map (name → GenericTypeDef)."""
@@ -1002,5 +1170,6 @@ class TypeEnvironment:
         self._function_signatures.update(other._function_signatures)
         self._generic_types.update(other._generic_types)
         self._constructor_sigs.update(other._constructor_sigs)
+        self._constructor_field_kinds.update(other._constructor_field_kinds)
         self._alias_type_params.update(other._alias_type_params)
         self._function_signatures_by_node_id.update(other._function_signatures_by_node_id)

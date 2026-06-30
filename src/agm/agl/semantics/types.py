@@ -811,6 +811,10 @@ _OPTION_TEXT_TYPE = EnumType(
     module_id=STD_CORE_ID,
 )
 
+# Public alias for the ``Option[text]`` type — the single source of truth
+# shared with engine_keys and any other module that needs this type.
+OPTION_TEXT_TYPE: EnumType = _OPTION_TEXT_TYPE
+
 _OPTION_JSON_TYPE = EnumType(
     name="Option",
     variants={

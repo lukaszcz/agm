@@ -1,0 +1,2 @@
+# Re-exports only `add` from math.ops; `mul` is NOT re-exported.
+export math.ops using add

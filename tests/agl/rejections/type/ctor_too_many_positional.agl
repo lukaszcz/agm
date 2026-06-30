@@ -1,0 +1,6 @@
+record R
+  @std
+  x: int
+  y: int
+let r = R(1, 2, 3)
+print r.x

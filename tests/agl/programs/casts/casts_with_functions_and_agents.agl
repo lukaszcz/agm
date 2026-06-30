@@ -27,7 +27,7 @@ print(double_text_int(b))
 
 # Agent supplies a JSON text; cast it to a record
 try
-  let raw: text = ask("Return a task.", agent: planner)
+  let raw: text = ask("Return a task.", agent = planner)
   let task = raw as Task
   print task.title
   print task.effort

@@ -187,7 +187,7 @@ Field access works normally: `res.stdout`, `res.exit_code`, etc.
 
 ### `ParsePolicy`
 
-An enum used as the `on_parse_error:` argument to `ask` and typed `exec`:
+An enum used as the `on_parse_error` argument to `ask` and typed `exec`:
 
 ```text
 enum ParsePolicy
@@ -232,15 +232,52 @@ record Issue
   description: text
 ```
 
-All fields are required. Records are constructed with named arguments only:
+All fields are required. By default, record fields are **named-only** — each must be
+supplied as `field = value` or via the bare-name shorthand `field` (which means
+`field = field`):
 
 ```agl
 let issue = Issue(
-  title: "Missing tests",
-  severity: 3,
-  description: "No failure-path tests exist."
+  title = "Missing tests",
+  severity = 3,
+  description = "No failure-path tests exist."
 )
 ```
+
+**Zone markers** let you opt record fields into the standard (positional-or-named) or
+positional-only zones. Markers appear in the parenthesized field list, as comma-separated
+zone entries, or in the indented block form (as a leading marker on the header line or
+on its own line between fields):
+
+```agl
+# Inline / parenthesized forms: marker as comma entry
+record Pair[T1, T2](@std, fst: T1, snd: T2)        # both fields standard
+record R(x: int, /, y: int)                          # x pos-only, y standard
+
+# Block form: leading marker on header line
+record StdPair @std
+  fst: int
+  snd: int
+
+# Block form: own-line marker between fields
+record Mixed
+  id: int
+  @std
+  value: int
+  label: text
+```
+
+With standard fields, construction may use positional arguments:
+
+```agl
+let p = Pair(1, 2)             # positional (both fields are standard)
+let q = Pair(1, snd = 2)       # first positional, second named
+let r = R(0, y = 1)            # x positional-only, y named (standard)
+# R(x = 0, y = 1) is an error — x is positional-only
+```
+
+Definition-time rules: at most one `/`/`@std` and one `*`/`@named` per list, in zone
+order; `@pos` must lead. Violations are static errors.
 
 Two record types with identical fields are still distinct types (nominal
 typing). Two record types from different modules are also distinct even if
@@ -272,6 +309,30 @@ Enums are the intended model for agent outcomes:
 enum Review
   | Pass
   | Fail(issues: list[text])
+```
+
+**Variant field zones.** By default, a variant with **exactly one field** has its field
+in the **standard** zone (positional-or-named); a variant with **two or more fields** has
+all fields named-only. This lets common single-value variants like `Ok(value)` and
+`Some(x)` be constructed positionally:
+
+```agl
+enum Result
+  | Ok(value: int)          # single field → standard; Ok(5) works
+  | Err(reason: text, fatal: bool)  # two fields → named-only by default
+```
+
+```agl
+let ok = Ok(42)             # positional: field 'value' is standard
+let ok2 = Ok(value = 42)    # named form also valid
+let err = Err(reason = "bad", fatal = false)   # named-only
+```
+
+Zone markers are also available on variant payloads:
+
+```agl
+enum Triple
+  | T(@std, a: int, b: int, c: int)   # all three fields standard → T(1, 2, 3)
 ```
 
 Construction, qualification, and ambiguity rules are covered in
@@ -308,7 +369,7 @@ record Point
 import foo
 import bar
 
-let p: foo::Point = foo::Point(x: 0, y: 0)
+let p: foo::Point = foo::Point(x = 0, y = 0)
 # The next line is a static error: bar::Point is not the same type as foo::Point
 # let q: bar::Point = p
 ```
@@ -342,8 +403,8 @@ arguments after the complete qualified name:
 ```agl
 import mylib
 
-let p1: Box[int] = Box(value: 1)
-let p2: mylib::Box[int] = mylib::Box(value: 2)
+let p1: Box[int] = Box(value = 1)
+let p2: mylib::Box[int] = mylib::Box(value = 2)
 ```
 
 ### Self-reference: `::TypeName`
@@ -357,7 +418,7 @@ shadow introduced by an open import:
 record Node
   value: int
 
-def make() -> ::Node = Node(value: 0)   # refers to this module's own Node
+def make() -> ::Node = Node(value = 0)   # refers to this module's own Node
 ```
 
 ## Type aliases
@@ -424,7 +485,7 @@ Before any value checking, the following are rejected as static errors:
    declarations.
 4. Cyclic aliases.
 5. Directly or indirectly **recursive records or enums**. Recursive nominal
-   types are not part of v1.
+   types are not part of AgL.
 
 Type declarations are valid only at the program root.
 
@@ -433,13 +494,13 @@ Type declarations are valid only at the program root.
 Typing is exact nominal matching with **one** implicit coercion:
 
 1. **`int` widens to `decimal`.** An `int` value is accepted wherever a
-   `decimal` is expected. Mixed arithmetic yields `decimal`, and `1 = 1.0`
+   `decimal` is expected. Mixed arithmetic yields `decimal`, and `1 == 1.0`
    is true.
 2. There are no other implicit conversions.
 3. A `json` target accepts any JSON-shaped value. When a JSON-shaped value of
    a more specific static type is bound into a `json` slot, it is stored in
    canonical `json` representation.
-4. Equality (`=`, `!=`) and ordering comparisons require both operands to
+4. Equality (`==`, `!=`) and ordering comparisons require both operands to
    have the *same* type after rule 1. Operands whose type is, or transitively
    contains, a function, agent, or `unit` value are a static error — see
    [Values and equality](#values-and-equality) below.
@@ -548,8 +609,8 @@ not implicitly assignable to `json`; `as json` must be written explicitly:
 record R
   x: int
 
-let r: R = R(x: 1)
-print r              # → R(x: 1)       (AgL form — the default)
+let r: R = R(x = 1)
+print r              # → R(x = 1)      (AgL render form — the default)
 
 # A json value printed (or interpolated) directly is top-level, so it renders
 # as pretty, multi-line JSON (2-space indent):
@@ -571,7 +632,7 @@ produces the JSON number `42` and raises `JsonParseError`
 
 ## Values and equality
 
-Every **data** type has full value equality (`=` / `!=`):
+Every **data** type has full value equality (`==` / `!=`):
 
 - Scalars compare by value; `int` and `decimal` compare numerically.
 - Lists compare element-wise; dictionaries compare by key set and per-key
@@ -583,9 +644,9 @@ Every **data** type has full value equality (`=` / `!=`):
 A comparison involving one of these types is a static error. This rule is
 **transitive**: a `list`, `dict`, `record`, `enum`, or `exception` that (at
 any depth) contains a function, agent, or `unit` value likewise has no
-equality and cannot be used with `=`/`!=`. For example,
-`list[(int) -> int] = list[(int) -> int]` is a static error, as is a
-`record` with an `agent` field compared with `=`.
+equality and cannot be used with `==`/`!=`. For example, comparing two
+`list[(int) -> int]` values with `==` is a static error, as is a
+`record` with an `agent` field compared with `==`.
 
 See [Expressions](expressions.md) for the operator rules and
 [Pattern matching](pattern-matching.md) for variant tests with `is`.

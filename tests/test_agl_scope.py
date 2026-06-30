@@ -28,12 +28,11 @@ from agm.agl.syntax.nodes import (
     AssignTarget,
     Block,
     BoolLit,
-    Break,
     Call,
     CaseBranch,
     CatchClause,
     ConstructorPattern,
-    Continue,
+    Do,
     EnumDef,
     Expr,
     FieldAccess,
@@ -44,9 +43,9 @@ from agm.agl.syntax.nodes import (
     Item,
     Lambda,
     LetDecl,
-    Loop,
     NameTarget,
     Param,
+    ParamKind,
     PatternField,
     Program,
     RecordDef,
@@ -151,10 +150,9 @@ def _find_varref(program: object, name: str, occurrence: int = -1) -> VarRef:
             walk(node.subject)
             for cbranch in node.branches:
                 walk(cbranch.body)
-        elif isinstance(node, Loop):
+        elif isinstance(node, Do):
             walk(node.body)
-            if node.until_cond is not None:
-                walk(node.until_cond)
+            walk(node.condition)
         elif isinstance(node, Try):
             walk(node.body)
             for clause in node.handlers:
@@ -493,7 +491,10 @@ class TestAssignErrors:
 
         sp = _sp()
         int_t = IntTNode(span=sp, node_id=_nid())
-        param = Param(name="n", type_expr=int_t, default=None, span=sp, node_id=_nid())
+        param = Param(
+            name="n", type_expr=int_t, kind=ParamKind.STANDARD, default=None,
+            span=sp, node_id=_nid()
+        )
         assign_n = _make_assign("n", _make_intlit(2))
         funcdef = FuncDef(
             name="f",
@@ -761,7 +762,7 @@ class TestBuiltinCallClassification:
         assert r.builtin_calls[let_node.value.node_id] == BuiltinKind.ASK
 
     def test_ask_with_agent_arg_classified(self) -> None:
-        r = parse_and_resolve('agent reviewer\nlet x = ask("Q", agent: reviewer)\nx')
+        r = parse_and_resolve('agent reviewer\nlet x = ask("Q", agent = reviewer)\nx')
         let_node = r.program.body.items[1]
         assert isinstance(let_node, LetDecl)
         assert isinstance(let_node.value, Call)
@@ -852,7 +853,7 @@ class TestCallResolution:
         """Named-arg values in a call are resolved."""
         r = parse_and_resolve(
             "agent reviewer\n"
-            'let x = ask("Q", agent: reviewer)\n'
+            'let x = ask("Q", agent = reviewer)\n'
             "x"
         )
         let_node = r.program.body.items[1]
@@ -906,8 +907,8 @@ class TestFuncDefMutualRecursion:
     def test_def_mutual_recursion(self) -> None:
         """Two top-level defs can reference each other."""
         r = parse_and_resolve(
-            "def even(n: int) -> bool = if n = 0 => true | else => odd(n - 1)\n"
-            "def odd(n: int) -> bool = if n = 0 => false | else => even(n - 1)\n"
+            "def even(n: int) -> bool = if n == 0 => true | else => odd(n - 1)\n"
+            "def odd(n: int) -> bool = if n == 0 => false | else => even(n - 1)\n"
             "even(4)"
         )
         assert _ref(r, "even").kind == BinderKind.function_binding
@@ -1042,7 +1043,7 @@ class TestAgentValueBindings:
         """An agent name used as a VarRef in ask(agent:) resolves to the binding."""
         r = parse_and_resolve(
             "agent reviewer\n"
-            'let x = ask("Q", agent: reviewer)\n'
+            'let x = ask("Q", agent = reviewer)\n'
             "x"
         )
         let_node = r.program.body.items[1]
@@ -1175,7 +1176,7 @@ class TestIfScoping:
         assert "inner" in msg
 
     def test_if_no_else_accepted(self) -> None:
-        r = parse_and_resolve("let x = 1\nif x = 1 => print 1\n")
+        r = parse_and_resolve("let x = 1\nif x == 1 => print 1\n")
         assert _ref(r, "x").kind == BinderKind.let_binding
 
 
@@ -1252,20 +1253,23 @@ class TestTryScoping:
 
 
 # ---------------------------------------------------------------------------
-# Config pragma enforcement
+# Config declaration enforcement
 # ---------------------------------------------------------------------------
 
 
-class TestConfigPragma:
+def _is_config_binding(r: ResolvedProgram, name: str) -> bool:
+    ref = r.root_scope.bindings.get(name)
+    return ref is not None and ref.kind is BinderKind.config_binding
+
+
+class TestConfigDecl:
     def test_config_at_header_accepted(self) -> None:
         r = parse_and_resolve("config log = true\n()")
-        assert r.config_pragmas == {"log": True}
+        assert _is_config_binding(r, "log")
 
-    def test_config_after_non_pragma_rejected(self) -> None:
-        err = reject_scope("let x = 1\nconfig log = true\nx")
-        _, msg = diag(err)
-        assert "config" in msg.lower()
-        assert "before" in msg.lower() or "after" in msg.lower()
+    def test_config_after_statement_accepted(self) -> None:
+        r = parse_and_resolve("let x = 1\nconfig log = true\nx")
+        assert _is_config_binding(r, "log")
 
     def test_config_nested_rejected(self) -> None:
         err = reject_scope("if true =>\n  config log = true\n| else =>\n  ()\n")
@@ -1282,14 +1286,18 @@ class TestConfigPragma:
         _, msg = diag(err)
         assert "duplicate" in msg.lower()
 
-    def test_config_wrong_value_type_rejected(self) -> None:
-        err = reject_scope('config log = "yes"\n()')
-        _, msg = diag(err)
-        assert "bool" in msg.lower()
+    def test_config_max_iters_accepted(self) -> None:
+        r = parse_and_resolve("config max-iters = 10\n()")
+        assert _is_config_binding(r, "max-iters")
 
-    def test_config_max_call_depth_accepted(self) -> None:
-        r = parse_and_resolve("config max_call_depth = 10\n()")
-        assert r.config_pragmas == {"max_call_depth": 10}
+    def test_config_creates_readable_binding(self) -> None:
+        r = parse_and_resolve("config log = true\nlog")
+        assert _is_config_binding(r, "log")
+
+    def test_config_binding_assign_rejected(self) -> None:
+        err = reject_scope("config log = true\nlog := false")
+        _, msg = diag(err)
+        assert "config" in msg.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -1342,7 +1350,7 @@ class TestParentScopeSeam:
     def test_ambient_agents(self) -> None:
         """An ambient agent resolves without an in-source declaration."""
         r = resolve(
-            parse_program('let x = ask("Q", agent: session_bot)\nx'),
+            parse_program('let x = ask("Q", agent = session_bot)\nx'),
             ambient_agents=frozenset({"session_bot"}),
         )
         let_node = r.program.body.items[0]
@@ -1404,7 +1412,7 @@ class TestParentScopeSeam:
         # 'Box' is a type name AND a parameter name inside f.
         # Inside f, Box.x is a regular field access on the parameter, not a
         # qualified constructor reference.
-        source = "record Box\n  x: int\ndef f(Box: Box) -> int = Box.x\nf(Box(x: 1))"
+        source = "record Box\n  x: int\ndef f(Box: Box) -> int = Box.x\nf(Box(x = 1))"
         entry = parse_and_resolve(source)
         from agm.agl.syntax.nodes import FieldAccess as _FA
         from agm.agl.syntax.nodes import FuncDef as _FD
@@ -1505,223 +1513,35 @@ class TestDirectASTConstruction:
 
     # --- Do loop ---
 
-    def test_loop_body_as_block_bindings_visible_in_condition(self) -> None:
+    def test_do_body_as_block_bindings_visible_in_condition(self) -> None:
         var_n = _make_var("n", _make_intlit(0))
         let_probe = _make_let("probe", _make_varref("n"))
         assign_n = _make_assign("n", _make_varref("probe"))
         body = _make_block(let_probe, assign_n)
         cond_probe = _make_varref("probe")
-        loop_node = Loop(
-            for_var=None, for_iter=None,
-            for_range_to=None, for_range_down=False, for_range_by=None,
-            while_cond=None, bound=_make_intlit(5),
+        do_node = Do(
+            limit=5,
             body=body,
-            until_cond=cond_probe,
+            condition=cond_probe,
             span=_sp(),
             node_id=_nid(),
         )
-        r = resolve_program(var_n, loop_node)
-        # "probe" is declared in the loop body and is visible in the until condition
+        r = resolve_program(var_n, do_node)
+        # "probe" is declared in the do body and is visible in the until condition
         assert r.resolution[cond_probe.node_id].kind == BinderKind.let_binding
 
-    def test_loop_body_single_expr_resolved(self) -> None:
+    def test_do_body_single_expr_resolved(self) -> None:
         var_n = _make_var("n", _make_intlit(0))
         body_n = _make_varref("n")
-        loop_node = Loop(
-            for_var=None, for_iter=None,
-            for_range_to=None, for_range_down=False, for_range_by=None,
-            while_cond=None, bound=_make_intlit(5),
+        do_node = Do(
+            limit=5,
             body=body_n,
-            until_cond=_make_boollit(True),
+            condition=_make_boollit(True),
             span=_sp(),
             node_id=_nid(),
         )
-        r = resolve_program(var_n, loop_node)
+        r = resolve_program(var_n, do_node)
         assert r.resolution[body_n.node_id].kind == BinderKind.var_binding
-
-    def test_loop_for_iter_resolved_in_enclosing_scope(self) -> None:
-        # for_iter is resolved in the enclosing scope (exercises the for_iter branch).
-        var_n = _make_var("n", _make_intlit(0))
-        iter_ref = _make_varref("n")
-        loop_node = Loop(
-            for_var="i", for_iter=iter_ref,
-            for_range_to=None, for_range_down=False, for_range_by=None,
-            while_cond=None, bound=None,
-            body=_make_intlit(1),
-            until_cond=_make_boollit(True),
-            span=_sp(),
-            node_id=_nid(),
-        )
-        r = resolve_program(var_n, loop_node)
-        assert r.resolution[iter_ref.node_id].kind == BinderKind.var_binding
-
-    def test_loop_while_cond_resolved_in_child_scope(self) -> None:
-        # while_cond is resolved in the child scope (exercises the while_cond branch).
-        var_n = _make_var("n", _make_intlit(0))
-        while_ref = _make_varref("n")
-        loop_node = Loop(
-            for_var=None, for_iter=None,
-            for_range_to=None, for_range_down=False, for_range_by=None,
-            while_cond=while_ref, bound=None,
-            body=_make_intlit(1),
-            until_cond=_make_boollit(False),
-            span=_sp(),
-            node_id=_nid(),
-        )
-        r = resolve_program(var_n, loop_node)
-        assert r.resolution[while_ref.node_id].kind == BinderKind.var_binding
-
-    # --- break / continue placement validation ---
-
-    def test_break_inside_loop_body_accepted(self) -> None:
-        """break is accepted when lexically inside a loop body."""
-        break_node = Break(span=_sp(), node_id=_nid())
-        loop_node = Loop(
-            for_var=None, for_iter=None,
-            for_range_to=None, for_range_down=False, for_range_by=None,
-            while_cond=None, bound=None, body=break_node, until_cond=None,
-            span=_sp(), node_id=_nid(),
-        )
-        # must not raise
-        resolve_program(loop_node)
-
-    def test_continue_inside_loop_body_accepted(self) -> None:
-        """continue is accepted when lexically inside a loop body."""
-        continue_node = Continue(span=_sp(), node_id=_nid())
-        loop_node = Loop(
-            for_var=None, for_iter=None,
-            for_range_to=None, for_range_down=False, for_range_by=None,
-            while_cond=None, bound=None, body=continue_node, until_cond=None,
-            span=_sp(), node_id=_nid(),
-        )
-        resolve_program(loop_node)
-
-    def test_break_outside_loop_rejected(self) -> None:
-        """break at the top level (outside any loop) is a scope error."""
-        break_node = Break(span=_sp(), node_id=_nid())
-        with pytest.raises(AglScopeError):
-            resolve_program(break_node)
-
-    def test_continue_outside_loop_rejected(self) -> None:
-        """continue at the top level (outside any loop) is a scope error."""
-        continue_node = Continue(span=_sp(), node_id=_nid())
-        with pytest.raises(AglScopeError):
-            resolve_program(continue_node)
-
-    def test_break_in_lambda_inside_loop_rejected(self) -> None:
-        """break inside a lambda that is nested inside a loop is a scope error."""
-        break_node = Break(span=_sp(line=4), node_id=_nid())
-        lam = Lambda(
-            params=(),
-            return_type=None,
-            body=break_node,
-            span=_sp(),
-            node_id=_nid(),
-        )
-        loop_node = Loop(
-            for_var=None, for_iter=None,
-            for_range_to=None, for_range_down=False, for_range_by=None,
-            while_cond=None, bound=None, body=lam, until_cond=None,
-            span=_sp(), node_id=_nid(),
-        )
-        with pytest.raises(AglScopeError):
-            resolve_program(loop_node)
-
-    def test_break_in_nested_loop_inside_outer_loop_accepted(self) -> None:
-        """break nested in an inner loop is valid (targets the inner loop)."""
-        break_node = Break(span=_sp(), node_id=_nid())
-        inner_loop = Loop(
-            for_var=None, for_iter=None,
-            for_range_to=None, for_range_down=False, for_range_by=None,
-            while_cond=None, bound=None, body=break_node, until_cond=None,
-            span=_sp(), node_id=_nid(),
-        )
-        outer_loop = Loop(
-            for_var=None, for_iter=None,
-            for_range_to=None, for_range_down=False, for_range_by=None,
-            while_cond=None, bound=None, body=inner_loop, until_cond=None,
-            span=_sp(), node_id=_nid(),
-        )
-        # must not raise — break is inside the inner loop body
-        resolve_program(outer_loop)
-
-    def test_break_in_until_cond_accepted(self) -> None:
-        """break inside until_cond is inside the loop interior (valid)."""
-        break_node = Break(span=_sp(), node_id=_nid())
-        loop_node = Loop(
-            for_var=None, for_iter=None,
-            for_range_to=None, for_range_down=False, for_range_by=None,
-            while_cond=None, bound=None, body=_make_unitlit(),
-            until_cond=break_node,
-            span=_sp(), node_id=_nid(),
-        )
-        resolve_program(loop_node)
-
-    def test_lambda_param_default_outer_binding_in_loop_accepted(self) -> None:
-        """A lambda param default referencing an enclosing binding resolves fine inside a loop.
-
-        This tests that the fn-boundary reset of _in_loop does not break scope
-        visibility: defaults are still resolved in the enclosing scope, so outer
-        bindings are reachable — only the loop-context flag is cleared.
-        """
-        sp = _sp()
-        let_x = _make_let("x", _make_intlit(0))
-        param = Param(
-            name="p",
-            type_expr=IntT(span=sp, node_id=_nid()),
-            default=_make_varref("x"),
-            span=sp,
-            node_id=_nid(),
-        )
-        lam = Lambda(
-            params=(param,),
-            return_type=None,
-            body=_make_unitlit(),
-            span=sp,
-            node_id=_nid(),
-        )
-        let_f = _make_let("f", lam)
-        loop_body = _make_block(let_f, _make_unitlit())
-        loop_node = Loop(
-            for_var=None, for_iter=None,
-            for_range_to=None, for_range_down=False, for_range_by=None,
-            while_cond=None, bound=None, body=loop_body, until_cond=None,
-            span=sp, node_id=_nid(),
-        )
-        # must not raise — default references outer binding x, not break/continue
-        resolve_program(let_x, loop_node)
-
-    def test_break_in_lambda_param_default_in_loop_rejected(self) -> None:
-        """break in a lambda param default inside a loop is rejected.
-
-        Param defaults are evaluated in the enclosing (definition) scope, not the
-        loop body, so break/continue there are invalid regardless of the surrounding
-        loop context.
-        """
-        sp = _sp(line=3)
-        break_node = Break(span=sp, node_id=_nid())
-        param = Param(
-            name="p",
-            type_expr=IntT(span=sp, node_id=_nid()),
-            default=break_node,
-            span=sp,
-            node_id=_nid(),
-        )
-        lam = Lambda(
-            params=(param,),
-            return_type=None,
-            body=_make_varref("p"),
-            span=_sp(),
-            node_id=_nid(),
-        )
-        loop_node = Loop(
-            for_var=None, for_iter=None,
-            for_range_to=None, for_range_down=False, for_range_by=None,
-            while_cond=None, bound=None, body=lam, until_cond=None,
-            span=_sp(), node_id=_nid(),
-        )
-        with pytest.raises(AglScopeError):
-            resolve_program(loop_node)
 
     # --- If with block bodies ---
 
@@ -1930,7 +1750,7 @@ class TestDirectASTConstruction:
         sub_pattern = VarPattern(name="issues", span=_sp(), node_id=_nid())
         pf = PatternField(name="issues", pattern=sub_pattern, span=_sp(), node_id=_nid())
         ctor_pattern = ConstructorPattern(
-            qualifier=None, name="Fail", fields=(pf,), span=_sp(), node_id=_nid()
+            qualifier=None, name="Fail", positional=(), named=(pf,), span=_sp(), node_id=_nid()
         )
         issues_ref = _make_varref("issues")
         branch = CaseBranch(
@@ -1956,7 +1776,8 @@ class TestDirectASTConstruction:
         pf1 = PatternField(name="a", pattern=sub1, span=_sp(5), node_id=_nid())
         pf2 = PatternField(name="b", pattern=sub2, span=_sp(5), node_id=_nid())
         ctor_pat = ConstructorPattern(
-            qualifier=None, name="Pair", fields=(pf1, pf2), span=_sp(5), node_id=_nid()
+            qualifier=None, name="Pair", positional=(), named=(pf1, pf2),
+            span=_sp(5), node_id=_nid()
         )
         branch = CaseBranch(
             pattern=ctor_pat, body=_make_unitlit(), span=_sp(5), node_id=_nid()
@@ -2065,7 +1886,10 @@ class TestDirectASTConstruction:
         """FuncDef body sees its own param; param is not visible outside."""
         sp = _sp()
         int_t = IntT(span=sp, node_id=_nid())
-        param = Param(name="x", type_expr=int_t, default=None, span=sp, node_id=_nid())
+        param = Param(
+            name="x", type_expr=int_t, kind=ParamKind.STANDARD, default=None,
+            span=sp, node_id=_nid()
+        )
         x_in_body = _make_varref("x")
         funcdef = FuncDef(
             name="g",
@@ -2083,7 +1907,10 @@ class TestDirectASTConstruction:
     def test_funcdef_param_not_visible_outside_body(self) -> None:
         sp = _sp()
         int_t = IntT(span=sp, node_id=_nid())
-        param = Param(name="p", type_expr=int_t, default=None, span=sp, node_id=_nid())
+        param = Param(
+            name="p", type_expr=int_t, kind=ParamKind.STANDARD, default=None,
+            span=sp, node_id=_nid()
+        )
         funcdef = FuncDef(
             name="g",
             params=(param,),
@@ -2101,7 +1928,10 @@ class TestDirectASTConstruction:
     def test_lambda_resolved(self) -> None:
         sp = _sp()
         int_t = IntT(span=sp, node_id=_nid())
-        param = Param(name="x", type_expr=int_t, default=None, span=sp, node_id=_nid())
+        param = Param(
+            name="x", type_expr=int_t, kind=ParamKind.STANDARD, default=None,
+            span=sp, node_id=_nid()
+        )
         x_in_lam = _make_varref("x")
         lam = Lambda(
             params=(param,),
@@ -2120,7 +1950,10 @@ class TestDirectASTConstruction:
         """A lambda body that references its own let-binding name fails."""
         sp = _sp()
         int_t = IntT(span=sp, node_id=_nid())
-        param = Param(name="x", type_expr=int_t, default=None, span=sp, node_id=_nid())
+        param = Param(
+            name="x", type_expr=int_t, kind=ParamKind.STANDARD, default=None,
+            span=sp, node_id=_nid()
+        )
         lam = Lambda(
             params=(param,),
             return_type=None,
@@ -2162,65 +1995,6 @@ class TestDeclaredFunctions:
         _, msg = diag(err)
         assert "foo" in msg
 
-
-# ---------------------------------------------------------------------------
-# Config pragma edge cases (coverage for pragma value validation)
-# ---------------------------------------------------------------------------
-
-
-class TestConfigPragmaValueValidation:
-    def test_int_pos_zero_rejected(self) -> None:
-        """config max_call_depth = 0 is rejected (must be > 0)."""
-        err = reject_scope("config max_call_depth = 0\n()")
-        _, msg = diag(err)
-        assert "positive" in msg.lower() or "greater" in msg.lower() or "> 0" in msg
-
-    def test_str_nonempty_non_string_rejected(self) -> None:
-        """config runner with an int value is rejected."""
-        err = reject_scope("config runner = 1\n()")
-        _, msg = diag(err)
-        assert "non-empty string" in msg or "string" in msg.lower()
-
-    def test_timeout_with_valid_int(self) -> None:
-        r = parse_and_resolve("config timeout = 30\n()")
-        assert r.config_pragmas.get("timeout") == 30
-
-    def test_timeout_zero_rejected(self) -> None:
-        err = reject_scope("config timeout = 0\n()")
-        _, msg = diag(err)
-        assert "positive" in msg.lower() or "> 0" in msg
-
-    def test_timeout_bool_rejected(self) -> None:
-        err = reject_scope("config timeout = true\n()")
-        _, msg = diag(err)
-        assert "timeout" in msg
-
-    def test_timeout_empty_string_rejected(self) -> None:
-        """An empty string for timeout is rejected."""
-        # We need to test via AST since the parser may not emit an empty string
-        # in a config pragma; use direct AST construction.
-        from agm.agl.syntax.nodes import ConfigPragma
-
-        pragma = ConfigPragma(key="timeout", value="", span=_sp(), node_id=_nid())
-        err = reject_program(pragma)
-        _, msg = diag(err)
-        assert "non-empty" in msg.lower() or "timeout" in msg.lower()
-
-    def test_runner_valid_string_accepted(self) -> None:
-        """config runner = 'claude' is accepted (covers str_nonempty valid branch)."""
-        from agm.agl.syntax.nodes import ConfigPragma
-
-        pragma = ConfigPragma(key="runner", value="claude", span=_sp(), node_id=_nid())
-        r = resolve_program(pragma)
-        assert r.config_pragmas.get("runner") == "claude"
-
-    def test_timeout_valid_string_accepted(self) -> None:
-        """config timeout = '30s' is accepted (covers str_or_int valid string branch)."""
-        from agm.agl.syntax.nodes import ConfigPragma
-
-        pragma = ConfigPragma(key="timeout", value="30s", span=_sp(), node_id=_nid())
-        r = resolve_program(pragma)
-        assert r.config_pragmas.get("timeout") == "30s"
 
 
 # ---------------------------------------------------------------------------
@@ -2312,8 +2086,14 @@ class TestLambdaDuplicateParam:
         from agm.agl.syntax.types import IntT as IntTNode
 
         int_t = IntTNode(span=sp, node_id=_nid())
-        p1 = Param(name="x", type_expr=int_t, default=None, span=sp, node_id=_nid())
-        p2 = Param(name="x", type_expr=int_t, default=None, span=_sp(2), node_id=_nid())
+        p1 = Param(
+            name="x", type_expr=int_t, kind=ParamKind.STANDARD, default=None,
+            span=sp, node_id=_nid()
+        )
+        p2 = Param(
+            name="x", type_expr=int_t, kind=ParamKind.STANDARD, default=None,
+            span=_sp(2), node_id=_nid()
+        )
         lam = Lambda(
             params=(p1, p2),
             return_type=None,
@@ -2334,12 +2114,19 @@ class TestLambdaDuplicateParam:
 def _make_record(
     name: str, *, type_params: tuple[str, ...] = (), line: int = 1
 ) -> RecordDef:
-    from agm.agl.syntax.nodes import FieldDef
+    from agm.agl.syntax.nodes import Param, ParamKind
     from agm.agl.syntax.types import IntT as IntTNode
 
     sp = _sp(line)
     field_t = IntTNode(span=sp, node_id=_nid())
-    fd = FieldDef(name="value", type_expr=field_t, span=sp, node_id=_nid())
+    fd = Param(
+        name="value",
+        type_expr=field_t,
+        kind=ParamKind.NAMED_ONLY,
+        default=None,
+        span=sp,
+        node_id=_nid(),
+    )
     return RecordDef(
         name=name, fields=(fd,), type_params=type_params, span=sp, node_id=_nid()
     )
@@ -2376,7 +2163,7 @@ class TestConstructorBindings:
         r = parse_and_resolve(
             "record Box\n"
             "  value: int\n"
-            "let b = Box(value: 1)\n"
+            "let b = Box(value = 1)\n"
             "b\n"
         )
         # The callee VarRef("Box") should be in constructor_refs
@@ -2392,7 +2179,7 @@ class TestConstructorBindings:
         r = parse_and_resolve(
             "record box\n"
             "  value: int\n"
-            "let b = box(value: 1)\n"
+            "let b = box(value = 1)\n"
             "b\n"
         )
         assert "box" in r.constructor_candidates
@@ -2451,7 +2238,7 @@ class TestConstructorBindings:
         r = parse_and_resolve(
             "record Box\n"
             "  value: int\n"
-            "let b = Box(value: 1)\n"
+            "let b = Box(value = 1)\n"
             "b\n"
         )
         let_decl = r.program.body.items[1]
@@ -2472,7 +2259,7 @@ class TestConstructorBindings:
         r = parse_and_resolve(
             "record Box[T]\n"
             "  value: int\n"
-            "let b = Box(value: 1)\n"
+            "let b = Box(value = 1)\n"
             "b\n"
         )
         assert r.constructor_candidates["Box"][0].type_params == ("T",)
@@ -2577,7 +2364,7 @@ class TestConstructorBindings:
             "enum Other[T]\n"
             "  | nope\n"
             "  | some(value: T)\n"
-            "some(value: 1)\n"
+            "some(value = 1)\n"
         )
         msg = err.to_diagnostic().message
         assert "ambiguous" in msg.lower()
@@ -2587,7 +2374,7 @@ class TestConstructorBindings:
     def test_ambiguous_explicit_type_args_still_raises(self) -> None:
         """Explicit type arguments do NOT disambiguate two enums sharing a variant name.
 
-        D7 guarantees that ``some::[int](value: 1)`` is still ambiguous when both
+        D7 guarantees that ``some::[int](value = 1)`` is still ambiguous when both
         ``Option`` and ``Other`` declare a ``some`` variant.  Both candidate enums
         must be named in the error message.
         """
@@ -2598,7 +2385,7 @@ class TestConstructorBindings:
             "enum Other[T]\n"
             "  | nope\n"
             "  | some(value: T)\n"
-            "some::[int](value: 1)\n"
+            "some::[int](value = 1)\n"
         )
         msg = err.to_diagnostic().message
         assert "ambiguous" in msg.lower()
@@ -2608,7 +2395,7 @@ class TestConstructorBindings:
     def test_ambiguous_contextual_type_still_raises(self) -> None:
         """A contextual expected type does NOT disambiguate an ambiguous variant.
 
-        D7 guarantees that ``let x: Option[int] = some(value: 1)`` is still
+        D7 guarantees that ``let x: Option[int] = some(value = 1)`` is still
         ambiguous when both ``Option`` and ``Other`` declare a ``some`` variant.
         Both candidate enums must be named in the error message.
         """
@@ -2619,7 +2406,7 @@ class TestConstructorBindings:
             "enum Other[T]\n"
             "  | nope\n"
             "  | some(value: T)\n"
-            "let x: Option[int] = some(value: 1)\n"
+            "let x: Option[int] = some(value = 1)\n"
             "x\n"
         )
         msg = err.to_diagnostic().message
@@ -2630,7 +2417,7 @@ class TestConstructorBindings:
     def test_qualified_payload_variant_resolves_without_error(self) -> None:
         """Qualification is the only valid disambiguation for shared variant names.
 
-        D7 requires that ``Option.some(value: 1)`` resolves without error even
+        D7 requires that ``Option.some(value = 1)`` resolves without error even
         when ``Other`` also declares a ``some`` variant.
         """
         r = parse_and_resolve(
@@ -2640,7 +2427,7 @@ class TestConstructorBindings:
             "enum Other[T]\n"
             "  | nope\n"
             "  | some(value: T)\n"
-            "Option.some(value: 1)\n"
+            "Option.some(value = 1)\n"
         )
         call_node = r.program.body.items[2]
         assert isinstance(call_node, Call)
@@ -3065,237 +2852,21 @@ class TestImportDeclScope:
 
 
 # ---------------------------------------------------------------------------
-# Integer-range for loop scope tests
+# Reserved program names (Task 2)
 # ---------------------------------------------------------------------------
 
 
-class TestRangeForScope:
-    """Scope resolution for integer-range for loops (for i in a to/downto b [by k])."""
+class TestReservedProgramNames:
+    def test_reserved_exec_rejected(self) -> None:
+        err = reject_scope("program exec\n()")
+        _, msg = diag(err)
+        assert "exec" in msg
 
-    def _make_range_loop(
-        self,
-        *,
-        for_var: str,
-        start: Expr,
-        to_bound: Expr,
-        down: bool = False,
-        by_step: Expr | None = None,
-        while_cond: Expr | None = None,
-        bound: Expr | None = None,
-        body: Expr | None = None,
-        until_cond: Expr | None = None,
-    ) -> Loop:
-        """Build a range Loop AST node with the given components."""
-        return Loop(
-            for_var=for_var,
-            for_iter=start,
-            for_range_to=to_bound,
-            for_range_down=down,
-            for_range_by=by_step,
-            while_cond=while_cond,
-            bound=bound,
-            body=body if body is not None else _make_unitlit(),
-            until_cond=until_cond,
-            span=_sp(),
-            node_id=_nid(),
-        )
+    def test_reserved_loop_rejected(self) -> None:
+        err = reject_scope("program loop\n()")
+        _, msg = diag(err)
+        assert "loop" in msg
 
-    def test_range_for_to_bound_resolves_in_enclosing_scope(self) -> None:
-        """The to-bound expression resolves names from the enclosing scope."""
-        let_b = _make_let("b", _make_intlit(10))
-        b_ref = _make_varref("b")
-        loop = self._make_range_loop(
-            for_var="i",
-            start=_make_intlit(1),
-            to_bound=b_ref,
-        )
-        r = resolve_program(let_b, loop)
-        assert r.resolution[b_ref.node_id].kind == BinderKind.let_binding
-
-    def test_range_for_by_step_resolves_in_enclosing_scope(self) -> None:
-        """The by-step expression resolves names from the enclosing scope."""
-        let_k = _make_let("k", _make_intlit(2))
-        k_ref = _make_varref("k")
-        loop = self._make_range_loop(
-            for_var="i",
-            start=_make_intlit(1),
-            to_bound=_make_intlit(10),
-            by_step=k_ref,
-        )
-        r = resolve_program(let_k, loop)
-        assert r.resolution[k_ref.node_id].kind == BinderKind.let_binding
-
-    def test_range_for_to_bound_cannot_see_loop_var(self) -> None:
-        """The to-bound resolves before the loop variable is bound, so it cannot use it."""
-        i_ref = _make_varref("i")
-        loop = self._make_range_loop(
-            for_var="i",
-            start=_make_intlit(1),
-            to_bound=i_ref,
-        )
-        with pytest.raises(AglScopeError):
-            resolve_program(loop)
-
-    def test_range_for_by_step_cannot_see_loop_var(self) -> None:
-        """The by-step resolves before the loop variable is bound, so it cannot use it."""
-        i_ref = _make_varref("i")
-        loop = self._make_range_loop(
-            for_var="i",
-            start=_make_intlit(1),
-            to_bound=_make_intlit(10),
-            by_step=i_ref,
-        )
-        with pytest.raises(AglScopeError):
-            resolve_program(loop)
-
-    def test_range_for_loop_var_visible_in_body(self) -> None:
-        """The loop variable is bound immutable and visible in the loop body."""
-        i_body_ref = _make_varref("i")
-        loop = self._make_range_loop(
-            for_var="i",
-            start=_make_intlit(1),
-            to_bound=_make_intlit(5),
-            body=i_body_ref,
-        )
-        r = resolve_program(loop)
-        assert r.resolution[i_body_ref.node_id].kind == BinderKind.loop_var_binding
-
-    def test_range_for_loop_var_visible_in_while_cond(self) -> None:
-        """The loop variable is in scope for the while condition."""
-        i_while_ref = _make_varref("i")
-        loop = self._make_range_loop(
-            for_var="i",
-            start=_make_intlit(1),
-            to_bound=_make_intlit(5),
-            while_cond=i_while_ref,
-        )
-        r = resolve_program(loop)
-        assert r.resolution[i_while_ref.node_id].kind == BinderKind.loop_var_binding
-
-    def test_range_for_loop_var_visible_in_until_cond(self) -> None:
-        """The loop variable is in scope for the until condition."""
-        i_until_ref = _make_varref("i")
-        loop = self._make_range_loop(
-            for_var="i",
-            start=_make_intlit(1),
-            to_bound=_make_intlit(5),
-            until_cond=i_until_ref,
-        )
-        r = resolve_program(loop)
-        assert r.resolution[i_until_ref.node_id].kind == BinderKind.loop_var_binding
-
-    def test_range_for_loop_var_assign_rejected(self) -> None:
-        """Assigning to the range-for loop variable via := is a static scope error.
-
-        The diagnostic must point at the assignment statement (the assign span),
-        not at the loop declaration.
-        """
-        assign_span = _sp(line=3)
-        assign = AssignStmt(
-            target=NameTarget(name="i", span=assign_span, node_id=_nid()),
-            value=_make_intlit(99),
-            span=assign_span,
-            node_id=_nid(),
-        )
-        # Wrap in a block so the body is a Block (AssignStmt is an Item, not Expr).
-        body = _make_block(assign)
-        loop = Loop(
-            for_var="i",
-            for_iter=_make_intlit(1),
-            for_range_to=_make_intlit(5),
-            for_range_down=False,
-            for_range_by=None,
-            while_cond=None,
-            bound=None,
-            body=body,
-            until_cond=None,
-            span=_sp(),
-            node_id=_nid(),
-        )
-        err = reject_program(loop)
-        line, msg = diag(err)
-        assert line == assign_span.start_line
-        assert "i" in msg
-
-    def test_range_for_downto_bound_resolves_in_enclosing_scope(self) -> None:
-        """The downto bound expression resolves names from the enclosing scope."""
-        let_b = _make_let("b", _make_intlit(1))
-        b_ref = _make_varref("b")
-        loop = self._make_range_loop(
-            for_var="i",
-            start=_make_intlit(10),
-            to_bound=b_ref,
-            down=True,
-        )
-        r = resolve_program(let_b, loop)
-        assert r.resolution[b_ref.node_id].kind == BinderKind.let_binding
-
-    def test_range_for_downto_with_by_both_resolve_in_enclosing_scope(self) -> None:
-        """Both the downto bound and by step resolve from the enclosing scope."""
-        let_b = _make_let("b", _make_intlit(1))
-        let_k = _make_let("k", _make_intlit(2))
-        b_ref = _make_varref("b")
-        k_ref = _make_varref("k")
-        loop = self._make_range_loop(
-            for_var="i",
-            start=_make_intlit(10),
-            to_bound=b_ref,
-            down=True,
-            by_step=k_ref,
-        )
-        r = resolve_program(let_b, let_k, loop)
-        assert r.resolution[b_ref.node_id].kind == BinderKind.let_binding
-        assert r.resolution[k_ref.node_id].kind == BinderKind.let_binding
-
-    def test_range_for_with_while_clause_and_bound(self) -> None:
-        """Range for composes with a while clause and a [n] safety bound at scope level."""
-        let_n = _make_let("n", _make_intlit(100))
-        n_ref_while = _make_varref("n")
-        n_ref_bound = _make_varref("n")
-        loop = Loop(
-            for_var="i",
-            for_iter=_make_intlit(1),
-            for_range_to=_make_intlit(50),
-            for_range_down=False,
-            for_range_by=None,
-            while_cond=n_ref_while,
-            bound=n_ref_bound,
-            body=_make_unitlit(),
-            until_cond=None,
-            span=_sp(),
-            node_id=_nid(),
-        )
-        r = resolve_program(let_n, loop)
-        # while_cond resolves in the loop (inner) scope but n is still visible from enclosing
-        assert r.resolution[n_ref_while.node_id].kind == BinderKind.let_binding
-        # bound resolves in enclosing scope
-        assert r.resolution[n_ref_bound.node_id].kind == BinderKind.let_binding
-
-    def test_range_for_to_bound_cannot_see_body_local(self) -> None:
-        """The to-bound resolves in the enclosing scope and cannot see names bound inside the body.
-
-        A body-local ``let`` is not in scope when ``for_range_to`` is evaluated, so
-        any reference to it from the bound expression is a scope error.
-        """
-        # body_local_ref appears in the to-bound, but "body_local" is only defined
-        # inside the loop body.  The bound resolves before the child scope is opened.
-        body_local_ref = _make_varref("body_local")
-        body = _make_block(
-            _make_let("body_local", _make_intlit(5)),
-            _make_unitlit(),
-        )
-        loop = Loop(
-            for_var="i",
-            for_iter=_make_intlit(1),
-            for_range_to=body_local_ref,
-            for_range_down=False,
-            for_range_by=None,
-            while_cond=None,
-            bound=None,
-            body=body,
-            until_cond=None,
-            span=_sp(),
-            node_id=_nid(),
-        )
-        with pytest.raises(AglScopeError):
-            resolve_program(loop)
+    def test_unreserved_program_name_ok(self) -> None:
+        r = parse_and_resolve("program myapp\n()")
+        assert r.program_name == "myapp"

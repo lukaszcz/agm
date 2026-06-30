@@ -17,7 +17,70 @@ if TYPE_CHECKING:
     from agm.agl.semantics.types import Type as AglType
     from agm.agl.semantics.values import Value
 
-__all__ = ["convert_param_value"]
+__all__ = [
+    "build_engine_config_base",
+    "convert_config_value",
+    "convert_param_value",
+    "raw_option_str",
+]
+
+
+def raw_option_str(
+    primary: "Mapping[str, object]",
+    fallback: "Mapping[str, object]",
+    key: str,
+) -> str | None:
+    """Return the raw TOML value for *key* as a string, checking primary then fallback.
+
+    Preserves the exact string written in the config file (e.g. ``"30s"``).
+    For numeric values (int/float), converts to string (e.g. ``60`` → ``"60"``),
+    but only when the value is positive (a zero/negative numeric config value is
+    treated as absent).
+    Returns ``None`` when the key is absent or empty/invalid in both tables.
+
+    Used by ``commands/exec.py`` and ``commands/repl.py`` to extract the raw
+    timeout/log-file strings before passing them to :func:`convert_config_value`.
+    """
+    for table in (primary, fallback):
+        val = table.get(key)
+        if isinstance(val, str) and val.strip():
+            return val
+        if isinstance(val, (int, float)) and not isinstance(val, bool) and val > 0:
+            return str(val)
+    return None
+
+
+# Engine defaults for build_engine_config_base when a key is absent from raw_values.
+_ENGINE_DEFAULTS: dict[str, object] = {
+    "log": False,
+    "strict-json": False,
+    "max-iters": 5,
+    "runner": "claude",  # callers providing a resolved runner override this
+    "log-file": None,
+    "timeout": None,
+}
+
+
+def build_engine_config_base(raw_values: "Mapping[str, object]") -> "dict[str, Value]":
+    """Build the engine config base dict from raw host values.
+
+    Decodes each of the six engine keys via :func:`convert_config_value`.
+    Keys absent from *raw_values* fall back to the engine defaults
+    (``false``/``false``/``5``/``"claude"``/``none``/``none``).
+
+    Each caller is responsible for constructing *raw_values* with its own
+    layering (CLI/program/exec config).  This helper performs only the
+    decoding step, keeping the layering logic in the callers.
+    """
+    from agm.agl.semantics.engine_keys import get_engine_key_type
+
+    result: dict[str, Value] = {}
+    for key_name, default_raw in _ENGINE_DEFAULTS.items():
+        raw = raw_values.get(key_name, default_raw)
+        key_type = get_engine_key_type(key_name)
+        assert key_type is not None, f"unknown engine key: {key_name!r}"
+        result[key_name] = convert_config_value(key_name, raw, key_type)
+    return result
 
 
 def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":
@@ -143,6 +206,25 @@ def convert_param_value(name: str, raw: object, type_obj: "AglType") -> "Value":
         raise ValueError(
             f"Param {name!r}: could not parse as {type_obj!r}: {exc}"
         ) from exc
+
+
+def convert_config_value(name: str, raw: object, key_type: "AglType") -> "Value":
+    """Convert a raw host config value to the declared engine-key AgL type.
+
+    For ``Option[T]`` engine keys (``timeout``, ``log-file``) the raw value is
+    projected into the Option enum: a present *raw* becomes ``some(value)`` with
+    its inner ``T`` decoded via :func:`convert_param_value`, and ``None`` becomes
+    ``none``.  Non-Option keys fall back to :func:`convert_param_value`.
+    """
+    from agm.agl.runtime.option import none_value, some_value
+    from agm.agl.semantics.types import EnumType, TextType
+
+    if isinstance(key_type, EnumType) and key_type.name == "Option":
+        if raw is None:
+            return none_value()
+        inner: AglType = key_type.type_args[0] if key_type.type_args else TextType()
+        return some_value(convert_param_value(name, raw, inner))
+    return convert_param_value(name, raw, key_type)
 
 
 def _is_json_shaped(obj: object) -> bool:

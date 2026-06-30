@@ -1,0 +1,5 @@
+record R
+  x: int
+def f() -> int = 1
+let r = R(f())
+print r.x

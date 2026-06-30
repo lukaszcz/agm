@@ -157,7 +157,7 @@ def _render(value: Value, *, pretty: bool, quote_strings: bool, top_level: bool,
 
     if isinstance(value, RecordValue):
         items = [
-            f"{name}: {_render_child(child, pretty=pretty, level=level + 1)}"
+            f"{name} = {_render_child(child, pretty=pretty, level=level + 1)}"
             for name, child in value.fields.items()
         ]
         return _render_sequence(
@@ -173,7 +173,7 @@ def _render(value: Value, *, pretty: bool, quote_strings: bool, top_level: bool,
         if not value.fields:
             return prefix if isinstance(value, EnumValue) else f"{prefix}()"
         items = [
-            f"{name}: {_render_child(child, pretty=pretty, level=level + 1)}"
+            f"{name} = {_render_child(child, pretty=pretty, level=level + 1)}"
             for name, child in value.fields.items()
         ]
         return _render_sequence(f"{prefix}(", ")", items, level=level, pretty=pretty)

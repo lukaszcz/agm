@@ -15,10 +15,11 @@ from typing import NoReturn, Protocol, cast
 from agm.agl.ir.ids import ContractId, Location, NominalId
 from agm.agl.ir.nodes import IrAsk, IrAskRequest, IrExec, IrExpr
 from agm.agl.ir.program import ExecutableProgram
-from agm.agl.modules.ids import PRELUDE_ID, STD_CORE_ID
+from agm.agl.modules.ids import PRELUDE_ID
 from agm.agl.runtime.agents import AgentRegistry
 from agm.agl.runtime.codec import ParseResult
 from agm.agl.runtime.contract import OutputContract
+from agm.agl.runtime.option import none_value, some_value
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.runtime.request import ValidationError as ReqValidationError
@@ -28,7 +29,6 @@ from agm.agl.semantics.exceptions import make_builtin_exception as _make_exc_val
 from agm.agl.semantics.values import (
     AgentValue,
     BoolValue,
-    EnumValue,
     IntValue,
     JsonValue,
     RecordValue,
@@ -279,29 +279,13 @@ class EffectHandlers:
 
         contract = self._ctx._program.contracts[contract_id]
 
-        option_nominal = NominalId(STD_CORE_ID, "Option")
-
-        def _none() -> EnumValue:
-            return EnumValue(
-                nominal=option_nominal,
-                display_name="Option",
-                variant="None",
-                fields={},
-            )
-
-        def _some(value: Value) -> EnumValue:
-            return EnumValue(
-                nominal=option_nominal,
-                display_name="Option",
-                variant="Some",
-                fields={"value": value},
-            )
-
         json_schema_value: Value
         if contract.json_schema is None:
-            json_schema_value = _none()
+            json_schema_value = none_value()
         else:
-            json_schema_value = _some(JsonValue(cast(object, json.loads(contract.json_schema))))
+            json_schema_value = some_value(
+                JsonValue(cast(object, json.loads(contract.json_schema)))
+            )
 
         return RecordValue(
             nominal=NominalId(PRELUDE_ID, "AgentRequest"),
@@ -309,15 +293,15 @@ class EffectHandlers:
             fields={
                 "agent": TextValue(agent_name),
                 "prompt": TextValue(prompt_text),
-                "target_type": _none()
+                "target_type": none_value()
                 if contract.is_unit
-                else _some(TextValue(contract.target_type_label)),
-                "format_instructions": _none()
+                else some_value(TextValue(contract.target_type_label)),
+                "format_instructions": none_value()
                 if not contract.format_instructions
-                else _some(TextValue(contract.format_instructions)),
+                else some_value(TextValue(contract.format_instructions)),
                 "json_schema": json_schema_value,
                 "attempt": IntValue(0),
-                "previous_error": _none(),
+                "previous_error": none_value(),
                 "metadata": JsonValue(
                     {
                         "codec_name": contract.codec_name,

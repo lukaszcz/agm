@@ -16,6 +16,8 @@ The AgL reference documentation is in `docs/agl/reference/`. This reference is w
 
 **IMPORTANT**: Each change to the AgL language syntax or semantics MUST be accompanied by a corresponding change in the AgL reference documentation (`docs/agl/reference`).
 
+The documentation MUST NOT include historical statements about abandoned or superseded features / syntax / semantics (avoid expressions like "no longer", "previous", "formerly"), and it MUST NOT mention previous AgL language versions or any version numbers. The AgL language reference describes ONLY the CURRENT language version. Remove ALL superseded information when updating.
+
 ## Testing
 
 Whenever you add a new language feature, create end-to-end test program examples under `tests/agl/programs/` exercising this feature thoroughly (in combination with other language features). Follow TDD - add end-to-end test program examples as the FIRST step before any other implementation work.

@@ -46,11 +46,11 @@ The layout rules:
    ```agl
    if
      | status is Complete => ()
-     | status is Blocked => let report = ask("Explain ${status}", agent: critic)
+     | status is Blocked => let report = ask("Explain ${status}", agent = critic)
      | else => ()
 
    do[5]
-     let r: Review = ask("Review ${artifact}", agent: reviewer)
+     let r: Review = ask("Review ${artifact}", agent = reviewer)
    until r is Pass
    ```
 
@@ -73,12 +73,7 @@ lexeme. There is no whitespace permitted between `as` and `?`; with
 whitespace, `as` is the cast keyword and `?` would start a separate (invalid)
 token. `as?` is always reserved and cannot be used as an identifier.
 
-**Removed from v1:** `pass` and `print` are **no longer reserved** in v2.
-`pass`'s role is taken by the unit literal `()`. `print` is a built-in
-function name, looked up like any variable — it is a contextual keyword, not
-a reserved word.
-
-`agent` is reserved (it leads an `agent` declaration) but is still accepted
+`agent` is reserved (it leads an `agent` declaration) but is accepted
 as a **field name** (record/enum field definitions, named constructor
 arguments, dict shorthand keys, postfix field access, and pattern field keys).
 It cannot be used as a variable binder, pattern binder, or catch binder.
@@ -89,8 +84,8 @@ definitions, named constructor arguments, dict shorthand keys, postfix field
 access, and pattern field keys). They cannot be used as variable, pattern, or
 catch binders. This preserves existing uses such as `tagged(by: value)`.
 
-**Contextual keywords** — `ask` and `exec` are NOT reserved; they lex as
-plain `NAME` tokens and are given their built-in meaning during scope
+**Contextual keywords** — `print`, `ask`, and `exec` are NOT reserved; they
+lex as plain `NAME` tokens and are given their built-in meaning during scope
 resolution. They may not be declared with `let`, `var`, or `param`, may not be
 declared as agents or functions, and may not appear as pattern or catch
 binders — but they remain legal as field names.
@@ -203,6 +198,7 @@ characters that break an identifier scan.
 | `a.b` | `NAME "a"`, `DOT "."`, `NAME "b"` | `.` is a delimiter, always an operator |
 | `a -> b` | `NAME "a"`, `THIN_ARROW "->"`, `NAME "b"` | arrow operator, whitespace-delimited |
 | `a->b` | `NAME "a->b"` | one identifier (no spaces) |
+| `x == 3` | `NAME "x"`, `EQ_EQ "=="`, `INT "3"` | equality operator, whitespace-delimited |
 | `x != 3` | `NAME "x"`, `NEQ "!="`, `INT "3"` | not-equal operator, whitespace-delimited |
 | `x!=3` | `NAME "x!=3"` | one identifier (no spaces) |
 | `a+b` | `NAME "a+b"` | one identifier (`+` is not a delimiter) |
@@ -242,8 +238,8 @@ semantics are covered in [Strings and interpolation](strings-and-interpolation.m
 ## Operators and punctuation
 
 ```text
-=>   ->   =   !=   <   <=   >   >=
-::   +   -   *   /
+=>   ->   =   ==   !=   <   <=   >   >=
+::   +   -   *   /   @
 (   )   [   ]   {   }
 :   ,   .   |   ;
 ```
@@ -259,12 +255,13 @@ separates a branch condition or pattern from its body.
 introducer** `callee::[Type](args)` (e.g. `ask-request::[Review](…)`). It is
 a maximal-munch token distinct from two `:` delimiters. The two uses are
 disambiguated by context: a `::` immediately preceded by a name or dotted path
-is the qualifier form; a `::` following a `VAR_NAME` and immediately followed
+is the qualifier form; a `::` following a `NAME` and immediately followed
 by `[` is the typed-call form.
 
-`==` is recognized as a distinct token solely so it can be rejected with
-the targeted error **"Use `=` for equality."** — it is not part of the
-language.
+`==` is the **equality operator** (with `!=` for inequality). A single `=` is
+never a comparison: it separates a binder or named argument from its value
+(`let x = …`, `f(name = …)`, `R(field = …)`), and `:=` is destructive
+assignment.
 
 Multi-character operators are matched greedily.
 
@@ -278,6 +275,28 @@ An adjacent `[` after an expression-ending token starts indexing. Whitespace
 keeps the bracket as a list literal, so `xs[0]` indexes while `f [0]` is the
 single-argument call sugar `f([0])`.
 
+## Zone markers
+
+`@` is a token used exclusively in **zone markers** inside parameter and field lists.
+The three markers are:
+
+| Marker | Equivalent | Zone opened |
+|--------|-----------|------------|
+| `@pos` | (none) | Positional-only (must be first in the list) |
+| `@std` | `/` | Standard (positional-or-named) |
+| `@named` | `*` | Named-only |
+
+`pos`, `std`, and `named` are **ordinary identifiers** everywhere except
+immediately after `@` inside a parameter or field list. An unrecognized name
+after `@` (e.g. `@foo`) is a static error.
+
+```agl
+def f(x: int, @std, y: int) -> int = x + y   # @std same as /
+def g(a: int, /, b: int, @named, c: int) -> int = ...  # mixing / and @named
+```
+
+See [Functions](functions.md) and [Types](types.md) for the full zone semantics.
+
 ## Operator precedence
 
 From loosest to tightest binding (the bottom binds tightest):
@@ -287,7 +306,7 @@ From loosest to tightest binding (the bottom binds tightest):
 | 1 | `or` | left |
 | 2 | `and` | left |
 | 3 | `not` (prefix) | — |
-| 4 | `=` `!=` `<` `<=` `>` `>=` `in` `is` `is not` | **non-associative** |
+| 4 | `==` `!=` `<` `<=` `>` `>=` `in` `is` `is not` | **non-associative** |
 | 5 | `+` `-` | left |
 | 6 | `*` `/` | left |
 | 7 | `as` `as?` (cast / convertibility test) | left |
@@ -309,12 +328,11 @@ postfix call can be the single sugar argument, so `f g(x)` parses as
 `f(g(x))`.
 
 **Calls with parentheses (level 10)** are left-associative postfix and
-support multiple arguments: `f(a, b)`, `f(a)(b)` (curried — not yet
-supported, but syntactically the grammar allows it for future use).
+support multiple arguments: `f(a, b)`.
 
 `case` and `if` expressions sit **below all of this**: they are the loosest
 expression forms. In positions where a following `|` would be ambiguous
 (branch bodies, `if`/`until` conditions) they must be parenthesized.
 
-All comparison operators are non-associative: `x = y = z`, `1 < 2 < 3`, and
+All comparison operators are non-associative: `x == y == z`, `1 < 2 < 3`, and
 `a <= b != c` are parse errors with a targeted diagnostic.

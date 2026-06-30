@@ -44,11 +44,13 @@ the references is qualified.
 import_decl ::= "import" module_path [".*"]
                     ["qualified"]
                     ["as" NAME]
-                    [("using" | "hiding") name_list]
+                    [import_clause]
 
+import_clause ::= "using" import_item ("," import_item)*
+                | "hiding" NAME ("," NAME)*
+
+import_item ::= NAME ["as" NAME]
 module_path ::= NAME ("." NAME)*
-name_list   ::= name_item ("," name_item)*
-name_item   ::= NAME ["as" NAME]
 ```
 
 - `qualified` suppresses unqualified injection (all names require a qualifier).
@@ -63,9 +65,9 @@ name_item   ::= NAME ["as" NAME]
 - The combinations `qualified using`, `qualified hiding`, and `qualified as A
   using …` are all valid.
 
-Import declarations must appear **before any other declaration or expression**
-in the module's body. A non-entry module that places an `import` after a `def`
-(or any other item) is a static error.
+Import and export declarations must appear **before any other declaration or
+expression** in the module's body. A non-entry module that places an `import` or
+`export` after a `def` (or any other item) is a static error.
 
 ### Open import
 
@@ -151,6 +153,64 @@ produces qualifier handles `A` (for `foo.bar`) and `A.baz` (for `foo.bar.baz`),
 so `foo.bar::x` becomes `A::x` and `foo.bar.baz::y` becomes `A.baz::y`.  The
 original handles `foo.bar` and `foo.bar.baz` are no longer registered.
 
+## Re-exporting
+
+A module may **re-export** names from another module, making them visible to
+consumers of the module as if they were defined locally. `export` is
+declaration-only: it loads the target module and contributes to the current
+module's public export set, but it does not inject names into the current
+module's local scope.
+
+```ebnf
+export_decl ::= "export" module_path [".*"] [export_clause]
+
+export_clause ::= "using" export_item ("," export_item)*
+                | "hiding" NAME ("," NAME)*
+
+export_item ::= NAME ["as" NAME]
+```
+
+Re-exports are transparent: a name re-exported through a chain of modules
+always carries its original defining module as its identity. A consumer that
+imports the facade sees re-exported names both unqualified and through the
+facade qualifier.
+
+Plain `export` re-exports all public names from the target module:
+
+```agl
+export math.ops
+```
+
+Use `using` to re-export only selected names:
+
+```agl
+export math.ops using add, mul
+```
+
+`using` may rename the exposed name:
+
+```agl
+export math.ops using add as plus
+```
+
+Use `hiding` to re-export all public names except the listed names:
+
+```agl
+export math.ops hiding _impl
+```
+
+Wildcard export re-exports public names from every module in a subtree:
+
+```agl
+export math.*
+```
+
+Private names are never re-exported. **Name conflict**: if two `export`
+declarations would expose the same name with
+different origins, it is a static error.  Diamond re-exports (the same name
+re-exported via two paths from the same original definition) are allowed and
+collapse silently.
+
 ### Merging imports
 
 Multiple import declarations for the same module are allowed and merge:
@@ -234,7 +294,7 @@ modules may only contain declarations:
 - `import` — import declarations (header only, before all other items)
 
 Statements, binders (`let`/`var`), expressions, agent declarations, `param`
-declarations, `program` declarations, and config pragmas are all **static
+declarations, `program` declarations, and config declarations are all **static
 errors** in a library module.
 
 ## Cross-module mutual recursion

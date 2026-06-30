@@ -5,16 +5,16 @@
 ## Programs
 
 An AgL program is a **block** — a sequence of items executed top to bottom.
-Items are separated by newlines or semicolons. In v2, the syntactic
-distinction between *statements* and *expressions* is removed: every former
-statement is an expression with a well-defined type, and the program is an
+Items are separated by newlines or semicolons. There is no syntactic
+distinction between *statements* and *expressions*: every item is an
+expression with a well-defined type, and the program is an
 expression-oriented sequence.
 
 ```ebnf
 program    ::= block EOF
 block      ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
 item       ::= import_decl                        (* header position only *)
-             | config_pragma                      (* header position only *)
+             | config_decl                        (* root only *)
              | "private"? record_def              (* root only *)
              | "private"? enum_def                (* root only *)
              | "private"? type_alias              (* root only *)
@@ -70,43 +70,63 @@ y              # the program's value is y
 Side-effecting forms (`print`, `:=`, loops, else-less `if`) yield `unit`
 and are commonly followed by another expression.
 
-## Config pragmas
+## Config declarations
 
-A **config pragma** sets a program-level option:
+A **config declaration** names a fixed engine-setting key and binds it as an
+immutable, runtime-resolved **readable value** — like `param`, but for the
+program's own engine options:
 
 ```ebnf
-config_pragma ::= "config" KEY "=" VALUE
-VALUE         ::= "true" | "false" | INT | DECIMAL | string_literal
+config_decl ::= "config" NAME ("=" expr)?
 ```
 
-Pragmas must appear **before every other item** at the program root (the
-*header* position). A pragma after any non-pragma item is a static error.
-Pragmas nested inside a block are also static errors.
+Config declarations may appear **anywhere at the program root** — before or
+after other items. Nesting inside a block is a static error. Each key may
+appear at most once; duplicate keys are an error. Entry-module only.
 
-Each key may appear at most once; duplicate keys are an error.
+The value expression, when present, must have the key's declared type. A bare
+`config KEY` (no value) resolves from the host's configured default.
 
-| Key | Value type | Meaning |
-|-----|------------|---------|
+| Key | Type | Meaning |
+|-----|------|---------|
 | `log` | `bool` | Enable/disable trace logging. |
-| `log_file` | non-empty string | Path to the trace log file. |
-| `strict_json` | `bool` | Parse agent JSON output strictly. |
-| `max_call_depth` | positive integer | Maximum recursion call depth before `RecursionError`. |
-| `runner` | non-empty string | Default agent runner command. |
-| `timeout` | string or positive integer | Shell execution timeout. |
+| `log-file` | `Option[text]` | Path to the trace log file. |
+| `strict-json` | `bool` | Parse agent JSON output strictly. |
+| `max-iters` | `int` | Maximum iterations for `do` loops. |
+| `runner` | `text` | Default agent runner command. |
+| `timeout` | `Option[text]` | Shell execution timeout. |
+
+For an `Option[T]` key (`log-file`, `timeout`) a bare `T` value is accepted and
+projected into `Some(value)`; an `Option[T]` value may also be given directly.
+
+A config key is a normal readable binding: it can be used in any expression.
+The binding is immutable — assigning to it is a static error.
 
 ```agl
-config log = true
-config max_call_depth = 512
+config max-iters = 10
+config timeout = "30s"        # projected into Some("30s")
 config runner = "claude -p"
-param spec
-let result = ask "Process ${spec}"
-print result
+let budget = max-iters        # config keys are readable
+print budget
 ```
 
-**Precedence.** CLI flags override pragma values, which override config-file
-settings.
+**Precedence.** The bound value is resolved per key as:
+`CLI flag > source value (if given) > [<program>].KEY > [exec].KEY > engine default`.
 
-**String values** must be static literals — no interpolation.
+A bare `config KEY` (no `=` value) contributes no source value and falls through
+to the program-section / exec-section / engine-default layers.
+
+**Effect-at-binding.** The three eval-consumed keys (`strict-json`, `max-iters`,
+`timeout`) take effect at the point the declaration executes in declaration order;
+expressions that follow see the updated setting. The remaining keys (`runner`,
+`log`, `log-file`) are start-resolved before the program runs; place them near the
+top of the program so the agent factory and trace infrastructure see them.
+
+**Error surface.** A source `config timeout = "…"` value is a runtime-evaluated
+expression; a bad value raises a runtime error (exit 2). A bad `--timeout` or
+`[exec].timeout` value is caught before execution (exit 1). The source `config
+timeout` controls the **shell-exec** timeout only; the agent idle timeout is always
+start-resolved from the CLI or `[exec]`.
 
 ## Binders: `let` and `var`
 
@@ -130,18 +150,16 @@ def broken() -> int =
 ## Inline forms
 
 AgL is designed so that small workflows fit on one line. Items are separated
-by `;` inline. In v2, the bar-safe stratification that previously governed
-statement bodies is replaced by a simpler model: branch bodies, `until`
-conditions, and the right-hand sides of binders are **`or_expr`** — the
-operator-chain level — and a `case` or `if` expression in those positions
-must be parenthesized:
+by `;` inline. Branch bodies, `until` conditions, and the right-hand sides of
+binders are **`or_expr`** — the operator-chain level — and a `case` or `if`
+expression in those positions must be parenthesized:
 
 ```agl
 # Inline block: items separated by ';'
 let x = 3; let y = x + 1; y
 
 # Inline do loop: body items, then until condition
-do[5] let r: Review = ask("Review ${a}", agent: reviewer); case r of Fail(i) => a := ask("Fix ${i} in ${a}", agent: impl) | Pass => () until r is Pass
+do[5] let r: Review = ask("Review ${a}", agent = reviewer); case r of Fail(i) => a := ask("Fix ${i} in ${a}", agent = impl) | Pass => () until r is Pass
 
 # A case expression as a loop condition must be parenthesized:
 do[3] n := n + 1 until (case st of Done => true | _ => false)
@@ -153,7 +171,7 @@ branch body:
 ```agl
 case review of
   Pass => ()
-  | Fail(issues) => artifact := ask("Fix ${issues}", agent: impl)
+  | Fail(issues) => artifact := ask("Fix ${issues}", agent = impl)
 ```
 
 ### Branch bodies
@@ -168,11 +186,6 @@ A `try`/`catch` inline holds a sequence of items up to the first `catch`
 keyword; the `catch` body is a single expression at `or_expr` level or a
 suite.
 
-### A note on `pass`
-
-`pass` is no longer a keyword in v2. Its role is taken by the unit literal
-`()`. Existing code using `pass` should replace it with `()`.
-
 ## Expression statements
 
 An expression evaluated at block level for its side effect is simply written
@@ -185,7 +198,6 @@ ask "Log a status update."
 print "done"
 ```
 
-A bare equality at block level that looks like an assignment is rejected with
-a targeted error: `n = 2` as an item produces
-**"Bare assignment 'n = …' is not valid. Use ':=' to reassign a mutable
-variable."**
+`=` is not an expression operator, so `n = 2` as a block item is a syntax
+error. Use `:=` to reassign a mutable binding, `let`/`var` to introduce a new
+binding, or `==` to compare for equality.

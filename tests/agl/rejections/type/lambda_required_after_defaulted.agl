@@ -1,0 +1,1 @@
+fn(x: int = 5, y: int) -> int => x + y

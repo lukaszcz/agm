@@ -8,7 +8,7 @@ let initial: Status = verdict
 
 if initial is Status.Approved => print "approved input" else => print "not approved"
 
-let next: Status = ask("Re-judge it.", agent: judge)
+let next: Status = ask("Re-judge it.", agent = judge)
 
 case next of
   | Approved() => print "ok"

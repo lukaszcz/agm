@@ -17,6 +17,7 @@ rendering, meta-commands, and the prompt_toolkit console are later milestones.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from agm.agl.diagnostics import AglError, Diagnostic, diagnostic_from_span
@@ -92,11 +93,13 @@ class ReplSession:
         self,
         *,
         default_strict_json: bool = False,
+        default_loop_limit: int = 5,
         default_call_depth_limit: int | None = None,
         default_agent: "AgentFn | None" = None,
         shell_exec_timeout: float | None = None,
         trace_path: "Path | None" = None,
         params_config_loader: "Callable[[str], dict[str, object]] | None" = None,
+        engine_base: "Mapping[str, Value] | None" = None,
         cwd: "Path | None" = None,
         stdlib_root: "Path | None" = None,
         lib_root: "Path | None" = None,
@@ -112,7 +115,16 @@ class ReplSession:
         from agm.config.module_roots import resolve_stdlib_root
 
         self._default_strict_json = default_strict_json
+        self._default_loop_limit = default_loop_limit
         self._shell_exec_timeout = shell_exec_timeout
+        # Capture initial D6 defaults for :reset to restore.
+        self._initial_loop_limit = default_loop_limit
+        self._initial_strict_json = default_strict_json
+        self._initial_shell_exec_timeout = shell_exec_timeout
+        # The [exec] engine base for all six engine keys, provided by the host
+        # command (commands/repl.py).  Used in _build_config_base to supply the
+        # runner/log/log-file base values (the three non-D6 static keys).
+        self._engine_base: dict[str, Value] = dict(engine_base) if engine_base is not None else {}
         # Trace destination: when set, each evaluated entry opens a fresh
         # ``TraceStore`` (its own ``run_id``) appending JSONL records to this one
         # file.  ``check_only`` entries write nothing (mirroring ``agm exec``).
@@ -124,6 +136,7 @@ class ReplSession:
         # Internal runtime owns the registrations + host-environment assembly.
         self._runtime = PipelineDriver(
             default_strict_json=default_strict_json,
+            default_loop_limit=default_loop_limit,
             default_call_depth_limit=default_call_depth_limit,
             default_agent=default_agent,
             shell_exec_timeout=shell_exec_timeout,
@@ -316,15 +329,7 @@ class ReplSession:
                 return self._fail([exc.to_diagnostic()], list(tab_sink))
         tab_warnings: list[Diagnostic] = list(tab_sink)
 
-        # [1b] Reject config pragmas: they are an exec/program feature and cannot
-        # be applied to a live REPL session (session settings come from CLI flags
-        # or config files, not source pragmas).  Check here — after parse, before
-        # resolve — so no session state is mutated.
-        pragma_diag = self._check_no_config_pragmas(program)
-        if pragma_diag is not None:
-            return self._fail([pragma_diag], tab_warnings)
-
-        # [1c] REPL trailing-binder synthesis: in v2, a block ending in a
+        # [1b] REPL trailing-binder synthesis: in v2, a block ending in a
         # ``let``/``var`` is a static error (the binder needs a continuation
         # expression).  In the REPL, the continuation is the NEXT entry — so a
         # standalone ``let x = 1`` entry is semantically valid.  Synthesize a
@@ -413,6 +418,12 @@ class ReplSession:
         if contract_errors:
             return self._fail(contract_errors, warnings)
 
+        # Build config resolution maps for this entry.  A REPL session has no
+        # CLI layer, so config_cli is always empty; config_base is derived from
+        # the session's current persisted engine settings and the active program
+        # config (for program-specific overrides).
+        config_base = self._build_config_base(entry_active_config)
+
         # [7] Incrementally link and execute only this entry's IR initializers.
         return self._evaluate_and_promote(
             text=text,
@@ -424,6 +435,8 @@ class ReplSession:
             param_values=param_values,
             entry_program_name=entry_program_name,
             entry_active_config=entry_active_config,
+            config_cli={},
+            config_base=config_base,
         )
 
     # ------------------------------------------------------------------
@@ -471,28 +484,6 @@ class ReplSession:
         )
         return new_program, next_start_id + 1
 
-    def _check_no_config_pragmas(self, program: "Program") -> Diagnostic | None:
-        """Return a diagnostic if the entry contains a ``config`` pragma.
-
-        Config pragmas are an exec/program feature: they set options for a batch
-        ``agm exec`` run and cannot be applied to a live REPL session, whose
-        settings come from CLI flags and config files.  Entering a pragma line
-        is rejected with a clear message; the entry has no effect on session
-        state.
-        """
-        from agm.agl.syntax.nodes import ConfigPragma
-
-        for item in program.body.items:
-            if isinstance(item, ConfigPragma):
-                return diagnostic_from_span(
-                    (
-                        "config pragmas are not supported in the REPL; "
-                        "set options via CLI flags or the config file"
-                    ),
-                    item.span,
-                )
-        return None
-
     def _ambient_agents(self, host_env: "HostEnvironment") -> frozenset[str]:
         """Agent names valid WITHOUT an in-entry ``agent`` declaration.
 
@@ -516,6 +507,75 @@ class ReplSession:
             warnings=warnings,
             error=None,
             ok=False,
+        )
+
+    def _build_config_base(
+        self, effective_config: "dict[str, object]"
+    ) -> "dict[str, Value]":
+        """Build the ``config_base`` dict for one entry.
+
+        Merges (lowest → highest precedence):
+        1. Engine defaults for all six keys (from :func:`build_engine_config_base`).
+        2. The session's ``_engine_base`` (exec-config values for the six keys
+           provided by the host command at construction; supplies runner/log/log-file
+           and the raw-string timeout, e.g. ``"30s"``).
+        3. The session's current persisted D6 settings for ``strict-json`` and
+           ``max-iters``, which may have been advanced by prior config declarations.
+           NOTE: ``timeout`` is intentionally excluded from step 3 — its base stays
+           as-is from ``engine_base``, preserving the raw written value (e.g. "30s"
+           not "30.0"). The timeout EFFECT chains correctly via the promoted float
+           stored in ``_shell_exec_timeout``.
+        4. Program-specific overrides from ``effective_config`` (the raw
+           ``[<program>]`` table).  Any engine key present there overrides the
+           base from steps 1–3.
+        """
+        from agm.agl.runtime.params import build_engine_config_base, convert_config_value
+        from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES, get_engine_key_type
+        from agm.agl.semantics.values import BoolValue, IntValue
+
+        # Step 1+2: start from engine defaults, then overlay the host engine_base.
+        # Engine defaults cover missing keys (e.g. in tests that omit engine_base);
+        # engine_base values (from commands/repl.py) override the defaults for the
+        # keys it provides, including the raw-string timeout.
+        config_base: dict[str, Value] = build_engine_config_base({})
+        config_base.update(self._engine_base)
+
+        # Step 3: override the two session-tracked D6 keys so prior
+        # ``config strict-json = true`` or ``config max-iters = N`` entries chain
+        # their effect-at-binding into subsequent entries.
+        config_base["strict-json"] = BoolValue(self._default_strict_json)
+        config_base["max-iters"] = IntValue(self._default_loop_limit)
+
+        # Step 4: apply program-specific overrides from [<program>].KEY.
+        for key_name in ENGINE_KEY_NAMES:
+            raw = effective_config.get(key_name)
+            if raw is not None:
+                key_type = get_engine_key_type(key_name)
+                assert key_type is not None
+                config_base[key_name] = convert_config_value(key_name, raw, key_type)
+
+        return config_base
+
+    def _update_engine_settings(
+        self,
+        *,
+        strict_json: bool,
+        loop_limit: int,
+        shell_exec_timeout: float | None,
+    ) -> None:
+        """Persist the three D6 engine settings after a successful entry.
+
+        Updates the session's persisted defaults AND the internal
+        ``PipelineDriver`` so that subsequent entries start with these values.
+        Agent/codec registrations on the driver are preserved.
+        """
+        self._default_strict_json = strict_json
+        self._default_loop_limit = loop_limit
+        self._shell_exec_timeout = shell_exec_timeout
+        self._runtime.update_defaults(
+            strict_json=strict_json,
+            loop_limit=loop_limit,
+            shell_exec_timeout=shell_exec_timeout,
         )
 
     def _pre_eval_param_check(
@@ -577,7 +637,7 @@ class ReplSession:
                 elif item.default is None:
                     effective_program_name = entry_program_name or self._program_name
                     prog_hint = (
-                        f" via [params.{effective_program_name}] config"
+                        f" via [{effective_program_name}] config"
                         if effective_program_name is not None
                         else ""
                     )
@@ -628,9 +688,11 @@ class ReplSession:
         host_env: "HostEnvironment",
         warnings: list[Diagnostic],
         next_start_id: int,
-        param_values: dict[str, Value],
+        param_values: "dict[str, Value]",
         entry_program_name: str | None,
-        entry_active_config: dict[str, object],
+        entry_active_config: "dict[str, object]",
+        config_cli: "dict[str, Value]",
+        config_base: "dict[str, Value]",
     ) -> EntryResult:
         """Lower and execute an entry against the persistent IR runtime image.
 
@@ -639,6 +701,11 @@ class ReplSession:
         program (potentially with a synthetic UnitLit appended).  Classification,
         echo data, and promotion use ``orig_program`` so the user-visible outcome
         is accurate.
+
+        ``config_cli`` carries explicitly-set overrides (always ``{}`` in a REPL
+        session — no CLI layer); ``config_base`` carries the host's configured
+        defaults and is threaded into the interpreter so ``IrConfigBind`` nodes
+        can resolve bare ``config KEY`` declarations.
         """
         from agm.agl.eval.ir_interpreter import IrInterpreter
         from agm.agl.lower import lower_repl_entry
@@ -675,12 +742,15 @@ class ReplSession:
             lowered.program,
             registry=host_env.registry,
             strict_json=self._default_strict_json,
+            loop_limit=self._default_loop_limit,
             max_call_depth=self._default_call_depth_limit,
             shell_exec_timeout=self._shell_exec_timeout,
             trace=trace,
             param_values=ir_param_values,
             host_contracts=host_contracts,
             base_frame=base_frame,
+            config_cli=config_cli,
+            config_base=config_base,
         )
 
         try:
@@ -747,6 +817,13 @@ class ReplSession:
             )
 
         trace.run_end(ok=True)
+        # Promote engine settings BEFORE static state so any subsequent entry
+        # that queries session defaults sees the post-config-binding values.
+        self._update_engine_settings(
+            strict_json=interp.strict_json,
+            loop_limit=interp.loop_limit,
+            shell_exec_timeout=interp.shell_exec_timeout,
+        )
         self._promote_ir_state(
             text=text,
             program=orig_program,
@@ -792,6 +869,7 @@ class ReplSession:
         """Advance static state in lockstep with installed IR frame symbols."""
         from agm.agl.syntax.nodes import (
             AgentDecl,
+            ConfigDecl,
             EnumDef,
             FuncDef,
             LetDecl,
@@ -805,6 +883,7 @@ class ReplSession:
         entry_root = checked.resolved.root_scope
         named_declarations = (
             AgentDecl,
+            ConfigDecl,
             EnumDef,
             FuncDef,
             LetDecl,
@@ -820,8 +899,18 @@ class ReplSession:
         for item in program.body.items:
             if isinstance(item, EnumDef):
                 entry_names.update(variant.name for variant in item.variants)
+        # Config-declared names: on partial failure these bindings are NEVER
+        # promoted, keeping the readable binding consistent with the un-promoted
+        # engine setting (which is only updated on full success).
+        config_decl_names: frozenset[str] = frozenset(
+            item.name for item in program.body.items if isinstance(item, ConfigDecl)
+        )
         installed: list[str] = []
         for name, ref in entry_root.bindings.items():
+            # Config bindings are promoted only on full success (alongside the
+            # engine setting), never on partial failure.
+            if partial and name in config_decl_names:
+                continue
             symbol = self._link_image.symbol_for_decl(ref.decl_node_id)
             declared_before_failure = (
                 failure_span is not None
@@ -910,6 +999,7 @@ class ReplSession:
             AgentDecl,
             AssignStmt,
             Binder,
+            ConfigDecl,
             Declaration,
             EnumDef,
             FuncDef,
@@ -931,14 +1021,22 @@ class ReplSession:
             return "binding", last.name
         if isinstance(
             last,
-            (RecordDef, EnumDef, TypeAlias, ParamDecl, ProgramDecl, FuncDef, AgentDecl),
+            (
+                RecordDef,
+                EnumDef,
+                TypeAlias,
+                ParamDecl,
+                ProgramDecl,
+                FuncDef,
+                AgentDecl,
+                ConfigDecl,
+            ),
         ):
             return "declaration", last.name
         # AssignStmt → "statement"
         if isinstance(last, AssignStmt):
             return "statement", None
-        # Remaining Declaration kinds (ConfigPragma is rejected earlier, but handle
-        # defensively).
+        # Remaining Declaration kinds (defensive fallback).
         return "statement", None  # pragma: no cover
 
     def _quote_strings_for_entry(self, program: "Program") -> bool:
@@ -1092,7 +1190,12 @@ class ReplSession:
         return frozenset(self._ambient_constructor_candidates)
 
     def reset(self) -> None:
-        """Clear ALL session state (symbols, types, values, params, source, ids)."""
+        """Clear ALL session state (symbols, types, values, params, source, ids).
+
+        Restores the three D6 engine settings (strict-json/max-iters/timeout)
+        to their values at session construction, undoing any effect-at-binding
+        from ``config`` declarations entered during the session.
+        """
         from agm.agl.lower import LinkImage
         from agm.agl.scope.symbols import ScopeNode
         from agm.agl.typecheck.env import TypeEnvironment
@@ -1111,6 +1214,13 @@ class ReplSession:
         self._declared_agents = set()
         self._ambient_constructor_candidates = {}
         self._ambient_type_names = frozenset()
+        # Restore D6 engine settings to the session's initial defaults so that
+        # promoted ``config`` effects from prior entries do not bleed past :reset.
+        self._update_engine_settings(
+            strict_json=self._initial_strict_json,
+            loop_limit=self._initial_loop_limit,
+            shell_exec_timeout=self._initial_shell_exec_timeout,
+        )
         # Clear module state (M6).
         self._roots = None
         self._loaded_lib_modules = {}

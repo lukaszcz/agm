@@ -4,8 +4,8 @@ param mode
 
 try
   try
-    if mode = "inner" =>
-      raise Abort(message: "from inner")
+    if mode == "inner" =>
+      raise Abort(message = "from inner")
     else =>
       ()
     print "inner ok"
@@ -17,6 +17,6 @@ catch Abort =>
 print "continue"
 
 try
-  raise Abort(message: "fatal ${mode}")
+  raise Abort(message = "fatal ${mode}")
 catch MatchError =>
   print "wrong handler"

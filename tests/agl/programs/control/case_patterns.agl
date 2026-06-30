@@ -14,17 +14,17 @@ param who
 
 agent picker
 
-let shape: Shape = ask("Pick a shape.", agent: picker)
+let shape: Shape = ask("Pick a shape.", agent = picker)
 
 case shape of
   | Shape.Dot() => print "dot"
   | Line(len) => print "line ${len}"
   | Box(w, h, label) => print "box ${w}x${h} ${label}"
 
-let wrapped: Wrapped = Inner(shape: shape)
+let wrapped: Wrapped = Inner(shape = shape)
 case wrapped of
-  | Inner(shape: Line(len: n)) => print "nested line ${n}"
-  | Inner(shape: inner) => print "nested other"
+  | Inner(shape = Line(len = n)) => print "nested line ${n}"
+  | Inner(shape = inner) => print "nested other"
   | Nothing() => print "nothing"
 
 case code of
@@ -33,7 +33,7 @@ case code of
   | other => print "other ${other}"
 
 case shape of
-  | Box(label: tag) => print "tagged ${tag}"
+  | Box(label = tag) => print "tagged ${tag}"
   | _ => print "untagged"
 
 case who of

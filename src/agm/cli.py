@@ -62,6 +62,7 @@ from agm.cli_support.args import (
     WorktreeNewArgs,
     WorktreeRemoveArgs,
 )
+from agm.command_catalog import COMMAND_OVERVIEW
 from agm.config.general import parse_timeout
 from agm.core import dry_run
 from agm.parser import (
@@ -73,7 +74,7 @@ from agm.parser import (
 
 _HELP_TEXTS = parser_helpers._HELP_TEXTS
 _HELP_ALIASES = parser_helpers._HELP_ALIASES
-_COMMAND_OVERVIEW = parser_helpers._COMMAND_OVERVIEW
+_COMMAND_OVERVIEW = COMMAND_OVERVIEW
 
 _BASE_CONTEXT_SETTINGS: dict[str, bool | list[str]] = {"help_option_names": []}
 _RUN_CONTEXT_SETTINGS: dict[str, bool | list[str]] = {
@@ -1018,6 +1019,11 @@ def exec_cmd(
         "--strict-json/--no-strict-json",
         help="Require agents to return exactly one bare JSON value; default is lenient recovery.",
     ),
+    max_iters: int | None = typer.Option(
+        None,
+        "--max-iters",
+        help="Override the default do[] iteration bound.",
+    ),
     max_call_depth: int | None = typer.Option(
         None,
         "--max-call-depth",
@@ -1037,7 +1043,7 @@ def exec_cmd(
     no_log: bool = typer.Option(
         False,
         "--no-log",
-        help="Disable trace logging (overrides a config pragma or [exec] log = true).",
+        help="Disable trace logging (overrides a source config declaration or [exec] log = true).",
     ),
     log: bool = typer.Option(
         False,
@@ -1045,7 +1051,7 @@ def exec_cmd(
         help=(
             "Enable trace logging to an auto-named timestamped file under .agent-files/. "
             "Trace logging is off by default; --log, --log-file, a source 'config log = true' "
-            "pragma, or [exec] log = true in config.toml opt in."
+            "declaration, or [exec] log = true in config.toml opt in."
         ),
     ),
     module_paths: list[str] = typer.Option(
@@ -1064,6 +1070,33 @@ def exec_cmd(
         False,
         "--no-stdlib",
         help="Do not automatically open the core AgL standard library in the entry module.",
+    ),
+    timeout: str | None = typer.Option(
+        None,
+        "--timeout",
+        help=(
+            "Override the shell-exec timeout (e.g. '30s', '5m', '120').  "
+            "Also sets the in-program 'config timeout' binding to some(VALUE).  "
+            "Mutually exclusive with --no-timeout."
+        ),
+    ),
+    no_timeout: bool = typer.Option(
+        False,
+        "--no-timeout",
+        help=(
+            "Remove any configured timeout (no shell-exec timeout).  "
+            "Also sets the in-program 'config timeout' binding to none.  "
+            "Mutually exclusive with --timeout."
+        ),
+    ),
+    no_log_file: bool = typer.Option(
+        False,
+        "--no-log-file",
+        help=(
+            "Clears only the in-program log-file binding; a log-file path set in "
+            "config or auto-assigned by --log still applies.  Use --no-log to disable "
+            "tracing entirely.  Mutually exclusive with --log-file."
+        ),
     ),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
@@ -1106,6 +1139,14 @@ def exec_cmd(
             ["exec"], "error: one of the arguments FILE -c/--command is required"
         )
     _check_log_flags_exclusive("exec", no_log=no_log, log=log, log_file=log_file)
+    if log_file is not None and no_log_file:
+        exit_with_usage_error(
+            ["exec"], "error: --log-file and --no-log-file are mutually exclusive"
+        )
+    if timeout is not None and no_timeout:
+        exit_with_usage_error(
+            ["exec"], "error: --timeout and --no-timeout are mutually exclusive"
+        )
     # Imported lazily: pulls in the AgL DSL (runtime, codec, jsonschema), which
     # would otherwise slow every non-AgL ``agm`` invocation's startup.
     import agm.commands.exec as exec_command
@@ -1116,6 +1157,7 @@ def exec_cmd(
             command=command,
             param_tokens=param_tokens,
             strict_json=strict_json,
+            max_iters=max_iters,
             max_call_depth=max_call_depth,
             runner=runner,
             no_log=no_log,
@@ -1123,6 +1165,9 @@ def exec_cmd(
             log=log,
             module_paths=module_paths,
             no_stdlib=no_stdlib,
+            timeout=timeout,
+            no_timeout=no_timeout,
+            no_log_file=no_log_file,
         )
     )
 
@@ -1133,6 +1178,11 @@ def repl_cmd(
         None,
         "--strict-json/--no-strict-json",
         help="Require agents to return exactly one bare JSON value; default is lenient recovery.",
+    ),
+    max_iters: int | None = typer.Option(
+        None,
+        "--max-iters",
+        help="Override the default do[] iteration bound.",
     ),
     max_call_depth: int | None = typer.Option(
         None,
@@ -1171,7 +1221,7 @@ def repl_cmd(
         help=(
             "Enable trace logging to an auto-named timestamped file under .agent-files/. "
             "Trace logging is off by default; --log, --log-file, or [exec] log = true in "
-            "config.toml opt in. Config pragmas are not applied in the REPL."
+            "config.toml opt in. Source config declarations take effect in the REPL too."
         ),
     ),
     _help: bool = _help_option(),
@@ -1187,6 +1237,7 @@ def repl_cmd(
     repl_command.run(
         ReplArgs(
             strict_json=strict_json,
+            max_iters=max_iters,
             max_call_depth=max_call_depth,
             runner=runner,
             confirm_agents=confirm_agents,

@@ -11,7 +11,7 @@ catch ExecError as e =>
   print "err ${e.stderr}"
   print "timed ${e.timed_out}"
 
-if mode = "uncaught" =>
+if mode == "uncaught" =>
   let _: text = exec "false"
   ()
 else =>

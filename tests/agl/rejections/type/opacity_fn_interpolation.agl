@@ -1,1 +1,1 @@
-render(1, style: true)
+render(1, style = true)

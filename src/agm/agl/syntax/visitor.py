@@ -40,7 +40,7 @@ from agm.agl.syntax.nodes import (
     CaseBranch,
     Cast,
     CatchClause,
-    ConfigPragma,
+    ConfigDecl,
     ConstructorPattern,
     Continue,
     DecimalLit,
@@ -49,8 +49,9 @@ from agm.agl.syntax.nodes import (
     ElseSentinel,
     EnumDef,
     ExceptionDef,
+    ExportDecl,
+    ExportItem,
     FieldAccess,
-    FieldDef,
     FuncDef,
     If,
     IfBranch,
@@ -163,9 +164,10 @@ class Visitor:
     def visit_Qualifier(self, node: Qualifier) -> None: ...
     def visit_ImportItem(self, node: ImportItem) -> None: ...
     def visit_ImportDecl(self, node: ImportDecl) -> None: ...
+    def visit_ExportItem(self, node: ExportItem) -> None: ...
+    def visit_ExportDecl(self, node: ExportDecl) -> None: ...
 
     # Declaration nodes
-    def visit_FieldDef(self, node: FieldDef) -> None: ...
     def visit_RecordDef(self, node: RecordDef) -> None: ...
     def visit_VariantDef(self, node: VariantDef) -> None: ...
     def visit_EnumDef(self, node: EnumDef) -> None: ...
@@ -175,7 +177,7 @@ class Visitor:
     def visit_ProgramDecl(self, node: ProgramDecl) -> None: ...
     def visit_AgentDecl(self, node: AgentDecl) -> None: ...
     def visit_FuncDef(self, node: FuncDef) -> None: ...
-    def visit_ConfigPragma(self, node: ConfigPragma) -> None: ...
+    def visit_ConfigDecl(self, node: ConfigDecl) -> None: ...
 
     # Binder nodes
     def visit_LetDecl(self, node: LetDecl) -> None: ...
@@ -263,8 +265,9 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         Qualifier,
         ImportItem,
         ImportDecl,
+        ExportItem,
+        ExportDecl,
         # declaration nodes
-        FieldDef,
         RecordDef,
         VariantDef,
         EnumDef,
@@ -274,7 +277,7 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         ProgramDecl,
         AgentDecl,
         FuncDef,
-        ConfigPragma,
+        ConfigDecl,
         # binder nodes
         LetDecl,
         VarDecl,
@@ -395,10 +398,14 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
         for import_item in node.items:
             walk(import_item, callback)
 
-    # --- Declaration nodes ---
-    elif isinstance(node, FieldDef):
-        walk(node.type_expr, callback)
+    elif isinstance(node, ExportItem):
+        pass  # leaf — name and rename are plain strings
 
+    elif isinstance(node, ExportDecl):
+        for export_item in node.items:
+            walk(export_item, callback)
+
+    # --- Declaration nodes ---
     elif isinstance(node, RecordDef):
         for f in node.fields:
             walk(f, callback)
@@ -437,8 +444,9 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
         if node.body is not None:
             walk(node.body, callback)
 
-    elif isinstance(node, ConfigPragma):
-        pass  # leaf — key and value are plain scalars
+    elif isinstance(node, ConfigDecl):
+        if node.value is not None:
+            walk(node.value, callback)
 
     # --- Binder nodes ---
     elif isinstance(node, LetDecl):
@@ -608,7 +616,9 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
     elif isinstance(node, ConstructorPattern):
         if node.module_qualifier is not None:
             walk(node.module_qualifier, callback)
-        for pf in node.fields:
+        for p in node.positional:
+            walk(p, callback)
+        for pf in node.named:
             walk(pf, callback)
 
     elif isinstance(node, ElseSentinel):

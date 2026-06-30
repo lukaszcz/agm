@@ -18,17 +18,17 @@ enum Option[T]
   | some(value: T)
 
 def peek[T](s: Stack[T]) -> Option[T] =
-  if s.size = 0 => none::[T]() else => some(value: s.items[0])
+  if s.size == 0 => none::[T]() else => some(value = s.items[0])
 
 def map_top[A, B](s: Stack[A], f: (A) -> B) -> Option[B] =
   case peek(s) of
     | none() => none::[B]()
-    | some(value) => some(value: f(value))
+    | some(value) => some(value = f(value))
 
 param top: int
 
 # Int stack: peek the top — driven by the host param.
-let ints: Stack[int] = Stack(items: [top, 20, 30], size: 3)
+let ints: Stack[int] = Stack(items = [top, 20, 30], size = 3)
 case peek(ints) of
   | none() => print "ints: empty"
   | some(value) => print "ints top: ${value}"
@@ -40,15 +40,15 @@ case map_top(ints, fn(n: int) -> text => "v${n}") of
 
 # Empty text stack: the nullary branch.
 let no_words: list[text] = []
-let words: Stack[text] = Stack(items: no_words, size: 0)
+let words: Stack[text] = Stack(items = no_words, size = 0)
 case peek(words) of
   | none() => print "words: empty"
   | some(value) => print "words top: ${value}"
 
 # Record-element stack: field access on the destructured payload.
 let items: Stack[Item] = Stack(
-  items: [Item(label: "bolt", qty: 4), Item(label: "nut", qty: 9)],
-  size: 2,
+  items = [Item(label = "bolt", qty = 4), Item(label = "nut", qty = 9)],
+  size = 2,
 )
 case peek(items) of
   | none() => print "items: empty"

@@ -199,9 +199,8 @@ def is_incomplete_source(text: str) -> bool:
       user hit Enter right after a block-opening ``=>``/header but has not yet
       indented the suite body) → incomplete.
     - Any other failure (``UnexpectedCharacters``, ``LexError``, a wrong token
-      mid-line such as ``let = 5`` or ``x == y``) → complete, so the REPL submits
-      and the user sees the genuine error instead of being trapped in a
-      continuation prompt.
+      mid-line such as ``let = 5``) → complete, so the REPL submits and the user
+      sees the genuine error instead of being trapped in a continuation prompt.
 
     Results are memoized for the most recently seen text so that the Enter-key
     check and the immediately following eval-path parse do not trigger two full
@@ -223,10 +222,6 @@ def is_incomplete_source(text: str) -> bool:
         token: Token = exc.token
         if token.type == "$END":
             result = True
-        elif token.type == "EQ_EQ":
-            # ``==`` is always a real error (never a valid token); never a
-            # continuation prompt even if ``_INDENT`` appears in expected.
-            result = False
         else:
             result = "_INDENT" in exc.expected
     except (LarkError, LexError):

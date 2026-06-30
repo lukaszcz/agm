@@ -4,7 +4,7 @@
 param items: list[int]
 var total: int = 0
 for x in items do
-  if x = -1 => break
+  if x == -1 => break
   total := total + x
 done
 print total

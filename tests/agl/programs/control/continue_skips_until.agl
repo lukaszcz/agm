@@ -7,6 +7,6 @@ param n: int
 var i: int = 0
 do[n + 2]
   i := i + 1
-  if i = n => continue
+  if i == n => continue
 until i >= n
 print i

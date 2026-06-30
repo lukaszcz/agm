@@ -88,7 +88,7 @@ from agm.agl.syntax.nodes import (
     Case,
     Cast,
     CatchClause,
-    ConfigPragma,
+    ConfigDecl,
     ConstructorPattern,
     Continue,
     DecimalLit,
@@ -96,6 +96,7 @@ from agm.agl.syntax.nodes import (
     ElseSentinel,
     EnumDef,
     ExceptionDef,
+    ExportDecl,
     Expr,
     FieldAccess,
     FuncDef,
@@ -114,7 +115,9 @@ from agm.agl.syntax.nodes import (
     Loop,
     NameTarget,
     NullLit,
+    Param,
     ParamDecl,
+    ParamKind,
     Pattern,
     Program,
     ProgramDecl,
@@ -134,16 +137,19 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import TypeExpr
+from agm.agl.typecheck.arguments import bind_call_args, bind_pattern_args
 from agm.agl.typecheck.builder import _BUILTIN_TYPE_NAMES as _BUILTIN_TYPE_NAMES
 from agm.agl.typecheck.builder import _TypeBuilder
 from agm.agl.typecheck.builtins import BuiltinCallChecker
 from agm.agl.typecheck.constructors import ConstructorChecker
 from agm.agl.typecheck.env import (
     AglTypeError,
+    ArgumentBindings,
     CallSiteRecord,
     CheckedProgram,
     FunctionSignature,
     OutputContractSpec,
+    ParamSpec,
     TypeEnvironment,
 )
 
@@ -159,39 +165,50 @@ _BUILTIN_FUNC_NAMES: frozenset[str] = frozenset(BUILTIN_CALL_NAMES)
 _IndexLike = IndexAccess | IndexTarget
 
 
+def _std_param(name: str, typ: Type, has_default: bool = False) -> ParamSpec:
+    """Create a ``ParamSpec`` with ``STANDARD`` kind (used for all built-in params)."""
+    return ParamSpec(name=name, type=typ, kind=ParamKind.STANDARD, has_default=has_default)
+
+
 def _builtin_function_signature(name: str) -> FunctionSignature | None:
     t = TypeVarType("T")
     match name:
         case "print":
             return FunctionSignature(
-                params=(("value", t, False),), result=UnitType(), type_params=("T",)
+                params=(_std_param("value", t),), result=UnitType(), type_params=("T",)
             )
         case "render":
             return FunctionSignature(
-                params=(("value", t, False),), result=TextType(), type_params=("T",)
+                params=(_std_param("value", t),), result=TextType(), type_params=("T",)
             )
         case "parse_json":
-            return FunctionSignature(params=(("value", TextType(), False),), result=JsonType())
+            return FunctionSignature(
+                params=(_std_param("value", TextType()),), result=JsonType()
+            )
         case "ask":
             return FunctionSignature(
                 params=(
-                    ("prompt", TextType(), False),
-                    ("agent", AgentType(), True),
-                    ("format", TextType(), True),
-                    ("strict_json", BoolType(), True),
-                    ("on_parse_error", EnumType(name="ParsePolicy", variants={}), True),
+                    _std_param("prompt", TextType()),
+                    _std_param("agent", AgentType(), has_default=True),
+                    _std_param("format", TextType(), has_default=True),
+                    _std_param("strict_json", BoolType(), has_default=True),
+                    _std_param(
+                        "on_parse_error",
+                        EnumType(name="ParsePolicy", variants={}),
+                        has_default=True,
+                    ),
                 ),
                 result=t,
                 type_params=("T",),
             )
         case "ask-request":
             return FunctionSignature(
-                params=(("prompt", TextType(), False),),
+                params=(_std_param("prompt", TextType()),),
                 result=RecordType(name="AgentRequest", fields={}),
             )
         case "exec":
             return FunctionSignature(
-                params=(("command", TextType(), False),),
+                params=(_std_param("command", TextType()),),
                 result=RecordType(name="ExecResult", fields={}),
             )
         case _:
@@ -205,7 +222,9 @@ def _builtin_function_signature_alternates(name: str) -> tuple[FunctionSignature
     if name == "ask":
         return (
             expected,
-            FunctionSignature(params=(("prompt", TextType(), False),), result=TextType()),
+            FunctionSignature(
+                params=(_std_param("prompt", TextType()),), result=TextType()
+            ),
         )
     return (expected,)
 
@@ -215,18 +234,16 @@ def _signature_matches(actual: FunctionSignature, expected: FunctionSignature) -
         return False
     if len(actual.params) != len(expected.params):
         return False
-    for (aname, atype, adefault), (ename, etype, edefault) in zip(
-        actual.params, expected.params
-    ):
-        if aname != ename or adefault != edefault:
+    for ap, ep in zip(actual.params, expected.params):
+        if ap.name != ep.name or ap.has_default != ep.has_default:
             return False
-        if isinstance(etype, RecordType):
-            if not isinstance(atype, RecordType) or atype.name != etype.name:
+        if isinstance(ep.type, RecordType):
+            if not isinstance(ap.type, RecordType) or ap.type.name != ep.type.name:
                 return False
-        elif isinstance(etype, EnumType):
-            if not isinstance(atype, EnumType) or atype.name != etype.name:
+        elif isinstance(ep.type, EnumType):
+            if not isinstance(ap.type, EnumType) or ap.type.name != ep.type.name:
                 return False
-        elif atype != etype:
+        elif ap.type != ep.type:
             return False
     if isinstance(expected.result, RecordType):
         return isinstance(actual.result, RecordType) and actual.result.name == expected.result.name
@@ -269,8 +286,40 @@ class _Checker:
         # Type variables currently in scope (non-empty inside a generic def body).
         self._current_type_vars: frozenset[str] = frozenset()
         self._cast_specs: dict[int, CastSpec] = {}
+        # Argument bindings computed during the check, reused by the lowerer so it
+        # never re-binds.  Keyed by Call/Pattern node_id (see ``ArgumentBindings``).
+        self._function_call_bindings: dict[int, tuple[Expr | None, ...]] = {}
+        self._constructor_call_bindings: dict[int, dict[str, Expr]] = {}
+        self._constructor_pattern_bindings: dict[int, tuple[tuple[str, Pattern], ...]] = {}
         self._builtins = BuiltinCallChecker(self)
         self._constructors = ConstructorChecker(self)
+
+    # ------------------------------------------------------------------
+    # D6b: required-after-defaulted check (shared by def and lambda)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _check_required_after_defaulted(params: Sequence[Param]) -> None:
+        """D6b: no required positional-fillable param may follow a defaulted one.
+
+        Named-only params are order-free — their defaults may appear in any order.
+        Raises ``AglTypeError`` if any POSITIONAL_ONLY or STANDARD param without a
+        default appears after one with a default.
+        """
+        seen_pos_default = False
+        for p in params:
+            is_pos_fillable = p.kind in (ParamKind.POSITIONAL_ONLY, ParamKind.STANDARD)
+            if is_pos_fillable:
+                has_default = p.default is not None
+                if has_default:
+                    seen_pos_default = True
+                elif seen_pos_default:
+                    raise AglTypeError(
+                        f"Parameter '{p.name}' has no default but follows a defaulted "
+                        "positional parameter. Required positional parameters must come "
+                        "before parameters with defaults.",
+                        span=p.span,
+                    )
 
     # ------------------------------------------------------------------
     # Pre-registration of function signatures
@@ -283,27 +332,24 @@ class _Checker:
                 f"'{node.name}' is a built-in type name and cannot be used as a function name.",
                 span=node.span,
             )
+        if node.name in _BUILTIN_FUNC_NAMES and not node.is_builtin:
+            raise AglTypeError(
+                f"'{node.name}' is a built-in function name and cannot be redefined.",
+                span=node.span,
+            )
         if node.is_builtin and node.name not in _BUILTIN_FUNC_NAMES:
             raise AglTypeError(
                 f"Unknown builtin function '{node.name}'.",
                 span=node.span,
             )
         type_vars: frozenset[str] = frozenset(node.type_params)
-        params: list[tuple[str, Type, bool]] = []
-        seen_required = True  # True until first defaulted param
+        params: list[ParamSpec] = []
+        # D6b: no required positional-fillable param may follow a defaulted one.
+        self._check_required_after_defaulted(node.params)
         for p in node.params:
             pt = self._env.resolve_type_expr(p.type_expr, span=p.span, type_vars=type_vars)
             has_default = p.default is not None
-            if seen_required and has_default:
-                # First defaulted param: switch to "defaulted" mode
-                seen_required = False
-            elif not seen_required and not has_default:
-                raise AglTypeError(
-                    f"Parameter '{p.name}' has no default but follows a defaulted parameter. "
-                    "Required parameters must come before parameters with defaults.",
-                    span=p.span,
-                )
-            params.append((p.name, pt, has_default))
+            params.append(ParamSpec(name=p.name, type=pt, kind=p.kind, has_default=has_default))
 
         result_type = self._env.resolve_type_expr(
             node.return_type, span=node.span, type_vars=type_vars
@@ -324,9 +370,9 @@ class _Checker:
         # _check_declared_name_call find the correct signature even when another
         # module defines a function with the same name but a different signature.
         self._env.register_function_signature_by_node_id(node.node_id, sig)
-        # Register the binding type as FunctionType (erases names/defaults).
+        # Register the binding type as FunctionType (erases names/defaults/kinds).
         func_type = FunctionType(
-            params=tuple(pt for _, pt, _ in params),
+            params=tuple(p.type for p in params),
             result=result_type,
         )
         self._env.set_binding_type(node.node_id, func_type)
@@ -352,6 +398,9 @@ class _Checker:
 
     def _check_block(self, block: Block, *, expected: Type | None) -> Type:
         """Type-check a block and return the type of its last item."""
+        if not block.items:
+            return UnitType()
+
         last = block.items[-1]
         if isinstance(last, (LetDecl, VarDecl)):
             raise AglTypeError(
@@ -373,7 +422,10 @@ class _Checker:
             # Signature already registered in pre-pass; check body now.
             self._check_funcdef_body(item)
             return UnitType()
-        if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias, ConfigPragma)):
+        if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
+            return UnitType()
+        if isinstance(item, ConfigDecl):
+            self._check_config(item)
             return UnitType()
         if isinstance(item, AgentDecl):
             self._env.set_binding_type(item.node_id, AgentType())
@@ -383,8 +435,8 @@ class _Checker:
             return UnitType()
         if isinstance(item, ProgramDecl):
             return UnitType()
-        if isinstance(item, ImportDecl):
-            return UnitType()  # The graph module-system pass processes imports.
+        if isinstance(item, (ImportDecl, ExportDecl)):
+            return UnitType()  # The graph module-system pass processes imports/exports.
         # --- Binders ---
         if isinstance(item, (LetDecl, VarDecl)):
             self._check_binding(item)
@@ -413,13 +465,13 @@ class _Checker:
         self._current_type_vars = frozenset(sig.type_params)
         try:
             # Bind params in the env.
-            for p, (pname, ptype, has_default) in zip(node.params, sig.params):
-                self._env.set_binding_type(p.node_id, ptype)
+            for p, spec in zip(node.params, sig.params):
+                self._env.set_binding_type(p.node_id, spec.type)
             # Check defaults against declared parameter types.
-            for p, (pname, ptype, has_default) in zip(node.params, sig.params):
+            for p, spec in zip(node.params, sig.params):
                 if p.default is not None:
-                    def_type = self._check_expr(p.default, expected=ptype)
-                    self._assert_assignable(def_type, ptype, p.span)
+                    def_type = self._check_expr(p.default, expected=spec.type)
+                    self._assert_assignable(def_type, spec.type, p.span)
             # Check body against declared return type.
             body_type = self._check_expr(node.body, expected=sig.result)
             if not isinstance(body_type, BottomType):
@@ -448,6 +500,37 @@ class _Checker:
                 declared_type = val_type
         else:
             declared_type = ann_type if ann_type is not None else TextType()
+        self._env.set_binding_type(stmt.node_id, declared_type)
+
+    def _check_config(self, stmt: ConfigDecl) -> None:
+        """Check a ``config`` declaration against the engine-key registry.
+
+        For ``Option[T]`` engine keys (``log-file``, ``timeout``) the value
+        expression may be either an ``Option[T]`` or the inner type ``T``: a bare
+        ``T`` value is projected into ``some(value)`` by the lowerer.  For all
+        other keys the value, if present, must be assignable to the engine-key
+        type.  The engine-key type is recorded as the binding type either way.
+        """
+        from agm.agl.semantics.engine_keys import get_engine_key_type
+
+        declared_type = get_engine_key_type(stmt.name)
+        if declared_type is None:
+            return  # pragma: no cover — unknown keys rejected earlier by scope
+        if stmt.value is not None:
+            val_type = self._check_expr(stmt.value, expected=declared_type)
+            if isinstance(declared_type, EnumType) and declared_type.type_args:
+                inner = declared_type.type_args[0]
+                if not (
+                    is_assignable(val_type, declared_type)
+                    or is_assignable(val_type, inner)
+                ):
+                    raise AglTypeError(
+                        f"config '{stmt.name}' expects '{declared_type!r}' or "
+                        f"'{inner!r}', got '{val_type!r}'.",
+                        span=stmt.span,
+                    )
+            else:
+                self._assert_assignable(val_type, declared_type, stmt.span)
         self._env.set_binding_type(stmt.node_id, declared_type)
 
     def _check_binding(self, stmt: LetDecl | VarDecl) -> None:
@@ -830,66 +913,54 @@ class _Checker:
 
     # --- shared call-argument checker ---
 
+    @staticmethod
+    def _bind_call_args(
+        params: tuple[ParamSpec, ...],
+        node: Call,
+        func_name: str,
+    ) -> tuple[Expr | None, ...]:
+        """Bind a call's positional/named args against *params* (declaration order).
+
+        Shared by the concrete check (``_check_call_args``) and the generic
+        inference path, so a bare-name shorthand in named-only territory is always
+        matched to its parameter by NAME rather than by raw positional index.
+        Raises ``AglTypeError`` on any binding violation.
+        """
+        return bind_call_args(
+            params,
+            node.args,
+            node.named_args,
+            call_span=node.span,
+            context_desc=f"call to '{func_name}'",
+        )
+
     def _check_call_args(
         self,
-        params: tuple[tuple[str, Type, bool], ...],
+        params: tuple[ParamSpec, ...],
         node: Call,
         func_name: str,
     ) -> None:
         """Check positional and named arguments against a concrete parameter list.
 
-        Performs: positional arity check, positional arg type-check+assignability,
-        named-arg matching (unknown / both-positional-and-named / duplicate-named),
-        and required-arg presence check.  Raises ``AglTypeError`` on any violation.
+        Delegates to ``bind_arguments`` for arity / duplicate / unknown / missing /
+        positional-kind checks, then type-checks each bound expression against its
+        parameter type.  Raises ``AglTypeError`` on any violation.
+
         The caller is responsible for re-checking positional arg expressions during
         type-variable inference before calling this helper with the substituted params.
         """
-        # Positional arity check.
-        if len(node.args) > len(params):
-            raise AglTypeError(
-                f"Too many positional arguments: '{func_name}' takes "
-                f"{len(params)} parameter(s), got {len(node.args)}.",
-                span=node.span,
-            )
+        binding = self._bind_call_args(params, node, func_name)
+        # Record the binding for the lowerer (binding is type-independent, so the
+        # generic path's pre- and post-substitution calls produce the same tuple).
+        self._function_call_bindings[node.node_id] = binding
 
-        # Check positional args.
-        positional_filled: set[str] = set()
-        for i, arg in enumerate(node.args):
-            pname, ptype, _ = params[i]
-            at = self._check_expr(arg, expected=ptype)
-            self._assert_assignable(at, ptype, arg.span)
-            positional_filled.add(pname)
-
-        # Check named args.
-        named_filled: set[str] = set()
-        for na in node.named_args:
-            match_param: tuple[str, Type, bool] | None = None
-            for p in params:
-                if p[0] == na.name:
-                    match_param = p
-                    break
-            if match_param is None:
-                raise AglTypeError(
-                    f"Unknown parameter '{na.name}' in call to '{func_name}'.",
-                    span=na.span,
-                )
-            mp_name, mp_type, _ = match_param
-            if mp_name in positional_filled:
-                raise AglTypeError(
-                    f"Parameter '{mp_name}' supplied both positionally and by name.",
-                    span=na.span,
-                )
-            at = self._check_expr(na.value, expected=mp_type)
-            self._assert_assignable(at, mp_type, na.span)
-            named_filled.add(mp_name)
-
-        # Check all required params are supplied.
-        for pname, _, has_def in params:
-            if not has_def and pname not in positional_filled and pname not in named_filled:
-                raise AglTypeError(
-                    f"Missing required argument '{pname}' in call to '{func_name}'.",
-                    span=node.span,
-                )
+        # Type-check each bound expression.  A ``None`` binding means "use default";
+        # the default's type was checked at definition time, so skip it here.
+        for spec, bound_expr in zip(params, binding):
+            if bound_expr is None:
+                continue
+            at = self._check_expr(bound_expr, expected=spec.type)
+            self._assert_assignable(at, spec.type, bound_expr.span)
 
     # --- generic declared-name call ---
 
@@ -922,17 +993,17 @@ class _Checker:
             # A hint from the expected result type lets annotation-requiring
             # literals in argument position (e.g. an empty list) resolve.
             hint = self._result_hint(sig.result, expected, span=node.span)
-            # Infer from positional args.
-            for i, arg in enumerate(node.args):
-                if i >= len(sig.params):
-                    break
-                self._infer_arg(sig.params[i][1], arg, subst, hint, span=arg.span)
-            # Infer from named args.
-            for na in node.named_args:
-                for pname, ptype, _ in sig.params:
-                    if pname == na.name:
-                        self._infer_arg(ptype, na.value, subst, hint, span=na.span)
-                        break
+            # Use bind_arguments to get the per-param binding in declaration order.
+            # This ensures that bare-name shorthands in named-only territory are
+            # matched to their param by NAME rather than by raw positional index.
+            # Any arity/unknown/missing error raised here propagates immediately —
+            # it is the same error _check_call_args (called below) would raise.
+            inf_binding = self._bind_call_args(sig.params, node, func_name)
+            # Infer type variables from each bound expression against its param's
+            # pre-substitution type (in declaration order).
+            for spec, bound_expr in zip(sig.params, inf_binding):
+                if bound_expr is not None:
+                    self._infer_arg(spec.type, bound_expr, subst, hint, span=bound_expr.span)
             # Try to fill remaining unsolved vars from expected result type.
             if expected is not None:
                 self._match(sig.result, expected, subst, span=node.span, challenge=False)
@@ -947,8 +1018,16 @@ class _Checker:
                 ),
             )
 
-        # Substitute to get the concrete signature.
-        sub_params = tuple((n, substitute(pt, subst), hd) for n, pt, hd in sig.params)
+        # Substitute to get the concrete parameter types while preserving kind/default.
+        sub_params = tuple(
+            ParamSpec(
+                name=p.name,
+                type=substitute(p.type, subst),
+                kind=p.kind,
+                has_default=p.has_default,
+            )
+            for p in sig.params
+        )
         sub_result = substitute(sig.result, subst)
 
         # Validate arguments against the substituted parameter list.
@@ -1023,6 +1102,8 @@ class _Checker:
     # --- Lambda ---
 
     def _check_lambda(self, node: Lambda, *, expected: Type | None) -> Type:
+        # D6b: no required positional-fillable param may follow a defaulted one.
+        self._check_required_after_defaulted(node.params)
         # Lambda annotations may reference the rigid type variables of an
         # enclosing generic ``def`` body (the body is checked with them in scope).
         type_vars = self._current_type_vars
@@ -1171,7 +1252,9 @@ class _Checker:
 
             exc_type: ExceptionType = EXCEPTION_BASE
         else:
-            resolved = self._env.get_type(clause.exc_type)
+            # resolve_named_type is used instead of get_type so that open-imported
+            # exception types (cross-module graph mode) are found as well.
+            resolved = self._env.resolve_named_type(clause.exc_type)
             if resolved is None or not isinstance(resolved, ExceptionType):
                 raise AglTypeError(
                     f"'{clause.exc_type}' is not a known exception type.",
@@ -1763,22 +1846,32 @@ class _Checker:
                     span=pattern.span,
                 )
             vfields = subj_type.variants[variant_name]
-            seen_pf: set[str] = set()
-            for pf in pattern.fields:
-                if pf.name in seen_pf:
-                    raise AglTypeError(
-                        f"Duplicate field '{pf.name}' in pattern for variant "
-                        f"'{variant_name}' — each field may appear at most once.",
-                        span=pf.span,
-                    )
-                seen_pf.add(pf.name)
-                if pf.name not in vfields:
-                    raise AglTypeError(
-                        f"Variant '{variant_name}' has no field '{pf.name}'.",
-                        span=pf.span,
-                    )
-                field_type = vfields[pf.name]
-                self._bind_pattern_types(pf.pattern, field_type, pf)
+
+            # Retrieve the registered field kinds for this variant constructor.
+            field_kinds = self._env.get_constructor_field_kinds(
+                subj_type.name, variant_name, module_id=subj_type.module_id
+            )
+            assert field_kinds is not None, (
+                f"field kinds not registered for {subj_type.name}.{variant_name}"
+            )
+
+            # Route through the shared binder (handles zones, duplicates, unknowns).
+            binding = bind_pattern_args(
+                field_kinds,
+                pattern.positional,
+                pattern.named,
+                call_span=pattern.span,
+                context_desc=f"pattern for variant '{variant_name}'",
+            )
+
+            # Record the side-table entry and recursively check bound sub-patterns.
+            bound_pairs: list[tuple[str, Pattern]] = []
+            for (fname, _), bound_pat in zip(field_kinds, binding):
+                if bound_pat is not None:
+                    bound_pairs.append((fname, bound_pat))
+                    field_type = vfields[fname]
+                    self._bind_pattern_types(bound_pat, field_type, pattern)
+            self._constructor_pattern_bindings[pattern.node_id] = tuple(bound_pairs)
 
     def _check_bare_variant_pattern(self, pattern: VarPattern, subj_type: Type) -> None:
         """Validate a bare-name nullary variant pattern (``| Red =>``).
@@ -1919,6 +2012,11 @@ class _Checker:
             type_env=self._env,
             function_signatures=self._env.all_function_signatures(),
             cast_specs=self._cast_specs,
+            argument_bindings=ArgumentBindings(
+                function_calls=self._function_call_bindings,
+                constructor_calls=self._constructor_call_bindings,
+                constructor_patterns=self._constructor_pattern_bindings,
+            ),
         )
 
 

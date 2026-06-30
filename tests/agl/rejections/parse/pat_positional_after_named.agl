@@ -1,0 +1,6 @@
+enum R
+  | Some(value: int, tag: text)
+let r: R = Some(value = 3, tag = "x")
+case r of
+  | Some(tag = t, x) => print t
+  | _ => ()

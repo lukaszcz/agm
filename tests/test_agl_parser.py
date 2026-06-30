@@ -44,22 +44,20 @@ from agm.agl.syntax import (
     BinOp,
     Block,
     BoolLit,
-    Break,
     Call,
     Case,
     CaseBranch,
     Cast,
     CatchClause,
-    ConfigPragma,
+    ConfigDecl,
     ConstructorPattern,
-    Continue,
     DecimalLit,
     DictEntry,
     DictLit,
+    Do,
     EnumDef,
     ExceptionDef,
     FieldAccess,
-    FieldDef,
     FuncDef,
     If,
     IfBranch,
@@ -72,12 +70,12 @@ from agm.agl.syntax import (
     LetDecl,
     ListLit,
     LiteralPattern,
-    Loop,
     NamedArg,
     NameTarget,
     NullLit,
     Param,
     ParamDecl,
+    ParamKind,
     PatternField,
     Program,
     ProgramDecl,
@@ -359,7 +357,7 @@ class TestBinders:
         assert isinstance(s.value, StringLit)
 
     def test_legacy_set_syntax_is_not_assignment(self) -> None:
-        assert not isinstance(first(parse("set x = 10")), AssignStmt)
+        assert not isinstance(first(parse("set x == 10")), AssignStmt)
 
     def test_assignment_target_must_have_variable_root(self) -> None:
         with pytest.raises(AglSyntaxError, match="assignment target"):
@@ -493,7 +491,7 @@ class TestDeclarations:
         assert isinstance(rec, RecordDef)
         assert rec.name == "Issue"
         assert len(rec.fields) == 2
-        assert isinstance(rec.fields[0], FieldDef)
+        assert isinstance(rec.fields[0], Param)
         assert rec.fields[0].name == "title"
         assert isinstance(rec.fields[0].type_expr, TextT)
 
@@ -550,7 +548,7 @@ class TestDeclarations:
         ok = en.variants[0]
         assert ok.name == "Ok"
         assert len(ok.fields) == 1
-        assert isinstance(ok.fields[0], FieldDef)
+        assert isinstance(ok.fields[0], Param)
 
     def test_type_alias(self) -> None:
         ta = first(parse("type Name = text"))
@@ -580,21 +578,24 @@ class TestDeclarations:
         assert isinstance(ag, AgentDecl)
         assert ag.runner == "claude -p %{PROMPT_FILE}"
 
-    def test_config_pragma_bool(self) -> None:
+    def test_config_decl_bool(self) -> None:
         cfg = first(parse("config log = true"))
-        assert isinstance(cfg, ConfigPragma)
-        assert cfg.key == "log"
-        assert cfg.value is True
+        assert isinstance(cfg, ConfigDecl)
+        assert cfg.name == "log"
+        assert isinstance(cfg.value, BoolLit)
+        assert cfg.value.value is True
 
-    def test_config_pragma_int(self) -> None:
-        cfg = first(parse("config max_call_depth = 10"))
-        assert isinstance(cfg, ConfigPragma)
-        assert cfg.value == 10
+    def test_config_decl_int(self) -> None:
+        cfg = first(parse("config max-iters = 10"))
+        assert isinstance(cfg, ConfigDecl)
+        assert isinstance(cfg.value, IntLit)
+        assert cfg.value.value == 10
 
-    def test_config_pragma_string(self) -> None:
+    def test_config_decl_string(self) -> None:
         cfg = first(parse('config runner = "claude"'))
-        assert isinstance(cfg, ConfigPragma)
-        assert cfg.value == "claude"
+        assert isinstance(cfg, ConfigDecl)
+        assert isinstance(cfg.value, StringLit)
+        assert cfg.value.value == "claude"
 
     def test_exception_def_simple(self) -> None:
         exc = first(parse("exception MyErr(msg: text)"))
@@ -815,6 +816,230 @@ class TestProgramDeclScopeSideTables:
 
 
 # ---------------------------------------------------------------------------
+# ParamKind — per-context default kind assignment
+# ---------------------------------------------------------------------------
+
+
+class TestParamKind:
+    """Transformer assigns the correct default ParamKind to each Param."""
+
+    def test_def_param_is_standard(self) -> None:
+        fd = first(parse("def f(x: int) -> int = x"))
+        assert isinstance(fd, FuncDef)
+        assert fd.params[0].kind == ParamKind.STANDARD
+
+    def test_lambda_param_is_standard(self) -> None:
+        prog = parse("let g = fn(x: int) => x")
+        ld = first(prog)
+        assert isinstance(ld, LetDecl)
+        lam = ld.value
+        assert isinstance(lam, Lambda)
+        assert lam.params[0].kind == ParamKind.STANDARD
+
+    def test_record_fields_are_named_only(self) -> None:
+        rec = first(parse("record Point(x: int, y: int)"))
+        assert isinstance(rec, RecordDef)
+        assert all(f.kind == ParamKind.NAMED_ONLY for f in rec.fields)
+
+    def test_record_indent_fields_are_named_only(self) -> None:
+        rec = first(parse("record Issue\n  title: text\n  severity: int"))
+        assert isinstance(rec, RecordDef)
+        assert all(f.kind == ParamKind.NAMED_ONLY for f in rec.fields)
+
+    def test_exception_fields_are_named_only(self) -> None:
+        exc = first(parse("exception MyErr(code: int, msg: text)"))
+        assert isinstance(exc, ExceptionDef)
+        assert all(f.kind == ParamKind.NAMED_ONLY for f in exc.fields)
+
+    def test_single_field_enum_variant_is_standard(self) -> None:
+        en = first(parse("enum Opt\n  | None\n  | Some(value: int)"))
+        assert isinstance(en, EnumDef)
+        some = en.variants[1]
+        assert len(some.fields) == 1
+        assert some.fields[0].kind == ParamKind.STANDARD
+
+    def test_multi_field_enum_variant_is_named_only(self) -> None:
+        en = first(parse("enum Result\n  | Ok(value: int, tag: text)\n  | Err(msg: text)"))
+        assert isinstance(en, EnumDef)
+        ok = en.variants[0]
+        assert len(ok.fields) == 2
+        assert all(f.kind == ParamKind.NAMED_ONLY for f in ok.fields)
+        # Err has one field → STANDARD
+        err = en.variants[1]
+        assert len(err.fields) == 1
+        assert err.fields[0].kind == ParamKind.STANDARD
+
+
+# ---------------------------------------------------------------------------
+# Marker syntax — _resolve_params zone assignment
+# ---------------------------------------------------------------------------
+
+
+class TestMarkerParams:
+    """Grammar markers (/ * @pos @std @named) resolve to concrete ParamKinds."""
+
+    # --- def / lambda param_list ---
+
+    def test_slash_def_pos_only_and_std(self) -> None:
+        """def f(x: int, /, y: int) → x pos-only, y standard."""
+        fd = first(parse("def f(x: int, /, y: int) -> int = x"))
+        assert isinstance(fd, FuncDef)
+        assert fd.params[0].kind == ParamKind.POSITIONAL_ONLY
+        assert fd.params[1].kind == ParamKind.STANDARD
+
+    def test_slash_star_def_all_three_zones(self) -> None:
+        """def g(x: int, /, y: int, *, z: int) → pos-only / std / named-only."""
+        fd = first(parse("def g(x: int, /, y: int, *, z: int) -> int = x"))
+        assert isinstance(fd, FuncDef)
+        assert fd.params[0].kind == ParamKind.POSITIONAL_ONLY
+        assert fd.params[1].kind == ParamKind.STANDARD
+        assert fd.params[2].kind == ParamKind.NAMED_ONLY
+
+    def test_at_markers_def_all_three_zones(self) -> None:
+        """@std / @named forms produce the same result as / *."""
+        fd = first(parse("def g(x: int, @std, y: int, @named, z: int) -> int = x"))
+        assert isinstance(fd, FuncDef)
+        assert fd.params[0].kind == ParamKind.POSITIONAL_ONLY
+        assert fd.params[1].kind == ParamKind.STANDARD
+        assert fd.params[2].kind == ParamKind.NAMED_ONLY
+
+    def test_trailing_slash_makes_all_pos_only(self) -> None:
+        """def f(x: int, y: int, /) → both positional-only."""
+        fd = first(parse("def f(x: int, y: int, /) -> int = x"))
+        assert isinstance(fd, FuncDef)
+        assert fd.params[0].kind == ParamKind.POSITIONAL_ONLY
+        assert fd.params[1].kind == ParamKind.POSITIONAL_ONLY
+
+    def test_leading_at_pos_def(self) -> None:
+        """def f(@pos, x: int, y: int) → both positional-only."""
+        fd = first(parse("def f(@pos, x: int, y: int) -> int = x"))
+        assert isinstance(fd, FuncDef)
+        assert fd.params[0].kind == ParamKind.POSITIONAL_ONLY
+        assert fd.params[1].kind == ParamKind.POSITIONAL_ONLY
+
+    def test_star_only_makes_all_named_only(self) -> None:
+        """def f(*, x: int, y: int) → both named-only."""
+        fd = first(parse("def f(*, x: int, y: int) -> int = x"))
+        assert isinstance(fd, FuncDef)
+        assert fd.params[0].kind == ParamKind.NAMED_ONLY
+        assert fd.params[1].kind == ParamKind.NAMED_ONLY
+
+    def test_slash_star_interchangeable_with_at_markers(self) -> None:
+        """/ ≡ @std and * ≡ @named — mix them in one list."""
+        fd = first(parse("def h(a: int, @std, b: int, *, c: int) -> int = a"))
+        assert isinstance(fd, FuncDef)
+        assert fd.params[0].kind == ParamKind.POSITIONAL_ONLY
+        assert fd.params[1].kind == ParamKind.STANDARD
+        assert fd.params[2].kind == ParamKind.NAMED_ONLY
+
+    def test_lambda_markers(self) -> None:
+        """Lambda param markers work the same as def."""
+        ld = first(parse("let g = fn(x: int, /, y: int) => x"))
+        assert isinstance(ld, LetDecl)
+        lam = ld.value
+        assert isinstance(lam, Lambda)
+        assert lam.params[0].kind == ParamKind.POSITIONAL_ONLY
+        assert lam.params[1].kind == ParamKind.STANDARD
+
+    # --- record bodies ---
+
+    def test_record_paren_slash(self) -> None:
+        """record R(x: int, /, y: int) — paren body with /."""
+        rec = first(parse("record R(x: int, /, y: int)"))
+        assert isinstance(rec, RecordDef)
+        assert rec.fields[0].kind == ParamKind.POSITIONAL_ONLY
+        assert rec.fields[1].kind == ParamKind.STANDARD
+
+    def test_record_paren_leading_at_std(self) -> None:
+        """record Pair(@std, fst: int, snd: int) — leading @std makes both standard."""
+        rec = first(parse("record Pair(@std, fst: int, snd: int)"))
+        assert isinstance(rec, RecordDef)
+        assert rec.fields[0].kind == ParamKind.STANDARD
+        assert rec.fields[1].kind == ParamKind.STANDARD
+
+    def test_record_inline_slash(self) -> None:
+        """Inline record body with / marker."""
+        rec = first(parse("record R x: int, /, y: int"))
+        assert isinstance(rec, RecordDef)
+        assert rec.fields[0].kind == ParamKind.POSITIONAL_ONLY
+        assert rec.fields[1].kind == ParamKind.STANDARD
+
+    def test_record_indent_own_line_marker(self) -> None:
+        """Indent body with own-line @std marker."""
+        src = "record R\n  x: int\n  @std\n  y: int"
+        rec = first(parse(src))
+        assert isinstance(rec, RecordDef)
+        assert rec.fields[0].kind == ParamKind.POSITIONAL_ONLY
+        assert rec.fields[1].kind == ParamKind.STANDARD
+
+    def test_record_indent_leading_marker(self) -> None:
+        """Indent body with leading @std marker before block."""
+        src = "record R @std\n  fst: int\n  snd: int"
+        rec = first(parse(src))
+        assert isinstance(rec, RecordDef)
+        assert rec.fields[0].kind == ParamKind.STANDARD
+        assert rec.fields[1].kind == ParamKind.STANDARD
+
+    # --- exception bodies ---
+
+    def test_exception_paren_slash(self) -> None:
+        """exception E(code: int, /, msg: text) — paren body with /."""
+        exc = first(parse("exception E(code: int, /, msg: text)"))
+        assert isinstance(exc, ExceptionDef)
+        assert exc.fields[0].kind == ParamKind.POSITIONAL_ONLY
+        assert exc.fields[1].kind == ParamKind.STANDARD
+
+    def test_exception_indent_own_line_marker(self) -> None:
+        """Indent exception body with own-line marker."""
+        src = "exception E\n  code: int\n  @std\n  msg: text"
+        exc = first(parse(src))
+        assert isinstance(exc, ExceptionDef)
+        assert exc.fields[0].kind == ParamKind.POSITIONAL_ONLY
+        assert exc.fields[1].kind == ParamKind.STANDARD
+
+    # --- enum variant payload ---
+
+    def test_enum_variant_with_at_named(self) -> None:
+        """Single-field variant with @named makes it named-only (overrides default)."""
+        en = first(parse("enum Opt\n  | None\n  | Some(@named, value: int)"))
+        assert isinstance(en, EnumDef)
+        some = en.variants[1]
+        assert some.fields[0].kind == ParamKind.NAMED_ONLY
+
+    def test_enum_variant_with_slash(self) -> None:
+        """Multi-field variant with / — first pos-only, rest standard."""
+        en = first(parse(
+            "enum R\n  | A(x: int, /, y: int)\n  | B"
+        ))
+        assert isinstance(en, EnumDef)
+        a = en.variants[0]
+        assert a.fields[0].kind == ParamKind.POSITIONAL_ONLY
+        assert a.fields[1].kind == ParamKind.STANDARD
+
+    # --- error cases ---
+
+    def test_error_out_of_order_markers(self) -> None:
+        """def f(x: int, *, /, y: int) — * before / is out of order."""
+        with pytest.raises(AglSyntaxError, match="out-of-order"):
+            parse("def f(x: int, *, /, y: int) -> int = x")
+
+    def test_error_duplicate_slash(self) -> None:
+        """def f(x: int, /, /, y: int) — duplicate /."""
+        with pytest.raises(AglSyntaxError, match="duplicate"):
+            parse("def f(x: int, /, /, y: int) -> int = x")
+
+    def test_error_at_pos_not_leading(self) -> None:
+        """def f(x: int, @pos, y: int) — @pos not leading."""
+        with pytest.raises(AglSyntaxError, match="must lead"):
+            parse("def f(x: int, @pos, y: int) -> int = x")
+
+    def test_error_unknown_at_marker(self) -> None:
+        """@foo is not a valid marker."""
+        with pytest.raises(AglSyntaxError, match="unknown"):
+            parse("def f(@foo, x: int) -> int = x")
+
+
+# ---------------------------------------------------------------------------
 # Function declarations (def)
 # ---------------------------------------------------------------------------
 
@@ -950,7 +1175,7 @@ class TestCalls:
         assert len(call.args) == 3
 
     def test_paren_call_named_arg(self) -> None:
-        call = first(parse("ask(x, agent: reviewer)"))
+        call = first(parse("ask(x, agent = reviewer)"))
         assert isinstance(call, Call)
         assert len(call.args) == 1
         assert len(call.named_args) == 1
@@ -959,7 +1184,7 @@ class TestCalls:
         assert na.name == "agent"
 
     def test_paren_call_multiple_named(self) -> None:
-        call = first(parse("ask(x, agent: rev, format: json)"))
+        call = first(parse("ask(x, agent = rev, format = json)"))
         assert isinstance(call, Call)
         assert len(call.named_args) == 2
 
@@ -1061,8 +1286,8 @@ class TestCalls:
         assert inner.callee.name == "classify"
 
     def test_juxt_call_with_qualified_constructor_call_argument(self) -> None:
-        """f Opt.Some(x: 1) desugars to f(Opt.Some(x: 1))."""
-        call = first(parse("f Opt.Some(x: 1)"))
+        """f Opt.Some(x = 1) desugars to f(Opt.Some(x = 1))."""
+        call = first(parse("f Opt.Some(x = 1)"))
         assert isinstance(call, Call)
         assert isinstance(call.callee, VarRef)
         assert call.callee.name == "f"
@@ -1110,7 +1335,7 @@ class TestCalls:
 
     def test_duplicate_named_arg_raises(self) -> None:
         with pytest.raises(AglSyntaxError, match="duplicate"):
-            parse("f(a: 1, a: 2)")
+            parse("f(a = 1, a = 2)")
 
 
 class TestTypedCalls:
@@ -1170,7 +1395,7 @@ class TestTypedCalls:
         assert call.type_args[0].value.name == "Review"
 
     def test_typed_call_with_named_args(self) -> None:
-        call = first(parse('ask-request::[Review]("p", agent: reviewer)'))
+        call = first(parse('ask-request::[Review]("p", agent = reviewer)'))
         assert isinstance(call, Call)
         assert len(call.named_args) == 1
         assert call.named_args[0].name == "agent"
@@ -1260,7 +1485,7 @@ class TestFieldAccessAndConstructors:
         assert c.name == "Pass"
 
     def test_constructor_with_args(self) -> None:
-        c = first(parse("Issue(title: x, severity: 1)"))
+        c = first(parse("Issue(title = x, severity = 1)"))
         assert isinstance(c, Call)
         assert isinstance(c.callee, VarRef)
         assert c.callee.name == "Issue"
@@ -1343,7 +1568,7 @@ class TestBinaryOperators:
         assert e.op == BinOp.GT
 
     def test_equality(self) -> None:
-        e = first(parse("x = y"))
+        e = first(parse("x == y"))
         assert isinstance(e, BinaryOp)
         assert e.op == BinOp.EQ
 
@@ -1382,21 +1607,22 @@ class TestBinaryOperators:
         assert isinstance(e, BinaryOp)
         assert e.op == BinOp.IN
 
-    def test_eq_eq_raises(self) -> None:
-        """== is not valid AgL; lexer emits EQ_EQ which triggers a parse error."""
+    def test_bare_eq_is_not_equality(self) -> None:
+        """`=` is no longer the equality operator (it binds/names); a bare
+        `x = y` expression is a parse error. Equality is spelled `==`."""
         with pytest.raises(AglSyntaxError):
-            parse("x == y")
+            parse("x = y")
 
-    def test_eq_eq_message(self) -> None:
-        """== triggers the 'Use `=` for equality.' friendly diagnostic (design §2.3)."""
-        with pytest.raises(AglSyntaxError) as exc_info:
-            parse("let b = a == b")
-        assert str(exc_info.value) == "Use `=` for equality."
+    def test_eq_eq_is_valid_equality(self) -> None:
+        """'==' is the equality operator and is valid in expressions."""
+        e = first(parse("let b = a == b"))
+        from agm.agl.syntax.nodes import LetDecl
+        assert isinstance(e, LetDecl)
 
     @pytest.mark.parametrize(
         "src",
         [
-            "x = y = z",
+            "x == y == z",
             "1 < 2 < 3",
             "a <= b != c",
         ],
@@ -1409,10 +1635,10 @@ class TestBinaryOperators:
     def test_chained_comparison_full_message(self) -> None:
         """Pins the full designed wording for the chained-comparison diagnostic."""
         with pytest.raises(AglSyntaxError) as exc_info:
-            parse("x = y = z")
+            parse("x == y == z")
         assert str(exc_info.value) == (
             "Comparisons are non-associative; parenthesize explicitly, "
-            "e.g. `(x = y) = z`."
+            "e.g. `(x == y) == z`."
         )
 
 
@@ -1554,231 +1780,31 @@ class TestCaseExpr:
 
 
 # ---------------------------------------------------------------------------
-# Control flow: loop_expr
+# Control flow: do_expr
 # ---------------------------------------------------------------------------
 
 
-class TestLoopExpr:
-    def test_loop_simple_until(self) -> None:
+class TestDoExpr:
+    def test_do_simple(self) -> None:
         e = first(parse("do x := 1 until x > 5"))
-        assert isinstance(e, Loop)
-        assert e.bound is None
-        assert isinstance(e.until_cond, BinaryOp)
+        assert isinstance(e, Do)
+        assert e.limit is None
+        assert isinstance(e.condition, BinaryOp)
 
-    def test_loop_with_bound_until(self) -> None:
+    def test_do_with_bound(self) -> None:
         e = first(parse("do[10] x := 1 until x > 5"))
-        assert isinstance(e, Loop)
-        assert isinstance(e.bound, IntLit)
-        assert e.bound.value == 10
+        assert isinstance(e, Do)
+        assert e.limit == 10
 
-    def test_loop_expression_bound(self) -> None:
-        # The bound is an arbitrary int-typed expression, not just a literal.
-        e = first(parse("do[n + 1] x := 1 until x > 5"))
-        assert isinstance(e, Loop)
-        assert isinstance(e.bound, BinaryOp)
+    def test_do_zero_bound_raises(self) -> None:
+        with pytest.raises(AglSyntaxError, match="positive"):
+            parse("do[0] x until true")
 
-    def test_loop_suite_body_until(self) -> None:
+    def test_do_suite_body(self) -> None:
         src = "do\n  x := 1\n  y := 2\nuntil x > 5"
         e = first(parse(src))
-        assert isinstance(e, Loop)
+        assert isinstance(e, Do)
         assert isinstance(e.body, Block)
-        assert isinstance(e.until_cond, BinaryOp)
-
-    def test_loop_done_terminator(self) -> None:
-        # Explicit `done` → until_cond is None
-        e = first(parse("do x := 1 done"))
-        assert isinstance(e, Loop)
-        assert e.until_cond is None
-
-    def test_loop_suite_done_terminator(self) -> None:
-        src = "do\n  x := 1\ndone"
-        e = first(parse(src))
-        assert isinstance(e, Loop)
-        assert isinstance(e.body, Block)
-        assert e.until_cond is None
-
-    def test_loop_suite_omitted_terminator(self) -> None:
-        # Omitted terminator in a multi-line body injects synthetic done
-        src = "do\n  x := 1\nprint x"
-        items = parse(src).body.items
-        loop = items[0]
-        assert isinstance(loop, Loop)
-        assert loop.until_cond is None
-        assert isinstance(loop.body, Block)
-
-    def test_loop_bound_done(self) -> None:
-        e = first(parse("do[5] x := 1 done"))
-        assert isinstance(e, Loop)
-        assert isinstance(e.bound, IntLit)
-        assert e.until_cond is None
-
-    def test_loop_bound_suite_omitted_terminator(self) -> None:
-        src = "do[3]\n  x := 1\nprint x"
-        items = parse(src).body.items
-        loop = items[0]
-        assert isinstance(loop, Loop)
-        assert isinstance(loop.bound, IntLit)
-        assert loop.until_cond is None
-
-    def test_break_parses_to_Break_node(self) -> None:
-        """break inside a do…done body parses to a Break AST node."""
-        e = first(parse("do break done"))
-        assert isinstance(e, Loop)
-        assert isinstance(e.body, Block)
-        assert isinstance(e.body.items[0], Break)
-
-    def test_continue_parses_to_Continue_node(self) -> None:
-        """continue inside a do…done body parses to a Continue AST node."""
-        e = first(parse("do continue done"))
-        assert isinstance(e, Loop)
-        assert isinstance(e.body, Block)
-        assert isinstance(e.body.items[0], Continue)
-
-    def test_break_in_if_branch_parses(self) -> None:
-        """break in a conditional branch inside a loop body parses correctly."""
-        src = "do\n  if x => break\ndone"
-        e = first(parse(src))
-        assert isinstance(e, Loop)
-        assert isinstance(e.body, Block)
-        if_node = e.body.items[0]
-        assert isinstance(if_node, If)
-        assert isinstance(if_node.branches[0].body, Break)
-
-
-# ---------------------------------------------------------------------------
-# Control flow: integer-range for loops
-# ---------------------------------------------------------------------------
-
-
-class TestRangeForLoop:
-    """Parser tests for integer-range for clauses (to / downto / by)."""
-
-    def test_for_to_parses_range_fields(self) -> None:
-        """for i in a to b do … done → Loop with range fields set."""
-        e = first(parse("for i in 1 to 10 do x := i done"))
-        assert isinstance(e, Loop)
-        assert e.for_var == "i"
-        assert isinstance(e.for_iter, IntLit)
-        assert e.for_iter.value == 1
-        assert isinstance(e.for_range_to, IntLit)
-        assert e.for_range_to.value == 10
-        assert e.for_range_down is False
-        assert e.for_range_by is None
-
-    def test_for_downto_parses_range_fields(self) -> None:
-        """for i in a downto b do … done → Loop with downto direction."""
-        e = first(parse("for i in 5 downto 1 do x := i done"))
-        assert isinstance(e, Loop)
-        assert e.for_var == "i"
-        assert isinstance(e.for_iter, IntLit)
-        assert e.for_iter.value == 5
-        assert isinstance(e.for_range_to, IntLit)
-        assert e.for_range_to.value == 1
-        assert e.for_range_down is True
-        assert e.for_range_by is None
-
-    def test_for_to_by_parses_step(self) -> None:
-        """for i in a to b by k do … done → Loop with by step set."""
-        e = first(parse("for i in 0 to 9 by 2 do x := i done"))
-        assert isinstance(e, Loop)
-        assert e.for_range_down is False
-        assert isinstance(e.for_range_by, IntLit)
-        assert e.for_range_by.value == 2
-
-    def test_for_downto_by_parses_step(self) -> None:
-        """for i in a downto b by k do … done → Loop with downto + step."""
-        e = first(parse("for i in 10 downto 1 by 3 do x := i done"))
-        assert isinstance(e, Loop)
-        assert e.for_range_down is True
-        assert isinstance(e.for_range_by, IntLit)
-        assert e.for_range_by.value == 3
-
-    def test_collection_for_unchanged(self) -> None:
-        """Collection for (no range tail) still builds Loop with range fields None/False."""
-        e = first(parse("for x in items do print x done"))
-        assert isinstance(e, Loop)
-        assert e.for_var == "x"
-        assert e.for_range_to is None
-        assert e.for_range_down is False
-        assert e.for_range_by is None
-
-    def test_range_for_with_while_clause(self) -> None:
-        """Range for composes with while clause."""
-        src = "for i in 1 to 100 while i < limit do x := i done"
-        e = first(parse(src))
-        assert isinstance(e, Loop)
-        assert e.for_range_to is not None
-        assert e.while_cond is not None
-
-    def test_range_for_with_bound(self) -> None:
-        """Range for composes with [n] loop bound."""
-        e = first(parse("for i in 1 to 100 do[50] x := i done"))
-        assert isinstance(e, Loop)
-        assert e.for_range_to is not None
-        assert isinstance(e.bound, IntLit)
-        assert e.bound.value == 50
-
-    def test_range_for_with_until(self) -> None:
-        """Range for with until terminator."""
-        e = first(parse("for i in 1 to 100 do x := i until x > 5"))
-        assert isinstance(e, Loop)
-        assert e.for_range_to is not None
-        assert e.until_cond is not None
-
-    def test_range_for_expr_bounds(self) -> None:
-        """Range bounds can be arbitrary expressions."""
-        e = first(parse("for i in start to end + 1 do x := i done"))
-        assert isinstance(e, Loop)
-        assert isinstance(e.for_iter, VarRef)
-        assert e.for_iter.name == "start"
-        assert isinstance(e.for_range_to, BinaryOp)
-
-    def test_range_for_expr_step(self) -> None:
-        """Range step can be an arbitrary expression."""
-        e = first(parse("for i in 1 to 20 by step_size do x := i done"))
-        assert isinstance(e, Loop)
-        assert isinstance(e.for_range_by, VarRef)
-        assert e.for_range_by.name == "step_size"
-
-    def test_by_as_field_name_regression(self) -> None:
-        """'by' used as a record field name still parses."""
-        src = (
-            "record Tagged(by: int)\n"
-            "let t = Tagged(by: 7)\n"
-            "t.by"
-        )
-        prog = parse(src)
-        assert prog is not None
-
-    def test_to_as_field_name_regression(self) -> None:
-        """'to' used as a record field name still parses."""
-        src = (
-            "record Range(to: int)\n"
-            "let r = Range(to: 10)\n"
-            "r.to"
-        )
-        prog = parse(src)
-        assert prog is not None
-
-    def test_downto_as_field_name_regression(self) -> None:
-        """'downto' used as a record field name still parses."""
-        src = (
-            "record Step(downto: int)\n"
-            "let s = Step(downto: 1)\n"
-            "s.downto"
-        )
-        prog = parse(src)
-        assert prog is not None
-
-    def test_tagged_by_existing_program_regression(self) -> None:
-        """Existing tagged(by: …) patterns still parse correctly."""
-        src = (
-            "record Holder(by: int)\n"
-            "let h = Holder(by: 7)\n"
-            "h.by"
-        )
-        prog = parse(src)
-        assert prog is not None
 
 
 # ---------------------------------------------------------------------------
@@ -1843,7 +1869,7 @@ class TestRaiseExpr:
         assert isinstance(e.exc, VarRef)
 
     def test_raise_constructor(self) -> None:
-        e = first(parse("raise Error(msg: m)"))
+        e = first(parse("raise Error(msg = m)"))
         assert isinstance(e, Raise)
         assert isinstance(e.exc, Call)
 
@@ -1860,13 +1886,13 @@ class TestPatterns:
         assert isinstance(e.branches[0].pattern, LiteralPattern)
 
     def test_constructor_pattern_with_fields(self) -> None:
-        src = "case r of | Issue(title: t, severity: s) => ok"
+        src = "case r of | Issue(title = t, severity = s) => ok"
         e = first(parse(src))
         assert isinstance(e, Case)
         pat = e.branches[0].pattern
         assert isinstance(pat, ConstructorPattern)
         assert pat.name == "Issue"
-        assert len(pat.fields) == 2
+        assert len(pat.named) == 2
 
     def test_constructor_pattern_shorthand(self) -> None:
         src = "case r of | Issue(title) => ok"
@@ -1874,8 +1900,9 @@ class TestPatterns:
         assert isinstance(e, Case)
         pat = e.branches[0].pattern
         assert isinstance(pat, ConstructorPattern)
-        assert isinstance(pat.fields[0], PatternField)
-        assert pat.fields[0].name == "title"
+        assert len(pat.positional) == 1
+        assert isinstance(pat.positional[0], VarPattern)
+        assert pat.positional[0].name == "title"
 
     def test_qualified_constructor_pattern(self) -> None:
         src = "case r of | Review.Pass => ok | Review.Fail => err"
@@ -2025,18 +2052,18 @@ class TestNegativeCases:
         with pytest.raises(AglSyntaxError):
             parse("f a b")
 
-    def test_bare_assignment_is_equality(self) -> None:
-        """In v2, n = 2 is a BinaryOp(EQ) expression (not a mutation).
-        Mutation uses `n := 2`. The parser accepts n = 2 as an expression.
+    def test_double_eq_is_equality(self) -> None:
+        """In v2, n == 2 is a BinaryOp(EQ) expression (not a mutation).
+        Mutation uses `n := 2`. The parser accepts n == 2 as an expression.
         The scope pass would verify mutation intent.
         """
-        e = first(parse("n = 2"))
+        e = first(parse("n == 2"))
         assert isinstance(e, BinaryOp)
         assert e.op == BinOp.EQ
 
     def test_duplicate_constructor_arg_raises(self) -> None:
         with pytest.raises(AglSyntaxError, match="duplicate"):
-            parse("Issue(title: a, title: b)")
+            parse("Issue(title = a, title = b)")
 
     def test_braced_constructor_arg_raises(self) -> None:
         with pytest.raises(AglSyntaxError):
@@ -2094,7 +2121,7 @@ class TestFullPrograms:
             "agent reviewer\n"
             "agent planner\n"
             'let s = ask "Hello?"\n'
-            'let r = ask("Review", agent: reviewer)\n'
+            'let r = ask("Review", agent = reviewer)\n'
             'print r'
         )
         prog = parse(src)
@@ -2220,19 +2247,21 @@ class TestLiteralPatternsCoverage:
 
 
 class TestDeclarationsCoverage:
-    """Covers config pragma values not yet tested: false and decimal."""
+    """Covers config decl values not yet tested: false and decimal."""
 
-    def test_config_pragma_false(self) -> None:
+    def test_config_decl_false(self) -> None:
         cfg = first(parse("config log = false"))
-        assert isinstance(cfg, ConfigPragma)
-        assert cfg.key == "log"
-        assert cfg.value is False
+        assert isinstance(cfg, ConfigDecl)
+        assert cfg.name == "log"
+        assert isinstance(cfg.value, BoolLit)
+        assert cfg.value.value is False
 
-    def test_config_pragma_decimal(self) -> None:
+    def test_config_decl_decimal(self) -> None:
         cfg = first(parse("config rate = 1.5"))
-        assert isinstance(cfg, ConfigPragma)
-        assert cfg.key == "rate"
-        assert cfg.value == decimal.Decimal("1.5")
+        assert isinstance(cfg, ConfigDecl)
+        assert cfg.name == "rate"
+        assert isinstance(cfg.value, DecimalLit)
+        assert cfg.value.value == decimal.Decimal("1.5")
 
 
 class TestTypeExprCoverage:
@@ -2300,8 +2329,8 @@ class TestReplSeamCoverage:
         assert result1 is True  # dangling '=' is incomplete
 
     def test_is_incomplete_source_lex_error(self) -> None:
-        """An param that causes a LexError returns False (real error, not incomplete)."""
-        assert not is_incomplete_source("@@@")
+        """Input that causes a LexError returns False (real error, not incomplete)."""
+        assert not is_incomplete_source("~~~")
 
 
 class TestParserErrorCoverage:
@@ -2324,7 +2353,7 @@ class TestAglSyntaxErrorSourceSpan:
     def test_source_span_returns_span(self) -> None:
         """source_span returns the same SourceSpan object as .span."""
         with pytest.raises(AglSyntaxError) as exc_info:
-            parse_program("x == y")
+            parse_program("x = y")
         err = exc_info.value
         assert err.span is not None
         assert err.source_span is err.span
@@ -2332,7 +2361,7 @@ class TestAglSyntaxErrorSourceSpan:
     def test_source_span_is_1based(self) -> None:
         """source_span on a parse error has a valid 1-based line and column."""
         with pytest.raises(AglSyntaxError) as exc_info:
-            parse_program("x == y")
+            parse_program("x = y")
         span = exc_info.value.source_span
         assert span.start_line >= 1
         assert span.start_col >= 1
@@ -2594,8 +2623,8 @@ class TestCaseNeutralNamesParser:
         assert ref.name == "none"
 
     def test_constructor_call_becomes_call(self) -> None:
-        # some(value: 1) -> Call(callee=VarRef("some"), named_args=(...))
-        prog = parse("some(value: 1)")
+        # some(value = 1) -> Call(callee=VarRef("some"), named_args=(...))
+        prog = parse("some(value = 1)")
         c = first(prog)
         assert isinstance(c, Call)
         assert isinstance(c.callee, VarRef)
@@ -2604,7 +2633,7 @@ class TestCaseNeutralNamesParser:
         assert c.named_args[0].name == "value"
 
     def test_uppercase_constructor_call_becomes_call(self) -> None:
-        prog = parse("Some(value: 1)")
+        prog = parse("Some(value = 1)")
         c = first(prog)
         assert isinstance(c, Call)
         assert isinstance(c.callee, VarRef)
@@ -2620,8 +2649,8 @@ class TestCaseNeutralNamesParser:
         assert fa.field == "some"
 
     def test_qualified_call_becomes_call_with_field_access(self) -> None:
-        # Option.some(value: 1) -> Call(callee=FieldAccess(VarRef("Option"), "some"), ...)
-        prog = parse("Option.some(value: 1)")
+        # Option.some(value = 1) -> Call(callee=FieldAccess(VarRef("Option"), "some"), ...)
+        prog = parse("Option.some(value = 1)")
         c = first(prog)
         assert isinstance(c, Call)
         assert isinstance(c.callee, FieldAccess)
@@ -2663,7 +2692,8 @@ class TestCaseNeutralPatterns:
         assert isinstance(pat, ConstructorPattern)
         assert pat.qualifier is None
         assert pat.name == "none"
-        assert pat.fields == ()
+        assert pat.positional == ()
+        assert pat.named == ()
 
     def test_uppercase_constructor_pattern_with_parens(self) -> None:
         prog = parse("case x of | None() => 1")
@@ -2683,14 +2713,14 @@ class TestCaseNeutralPatterns:
         assert pat.name == "none"
 
     def test_constructor_pattern_with_fields(self) -> None:
-        prog = parse("case x of | some(value: v) => v")
+        prog = parse("case x of | some(value = v) => v")
         case = first(prog)
         assert isinstance(case, Case)
         pat = case.branches[0].pattern
         assert isinstance(pat, ConstructorPattern)
         assert pat.name == "some"
-        assert len(pat.fields) == 1
-        assert pat.fields[0].name == "value"
+        assert len(pat.named) == 1
+        assert pat.named[0].name == "value"
 
 
 # ---------------------------------------------------------------------------
@@ -3046,6 +3076,71 @@ class TestImportDecl:
         assert decl.mode == syntax.ImportMode.USING
         assert decl.items[0].name == "x"
 
+class TestExportDecl:
+    """Tests for export declaration parsing."""
+
+    def test_export_plain(self) -> None:
+        prog = parse("export foo")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ExportDecl)
+        assert decl.module_path == ("foo",)
+        assert decl.wildcard is False
+        assert decl.mode == syntax.ImportMode.ALL
+        assert decl.items == ()
+
+    def test_export_wildcard(self) -> None:
+        prog = parse("export foo.*")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ExportDecl)
+        assert decl.module_path == ("foo",)
+        assert decl.wildcard is True
+
+    def test_export_using_single_item(self) -> None:
+        prog = parse("export foo using Bar")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ExportDecl)
+        assert decl.mode == syntax.ImportMode.USING
+        assert len(decl.items) == 1
+        assert decl.items[0].name == "Bar"
+        assert decl.items[0].rename is None
+
+    def test_export_using_multiple_items(self) -> None:
+        prog = parse("export foo using Bar, Baz")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ExportDecl)
+        assert decl.mode == syntax.ImportMode.USING
+        assert {item.name for item in decl.items} == {"Bar", "Baz"}
+
+    def test_export_using_with_rename(self) -> None:
+        prog = parse("export foo using Bar as B")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ExportDecl)
+        assert decl.mode == syntax.ImportMode.USING
+        assert decl.items[0].name == "Bar"
+        assert decl.items[0].rename == "B"
+
+    def test_export_hiding_single_name(self) -> None:
+        prog = parse("export foo hiding Baz")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ExportDecl)
+        assert decl.mode == syntax.ImportMode.HIDING
+        assert len(decl.items) == 1
+        assert decl.items[0].name == "Baz"
+
+    def test_export_hiding_multiple_names(self) -> None:
+        prog = parse("export foo hiding X, Y")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.ExportDecl)
+        assert decl.mode == syntax.ImportMode.HIDING
+        assert {item.name for item in decl.items} == {"X", "Y"}
+
+    def test_export_is_not_promoted_inside_expressions(self) -> None:
+        prog = parse("let x = export")
+        (decl,) = items(prog)
+        assert isinstance(decl, syntax.LetDecl)
+        assert isinstance(decl.value, syntax.VarRef)
+        assert decl.value.name == "export"
+
 
 # ---------------------------------------------------------------------------
 # Qualified reference tests
@@ -3106,8 +3201,8 @@ class TestQualifiedRefs:
         assert expr.module_qualifier.segments == ()
 
     def test_qual_constructor_with_payload(self) -> None:
-        # m::Color(r: 1) → Call(VarRef("Color", mq=...), named_args=[NamedArg("r", 1)])
-        prog = parse("m::Color(r: 1)")
+        # m::Color(r = 1) → Call(VarRef("Color", mq=...), named_args=[NamedArg("r", 1)])
+        prog = parse("m::Color(r = 1)")
         (call,) = items(prog)
         assert isinstance(call, syntax.Call)
         callee = call.callee
@@ -3174,7 +3269,7 @@ class TestQualifiedTypeRefs:
         assert decl.type_ann.module_qualifier.segments == ("m",)
 
     def test_qualified_enum_constructor_with_type_args(self) -> None:
-        prog = parse("Option.some::[int](value: 1)")
+        prog = parse("Option.some::[int](value = 1)")
         (call,) = items(prog)
         assert isinstance(call, syntax.Call)
         assert isinstance(call.callee, syntax.FieldAccess)
@@ -3237,13 +3332,13 @@ class TestQualifiedTypeRefs:
 
     def test_qual_pattern_constructor_with_fields(self) -> None:
         # Qualified constructor pattern with payload fields
-        prog = parse("case x of | m::Foo(y: z) => 1")
+        prog = parse("case x of | m::Foo(y = z) => 1")
         (expr,) = items(prog)
         assert isinstance(expr, Case)
         pat = expr.branches[0].pattern
         assert isinstance(pat, ConstructorPattern)
         assert pat.name == "Foo"
-        assert len(pat.fields) == 1
+        assert len(pat.named) == 1
         assert pat.module_qualifier is not None
 
 
@@ -3313,6 +3408,108 @@ class TestPrivateDecls:
         assert it[0].is_private is False
         assert isinstance(it[1], FuncDef)
         assert it[1].is_private is True
+
+
+# ---------------------------------------------------------------------------
+# Field-assignment syntax change: '=' named args, '==' equality, shorthand.
+# These specify the TARGET grammar and are expected to fail until the grammar
+# is updated (named args switch ':' -> '=', equality switches '=' -> '==').
+# ---------------------------------------------------------------------------
+
+
+class TestFieldAssignmentSyntax:
+    def test_paren_call_named_arg_eq(self) -> None:
+        """Named args use '=' (was ':')."""
+        call = first(parse("ask(x, agent = reviewer)"))
+        assert isinstance(call, Call)
+        assert len(call.args) == 1
+        assert len(call.named_args) == 1
+        na = call.named_args[0]
+        assert isinstance(na, NamedArg)
+        assert na.name == "agent"
+
+    def test_paren_call_multiple_named_eq(self) -> None:
+        call = first(parse("ask(x, agent = rev, format = json)"))
+        assert isinstance(call, Call)
+        assert len(call.named_args) == 2
+        assert {na.name for na in call.named_args} == {"agent", "format"}
+
+    def test_constructor_call_named_arg_eq(self) -> None:
+        """Constructor construction uses '=' for its named fields."""
+        call = first(parse("Some(value = 1)"))
+        assert isinstance(call, Call)
+        assert isinstance(call.callee, VarRef)
+        assert call.callee.name == "Some"
+        assert len(call.named_args) == 1
+        assert call.named_args[0].name == "value"
+
+    def test_constructor_call_shorthand_is_positional_varref(self) -> None:
+        """A bare-name constructor arg parses as a positional VarRef; the
+        constructor type checker reinterprets it as 'name = name' shorthand."""
+        call = first(parse("R(x, y = 1)"))
+        assert isinstance(call, Call)
+        assert len(call.args) == 1
+        assert isinstance(call.args[0], VarRef)
+        assert call.args[0].name == "x"
+        assert len(call.named_args) == 1
+        assert call.named_args[0].name == "y"
+
+    def test_constructor_call_shorthand_after_named_arg(self) -> None:
+        """Positional args (incl. bare-name shorthands) must precede named args.
+        B(r = 1, x) is rejected at parse time."""
+        from agm.agl.parser.errors import AglSyntaxError
+
+        with pytest.raises(AglSyntaxError):
+            parse("B(r = 1, x)")
+
+    def test_pattern_field_full_form_eq(self) -> None:
+        """Named pattern fields use '=' (name = pattern form)."""
+        src = "case r of | Issue(title = t) => ok"
+        e = first(parse(src))
+        assert isinstance(e, Case)
+        pat = e.branches[0].pattern
+        assert isinstance(pat, ConstructorPattern)
+        assert pat.name == "Issue"
+        assert len(pat.named) == 1
+        field0 = pat.named[0]
+        assert isinstance(field0, PatternField)
+        assert field0.name == "title"
+        assert isinstance(field0.pattern, VarPattern)
+        assert field0.pattern.name == "t"
+
+    def test_pattern_field_shorthand_binds_field_name(self) -> None:
+        """Bare name in pattern position becomes a positional sub-pattern."""
+        src = "case r of | Issue(title) => ok"
+        e = first(parse(src))
+        assert isinstance(e, Case)
+        pat = e.branches[0].pattern
+        assert isinstance(pat, ConstructorPattern)
+        assert len(pat.positional) == 1
+        assert isinstance(pat.positional[0], VarPattern)
+        assert pat.positional[0].name == "title"
+
+    def test_pattern_field_full_form_nested(self) -> None:
+        src = "case r of | Box(at = Pt(x = px)) => ok"
+        e = first(parse(src))
+        assert isinstance(e, Case)
+        outer = e.branches[0].pattern
+        assert isinstance(outer, ConstructorPattern)
+        inner = outer.named[0].pattern
+        assert isinstance(inner, ConstructorPattern)
+        assert inner.name == "Pt"
+        assert inner.named[0].name == "x"
+
+    def test_equality_parses_to_bin_eq(self) -> None:
+        """'==' is the equality operator, mapping to BinOp.EQ."""
+        e = first(parse("x == y"))
+        assert isinstance(e, BinaryOp)
+        assert e.op == BinOp.EQ
+
+    def test_single_eq_is_not_equality_in_paren(self) -> None:
+        """A single '=' is no longer an expression operator; '(x = 3)' as a
+        parenthesized expression is a syntax error."""
+        with pytest.raises(AglSyntaxError):
+            parse("let same = (x = 3)")
 
 
 class TestModifierDecoratorNewline:

@@ -12,7 +12,7 @@ When an entry imports modules — or earlier entries did — the session switche
 
 ## Program Parameters
 
-`param` declarations make a program parameterizable. The pipeline can discover the typed parameter inventory before execution, which `agm exec` uses to expose each parameter as a first-class CLI option (boolean params become flag pairs; names that collide with built-in flags are rejected) and to load values from the `[params.<program>]` config section. Resolution precedence is external value > default expression > error for a required param, and external values are converted and type-checked before any evaluation, so a bad value fails before any agent or shell call runs. In the REPL the same precedence applies, with config values converted in a pre-evaluation check.
+`param` declarations make a program parameterizable. The pipeline can discover the typed parameter inventory before execution, which `agm exec` uses to expose each parameter as a first-class CLI option (boolean params become flag pairs; names that collide with built-in flags are rejected) and to load values from the `[<program>]` config section. Resolution precedence is external value > default expression > error for a required param, and external values are converted and type-checked before any evaluation, so a bad value fails before any agent or shell call runs. In the REPL the same precedence applies, with config values converted in a pre-evaluation check.
 
 ## Agent Declaration and Reconciliation
 
@@ -20,9 +20,13 @@ Agents must be declared in source; the host backs declared names but never owns 
 
 `agm exec` wires the backings by reading the declared inventory and registering each name with a runner-backed factory. The runner command is chosen by precedence across config, a source runner hint, CLI flags, and a built-in default floor, so every declared agent resolves and also backs `ask`. The agent-runner mechanics are shared with the rest of AGM (see [agents.md](../agents.md)).
 
-## Config Pragmas
+## Config Declarations
 
-`config KEY = VALUE` header pragmas let a program carry its own execution options. They are parsed as AST nodes, validated and collected by the scope pass (header-only placement is enforced), and treated as no-ops by typecheck and eval. `agm exec` reads the collected pragmas and applies them with CLI > pragma > config-file precedence (see [config.md](../config.md)); for example trace logging is off unless opted in by pragma, flag, or config. Pragmas are an exec/program feature; the REPL rejects them and takes its options from flags and config instead.
+`config KEY = VALUE` declarations let a program carry its own execution options. Each names a fixed engine key (`semantics/engine_keys.py`) and binds it as an immutable, runtime-resolved **readable value** — the unification of `config` and `param` into one declared-binding mechanism. The scope pass enforces root placement and creates the binding; typecheck validates the value against the engine-key type (an `Option[T]` key also accepts a bare inner `T`); the lowerer emits an `IrConfigBind` initializer whose evaluator resolves it as CLI override > source value > host default.
+
+Three engine keys — `strict-json`, `max-iters`, `timeout` — have **D6 effect-at-binding**: when `IrConfigBind` executes for one of these keys, the evaluator immediately updates the corresponding live interpreter field (`_strict_json`, `_loop_limit`, `_shell_exec_timeout`). The resolved value takes effect from that point forward, so subsequent `ask`, `do`, and `exec` calls within the program see the updated setting. The remaining keys (`runner`, `log`, `log-file`) are start-resolved by `agm exec` before the program runs; `exec` uses a narrow startup-config prepass through the same checked/lowered graph so computed source values are honored before the agent factory and trace sink are created.
+
+`agm exec` passes the CLI/base value maps to the runtime (see [config.md](../config.md)). Config declarations are fully supported in the REPL: effect-at-binding applies per-entry and persists across entries; `:reset` clears all config bindings.
 
 ## Console and Confirmation
 
@@ -34,4 +38,4 @@ The REPL console adds interactivity around the session. Live agent calls are gat
 - `src/agm/agl/pipeline.py` — program preparation, parameter discovery, agent reconciliation, and host-environment assembly shared by `exec` and the REPL.
 - `src/agm/commands/exec.py` and `src/agm/commands/repl.py` — the hosting commands.
 - `src/agm/cli_support/exec_params.py` — parameter discovery and option wiring for `agm exec`.
-- Tests: `tests/test_agl_repl_session.py`, `tests/test_agl_repl_console.py`, `tests/test_agl_repl_agents.py`, `tests/test_agl_repl_themes.py`, `tests/test_agl_config_pragma.py`, `tests/test_exec_command.py`.
+- Tests: `tests/test_agl_repl_session.py`, `tests/test_agl_repl_console.py`, `tests/test_agl_repl_agents.py`, `tests/test_agl_repl_themes.py`, `tests/test_agl_config_decl.py`, `tests/test_exec_command.py`.

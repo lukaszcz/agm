@@ -1102,7 +1102,7 @@ class TestAgentCallErrorViaRuntime:
         from agm.agl import PipelineDriver
 
         rt = PipelineDriver(default_agent=counting_agent)
-        rt.run('let x = ask("hi", on_parse_error: Retry(n: 3))\nx')
+        rt.run('let x = ask("hi", on_parse_error = Retry(n = 3))\nx')
         # Must only be called once — transport failures are not retried
         assert call_count[0] == 1
 
@@ -1124,7 +1124,7 @@ class TestPipelineDriverRunnerWiring:
         from agm.agl import PipelineDriver
 
         rt = PipelineDriver(default_agent=lambda req: "ok")
-        result = rt.run('agent any_random_agent\nlet x = ask("hi", agent: any_random_agent)\nx')
+        result = rt.run('agent any_random_agent\nlet x = ask("hi", agent = any_random_agent)\nx')
         assert result.ok is True  # default agent backs the declared name
 
     def test_exec_config_runner_wires_through_to_runtime(self) -> None:
@@ -1141,7 +1141,6 @@ class TestPipelineDriverRunnerWiring:
             original_init(self, **kwargs)
 
         # Patch config to return a runner
-        import agm.config.general as cfg_mod
         from agm.config.general import ExecConfig
 
         fake_config = ExecConfig(
@@ -1156,10 +1155,10 @@ class TestPipelineDriverRunnerWiring:
         import agm.agl.pipeline as rt_mod
 
         agl_file = Path("/tmp/nonexistent_test.agl")
-        # Just check that load_exec_config is called and runner is used; we
+        # Just check that exec_config_from_merged is called and runner is used; we
         # don't need to run the full pipeline.
         with (
-            patch.object(cfg_mod, "load_exec_config", return_value=fake_config),
+            patch.object(exec_mod, "exec_config_from_merged", return_value=fake_config),
             patch.object(
                 exec_mod,
                 "read_text_arg",
@@ -1348,7 +1347,7 @@ class TestCliRunnerIntegration:
         _install_fake_runner(tmp_path / "bin", env)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('agent myagent\nlet x = ask("do this", agent: myagent)\nprint(x)\n')
+        agl_file.write_text('agent myagent\nlet x = ask("do this", agent = myagent)\nprint(x)\n')
 
         config_dir = tmp_path / ".agm"
         config_dir.mkdir()

@@ -7,6 +7,8 @@ import textwrap
 from collections.abc import Sequence
 from typing import NoReturn, Protocol
 
+from agm.command_catalog import COMMAND_OVERVIEW
+
 
 class _Writeable(Protocol):
     def write(self, data: str) -> object: ...
@@ -488,9 +490,9 @@ _HELP_TEXTS: dict[str, str] = {
         take a JSON string. Run `agm exec FILE --help` to show discovered params.
 
         Trace logging is OFF by default.  Enable it with --log, --log-file,
-        a source-level "config log = true" pragma, or [exec] log = true in
-        config.toml.  Source pragmas (config KEY = VALUE at the top of the
-        program) override config; CLI flags override pragmas.
+        a source-level "config log = true" declaration, or [exec] log = true
+        in config.toml.  Source config declarations override config-file values;
+        CLI flags override source declarations (CLI > source > config).
 
         Options:
           -c, --command COMMAND  Execute the program given as COMMAND instead of FILE.
@@ -501,7 +503,7 @@ _HELP_TEXTS: dict[str, str] = {
           --runner COMMAND      Override the default agent runner command.
           --log                 Enable trace logging (auto timestamped path).
           --log-file PATH       Write trace log to PATH.
-          --no-log              Disable trace logging (overrides pragma/config).
+          --no-log              Disable trace logging (overrides source/config).
           --log, --log-file, and --no-log are mutually exclusive.
           --no-stdlib           Do not automatically open std.core in the entry module.
           -I DIR, --module-path DIR
@@ -530,12 +532,13 @@ _HELP_TEXTS: dict[str, str] = {
         session reuses the [exec] configuration (runner, per-agent commands,
         call-depth limit, JSON strictness, timeout).
 
-        Trace logging is OFF by default.  Config pragmas (config KEY = VALUE)
-        entered at the prompt are rejected — set session options via CLI flags
-        or [exec] config instead.
+        Trace logging is OFF by default.  Source config declarations
+        (config KEY = VALUE) entered at the REPL prompt take effect from their
+        declaration point and persist for the session; :reset clears them.
+        Set session-wide defaults via CLI flags or [exec] config.
 
         Params (`param NAME: T`) resolve eagerly when entered: first from
-        [params.<program>] config when a `program NAME` declaration is active,
+        [<program>] config when a `program NAME` declaration is active,
         then from the param default expression. There is no CLI param seeding.
         Use :params to list declared params and their resolved values.
 
@@ -581,26 +584,6 @@ _HELP_ALIASES: dict[str, str] = {
     "cp": "config",
     "copy": "config",
 }
-
-_COMMAND_OVERVIEW: list[tuple[str, str]] = [
-    ("open", "Open a workspace"),
-    ("close", "Close a workspace"),
-    ("workspace", "Manage AGM workspaces"),
-    ("init", "Initialize a project"),
-    ("sync", "Fetch and merge project repositories"),
-    ("dep", "Manage project dependency checkouts"),
-    ("loop", "Run the loop prompt until completion"),
-    ("review", "Run the review prompt"),
-    ("revise", "Run the revision prompt"),
-    ("refine", "Run review/revise refinement"),
-    ("exec", "Execute an AgL workflow program"),
-    ("repl", "Start an interactive AgL REPL"),
-    ("run", "Run a command in a sandbox"),
-    ("config", "Manage project configuration files"),
-    ("worktree", "Git worktree management"),
-    ("tmux", "Tmux session and layout management"),
-    ("help", "Show help for a command"),
-]
 
 _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
     ("workspace", "open"): textwrap.dedent("""\
@@ -845,8 +828,8 @@ def _overview_text() -> str:
         "",
         "Commands:",
     ]
-    width = max(len(name) for name, _ in _COMMAND_OVERVIEW)
-    for name, desc in _COMMAND_OVERVIEW:
+    width = max(len(name) for name, _ in COMMAND_OVERVIEW)
+    for name, desc in COMMAND_OVERVIEW:
         lines.append(f"  {name:<{width + 2}} {desc}")
     lines.extend(
         [

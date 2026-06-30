@@ -5,7 +5,7 @@ var count: int = 0
 var found: bool = false
 for ch in s do
   count := count + 1
-  if ch = "!" =>
+  if ch == "!" =>
     found := true
 until found
 print count

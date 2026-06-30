@@ -33,7 +33,8 @@ from agm.agl.semantics.types import (
 from agm.agl.syntax.nodes import (
     EnumDef,
     ExceptionDef,
-    FieldDef,
+    Param,
+    ParamKind,
     Program,
     RecordDef,
     TypeAlias,
@@ -288,6 +289,9 @@ class _TypeBuilder:
         )
         self._validate_builtin_type_shape(stmt, typ)
         self._env.register_type(stmt.name, typ)
+        # Register field kinds for this record constructor.
+        field_kinds = tuple((fd.name, fd.kind) for fd in stmt.fields)
+        self._env.register_constructor_field_kinds(stmt.name, None, field_kinds)
 
     def _build_enum(self, stmt: EnumDef) -> None:
         if stmt.type_params:
@@ -321,6 +325,10 @@ class _TypeBuilder:
         )
         self._validate_builtin_type_shape(stmt, typ)
         self._env.register_type(stmt.name, typ)
+        # Register field kinds for each variant constructor.
+        for vd in stmt.variants:
+            vfield_kinds = tuple((fd.name, fd.kind) for fd in vd.fields)
+            self._env.register_constructor_field_kinds(stmt.name, vd.name, vfield_kinds)
 
     def _build_exception(self, stmt: ExceptionDef) -> None:
         fields: dict[str, Type] = {}
@@ -351,6 +359,28 @@ class _TypeBuilder:
         )
         self._validate_builtin_type_shape(stmt, typ)
         self._env.register_type(stmt.name, typ)
+        # Register field kinds for this exception constructor (user fields only,
+        # trace_id excluded).  Inherit base field kinds first, then add own fields.
+        # Abstract exceptions (base is None) have no constructor, so nothing to register.
+        if stmt.base is not None:
+            base_registered = self._env.get_constructor_field_kinds(stmt.base, None)
+            if base_registered is not None:
+                # Base has registered field kinds (concrete exception): use them directly.
+                base_inherited = base_registered
+            else:
+                # Base is abstract (e.g. the built-in Exception root) and has no
+                # registered field kinds.  Derive NAMED_ONLY kinds from its field
+                # names, excluding trace_id which is auto-filled at runtime.
+                assert isinstance(base_type, ExceptionType)
+                base_inherited = tuple(
+                    (fname, ParamKind.NAMED_ONLY)
+                    for fname in base_type.fields
+                    if fname != "trace_id"
+                )
+            own_field_kinds = tuple((fd.name, fd.kind) for fd in stmt.fields)
+            self._env.register_constructor_field_kinds(
+                stmt.name, None, base_inherited + own_field_kinds
+            )
 
     def _validate_builtin_type_shape(
         self, stmt: RecordDef | EnumDef | ExceptionDef, typ: Type
@@ -366,7 +396,7 @@ class _TypeBuilder:
             )
 
     def _resolve_field_type(
-        self, fd: FieldDef, owner: str, type_vars: frozenset[str] = frozenset()
+        self, fd: Param, owner: str, type_vars: frozenset[str] = frozenset()
     ) -> Type:
         """Resolve a field's TypeExpr to a semantic Type."""
         self._ensure_referenced_type_built(fd.type_expr)
@@ -443,6 +473,9 @@ class _TypeBuilder:
             type_params=stmt.type_params,
         )
         self._env.register_constructor_signature(sig)
+        # Register field kinds for the generic record constructor.
+        generic_record_field_kinds = tuple((fd.name, fd.kind) for fd in stmt.fields)
+        self._env.register_constructor_field_kinds(stmt.name, None, generic_record_field_kinds)
 
     def _build_generic_enum(self, stmt: EnumDef) -> None:
         """Build a generic enum type: register GenericTypeDef + ConstructorSignatures."""
@@ -478,7 +511,7 @@ class _TypeBuilder:
         gdef = GenericTypeDef(kind="enum", type_params=stmt.type_params, template=template)
         self._env.register_generic_type(stmt.name, gdef)
         self._env.unregister_name(stmt.name)
-        # Register one ConstructorSignature per variant.
+        # Register one ConstructorSignature and field kinds per variant.
         for vd in stmt.variants:
             vfields = variants[vd.name]
             field_names = tuple(vfields.keys())
@@ -492,6 +525,9 @@ class _TypeBuilder:
                 type_params=stmt.type_params,
             )
             self._env.register_constructor_signature(sig)
+            # Register field kinds for this generic enum variant constructor.
+            vfield_kinds = tuple((fd.name, fd.kind) for fd in vd.fields)
+            self._env.register_constructor_field_kinds(stmt.name, vd.name, vfield_kinds)
 
     def _validate_alias(self, stmt: TypeAlias) -> None:
         """Validate that the alias target resolves without cycles.

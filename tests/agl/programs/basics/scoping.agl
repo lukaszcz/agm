@@ -5,10 +5,10 @@ let x = 1
 var trail: text = ""
 
 if
-  | mode = "shadow" =>
+  | mode == "shadow" =>
     let x = 2
     trail := "branch ${x}"
-  | mode = "plain" =>
+  | mode == "plain" =>
     trail := "branch kept ${x}"
   | else =>
     ()

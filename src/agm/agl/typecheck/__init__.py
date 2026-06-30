@@ -45,6 +45,7 @@ from agm.agl.typecheck.env import (
     FunctionSignature,
     GenericTypeDef,
     OutputContractSpec,
+    ParamSpec,
     TypeEnvironment,
 )
 from agm.agl.typecheck.graph import CheckedModule, CheckedModuleGraph, check_graph
@@ -70,6 +71,7 @@ __all__ = [
     "JsonType",
     "ListType",
     "OutputContractSpec",
+    "ParamSpec",
     "RecordType",
     "TextType",
     "Type",

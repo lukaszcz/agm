@@ -198,7 +198,7 @@ class TestAglSyntaxErrorWithSource:
     def test_syntax_error_without_source_has_unknown(self) -> None:
         """Without source=, a parse error's span has UNKNOWN_SOURCE."""
         with pytest.raises(AglSyntaxError) as exc_info:
-            parse_program("x == y")
+            parse_program("x = y")
         err = exc_info.value
         assert err.span is not None
         assert err.span.source is UNKNOWN_SOURCE
@@ -207,7 +207,7 @@ class TestAglSyntaxErrorWithSource:
         """With source=sid, a parse error's span is stamped with sid."""
         sid = SourceId(label="/modules/broken.agl")
         with pytest.raises(AglSyntaxError) as exc_info:
-            parse_program("x == y", source=sid)
+            parse_program("x = y", source=sid)
         err = exc_info.value
         assert err.span is not None
         assert err.span.source == sid

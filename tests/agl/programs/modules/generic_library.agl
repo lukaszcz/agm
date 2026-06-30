@@ -10,7 +10,7 @@ param seed: int
 param empty: bool
 
 # Imported generic enum at int; imported generic function consumes it.
-let maybe: Maybe[int] = if empty => none else => some(value: seed)
+let maybe: Maybe[int] = if empty => none else => some(value = seed)
 print(or_else(maybe, 0) as text)
 
 # Pattern matching on the imported variant (brought in unqualified by the open
@@ -20,7 +20,7 @@ case maybe of
   | some(value) => print "value ${value}"
 
 # The SAME imported definition at text — erasure across the module boundary.
-let word: Maybe[text] = if empty => none else => some(value: "w${seed}")
+let word: Maybe[text] = if empty => none else => some(value = "w${seed}")
 print(or_else(word, "fallback"))
 
 # Qualified generic record type + qualified constructor, then field access.

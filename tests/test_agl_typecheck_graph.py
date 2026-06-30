@@ -205,7 +205,7 @@ def test_check_graph_basic(tmp_path: Path) -> None:
             "record Point\n"
             "  x: int\n"
             "  y: int\n"
-            "def makePoint() -> Point = Point(x: 0, y: 0)"
+            "def makePoint() -> Point = Point(x = 0, y = 0)"
         ),
     }
     cg = _check_graph(tmp_path, modules)
@@ -266,7 +266,7 @@ def test_qualified_type_ref_in_annotation(tmp_path: Path) -> None:
             "record Point\n"
             "  x: int\n"
             "  y: int\n"
-            "def mkPoint() -> Point = Point(x: 1, y: 2)"
+            "def mkPoint() -> Point = Point(x = 1, y = 2)"
         ),
     }
     mylib_id = ModuleId.from_dotted("mylib")
@@ -370,7 +370,7 @@ def test_unqualified_open_import_type(tmp_path: Path) -> None:
             "record Point\n"
             "  x: int\n"
             "  y: int\n"
-            "def mkPoint() -> Point = Point(x: 0, y: 0)"
+            "def mkPoint() -> Point = Point(x = 0, y = 0)"
         ),
     }
     mylib_id = ModuleId.from_dotted("mylib")
@@ -428,7 +428,7 @@ def test_qualified_access_bounded_by_s(tmp_path: Path) -> None:
             "record Rect\n"
             "  w: int\n"
             "  h: int\n"
-            "def mkRect() -> Rect = Rect(w: 10, h: 5)"
+            "def mkRect() -> Rect = Rect(w = 10, h = 5)"
         ),
     }
     with pytest.raises(AglScopeError, match="not in the imported set"):
@@ -452,7 +452,7 @@ def test_private_type_not_importable(tmp_path: Path) -> None:
         "mylib": (
             "private record Hidden\n"
             "  x: int\n"
-            "def mkHidden() -> Hidden = Hidden(x: 1)"
+            "def mkHidden() -> Hidden = Hidden(x = 1)"
         ),
     }
     with pytest.raises(AglTypeError, match="Unknown type"):
@@ -471,7 +471,7 @@ def test_whole_graph_type_pre_pass_with_cycles(tmp_path: Path) -> None:
             "import modA\n"
             "import modB\n"
             "let fa = modA::wrapB(modB::Color.Red)\n"
-            "let fb = modB::wrapA(modA::Foo(x: 1))\n"
+            "let fb = modB::wrapA(modA::Foo(x = 1))\n"
             "()"
         ),
         "modA": (
@@ -510,7 +510,7 @@ def test_imported_exception_base_is_built_before_child(tmp_path: Path) -> None:
             "exception Child extends Base\n"
             "  code: int\n"
             "def make() -> text =\n"
-            "  let err = Child(message: \"m\", detail: \"d\", code: 1)\n"
+            "  let err = Child(message = \"m\", detail = \"d\", code = 1)\n"
             "  err.detail"
         ),
         "z": (
@@ -587,7 +587,7 @@ def test_self_ref_type(tmp_path: Path) -> None:
             "  x: int\n"
             "  y: int\n"
             # ::Point refers to mylib's own Point type via self-reference
-            "def origin() -> ::Point = Point(x: 0, y: 0)"
+            "def origin() -> ::Point = Point(x = 0, y = 0)"
         ),
     }
     mylib_id = ModuleId.from_dotted("mylib")
@@ -796,7 +796,7 @@ def test_unknown_module_qualifier_error(tmp_path: Path) -> None:
         "mylib": (
             "record Point\n"
             "  x: int\n"
-            "def mkPoint() -> Point = Point(x: 1)"
+            "def mkPoint() -> Point = Point(x = 1)"
         ),
     }
     with pytest.raises(AglTypeError, match="Unknown module qualifier"):
@@ -854,11 +854,11 @@ def test_module_qualified_constructor_missing_variant_error(tmp_path: Path) -> N
 
 
 def test_module_qualified_record_constructor(tmp_path: Path) -> None:
-    """'mylib::Point(x: 1, y: 2)' constructs a record from an imported module."""
+    """'mylib::Point(x = 1, y = 2)' constructs a record from an imported module."""
     modules = {
         "entry": (
             "import mylib qualified\n"
-            "let p: mylib::Point = mylib::Point(x: 1, y: 2)\n"
+            "let p: mylib::Point = mylib::Point(x = 1, y = 2)\n"
             "p"
         ),
         "mylib": (
@@ -889,7 +889,7 @@ def test_self_ref_type_graph_mode(tmp_path: Path) -> None:
             "record Point\n"
             "  x: int\n"
             "  y: int\n"
-            "def origin() -> ::Point = Point(x: 0, y: 0)"
+            "def origin() -> ::Point = Point(x = 0, y = 0)"
         ),
     }
     mylib_id = ModuleId.from_dotted("mylib")
@@ -946,7 +946,7 @@ def test_name_not_in_s_qualified_lookup(tmp_path: Path) -> None:
             "record Point\n"
             "  x: int\n"
             "def getValue() -> int = 1\n"
-            "def mkPoint() -> Point = Point(x: 1)"
+            "def mkPoint() -> Point = Point(x = 1)"
         ),
     }
     with pytest.raises(AglScopeError, match="not in the imported set"):
@@ -1091,8 +1091,8 @@ def test_self_ref_type_builtin_exception_fallback(tmp_path: Path) -> None:
         ),
         "mylib": (
             # ::Abort references the built-in Abort exception type (not in graph table)
-            # This exercises the ::Name fallback to the built-in exception type registry.
-            "def boom() -> ::Abort = raise Abort(message: \"oops\")"
+            # This exercises the fallback at env.py line 509
+            "def boom() -> ::Abort = raise Abort(message = \"oops\")"
         ),
     }
     cg = _check_graph(tmp_path, modules)
@@ -1241,7 +1241,7 @@ def test_cross_module_field_type_single_direction(tmp_path: Path) -> None:
             "import payload\n"
             "record Wrapper\n"
             "  c: payload::Data\n"
-            "def mk() -> Wrapper = Wrapper(c: payload::Data(n: 1))"
+            "def mk() -> Wrapper = Wrapper(c = payload::Data(n = 1))"
         ),
         "payload": (
             "record Data\n"
@@ -1294,7 +1294,7 @@ def test_cross_module_field_type_mutual_import_cycle(tmp_path: Path) -> None:
             "import modB\n"
             "record Foo\n"
             "  c: modB::Color\n"
-            "def makeFoo() -> Foo = Foo(c: modB::Color.Red)"
+            "def makeFoo() -> Foo = Foo(c = modB::Color.Red)"
         ),
         "modB": (
             "import modA\n"
@@ -1303,7 +1303,7 @@ def test_cross_module_field_type_mutual_import_cycle(tmp_path: Path) -> None:
             "  | Blue\n"
             "record Bar\n"
             "  f: modA::Foo\n"
-            "def makeBar() -> Bar = Bar(f: modA::makeFoo())"
+            "def makeBar() -> Bar = Bar(f = modA::makeFoo())"
         ),
     }
     cg = _check_graph(tmp_path, modules)
@@ -1342,7 +1342,7 @@ def test_cross_module_enum_variant_field_type(tmp_path: Path) -> None:
         "entry": (
             "import carrier\n"
             "import payload\n"
-            "let env: carrier::Envelope = carrier::wrap(payload::Data(n: 42))\n"
+            "let env: carrier::Envelope = carrier::wrap(payload::Data(n = 42))\n"
             "env"
         ),
         "carrier": (
@@ -1350,7 +1350,7 @@ def test_cross_module_enum_variant_field_type(tmp_path: Path) -> None:
             "enum Envelope\n"
             "  | None\n"
             "  | Some(value: payload::Data)\n"
-            "def wrap(d: payload::Data) -> Envelope = Envelope.Some(value: d)"
+            "def wrap(d: payload::Data) -> Envelope = Envelope.Some(value = d)"
         ),
         "payload": (
             "record Data\n"
@@ -1473,7 +1473,7 @@ def test_type_expr_deps_self_ref_qualifier(tmp_path: Path) -> None:
             "  n: int\n"
             "record Wrapper\n"
             "  c: ::Inner\n"
-            "def mk() -> Wrapper = Wrapper(c: Inner(n: 1))"
+            "def mk() -> Wrapper = Wrapper(c = Inner(n = 1))"
         ),
     }
     mylib_id = ModuleId.from_dotted("mylib")
@@ -1493,7 +1493,7 @@ def test_type_expr_deps_qualified_field(tmp_path: Path) -> None:
             "import payload qualified\n"
             "record Wrapper\n"
             "  c: payload::Data\n"
-            "def mk() -> Wrapper = Wrapper(c: payload::Data(n: 1))"
+            "def mk() -> Wrapper = Wrapper(c = payload::Data(n = 1))"
         ),
         "payload": (
             "record Data\n"
@@ -1518,7 +1518,7 @@ def test_type_expr_deps_unqualified_open_import_field(tmp_path: Path) -> None:
             "import payload\n"
             "record Wrapper\n"
             "  c: Data\n"       # unqualified reference to open-imported type
-            "def mk() -> Wrapper = Wrapper(c: Data(n: 1))"
+            "def mk() -> Wrapper = Wrapper(c = Data(n = 1))"
         ),
         "payload": (
             "record Data\n"
@@ -1542,7 +1542,7 @@ def test_type_expr_deps_list_field(tmp_path: Path) -> None:
             "import payload\n"
             "record Wrapper\n"
             "  items: list[payload::Data]\n"
-            "def mk() -> Wrapper = Wrapper(items: [payload::Data(n: 1)])"
+            "def mk() -> Wrapper = Wrapper(items = [payload::Data(n = 1)])"
         ),
         "payload": (
             "record Data\n"
@@ -1566,7 +1566,7 @@ def test_type_expr_deps_dict_field(tmp_path: Path) -> None:
             "import payload\n"
             "record Wrapper\n"
             "  items: dict[text, payload::Data]\n"
-            "def mk() -> Wrapper = Wrapper(items: {})"
+            "def mk() -> Wrapper = Wrapper(items = {})"
         ),
         "payload": (
             "record Data\n"
@@ -1663,13 +1663,13 @@ def test_record_type_repr_qualified_with_module(tmp_path: Path) -> None:
             "record Point\n"
             "  x: int\n"
             "  y: int\n"
-            "def makePoint() -> Point = Point(x: 0, y: 0)"
+            "def makePoint() -> Point = Point(x = 0, y = 0)"
         ),
         "bar": (
             "record Point\n"
             "  x: int\n"
             "  y: int\n"
-            "def makePoint() -> Point = Point(x: 1, y: 1)"
+            "def makePoint() -> Point = Point(x = 1, y = 1)"
         ),
     }
     with pytest.raises(_AglTypeError) as exc_info:
@@ -1708,7 +1708,7 @@ def test_type_alias_with_cross_module_dep_creates_dep(tmp_path: Path) -> None:
             "record Wrapper\n"
             "  a: DataAlias\n"    # depends on alias, alias depends on payload::Data
             "  b: payload::Data\n"  # direct dep on payload::Data (diamond dep!)
-            "def mk() -> Wrapper = Wrapper(a: payload::Data(n: 1), b: payload::Data(n: 2))"
+            "def mk() -> Wrapper = Wrapper(a = payload::Data(n = 1), b = payload::Data(n = 2))"
         ),
         "payload": (
             "record Data\n"
@@ -1739,7 +1739,7 @@ def test_type_expr_deps_func_field(tmp_path: Path) -> None:
             # This exercises the FuncT branch in _collect_type_expr_deps
             "record Wrapper\n"
             "  transform: (payload::Data) -> text\n"
-            "def mk() -> Wrapper = Wrapper(transform: fn(d: payload::Data) -> text => \"ok\")"
+            "def mk() -> Wrapper = Wrapper(transform = fn(d: payload::Data) -> text => \"ok\")"
         ),
         "payload": (
             "record Data\n"
@@ -1774,7 +1774,7 @@ def test_type_expr_deps_self_ref_to_builtin(tmp_path: Path) -> None:
             # ::ExecResult is a built-in prelude type (not in all_type_keys)
             "record Wrapper\n"
             "  c: ::ExecResult\n"
-            "def mk() -> Wrapper = Wrapper(c: exec(\"echo hi\"))"
+            "def mk() -> Wrapper = Wrapper(c = exec(\"echo hi\"))"
         ),
     }
     mylib_id = ModuleId.from_dotted("mylib")
@@ -1804,7 +1804,7 @@ def test_type_expr_deps_open_import_to_builtin_variant(tmp_path: Path) -> None:
             # Field typed 'int' (builtin) via bare name — candidates list is empty
             "record Wrapper\n"
             "  n: int\n"
-            "def mk() -> Wrapper = Wrapper(n: 42)"
+            "def mk() -> Wrapper = Wrapper(n = 42)"
         ),
     }
     mylib_id = ModuleId.from_dotted("mylib")
@@ -1982,13 +1982,13 @@ def test_cross_file_mutual_recursion_qualified(tmp_path: Path) -> None:
         "even": (
             "import odd\n"
             "def is_even(n: int) -> bool =\n"
-            "  if n = 0 => true\n"
+            "  if n == 0 => true\n"
             "  | else => odd::is_odd(n - 1)"
         ),
         "odd": (
             "import even\n"
             "def is_odd(n: int) -> bool =\n"
-            "  if n = 0 => false\n"
+            "  if n == 0 => false\n"
             "  | else => even::is_even(n - 1)"
         ),
         "entry": (
@@ -2018,13 +2018,13 @@ def test_cross_file_mutual_recursion_open_import(tmp_path: Path) -> None:
         "even": (
             "import odd\n"
             "def is_even(n: int) -> bool =\n"
-            "  if n = 0 => true\n"
+            "  if n == 0 => true\n"
             "  | else => is_odd(n - 1)"
         ),
         "odd": (
             "import even\n"
             "def is_odd(n: int) -> bool =\n"
-            "  if n = 0 => false\n"
+            "  if n == 0 => false\n"
             "  | else => is_even(n - 1)"
         ),
         "entry": (
@@ -2229,11 +2229,11 @@ def test_cross_module_constructor_call_positional_args_rejected(tmp_path: Path) 
 
 
 def test_cross_module_generic_constructor_call_explicit_type_args(tmp_path: Path) -> None:
-    """Cross-module generic constructor with explicit type args: lib::Box::[int](value: 1)."""
+    """Cross-module generic constructor with explicit type args: lib::Box::[int](value = 1)."""
     lib_id = ModuleId.from_dotted("lib")
     modules = {
         "lib": "record Box[T]\n  value: T",
-        "entry": "import lib qualified\nlet r = lib::Box::[int](value: 1)\nr",
+        "entry": "import lib qualified\nlet r = lib::Box::[int](value = 1)\nr",
     }
     cg = _check_graph(tmp_path, modules)
     assert _binding_value_type(cg, ENTRY_ID, "r") == RecordType(
@@ -2242,11 +2242,11 @@ def test_cross_module_generic_constructor_call_explicit_type_args(tmp_path: Path
 
 
 def test_cross_module_generic_constructor_call_inferred_type_args(tmp_path: Path) -> None:
-    """Cross-module generic constructor with inferred type args: lib::Box(value: 1)."""
+    """Cross-module generic constructor with inferred type args: lib::Box(value = 1)."""
     lib_id = ModuleId.from_dotted("lib")
     modules = {
         "lib": "record Box[T]\n  value: T",
-        "entry": "import lib qualified\nlet r = lib::Box(value: 1)\nr",
+        "entry": "import lib qualified\nlet r = lib::Box(value = 1)\nr",
     }
     cg = _check_graph(tmp_path, modules)
     assert _binding_value_type(cg, ENTRY_ID, "r") == RecordType(
@@ -2258,7 +2258,7 @@ def test_open_imported_generic_type_in_annotation(tmp_path: Path) -> None:
     lib_id = ModuleId.from_dotted("lib")
     modules = {
         "lib": "record Box[T]\n  value: T",
-        "entry": "import lib\nlet x: Box[int] = Box(value: 1)\nx",
+        "entry": "import lib\nlet x: Box[int] = Box(value = 1)\nx",
     }
     cg = _check_graph(tmp_path, modules)
     assert _binding_value_type(cg, ENTRY_ID, "x") == RecordType(
@@ -2270,7 +2270,7 @@ def test_qualified_generic_type_in_annotation(tmp_path: Path) -> None:
     lib_id = ModuleId.from_dotted("lib")
     modules = {
         "lib": "record Box[T]\n  value: T",
-        "entry": "import lib qualified\nlet x: lib::Box[int] = lib::Box(value: 1)\nx",
+        "entry": "import lib qualified\nlet x: lib::Box[int] = lib::Box(value = 1)\nx",
     }
     cg = _check_graph(tmp_path, modules)
     assert _binding_value_type(cg, ENTRY_ID, "x") == RecordType(
@@ -2345,7 +2345,7 @@ def test_cross_module_qualified_generic_enum_explicit_type_args(tmp_path: Path) 
     lib_id = ModuleId.from_dotted("lib")
     modules = {
         "lib": "enum Option[T]\n  | none\n  | some(value: T)",
-        "entry": "import lib qualified\nlet r = lib::Option.some::[int](value: 1)\nr",
+        "entry": "import lib qualified\nlet r = lib::Option.some::[int](value = 1)\nr",
     }
     cg = _check_graph(tmp_path, modules)
     assert _binding_value_type(cg, ENTRY_ID, "r") == EnumType(
@@ -2357,10 +2357,20 @@ def test_cross_module_non_generic_constructor_type_args_rejected(tmp_path: Path)
     """Coverage: checker.py _check_cross_module_constructor_call — non-generic with type args."""
     modules = {
         "lib": "record Point\n  x: int",
-        "entry": "import lib qualified\nlib::Point::[int](x: 1)",
+        "entry": "import lib qualified\nlib::Point::[int](x = 1)",
     }
     with pytest.raises(AglTypeError, match="not a generic type"):
         _check_graph(tmp_path, modules)
+
+
+def test_qualified_same_named_exceptions_keep_module_field_kinds(tmp_path: Path) -> None:
+    """Qualified exception construction uses the defining module's field kinds."""
+    modules = {
+        "a": "exception Boom extends Exception\n  a: int",
+        "b": "exception Boom extends Exception\n  b: text",
+        "entry": "import a qualified\nimport b qualified\na::Boom(message = \"x\", a = 1)",
+    }
+    _check_graph(tmp_path, modules)
 
 
 
@@ -2410,7 +2420,7 @@ def test_cross_module_generic_record_template_has_module_id(tmp_path: Path) -> N
     }
     mg = _make_graph_from_files(tmp_path, modules)
     rg = resolve_graph(mg)
-    _gtt, graph_generic_table, _gcts = _build_graph_type_table(rg)
+    _gtt, graph_generic_table, _gcts, _gckft = _build_graph_type_table(rg)
 
     lib_id = ModuleId.from_dotted("lib")
     gdef = graph_generic_table.get((lib_id, "Box"))
@@ -2440,7 +2450,7 @@ def test_cross_module_generic_enum_template_has_module_id(tmp_path: Path) -> Non
     }
     mg = _make_graph_from_files(tmp_path, modules)
     rg = resolve_graph(mg)
-    _gtt, graph_generic_table, _gcts = _build_graph_type_table(rg)
+    _gtt, graph_generic_table, _gcts, _gckft = _build_graph_type_table(rg)
 
     lib_id = ModuleId.from_dotted("lib")
     gdef = graph_generic_table.get((lib_id, "Opt"))
@@ -2504,7 +2514,7 @@ def test_generic_arity_mismatch_has_span(tmp_path: Path) -> None:
     the error had no source location.  After the fix the error carries the span
     from the AppliedT call site.
     """
-    src = "record Box[T]\n  value: T\nlet x: Box[int, text] = Box(value: 1)\nx"
+    src = "record Box[T]\n  value: T\nlet x: Box[int, text] = Box(value = 1)\nx"
     with pytest.raises(AglTypeError) as exc_info:
         _check(src)
     err = exc_info.value
@@ -2696,3 +2706,24 @@ def test_cross_module_generic_func_call_wrong_type_rejected(tmp_path: Path) -> N
     }
     with pytest.raises(AglTypeError):
         _check_graph(tmp_path, modules)
+
+
+# ---------------------------------------------------------------------------
+# Named-only parameters in graph context
+# ---------------------------------------------------------------------------
+
+
+def test_named_only_param_in_graph_function(tmp_path: Path) -> None:
+    """check_graph handles a function with a named-only param (*, z) correctly."""
+    from agm.agl.typecheck.graph import CheckedModuleGraph  # type: ignore[import-untyped]
+
+    modules = {
+        "lib": "def add_named(x: int, *, z: int) -> int = x + z",
+        "entry": (
+            "import lib\n"
+            "let z = 5\n"
+            "add_named(3, z)"
+        ),
+    }
+    cg: object = _check_graph(tmp_path, modules)
+    assert isinstance(cg, CheckedModuleGraph)

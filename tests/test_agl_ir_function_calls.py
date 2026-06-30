@@ -43,7 +43,7 @@ def test_named_args_reordered() -> None:
     """Named args supplied in non-declaration order."""
     source = (
         'def greet(greeting: text, name: text) -> text = greeting + " " + name\n'
-        'let result = greet(name: "World", greeting: "Hello")\n()'
+        'let result = greet(name = "World", greeting = "Hello")\n()'
     )
     ir = evaluate_ir(source)
     assert ir["result"] == TextValue("Hello World")
@@ -90,9 +90,9 @@ def test_mutual_recursion_even_odd() -> None:
     """Mutually recursive even/odd functions."""
     source = (
         "def is_even(n: int) -> bool =\n"
-        "  if n = 0 => true else => is_odd(n - 1)\n"
+        "  if n == 0 => true else => is_odd(n - 1)\n"
         "def is_odd(n: int) -> bool =\n"
-        "  if n = 0 => false else => is_even(n - 1)\n"
+        "  if n == 0 => false else => is_even(n - 1)\n"
         "let r1 = is_even(4)\n"
         "let r2 = is_odd(3)\n()"
     )
@@ -217,7 +217,7 @@ def test_function_with_named_args_in_body_call() -> None:
     source = (
         "def greet(name: text, greeting: text = \"Hi\") -> text =\n"
         "  greeting + \", \" + name + \"!\"\n"
-        "def greet_world(g: text) -> text = greet(name: \"World\", greeting: g)\n"
+        "def greet_world(g: text) -> text = greet(name = \"World\", greeting = g)\n"
         "let result = greet_world(\"Hello\")\n()"
     )
     ir = evaluate_ir(source)
@@ -244,7 +244,7 @@ def test_function_with_field_access_in_body() -> None:
         "  x: int\n"
         "  y: int\n"
         "def get_x(p: Point) -> int = p.x\n"
-        "let p = Point(x: 3, y: 4)\n"
+        "let p = Point(x = 3, y = 4)\n"
         "let result = get_x(p)\n()"
     )
     ir = evaluate_ir(source)
@@ -338,7 +338,7 @@ def test_function_with_raise_in_body() -> None:
     source = (
         "def checked_inc(n: int) -> int =\n"
         "  if n < 0 =>\n"
-        "    raise Abort(message: \"negative\")\n"
+        "    raise Abort(message = \"negative\")\n"
         "  else =>\n"
         "    n + 1\n"
         "let result = checked_inc(5)\n()"
@@ -484,10 +484,10 @@ def test_capture_through_nested_positions_and_pattern_locals() -> None:
         "let multiplier = 3\n"
         "def describe(s: Shape) -> int =\n"
         "  case s of\n"
-        "    | Circle(radius: r) => r * multiplier\n"
-        "    | Square(side: sd) => sd * multiplier\n"
-        "let c = describe(Shape.Circle(radius: 4))\n"
-        "let sq = describe(Shape.Square(side: 5))\n()"
+        "    | Circle(radius = r) => r * multiplier\n"
+        "    | Square(side = sd) => sd * multiplier\n"
+        "let c = describe(Shape.Circle(radius = 4))\n"
+        "let sq = describe(Shape.Square(side = 5))\n()"
     )
     ir = evaluate_ir(source)
     assert ir["c"] == IntValue(12)

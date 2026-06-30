@@ -11,11 +11,13 @@ from other functions. The type of a function value is written
 ## `def` — named function declarations
 
 ```ebnf
-func_def   ::= "def" NAME type_params? "(" params? ")" "->" type_expr "=" expr
-             | "builtin" NEWLINE? "def" NAME type_params? "(" params? ")" "->" type_expr
-type_params ::= "[" NAME ("," NAME)* "]"
-params     ::= param ("," param)* ","?
-param      ::= NAME ":" type_expr ("=" expr)?
+func_def   ::= "def" NAME type_params? "(" param_list? ")" "->" type_expr "=" expr
+             | "builtin" "def" NAME type_params? "(" param_list? ")" "->" type_expr
+type_params  ::= "[" NAME ("," NAME)* "]"
+param_list   ::= param_entry ("," param_entry)* ","?
+param_entry  ::= param | param_marker
+param        ::= NAME ":" type_expr ("=" expr)?
+param_marker ::= "/" | "*" | "@" NAME    (* @pos, @std, @named *)
 ```
 
 A `def` is a top-level declaration. The body is a single expression — which
@@ -53,13 +55,45 @@ insignificant).
 
 ### Parameters
 
-Parameters are listed with explicit types. A parameter may carry a
-**default value** (`param: type = expr`). Defaulted parameters must follow
-all required parameters:
+Parameters are listed with explicit types. Each parameter belongs to one of
+three **zones** that determine how arguments at the call site are matched:
+
+| Zone | Binding | Notation in the list |
+|------|---------|---------------------|
+| **Positional-only** | Positional argument only; cannot be passed by name | Parameters before a `/` or `@std` marker, or after an `@pos` marker |
+| **Standard** | Positional or named | Parameters after a `/` or `@std` marker, or before `*`/`@named` |
+| **Named-only** | Named argument only (or bare-name shorthand) | Parameters after a `*` or `@named` marker |
+
+For `def`/`builtin def`/lambda, the **default zone is standard**: a
+parameter list with no markers has all parameters in the standard zone
+(positional or named). Markers switch zones at the boundary they appear at:
+
+```agl
+def f(x: int, /, y: int) -> int = x + y          # x pos-only, y standard
+def g(x: int, /, y: int, *, z: int) -> int = ...  # x pos-only, y std, z named-only
+def h(x: int, @std, y: int, @named, z: int) -> int = ...  # same as g
+def simple(x: int, y: int) -> int = x + y         # both standard (default)
+```
+
+`/` and `@std` are interchangeable (both mean "end of positional-only zone");
+`*` and `@named` are interchangeable (both mean "end of standard zone"). A list
+may use `/`/`*` and `@`-markers freely mixed. `@pos` opens the positional-only
+zone and has no punctuation equivalent; it must come first.
+
+At most one `/`/`@std` and one `*`/`@named` may appear, in zone order. `@pos`
+must be the first entry. Violations are static errors.
+
+**Defaults.** A parameter may carry a default value (`param: type = expr`).
+Only positional-fillable (pos-only or standard) parameters are subject to the
+ordering constraint: no *required* pos-only/standard parameter may follow a
+*defaulted* pos-only/standard one. Named-only defaults may appear in any order:
 
 ```agl
 def greet(name: text, greeting: text = "Hello") -> text =
   "${greeting}, ${name}!"
+
+def with_named_default(x: int, *, tag: text = "ok") -> text =
+  "${tag}: ${x}"   # tag is named-only; its default is unconstrained
 ```
 
 ### Scope and forward references
@@ -70,10 +104,10 @@ recursion among top-level `def`s is therefore unrestricted:
 
 ```agl
 def is_even(n: int) -> bool =
-  if n = 0 => true else => is_odd(n - 1)
+  if n == 0 => true else => is_odd(n - 1)
 
 def is_odd(n: int) -> bool =
-  if n = 0 => false else => is_even(n - 1)
+  if n == 0 => false else => is_even(n - 1)
 ```
 
 `def` is **not** a valid declaration inside a block (`do` body, `if`
@@ -204,7 +238,7 @@ returned, or stored. It may **not** be:
 - tested with `is` / `is not`.
 
 ```agl
-def bad[T](x: T, y: T) -> bool = x = y   # static error: '=' on type variable T
+def bad[T](x: T, y: T) -> bool = x == y   # static error: '==' on type variable T
 ```
 
 Each of these is a static error. This *parametricity* guarantee means a
@@ -222,7 +256,7 @@ call_expr ::= postfix_expr type_args? "(" arg_list? ")"
 type_args ::= "::" "[" type_expr ("," type_expr)* "]"
 arg_list  ::= arg ("," arg)* ","?
 arg       ::= expr                   (* positional *)
-            | NAME ":" expr          (* named *)
+            | NAME "=" expr          (* named *)
 ```
 
 **Single-argument sugar.** When there is exactly one positional argument
@@ -234,7 +268,7 @@ print review          # equivalent to print(review)
 ask "Hello?"          # equivalent to ask("Hello?")
 print res.stdout      # field-access path is a valid sugar argument
 print classify(x)     # equivalent to print(classify(x))
-f Opt.Some(x: 1)      # equivalent to f(Opt.Some(x: 1))
+f Opt.Some(x = 1)      # equivalent to f(Opt.Some(x = 1))
 ```
 
 Application binds **tighter than all operators**:
@@ -243,37 +277,60 @@ Application binds **tighter than all operators**:
 print x + 1           # parsed as (print x) + 1
 ```
 
-### Required (positional) arguments
+### Calling functions
 
-Required parameters must be supplied positionally, in declaration order:
+Arguments are matched **positional-greedy**: positional arguments fill
+positional-capable (pos-only and standard) slots left to right, in
+declaration order. Named arguments use `name = value` and may follow the
+positional arguments in any order. Positional arguments must precede named
+arguments at the call site.
 
 ```agl
 def add(x: int, y: int) -> int = x + y
+let r = add(3, 4)          # x=3, y=4 (both standard — positional or named)
+let s = add(3, y = 4)      # x=3 positional, y=4 named
 
-let r = add(3, 4)     # x=3, y=4
+def f(x: int, /, y: int) -> int = x + y
+let a = f(1, 2)            # x=1 positional-only, y=2 positional
+let b = f(1, y = 2)        # x=1 positional-only, y=2 named (standard)
+# f(x = 1, y = 2) is an error — x is positional-only
+
+def g(x: int, *, z: int) -> int = x + z
+let c = g(5, z = 3)        # x=5 (standard), z=3 named-only
+# g(5, 3) is an error — z is named-only, positional not permitted
 ```
 
-### Named and defaulted arguments
+**Named-only shorthand.** When a bare variable name `x` appears in a
+positional argument slot but all positional-capable parameters are already
+filled, it is reinterpreted as the named argument `x = x` — but only if
+`x` is a bare name (not an expression). A non-bare expression in that
+position is an error:
 
-Parameters that carry a default may be omitted at a declared-name call site.
-When supplied, they are named:
+```agl
+def h(a: int, *, key: text) -> text = "${a}: ${key}"
+let key = "hello"
+print(h(1, key))           # key is bare name, lands on named-only 'key' → key = key
+print(h(1, key = key))     # explicit form, identical result
+```
+
+**Defaults.** Defaulted parameters may be omitted. Named-only defaults may be
+supplied in any order:
 
 ```agl
 def format_msg(text: text, prefix: text = "[INFO]") -> text =
   "${prefix} ${text}"
 
 format_msg("Done.")              # prefix uses its default
-format_msg("Done.", prefix: "!") # prefix supplied by name
+format_msg("Done.", prefix = "!") # prefix supplied by name
 ```
 
-Named arguments may be given in any order after all required positional
-arguments. Unknown names, duplicates, and supplying a required positional
-argument both positionally and by name are static errors.
+Unknown names, duplicates, and supplying a positional-only parameter by name
+are static errors.
 
-Named arguments are only available when calling a **declared name** — a
-`def` or a built-in. A function *value* (bound in a `let` or passed as an
-argument) has a purely positional type and is called with positional
-arguments only.
+**Named arguments at declared-name sites only.** Named arguments are
+available when calling a **declared name** (`def` or built-in). A function
+*value* (bound in a `let` or passed as an argument) has a purely positional
+type and is called with positional arguments only.
 
 ### Calling function values
 
@@ -303,7 +360,7 @@ let h: () -> bool = fn() => true
 
 Function types are assignable by **exact structural match**: the number of
 parameters, their types (in order), and the result type must all agree. No
-variance or subtyping applies in v1.
+variance or subtyping applies.
 
 Named and defaulted arguments are erased from the function *value* type.
 A `def` with optional parameters still has a fully positional function type;
@@ -349,7 +406,7 @@ can be stored in bindings and passed to functions:
 
 ```agl
 def make_policy(retries: int) -> ParsePolicy =
-  if retries = 0 => ParsePolicy.Abort else => Retry(n: retries)
+  if retries == 0 => ParsePolicy.Abort else => Retry(n = retries)
 ```
 
 ## Complete example
@@ -369,11 +426,11 @@ def summarize_issues(issues: list[text]) -> text =
   "Issues found:\n${issues}"
 
 def review_artifact(artifact: text, max_retries: int = 2) -> Review =
-  let policy = if max_retries > 0 => Retry(n: max_retries) else => Abort
+  let policy = if max_retries > 0 => Retry(n = max_retries) else => Abort
   let r: Review = ask(
     "Review this artifact:\n${artifact}",
-    agent: reviewer,
-    on_parse_error: policy
+    agent = reviewer,
+    on_parse_error = policy
   )
   r
 

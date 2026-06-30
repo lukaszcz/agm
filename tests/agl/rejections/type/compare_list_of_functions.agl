@@ -2,5 +2,5 @@ def double(n: int) -> int = n * 2
 def triple(n: int) -> int = n * 3
 let fs: list[(int) -> int] = [double, triple]
 let gs: list[(int) -> int] = [double]
-let r = (fs = gs)
+let r = (fs == gs)
 r

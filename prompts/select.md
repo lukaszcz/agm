@@ -1,6 +1,6 @@
 Read ${TASKS_DIR}/TASK_INDEX.md. Update ${TASKS_DIR}/PROGRESS.md to track task progress - completed and remaining tasks, next unblocked task (not yet completed and not blocked by other tasks). Check against codebase sources. For the most recently completed task, verify the implementation against the corresponding task file and re-open if not fully finished.
 
-Commit in ${TASKS_DIR} (git repo separate from main repo) after updating ${TASKS_DIR}/PROGRESS.md
+If ${TASKS_DIR} is under a separate git repo distinct from the main project repo, commit in ${TASKS_DIR} after updating ${TASKS_DIR}/PROGRESS.md. NEVER commit in the main project repo or add ${TASKS_DIR}/PROGRESS.md to the main repo (it is gitignored there).
 
 Respond with either:
 - file path of the next unblocked task,
@@ -13,7 +13,7 @@ IMPORTANT: A task is not done until all its acceptance criteria are satisfied. D
 ## Format of PROGRESS.md
 
 Only three sections:
-1. Task status for each task
+1. Task status for each task (list)
     - done / blocked / unblocked (not started / in progress)
 2. Next unblocked task
 3. Completion log

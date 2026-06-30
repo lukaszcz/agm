@@ -369,15 +369,14 @@ class TestIndexBracketRemap:
             ("RSQB", "]"),
         ]
 
-    def test_do_bound_lsqb_is_do_lsqb_not_index_lsqb(self) -> None:
-        # do[3] — the [ is retagged DO_LSQB (not INDEX_LSQB or plain LSQB).
-        # Use explicit `done` terminator; `done` is now a reserved keyword (DONE).
-        assert lark_tok("do[3] tick done") == [
+    def test_do_loop_bound_merge_still_wins_over_index_lsqb(self) -> None:
+        assert lark_tok("do[3] tick until done") == [
             ("DO", "do"),
             ("DO_LSQB", "["),
             ("INT", "3"),
             ("RSQB", "]"),
             ("NAME", "tick"),
+            ("UNTIL", "until"),
             ("DONE", "done"),
         ]
 
@@ -881,7 +880,7 @@ class TestPipeContinuation:
 
     def test_pipe_does_not_push_indent(self) -> None:
         # A | line never pushes an INDENT
-        source = "if a =>\n  pass\n| b =>\n  other\n| else =>\n  final"
+        source = "if a =>\n  pass\n| b =>\n  other\n| else =>\n  finish"
         result = tok(source)
         types = [t for t, _ in result]
         # Only the branch bodies cause indents
@@ -1082,9 +1081,9 @@ class TestLexErrorSpan:
         assert exc_info.value.span is not None
 
     def test_unknown_character_raises_lex_error(self) -> None:
-        # Characters that are not valid in AgL code
+        # Characters that are not valid in AgL code (~ is not a valid AgL token)
         with pytest.raises(LexError) as exc_info:
-            tok("@")
+            tok("~")
         assert exc_info.value.span is not None
 
     def test_triple_quoted_with_escape(self) -> None:
@@ -1570,13 +1569,14 @@ class TestIdentifierUnicodeAndSymbols:
         assert tok("do-it-now!") == [("NAME", "do-it-now!")]
 
     def test_operator_chars_in_identifier(self) -> None:
-        # <, >, =, +, * are identifier-continuation characters, so a run of
-        # them with no surrounding whitespace is one identifier.
+        # -, >, +, * (but NOT =) are identifier-continuation characters, so
+        # a run of them with no surrounding whitespace stays one identifier.
         assert tok("a->b") == [("NAME", "a->b")]
-        assert tok("x!=3") == [("NAME", "x!=3")]
         assert tok("a+b") == [("NAME", "a+b")]
         assert tok("n*x") == [("NAME", "n*x")]
-        assert tok("Pass=>()") == [("NAME", "Pass=>"), ("LPAR", "("), ("RPAR", ")")]
+        # = is a stop character: a=b lexes as NAME EQ NAME, not a single identifier.
+        assert tok("x!=3") == [("NAME", "x!"), ("EQ", "="), ("INT", "3")]
+        assert tok("Pass=>()") == [("NAME", "Pass"), ("ARROW", "=>"), ("LPAR", "("), ("RPAR", ")")]
 
     def test_spaces_break_identifier_before_operator(self) -> None:
         # Whitespace is a stop character, so the operator tokens re-emerge.
@@ -1945,36 +1945,14 @@ class TestV2Keywords:
         assert types == ["def", "fn"]
 
     def test_still_reserved_keywords_unchanged(self) -> None:
-        # let/var/do/until/done/if/else/case/of/try/catch/raise/as/and/or/not
+        # let/var/do/until/if/else/case/of/try/catch/raise/as/and/or/not
         # are still reserved.
-        source = "let var set do until done if else case of try catch raise as and or not"
+        source = "let var set do until if else case of try catch raise as and or not"
         result = tok(source)
         types = [t for t, _ in result]
-        for kw in ("let", "var", "do", "until", "done", "if", "else", "case",
+        for kw in ("let", "var", "do", "until", "if", "else", "case",
                    "of", "try", "catch", "raise", "as", "and", "or", "not"):
             assert kw in types, f"keyword {kw!r} must still be reserved"
-
-    def test_done_lexes_as_keyword_token(self) -> None:
-        # `done` is now a reserved keyword (loop terminator).
-        result = tok("done")
-        assert result == [("done", "done")]
-
-    def test_done_is_reserved_not_var_name(self) -> None:
-        types = [t for t, _ in tok("done")]
-        assert "NAME" not in types
-        assert "done" in types
-
-    def test_done_remapped_to_uppercase_in_lark_interface(self) -> None:
-        lexer = AglLexer(None)
-        state = LexerState("done")
-        result = list(lexer.lex(state, None))
-        assert len(result) == 1
-        assert result[0].type == "DONE"
-
-    def test_done_prefix_identifier_is_var_name(self) -> None:
-        # "doneness" starts with "done" but must lex as a plain identifier.
-        result = tok("doneness")
-        assert result == [("NAME", "doneness")]
 
 
 class TestV2ThinArrow:
@@ -2062,62 +2040,39 @@ class TestV2ThinArrow:
         assert result == [("THIN_ARROW", "->"), ("ARROW", "=>")]
 
 
-class TestV2DoLsqb:
-    """Verify the do[N] opening bracket is lexed as DO_LSQB after v2 changes.
-
-    Note: the DO_LSQB remap (the first ``[`` immediately following a ``do``
-    keyword becomes ``DO_LSQB``) is performed by ``_remap()`` inside
-    ``AglLexer.lex()`` — the Lark-parser-facing interface.  The plain
-    ``tokenize()`` / ``tok()`` helper does NOT perform this remap (it bypasses
-    ``_remap``).  Tests here use ``AglLexer.lex()`` directly so they test the
-    actual remap path.
-    """
+class TestV2LoopBoundPreserved:
+    """Verify the do[N] bracket tokens are preserved for the grammar."""
 
     def _lex(self, source: str) -> list[tuple[str, str]]:
-        """Lex via AglLexer (Lark interface) which applies DO_LSQB remap."""
+        """Lex via AglLexer (Lark interface)."""
         lexer = AglLexer(None)
         state = LexerState(source)
         return [(t.type, str(t)) for t in lexer.lex(state, None)]
 
     def test_do_loop_bound_merge_preserved(self) -> None:
-        # do[5] — the first [ after do becomes DO_LSQB; INT and RSQB follow.
         result = self._lex("do[5]")
         types = [t for t, _ in result]
-        assert "DO" in types
-        assert "DO_LSQB" in types
-        assert "INT" in types
-        assert "RSQB" in types
-        # The bound's [ must NOT be a plain LSQB.
-        assert "LSQB" not in types
+        assert types == ["DO", "DO_LSQB", "INT", "RSQB"]
 
     def test_loop_bound_value_is_integer_string(self) -> None:
-        # The bound value is carried by the INT token, not a merged token.
         result = self._lex("do[10]")
-        int_val = next(v for t, v in result if t == "INT")
-        assert int_val == "10"
+        lb = next(v for t, v in result if t == "INT")
+        assert lb == "10"
 
     def test_loop_bound_not_confused_with_list_literal(self) -> None:
-        # [5] alone (not after do) must NOT become DO_LSQB.
+        # [5] alone (not after do) must NOT become LOOP_BOUND even via AglLexer.
         result = self._lex("[5]")
         types = [t for t, _ in result]
         assert "LSQB" in types
         assert "INT" in types
         assert "RSQB" in types
-        assert "DO_LSQB" not in types
 
     def test_do_with_body_and_thin_arrow_no_conflict(self) -> None:
-        # DO_LSQB must appear and THIN_ARROW must also appear without conflict.
+        # Ensure the thin-arrow addition doesn't interfere with do[N] tokenization.
         result = self._lex("do[3] x -> y")
         types = [t for t, _ in result]
-        assert "DO_LSQB" in types
+        assert types[:4] == ["DO", "DO_LSQB", "INT", "RSQB"]
         assert "THIN_ARROW" in types
-
-    def test_do_lsqb_with_space_between_do_and_bracket(self) -> None:
-        # Whitespace between do and [ is allowed; the [ still becomes DO_LSQB.
-        result = self._lex("do [5]")
-        types = [t for t, _ in result]
-        assert "DO_LSQB" in types
-        assert "LSQB" not in types
 
 
 # ---------------------------------------------------------------------------
@@ -2335,113 +2290,77 @@ class TestModuleSystemLexer:
 
 
 # ---------------------------------------------------------------------------
-# Synthetic DONE injection (plan §4.2)
+# AT token (@) — parameter-marker prefix for @pos / @std / @named
 # ---------------------------------------------------------------------------
 
 
-class TestSyntheticDoneInjection:
-    """Layout injects a synthetic DONE token when a multi-line loop body
-    is closed without an explicit until/done terminator."""
+class TestAtToken:
+    """Tests for the standalone AT token (``@``).
 
-    def _toks(self, source: str) -> list[tuple[str, str]]:
-        """Return raw (lowercase) token-type pairs from the layout pass."""
-        return tok(source)
+    ``@`` lexes as a single ``AT`` token.  A following identifier is emitted
+    as a separate ``NAME`` token, so ``@pos``, ``@std``, and ``@named`` each
+    produce two tokens: ``AT`` then ``NAME``.  ``pos``, ``std``, and ``named``
+    without a leading ``@`` remain ordinary ``NAME`` tokens.
+    """
 
-    def test_suite_body_omitted_terminator_injects_done(self) -> None:
-        # A multi-line do body followed by a sibling statement at column 0
-        # should get a synthetic DONE after the DEDENT.
-        source = "do\n  x := 1\nprint x"
-        result = self._toks(source)
-        types = [t for t, _ in result]
-        assert "do" in types
-        assert "_INDENT" in types
-        assert "_DEDENT" in types
-        assert "done" in types
-        # DONE must come after DEDENT (not before)
-        done_idx = types.index("done")
-        dedent_idx = types.index("_DEDENT")
-        assert dedent_idx < done_idx
+    def test_at_alone_is_at_token(self) -> None:
+        assert tok("@") == [("AT", "@")]
 
-    def test_suite_body_with_explicit_done_not_doubled(self) -> None:
-        # Explicit `done` in source → only one DONE in the stream (no synthetic copy).
-        source = "do\n  x := 1\ndone"
-        result = self._toks(source)
-        types = [t for t, _ in result]
-        assert types.count("done") == 1
+    def test_at_pos_is_at_name(self) -> None:
+        assert tok("@pos") == [("AT", "@"), ("NAME", "pos")]
 
-    def test_suite_body_with_explicit_until_no_synthetic_done(self) -> None:
-        # Explicit `until` terminator → no synthetic DONE injected.
-        source = "do\n  x := 1\nuntil false"
-        result = self._toks(source)
-        types = [t for t, _ in result]
-        assert "done" not in types
-        assert "until" in types
+    def test_at_std_is_at_name(self) -> None:
+        assert tok("@std") == [("AT", "@"), ("NAME", "std")]
 
-    def test_bound_suite_body_omitted_terminator_injects_done(self) -> None:
-        # do[n] with suite body and omitted terminator gets synthetic DONE.
-        source = "do[3]\n  x := 1\nprint x"
-        result = lark_tok(source)
-        types = [t for t, _ in result]
-        assert "DO_LSQB" in types
-        assert "_DEDENT" in types
-        assert "DONE" in types
-        done_idx = types.index("DONE")
-        dedent_idx = types.index("_DEDENT")
-        assert dedent_idx < done_idx
+    def test_at_named_is_at_name(self) -> None:
+        assert tok("@named") == [("AT", "@"), ("NAME", "named")]
 
-    def test_nested_loop_inner_omitted_outer_explicit_until(self) -> None:
-        # Inner loop: omitted terminator → synthetic DONE after inner DEDENT.
-        # Outer loop: explicit until → no synthetic DONE for outer.
-        source = "do\n  do\n    body\nuntil false"
-        result = lark_tok(source)
-        types = [t for t, _ in result]
-        # Should have exactly one DONE (synthetic for inner), no extra DONE for outer
-        assert types.count("DONE") == 1
-        # Outer loop is closed by UNTIL
-        assert "UNTIL" in types
+    def test_pos_without_at_is_name(self) -> None:
+        # `pos` is not a keyword — it must remain a plain identifier everywhere.
+        assert tok("pos") == [("NAME", "pos")]
 
-    def test_inline_body_no_synthetic_done(self) -> None:
-        # Inline body (do ... until cond all on one line) → no DONE injection.
-        source = "do x := 1 until false"
-        result = self._toks(source)
-        types = [t for t, _ in result]
-        # No INDENT means inline, no synthetic DONE either.
-        assert "_INDENT" not in types
-        assert "done" not in types
+    def test_std_without_at_is_name(self) -> None:
+        assert tok("std") == [("NAME", "std")]
 
-    def test_eof_omitted_terminator_injects_done(self) -> None:
-        # A loop at EOF (no sibling statement) also gets synthetic DONE.
-        source = "do\n  x := 1"
-        result = self._toks(source)
-        types = [t for t, _ in result]
-        assert "done" in types
+    def test_named_without_at_is_name(self) -> None:
+        assert tok("named") == [("NAME", "named")]
 
-    def test_for_loop_mid_line_do_until_no_spurious_done(self) -> None:
-        # `for x in items do` has `do` mid-line (after the for-clause).
-        # The enclosing indent level (0) matches the `until` column, so no
-        # synthetic DONE is emitted and the until terminates the loop.
-        source = "for x in items do\n  body\nuntil false"
-        result = lark_tok(source)
-        types = [t for t, _ in result]
-        assert "DONE" not in types
-        assert "UNTIL" in types
+    def test_at_adjacent_to_punctuation(self) -> None:
+        # (@named, x) → LPAR AT NAME("named") COMMA NAME("x") RPAR
+        assert tok("(@named, x)") == [
+            ("LPAR", "("),
+            ("AT", "@"),
+            ("NAME", "named"),
+            ("COMMA", ","),
+            ("NAME", "x"),
+            ("RPAR", ")"),
+        ]
 
-    def test_for_while_stacked_do_until_no_spurious_done(self) -> None:
-        # Stacked for/while/do form: for_clause on one line, while_clause on
-        # the next, then do on its own line followed by a suite body.
-        # The until at the enclosing indent closes the loop without a synthetic DONE.
-        source = "for x in items\nwhile true\ndo\n  body\nuntil false"
-        result = lark_tok(source)
-        types = [t for t, _ in result]
-        assert "DONE" not in types
-        assert "UNTIL" in types
+    def test_at_adjacent_to_operators(self) -> None:
+        # Spaced @std between other tokens
+        assert tok("/ @std *") == [
+            ("SLASH", "/"),
+            ("AT", "@"),
+            ("NAME", "std"),
+            ("STAR", "*"),
+        ]
 
-    def test_mid_line_do_expr_until_no_spurious_done(self) -> None:
-        # `let r = do` places `do` mid-line (column > 0). The suite body opens
-        # tagged with the enclosing indent level (column 0), so an `until` at
-        # column 0 is recognised as an explicit terminator, not a spurious close.
-        source = "let r = do\n  ()\nuntil true"
-        result = lark_tok(source)
-        types = [t for t, _ in result]
-        assert "DONE" not in types
-        assert "UNTIL" in types
+    def test_at_breaks_preceding_identifier(self) -> None:
+        # `@` is in _IDENT_STOP, so it terminates a preceding identifier scan.
+        assert tok("x@pos") == [("NAME", "x"), ("AT", "@"), ("NAME", "pos")]
+
+    def test_at_with_space_before_name(self) -> None:
+        # A space between @ and the name still yields exactly AT then NAME.
+        assert tok("@ pos") == [("AT", "@"), ("NAME", "pos")]
+
+    def test_at_token_position(self) -> None:
+        # Verify the AT token carries correct position information.
+        tokens = list(tokenize("@pos"))
+        at_tok = tokens[0]
+        assert at_tok.type == "AT"
+        assert at_tok.line == 1
+        assert at_tok.column == 1
+        name_tok = tokens[1]
+        assert name_tok.type == "NAME"
+        assert str(name_tok) == "pos"
+        assert name_tok.column == 2  # `pos` starts immediately after `@`

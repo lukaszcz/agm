@@ -39,7 +39,7 @@ def test_text_ask_basic() -> None:
     """Text-codec ask: passthrough, no JSON involved."""
     source = """\
 agent summarizer
-let summary: text = ask("Summarise it.", agent: summarizer)
+let summary: text = ask("Summarise it.", agent = summarizer)
 summary
 """
     ir = evaluate_ir_with_agents(
@@ -58,7 +58,7 @@ def test_json_int_ask() -> None:
     """JSON-int ask: agent returns a bare integer."""
     source = """\
 agent counter
-let n: int = ask("How many?", agent: counter)
+let n: int = ask("How many?", agent = counter)
 n
 """
     ir = evaluate_ir_with_agents(
@@ -81,7 +81,7 @@ record Point
   y: int
 
 agent locator
-let pt: Point = ask("Find the point.", agent: locator)
+let pt: Point = ask("Find the point.", agent = locator)
 pt
 """
     ir = evaluate_ir_with_agents(
@@ -102,7 +102,7 @@ def test_json_list_ask() -> None:
     """JSON-list ask: agent returns a JSON array."""
     source = """\
 agent lister
-let items: list[text] = ask("List items.", agent: lister)
+let items: list[text] = ask("List items.", agent = lister)
 items
 """
     ir = evaluate_ir_with_agents(
@@ -132,7 +132,7 @@ enum Status
   | Err(msg: text)
 
 agent checker
-let status: Status = ask("Check it.", agent: checker)
+let status: Status = ask("Check it.", agent = checker)
 status
 """
     ir = evaluate_ir_with_agents(
@@ -152,7 +152,7 @@ def test_lenient_json_fence_stripping() -> None:
     """Lenient mode: agent wraps JSON in a markdown fence — still parsed."""
     source = """\
 agent answerer
-let n: int = ask("Give me a number.", agent: answerer)
+let n: int = ask("Give me a number.", agent = answerer)
 n
 """
     fenced = "```json\n17\n```"
@@ -172,7 +172,7 @@ def test_retry_success_second_attempt() -> None:
     """Retry policy: first response is invalid JSON, second is valid."""
     source = """\
 agent parser
-let n: int = ask("Parse this.", agent: parser, on_parse_error: Retry(n: 1))
+let n: int = ask("Parse this.", agent = parser, on_parse_error = Retry(n = 1))
 n
 """
     ir = evaluate_ir_with_agents(
@@ -191,7 +191,7 @@ def test_retry_exhausted_raises() -> None:
     """Retry policy: all attempts fail → AgentParseError raised."""
     source = """\
 agent parser
-let n: int = ask("Parse this.", agent: parser, on_parse_error: Retry(n: 1))
+let n: int = ask("Parse this.", agent = parser, on_parse_error = Retry(n = 1))
 n
 """
     ir_exc = evaluate_ir_raises_with_agents(
@@ -211,7 +211,7 @@ def test_strict_json_mode() -> None:
     """strict_json: true — bare JSON without fences, no repair."""
     source = """\
 agent strict_agent
-let b: bool = ask("True or false?", agent: strict_agent, strict_json: true)
+let b: bool = ask("True or false?", agent = strict_agent, strict_json = true)
 b
 """
     ir = evaluate_ir_with_agents(
@@ -230,16 +230,16 @@ def test_unit_typed_ask() -> None:
     """Unit ask: agent is called for side effects, result is discarded."""
     source = """\
 agent notifier
-let _: unit = ask("Notify!", agent: notifier)
-let result: text = "acknowledged"
+let _: unit = ask("Notify!", agent = notifier)
+let result: text = "done"
 result
 """
     ir = evaluate_ir_with_agents(
         source,
         scripts={"notifier": ["acknowledged"]},
     )
-    # The `_` binding may or may not appear in the snapshot; check `result` which always does.
-    assert ir.get("result") == TextValue("acknowledged")
+    # The `_` binding may or may not appear in the snapshot; check a named binding.
+    assert ir.get("result") == TextValue("done")
 
 
 # ---------------------------------------------------------------------------
@@ -251,7 +251,7 @@ def test_ask_inside_function() -> None:
     """ask call site inside a function body — agent is captured in closure."""
     source = """\
 agent namer
-def get_name(prompt: text) -> text = ask(prompt, agent: namer)
+def get_name(prompt: text) -> text = ask(prompt, agent = namer)
 let name: text = get_name("What is the name?")
 name
 """
@@ -272,8 +272,8 @@ def test_multiple_agents() -> None:
     source = """\
 agent first
 agent second
-let a: text = ask("First.", agent: first)
-let b: text = ask("Second.", agent: second)
+let a: text = ask("First.", agent = first)
+let b: text = ask("Second.", agent = second)
 b
 """
     ir = evaluate_ir_with_agents(
@@ -296,7 +296,7 @@ def test_schema_validation_failure_wrong_type() -> None:
     """Agent returns invalid JSON (fails schema validation) → AgentParseError."""
     source = """\
 agent validator
-let n: int = ask("Give int.", agent: validator)
+let n: int = ask("Give int.", agent = validator)
 n
 """
     # Agent returns a string, not an integer — schema validation fails.
@@ -317,7 +317,7 @@ def test_strict_json_invalid_raises() -> None:
     """strict_json=true with fenced JSON: strict mode does not strip fences."""
     source = """\
 agent strict_agent
-let n: int = ask("Give int.", agent: strict_agent, strict_json: true)
+let n: int = ask("Give int.", agent = strict_agent, strict_json = true)
 n
 """
     # Fenced JSON fails in strict mode (strict does not strip fences).
@@ -359,7 +359,7 @@ def test_ask_request_builds_record() -> None:
     """ask-request: no agent dispatch, returns an AgentRequest-shaped record."""
     source = """\
 agent dummy
-let req = ask-request("My prompt.", agent: dummy)
+let req = ask-request("My prompt.", agent = dummy)
 let agent_name: text = req.agent
 let prompt_text: text = req.prompt
 prompt_text
@@ -382,7 +382,7 @@ def test_retry_with_schema_validation_error_then_success() -> None:
     """Retry: first response fails schema, second is valid."""
     source = """\
 agent fixer
-let n: int = ask("Give int.", agent: fixer, on_parse_error: Retry(n: 1))
+let n: int = ask("Give int.", agent = fixer, on_parse_error = Retry(n = 1))
 n
 """
     # First response: string (wrong type) → schema error; second: valid int.
@@ -473,7 +473,7 @@ enum Status
   | Err(msg: text)
 
 agent checker
-let s: Status = ask("Status?", agent: checker, on_parse_error: Retry(n: 1))
+let s: Status = ask("Status?", agent = checker, on_parse_error = Retry(n = 1))
 s
 """
     ir = evaluate_ir_with_agents(
@@ -617,7 +617,7 @@ def test_ask_request_typed_builds_record() -> None:
     """ask-request with explicit type argument builds AgentRequest record."""
     source = """\
 agent worker
-let req = ask-request::[int]("Give me a number.", agent: worker)
+let req = ask-request::[int]("Give me a number.", agent = worker)
 let prompt_text: text = req.prompt
 prompt_text
 """
@@ -1486,7 +1486,7 @@ def test_ir_ask_request_unit_contract() -> None:
     """IrAskRequest with is_unit contract -> AgentRequest.target_type is None."""
     source = """\
 agent a
-let req = ask-request("Do it.", agent: a)
+let req = ask-request("Do it.", agent = a)
 let prompt_text: text = req.prompt
 prompt_text
 """
@@ -1565,7 +1565,7 @@ def test_lower_on_parse_error_abort_gives_one_attempt() -> None:
     """_extract_max_attempts: Abort policy → 1 attempt."""
     source = """\
 agent a
-let n: int = ask("?", agent: a, on_parse_error: Abort)
+let n: int = ask("?", agent = a, on_parse_error = Abort)
 n
 """
     from tests.agl.ir_harness import evaluate_ir_with_agents
@@ -1714,7 +1714,7 @@ def test_ir_ask_request_unit_typed() -> None:
     """IrAskRequest with is_unit=True contract -> target_type=None in record."""
     source = """\
 agent a
-let req = ask-request::[unit]("Do it.", agent: a)
+let req = ask-request::[unit]("Do it.", agent = a)
 let target = req.target_type
 target
 """
@@ -1799,7 +1799,7 @@ def test_lower_on_parse_error_field_access_retry() -> None:
     """_extract_max_attempts: FieldAccess callee (qualified Retry) → correct attempt count."""
     source = """\
 agent a
-let n: int = ask("?", agent: a, on_parse_error: ::Retry(n: 2))
+let n: int = ask("?", agent = a, on_parse_error = ::Retry(n = 2))
 n
 """
     from tests.agl.ir_harness import evaluate_ir_with_agents
@@ -2284,7 +2284,7 @@ enum Status
   | Err(msg: text)
 
 agent checker
-let status: Status = ask("Check.", agent: checker)
+let status: Status = ask("Check.", agent = checker)
 status
 """
     ir_exc = evaluate_ir_raises_with_agents(
@@ -2321,7 +2321,7 @@ enum Status
   | Err(msg: text)
 
 agent checker
-let status: Status = ask("Check.", agent: checker)
+let status: Status = ask("Check.", agent = checker)
 status
 """
     ir_exc = evaluate_ir_raises_with_agents(
@@ -2370,7 +2370,7 @@ enum Status
   | Err(msg: text)
 
 agent checker
-let status: Status = ask("Check.", agent: checker)
+let status: Status = ask("Check.", agent = checker)
 status
 """
     ir_exc = evaluate_ir_raises_with_agents(

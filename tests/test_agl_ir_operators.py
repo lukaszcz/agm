@@ -111,7 +111,7 @@ def test_div_by_zero_raises() -> None:
 # ---------------------------------------------------------------------------
 
 def test_eq_int() -> None:
-    source = "let x: bool = 3 = 3\n()"
+    source = "let x: bool = 3 == 3\n()"
     ir = evaluate_ir(source)
     assert ir["x"] == BoolValue(True)
 
@@ -121,7 +121,7 @@ def test_neq_int() -> None:
     assert ir["x"] == BoolValue(True)
 
 def test_eq_text() -> None:
-    source = 'let x: bool = "a" = "a"\n()'
+    source = 'let x: bool = "a" == "a"\n()'
     ir = evaluate_ir(source)
     assert ir["x"] == BoolValue(True)
 
@@ -131,12 +131,12 @@ def test_neq_text() -> None:
     assert ir["x"] == BoolValue(True)
 
 def test_eq_bool() -> None:
-    source = "let x: bool = true = true\n()"
+    source = "let x: bool = true == true\n()"
     ir = evaluate_ir(source)
     assert ir["x"] == BoolValue(True)
 
 def test_eq_int_decimal_widening() -> None:
-    source = "let x: bool = 2 = 2.0\n()"
+    source = "let x: bool = 2 == 2.0\n()"
     ir = evaluate_ir(source)
     assert ir["x"] == BoolValue(True)
 
@@ -285,14 +285,14 @@ def test_or_true_short_circuit() -> None:
 def test_and_short_circuit_rhs_not_evaluated() -> None:
     """false and <div-by-zero> must short-circuit: rhs must NOT be evaluated."""
     # If the rhs were evaluated, 1/0 would raise ArithmeticError.
-    source = "let x: bool = false and (1 / 0 = 0.0)\n()"
+    source = "let x: bool = false and (1 / 0 == 0.0)\n()"
     ir = evaluate_ir(source)
     assert ir["x"] == BoolValue(False)
 
 def test_or_short_circuit_rhs_not_evaluated() -> None:
     """true or <div-by-zero> must short-circuit: rhs must NOT be evaluated."""
     # If the rhs were evaluated, 1/0 would raise ArithmeticError.
-    source = "let y: bool = true or (1 / 0 = 0.0)\n()"
+    source = "let y: bool = true or (1 / 0 == 0.0)\n()"
     ir = evaluate_ir(source)
     assert ir["y"] == BoolValue(True)
 

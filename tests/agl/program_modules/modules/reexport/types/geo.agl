@@ -1,0 +1,6 @@
+record Point
+  x: int
+  y: int
+
+def make_point(x: int, y: int) -> Point = Point(x = x, y = y)
+private def _raw() -> int = 0

@@ -61,6 +61,7 @@ from agm.agl.ir.nodes import (
     IrCatchHandler,
     IrCoerce,
     IrCompare,
+    IrConfigBind,
     IrConstBool,
     IrConstDecimal,
     IrConstInt,
@@ -720,6 +721,17 @@ def _validate_expr(node: IrExpr, ctx: _Context) -> None:
                     raise InvalidIrError(
                         f"IrExec has max_attempts={node.max_attempts!r} (must be >= 1)"
                     )
+
+        case IrConfigBind(symbol=sym, value=value_expr):
+            _validate_location(node.location, ctx)
+            if ctx.deep:
+                if sym not in ctx.program.symbols:
+                    raise InvalidIrError(
+                        f"IrConfigBind references symbol_id={sym.value!r}"
+                        " which is not in program.symbols"
+                    )
+            if value_expr is not None:
+                _validate_expr(value_expr, ctx)
 
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)

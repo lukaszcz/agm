@@ -178,6 +178,7 @@ PLUS = "PLUS"  # +
 MINUS = "MINUS"  # -
 STAR = "STAR"  # *
 SLASH = "SLASH"  # /
+AT = "AT"  # @
 LPAR = "LPAR"  # (
 RPAR = "RPAR"  # )
 LSQB = "LSQB"  # [
@@ -193,7 +194,7 @@ DOT = "DOT"  # .
 PIPE = "PIPE"  # |
 SEMICOLON = "SEMICOLON"  # ;
 
-# Error token emitted for "==" so the parser can emit a friendly diagnostic.
+# Equality operator token for "==".
 EQ_EQ = "EQ_EQ"  # ==
 
 # Synthetic token: the "[" that opens a loop bound, i.e. the first "[" after the
@@ -210,6 +211,7 @@ IMPORT = "IMPORT"       # contextual: 'import' at item-start
 QUALIFIED = "QUALIFIED" # contextual: 'qualified' in import line
 USING = "USING"         # contextual: 'using' in import line
 HIDING = "HIDING"       # contextual: 'hiding' in import line
+EXPORT = "EXPORT"       # contextual: 'export' in import line
 PRIVATE = "PRIVATE"     # contextual: 'private' at item-start
 MODQUAL = "MODQUAL"     # synthetic: merged module-qualifier prefix (e.g. "foo.bar::")
 MODPATH = "MODPATH"     # synthetic: merged module path in import (e.g. "foo.bar")

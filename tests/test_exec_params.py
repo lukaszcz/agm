@@ -56,6 +56,23 @@ class TestCheckParamCollisions:
         params = (_make_param("msg"), _make_param("count"), _make_param("verbose", BoolType()))
         assert check_param_collisions(params) == []
 
+    def test_verbatim_collision_with_max_iters(self) -> None:
+        from agm.cli_support.exec_params import check_param_collisions
+
+        # verbatim: param name max-iters (kebab) → --max-iters is reserved
+        params = (_make_param("max-iters"),)
+        errors = check_param_collisions(params)
+        assert len(errors) == 1
+        assert "max-iters" in errors[0]
+
+    def test_underscore_max_iters_no_collision(self) -> None:
+        from agm.cli_support.exec_params import check_param_collisions
+
+        # underscore: --max_iters ≠ --max-iters (no normalization → no collision)
+        params = (_make_param("max_iters"),)
+        errors = check_param_collisions(params)
+        assert errors == []
+
     def test_exact_collision_with_command(self) -> None:
         from agm.cli_support.exec_params import check_param_collisions
 
@@ -64,14 +81,22 @@ class TestCheckParamCollisions:
         assert len(errors) == 1
         assert "command" in errors[0]
 
-    def test_normalized_collision_strict_json(self) -> None:
+    def test_verbatim_collision_strict_json(self) -> None:
         from agm.cli_support.exec_params import check_param_collisions
 
-        # param strict_json → --strict_json normalizes to --strict-json (reserved)
-        params = (_make_param("strict_json"),)
+        # verbatim: param strict-json (kebab) → --strict-json is reserved
+        params = (_make_param("strict-json"),)
         errors = check_param_collisions(params)
         assert len(errors) == 1
-        assert "strict_json" in errors[0]
+        assert "strict-json" in errors[0]
+
+    def test_underscore_strict_json_no_collision(self) -> None:
+        from agm.cli_support.exec_params import check_param_collisions
+
+        # underscore form no longer normalises → --strict_json ≠ --strict-json
+        params = (_make_param("strict_json"),)
+        errors = check_param_collisions(params)
+        assert errors == []
 
     def test_bool_no_prefix_collision_no_log(self) -> None:
         from agm.cli_support.exec_params import check_param_collisions
@@ -97,19 +122,28 @@ class TestCheckParamCollisions:
         assert len(errors) == 1
         assert "runner" in errors[0]
 
-    def test_dry_run_normalized_collision(self) -> None:
+    def test_verbatim_collision_dry_run(self) -> None:
         from agm.cli_support.exec_params import check_param_collisions
 
-        # param dry_run → --dry_run normalizes to --dry-run (reserved)
-        params = (_make_param("dry_run"),)
+        # verbatim: param dry-run (kebab) → --dry-run is reserved
+        params = (_make_param("dry-run"),)
         errors = check_param_collisions(params)
         assert len(errors) == 1
-        assert "dry_run" in errors[0]
+        assert "dry-run" in errors[0]
+
+    def test_underscore_dry_run_no_collision(self) -> None:
+        from agm.cli_support.exec_params import check_param_collisions
+
+        # underscore form: --dry_run ≠ --dry-run (no normalization)
+        params = (_make_param("dry_run"),)
+        errors = check_param_collisions(params)
+        assert errors == []
 
     def test_multiple_collisions_reported(self) -> None:
         from agm.cli_support.exec_params import check_param_collisions
 
-        params = (_make_param("runner"), _make_param("command"))
+        # Both use kebab engine key names (verbatim match).
+        params = (_make_param("runner"), _make_param("max-iters"))
         errors = check_param_collisions(params)
         assert len(errors) == 2
 
@@ -120,14 +154,22 @@ class TestCheckParamCollisions:
         errors = check_param_collisions(params)
         assert "7" in errors[0]
 
-    def test_module_path_collision(self) -> None:
+    def test_verbatim_collision_module_path(self) -> None:
         from agm.cli_support.exec_params import check_param_collisions
 
-        # param module_path → --module_path normalizes to --module-path (reserved)
-        params = (_make_param("module_path"),)
+        # verbatim: param module-path (kebab) → --module-path is reserved
+        params = (_make_param("module-path"),)
         errors = check_param_collisions(params)
         assert len(errors) == 1
-        assert "module_path" in errors[0]
+        assert "module-path" in errors[0]
+
+    def test_underscore_module_path_no_collision(self) -> None:
+        from agm.cli_support.exec_params import check_param_collisions
+
+        # underscore form: --module_path ≠ --module-path (no normalization)
+        params = (_make_param("module_path"),)
+        errors = check_param_collisions(params)
+        assert errors == []
 
     def test_log_collision(self) -> None:
         from agm.cli_support.exec_params import check_param_collisions

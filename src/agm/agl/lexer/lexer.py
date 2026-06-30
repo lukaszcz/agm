@@ -42,6 +42,7 @@ from agm.agl.lexer.tokens import (
     DCOLON,
     DO_LSQB,
     DOT,
+    EXPORT,
     GRAMMAR_TOKEN_REMAP,
     HIDING,
     IMPORT,
@@ -136,12 +137,15 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
     - 'import' → IMPORT when preceded by start-of-file / _NEWLINE / _INDENT /
       _DEDENT / SEMICOLON (i.e. at item-start position).
     - 'private' → PRIVATE under the same item-start condition.
+    - 'export' → EXPORT under the same item-start condition.
     - 'qualified' → QUALIFIED, 'using' → USING, 'hiding' → HIDING only
       within an import declaration line (after IMPORT has been emitted on
       the current logical line, up to the next line/statement terminator).
+    - 'using' → USING, 'hiding' → HIDING within an export declaration line.
     """
     result: list[Token] = []
     in_import_line = False
+    in_export_line = False
     prev_type: str | None = None  # None means start-of-stream
 
     for tok in tokens:
@@ -151,18 +155,27 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
         # Track import-line window: close on line/stmt terminators
         if tt in ("_NEWLINE", "_INDENT", "_DEDENT", "SEMICOLON"):
             in_import_line = False
+            in_export_line = False
 
         if tt == NAME:
             at_item_start = prev_type is None or prev_type in _ITEM_START_TYPES
             if tv == "import" and at_item_start:
                 tok = _retype(tok, IMPORT)
                 in_import_line = True
+            elif tv == "export" and at_item_start:
+                tok = _retype(tok, EXPORT)
+                in_export_line = True
             elif tv == "private" and at_item_start:
                 tok = _retype(tok, PRIVATE)
             elif in_import_line:
                 if tv == "qualified":
                     tok = _retype(tok, QUALIFIED)
                 elif tv == "using":
+                    tok = _retype(tok, USING)
+                elif tv == "hiding":
+                    tok = _retype(tok, HIDING)
+            elif in_export_line:
+                if tv == "using":
                     tok = _retype(tok, USING)
                 elif tv == "hiding":
                     tok = _retype(tok, HIDING)
@@ -176,7 +189,7 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
 def _merge_modpath(tokens: list[Token]) -> list[Token]:
     """Merge import module paths into single MODPATH tokens.
 
-    Pattern: immediately following an IMPORT token, consume
+    Pattern: immediately following an IMPORT or EXPORT token, consume
     NAME (DOT NAME)* into a single MODPATH token whose value
     is the dotted path (e.g. "foo.bar", "utils").
 
@@ -191,7 +204,7 @@ def _merge_modpath(tokens: list[Token]) -> list[Token]:
     n = len(tokens)
     while i < n:
         tok = tokens[i]
-        if tok.type == IMPORT and i + 1 < n and tokens[i + 1].type == NAME:
+        if tok.type in (IMPORT, EXPORT) and i + 1 < n and tokens[i + 1].type == NAME:
             result.append(tok)
             i += 1
             # Absorb NAME (DOT NAME)*. Module path segments may begin with

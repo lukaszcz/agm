@@ -80,7 +80,7 @@
 // ---------------------------------------------------------------------------
 
 %declare NAME
-%declare IMPORT QUALIFIED USING HIDING PRIVATE MODQUAL MODPATH
+%declare IMPORT QUALIFIED USING HIDING EXPORT PRIVATE MODQUAL MODPATH
 %declare AS_QUESTION
 // AGENT: the reserved word `agent`.  Declared (rather than written as the
 // string literal "agent") so it can be referenced by name in `field_name`,
@@ -94,15 +94,11 @@
 // referenceable by name in field_name without grammar conflicts.
 %declare TO DOWNTO BY
 %declare INT DECIMAL
-%declare ASSIGN EQ NEQ LT LE GT GE
-%declare PLUS MINUS STAR SLASH
+%declare ASSIGN EQ EQ_EQ NEQ LT LE GT GE
+%declare PLUS MINUS STAR SLASH AT
 %declare ARROW THIN_ARROW
 %declare LPAR RPAR LSQB INDEX_LSQB RSQB LBRACE CALL_LBRACE RBRACE COLON DCOLON COMMA SEMICOLON PIPE DOT
 %declare DO_LSQB
-
-// Note: EQ_EQ (==) is declared by the lexer but not used in any grammar rule.
-// When the lexer emits it, Lark raises UnexpectedToken; the parser error
-// handler checks for EQ_EQ and converts it to a friendly AglSyntaxError.
 
 // ---------------------------------------------------------------------------
 // Program root
@@ -135,13 +131,14 @@ _sep: _NEWLINE | SEMICOLON
             | param_decl
             | program_decl
             | agent_decl
-            | config_pragma
+            | config_decl
             | func_def
             | builtin_record_def
             | builtin_enum_def
             | builtin_exception_def
             | builtin_func_def
             | import_decl
+            | export_decl
             | private_record_def
             | private_enum_def
             | private_exception_def
@@ -154,11 +151,15 @@ _sep: _NEWLINE | SEMICOLON
 
 // record_def: indented block of field definitions, parenthesized field list, or inline field list.
 // The custom lexer emits _INDENT directly after the name (no _NEWLINE before _INDENT).
+// param_marker? allows an optional leading zone-marker before the indent block.
+// ?block_entry allows a marker on its own line inside the indent block.
 record_def: "record" name type_params? record_body
 
-record_body: _INDENT field_def (_NEWLINE field_def)* _NEWLINE? _DEDENT -> record_indent_body
-           | LPAR field_list? RPAR                                  -> record_paren_body
-           | field_list                                             -> record_inline_body
+record_body: param_marker? _INDENT block_entry (_NEWLINE block_entry)* _NEWLINE? _DEDENT -> record_indent_body
+           | LPAR field_list? RPAR                                                        -> record_paren_body
+           | field_list                                                                   -> record_inline_body
+
+?block_entry: field_def | param_marker
 
 field_def: field_name COLON type_expr
 
@@ -189,7 +190,11 @@ variant_tail: PIPE name variant_payload?       -> variant_def
 
 variant_payload: LPAR field_list? RPAR
 
-field_list: field_inline (COMMA field_inline)* COMMA?
+// field_list: comma-separated field entries (field defs and/or zone markers).
+// ?field_entry is transparent so the children reach field_list directly.
+field_list: field_entry (COMMA field_entry)* COMMA?
+
+?field_entry: field_inline | param_marker
 
 field_inline: field_name COLON type_expr
 
@@ -198,9 +203,10 @@ exception_def: "exception" name exception_base? exception_body
 
 exception_base: "extends" name
 
-exception_body: _INDENT field_def (_NEWLINE field_def)* _NEWLINE? _DEDENT -> exception_indent_body
-              | LPAR field_list? RPAR                                  -> exception_paren_body
-              | field_list                                             -> exception_inline_body
+// exception_body mirrors record_body: optional leading marker + block entries for indent form.
+exception_body: param_marker? _INDENT block_entry (_NEWLINE block_entry)* _NEWLINE? _DEDENT -> exception_indent_body
+              | LPAR field_list? RPAR                                                        -> exception_paren_body
+              | field_list                                                                   -> exception_inline_body
 
 // type_alias: "type" name type_params? = type_expr
 type_alias: "type" name type_params? EQ type_expr
@@ -218,15 +224,9 @@ program_decl: "program" name
 // The optional runner string must be a static literal (checked in transformer).
 agent_decl: AGENT name (EQ template)?
 
-// config_pragma: "config" KEY = VALUE (header-only; enforced in scope pass).
-// pragma_value covers bool, int, decimal, and static string literals.
-config_pragma: "config" name EQ pragma_value
-
-pragma_value: "true"     -> pragma_true
-            | "false"    -> pragma_false
-            | INT        -> pragma_int
-            | DECIMAL    -> pragma_decimal
-            | template   -> pragma_str
+// config_decl: "config" NAME [= expr] — root-only engine-key binding;
+// the optional value is a general expression resolved at runtime.
+config_decl: "config" name (EQ expr)?
 
 // ---------------------------------------------------------------------------
 // Function definition
@@ -249,7 +249,17 @@ builtin_record_def: "builtin" _NEWLINE? record_def
 builtin_enum_def: "builtin" _NEWLINE? enum_def
 builtin_exception_def: "builtin" _NEWLINE? exception_def
 
-param_list: param_def (COMMA param_def)* COMMA?
+// param_list: comma-separated parameter entries (defs and/or zone markers).
+// ?param_entry is transparent so the children reach param_list directly.
+param_list: param_entry (COMMA param_entry)* COMMA?
+
+?param_entry: param_def | param_marker
+
+// param_marker: a zone-boundary marker inside a parameter or field list.
+// The NAME in AT NAME is validated in the transformer (pos/std/named only).
+param_marker: SLASH    -> marker_slash
+            | STAR     -> marker_star
+            | AT NAME  -> marker_at
 
 // param_def default value uses or_expr (inside LPAR…RPAR, COMMA terminates).
 // `agent` is accepted as a parameter name so builtin signatures can expose
@@ -461,7 +471,7 @@ suite_expr: _INDENT block _DEDENT
            | additive "is" name DOT name                        -> is_test_qualified
            | additive "is" name                                 -> is_test_simple
            | additive "in" additive                             -> bin_in
-           | additive EQ additive                               -> bin_eq
+           | additive EQ_EQ additive                            -> bin_eq
            | additive NEQ additive                              -> bin_neq
            | additive LT additive                               -> bin_lt
            | additive LE additive                               -> bin_le
@@ -592,7 +602,7 @@ arg_list: arg (COMMA arg)* COMMA?
 
 pos_arg: expr
 
-named_arg: field_name COLON expr
+named_arg: field_name EQ expr
 
 // ---------------------------------------------------------------------------
 // Literal nodes
@@ -658,13 +668,13 @@ pattern_fields: pattern_field (COMMA pattern_field)* COMMA?
 
 // pattern_field key uses field_name (not name) so keyword-admitted field names
 // such as `by`, `to`, `downto` are valid pattern key names.
-pattern_field: field_name COLON pattern   -> pat_field_full
-             | field_name                 -> pat_field_shorthand
+pattern_field: field_name EQ pattern   -> pat_field_named
+             | pattern            -> pat_field_positional
 
 // ---------------------------------------------------------------------------
-// Module system: import declarations and private declarations
+// Module system: import/export declarations and private declarations
 //
-// The lexer pre-merges `NAME (DOT NAME)*` after IMPORT into a single
+// The lexer pre-merges `NAME (DOT NAME)*` after IMPORT or EXPORT into a single
 // MODPATH token, eliminating the LALR(1) ambiguity with the expression grammar.
 // Qualified prefixes `NAME(DOT NAME)*::` are pre-merged into MODQUAL by the
 // lexer, eliminating the DCOLON ambiguity with typed_call_atom.
@@ -677,11 +687,20 @@ import_decl : IMPORT MODPATH DOT STAR QUALIFIED? import_alias? import_clause? ->
 
 import_alias : "as" name
 
-import_clause : USING import_item (COMMA import_item)*  -> import_clause_using
-              | HIDING name (COMMA name)*                -> import_clause_hiding
+import_clause : USING import_item (COMMA import_item)* -> import_clause_using
+              | HIDING name (COMMA name)*              -> import_clause_hiding
 
-import_item : name "as" name    -> import_item_rename
-            | name               -> import_item_plain
+import_item : name "as" name -> import_item_rename
+            | name           -> import_item_plain
+
+export_decl : EXPORT MODPATH DOT STAR export_clause? -> export_decl_wildcard
+            | EXPORT MODPATH export_clause?          -> export_decl_plain
+
+export_clause : USING export_item (COMMA export_item)* -> export_clause_using
+              | HIDING name (COMMA name)*              -> export_clause_hiding
+
+export_item : name "as" name -> export_item_rename
+            | name           -> export_item_plain
 
 // Private declaration wrappers.  `private` is a decorator-style modifier: the
 // `_NEWLINE?` makes the newline after it insignificant, so the modifier may sit

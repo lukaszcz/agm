@@ -98,9 +98,9 @@ class TestRedefinition:
         assert r.kind == "declaration"
         assert r.name == "R"
         # The new shape is the one in effect.
-        use = s.eval_entry('let r = R(b: "hi")')
+        use = s.eval_entry('let r = R(b = "hi")')
         assert use.ok
-        bad = s.eval_entry("let r2 = R(a: 1)")
+        bad = s.eval_entry("let r2 = R(a = 1)")
         assert not bad.ok  # old field 'a' no longer valid
 
 
@@ -259,7 +259,7 @@ class TestFailureEffects:
             "record Box\n  value: int\nlet z: decimal = 1 / 0\nlet after = 9\nafter"
         )
         assert not result.ok
-        assert s.eval_entry("Box(value: 3)").ok
+        assert s.eval_entry("Box(value = 3)").ok
         assert not s.eval_entry("after").ok
 
     def test_runtime_raise_preserves_assign_to_prior_var(self) -> None:
@@ -362,7 +362,7 @@ class TestExactlyOnce:
         named = CountingAgent("named-reply")
         s = ReplSession()
         s.register_agent("reviewer", named)
-        r = s.eval_entry('agent reviewer\nlet out = ask("""review this""", agent: reviewer)')
+        r = s.eval_entry('agent reviewer\nlet out = ask("""review this""", agent = reviewer)')
         assert r.ok, r.diagnostics
         assert _text(r.value) == "named-reply"
         assert named.calls == 1
@@ -383,7 +383,7 @@ class TestAgentDeclarations:
         # Test: registering and declaring an agent in the same entry works.
         s = ReplSession()
         s.register_agent("reviewer", CountingAgent("ok"))
-        r = s.eval_entry('agent reviewer\nask("""look""", agent: reviewer)')
+        r = s.eval_entry('agent reviewer\nask("""look""", agent = reviewer)')
         assert r.ok
 
     def test_undeclared_unregistered_agent_call_errors(self) -> None:
@@ -402,7 +402,7 @@ class TestAgentDeclarations:
         s.register_agent("helper", CountingAgent("done"))
         r1 = s.eval_entry("agent helper")
         assert r1.ok
-        r2 = s.eval_entry('let out = ask("""go""", agent: helper)')
+        r2 = s.eval_entry('let out = ask("""go""", agent = helper)')
         assert r2.ok, r2.diagnostics
         assert _text(r2.value) == "done"
 
@@ -433,7 +433,7 @@ class TestAgentDeclarations:
         s = ReplSession()
         s.register_agent("reviewer", CountingAgent("x"))
         s.eval_entry("agent reviewer")
-        assert s.type_of('ask("""ask""", agent: reviewer)') == repr(TextType())
+        assert s.type_of('ask("""ask""", agent = reviewer)') == repr(TextType())
 
     def test_reset_clears_declared_agents(self) -> None:
         # After reset, a previously source-declared agent is gone: a call to it
@@ -609,7 +609,7 @@ class TestLoadFile:
         f.write_text(
             "let n = 1\n"
             "var label: text = \"\"\n"
-            "if n = 1 =>\n"
+            "if n == 1 =>\n"
             "    label := \"one\"\n"
             "| else =>\n"
             "    label := \"many\"\n"
@@ -627,7 +627,7 @@ class TestLoadFile:
             "record Point\n"
             "    x: int\n"
             "    y: int\n"
-            "let p = Point(x: 1, y: 2)\n"
+            "let p = Point(x = 1, y = 2)\n"
             "p.x\n"
         )
         s = ReplSession()
@@ -773,7 +773,7 @@ class TestCheckOnly:
         assert r.kind == "declaration"
         assert r.name == "P"
         # Not promoted.
-        assert not s.eval_entry("let p = P(x: 1)").ok
+        assert not s.eval_entry("let p = P(x = 1)").ok
 
     def test_check_only_type_error_still_fails(self) -> None:
         s = ReplSession()
@@ -927,7 +927,7 @@ class TestAgentCancellation:
         s = ReplSession(default_agent=_CancellingAgent())
         r = s.eval_entry('record Box\n  value: int\nlet g = ask """x"""')
         assert not r.ok
-        assert s.eval_entry("Box(value: 3)").ok
+        assert s.eval_entry("Box(value = 3)").ok
 
     def test_cancellation_excludes_record_declared_after_call(self) -> None:
         # A type declared after the cancelled call is not promoted.
@@ -1485,7 +1485,7 @@ class TestImports:
     def test_agl_raise_in_graph_mode(self, tmp_path: Path) -> None:
         # An AglRaise exception during graph-mode evaluation aborts the entry.
         lib = tmp_path / 'mylib.agl'
-        lib.write_text('def boom() -> int = raise Abort(message: "boom")\n')
+        lib.write_text('def boom() -> int = raise Abort(message = "boom")\n')
         s = self._make_session_with_root(tmp_path)
         r = s.eval_entry("import mylib\nboom()")
         assert not r.ok
@@ -1495,7 +1495,7 @@ class TestImports:
         import json
 
         lib = tmp_path / 'mylib.agl'
-        lib.write_text('def boom() -> int = raise Abort(message: "boom")\n')
+        lib.write_text('def boom() -> int = raise Abort(message = "boom")\n')
         trace = tmp_path / "trace.jsonl"
         s = self._make_session_with_root(tmp_path)
         s._trace_path = trace
@@ -1571,7 +1571,7 @@ class TestImports:
         s = self._make_session_with_root(tmp_path)
         # The ask() built-in produces a contract spec; trigger it in graph mode.
         s.register_agent("helper", CountingAgent("ok"))
-        r = s.eval_entry('import mylib\nagent helper\nask("hi", agent: helper)')
+        r = s.eval_entry('import mylib\nagent helper\nask("hi", agent = helper)')
         assert not r.ok
         assert any("Contract error" in d.message for d in r.diagnostics)
 
@@ -1595,7 +1595,7 @@ class TestImports:
         lib.write_text('def noop(n: int) -> int = n\n')
         s = self._make_session_with_root(tmp_path)
         s.register_agent("helper", _CancellingAgent())
-        r = s.eval_entry("import mylib\nagent helper\nnoop(ask(\"hi\", agent: helper))")
+        r = s.eval_entry("import mylib\nagent helper\nnoop(ask(\"hi\", agent = helper))")
         assert not r.ok
         assert r.error is None
         assert r.diagnostics
@@ -1695,91 +1695,249 @@ def _snapshot(s: ReplSession) -> list[tuple[str, str, str]]:
 
 
 # ---------------------------------------------------------------------------
-# Config pragma rejection in the REPL
+# Config declarations in the REPL
 # ---------------------------------------------------------------------------
 
 
-class TestReplConfigPragmaRejection:
-    """Config pragmas entered in the REPL are rejected with a clear diagnostic.
+class TestReplConfigDecl:
+    """``config`` declarations are first-class in a REPL session.
 
-    Pragmas are an exec/program feature and cannot be applied to a live session
-    (session settings come from CLI flags and config files).  The entry must
-    fail, leave session state unchanged, and allow subsequent entries to work
-    normally.
+    Each ``config KEY`` or ``config KEY = e`` entry is accepted, creates a
+    readable binding, and (for the three D6 keys) takes effect at the binding
+    point and persists into subsequent entries.  ``param`` behaviour is
+    unchanged.
     """
 
-    def test_config_pragma_is_rejected(self) -> None:
+    # -----------------------------------------------------------------------
+    # Acceptance: config is no longer rejected
+    # -----------------------------------------------------------------------
+
+    def test_config_is_accepted(self) -> None:
         s = ReplSession()
         r = s.eval_entry("config log = true")
-        assert not r.ok
-        assert len(r.diagnostics) == 1
-        msg = r.diagnostics[0].message
-        assert "config pragmas" in msg.lower() or "config pragma" in msg.lower()
-        assert "REPL" in msg or "repl" in msg.lower()
+        assert r.ok
+        assert r.diagnostics == []
 
-    def test_config_pragma_rejection_message_mentions_cli(self) -> None:
+    def test_config_binding_is_readable_in_same_entry(self) -> None:
+        """A config key declared in an entry can be read in that same entry."""
         s = ReplSession()
-        r = s.eval_entry("config max_call_depth = 10")
-        assert not r.ok
-        # The error should mention how to set options (CLI flags / config file).
-        msg = r.diagnostics[0].message
-        assert "cli" in msg.lower() or "flag" in msg.lower() or "config file" in msg.lower()
+        r = s.eval_entry("config strict-json = false\nstrict-json")
+        assert r.ok
+        from agm.agl.semantics.values import BoolValue
 
-    def test_config_pragma_leaves_session_state_unchanged(self) -> None:
+        assert isinstance(r.value, BoolValue)
+        assert r.value.value is False
+
+    def test_config_all_six_keys_accepted(self) -> None:
         s = ReplSession()
-        # Establish some session state first.
-        s.eval_entry("let x = 42")
-        snapshot_before = _snapshot(s)
+        for source in [
+            "config log = true",
+            "config max-iters = 5",
+            "config runner = \"echo\"",
+            "config strict-json = false",
+            "config timeout = \"30s\"",
+            'config log-file = "trace.jsonl"',
+        ]:
+            r = s.eval_entry(source)
+            assert r.ok, f"Unexpected rejection for: {source}"
+            assert r.diagnostics == []
 
-        # Entering a pragma must not change session bindings.
-        r = s.eval_entry("config strict_json = true")
-        assert not r.ok
-        assert _snapshot(s) == snapshot_before
-
-    def test_normal_entry_works_after_pragma_rejection(self) -> None:
+    def test_config_classified_as_declaration(self) -> None:
+        """A ``config`` entry is classified as a declaration with the key name."""
         s = ReplSession()
-        # Pragma is rejected.
-        r_pragma = s.eval_entry("config log = false")
-        assert not r_pragma.ok
+        r = s.eval_entry("config max-iters = 10")
+        assert r.ok
+        assert r.kind == "declaration"
+        assert r.name == "max-iters"
 
-        # Normal entry still evaluates correctly.
-        r_normal = s.eval_entry("let y = 1 + 2")
-        assert r_normal.ok
+    def test_normal_entry_still_works_with_config_in_session(self) -> None:
+        s = ReplSession()
+        s.eval_entry("config log = false")
+        r = s.eval_entry("let y = 1 + 2")
+        assert r.ok
         vals = {n: v for n, _t, v in s.bindings()}
         assert "y" in vals
 
-    def test_multiple_pragma_keys_each_rejected(self) -> None:
+    # -----------------------------------------------------------------------
+    # Effect-at-binding: D6 settings persist across subsequent entries
+    # -----------------------------------------------------------------------
+
+    def test_strict_json_effect_persists_across_entries(self) -> None:
+        """Setting strict-json=true in one entry makes a later JSON agent call strict.
+
+        The mock agent returns fenced JSON (triple-backtick json fence).  In lenient
+        (default) mode this parses fine; in strict mode it raises AgentParseError.
+        This is the headline cross-entry persistence test.
+        """
+        # Agent returns fenced JSON — valid in lenient mode, rejected in strict.
+        fenced_agent = CountingAgent("```json\n42\n```")
+
+        # First confirm that without strict-json the fenced response parses OK.
+        s_lenient = ReplSession(default_agent=fenced_agent)
+        r_lenient = s_lenient.eval_entry('let n: int = ask """how many"""')
+        assert r_lenient.ok, "Lenient mode should accept fenced JSON"
+        assert _int(r_lenient.value) == 42
+
+        # Now set strict-json=true in one entry and verify subsequent entries fail.
+        fenced_agent2 = CountingAgent("```json\n42\n```")
+        s = ReplSession(default_agent=fenced_agent2)
+
+        r1 = s.eval_entry("config strict-json = true")
+        assert r1.ok, "config strict-json = true should be accepted"
+
+        r2 = s.eval_entry('let m: int = ask """how many"""')
+        # In strict mode fenced JSON is not accepted → AgentParseError raised.
+        assert not r2.ok
+        assert r2.error is not None
+        assert "AgentParseError" in r2.error.type_name
+
+    def test_max_iters_effect_persists_across_entries(self) -> None:
+        """Setting max-iters=1 in one entry limits loops in subsequent entries."""
         s = ReplSession()
-        for pragma in [
-            "config log = true",
-            "config max_call_depth = 5",
-            "config runner = \"echo\"",
-            "config strict_json = false",
-            "config timeout = \"30s\"",
-        ]:
-            r = s.eval_entry(pragma)
-            assert not r.ok, f"Expected rejection for: {pragma}"
-            assert r.diagnostics  # has at least one error diagnostic
+        r1 = s.eval_entry("config max-iters = 1")
+        assert r1.ok
 
+        # A do[3] loop with max_iters=1 should raise RecursionError / loop-limit error.
+        r2 = s.eval_entry("do [3]\n  let _ = 1")
+        assert not r2.ok
+        # Either a static or runtime failure indicating the limit was applied.
+        has_error = r2.error is not None or r2.diagnostics
+        assert has_error
 
-class TestCallDepthLimit:
-    """The session's ``default_call_depth_limit`` bounds recursion in entries."""
+    def test_config_setting_not_promoted_on_failed_entry(self) -> None:
+        """A config binding that fires BEFORE a runtime error must NOT promote settings.
 
-    _COUNTDOWN = "def countdown(x: int) -> int = if x <= 0 => 0 else => countdown(x - 1)"
-
-    def test_recursion_within_limit_completes(self) -> None:
-        s = ReplSession(default_call_depth_limit=50)
-        s.eval_entry(self._COUNTDOWN)
-        r = s.eval_entry("countdown(20)")
-        assert r.ok
-        assert r.value is not None and _int(r.value) == 0
-
-    def test_recursion_exceeding_limit_raises(self) -> None:
-        s = ReplSession(default_call_depth_limit=10)
-        s.eval_entry(self._COUNTDOWN)
-        r = s.eval_entry("countdown(100)")
+        The config decl runs first (config strict-json = true), then a runtime
+        error occurs in the same entry.  The engine setting must NOT be promoted,
+        keeping strict-json=False.  This test is structured so that the config
+        DOES fire (unlike a test with the error first), making it sensitive to
+        spurious promotion bugs.
+        """
+        s = ReplSession(default_strict_json=False)
+        # config fires FIRST, then the runtime error follows in the same entry.
+        r = s.eval_entry("config strict-json = true\nlet z: decimal = 1 / 0")
         assert not r.ok
-        assert r.error is not None
+        # Session engine setting must remain False (partial failure → no promotion).
+        assert s._default_strict_json is False
+
+    def test_config_binding_not_promoted_on_partial_failure(self) -> None:
+        """A config binding that fires before a runtime error must NOT appear in scope.
+
+        The engine setting and the readable binding must both be absent after a
+        partial-failure entry, so they never diverge (F4).
+        """
+        s = ReplSession(default_strict_json=False)
+        # config fires FIRST, then the runtime error follows.
+        r = s.eval_entry("config strict-json = true\nlet z: decimal = 1 / 0")
+        assert not r.ok
+        # Engine setting not promoted.
+        assert s._default_strict_json is False
+        # Config binding must also NOT be promoted into scope.
+        r2 = s.eval_entry("strict-json")
+        assert not r2.ok, "strict-json binding must not be in scope after partial failure"
+
+    # -----------------------------------------------------------------------
+    # timeout raw-string round-trip (F1)
+    # -----------------------------------------------------------------------
+
+    def test_config_timeout_base_preserves_raw_string(self) -> None:
+        """A bare ``config timeout`` binding reads the raw config string, not a float.
+
+        When [exec] timeout = "30s" is set, engine_base["timeout"] holds some("30s").
+        _build_config_base must use this value verbatim — not reconstruct it from the
+        parsed float (which would give some("30.0")).
+        """
+        from agm.agl.runtime.params import convert_config_value
+        from agm.agl.semantics.engine_keys import get_engine_key_type
+        from agm.agl.semantics.values import BoolValue, EnumValue, IntValue, TextValue
+
+        timeout_type = get_engine_key_type("timeout")
+        assert timeout_type is not None
+        log_file_type = get_engine_key_type("log-file")
+        assert log_file_type is not None
+        engine_base = {
+            "strict-json": BoolValue(False),
+            "max-iters": IntValue(5),
+            "runner": TextValue("claude"),
+            "log": BoolValue(False),
+            "timeout": convert_config_value("timeout", "30s", timeout_type),
+            "log-file": convert_config_value("log-file", None, log_file_type),
+        }
+        # shell_exec_timeout is the parsed float; engine_base["timeout"] is some("30s").
+        s = ReplSession(engine_base=engine_base, shell_exec_timeout=30.0)
+
+        # A bare config timeout followed by reading the binding value.
+        r = s.eval_entry("config timeout\ntimeout")
+        assert r.ok
+        assert isinstance(r.value, EnumValue), f"expected EnumValue, got {r.value!r}"
+        assert r.value.variant == "Some"
+        inner = r.value.fields.get("value")
+        assert isinstance(inner, TextValue)
+        assert inner.value == "30s", f"expected '30s', got {inner.value!r}"
+
+    # -----------------------------------------------------------------------
+    # reset() restores initial settings
+    # -----------------------------------------------------------------------
+
+    def test_reset_clears_promoted_config_settings(self) -> None:
+        """After :reset, strict-json reverts to the session's initial value."""
+        s = ReplSession(default_strict_json=False)
+        r = s.eval_entry("config strict-json = true")
+        assert r.ok
+        assert s._default_strict_json is True  # promoted
+
+        s.reset()
+        assert s._default_strict_json is False  # restored
+
+    def test_reset_clears_max_iters(self) -> None:
+        s = ReplSession(default_loop_limit=10)
+        r = s.eval_entry("config max-iters = 2")
+        assert r.ok
+        assert s._default_loop_limit == 2
+
+        s.reset()
+        assert s._default_loop_limit == 10
+
+    def test_reset_clears_timeout(self) -> None:
+        s = ReplSession(shell_exec_timeout=None)
+        r = s.eval_entry('config timeout = "5s"')
+        assert r.ok
+        assert s._shell_exec_timeout is not None
+
+        s.reset()
+        assert s._shell_exec_timeout is None
+
+    # -----------------------------------------------------------------------
+    # config resolution from [<program>] table
+    # -----------------------------------------------------------------------
+
+    def test_config_base_from_program_table(self) -> None:
+        """A bare ``config KEY`` resolves from the [<program>] config table."""
+        # The program config loader returns max-iters = 3 for program "myprog".
+        def _loader(name: str) -> dict[str, object]:
+            return {"max-iters": 3} if name == "myprog" else {}
+
+        s = ReplSession(params_config_loader=_loader, default_loop_limit=10)
+        # Program name set; bare config max-iters should pick up 3.
+        r = s.eval_entry("program myprog\nconfig max-iters\nmax-iters")
+        assert r.ok
+        assert _int(r.value) == 3
+
+    # -----------------------------------------------------------------------
+    # PipelineDriver.update_defaults does not drop registrations
+    # -----------------------------------------------------------------------
+
+    def test_update_defaults_preserves_agent_registrations(self) -> None:
+        """update_defaults must not wipe agent registrations on the driver."""
+        agent = CountingAgent("hello")
+        s = ReplSession(default_agent=agent)
+        r1 = s.eval_entry("config max-iters = 7")
+        assert r1.ok
+
+        # The session driver should still have the default agent after update.
+        r2 = s.eval_entry('ask """test"""')
+        assert r2.ok
+        assert agent.calls == 1
 
 
 # ---------------------------------------------------------------------------

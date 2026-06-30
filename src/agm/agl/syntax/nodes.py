@@ -32,7 +32,6 @@ import decimal
 import enum
 from dataclasses import dataclass
 from dataclasses import field as dc_field
-from decimal import Decimal
 
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import ImportMode, Qualifier, TypeExpr
@@ -62,7 +61,7 @@ ELSE: ElseSentinel = ElseSentinel()
 class BinOp(enum.Enum):
     """Closed set of binary operators recognised by AgL."""
 
-    EQ = "="
+    EQ = "=="
     NEQ = "!="
     LT = "<"
     LE = "<="
@@ -102,6 +101,28 @@ class ImportDecl:
     alias: str | None
     mode: ImportMode
     items: tuple[ImportItem, ...]
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class ExportItem:
+    """A single item in a ``using`` export clause: ``name [as rename]``."""
+
+    name: str
+    rename: str | None
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class ExportDecl:
+    """``export MODPATH[.*] [using…|hiding…]`` declaration."""
+
+    module_path: tuple[str, ...]
+    wildcard: bool
+    mode: ImportMode
+    items: tuple[ExportItem, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
 
@@ -183,7 +204,7 @@ class Template:
 
 @dataclass(frozen=True, slots=True)
 class NamedArg:
-    """A named argument in a constructor or call expression: ``name: value``."""
+    """A named argument in a constructor or call expression: ``name = value``."""
 
     name: str
     value: Expr
@@ -268,12 +289,33 @@ class Call:
     type_args: tuple[TypeExpr, ...] = ()
 
 
+class ParamKind(enum.Enum):
+    """The zone a parameter belongs to in its parameter list.
+
+    Values are stable strings for debuggability; no code should branch on them.
+    The transformer assigns a concrete kind to every ``Param`` at parse time;
+    no downstream pass ever sees a marker token.
+    """
+
+    POSITIONAL_ONLY = "positional_only"
+    STANDARD = "standard"
+    NAMED_ONLY = "named_only"
+
+
 @dataclass(frozen=True, slots=True)
 class Param:
-    """A function or lambda parameter: ``name: TypeExpr [= default]``."""
+    """A function/lambda parameter or a record/enum-variant/exception field.
+
+    ``kind`` records which zone this parameter belongs to (positional-only,
+    standard, or named-only).  In this version kinds are assigned by the
+    transformer but not yet enforced by the binder — they are inert data.
+    ``default`` is ``None`` for field params (records/variants/exceptions);
+    only ``def``/``builtin def``/lambda params may carry a default expression.
+    """
 
     name: str
     type_expr: TypeExpr
+    kind: ParamKind
     default: Expr | None
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
@@ -378,7 +420,7 @@ class Case:
     node_id: int = dc_field(compare=False)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class Loop:
     """Unified loop expression.
 
@@ -429,6 +471,53 @@ class Loop:
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
 
+    def __init__(
+        self,
+        *,
+        for_var: str | None = None,
+        for_iter: Expr | None = None,
+        for_range_to: Expr | None = None,
+        for_range_down: bool = False,
+        for_range_by: Expr | None = None,
+        while_cond: Expr | None = None,
+        bound: Expr | None = None,
+        body: Expr,
+        until_cond: Expr | None = None,
+        span: SourceSpan,
+        node_id: int,
+        limit: int | Expr | None = None,
+        condition: Expr | None = None,
+    ) -> None:
+        if bound is None and limit is not None:
+            bound = (
+                IntLit(value=limit, span=span, node_id=node_id)
+                if isinstance(limit, int)
+                else limit
+            )
+        if until_cond is None and condition is not None:
+            until_cond = condition
+        object.__setattr__(self, "for_var", for_var)
+        object.__setattr__(self, "for_iter", for_iter)
+        object.__setattr__(self, "for_range_to", for_range_to)
+        object.__setattr__(self, "for_range_down", for_range_down)
+        object.__setattr__(self, "for_range_by", for_range_by)
+        object.__setattr__(self, "while_cond", while_cond)
+        object.__setattr__(self, "bound", bound)
+        object.__setattr__(self, "body", body)
+        object.__setattr__(self, "until_cond", until_cond)
+        object.__setattr__(self, "span", span)
+        object.__setattr__(self, "node_id", node_id)
+
+    @property
+    def limit(self) -> int | Expr | None:
+        if isinstance(self.bound, IntLit):
+            return self.bound.value
+        return self.bound
+
+    @property
+    def condition(self) -> Expr | None:
+        return self.until_cond
+
 
 @dataclass(frozen=True, slots=True)
 class Break:
@@ -452,6 +541,9 @@ class Continue:
 
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+
+
+Do = Loop
 
 
 @dataclass(frozen=True, slots=True)
@@ -659,11 +751,21 @@ class PatternField:
 
 @dataclass(frozen=True, slots=True)
 class ConstructorPattern:
-    """A constructor (record/variant) destructuring pattern."""
+    """A constructor (record/variant) destructuring pattern.
+
+    ``positional`` holds positional sub-patterns (in source order); they bind
+    to positional-capable (POSITIONAL_ONLY or STANDARD) fields left to right, or
+    overflow to named-only shorthand when all positional-capable slots are full.
+    ``named`` holds named sub-patterns ``name = pattern`` (PatternField), each
+    bound to the field with that name.  Positional must precede named (enforced
+    by the transformer); the checker routes both through ``bind_arguments``.
+    Partial patterns are allowed — unmentioned fields are wildcards.
+    """
 
     qualifier: str | None
     name: str
-    fields: tuple[PatternField, ...]
+    positional: tuple[Pattern, ...]
+    named: tuple[PatternField, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     module_qualifier: Qualifier | None = None
@@ -751,21 +853,11 @@ Binder = LetDecl | VarDecl | AssignStmt
 
 
 @dataclass(frozen=True, slots=True)
-class FieldDef:
-    """A field definition in a ``record`` or enum-variant body."""
-
-    name: str
-    type_expr: TypeExpr
-    span: SourceSpan = dc_field(compare=False)
-    node_id: int = dc_field(compare=False)
-
-
-@dataclass(frozen=True, slots=True)
 class RecordDef:
     """``record Name(fields)`` declaration."""
 
     name: str
-    fields: tuple[FieldDef, ...]
+    fields: tuple[Param, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     type_params: tuple[str, ...] = ()
@@ -778,7 +870,7 @@ class VariantDef:
     """A single variant inside an ``enum`` declaration."""
 
     name: str
-    fields: tuple[FieldDef, ...]
+    fields: tuple[Param, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
 
@@ -801,7 +893,7 @@ class ExceptionDef:
     """``exception Name [extends Base](fields...)`` declaration."""
 
     name: str
-    fields: tuple[FieldDef, ...]
+    fields: tuple[Param, ...]
     base: str | None
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
@@ -866,27 +958,25 @@ class AgentDecl:
 
 
 # ---------------------------------------------------------------------------
-# Config pragma
+# Config declaration
 # ---------------------------------------------------------------------------
-
-#: The set of value types a config pragma may carry.
-PragmaValue = bool | int | Decimal | str
 
 
 @dataclass(frozen=True, slots=True)
-class ConfigPragma:
-    """``config KEY = VALUE`` header pragma.
+class ConfigDecl:
+    """``config NAME [= expr]`` declaration (engine-setting key).
 
-    Must appear before any non-pragma item at the program root.
+    May appear anywhere at the program root (not inside a nested block).
     Enforced by the scope pass; grammatically it is a top-level item.
 
-    ``key``    — the pragma name (e.g. ``"log"``, ``"max_call_depth"``).
-    ``value``  — a statically-known scalar: ``bool``, ``int``,
-                 ``Decimal``, or ``str``.
+    ``name``   — the declared engine key in kebab-case (e.g. ``"log"``, ``"max-iters"``).
+    ``value``  — the optional value expression; ``None`` when omitted.  When
+                 present it is a runtime-evaluated readable binding; absent
+                 declarations resolve from the host's configured default.
     """
 
-    key: str
-    value: PragmaValue
+    name: str
+    value: Expr | None
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
 
@@ -902,8 +992,9 @@ Declaration = (
     | ParamDecl
     | ProgramDecl
     | AgentDecl
-    | ConfigPragma
+    | ConfigDecl
     | ImportDecl
+    | ExportDecl
 )
 
 

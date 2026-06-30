@@ -17,7 +17,7 @@ M2 supported AST nodes
     LetDecl, VarDecl, AssignStmt (simple name target only)
     Declarations that have no runtime action:
       RecordDef, EnumDef, TypeAlias, FuncDef, AgentDecl, ParamDecl,
-      ProgramDecl, ConfigPragma, ImportDecl
+      ProgramDecl, ConfigDecl, ImportDecl, ExportDecl
 
 Any AST node outside this set raises ``NotImplementedError`` with a clear
 message.  A missing checker side-table entry is a compiler bug and raises
@@ -52,6 +52,7 @@ from agm.agl.ir.nodes import (
     IrCatchHandler,
     IrCoerce,
     IrCompare,
+    IrConfigBind,
     IrConstBool,
     IrConstDecimal,
     IrConstInt,
@@ -128,7 +129,7 @@ from agm.agl.ir.program import (
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.coercions import compile_coercion
 from agm.agl.lower.conversions import compile_recipe
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CORE_ID, ModuleId
 from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
@@ -160,7 +161,7 @@ from agm.agl.syntax.nodes import (
     CaseBranch,
     Cast,
     CatchClause,
-    ConfigPragma,
+    ConfigDecl,
     ConstructorPattern,
     Continue,
     DecimalLit,
@@ -168,6 +169,7 @@ from agm.agl.syntax.nodes import (
     ElseSentinel,
     EnumDef,
     ExceptionDef,
+    ExportDecl,
     Expr,
     FieldAccess,
     FuncDef,
@@ -380,7 +382,9 @@ class _Lowerer:
                 if pattern.node_id not in self._checked.resolved.bare_variant_patterns:
                     out.add(pattern.node_id)
             case ConstructorPattern():
-                for pf in pattern.fields:
+                for p in pattern.positional:
+                    self._pattern_binding_ids(p, out)
+                for pf in pattern.named:
                     self._pattern_binding_ids(pf.pattern, out)
             case WildcardPattern() | LiteralPattern():
                 pass
@@ -412,7 +416,8 @@ class _Lowerer:
                 self._record_capture(node.node_id, local_ids, captured)
             # Boundaries + declarations introduce no value captures for THIS function:
             case (Lambda() | FuncDef() | RecordDef() | EnumDef() | ExceptionDef() | TypeAlias()
-                  | ParamDecl() | ProgramDecl() | AgentDecl() | ConfigPragma() | ImportDecl()):
+                  | ParamDecl() | ProgramDecl() | AgentDecl() | ConfigDecl() | ImportDecl()
+                  | ExportDecl()):
                 return
             case LetDecl() | VarDecl():
                 local_ids.add(node.node_id)
@@ -600,7 +605,7 @@ class _Lowerer:
             module_id=self._module_id,
             params=tuple(ir_params),
             body=body_ir,
-            param_labels=tuple(repr(param_type) for _, param_type, _ in sig.params),
+            param_labels=tuple(repr(p.type) for p in sig.params),
             result_label=repr(sig.result),
         )
         self._link.functions[fn_id] = desc
@@ -1722,7 +1727,10 @@ class _Lowerer:
             cref = self._checked.resolved.constructor_refs.get(callee.node_id)
             if cref is not None:
                 return self._lower_named_constructor_call(
-                    nid, cref.owner_name, cref.variant, call_node.named_args, span
+                    nid,
+                    cref.owner_name,
+                    cref.variant,
+                    span,
                 )
             # (b) VarRef callee resolving via BinderKind.constructor_binding (M5).
             callee_ref = self._checked.resolved.resolution.get(callee.node_id)
@@ -1731,7 +1739,10 @@ class _Lowerer:
                 and callee_ref.kind is BinderKind.constructor_binding
             ):
                 return self._lower_named_constructor_call(
-                    nid, callee.name, None, call_node.named_args, span
+                    nid,
+                    callee.name,
+                    None,
+                    span,
                 )
             # (c) Direct user function call
             if (
@@ -1745,7 +1756,10 @@ class _Lowerer:
             if qcr is not None:
                 owner_name, variant_name, _qcr_mid = qcr
                 return self._lower_named_constructor_call(
-                    nid, owner_name, variant_name, call_node.named_args, span
+                    nid,
+                    owner_name,
+                    variant_name,
+                    span,
                 )
 
         # Indirect/value call (M4b): callee is an arbitrary expression (lambda, let-bound
@@ -1771,23 +1785,15 @@ class _Lowerer:
             f"compiler bug: no signature for function {callee_ref.name!r}"
         )
 
-        pos_args = list(call_node.args)
-        named_args: dict[str, Expr] = {na.name: na.value for na in call_node.named_args}
+        # The checker already bound the call; reuse its result (never re-bind).
+        binding = self._checked.argument_bindings.function_calls[result_node_id]
 
         ir_args: list[IrExpr | UseDefault] = []
-        pos_idx = 0
-        for i, (pname, ptype, has_default) in enumerate(sig.params):
-            if pname in named_args:
-                ir_args.append(self.lower_coerced(named_args[pname], ptype))
-            elif pos_idx < len(pos_args):
-                ir_args.append(self.lower_coerced(pos_args[pos_idx], ptype))
-                pos_idx += 1
-            else:
-                assert has_default, (
-                    f"compiler bug: missing required arg for param {pname!r} in call to"
-                    f" {callee_ref.name!r} (checker should have caught this)"
-                )
+        for i, (spec, bound_expr) in enumerate(zip(sig.params, binding)):
+            if bound_expr is None:
                 ir_args.append(UseDefault(param_index=i))
+            else:
+                ir_args.append(self.lower_coerced(bound_expr, spec.type))
 
         return IrDirectCall(
             location=self._loc(span),
@@ -1840,12 +1846,15 @@ class _Lowerer:
         result_node_id: int,
         owner_name: str,
         variant: str | None,
-        named_args: "tuple[NamedArg, ...]",
         span: "SourceSpan",
     ) -> IrExpr:
-        """Lower a constructor call with named arguments to an IrMake* node."""
-        arg_exprs: dict[str, "Expr"] = {arg.name: arg.value for arg in named_args}
+        """Lower a constructor call to an IrMake* node.
+
+        Reuses the field→expr binding the checker already computed (never re-binds),
+        then builds the Ir node via ``_lower_constructor_from_type``.
+        """
         typ = self._checked.node_types.get(result_node_id)
+        arg_exprs = self._checked.argument_bindings.constructor_calls[result_node_id]
         return self._lower_constructor_from_type(typ, owner_name, variant, arg_exprs, span)
 
     def _lower_constructor_from_type(
@@ -2058,9 +2067,11 @@ class _Lowerer:
                 # Lower the literal to its IrConst* node (re-use lower_expr).
                 return IrLiteralPlan(value=self.lower_expr(lit))
 
-            case ConstructorPattern(name=variant_name, fields=fields):
+            case ConstructorPattern(name=variant_name):
                 field_plans: list[tuple[str, IrMatchPlan]] = [
-                    (pf.name, self._compile_plan(pf.pattern)) for pf in fields
+                    (fname, self._compile_plan(sub_pat))
+                    for fname, sub_pat
+                    in self._checked.argument_bindings.constructor_patterns[pattern.node_id]
                 ]
                 return IrConstructorPlan(
                     variant=variant_name,
@@ -2288,6 +2299,12 @@ class _Lowerer:
                 self._lower_param_decl(param_decl)
                 return None
 
+            case ConfigDecl() as config_decl:
+                # Config declarations are entry-only readable bindings; unlike
+                # ParamDecl they emit an initializer (IrConfigBind) evaluated in
+                # declaration order, NOT hoisted like params.
+                return self._lower_config_decl(config_decl)
+
             case AgentDecl() as agent_decl:
                 sym = self._sym_for_decl(agent_decl.node_id)
                 loc = self._loc(agent_decl.span)
@@ -2303,8 +2320,8 @@ class _Lowerer:
                 | ExceptionDef()
                 | TypeAlias()
                 | ProgramDecl()
-                | ConfigPragma()
                 | ImportDecl()
+                | ExportDecl()
             ):
                 return None
 
@@ -2344,6 +2361,74 @@ class _Lowerer:
             external_decoder=build_param_decoder(binding_type),
         )
         self._params.append(ir_param)
+
+    def _lower_config_decl(self, node: "ConfigDecl") -> IrConfigBind:
+        """Lower an entry-module ``ConfigDecl`` to an ``IrConfigBind`` initializer.
+
+        Allocates a PUBLIC ``SymbolId`` for the config key and lowers the source
+        value expression (projecting a bare inner-type value into ``some(value)``
+        for ``Option[T]`` engine keys).  Unlike ``_lower_param_decl`` this returns
+        an initializer node (params are hoisted; config bindings are evaluated in
+        declaration order).  Decoding of external CLI/config-file values is handled
+        host-side via ``convert_config_value`` — the IR node carries no decoder.
+        """
+        sym = self._alloc_sym(
+            node.node_id,
+            name=node.name,
+            mutable=False,
+            public=True,
+            owner=self._module_id,
+        )
+        declared_type = self._binding_type(node.node_id)
+        value_ir: IrExpr | None
+        if node.value is not None:
+            value_ir = self._lower_config_value(node.value, declared_type)
+        else:
+            value_ir = None
+        return IrConfigBind(
+            location=self._loc(node.span),
+            symbol=sym,
+            public_name=node.name,
+            value=value_ir,
+        )
+
+    def _lower_config_value(self, expr: Expr, declared_type: Type) -> IrExpr:
+        """Lower a config value, projecting a bare ``T`` into ``some(T)`` for Option keys.
+
+        When the engine-key type is ``Option[T]`` and the source value's type is
+        not itself an enum (i.e. it is the inner ``T``), wrap the lowered inner
+        value in an ``Option.Some`` construction.  Otherwise lower with ordinary
+        coercion to the declared type.
+        """
+        if isinstance(declared_type, EnumType) and declared_type.type_args:
+            expr_type = self._node_type(expr.node_id)
+            if not isinstance(expr_type, EnumType):
+                inner = declared_type.type_args[0]
+                inner_ir = self.lower_coerced(expr, inner)
+                self._ensure_option_nominal()
+                return IrMakeEnum(
+                    location=self._loc(expr.span),
+                    nominal=NominalId(STD_CORE_ID, "Option"),
+                    display_name="Option",
+                    variant="Some",
+                    fields=(("value", inner_ir),),
+                )
+        return self.lower_coerced(expr, declared_type)
+
+    def _ensure_option_nominal(self) -> None:
+        """Register the ``std.core::Option`` enum nominal if not already present."""
+        nominal = NominalId(STD_CORE_ID, "Option")
+        if nominal not in self._link.nominals:
+            self._link.nominals[nominal] = NominalDescriptor(
+                nominal=nominal,
+                display_name="Option",
+                kind=NominalKind.ENUM,
+                fields=(),
+                variants=(
+                    VariantDescriptor(name="None", fields=()),
+                    VariantDescriptor(name="Some", fields=("value",)),
+                ),
+            )
 
     def _lower_assign(
         self,

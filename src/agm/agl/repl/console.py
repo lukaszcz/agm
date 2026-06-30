@@ -93,11 +93,11 @@ def format_banner(agent_mode: "AgentMode | None" = None) -> str:
 # stable suggestion order).
 _KEYWORDS: tuple[str, ...] = tuple(sorted(KEYWORDS))
 
-# Word pattern for completion: AgL identifiers, including the hyphenated
-# built-in call name ``ask-request``.  prompt_toolkit's default word finder
-# treats ``-`` as a boundary, so without this pattern typing ``ask-r`` yields
-# a one-character word (``r``) and never matches ``ask-request``.
-_IDENT_WORD: re.Pattern[str] = re.compile(r"[A-Za-z0-9_-]+")
+# Word-prefix pattern for completion: AgL identifiers, including the hyphenated
+# built-in call name ``ask-request``.  It is anchored to the cursor so
+# punctuation such as `${` is not treated as an empty identifier completion
+# site.
+_IDENT_PREFIX: re.Pattern[str] = re.compile(r"[A-Za-z0-9_-]+$")
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +280,10 @@ def _styled_spans(
         end = token.end_pos
         if start is None or end is None or end <= start:
             continue
+        if token.type == "STRING_FRAGMENT":
+            end = _trim_string_fragment_end(tokens, index, end)
+            if end <= start:
+                continue
         style = forced.get(index)
         if style is None:
             style = _style_class_for(
@@ -289,6 +293,23 @@ def _styled_spans(
             continue
         spans.append((start, end, style))
     return spans
+
+
+def _trim_string_fragment_end(tokens: "list[Token]", index: int, end: int) -> int:
+    """Return the display end for a string fragment token.
+
+    The lexer keeps the following interpolation opener in a preceding
+    ``STRING_FRAGMENT`` span so diagnostics can point at the source transition
+    cleanly, then emits ``INTERP_START`` for the same source characters.  Prompt
+    highlighting must partition the source text instead: the structural
+    interpolation token owns the opener, and the literal fragment owns only the
+    preceding string text.
+    """
+    next_token = tokens[index + 1]
+    next_start = next_token.start_pos
+    if next_token.type == "INTERP_START" and next_start is not None and next_start < end:
+        return next_start
+    return end
 
 
 def _next_significant_types(tokens: "list[Token]") -> list[str | None]:
@@ -422,7 +443,9 @@ class AglCompleter(Completer):
                 yield Completion(name, start_position=-len(word))
 
     def _word_completions(self, document: Document) -> Iterable[Completion]:
-        word = document.get_word_before_cursor(pattern=_IDENT_WORD)
+        word = _completion_word_before_cursor(document.text_before_cursor)
+        if word is None:
+            return
         for candidate in self._candidates():
             if candidate.startswith(word) and candidate != word:
                 yield Completion(candidate, start_position=-len(word))
@@ -445,6 +468,16 @@ class AglCompleter(Completer):
                 seen.add(name)
                 unique.append(name)
         return unique
+
+
+def _completion_word_before_cursor(text_before_cursor: str) -> str | None:
+    """Return the AgL identifier prefix before the cursor, or ``None`` off-word."""
+    if text_before_cursor == "":
+        return ""
+    match = _IDENT_PREFIX.search(text_before_cursor)
+    if match is None:
+        return None
+    return match.group(0)
 
 
 # ---------------------------------------------------------------------------

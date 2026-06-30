@@ -319,6 +319,22 @@ class TestLexer:
         fragments = AglPromptLexer().lex_document(Document(line))(0)
         assert "".join(text for _style, text in fragments) == line
 
+    @pytest.mark.parametrize(
+        "line",
+        [
+            '"${x}"',
+            '"a${x}"',
+            '"a${x}b"',
+            '"${x}${y}"',
+        ],
+    )
+    def test_string_interpolation_is_not_duplicated(self, line: str) -> None:
+        # The lexer gives STRING_FRAGMENT a source span that can overlap the
+        # following INTERP_START. The prompt highlighter must still partition
+        # the source so typed interpolation delimiters render exactly once.
+        fragments = AglPromptLexer().lex_document(Document(line))(0)
+        assert "".join(text for _style, text in fragments) == line
+
     def test_out_of_range_line_does_not_crash(self) -> None:
         lexer = AglPromptLexer()
         getter = lexer.lex_document(Document("let x = 1"))
@@ -521,6 +537,19 @@ class TestCompleter:
         # pool when a default agent existed).
         completer = AglCompleter(ReplSession())
         assert "ask" in _completions(completer, "as")
+
+    def test_deduplicates_builtin_default_agent_name(self) -> None:
+        # A configured default agent is also named ``ask``; completion should
+        # keep the builtin-first candidate once, not offer a duplicate.
+        completer = AglCompleter(ReplSession(default_agent=_CountingAgent()))
+        assert _completions(completer, "as").count("ask") == 1
+
+    def test_no_completion_after_interpolation_opener(self) -> None:
+        # Regression: when completions were offered with an empty word after
+        # punctuation, typing `${x}` interactively could accept a stale
+        # completion and leave `${${x}` in the buffer.
+        completer = AglCompleter(ReplSession())
+        assert _completions(completer, "${") == []
 
 
 # ---------------------------------------------------------------------------

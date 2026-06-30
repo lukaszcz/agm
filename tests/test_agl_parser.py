@@ -502,6 +502,13 @@ class TestDeclarations:
         assert rec.name == "Point"
         assert [field.name for field in rec.fields] == ["x", "y"]
 
+    def test_record_def_with_optional_equals_before_parens(self) -> None:
+        prog = parse("record Point = (x: int, y: int)")
+        rec = first(prog)
+        assert isinstance(rec, RecordDef)
+        assert rec.name == "Point"
+        assert [field.name for field in rec.fields] == ["x", "y"]
+
     def test_record_def_empty_parens(self) -> None:
         prog = parse("record Empty()")
         rec = first(prog)
@@ -515,6 +522,13 @@ class TestDeclarations:
 
     def test_record_def_inline_without_braces(self) -> None:
         prog = parse("record Point x: int, y: int")
+        rec = first(prog)
+        assert isinstance(rec, RecordDef)
+        assert rec.name == "Point"
+        assert [field.name for field in rec.fields] == ["x", "y"]
+
+    def test_record_def_with_optional_equals_before_inline_fields(self) -> None:
+        prog = parse("record Point = x: int, y: int")
         rec = first(prog)
         assert isinstance(rec, RecordDef)
         assert rec.name == "Point"

@@ -148,7 +148,7 @@ _sep: _NEWLINE | SEMICOLON
 // The custom lexer emits _INDENT directly after the name (no _NEWLINE before _INDENT).
 // param_marker? allows an optional leading zone-marker before the indent block.
 // ?block_entry allows a marker on its own line inside the indent block.
-record_def: "record" name type_params? record_body
+record_def: "record" name type_params? EQ? record_body
 
 record_body: param_marker? _INDENT block_entry (_NEWLINE block_entry)* _NEWLINE? _DEDENT -> record_indent_body
            | LPAR field_list? RPAR                                                        -> record_paren_body

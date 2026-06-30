@@ -1,4 +1,6 @@
-Read %{PLAN_FILE} and create implementation tasks for this plan. Make sure that each task can be implemented by an agent in 200k context widow. If the steps described in the plan are too big, split them into multiple tasks. In each task, add a brief section summarizing what the ultimate goals of the whole plan are. Make it clear that any work done must be a step toward these goals.
+Read %{PLAN_FILE} and create implementation tasks for this plan. Make sure that each task can be implemented by an agent in 200k context widow. If the steps described in the plan are too big, split them into multiple tasks.
+
+In each task, add a brief "Context" section summarizing what the ultimate goals of the whole plan are. Make it clear that any work done must be a step toward these goals, but the ultimate plan goals are not acceptance criteria for the task.
 
 Save the task files to .agent-files/tasks/TASK_*.md. Create a task index in .agent-files/tasks/TASK_INDEX.md. Create .agent-files/tasks/PROGRESS.md to track task progress - list of completed and remaining tasks, next unblocked task.
 

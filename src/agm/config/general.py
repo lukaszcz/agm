@@ -533,7 +533,7 @@ class ExecConfig:
     agents: dict[str, str]
     log: bool
     log_file: str | None
-    default_loop_limit: int = 5
+    default_loop_limit: int | None = None
     # Optional recursion call-depth override (None = use the canonical default).
     max_call_depth: int | None = None
 
@@ -598,7 +598,7 @@ def exec_config_from_merged(
 
     resolved_runner = _optional_str(effective, "runner")
     resolved_strict_json = _optional_bool(effective, "strict-json")
-    resolved_loop_limit = _optional_positive_int(effective, "max-iters") or 5
+    resolved_loop_limit = _optional_positive_int(effective, "max-iters")
     resolved_max_call_depth = _optional_positive_int(exec_table, "max-call-depth")
 
     resolved_timeout = _optional_timeout(effective, "timeout")

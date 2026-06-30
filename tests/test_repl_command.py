@@ -191,6 +191,7 @@ def _args(
     quiet: bool = False,
     no_log: bool = False,
     log_file: str | None = None,
+    max_iters: int | None = None,
 ) -> ReplArgs:
     """Build ``ReplArgs`` with sensible defaults, overriding named fields."""
     return ReplArgs(
@@ -200,6 +201,7 @@ def _args(
         quiet=quiet,
         no_log=no_log,
         log_file=log_file,
+        max_iters=max_iters,
     )
 
 
@@ -227,6 +229,18 @@ class TestReplRun:
         assert call["echo"] is True
         assert call["check_only"] is False  # not a dry-run by default
         assert call["history_path"] == home / "repl_history"
+
+    def test_max_iters_flows_into_session_valve(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        """``--max-iters`` resolves to the session's max-iters valve (ON at N)."""
+        _isolated_home(monkeypatch, tmp_path)
+        repl_command.run(_args(max_iters=10))
+        session: ReplSession = fake_console[0]["session"]
+        assert session._default_loop_limit == 10
 
     def test_dry_run_runs_console_in_check_only_mode(
         self,

@@ -2,8 +2,8 @@
 
 | Command | Description |
 |---------|-------------|
-| `agm exec [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--log\|--log-file PATH\|--no-log] [--no-stdlib] [-I DIR]... (FILE \| -c COMMAND) [--PARAM VALUE]...` | Execute an AgL workflow program |
-| `agm repl [--strict-json\|--no-strict-json] [--max-iters N] [--runner COMMAND] [--confirm-agents] [--quiet] [--log\|--log-file PATH\|--no-log]` | Start an interactive AgL REPL |
+| `agm exec [--strict-json\|--no-strict-json] [--max-iters N] [--max-call-depth N] [--runner COMMAND] [--log\|--log-file PATH\|--no-log] [--no-stdlib] [-I DIR]... (FILE \| -c COMMAND) [--PARAM VALUE]...` | Execute an AgL workflow program |
+| `agm repl [--strict-json\|--no-strict-json] [--max-iters N] [--max-call-depth N] [--runner COMMAND] [--confirm-agents] [--quiet] [--log\|--log-file PATH\|--no-log]` | Start an interactive AgL REPL |
 
 AGM runs AgL (Agent Language) workflow programs two ways: `agm exec` runs a whole
 program from a fresh environment, and `agm repl` evaluates entries interactively in a
@@ -14,7 +14,7 @@ documented in the [AgL language reference](../agl/reference/index.md).
 
 ```text
 agm exec [--strict-json|--no-strict-json]
-         [--max-iters N] [--runner COMMAND]
+         [--max-iters N] [--max-call-depth N] [--runner COMMAND]
          [--log|--log-file PATH|--no-log]
          [--no-stdlib]
          [-I DIR]...
@@ -63,7 +63,16 @@ or two or more distinct files, are static errors (exit 1 with a diagnostic).
   exactly one JSON value from chatty output (stripping fences/prose, repairing
   trivially malformed JSON), then validates it strictly against the schema. The
   recovered (normalized) value is traced alongside the raw output.
-- `--max-iters N`: Override the default `do`-loop iteration limit.
+- `--max-iters N`: Override the host's `max-iters` safety valve, which caps
+  **unbounded** loops (a bare `while … do … done` or `do … until E` with no
+  `[n]` bound and no `for` clause) at `N` body executions, raising
+  `MaxIterationsExceeded`. Self-bounded loops (`for`, `do[n]`) are never cut
+  short by this valve. The valve is **off by default**; setting this option (or
+  `max-iters` in config / a source `config max-iters = N` declaration) turns it
+  on. See [Control flow](../agl/reference/control-flow.md).
+- `--max-call-depth N`: Override the maximum recursion call depth (CLI >
+  `[exec] max-call-depth` config; the canonical default is 256). Exceeding it
+  raises `RecursionError`.
 - `--runner COMMAND`: Override the default agent runner command (backs `ask` and any
   declared agent without its own command). See [runner precedence](#agents-and-runner-precedence).
 - `--log` / `--log-file PATH` / `--no-log`: Control trace logging, which is **off by
@@ -122,7 +131,7 @@ source config declarations can override:
 [exec]
 runner = "claude -p"        # default agent runner
 strict-json = false         # lenient JSON recovery is the default
-max-iters = 5               # do[] default iteration bound
+max-iters = 5               # host safety valve for unbounded loops (off when unset)
 timeout = "30m"             # shell-exec idle timeout
 log = false                 # trace logging off by default; set true to enable
 # log-file = "trace.jsonl" # explicit trace path (omit for auto timestamped path)
@@ -146,7 +155,7 @@ Each declaration is also a **readable immutable binding** usable in any expressi
 config log = true             # enable trace logging for this program
 config log-file = "trace.log" # explicit trace path
 config strict-json = true     # require bare JSON from agents
-config max-iters = 10         # do[] iteration cap
+config max-iters = 10         # host safety valve cap for unbounded loops
 config runner = "claude -p"   # default agent runner
 config timeout = "30s"        # shell-exec idle timeout
 param spec
@@ -204,7 +213,7 @@ disable tracing entirely.
 
 ```text
 agm repl [--strict-json|--no-strict-json]
-         [--max-iters N] [--runner COMMAND] [--confirm-agents]
+         [--max-iters N] [--max-call-depth N] [--runner COMMAND] [--confirm-agents]
          [--quiet] [--log|--log-file PATH|--no-log]
 ```
 
@@ -214,9 +223,10 @@ entry is parsed, type-checked, and evaluated once against an environment that
 accumulates bindings, types, and declarations across entries, so earlier results stay
 available and agent calls fire exactly once.
 
-The REPL reuses the `[exec]` configuration (runner, per-agent commands, default loop
-limit, JSON strictness, timeout), so an interactive session evaluates entries with the
-same agent backing a batch `agm exec` run would use.
+The REPL reuses the `[exec]` configuration (runner, per-agent commands,
+max-iters valve, call-depth limit, JSON strictness, timeout), so an interactive
+session evaluates entries with the same agent backing a batch `agm exec` run
+would use.
 
 ### Entry editing
 
@@ -279,7 +289,7 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
 
 - `--strict-json` / `--no-strict-json`: Set JSON-codec strictness for agent output
   (lenient recovery is the default), as for `agm exec`.
-- `--max-iters N`, `--runner COMMAND`: As for `agm exec`.
+- `--max-iters N`, `--max-call-depth N`, `--runner COMMAND`: As for `agm exec`.
 - `--confirm-agents`: Start in confirm mode, asking before each agent call (the default
   is auto; see [Agent-call confirmation](#agent-call-confirmation)).
 - `--quiet`: Suppress the automatic echoing of entry results.

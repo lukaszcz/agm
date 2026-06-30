@@ -1569,8 +1569,9 @@ class AstBuilder(Transformer):
         bound: syntax.Expr | None = (
             cast("syntax.Expr | None", children[1]) if len(children) == 4 else None
         )
-        if isinstance(bound, syntax.IntLit) and bound.value <= 0:
-            raise AglSyntaxError("loop bound must be positive", span=bound.span)
+        # A non-positive bound (e.g. do[0] or do[-1]) is NOT rejected here: per
+        # the loop design (D2) a bound n <= 0 runs the body zero times and
+        # completes normally.  The lowerer's runtime bound check handles it.
 
         return syntax.Loop(
             for_var=for_var,

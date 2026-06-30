@@ -118,14 +118,18 @@ def run(args: ReplArgs) -> None:
     # parsed float (e.g. "30.0").
     exec_raw_table = toml_dict(merged_config.get("exec"))
     raw_timeout_str = raw_option_str(exec_raw_table, {}, "timeout")
-    engine_base: dict[str, Value] = build_engine_config_base({
+    # Omit max-iters when unset (None = valve OFF) so build_engine_config_base
+    # falls back to its _ENGINE_DEFAULTS entry (the bare-config floor).
+    repl_base_raw: dict[str, object] = {
         "strict-json": strict_json,
-        "max-iters": loop_limit,
         "runner": runner_cmd,
         "log": config.log,
         "timeout": raw_timeout_str,
         "log-file": config.log_file,
-    })
+    }
+    if loop_limit is not None:
+        repl_base_raw["max-iters"] = loop_limit
+    engine_base: dict[str, Value] = build_engine_config_base(repl_base_raw)
 
     session = ReplSession(
         default_strict_json=strict_json,

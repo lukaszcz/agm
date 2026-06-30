@@ -287,6 +287,14 @@ class PipelineDriver:
         When ``True`` the JSON codec defaults to strict parsing (only a bare
         JSON value with surrounding whitespace is accepted).  The default
         ``False`` enables lenient JSON recovery (design §2.8, Q3).
+    default_loop_limit : int or None
+        The host's global ``max-iters`` safety valve for unguarded loops
+        (``while``/``do…until`` with no ``[n]`` bound and no ``for`` clause).
+        ``None`` (the default) means the valve is OFF — unbounded loops run
+        until they self-terminate.  An ``int`` caps unguarded loops at that
+        many iterations, raising ``MaxIterationsExceeded``.  Self-bounded
+        loops (``for``, ``do[n]``) are never affected by this valve.  Resolved
+        by the caller as ``--max-iters`` > ``[exec] max-iters``.
     default_agent : callable or None
         The callable used for the built-in ``ask`` agent.  ``None`` means
         no default agent is configured (only explicitly registered agents will
@@ -307,7 +315,7 @@ class PipelineDriver:
         self,
         *,
         default_strict_json: bool = False,
-        default_loop_limit: int = 5,
+        default_loop_limit: int | None = None,
         default_agent: AgentFn | None = None,
         shell_exec_timeout: float | None = None,
         default_call_depth_limit: int | None = None,
@@ -1174,8 +1182,8 @@ class PipelineDriver:
         return self._default_strict_json
 
     @property
-    def default_loop_limit(self) -> int:
-        """Default do[] iteration bound."""
+    def default_loop_limit(self) -> int | None:
+        """Default max-iters valve (``None`` = OFF) for unguarded loops."""
         return self._default_loop_limit
 
     @property
@@ -1192,7 +1200,7 @@ class PipelineDriver:
         self,
         *,
         strict_json: bool,
-        loop_limit: int,
+        loop_limit: int | None,
         shell_exec_timeout: float | None,
     ) -> None:
         """Update the three D6 engine defaults in place without losing registrations.

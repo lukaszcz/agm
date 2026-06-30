@@ -499,7 +499,7 @@ _HELP_TEXTS: dict[str, str] = {
           --strict-json         Require bare JSON output from agents (no recovery).
           --no-strict-json      Use lenient JSON recovery (default).
           --max-call-depth N    Override the maximum recursion call depth
-                                (CLI > source pragma > config).
+                                (CLI > config).
           --runner COMMAND      Override the default agent runner command.
           --log                 Enable trace logging (auto timestamped path).
           --log-file PATH       Write trace log to PATH.
@@ -546,7 +546,7 @@ _HELP_TEXTS: dict[str, str] = {
           --strict-json         Require bare JSON output from agents (no recovery).
           --no-strict-json      Use lenient JSON recovery (default).
           --max-call-depth N    Override the maximum recursion call depth
-                                (CLI > config; pragmas are not applied in the REPL).
+                                (CLI > config; source pragmas are not applied in the REPL).
           --runner COMMAND      Override the default agent runner command.
           --confirm-agents     Confirm each agent call before dispatching it
                                 (default: fire agent calls without confirming).

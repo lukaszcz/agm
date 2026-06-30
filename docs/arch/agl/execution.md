@@ -14,7 +14,7 @@ The IR is a runtime-neutral data model: program-local identities and source loca
 
 ### Single-Loop Primitive and Desugar
 
-The IR has exactly one loop kind: `IrLoop(body)`, which repeats `body` unconditionally. The only loop exits are `IrBreak` (leave the loop, yielding unit) and `IrContinue` (start the next iteration). Both propagate through `IrTry` bodies — which catch only `AglRaise` — so a `break`/`continue` inside a `try` block exits the loop, not the `try`. The loop evaluator is a simple `while True:` that catches `_BreakSignal`/`_ContinueSignal` (internal Python exceptions, not `AglRaise`).
+The IR has exactly one loop kind: `IrLoop(body, guarded)`, which repeats `body` unconditionally. The only loop exits are `IrBreak` (leave the loop, yielding unit) and `IrContinue` (start the next iteration). Both propagate through `IrTry` bodies — which catch only `AglRaise` — so a `break`/`continue` inside a `try` block exits the loop, not the `try`. The loop evaluator is a simple `while True:` that catches `_BreakSignal`/`_ContinueSignal` (internal Python exceptions, not `AglRaise`).
 
 All richer loop features are desugared by the lowerer (`lower/lowerer.py` → `_lower_loop`) before the evaluator sees them:
 
@@ -25,6 +25,8 @@ All richer loop features are desugared by the lowerer (`lower/lowerer.py` → `_
 - **`until E`**: appended as the final item: `IrIf(lower(E)) => IrBreak`. Absent (for `done`/omitted terminators) → no guard.
 
 `MaxIterationsExceeded` and `RangeError` are both constructed as standard `IrMakeException` nodes, not special IR primitives, keeping `IrLoop` a pure repeat node with no exception-raising logic of its own. The three iterator IR nodes (`IrIterInit`, `IrIterHasNext`, `IrIterNext`) are also fully typeless; the `IterKind` discriminant (an enum on `IrIterInit`) is the only runtime clue about collection shape.
+
+The `guarded` flag marks self-bounded loops — those with a `[n]` bound (which raises `MaxIterationsExceeded` itself) or a `for` clause (bounded by a finite collection). The host's global `max-iters` safety valve (resolved from `--max-iters` / `[exec] max-iters` / a source `config max-iters` declaration; off by default) applies **only to unguarded loops** (`guarded=False`), capping them at `max-iters` body executions. A self-bounded loop is never cut short by the host safety net, which exists solely to catch runaway unbounded `while`/`do…until` loops.
 
 ### AST→IR Coverage
 

@@ -2466,6 +2466,84 @@ class TestExecSourceConfigPrecedence:
         assert capsys.readouterr().out == "done\n"
 
     # ------------------------------------------------------------------
+    # max-iters valve scope: self-bounded loops are exempt
+    # ------------------------------------------------------------------
+
+    def test_max_iters_does_not_cap_for_over_finite_collection(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """``--max-iters`` caps only unguarded loops; a ``for`` over a finite
+        collection larger than the cap must run to completion.
+
+        Regression: the valve applied to all loops, so ``--max-iters 3`` broke
+        ``for x in [1,2,3,4]``.
+        """
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "var s = 0\n"
+            "for x in [1, 2, 3, 4, 5] do s := s + x done\n"
+            "print s\n"
+        )
+        result = exec_command.run(_exec_args_no_log(agl_file, max_iters=3))
+        assert result is None  # exit 0
+        assert capsys.readouterr().out == "15\n"
+
+    def test_max_iters_does_not_cap_bounded_do_n_loop(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """``--max-iters`` does not cap a ``do[n]`` loop whose own bound exceeds it.
+
+        The loop's own ``[n]`` bound is its termination machinery; the host
+        safety valve must not cut it short.
+        """
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "var i = 0\n"
+            "do[10]\n"
+            "  i := i + 1\n"
+            "until i >= 5\n"
+            "print i\n"
+        )
+        result = exec_command.run(_exec_args_no_log(agl_file, max_iters=3))
+        assert result is None  # exit 0
+        assert capsys.readouterr().out == "5\n"
+
+    def test_max_iters_caps_unbounded_do_until_loop(
+        self, tmp_path: Path
+    ) -> None:
+        """``--max-iters`` caps an unguarded ``do…until`` loop (no [n], no for)."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "var i = 0\n"
+            "do\n"
+            "  i := i + 1\n"
+            "until i >= 1000\n"
+            "print i\n"
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file, max_iters=3))
+        assert exc_info.value.code == 2
+
+    def test_max_iters_five_enables_valve(self, tmp_path: Path) -> None:
+        """``--max-iters 5`` enables the valve (regression: was a silent no-op).
+
+        The old magic-``5`` sentinel treated ``5`` as "off", so ``--max-iters 5``
+        was a no-op while ``config max-iters = 5`` enabled the valve.  Both must
+        now enable it consistently.
+        """
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "var i = 0\n"
+            "do\n"
+            "  i := i + 1\n"
+            "until i >= 1000\n"
+            "print i\n"
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file, max_iters=5))
+        assert exc_info.value.code == 2
+
+    # ------------------------------------------------------------------
     # strict-json source declaration
     # ------------------------------------------------------------------
 

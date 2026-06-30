@@ -93,7 +93,7 @@ class ReplSession:
         self,
         *,
         default_strict_json: bool = False,
-        default_loop_limit: int = 5,
+        default_loop_limit: int | None = None,
         default_call_depth_limit: int | None = None,
         default_agent: "AgentFn | None" = None,
         shell_exec_timeout: float | None = None,
@@ -544,7 +544,10 @@ class ReplSession:
         # ``config strict-json = true`` or ``config max-iters = N`` entries chain
         # their effect-at-binding into subsequent entries.
         config_base["strict-json"] = BoolValue(self._default_strict_json)
-        config_base["max-iters"] = IntValue(self._default_loop_limit)
+        # When the valve is OFF (None) leave the engine default floor in place;
+        # otherwise override with the session-tracked cap.
+        if self._default_loop_limit is not None:
+            config_base["max-iters"] = IntValue(self._default_loop_limit)
 
         # Step 4: apply program-specific overrides from [<program>].KEY.
         for key_name in ENGINE_KEY_NAMES:
@@ -560,7 +563,7 @@ class ReplSession:
         self,
         *,
         strict_json: bool,
-        loop_limit: int,
+        loop_limit: int | None,
         shell_exec_timeout: float | None,
     ) -> None:
         """Persist the three D6 engine settings after a successful entry.

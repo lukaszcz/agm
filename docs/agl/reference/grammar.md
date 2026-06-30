@@ -188,13 +188,22 @@ while `xs [0]` is not.
 ## Loops
 
 ```ebnf
-do_until   ::= "do" loop_bound? suite "until" or_expr
-             | "do" loop_bound? inline_body "until" or_expr
-
-loop_bound ::= "[" INT "]"            (* INT must be positive *)
-
+loop        ::= for_clause? while_clause? "do" loop_bound? body loop_end
+for_clause  ::= "for" name "in" or_expr range_tail? _NL?
+range_tail  ::= ("to" | "downto") or_expr ("by" or_expr)?
+while_clause::= "while" or_expr _NL?
+loop_bound  ::= "[" or_expr "]"           (* int; n <= 0 runs zero iterations *)
+body        ::= suite | inline_body
+loop_end    ::= "until" or_expr | "done"   (* omitted terminator allowed in suite form *)
 inline_body ::= item (";" item)*
 ```
+
+At most one `for` and one `while` clause, in that order. `done` and an
+omitted (suite-form) terminator are equivalent to `until false`. `break` and
+`continue` are nullary expressions of the bottom type, valid only lexically
+inside a loop body within the same function/lambda. See
+[Control flow](control-flow.md) for the full clause, scope, and bound
+semantics.
 
 ## `if`
 

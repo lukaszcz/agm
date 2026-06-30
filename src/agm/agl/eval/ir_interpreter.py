@@ -283,7 +283,7 @@ class IrInterpreter:
         param_values: Mapping[SymbolId, Value] | None = None,
         registry: AgentRegistry | None = None,
         strict_json: bool = False,
-        loop_limit: int = 5,
+        loop_limit: int | None = None,
         shell_exec_timeout: float | None = None,
         host_contracts: Mapping[ContractId, "OutputContract"] | None = None,
         base_frame: Frame | None = None,
@@ -306,8 +306,12 @@ class IrInterpreter:
             named={}, default_agent=None
         )
         self._strict_json: bool = strict_json
-        self._loop_limit: int = loop_limit
-        self._loop_limit_active: bool = loop_limit != 5
+        # Global max-iters safety valve.  ``None`` means the valve is OFF (no
+        # host cap); an ``int`` means the valve is ON, capping unguarded loops at
+        # that many iterations.  The valve applies ONLY to unguarded loops
+        # (``IrLoop.guarded is False``) — ``for`` and ``do[n]`` loops carry
+        # their own bound and are never cut short by this safety net.
+        self._loop_limit: int | None = loop_limit
         self._shell_exec_timeout: float | None = shell_exec_timeout
         self._host_contracts: Mapping[ContractId, OutputContract] = (
             host_contracts if host_contracts is not None else {}
@@ -348,8 +352,8 @@ class IrInterpreter:
         return self._strict_json
 
     @property
-    def loop_limit(self) -> int:
-        """Current loop-iteration limit (may have been updated by a config binding)."""
+    def loop_limit(self) -> int | None:
+        """Current global max-iters valve (``None`` = OFF; may be updated by a config binding)."""
         return self._loop_limit
 
     @property
@@ -1089,15 +1093,24 @@ class IrInterpreter:
                     _make_match_error(subject_val, trace_id=self._trace.new_event_id())
                 )
 
-            case IrLoop(body=body_expr):
+            case IrLoop(body=body_expr, guarded=guarded):
                 # Unconditional repeat — all loop logic (bound checks, until
                 # guards, for/while clauses) is desugared into the body by the
                 # lowerer.  The only exits are IrBreak (leave the loop)
                 # and IrContinue (next iteration).  Both signals propagate through
                 # IrTry bodies (which catch only AglRaise) to reach this handler.
+                #
+                # The host's global max-iters valve applies ONLY to unguarded
+                # loops (no [n] bound, no for clause): a self-bounded loop carries
+                # its own termination and must never be cut short by this safety
+                # net, which exists to catch runaway while/do-until loops.
                 iterations = 0
                 while True:
-                    if self._loop_limit_active and iterations >= self._loop_limit:
+                    if (
+                        not guarded
+                        and self._loop_limit is not None
+                        and iterations >= self._loop_limit
+                    ):
                         raise AglRaise(
                             _make_exc_value(
                                 "MaxIterationsExceeded",
@@ -1322,7 +1335,6 @@ class IrInterpreter:
                         )
                     )
                 self._loop_limit = config_value.value
-                self._loop_limit_active = True
         elif public_name == "timeout":
             if isinstance(config_value, EnumValue):
                 if config_value.variant == "None":

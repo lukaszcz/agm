@@ -290,14 +290,20 @@ def run(args: ExecArgs) -> None:
     base_runner_cmd = config.runner or default_agent_runner(merged=merged_config)
     exec_raw_table = toml_dict(merged_config.get("exec"))
     raw_timeout = raw_option_str(program_table, exec_raw_table, "timeout")
-    config_base = build_engine_config_base({
+    # The config_base floor for ``max-iters`` is the resolved config value when
+    # set, else the engine default (5) — a bare ``config max-iters`` decl binds
+    # this floor and turns the valve ON.  Omit the key when unset so
+    # build_engine_config_base falls back to its _ENGINE_DEFAULTS entry.
+    engine_base_raw: dict[str, object] = {
         "strict-json": config.strict_json,
-        "max-iters": config.default_loop_limit,
         "runner": base_runner_cmd,
         "log": config.log,
         "timeout": raw_timeout,
         "log-file": config.log_file,
-    })
+    }
+    if config.default_loop_limit is not None:
+        engine_base_raw["max-iters"] = config.default_loop_limit
+    config_base = build_engine_config_base(engine_base_raw)
 
     # Resolve strict_json: CLI > config.  Source config strict-json = VALUE
     # is applied at runtime by the D6 effect (IrConfigBind → _apply_config_effect).
@@ -313,11 +319,11 @@ def run(args: ExecArgs) -> None:
         config.max_call_depth,
     )
 
-    # Resolve loop limit: CLI > config.  Source config max-iters = VALUE is
-    # applied at runtime by the D6 effect.
-    loop_limit = _first(args.max_iters, config.default_loop_limit)
-    assert loop_limit is not None
-    resolved_loop_limit: int = loop_limit
+    # Resolve loop limit (max-iters valve): CLI > config.  ``None`` (nothing
+    # set at any layer) means the valve is OFF — unguarded loops run until they
+    # self-terminate.  Source ``config max-iters = VALUE`` is applied at runtime
+    # by the D6 effect (effect-at-binding), overriding this initial value.
+    resolved_loop_limit: int | None = _first(args.max_iters, config.default_loop_limit)
 
     # Resolve timeout: CLI > [exec] config.  Source config timeout = VALUE is
     # applied at runtime by the D6 effect (effect-at-binding).

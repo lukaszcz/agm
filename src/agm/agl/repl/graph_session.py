@@ -72,7 +72,7 @@ class GraphSessionCtx(Protocol):
         self,
         *,
         strict_json: bool,
-        loop_limit: int,
+        loop_limit: int | None,
         shell_exec_timeout: float | None,
     ) -> None: ...
 

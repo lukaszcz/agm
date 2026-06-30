@@ -1,6 +1,6 @@
 # Recursion that stays within the configured call-depth limit returns normally;
 # recursion that exceeds it raises RecursionError. The limit is host-configured
-# (the `max_call_depth` config pragma in source, or the runtime default).
+# (--max-call-depth / [exec] max-call-depth, or the runtime default).
 param n: int
 
 def countdown(x: int) -> int =

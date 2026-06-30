@@ -1796,9 +1796,13 @@ class TestDoExpr:
         assert isinstance(e, Do)
         assert e.limit == 10
 
-    def test_do_zero_bound_raises(self) -> None:
-        with pytest.raises(AglSyntaxError, match="positive"):
-            parse("do[0] x until true")
+    def test_do_zero_bound_parses(self) -> None:
+        # A non-positive bound is not a parse error (D2: n <= 0 runs the body
+        # zero times and completes normally).  The lowerer's runtime bound
+        # check handles it.
+        e = first(parse("do[0] x until true"))
+        assert isinstance(e, Do)
+        assert e.limit == 0
 
     def test_do_suite_body(self) -> None:
         src = "do\n  x := 1\n  y := 2\nuntil x > 5"

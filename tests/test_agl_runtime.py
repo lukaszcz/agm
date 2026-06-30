@@ -38,7 +38,9 @@ class TestPipelineDriverConstructor:
     def test_default_constructor_uses_documented_defaults(self) -> None:
         rt = PipelineDriver()
         # Documented constructor defaults (design §2.8/§2.11).
-        assert rt.default_loop_limit == 5
+        # The max-iters valve defaults to OFF (None): unbounded loops run until
+        # they self-terminate; an explicit max-iters turns the valve on.
+        assert rt.default_loop_limit is None
         assert rt.default_strict_json is False
 
     def test_default_loop_limit_kwarg_is_observable(self) -> None:

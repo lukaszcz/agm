@@ -56,7 +56,8 @@ class TestLoadExecConfig:
         cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
         assert cfg.runner is None
         assert cfg.strict_json is False
-        assert cfg.default_loop_limit == 5
+        # No [exec] max-iters → the valve is OFF (None), not a baked-in default.
+        assert cfg.default_loop_limit is None
         assert cfg.timeout is None
         assert cfg.agents == {}
         assert cfg.log is False

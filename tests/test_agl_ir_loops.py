@@ -49,6 +49,7 @@ from agm.agl.ir.program import (
 )
 from agm.agl.ir.validate import validate_ir
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
+from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import BoolValue, IntValue, JsonValue, TextValue
 from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises
 
@@ -256,6 +257,58 @@ def test_ir_semantic_unbounded_loop_runs_to_completion() -> None:
     source = "var x = 0\ndo\n  x := x + 1\nuntil x >= 1000\nx\n"
     ir = evaluate_ir(source)
     assert ir["x"] == IntValue(1000)
+
+
+def test_literal_zero_bound_runs_zero_iterations() -> None:
+    """A literal do[0] runs the body zero times and completes normally (D2).
+
+    Regression: the parser used to reject literal do[0] as a syntax error;
+    it must parse and behave identically to a computed bound of 0.
+    """
+    source = "var r = 0\ndo[0]\n  r := r + 1\nuntil r >= 1\nr\n"
+    ir = evaluate_ir(source)
+    assert ir["r"] == IntValue(0)
+
+
+def test_literal_negative_bound_runs_zero_iterations() -> None:
+    """A literal do[-1] also runs zero iterations (consistent with do[0])."""
+    source = "var r = 0\ndo[-1]\n  r := r + 1\nuntil r >= 1\nr\n"
+    ir = evaluate_ir(source)
+    assert ir["r"] == IntValue(0)
+
+
+def test_valve_does_not_cap_for_over_finite_collection() -> None:
+    """The max-iters valve must not cap a for loop over a finite collection.
+
+    Regression: the valve applied to ALL loops, so --max-iters 3 broke
+    `for x in [1,2,3,4]`.  Self-bounded loops (for/do[n]) are guarded and
+    exempt from the host safety valve.
+    """
+    source = "var s = 0\nfor x in [1, 2, 3, 4, 5] do s := s + x done\ns\n"
+    interp = IrInterpreter(_lower(source), loop_limit=3)
+    result = interp.run()
+    assert result["s"] == IntValue(15)
+
+
+def test_valve_does_not_cap_bounded_do_n_loop() -> None:
+    """The max-iters valve must not cap a do[n] loop whose own bound exceeds it."""
+    source = "var i = 0\ndo[10]\n  i := i + 1\nuntil i >= 5\ni\n"
+    interp = IrInterpreter(_lower(source), loop_limit=3)
+    result = interp.run()
+    assert result["i"] == IntValue(5)
+
+
+def test_valve_caps_unbounded_do_until_loop() -> None:
+    """The max-iters valve caps an unguarded (no [n], no for) do...until loop."""
+    source = "var i = 0\ndo\n  i := i + 1\nuntil i >= 1000\ni\n"
+    interp = IrInterpreter(_lower(source), loop_limit=3)
+    try:
+        interp.run()
+    except AglRaise as exc:
+        assert exc.exc.display_name == "MaxIterationsExceeded"
+        assert exc.exc.fields.get("limit") == IntValue(3)
+        return
+    raise AssertionError("expected MaxIterationsExceeded")
 
 
 def test_crlf_loop_exhaustion_condition_field() -> None:

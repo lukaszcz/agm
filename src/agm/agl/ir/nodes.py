@@ -769,10 +769,19 @@ class IrLoop:
 
     Per D5 there are NO per-iteration frames: body bindings reuse the same
     single frame slots across iterations.
+
+    ``guarded`` marks loops that carry their own termination bound — a ``[n]``
+    bound (which raises ``MaxIterationsExceeded`` itself) or a ``for`` clause
+    (bounded by a finite collection).  The host's global ``max-iters`` safety
+    valve applies ONLY to unguarded loops (``guarded=False``): a ``for`` over a
+    million-element list or a ``do[n]`` with a large ``n`` must never be cut
+    short by the host safety net, which exists solely to catch runaway
+    unbounded ``while``/``do…until`` loops.
     """
 
     location: Location
     body: "IrExpr"
+    guarded: bool = False
 
 
 @dataclass(frozen=True, slots=True)

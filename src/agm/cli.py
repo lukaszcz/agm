@@ -1022,12 +1022,12 @@ def exec_cmd(
     max_iters: int | None = typer.Option(
         None,
         "--max-iters",
-        help="Override the default do[] iteration bound.",
+        help="Cap for unbounded loops (while/do...until with no [n] or for); off by default.",
     ),
     max_call_depth: int | None = typer.Option(
         None,
         "--max-call-depth",
-        help="Override the maximum recursion call depth (CLI > source pragma > config).",
+        help="Override the maximum recursion call depth (CLI > config).",
     ),
     runner: str | None = typer.Option(
         None,
@@ -1182,7 +1182,7 @@ def repl_cmd(
     max_iters: int | None = typer.Option(
         None,
         "--max-iters",
-        help="Override the default do[] iteration bound.",
+        help="Cap for unbounded loops (while/do...until with no [n] or for); off by default.",
     ),
     max_call_depth: int | None = typer.Option(
         None,

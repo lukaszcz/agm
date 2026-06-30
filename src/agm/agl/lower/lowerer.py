@@ -1435,9 +1435,16 @@ class _Lowerer:
                 )
             )
 
+        # A loop is self-bounded (guarded) when it has a [n] bound (which raises
+        # MaxIterationsExceeded itself) or a for clause (bounded by a finite
+        # collection).  The host's global max-iters safety valve applies only
+        # to unguarded loops, so a large do[n] or a for over a big collection
+        # is never cut short by the host safety net.
+        guarded = bound_expr is not None or for_var is not None
         loop = IrLoop(
             location=loc,
             body=IrBlock(location=loc, items=tuple(body_items)),
+            guarded=guarded,
         )
 
         if pre_items:

@@ -3,8 +3,8 @@
 [← Index](index.md)
 
 Control flow in AgL is expression-oriented: every construct produces a
-value. `if` and `case` with branches unify to a common type; `do … until`
-and else-less `if` produce `unit`. Exception control flow — `try`, `catch`,
+value. `if` and `case` with branches unify to a common type; loops and
+else-less `if` produce `unit`. Exception control flow — `try`, `catch`,
 `raise` — is covered in [Exceptions](exceptions.md).
 
 ## `if`
@@ -103,75 +103,144 @@ let next_prompt: text = case action of
   | Escalate(reason) => "Investigate:\n${reason}"
 ```
 
-## `do … until` loops
+## Loops
+
+AgL has one uniform loop construct covering every loop shape — `for`,
+`while`, `do`, a `[n]` bound, and `until`/`done` termination — plus
+`break`/`continue`. The surface form composes a fixed-ordered header with
+an optional bound and a body:
 
 ```ebnf
-do_until   ::= "do" ("[" INT "]")? block "until" or_expr
+loop        ::= for_clause? while_clause? "do" loop_bound? body loop_end
+for_clause  ::= "for" name "in" or_expr range_tail? _NL?
+range_tail  ::= ("to" | "downto") or_expr ("by" or_expr)?
+while_clause::= "while" or_expr _NL?
+loop_bound  ::= "[" or_expr "]"
+loop_end    ::= "until" or_expr | "done"
+body        ::= suite | inline_seq
 ```
 
-The only loop in AgL is a **bounded, post-test** loop. The bound is written
-immediately after `do`:
+A loop may begin with **at most one `for`** clause and **at most one
+`while`** clause, in that fixed order (so a `while` guard can always
+reference the `for` variable). `do` is always present and may carry an
+optional iteration **bound** `[n]`. The body is an indented suite or an
+inline `;`-separated sequence. It ends with `until E`, `done`, or — in the
+**multi-line** form only — nothing (the body is delimited by indentation).
+`done` and an omitted terminator are equivalent to `until false`.
 
 ```agl
-do[5]
-  let r: Review = ask(
-    "Review ${artifact}",
-    agent = reviewer,
-    on_parse_error = Retry(n = 2)
-  )
+# collection for, terminated by `done`
+for x in items do
+  process(x)
+done
+
+# integer range: i = a, a+step, … up/down to and including b
+for i in 1 to n do print i done
+for i in n downto 1 by 2 do print i done
+
+# while with an explicit bound (safety limit)
+var i: int = 0
+while i < target do[1000]
+  i := i + 1
+done
+
+# bare post-test loop
+var r: Review = ask("Review ${a}", agent = reviewer)
+do
   case r of
-    | Fail(issues) =>
-        artifact := ask("Fix ${issues}", agent = impl)
-    | Pass => ()
+    | Fail(issues) => r := ask("Fix ${issues}", agent = impl)
+    | Pass => break
 until r is Pass
 ```
 
-Inline:
+Every loop expression has type **`unit`** — it runs for effect and produces
+no value.
+
+### Clause semantics
+
+**`for` — collection iteration.** `for x in COLLECTION` iterates `list[T]`
+(elements, in order), `dict[text, V]` (keys, in dict order), or `text`
+(each character as a length-1 `text`). The loop variable `x` takes the
+element/key/char type respectively.
+
+**`for` — integer range.** `for i in a to b` runs `i = a, a+1, …, b`
+(inclusive); `for i in a downto b` runs `i = a, a-1, …, b` (inclusive).
+An optional `by k` sets the step (a positive `int`); an omitted step is `1`.
+Bounds and step are each evaluated exactly once at loop entry, in source
+order (`a`, then `b`, then `k`). A degenerate range (`a > b` for `to`,
+`a < b` for `downto`) runs the body zero times and completes normally. A
+non-positive step raises **`RangeError`** at loop entry.
+
+**`while E`.** Before each body execution, `E` is evaluated; if false the
+loop exits. `E` must be `bool`. (Placed after `for` so it may reference
+the `for` variable.)
+
+**`[n]` bound.** An `int` expression evaluated once at loop entry, in the
+enclosing scope. It counts **body executions**. Exceeding it raises
+**`MaxIterationsExceeded`**. `n ≤ 0` runs the body **zero times** and
+completes normally (even though a positive-bound loop is post-test and
+always runs at least once). An omitted bound is unbounded from the loop's
+own machinery. The bound's counter and raise machinery exist only when a
+`[n]` bound is present.
+
+**`until E`.** After each body execution, `E` is evaluated in the iteration
+scope (it sees the body's bindings); if true the loop exits. `E` must be
+`bool`. `done` and an omitted terminator mean `until false` — so a
+`do[n] … done` loop runs the body `n` times and then **raises**
+`MaxIterationsExceeded` (the bound is the only real exit).
+
+The only exception-free loop exits are: `for` exhaustion, a false `while`,
+a true `until`, and `break`.
+
+### Iteration order and scope
+
+The `for` variable is a fresh **immutable** binding each iteration
+(assigning it with `:=` is a static error). It is in scope in the `while`
+guard, the body, and the `until` condition. It is **not** in scope in the
+`for` collection/range expressions or the `[n]` bound (all evaluated once at
+entry, in the enclosing scope), nor after the loop. Body bindings are
+visible to the `until` condition but do not survive to the next iteration
+or past the loop. Persistent state lives in an outer `var` mutated with `:=`.
+
+### `break` and `continue`
+
+`break` exits the innermost enclosing loop immediately; `continue` skips the
+remainder of the current iteration's body and starts the next iteration
+(re-running the `for` advance, the `while`/`until` guards, and the bound
+check — a continued iteration still advances the iterator and still counts
+toward the bound). Both are nullary expressions of the **bottom type**:
+assignable to any expected type and usable in any branch position (like
+`raise`).
 
 ```agl
-do[5] let r: Review = ask("Review ${a}", agent = reviewer) until r is Pass
+for x in items do
+  if x is Skip => continue
+  if x is Stop => break
+  process(x)
+done
+
+# bottom type: `break` in a typed branch
+let v: int = if done => break else => count
 ```
 
-Semantics:
+`break`/`continue` are valid only **lexically inside a loop body within the
+same function/lambda**: one outside any loop, or one that would cross a
+`fn`/`def`/lambda boundary into an outer loop, is a static error. `break`
+inside a `try` body exits the loop (it is not caught by `catch`, which
+handles only AgL exceptions).
 
-1. Execute the body in a **fresh iteration scope**.
-2. Evaluate the `until` condition *in that same iteration scope* — it sees
-   the body's bindings for that iteration. The condition must be `bool`.
-3. If the condition is true, the loop ends.
-4. Otherwise discard the iteration scope and repeat.
-5. If the body has executed `N` times and the condition is still false, raise
-   **`MaxIterationsExceeded`**.
+### The host `max-iters` safety valve
 
-The `do … until` loop always has type **`unit`**: it runs for effect and
-produces no value.
+A `[n]` bound is the loop's own termination machinery. Loops with a `for`
+clause are bounded by a finite collection. Both are **self-bounded** and are
+never cut short by the host. The host's `max-iters` setting
+(`--max-iters` / `[exec] max-iters` / `config max-iters`) is a **safety
+valve** that applies **only to unbounded loops** — those with no `[n]` bound
+and no `for` clause (a bare `while … do … done` or `do … until E`). It
+caps such loops at `max-iters` body executions, raising
+`MaxIterationsExceeded`. The valve is **off by default** (unbounded loops run
+until they self-terminate); setting `max-iters` turns it on.
 
-The bound:
-
-- must be a positive integer literal;
-- counts **body executions**, not agent calls — retries inside the body do
-  not consume loop iterations;
-- when omitted, the host's default bound applies (portable default: **5**).
-  `do` without a bound does *not* mean unbounded — AgL has no unbounded loops.
-
-Because the condition is post-tested, the body always executes at least once.
-
-### Loop state
-
-Iteration-local bindings do not survive to the next iteration or past the
-loop. Persistent state lives in an outer `var` mutated with `:=`:
-
-```agl
-var artifact: text = ask("Implement ${spec}", agent = impl)
-
-do[5]
-  let review: Review = ask("Review ${artifact}", agent = reviewer)
-  case review of
-    | Fail(issues) =>
-        artifact := ask("Fix ${issues}", agent = impl)
-    | Pass => ()
-until review is Pass
-```
-
-The `until` keyword may start its own line aligned with `do`, courtesy of the
-branch-marker continuation rule
+The `until` keyword (and `done`) may start its own line aligned with `do`,
+courtesy of the branch-marker continuation rule
 ([Lexical structure](lexical-structure.md)).

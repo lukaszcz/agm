@@ -230,6 +230,26 @@ class TestMultiline:
         assert is_incomplete("record R") is True
         assert is_incomplete("record R\n") is False
 
+    @pytest.mark.parametrize("quote", ['"""', "'''"])
+    def test_unterminated_triple_quoted_string_keeps_prompting(self, quote: str) -> None:
+        # An open triple-quoted string is a lexical EOF condition, but in the
+        # REPL it is a natural multiline entry and must keep accepting lines
+        # until the matching delimiter is typed.
+        assert is_incomplete(f"let text = {quote}first") is True
+        assert is_incomplete(f"let text = {quote}first\n") is True
+        assert is_incomplete(f"let text = {quote}first\n\nsecond") is True
+        assert is_incomplete(f"let text = {quote}first\n\nsecond{quote}") is False
+
+    @pytest.mark.parametrize("quote", ['"""', "'''"])
+    def test_triple_quoted_string_continues_through_blank_lines(
+        self, quote: str
+    ) -> None:
+        # Pressing Enter on a blank line inside an open triple-quoted string
+        # inserts another newline instead of force-submitting the broken entry.
+        output = drive(f"let text = {quote}first\r\rsecond{quote}\rtext\r\x04")
+        assert "first" in output
+        assert "second" in output
+
 
 class TestIsIncomplete:
     @pytest.mark.parametrize(

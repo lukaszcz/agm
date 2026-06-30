@@ -32,6 +32,7 @@ import pytest
 import agm.agl.syntax as syntax
 from agm.agl.parser import (
     AglSyntaxError,
+    has_unterminated_triple_quoted_string,
     is_incomplete_source,
     parse_program,
     parse_program_seeded,
@@ -2411,6 +2412,29 @@ class TestReplSeamCoverage:
     def test_is_incomplete_source_lex_error(self) -> None:
         """Input that causes a LexError returns False (real error, not incomplete)."""
         assert not is_incomplete_source("~~~")
+
+    def test_is_incomplete_source_lark_error_fallback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Unexpected residual Lark errors are complete so the REPL shows them."""
+        from lark.exceptions import LarkError
+
+        import agm.agl.parser.parser as parser_mod
+
+        def fail_parse(_text: str) -> object:
+            raise LarkError("synthetic parser failure")
+
+        monkeypatch.setattr(parser_mod, "_incomplete_cache", None)
+        monkeypatch.setattr(parser_mod._PARSER, "parse", fail_parse)
+        assert not is_incomplete_source("synthetic lark fallback")
+
+    @pytest.mark.parametrize("quote", ['"""', "'''"])
+    def test_is_incomplete_source_unterminated_triple_quote(self, quote: str) -> None:
+        """Triple-quoted string EOF is incomplete for REPL continuation."""
+        source = f"let text = {quote}hello"
+        assert has_unterminated_triple_quoted_string(source)
+        assert is_incomplete_source(source)
+        assert not has_unterminated_triple_quoted_string(f"{source}{quote}")
 
 
 class TestParserErrorCoverage:

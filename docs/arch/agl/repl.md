@@ -4,7 +4,7 @@ Two commands host AgL programs: `agm exec` runs a whole program, and `agm repl` 
 
 ## Incremental REPL Session
 
-The REPL is a UI-free incremental driver that runs the full parse → resolve → check → lower → eval pipeline one entry at a time against two persistent images: the static session environment and the linked IR/runtime image. It reuses the firewalled passes' seam parameters so each entry's node ids stay globally unique, new references fall through to prior session bindings, and new declarations shadow. Each entry contributes a delta of initializers executed against one persistent base frame, so earlier initializers and host calls are never replayed, and the session echoes the trailing expression's result.
+The REPL is a UI-free incremental driver that runs the full parse → resolve → check → lower → eval pipeline one entry at a time against two persistent images: the static session environment and the linked IR/runtime image. It reuses the firewalled passes' seam parameters so each entry's node ids stay globally unique, new references fall through to prior session bindings, and new declarations shadow. Each entry contributes a delta of initializers executed against one persistent base frame, so earlier initializers and host calls are never replayed, and the session echoes the trailing expression's result unless that result is the non-printable unit value used by statement-like effects.
 
 Runtime failure is deliberately non-transactional: initializers completed before a failure remain installed (including mutations and new bindings), and the static environment advances only for the symbols that actually reached the runtime frame, keeping later name resolution aligned with the partially advanced image.
 
@@ -30,7 +30,7 @@ Three engine keys — `strict-json`, `max-iters`, `timeout` — have **D6 effect
 
 ## Console and Confirmation
 
-The REPL console adds interactivity around the session. Live agent calls are gated by a confirmation wrapper holding a shared confirm/auto mode (also toggled by a meta-command); in confirm mode it prompts before each call, and a Ctrl-C during a live call is converted into a cancellation. Syntax highlighting runs the real lexer and classifies each `NAME` semantically rather than by capitalization, using declaration-site context and the live session's known type and constructor names. Color themes are detectable from the terminal and persisted to config. The console supplies all UI; the session itself stays UI-free.
+The REPL console adds interactivity around the session. Live agent calls are gated by a confirmation wrapper holding a shared confirm/auto mode (also toggled by a meta-command); in confirm mode it prompts before each call, and a Ctrl-C during a live call is converted into a cancellation. Syntax highlighting runs the real lexer and classifies each `NAME` semantically rather than by capitalization, using declaration-site context and the live session's known type and constructor names. Multiline submission is parser-driven, with lexical EOF inside triple-quoted strings treated as continuation input until the closing delimiter is entered. Color themes are detectable from the terminal and persisted to config. The console supplies all UI; the session itself stays UI-free.
 
 ## Code Entry Points
 

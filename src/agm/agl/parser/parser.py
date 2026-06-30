@@ -92,6 +92,17 @@ def _type_parser() -> Lark:
     return _TYPE_PARSER
 
 
+def has_unterminated_triple_quoted_string(text: str) -> bool:
+    """Return ``True`` when lexing *text* ends inside a triple-quoted string."""
+    try:
+        _PARSER.parse(text)
+    except LexError as exc:
+        return str(exc) == "Unterminated triple-quoted string literal"
+    except LarkError:
+        return False
+    return False
+
+
 def _parse_tree(
     parser: Lark,
     text: str,
@@ -201,9 +212,11 @@ def is_incomplete_source(text: str) -> bool:
     - ``UnexpectedToken`` on a real token where an ``_INDENT`` was expected (the
       user hit Enter right after a block-opening ``=>``/header but has not yet
       indented the suite body) → incomplete.
-    - Any other failure (``UnexpectedCharacters``, ``LexError``, a wrong token
-      mid-line such as ``let = 5``) → complete, so the REPL submits and the user
-      sees the genuine error instead of being trapped in a continuation prompt.
+    - ``LexError`` for an unterminated triple-quoted string → incomplete. Other
+      lexical failures remain complete so the REPL submits and the user sees the
+      genuine error instead of being trapped in a continuation prompt.
+    - Any other failure (``UnexpectedCharacters``, a wrong token mid-line such
+      as ``let = 5``) → complete.
 
     Results are memoized for the most recently seen text so that the Enter-key
     check and the immediately following eval-path parse do not trigger two full
@@ -232,11 +245,12 @@ def is_incomplete_source(text: str) -> bool:
             result = not typed_call_without_call
         else:
             result = "_INDENT" in exc.expected
-    except (LarkError, LexError):
-        # Any other parse/lex failure (``UnexpectedCharacters`` and the residual
-        # ``LarkError`` family, plus the custom ``LexError`` — which is NOT a
-        # ``LarkError`` subclass) is a real error the user should see
-        # immediately, not a continuation.
+    except LexError as exc:
+        result = str(exc) == "Unterminated triple-quoted string literal"
+    except LarkError:
+        # Any other parse failure (``UnexpectedCharacters`` and the residual
+        # ``LarkError`` family) is a real error the user should see immediately,
+        # not a continuation.
         result = False
 
     _incomplete_cache = (text, result)

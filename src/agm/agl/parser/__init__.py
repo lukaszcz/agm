@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from agm.agl.parser.errors import AglSyntaxError
 from agm.agl.parser.parser import (
+    has_unterminated_triple_quoted_string,
     is_incomplete_source,
     parse_program,
     parse_program_seeded,
@@ -23,6 +24,7 @@ from agm.agl.parser.parser import (
 
 __all__ = [
     "AglSyntaxError",
+    "has_unterminated_triple_quoted_string",
     "is_incomplete_source",
     "parse_program",
     "parse_program_seeded",

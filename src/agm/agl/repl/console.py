@@ -42,7 +42,7 @@ from prompt_toolkit.output import Output
 
 from agm.agl.lexer import tokenize
 from agm.agl.lexer.tokens import KEYWORDS
-from agm.agl.parser import is_incomplete_source
+from agm.agl.parser import has_unterminated_triple_quoted_string, is_incomplete_source
 from agm.agl.repl import meta as meta_mod
 from agm.agl.repl import render as render_mod
 from agm.agl.repl import session as session_mod
@@ -499,7 +499,7 @@ def is_incomplete(text: str) -> bool:
     """
     if not text.strip():
         return False
-    if text.endswith("\n"):
+    if text.endswith("\n") and not has_unterminated_triple_quoted_string(text):
         return False
     return is_incomplete_source(text)
 

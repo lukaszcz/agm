@@ -23,6 +23,7 @@ from agm.agl.semantics.types import (
 )
 from agm.agl.syntax.nodes import Call, Expr, FieldAccess, NamedArg, VarRef
 from agm.agl.syntax.spans import SourceSpan
+from agm.agl.syntax.types import TypeExpr
 from agm.agl.typecheck.arguments import bind_constructor_args
 from agm.agl.typecheck.env import (
     AglTypeError,
@@ -203,6 +204,153 @@ class ConstructorChecker:
             concrete_params = tuple(substitute(ft, subst) for ft in sig.field_templates)
             concrete_result = substitute(sig.result_template, subst)
             return FunctionType(params=concrete_params, result=concrete_result)
+
+    # --- Generic constructor type-apply as value (explicit type args) ---
+
+    def _resolve_constructor_sig(
+        self, *, owner_name: str, variant: str | None
+    ) -> tuple[ConstructorSignature, "GenericTypeDef | None", str]:
+        """Look up a constructor signature, falling back to open-imported generics.
+
+        Returns ``(sig, imported_gdef_or_None, source_name)`` where *source_name*
+        is the owner name to use for instantiation (may differ from the callee
+        name for open-imported generic enums whose variants travel separately).
+        """
+        sig = self._ctx._env.get_constructor_signature(owner_name, variant)
+        if sig is not None:
+            return sig, None, owner_name
+        imported = self._ctx._env.get_open_imported_generic_type(owner_name)
+        assert imported is not None, (
+            f"No constructor signature for {owner_name}.{variant}"
+        )
+        module_id, source_name, imported_gdef = imported
+        sig = self._ctx._env.get_ctor_sig_from_module(module_id, source_name, variant)
+        assert sig is not None, f"No constructor signature for {owner_name}.{variant}"
+        return sig, imported_gdef, source_name
+
+    def _instantiate_constructor_value(
+        self,
+        *,
+        owner_name: str,
+        variant: str | None,
+        type_params: tuple[str, ...],
+        type_args: tuple[TypeExpr, ...],
+        sig: ConstructorSignature,
+        gdef: GenericTypeDef | None,
+        source_name: str,
+        span: SourceSpan,
+    ) -> Type:
+        """Instantiate a generic constructor value from explicit type arguments.
+
+        Shared core of the bare and qualified type-apply-as-value paths. A
+        payload variant yields a ``FunctionType`` (field types → owner type);
+        a nullary variant yields the constructed nominal value. *gdef* is the
+        owning ``GenericTypeDef`` (own-module or cross-module); when ``None``
+        the own-module nominal registry is used via *owner_name*.
+        """
+        if len(type_args) != len(type_params):
+            raise AglTypeError(
+                f"'{owner_name}' requires {len(type_params)} type argument(s), "
+                f"but {len(type_args)} were supplied.",
+                span=span,
+            )
+        subst = {
+            p: self._ctx._env.resolve_type_expr(
+                ta, span=span, type_vars=self._ctx._current_type_vars
+            )
+            for p, ta in zip(type_params, type_args)
+        }
+        concrete_args = tuple(subst[p] for p in type_params)
+        if not sig.field_names:
+            # Nullary variant: instantiate the nominal type and construct it.
+            concrete_type = (
+                self._ctx._env.instantiate_from_gdef(
+                    source_name, gdef, concrete_args, span=span
+                )
+                if gdef is not None
+                else self._ctx._env.instantiate_nominal(owner_name, concrete_args, span=span)
+            )
+            return self._check_constructor_call(
+                owner=concrete_type, variant=variant, positional=(), named=(), span=span
+            )
+        concrete_params = tuple(substitute(ft, subst) for ft in sig.field_templates)
+        concrete_result = substitute(sig.result_template, subst)
+        return FunctionType(params=concrete_params, result=concrete_result)
+
+    def check_constructor_type_apply(
+        self,
+        *,
+        ctor_ref: ConstructorRef,
+        type_args: tuple[TypeExpr, ...],
+        span: SourceSpan,
+    ) -> Type:
+        """Type a generic constructor with explicit type args used as a value.
+
+        ``some::[int]``  → ``FunctionType((int,), Option[int])`` (payload variant).
+        ``none::[int]``  → the constructed ``Option[int]`` value (nullary variant).
+        """
+        if not ctor_ref.type_params:
+            raise AglTypeError(
+                f"'{ctor_ref.owner_name}' is not a generic constructor and does not accept "
+                "type arguments.",
+                span=span,
+            )
+        sig, imported_gdef, source_name = self._resolve_constructor_sig(
+            owner_name=ctor_ref.owner_name, variant=ctor_ref.variant
+        )
+        return self._instantiate_constructor_value(
+            owner_name=ctor_ref.owner_name,
+            variant=ctor_ref.variant,
+            type_params=ctor_ref.type_params,
+            type_args=type_args,
+            sig=sig,
+            gdef=imported_gdef,
+            source_name=source_name,
+            span=span,
+        )
+
+    def check_qualified_constructor_type_apply(
+        self,
+        *,
+        owner_name: str,
+        variant: str,
+        owner_module_id: ModuleId | None,
+        type_args: tuple[TypeExpr, ...],
+        span: SourceSpan,
+    ) -> Type:
+        """Type a qualified generic constructor with explicit type args as a value.
+
+        e.g. ``Option.some::[int]`` or ``Option.none::[int]``.
+        """
+        gdef = (
+            self._ctx._env.get_generic_type_from_module(owner_module_id, owner_name)
+            if owner_module_id is not None
+            else self._ctx._env.get_generic_type(owner_name)
+        )
+        if gdef is None:
+            raise AglTypeError(
+                f"'{owner_name}' is not a generic constructor and does not accept "
+                "type arguments.",
+                span=span,
+            )
+        sig = (
+            self._ctx._env.get_ctor_sig_from_module(owner_module_id, owner_name, variant)
+            if owner_module_id is not None
+            else self._ctx._env.get_constructor_signature(owner_name, variant)
+        )
+        assert sig is not None, (
+            f"Generic enum '{owner_name}' has no constructor signature for '{variant}'"
+        )
+        return self._instantiate_constructor_value(
+            owner_name=owner_name,
+            variant=variant,
+            type_params=gdef.type_params,
+            type_args=type_args,
+            sig=sig,
+            gdef=gdef,
+            source_name=owner_name,
+            span=span,
+        )
 
     # --- Generic constructor call (private helper) ---
 

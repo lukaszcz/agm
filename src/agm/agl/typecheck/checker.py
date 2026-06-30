@@ -815,6 +815,35 @@ class _Checker:
         }
 
     def _check_type_apply(self, node: TypeApply) -> Type:
+        # A constructor used as a value with explicit type arguments
+        # (e.g. ``some::[int]`` or ``Option.none::[int]``): delegate to the
+        # constructor checker, which instantiates the constructor with the
+        # supplied type arguments and returns a function value (payload) or
+        # the constructed nominal value (nullary variant).
+        if isinstance(node.expr, VarRef) and node.expr.node_id in self._resolved.constructor_refs:
+            ctor_ref = self._resolved.constructor_refs[node.expr.node_id]
+            typ = self._constructors.check_constructor_type_apply(
+                ctor_ref=ctor_ref, type_args=node.type_args, span=node.span
+            )
+            self._node_types[node.expr.node_id] = typ
+            return typ
+        if (
+            isinstance(node.expr, FieldAccess)
+            and node.expr.node_id in self._resolved.qualified_constructor_refs
+        ):
+            owner_name, variant, owner_module_id = (
+                self._resolved.qualified_constructor_refs[node.expr.node_id]
+            )
+            typ = self._constructors.check_qualified_constructor_type_apply(
+                owner_name=owner_name,
+                variant=variant,
+                owner_module_id=owner_module_id,
+                type_args=node.type_args,
+                span=node.span,
+            )
+            self._node_types[node.expr.node_id] = typ
+            return typ
+
         if not isinstance(node.expr, VarRef):
             raise AglTypeError(
                 "Explicit type arguments can only be applied to a generic function value.",

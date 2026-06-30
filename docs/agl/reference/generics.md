@@ -175,6 +175,27 @@ let made = apply(42, mk)
 print made.value
 ```
 
+### Pinning a generic constructor value with `::[…]`
+
+Instead of relying on an expected-type annotation, you can instantiate a
+bare generic constructor value explicitly with the same `::[…]` suffix used
+for generic functions. A payload variant becomes a function value; a nullary
+variant constructs its value directly, with no parentheses:
+
+```agl
+enum Option[T]
+  | none
+  | some(value: T)
+
+let mk: (int) -> Option[int] = some::[int]   # ≡ fn (x: int) => some(x)
+let v = mk(7)
+let z: Option[int] = none::[int]            # nullary value, no call needed
+```
+
+The qualified forms `Option.some::[int]` and `Option.none::[int]` work the
+same way. The result is an ordinary function value (payload) or nominal value
+(nullary) and can be passed and called like any other.
+
 ## Strict parametricity
 
 A value whose static type is a **bare type parameter** `T` is **opaque**: the

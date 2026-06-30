@@ -507,6 +507,60 @@ let mk = Shape.Circle
     assert mk.variant == "Circle"
 
 
+def test_bare_payload_constructor_type_apply_is_callable_value() -> None:
+    """``some::[int]`` is a constructor function value that can be applied."""
+    source = """\
+enum Option[T]
+  | none
+  | some(value: T)
+let mk = some::[int]
+let v = mk(7)
+()
+"""
+    ir = evaluate_ir(source)
+    mk = ir["mk"]
+    assert isinstance(mk, ConstructorValue)
+    assert mk.display_name == "Option" and mk.variant == "some"
+    v = ir["v"]
+    assert isinstance(v, EnumValue)
+    assert v.variant == "some" and v.fields["value"] == IntValue(7)
+
+
+def test_bare_nullary_constructor_type_apply_constructs_directly() -> None:
+    """``none::[int]`` constructs the nullary value without parentheses."""
+    source = """\
+enum Option[T]
+  | none
+  | some(value: T)
+let z = none::[int]
+()
+"""
+    ir = evaluate_ir(source)
+    z = ir["z"]
+    assert isinstance(z, EnumValue)
+    assert z.variant == "none" and z.fields == {}
+
+
+def test_qualified_constructor_type_apply_is_callable_value() -> None:
+    """``Option.some::[int]`` and ``Option.none::[int]`` work as values."""
+    source = """\
+enum Option[T]
+  | none
+  | some(value: T)
+let mk = Option.some::[int]
+let v = mk(7)
+let z = Option.none::[int]
+()
+"""
+    ir = evaluate_ir(source)
+    mk = ir["mk"]
+    assert isinstance(mk, ConstructorValue)
+    assert mk.variant == "some"
+    assert isinstance(ir["v"], EnumValue) and ir["v"].variant == "some"
+    assert isinstance(ir["z"], EnumValue) and ir["z"].variant == "none"
+
+
+
 # ---------------------------------------------------------------------------
 # Golden lowering tests — node shapes
 # ---------------------------------------------------------------------------

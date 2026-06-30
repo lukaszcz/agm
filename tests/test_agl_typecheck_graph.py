@@ -2366,6 +2366,41 @@ def test_cross_module_qualified_generic_enum_explicit_type_args(tmp_path: Path) 
     )
 
 
+def test_open_imported_generic_constructor_payload_type_apply_as_value(tmp_path: Path) -> None:
+    """Open-imported generic payload constructor as a value with explicit type args.
+
+    ``some::[int]`` in the entry resolves via the open-imported generic enum
+    fallback and yields a function value ``int -> Choice[int]`` owned by ``lib``.
+    The type is renamed away from ``Option`` to avoid clashing with the
+    auto-open-imported ``std.core::Option``.
+    """
+    lib_id = ModuleId.from_dotted("lib")
+    modules = {
+        "lib": "enum Choice[T]\n  | none\n  | some(value: T)",
+        "entry": "import lib\nlet f = some::[int]\nf",
+    }
+    cg = _check_graph(tmp_path, modules)
+    assert _binding_value_type(cg, ENTRY_ID, "f") == FunctionType(
+        (IntType(),), EnumType("Choice", {}, module_id=lib_id, type_args=(IntType(),))
+    )
+
+
+def test_open_imported_generic_constructor_nullary_type_apply_as_value(tmp_path: Path) -> None:
+    """Open-imported generic nullary constructor as a value with explicit type args.
+
+    ``none::[int]`` constructs the nullary ``Choice[int]`` value owned by ``lib``.
+    """
+    lib_id = ModuleId.from_dotted("lib")
+    modules = {
+        "lib": "enum Choice[T]\n  | none\n  | some(value: T)",
+        "entry": "import lib\nlet z = none::[int]\nz",
+    }
+    cg = _check_graph(tmp_path, modules)
+    assert _binding_value_type(cg, ENTRY_ID, "z") == EnumType(
+        "Choice", {}, module_id=lib_id, type_args=(IntType(),)
+    )
+
+
 def test_cross_module_non_generic_constructor_type_args_rejected(tmp_path: Path) -> None:
     """Coverage: checker.py _check_cross_module_constructor_call — non-generic with type args."""
     modules = {

@@ -2229,6 +2229,102 @@ class TestConstructorRefDispatch:
 
 
 # ---------------------------------------------------------------------------
+# Bare constructors as function values with explicit type arguments
+# (`Some::[int]` ≡ `fn (x: int) => Some(x)`, `None::[int]` constructs directly)
+# ---------------------------------------------------------------------------
+
+
+class TestBareConstructorTypeApply:
+    """Bare constructor references accept explicit type arguments in value
+    position, producing a function value (payload variant) or the constructed
+    nominal value (nullary variant)."""
+
+    _OPT = "enum Option[T]\n  | none\n  | some(value: T)\n"
+
+    def test_bare_payload_constructor_type_apply_is_function_value(self) -> None:
+        r = accept_type(self._OPT + "let f = some::[int]\nf")
+        prog = r.resolved.program
+        f_ref = prog.body.items[-1]
+        assert isinstance(f_ref, VarRef)
+        assert r.node_types[f_ref.node_id] == FunctionType(
+            params=(IntType(),), result=EnumType("Option", {}, type_args=(IntType(),))
+        )
+
+    def test_bare_nullary_constructor_type_apply_is_constructed_value(self) -> None:
+        r = accept_type(self._OPT + "let z = none::[int]\nz")
+        prog = r.resolved.program
+        z_ref = prog.body.items[-1]
+        assert isinstance(z_ref, VarRef)
+        assert r.node_types[z_ref.node_id] == EnumType(
+            "Option", {}, type_args=(IntType(),)
+        )
+
+    def test_bare_payload_constructor_callable(self) -> None:
+        # `some::[int]` applied positionally yields the constructed enum value.
+        r = accept_type(self._OPT + "let v = (some::[int])(7)\nv")
+        prog = r.resolved.program
+        v_ref = prog.body.items[-1]
+        assert isinstance(v_ref, VarRef)
+        assert r.node_types[v_ref.node_id] == EnumType(
+            "Option", {"some": {"value": IntType()}, "none": {}}, type_args=(IntType(),)
+        )
+
+    def test_bare_nullary_constructor_used_in_context(self) -> None:
+        r = accept_type(self._OPT + "let z: Option[int] = none::[int]\nz")
+        assert r.resolved.program is not None
+
+    def test_qualified_payload_constructor_type_apply(self) -> None:
+        r = accept_type(self._OPT + "let f = Option.some::[int]\nf")
+        prog = r.resolved.program
+        f_ref = prog.body.items[-1]
+        assert isinstance(f_ref, VarRef)
+        assert r.node_types[f_ref.node_id] == FunctionType(
+            params=(IntType(),), result=EnumType("Option", {}, type_args=(IntType(),))
+        )
+
+    def test_qualified_nullary_constructor_type_apply(self) -> None:
+        r = accept_type(self._OPT + "let z = Option.none::[int]\nz")
+        prog = r.resolved.program
+        z_ref = prog.body.items[-1]
+        assert isinstance(z_ref, VarRef)
+        assert r.node_types[z_ref.node_id] == EnumType(
+            "Option", {}, type_args=(IntType(),)
+        )
+
+    def test_qualified_payload_constructor_callable(self) -> None:
+        r = accept_type(self._OPT + "let v = (Option.some::[int])(7)\nv")
+        assert r.resolved.program is not None
+
+    def test_non_generic_constructor_type_apply_rejected(self) -> None:
+        err = reject_type("enum E\n  | Pass\nlet f = Pass::[int]\nf")
+        assert "not a generic constructor" in str(err).lower()
+
+    def test_qualified_non_generic_constructor_type_apply_rejected(self) -> None:
+        err = reject_type("enum E\n  | Pass\nlet f = E.Pass::[int]\nf")
+        assert "not a generic constructor" in str(err).lower()
+
+    def test_wrong_arity_type_apply_rejected(self) -> None:
+        err = reject_type(self._OPT + "let f = some::[int, text]\nf")
+        assert "type argument" in str(err).lower()
+
+    def test_qualified_wrong_arity_type_apply_rejected(self) -> None:
+        err = reject_type(self._OPT + "let f = Option.some::[int, text]\nf")
+        assert "type argument" in str(err).lower()
+
+    def test_generic_record_constructor_type_apply(self) -> None:
+        # A generic record constructor as a value with explicit type args.
+        r = accept_type(
+            "record Box[T]\n  value: T\nlet f = Box::[int]\nlet v = f(9)\nf"
+        )
+        prog = r.resolved.program
+        f_ref = prog.body.items[-1]
+        assert isinstance(f_ref, VarRef)
+        assert r.node_types[f_ref.node_id] == FunctionType(
+            params=(IntType(),), result=RecordType("Box", {}, type_args=(IntType(),))
+        )
+
+
+# ---------------------------------------------------------------------------
 # List literals
 # ---------------------------------------------------------------------------
 

@@ -1,28 +1,10 @@
 {
   "scenarios": [
     {
-      "name": "signal_on",
-      "params": {"raise_it": true},
+      "name": "constructor_values",
+      "agents": {},
       "expect": {
-        "stdout_contains": [
-          "3,4\n",
-          "Signal.On(label = \"go\")",
-          "40\nheld 7\nblank\nsignal on: fire\n"
-        ],
-        "stdout_not_contains": ["signal off"],
-        "calls": {}
-      }
-    },
-    {
-      "name": "signal_off",
-      "params": {"raise_it": false},
-      "expect": {
-        "stdout_contains": [
-          "3,4\n",
-          "Signal.On(label = \"go\")",
-          "40\nheld 7\nblank\nsignal off\n"
-        ],
-        "stdout_not_contains": ["signal on: "],
+        "stdout": "true\ntrue\ntrue\ntrue\n",
         "calls": {}
       }
     }

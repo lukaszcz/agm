@@ -133,6 +133,7 @@ _sep: _NEWLINE | SEMICOLON
             | builtin_exception_def
             | builtin_func_def
             | import_decl
+            | export_decl
             | private_record_def
             | private_enum_def
             | private_exception_def
@@ -637,33 +638,35 @@ pattern_field: name EQ pattern   -> pat_field_named
              | pattern            -> pat_field_positional
 
 // ---------------------------------------------------------------------------
-// Module system: import declarations and private declarations
+// Module system: import/export declarations and private declarations
 //
-// The lexer pre-merges `NAME (DOT NAME)*` after IMPORT into a single
+// The lexer pre-merges `NAME (DOT NAME)*` after IMPORT or EXPORT into a single
 // MODPATH token, eliminating the LALR(1) ambiguity with the expression grammar.
 // Qualified prefixes `NAME(DOT NAME)*::` are pre-merged into MODQUAL by the
 // lexer, eliminating the DCOLON ambiguity with typed_call_atom.
 // ---------------------------------------------------------------------------
 
-// import_decl: IMPORT MODPATH QUALIFIED? (as ref_name)? import_spec?
+// import_decl: IMPORT MODPATH QUALIFIED? (as ref_name)? import_clause?
 // Wildcard tail (.*) follows MODPATH as DOT STAR.
-// import_spec is a unified non-terminal covering both the using/hiding filter
-// and the re-export annotation.  LALR(1) is conflict-free because EXPORT never
-// appears in FOLLOW(import_spec) or FOLLOW(import_item).
-import_decl : IMPORT MODPATH DOT STAR QUALIFIED? import_alias? import_spec? -> import_decl_wildcard
-            | IMPORT MODPATH QUALIFIED? import_alias? import_spec? -> import_decl_plain
+import_decl : IMPORT MODPATH DOT STAR QUALIFIED? import_alias? import_clause? -> import_decl_wildcard
+            | IMPORT MODPATH QUALIFIED? import_alias? import_clause? -> import_decl_plain
 
 import_alias : "as" name
 
-import_spec : EXPORT                                        -> import_spec_reexport_all
-            | USING import_item (COMMA import_item)*        -> import_spec_using
-            | HIDING name (COMMA name)* EXPORT              -> import_spec_hiding_reexport
-            | HIDING name (COMMA name)*                     -> import_spec_hiding
+import_clause : USING import_item (COMMA import_item)* -> import_clause_using
+              | HIDING name (COMMA name)*              -> import_clause_hiding
 
-import_item : name "as" name EXPORT   -> import_item_rename_export
-            | name "as" name           -> import_item_rename
-            | name EXPORT              -> import_item_plain_export
-            | name                     -> import_item_plain
+import_item : name "as" name -> import_item_rename
+            | name           -> import_item_plain
+
+export_decl : EXPORT MODPATH DOT STAR export_clause? -> export_decl_wildcard
+            | EXPORT MODPATH export_clause?          -> export_decl_plain
+
+export_clause : USING export_item (COMMA export_item)* -> export_clause_using
+              | HIDING name (COMMA name)*              -> export_clause_hiding
+
+export_item : name "as" name -> export_item_rename
+            | name           -> export_item_plain
 
 // Private declaration wrappers.  `private` is a decorator-style modifier: the
 // `_NEWLINE?` makes the newline after it insignificant, so the modifier may sit

@@ -1,2 +1,2 @@
 # Re-exports `add` under the name `plus`.
-import math.ops using add as plus export
+export math.ops using add as plus

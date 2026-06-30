@@ -56,7 +56,6 @@ def _decl(
     alias: str | None = None,
     mode: ImportMode = ImportMode.ALL,
     items: tuple[ImportItem, ...] = (),
-    export: bool = False,
     line: int = 1,
 ) -> ImportDecl:
     return ImportDecl(
@@ -66,14 +65,13 @@ def _decl(
         alias=alias,
         mode=mode,
         items=items,
-        export=export,
         span=_span(line),
         node_id=_nid(),
     )
 
 
-def _item(name: str, rename: str | None = None, export: bool = False) -> ImportItem:
-    return ImportItem(name=name, rename=rename, export=export, span=_span(), node_id=_nid())
+def _item(name: str, rename: str | None = None) -> ImportItem:
+    return ImportItem(name=name, rename=rename, span=_span(), node_id=_nid())
 
 
 def _mid(*segments: str) -> ModuleId:

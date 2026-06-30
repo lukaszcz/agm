@@ -36,6 +36,8 @@ from agm.agl.syntax.nodes import (
     ElseSentinel,
     EnumDef,
     ExceptionDef,
+    ExportDecl,
+    ExportItem,
     Expr,
     FieldAccess,
     FuncDef,
@@ -124,6 +126,8 @@ __all__ = [
     "Qualifier",
     "ImportItem",
     "ImportDecl",
+    "ExportItem",
+    "ExportDecl",
     # program
     "Program",
     # declarations

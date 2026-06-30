@@ -1,0 +1,1 @@
+def dec(x: int) -> int = x - 1

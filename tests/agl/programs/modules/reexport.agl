@@ -1,11 +1,14 @@
-# Re-export: verify that modules can re-export imported names.
-# math.facade re-exports everything from math.ops (decl-level export).
-# math.selective re-exports only `add` from math.ops (per-item export).
-# math.renamed re-exports `add as plus` from math.ops (per-item with rename).
+# Re-export: verify that modules can re-export names with export declarations.
+# math.facade re-exports everything from math.ops.
+# math.selective re-exports only `add` from math.ops.
+# math.renamed re-exports `add as plus` from math.ops.
 # types.public re-exports a record type and its constructor from types.geo.
 import math.facade
 import math.selective qualified as sel
 import math.renamed qualified as ren
+import math.masked qualified as masked
+import math.tools_facade qualified as tools
+import chain.top qualified as chain
 import types.public
 
 # math.facade re-exports add and mul from math.ops.
@@ -17,6 +20,16 @@ print(sel::add(10, 1) as text)
 
 # math.renamed re-exports add as plus; access via qualifier.
 print(ren::plus(6, 2) as text)
+
+# math.masked re-exports add but hides mul.
+print(masked::add(20, 1) as text)
+
+# math.tools_facade wildcard re-exports every module under math.tools.
+print(tools::inc(4) as text)
+print(tools::dec(4) as text)
+
+# chain.top receives answer through a multi-hop re-export chain.
+print(chain::answer() as text)
 
 # types.public re-exports the Point type and make_point.
 let p = make_point(7, 3)

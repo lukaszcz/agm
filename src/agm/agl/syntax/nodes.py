@@ -83,18 +83,17 @@ class BinOp(enum.Enum):
 
 @dataclass(frozen=True, slots=True)
 class ImportItem:
-    """A single item in a ``using`` import clause: ``name [as rename] [export]``."""
+    """A single item in a ``using`` import clause: ``name [as rename]``."""
 
     name: str
     rename: str | None
-    export: bool
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
 
 
 @dataclass(frozen=True, slots=True)
 class ImportDecl:
-    """``import MODPATH[.*] [qualified] [as ALIAS] [using…|hiding…] [export]`` declaration."""
+    """``import MODPATH[.*] [qualified] [as ALIAS] [using…|hiding…]`` declaration."""
 
     module_path: tuple[str, ...]
     wildcard: bool
@@ -102,7 +101,28 @@ class ImportDecl:
     alias: str | None
     mode: ImportMode
     items: tuple[ImportItem, ...]
-    export: bool
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class ExportItem:
+    """A single item in a ``using`` export clause: ``name [as rename]``."""
+
+    name: str
+    rename: str | None
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class ExportDecl:
+    """``export MODPATH[.*] [using…|hiding…]`` declaration."""
+
+    module_path: tuple[str, ...]
+    wildcard: bool
+    mode: ImportMode
+    items: tuple[ExportItem, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
 
@@ -861,6 +881,7 @@ Declaration = (
     | AgentDecl
     | ConfigDecl
     | ImportDecl
+    | ExportDecl
 )
 
 

@@ -7,8 +7,9 @@ results plus whole-graph pre-pass tables.
 
 Design
 ------
-- **Export sets**: non-private top-level ``def``/``record``/``enum``/``type``
-  names per module, computed before any body is resolved.
+- **Export maps**: non-private top-level ``def``/``record``/``enum``/``type``
+  names per module plus explicit ``export`` declarations, computed before any
+  body is resolved.
 - **ImportEnv per module**: built from each module's import declarations against
   the already-loaded graph (no re-reading files).
 - **Whole-graph pre-pass tables**: ``all_public_funcs`` and ``all_public_types``
@@ -50,6 +51,7 @@ from agm.agl.syntax.nodes import (
     AgentDecl,
     EnumDef,
     ExceptionDef,
+    ExportDecl,
     FuncDef,
     ImportDecl,
     Program,
@@ -187,7 +189,7 @@ def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[str, QNa
     """Compute the local export map for a module from its own declarations.
 
     Returns a dict mapping each non-private top-level name to the QName
-    ``(self_id, name)``.  Re-exported imported names are NOT included here;
+    ``(self_id, name)``.  Re-exported names are NOT included here;
     they are added by :func:`_resolve_reexports` in a subsequent pass.
     """
     result: dict[str, QName] = {}
@@ -203,13 +205,11 @@ def _resolve_reexports(
     all_targets: dict[int, ImportTarget],
     graph: ModuleGraph,
 ) -> None:
-    """Fixed-point resolution of re-exports across the module graph.
+    """Fixed-point resolution of explicit export declarations across the graph.
 
-    Iterates until no new re-exported names are added.  For each import
-    declaration with re-export annotation (``decl.export=True`` or per-item
-    ``item.export=True``), this function propagates the target module's
-    exported names into the current module's export map with their origin
-    :data:`QName` preserved.
+    Iterates until no new re-exported names are added.  For each ``ExportDecl``,
+    this function propagates the target module's exported names into the
+    current module's export map with their origin :data:`QName` preserved.
 
     Re-export name conflicts (same exposed name → different origin QNames)
     raise :class:`~agm.agl.scope.symbols.AglScopeError`.
@@ -218,10 +218,7 @@ def _resolve_reexports(
     while changed:
         changed = False
         for mid, loaded in graph.modules.items():
-            for decl in loaded.imports:
-                if not decl.export and not any(item.export for item in decl.items):
-                    continue
-
+            for decl in loaded.export_decls:
                 target = all_targets[decl.node_id]
                 if isinstance(target, SingleTarget):
                     target_mids: list[ModuleId] = [target.module]
@@ -247,45 +244,45 @@ def _resolve_reexports(
 
 
 def _compute_reexport_additions(
-    decl: ImportDecl,
+    decl: ExportDecl,
     target_exports: dict[str, QName],
 ) -> dict[str, QName]:
-    """Compute names to add to the current module's exports from one re-exporting ImportDecl.
+    """Compute names to add to the current module's exports from one ExportDecl.
 
     Returns a dict of ``exposed_name → origin_qname``.  This is called once
-    per (module, import-decl, target-module) triple during the fixed-point.
+    per (module, export-decl, target-module) triple during the fixed-point.
     """
     result: dict[str, QName] = {}
 
-    if decl.export:
-        # Decl-level export: re-export all public names, applying hiding filter if present.
-        if decl.mode == ImportMode.HIDING:
-            hidden = frozenset(item.name for item in decl.items)
-            s = frozenset(target_exports.keys()) - hidden
-        else:  # ImportMode.ALL
-            s = frozenset(target_exports.keys())
-        for src_name in s:
-            result[src_name] = target_exports[src_name]
+    if decl.mode == ImportMode.HIDING:
+        hidden = frozenset(item.name for item in decl.items)
+        selected = frozenset(target_exports.keys()) - hidden
+    elif decl.mode == ImportMode.USING:
+        selected = frozenset(item.name for item in decl.items)
     else:
-        # Per-item export: only items with item.export=True in a using clause.
+        selected = frozenset(target_exports.keys())
+
+    rename_map: dict[str, str] = {}
+    if decl.mode == ImportMode.USING:
         for item in decl.items:
-            if not item.export:
-                continue
-            src_name = item.name
-            origin = target_exports.get(src_name)
-            if origin is None:
-                continue  # name not yet propagated; fixed-point will retry
-            exposed = item.rename if item.rename is not None else src_name
-            result[exposed] = origin
+            if item.rename is not None:
+                rename_map[item.name] = item.rename
+
+    for src_name in selected:
+        origin = target_exports.get(src_name)
+        if origin is None:
+            continue  # name not yet propagated; fixed-point will retry
+        exposed = rename_map.get(src_name, src_name)
+        result[exposed] = origin
 
     return result
 
 
 def _decl_to_import_target(
-    decl: ImportDecl,
+    decl: ImportDecl | ExportDecl,
     graph_modules: Mapping[ModuleId, object],
 ) -> ImportTarget:
-    """Map an ImportDecl to an ImportTarget using the already-loaded graph.
+    """Map an import/export declaration to an ImportTarget using the loaded graph.
 
     For single imports, returns a ``SingleTarget`` with the resolved
     ``ModuleId``.  For wildcard imports, returns a ``WildcardTarget`` with
@@ -364,13 +361,16 @@ def resolve_graph(
         export_maps[mid] = _compute_local_exports(mid, loaded.program)
 
     # ------------------------------------------------------------------
-    # Step 2: Map ImportDecl → ImportTarget for every module.
+    # Step 2: Map ImportDecl and ExportDecl → ImportTarget for every module.
     # ------------------------------------------------------------------
     all_targets: dict[int, ImportTarget] = {}
     for _mid, loaded in graph.modules.items():
         for decl in loaded.imports:
             target = _decl_to_import_target(decl, graph.modules)
             all_targets[decl.node_id] = target
+        for export_decl in loaded.export_decls:
+            target = _decl_to_import_target(export_decl, graph.modules)
+            all_targets[export_decl.node_id] = target
 
     # ------------------------------------------------------------------
     # Step 3: Resolve re-exports (fixed-point propagation).

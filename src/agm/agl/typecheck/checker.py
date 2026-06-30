@@ -95,6 +95,7 @@ from agm.agl.syntax.nodes import (
     ElseSentinel,
     EnumDef,
     ExceptionDef,
+    ExportDecl,
     Expr,
     FieldAccess,
     FuncDef,
@@ -432,8 +433,8 @@ class _Checker:
             return UnitType()
         if isinstance(item, ProgramDecl):
             return UnitType()
-        if isinstance(item, ImportDecl):
-            return UnitType()  # The graph module-system pass processes imports.
+        if isinstance(item, (ImportDecl, ExportDecl)):
+            return UnitType()  # The graph module-system pass processes imports/exports.
         # --- Binders ---
         if isinstance(item, (LetDecl, VarDecl)):
             self._check_binding(item)

@@ -48,6 +48,8 @@ from agm.agl.syntax.nodes import (
     ElseSentinel,
     EnumDef,
     ExceptionDef,
+    ExportDecl,
+    ExportItem,
     FieldAccess,
     FuncDef,
     If,
@@ -160,6 +162,8 @@ class Visitor:
     def visit_Qualifier(self, node: Qualifier) -> None: ...
     def visit_ImportItem(self, node: ImportItem) -> None: ...
     def visit_ImportDecl(self, node: ImportDecl) -> None: ...
+    def visit_ExportItem(self, node: ExportItem) -> None: ...
+    def visit_ExportDecl(self, node: ExportDecl) -> None: ...
 
     # Declaration nodes
     def visit_RecordDef(self, node: RecordDef) -> None: ...
@@ -257,6 +261,8 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         Qualifier,
         ImportItem,
         ImportDecl,
+        ExportItem,
+        ExportDecl,
         # declaration nodes
         RecordDef,
         VariantDef,
@@ -385,6 +391,13 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
     elif isinstance(node, ImportDecl):
         for import_item in node.items:
             walk(import_item, callback)
+
+    elif isinstance(node, ExportItem):
+        pass  # leaf — name and rename are plain strings
+
+    elif isinstance(node, ExportDecl):
+        for export_item in node.items:
+            walk(export_item, callback)
 
     # --- Declaration nodes ---
     elif isinstance(node, RecordDef):

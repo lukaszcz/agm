@@ -79,6 +79,7 @@ from agm.agl.syntax.nodes import (
     Do,
     EnumDef,
     ExceptionDef,
+    ExportDecl,
     Expr,
     FieldAccess,
     FuncDef,
@@ -762,11 +763,11 @@ class _Resolver:
         In graph mode (``_import_env is not None``), additional enforcement:
 
         - Non-entry modules: only ``FuncDef``, ``RecordDef``, ``EnumDef``,
-          ``TypeAlias``, and ``ImportDecl`` are allowed at the module root.
+          ``TypeAlias``, ``ImportDecl``, and ``ExportDecl`` are allowed at the module root.
           ``LetDecl``, ``VarDecl``, ``AssignStmt``, bare expressions, and
           entry-only constructs (``AgentDecl``, ``ParamDecl``, ``ProgramDecl``)
           are rejected with a scope error.
-        - Non-entry modules: ``ImportDecl`` must precede all declarations
+        - Non-entry modules: ``ImportDecl`` and ``ExportDecl`` must precede all declarations
           (header-only; ``_seen_non_import_item`` tracks this).
         """
         is_graph_mode = self._import_env is not None
@@ -784,14 +785,14 @@ class _Resolver:
                 self._resolve_config(item)
                 # A config declaration is not a non-config item.
                 continue
-            if isinstance(item, ImportDecl):
+            if isinstance(item, (ImportDecl, ExportDecl)):
                 if is_non_entry_root and self._seen_non_import_item:
                     raise AglScopeError(
-                        "Import declarations must appear before any other "
+                        "Import and export declarations must appear before any other "
                         "declarations in a library module.",
                         span=item.span,
                     )
-                # The graph module-system pass processes imports; this pass skips them.
+                # The graph module-system pass processes imports/exports; this pass skips them.
                 continue
             # Non-entry enforcement: track that a non-import item has been seen.
             if is_non_entry_root:

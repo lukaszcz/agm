@@ -159,18 +159,20 @@ concrete type arguments (`Box[int]`, `Outcome[int, text]`). The built-in
 ## Function declarations
 
 ```ebnf
-func_def     ::= "def" NAME type_params? "(" param_list? ")" "->" type_expr "=" expr
+func_def     ::= "def" NAME type_params? "(" param_list? ")" ("->" type_expr)? "=" expr
 param_list   ::= param_entry ("," param_entry)* ","?
 param_entry  ::= param | param_marker
 param        ::= NAME ":" type_expr ("=" expr)?
 ```
 
-The `def` body is a single expression (which may be a `block`). Zone markers
-(`/`, `*`, `@pos`, `@std`, `@named`) may appear as `param_entry` items between
-parameters; see [Functions](functions.md) for full zone semantics. No required
-positional-fillable (pos-only/standard) parameter may follow a defaulted one in
-the same zone. An optional `type_params` list after the function name makes the
-`def` generic (e.g. `def id[T](x: T) -> T`); see [Generics](generics.md).
+The `def` body is a single expression (which may be a `block`). The return type
+annotation is optional for ordinary `def` declarations and required for
+`builtin def`. Zone markers (`/`, `*`, `@pos`, `@std`, `@named`) may appear as
+`param_entry` items between parameters; see [Functions](functions.md) for full
+zone semantics. No required positional-fillable (pos-only/standard) parameter
+may follow a defaulted one in the same zone. An optional `type_params` list
+after the function name makes the `def` generic (e.g. `def id[T](x: T) -> T`);
+see [Generics](generics.md).
 
 ## Bindings and mutation
 

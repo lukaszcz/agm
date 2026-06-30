@@ -530,7 +530,8 @@ class AstBuilder(Transformer):
     # ------------------------------------------------------------------
 
     def func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
-        """func_def: "def" name type_params? LPAR param_list? RPAR THIN_ARROW type_expr EQ func_body
+        """func_def: "def" name type_params? LPAR param_list? RPAR
+        (THIN_ARROW type_expr)? EQ func_body
         """
         name_tok = _find_name_token(args)
         type_params_val: tuple[str, ...] = ()
@@ -538,7 +539,6 @@ class AstBuilder(Transformer):
             if _is_str_tuple(a):
                 type_params_val = cast(tuple[str, ...], a)
         params, return_type, body = self._split_params_type_body(args)
-        assert return_type is not None, "func_def: no return type"
         assert body is not None, "func_def: no body"
         return syntax.FuncDef(
             name=str(name_tok),

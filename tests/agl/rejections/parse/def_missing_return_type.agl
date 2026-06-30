@@ -1,1 +1,0 @@
-def double(n: int): n * 2

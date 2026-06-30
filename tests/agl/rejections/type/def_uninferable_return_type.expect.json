@@ -1,0 +1,1 @@
+{"diagnostic": {"line": 1, "message_contains": ["Cannot infer return type", "Add a return type annotation"]}}

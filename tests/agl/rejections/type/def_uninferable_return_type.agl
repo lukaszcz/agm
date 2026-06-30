@@ -1,0 +1,1 @@
+def fail() = raise Abort(message = "x")

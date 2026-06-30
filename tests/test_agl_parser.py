@@ -2098,10 +2098,12 @@ class TestNegativeCases:
         with pytest.raises(AglSyntaxError):
             parse("Issue{title: a, title: b}")
 
-    def test_def_without_return_type_raises(self) -> None:
-        """def without -> return type is a parse error."""
-        with pytest.raises(AglSyntaxError):
-            parse("def f(x: int) = x")
+    def test_def_without_return_type_parses(self) -> None:
+        """def may omit -> return type for typecheck-time inference."""
+        prog = parse("def f(x: int) = x")
+        fd = prog.body.items[0]
+        assert isinstance(fd, FuncDef)
+        assert fd.return_type is None
 
     def test_lambda_as_juxt_arg_raises(self) -> None:
         """A lambda cannot be a bare juxt argument (it starts with fn, a keyword)."""

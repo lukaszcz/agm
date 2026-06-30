@@ -683,6 +683,8 @@ def _build_graph_func_sig_table(
             # names that the body-checker will report with a better span.
             if item.name in _BUILTIN_TYPE_NAMES or item.name in _BUILTIN_FUNC_NAMES:
                 continue
+            if item.return_type is None:
+                continue
 
             type_vars: frozenset[str] = frozenset(item.type_params)
             params: list[ParamSpec] = []

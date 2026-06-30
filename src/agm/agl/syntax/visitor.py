@@ -440,7 +440,8 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
     elif isinstance(node, FuncDef):
         for param in node.params:
             walk(param, callback)
-        walk(node.return_type, callback)
+        if node.return_type is not None:
+            walk(node.return_type, callback)
         if node.body is not None:
             walk(node.body, callback)
 

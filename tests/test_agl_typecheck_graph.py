@@ -110,6 +110,19 @@ def test_check_graph_importable() -> None:
     assert CheckedModule is not None
 
 
+def test_graph_func_signature_prepass_skips_inferred_return_type(tmp_path: Path) -> None:
+    """Graph mode lets an unannotated def infer inside its own module."""
+    cg = _check_graph(
+        tmp_path,
+        {
+            "entry": "import lib\n1",
+            "lib": "def answer() = 42",
+        },
+    )
+    lib = cg.modules[ModuleId(("lib",))]
+    assert lib.type_env.all_function_signatures()["answer"].result == IntType()
+
+
 # ---------------------------------------------------------------------------
 # 1. module_id field on RecordType — default ENTRY_ID
 # ---------------------------------------------------------------------------

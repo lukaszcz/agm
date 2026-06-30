@@ -11,7 +11,7 @@ from other functions. The type of a function value is written
 ## `def` — named function declarations
 
 ```ebnf
-func_def   ::= "def" NAME type_params? "(" param_list? ")" "->" type_expr "=" expr
+func_def   ::= "def" NAME type_params? "(" param_list? ")" ("->" type_expr)? "=" expr
              | "builtin" "def" NAME type_params? "(" param_list? ")" "->" type_expr
 type_params  ::= "[" NAME ("," NAME)* "]"
 param_list   ::= param_entry ("," param_entry)* ","?
@@ -34,20 +34,28 @@ def summarize(doc: text, limit: int = 3) -> text =
   let head = ask "Summarize: ${doc}"
   let tagged = "[${limit}] ${head}"
   tagged
+
+def double(n: int) = n * 2
 ```
 
 ### Return type
 
-The `-> RetType` annotation is **required** on every `def`. The body is
-checked against it; a mismatch is a static error. There is no `return`
-keyword — the body's value is its last expression.
+The `-> RetType` annotation is optional on ordinary `def` declarations. When
+present, the body is checked against it; a mismatch is a static error. When
+omitted, AgL infers the return type from the body, as it does for lambdas. If
+the body has no inferable result, for example because it always raises or calls
+the same unannotated function before its signature is known, AgL reports a type
+error and asks for an explicit return type annotation.
+
+There is no `return` keyword — the body's value is its last expression.
 
 ### Built-in functions
 
 `builtin def` declares a function implemented by the host, so it has no body.
-The declared name and signature must match a recognized built-in exactly. This
-form is used by `std.core`; ordinary programs normally call those declarations
-through the default standard-library import instead of redeclaring them.
+Its return type annotation is required. The declared name and signature must
+match a recognized built-in exactly. This form is used by `std.core`; ordinary
+programs normally call those declarations through the default standard-library
+import instead of redeclaring them.
 
 `builtin` is a declaration modifier: it may precede `def` on the same line or
 on the line directly above it (the newline after the modifier is

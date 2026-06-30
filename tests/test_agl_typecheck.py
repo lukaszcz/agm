@@ -1268,6 +1268,31 @@ class TestFuncDef:
         err = reject_type("def f(x: int) -> text = x")
         assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
 
+    def test_funcdef_without_return_type_inferred(self) -> None:
+        r = accept_type("def f(x: int) = x\nf")
+        prog = r.resolved.program
+        f_ref = prog.body.items[1]
+        assert isinstance(f_ref, VarRef)
+        t = r.node_types[f_ref.node_id]
+        assert t == FunctionType(params=(IntType(),), result=IntType())
+
+    def test_funcdef_without_return_type_checks_default_param(self) -> None:
+        r = accept_type("def f(x: int = 1) = x\nf()")
+        assert "f" in r.function_signatures
+
+    def test_funcdef_without_return_type_body_always_raises(self) -> None:
+        err = reject_type('def f() = raise Abort(message = "x")')
+        msg = str(err).lower()
+        assert "infer" in msg
+        assert "return type" in msg
+
+    def test_funcdef_without_return_type_recursive_call_needs_annotation(self) -> None:
+        err = reject_type("def f(x: int) = f(x)")
+        msg = str(err).lower()
+        assert "infer" in msg
+        assert "return type" in msg
+        assert "annotation" in msg
+
     def test_funcdef_with_default_param(self) -> None:
         r = accept_type("def f(x: int, y: int = 0) -> int = x + y\nf(1)")
         assert "f" in r.function_signatures
@@ -3584,9 +3609,8 @@ class TestDefensiveGuards:
             check(resolved, default_capabilities())
 
     def test_declared_call_sig_none_fallback(self) -> None:
-        # Exercises line 935: _check_declared_name_call falls back to value-call
-        # when get_function_signature returns None.  This happens when a FuncDef
-        # is in declared_functions but not in the block items (so the pre-pass skips it).
+        # A function binding without a registered signature now reports a user-facing
+        # inference error instead of falling through to an internal assertion.
         sp = mk_span()
         body_expr = IntLit(value=1, span=sp, node_id=_mk_node_id())
         ret_type = IntT(span=sp, node_id=_mk_node_id())
@@ -3605,14 +3629,63 @@ class TestDefensiveGuards:
             name="h", mutable=False, decl_span=sp, decl_node_id=fd_nid,
             kind=BinderKind.function_binding,
         )
-        # h IS in declared_functions → _check_declared_name_call runs, sig is None,
-        # falls through to value-call → binding type of h not set → AssertionError
         resolved = self._mk_resolved(
             prog,
             resolution={callee_nid: binding_ref},
             declared_functions={"h": fd},
         )
-        with pytest.raises(AssertionError, match="checker invariant"):
+        with pytest.raises(AglTypeError, match="Cannot infer return type"):
+            check(resolved, default_capabilities())
+
+    def test_function_value_without_registered_type_reports_inference_error(self) -> None:
+        sp = mk_span()
+        body_expr = IntLit(value=1, span=sp, node_id=_mk_node_id())
+        ret_type = IntT(span=sp, node_id=_mk_node_id())
+        fd_nid = _mk_node_id()
+        fd = FuncDef(
+            name="h",
+            params=(),
+            return_type=ret_type,
+            body=body_expr,
+            span=sp,
+            node_id=fd_nid,
+        )
+        ref_nid = _mk_node_id()
+        ref = VarRef(name="h", span=sp, node_id=ref_nid)
+        block = Block(items=(ref,), span=sp, node_id=_mk_node_id())
+        prog = Program(body=block, span=sp, node_id=_mk_node_id())
+        binding_ref = BindingRef(
+            name="h",
+            mutable=False,
+            decl_span=sp,
+            decl_node_id=fd_nid,
+            kind=BinderKind.function_binding,
+        )
+        resolved = self._mk_resolved(
+            prog,
+            resolution={ref_nid: binding_ref},
+            declared_functions={"h": fd},
+        )
+
+        with pytest.raises(AglTypeError, match="Cannot infer return type"):
+            check(resolved, default_capabilities())
+
+    def test_builtin_funcdef_without_return_type_rejected_defensively(self) -> None:
+        sp = mk_span()
+        fd = FuncDef(
+            name="print",
+            params=(),
+            return_type=None,
+            body=None,
+            span=sp,
+            node_id=_mk_node_id(),
+            is_builtin=True,
+        )
+        block = Block(items=(fd,), span=sp, node_id=_mk_node_id())
+        prog = Program(body=block, span=sp, node_id=_mk_node_id())
+        resolved = self._mk_resolved(prog, declared_functions={"print": fd})
+
+        with pytest.raises(AglTypeError, match="must declare a return type"):
             check(resolved, default_capabilities())
 
     def test_duplicate_named_arg_in_declared_call(self) -> None:

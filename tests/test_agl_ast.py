@@ -1711,6 +1711,21 @@ class TestVisitorWalk:
         assert TextT in {type(n) for n in visited}
         assert VarRef in {type(n) for n in visited}
 
+    def test_walk_func_def_no_return_type(self) -> None:
+        """walk(FuncDef) skips return_type when it is omitted."""
+        from agm.agl.syntax.visitor import walk
+
+        s = self._s()
+        body = VarRef(name="x", span=s, node_id=5)
+        fd = FuncDef(name="f", params=(), return_type=None, body=body, span=s, node_id=1)
+
+        visited: list[object] = []
+        walk(fd, visited.append)
+
+        assert visited[0] is fd
+        assert VarRef in {type(n) for n in visited}
+        assert not any(isinstance(n, (IntT, TextT)) for n in visited)
+
     def test_walk_lambda_visits_params_return_type_body(self) -> None:
         """walk(Lambda) visits params, return_type (if present), then body."""
         from agm.agl.syntax.visitor import walk

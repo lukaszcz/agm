@@ -327,6 +327,15 @@ class _Checker:
 
     def _preregister_funcdef(self, node: FuncDef) -> None:
         """Resolve and register the signature of a top-level ``def``."""
+        self._validate_funcdef_header(node)
+        if node.return_type is None:
+            return
+
+        sig, func_type = self._build_funcdef_signature(node, result_type=node.return_type)
+        self._register_funcdef_signature(node, sig, func_type)
+
+    def _validate_funcdef_header(self, node: FuncDef) -> None:
+        """Validate declaration-level properties that do not need a return type."""
         if node.name in _BUILTIN_TYPE_NAMES:
             raise AglTypeError(
                 f"'{node.name}' is a built-in type name and cannot be used as a function name.",
@@ -342,21 +351,43 @@ class _Checker:
                 f"Unknown builtin function '{node.name}'.",
                 span=node.span,
             )
-        type_vars: frozenset[str] = frozenset(node.type_params)
-        params: list[ParamSpec] = []
+        if node.is_builtin and node.return_type is None:
+            raise AglTypeError(
+                f"Builtin function '{node.name}' must declare a return type.",
+                span=node.span,
+            )
         # D6b: no required positional-fillable param may follow a defaulted one.
         self._check_required_after_defaulted(node.params)
+
+    def _build_funcdef_signature(
+        self, node: FuncDef, *, result_type: TypeExpr | Type
+    ) -> tuple[FunctionSignature, FunctionType]:
+        """Resolve a ``def`` signature with either an annotated or inferred result."""
+        type_vars: frozenset[str] = frozenset(node.type_params)
+        params: list[ParamSpec] = []
         for p in node.params:
             pt = self._env.resolve_type_expr(p.type_expr, span=p.span, type_vars=type_vars)
             has_default = p.default is not None
             params.append(ParamSpec(name=p.name, type=pt, kind=p.kind, has_default=has_default))
 
-        result_type = self._env.resolve_type_expr(
-            node.return_type, span=node.span, type_vars=type_vars
+        resolved_result = (
+            self._env.resolve_type_expr(result_type, span=node.span, type_vars=type_vars)
+            if isinstance(result_type, TypeExpr)
+            else result_type
         )
         sig = FunctionSignature(
-            params=tuple(params), result=result_type, type_params=node.type_params
+            params=tuple(params), result=resolved_result, type_params=node.type_params
         )
+        func_type = FunctionType(
+            params=tuple(p.type for p in params),
+            result=resolved_result,
+        )
+        return sig, func_type
+
+    def _register_funcdef_signature(
+        self, node: FuncDef, sig: FunctionSignature, func_type: FunctionType
+    ) -> None:
+        """Register a resolved ``def`` signature in every function side table."""
         if node.is_builtin:
             expected_sigs = _builtin_function_signature_alternates(node.name)
             assert expected_sigs
@@ -366,15 +397,7 @@ class _Checker:
                     span=node.span,
                 )
         self._env.register_function_signature(node.name, sig)
-        # Register by node_id so that cross-module callee signature lookups in
-        # _check_declared_name_call find the correct signature even when another
-        # module defines a function with the same name but a different signature.
         self._env.register_function_signature_by_node_id(node.node_id, sig)
-        # Register the binding type as FunctionType (erases names/defaults/kinds).
-        func_type = FunctionType(
-            params=tuple(p.type for p in params),
-            result=result_type,
-        )
         self._env.set_binding_type(node.node_id, func_type)
 
     # ------------------------------------------------------------------
@@ -454,7 +477,9 @@ class _Checker:
     def _check_funcdef_body(self, node: FuncDef) -> None:
         """Check the body of a ``def`` against its registered signature."""
         sig = self._env.get_function_signature(node.name)
-        assert sig is not None, f"FuncDef '{node.name}' not pre-registered"
+        if sig is None:
+            self._infer_funcdef_signature(node)
+            return
         if node.is_builtin:
             return
         assert node.body is not None, f"FuncDef '{node.name}' has no body"
@@ -476,6 +501,38 @@ class _Checker:
             body_type = self._check_expr(node.body, expected=sig.result)
             if not isinstance(body_type, BottomType):
                 self._assert_assignable(body_type, sig.result, node.span)
+        finally:
+            self._current_type_vars = old_type_vars
+
+    def _infer_funcdef_signature(self, node: FuncDef) -> None:
+        """Infer and register an unannotated ``def`` signature from its body."""
+        self._validate_funcdef_header(node)
+        assert node.return_type is None
+        assert node.body is not None, f"FuncDef '{node.name}' has no body"
+        sig, _func_type = self._build_funcdef_signature(node, result_type=UnitType())
+        old_type_vars = self._current_type_vars
+        self._current_type_vars = frozenset(sig.type_params)
+        try:
+            for p, spec in zip(node.params, sig.params):
+                self._env.set_binding_type(p.node_id, spec.type)
+            for p, spec in zip(node.params, sig.params):
+                if p.default is not None:
+                    def_type = self._check_expr(p.default, expected=spec.type)
+                    self._assert_assignable(def_type, spec.type, p.span)
+            body_type = self._check_expr(node.body, expected=None)
+            if isinstance(body_type, BottomType):
+                raise AglTypeError(
+                    f"Cannot infer return type of function '{node.name}': body always raises. "
+                    "Add a return type annotation.",
+                    span=node.span,
+                )
+            inferred_sig = FunctionSignature(
+                params=sig.params, result=body_type, type_params=sig.type_params
+            )
+            inferred_type = FunctionType(
+                params=tuple(p.type for p in sig.params), result=body_type
+            )
+            self._register_funcdef_signature(node, inferred_sig, inferred_type)
         finally:
             self._current_type_vars = old_type_vars
 
@@ -724,6 +781,12 @@ class _Checker:
 
     def _require_binding_type(self, ref: BindingRef) -> Type:
         typ = self._env.resolve_binding(ref)
+        if typ is None and ref.kind is BinderKind.function_binding:
+            raise AglTypeError(
+                f"Cannot infer return type of function '{ref.name}' before it is checked. "
+                "Add a return type annotation.",
+                span=None,
+            )
         assert typ is not None, f"Binding {ref!r} has no recorded type; checker invariant violated."
         return typ
 
@@ -1052,10 +1115,12 @@ class _Checker:
         # signatures, which would cause the name-keyed table to return the wrong
         # signature for a qualified cross-module call.
         sig = self._env.get_function_signature_by_node_id(callee_node_id)
-        assert sig is not None, (
-            f"no signature for function-binding callee node_id={callee_node_id!r}; "
-            "checker invariant violated."
-        )
+        if sig is None:
+            raise AglTypeError(
+                f"Cannot infer return type of function '{func_name}' before it is checked. "
+                "Add a return type annotation.",
+                span=node.span,
+            )
 
         # Dispatch to the generic path when the function has type parameters.
         if sig.type_params:

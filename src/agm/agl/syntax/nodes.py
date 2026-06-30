@@ -323,15 +323,15 @@ class Param:
 
 @dataclass(frozen=True, slots=True)
 class FuncDef:
-    """``def name(params) -> RetType = body`` — a top-level function declaration.
+    """``def name(params) (-> RetType)? = body`` — a top-level function declaration.
 
-    ``return_type`` is always required for ``def`` (full annotation in v1).
+    ``return_type`` is ``None`` when omitted and inferred from the body.
     ``body`` is an expression (which may be a ``Block`` for multi-step bodies).
     """
 
     name: str
     params: tuple[Param, ...]
-    return_type: TypeExpr
+    return_type: TypeExpr | None
     body: Expr | None
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)

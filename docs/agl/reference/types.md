@@ -19,6 +19,8 @@ decimal
 list[T]
 dict[text, T]
 agent
+(A) -> B
+A -> B
 (A, B, …) -> C
 ```
 
@@ -33,7 +35,13 @@ type_expr ::= "unit"
             | "dict" "[" "text" "," type_expr "]"
             | func_type
 
-func_type ::= "(" type_list? ")" "->" type_expr
+func_type ::= type_atom "->" type_expr
+            | "(" type_list? ")" "->" type_expr
+type_atom ::= "unit" | "text" | "json" | "bool" | "int" | "decimal"
+            | NAME
+            | NAME "[" type_expr ("," type_expr)* "]"
+            | "list" "[" type_expr "]"
+            | "dict" "[" "text" "," type_expr "]"
 type_list ::= type_expr ("," type_expr)* ","?
 ```
 
@@ -126,16 +134,18 @@ Storing it where a JSON-shaped type is expected is a static error.
 
 See [Agent calls](agent-calls.md) for how agent values are used with `ask`.
 
-### Function types: `(A, B, …) -> C`
+### Function types: `A -> B` and `(A, B, …) -> C`
 
 A function value has a positional function type. The parameters appear as a
-parenthesized comma-separated list of types; the arrow `->` separates the
-parameters from the result type:
+type or a parenthesized comma-separated list of types; the arrow `->` separates
+the parameters from the result type. A single parameter may omit parentheses,
+and chained arrows associate to the right:
 
 ```agl
-let f: (int) -> text = classify      # one param, text result
+let f: int -> text = classify        # one param, text result
 let g: (int, int) -> int = add       # two params, int result
 let h: () -> bool = fn() => true     # zero params
+let k: int -> text -> bool = chain   # int -> (text -> bool)
 ```
 
 Function type assignability is by **exact structural match** — same parameter

@@ -148,7 +148,15 @@ type_expr ::= "unit"
             | "dict" "[" "text" "," type_expr "]"
             | func_type
 
-func_type ::= "(" type_list? ")" "->" type_expr
+func_type ::= type_atom "->" type_expr
+            | "(" type_list? ")" "->" type_expr
+type_atom ::= "unit" | "text" | "json" | "bool" | "int" | "decimal"
+            | NAME
+            | NAME "[" type_expr ("," type_expr)* "]"
+            | qual_prefix NAME "[" type_expr ("," type_expr)* "]"
+            | qual_prefix NAME
+            | "list" "[" type_expr "]"
+            | "dict" "[" "text" "," type_expr "]"
 type_list ::= type_expr ("," type_expr)* ","?
 ```
 

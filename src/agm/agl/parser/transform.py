@@ -815,6 +815,18 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
+    def unary_func_type(self, meta: Meta, args: _Args) -> FuncT:
+        """type_atom THIN_ARROW type_expr — function type A -> B."""
+        type_nodes = [a for a in args if isinstance(a, _ALL_TYPE_EXPRS)]
+        assert len(type_nodes) == 2, "unary_func_type: expected parameter and result types"
+        param_type, result_type = type_nodes
+        return FuncT(
+            params=(param_type,),
+            result=result_type,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
     def type_list(self, meta: Meta, args: _Args) -> tuple[TypeExpr, ...]:
         """type_list: type_expr (COMMA type_expr)* COMMA?"""
         return tuple(a for a in args if isinstance(a, _ALL_TYPE_EXPRS))

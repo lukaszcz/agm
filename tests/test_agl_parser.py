@@ -458,6 +458,14 @@ class TestTypeExpressions:
         assert isinstance(let.type_ann.params[0], IntT)
         assert isinstance(let.type_ann.result, TextT)
 
+    def test_func_type_one_param_without_parentheses(self) -> None:
+        let = first(parse("let f: int -> text = classify"))
+        assert isinstance(let, LetDecl)
+        assert isinstance(let.type_ann, FuncT)
+        assert len(let.type_ann.params) == 1
+        assert isinstance(let.type_ann.params[0], IntT)
+        assert isinstance(let.type_ann.result, TextT)
+
     def test_func_type_two_params(self) -> None:
         let = first(parse("let f: (int, text) -> bool = g"))
         assert isinstance(let, LetDecl)
@@ -478,6 +486,24 @@ class TestTypeExpressions:
         assert isinstance(let, LetDecl)
         assert isinstance(let.type_ann, FuncT)
         assert isinstance(let.type_ann.result, FuncT)
+
+    def test_func_type_chain_is_right_associative(self) -> None:
+        let = first(parse("let f: int -> text -> bool = g"))
+        assert isinstance(let, LetDecl)
+        assert isinstance(let.type_ann, FuncT)
+        assert len(let.type_ann.params) == 1
+        assert isinstance(let.type_ann.params[0], IntT)
+        assert isinstance(let.type_ann.result, FuncT)
+        assert isinstance(let.type_ann.result.params[0], TextT)
+        assert isinstance(let.type_ann.result.result, BoolT)
+
+    def test_parenthesized_single_function_type_as_parameter(self) -> None:
+        let = first(parse("let f: (int -> text) -> bool = g"))
+        assert isinstance(let, LetDecl)
+        assert isinstance(let.type_ann, FuncT)
+        assert len(let.type_ann.params) == 1
+        assert isinstance(let.type_ann.params[0], FuncT)
+        assert isinstance(let.type_ann.result, BoolT)
 
 
 # ---------------------------------------------------------------------------
@@ -733,6 +759,23 @@ class TestParseTypeExpr:
         assert len(result.params) == 1
         assert isinstance(result.params[0], IntT)
         assert isinstance(result.result, TextT)
+
+    def test_unparenthesized_func_type(self) -> None:
+        from agm.agl.syntax.types import FuncT, IntT, TextT
+        result = parse_type_expr("int -> text")
+        assert isinstance(result, FuncT)
+        assert len(result.params) == 1
+        assert isinstance(result.params[0], IntT)
+        assert isinstance(result.result, TextT)
+
+    def test_unparenthesized_func_type_chain(self) -> None:
+        from agm.agl.syntax.types import BoolT, FuncT, IntT, TextT
+        result = parse_type_expr("int -> text -> bool")
+        assert isinstance(result, FuncT)
+        assert isinstance(result.params[0], IntT)
+        assert isinstance(result.result, FuncT)
+        assert isinstance(result.result.params[0], TextT)
+        assert isinstance(result.result.result, BoolT)
 
     def test_unit_type(self) -> None:
         from agm.agl.syntax.types import UnitT

@@ -224,6 +224,9 @@ def _resolve_body_for_one(
             graph_type_table[(mid, name)] = typ
             return
         if isinstance(item, TypeAlias) and item.name == name:
+            if item.type_params:
+                builder.validate_alias(item)
+                return
             resolved = cross_env.resolve_type_expr(item.type_expr, span=item.span)
             graph_type_table[(mid, item.name)] = resolved
             return

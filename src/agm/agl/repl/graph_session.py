@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from agm.agl.modules.loader import LoadedModule
     from agm.agl.modules.roots import RootSet
     from agm.agl.runtime.types import HostEnvironment
-    from agm.agl.scope.symbols import ScopeNode
+    from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import Frame, Value
     from agm.agl.syntax.nodes import ImportDecl, Program
@@ -45,6 +45,8 @@ class GraphSessionCtx(Protocol):
     _ir_base_frame: Frame
     _session_scope: ScopeNode
     _type_env: TypeEnvironment
+    _ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]]
+    _ambient_type_names: frozenset[str]
     _trace_path: Path | None
     _default_loop_limit: int
     _default_strict_json: bool
@@ -175,6 +177,8 @@ class GraphSession:
             rgraph = resolve_graph(
                 graph,
                 ambient_agents=self._ctx._ambient_agents(host_env),
+                entry_ambient_constructor_candidates=self._ctx._ambient_constructor_candidates,
+                entry_ambient_type_names=self._ctx._ambient_type_names,
                 entry_parent_scope=self._ctx._session_scope,
                 entry_repl_session_scope=self._ctx._session_scope,
             )

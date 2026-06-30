@@ -74,6 +74,22 @@ class TestPersistence:
 
 
 # ---------------------------------------------------------------------------
+# Standard library
+# ---------------------------------------------------------------------------
+
+
+class TestStdlib:
+    def test_core_stdlib_is_opened_unqualified_by_default(self) -> None:
+        s = ReplSession(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
+
+        some_result = s.eval_entry("let present: Option[int] = Some(value = 1)")
+        none_result = s.eval_entry("let missing: Option[int] = None")
+
+        assert some_result.ok, some_result.diagnostics
+        assert none_result.ok, none_result.diagnostics
+
+
+# ---------------------------------------------------------------------------
 # Redefinition / shadowing
 # ---------------------------------------------------------------------------
 
@@ -1387,7 +1403,9 @@ class TestImports:
         assert not r.ok
         assert _snapshot(s) == before
         # goodlib should NOT have been added to loaded lib modules
-        assert not s._loaded_lib_modules
+        from agm.agl.modules.ids import ModuleId
+
+        assert ModuleId(segments=("goodlib",)) not in s._loaded_lib_modules
 
     def test_import_not_found_error(self, tmp_path: Path) -> None:
         s = self._make_session_with_root(tmp_path)

@@ -529,7 +529,8 @@ _HELP_TEXTS: dict[str, str] = {
         that accumulates bindings, types, and declarations across entries, so
         earlier results stay available and agent calls fire exactly once.  The
         session reuses the [exec] configuration (runner, per-agent commands,
-        loop limit, JSON strictness, timeout).
+        loop limit, JSON strictness, timeout).  Like agm exec, it automatically
+        opens std.core so standard-library names are available unqualified.
 
         Trace logging is OFF by default.  Source config declarations
         (config KEY = VALUE) entered at the REPL prompt take effect from their

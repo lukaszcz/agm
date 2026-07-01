@@ -228,6 +228,8 @@ class TestConfigCliProjection:
     ) -> None:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text("let x = 1\n")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("agm.core.log.git_helpers.containing_root", lambda _path: None)
         captured = _spy_config_cli(monkeypatch)
         exec_command.run(_exec_args(agl_file, log=True))
         assert captured.get("log") == BoolValue(True)
@@ -337,7 +339,7 @@ class TestCliBeatsSource:
     """CLI values override source config declarations at runtime."""
 
     def test_cli_log_true_beats_source_false(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """--log sets config_cli['log']=true, which overrides source config log = false."""
         agl_file = tmp_path / "prog.agl"
@@ -352,6 +354,8 @@ class TestCliBeatsSource:
         assert capsys.readouterr().out.strip() == "logging-off"
 
         # With --log, CLI wins → "logging-on"
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("agm.core.log.git_helpers.containing_root", lambda _path: None)
         exec_command.run(_exec_args(agl_file, log=True))
         assert capsys.readouterr().out.strip() == "logging-on"
 

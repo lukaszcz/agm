@@ -13,6 +13,7 @@ NOTE: No static-analysis suppression comments in this file.
 from __future__ import annotations
 
 import decimal
+from pathlib import Path
 
 import pytest
 
@@ -324,7 +325,7 @@ class TestTypecheckValueValidation:
 
     def test_log_true_accepted(self) -> None:
         """config log = true type-checks."""
-        result = PipelineDriver().run("config log = true\nprint 1")
+        result = PipelineDriver().run("config log = true\nprint 1", check_only=True)
         assert result.ok
 
     def test_max_iters_accepted(self) -> None:
@@ -339,13 +340,14 @@ class TestTypecheckValueValidation:
 
 
 class TestInterpreterNoOp:
-    def test_config_plus_print_runs_fine(self) -> None:
+    def test_config_plus_print_runs_fine(self, tmp_path: Path) -> None:
         """A program of config decls + a print executes without error."""
         rt = PipelineDriver()
         result = rt.run(
             "config log = true\n"
             "config max-iters = 5\n"
-            "print 1\n"
+            "print 1\n",
+            log_file=tmp_path / "trace.jsonl",
         )
         assert result.ok
         assert not result.diagnostics

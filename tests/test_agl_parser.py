@@ -335,6 +335,12 @@ class TestBinders:
         assert isinstance(let, LetDecl)
         assert isinstance(let.type_ann, IntT)
 
+    def test_operator_name_let_binding(self) -> None:
+        let = first(parse("let >> = 0"))
+        assert isinstance(let, LetDecl)
+        assert let.name == ">>"
+        assert isinstance(let.value, IntLit)
+
     def test_var_decl(self) -> None:
         v = first(parse("var count: int = 0"))
         assert isinstance(v, VarDecl)
@@ -2725,6 +2731,21 @@ class TestCaseNeutralNamesParser:
         ref = first(prog)
         assert isinstance(ref, VarRef)
         assert ref.name == "none"
+
+    def test_operator_name_def_and_call(self) -> None:
+        prog = parse("def |>[T](x: T, f: T -> T) -> T = f x\n|>(1, fn(y: int) -> int => y)")
+        definition, call = items(prog)
+        assert isinstance(definition, FuncDef)
+        assert definition.name == "|>"
+        assert isinstance(call, Call)
+        assert isinstance(call.callee, VarRef)
+        assert call.callee.name == "|>"
+
+    def test_operator_name_var_ref(self) -> None:
+        prog = parse(">>")
+        ref = first(prog)
+        assert isinstance(ref, VarRef)
+        assert ref.name == ">>"
 
     def test_constructor_call_becomes_call(self) -> None:
         # some(value = 1) -> Call(callee=VarRef("some"), named_args=(...))

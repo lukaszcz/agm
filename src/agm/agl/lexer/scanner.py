@@ -63,6 +63,7 @@ from agm.agl.lexer.tokens import (
     NAME,
     NEQ,
     NEWLINE,
+    OP_NAME,
     PIPE,
     PLUS,
     RBRACE,
@@ -144,6 +145,24 @@ _SINGLE_OPS: dict[str, str] = {
     "/": SLASH,
     "@": AT,
 }
+
+_RESERVED_OPERATOR_NAMES: dict[str, str] = {
+    "=>": ARROW,
+    "==": EQ_EQ,
+    "=": EQ,
+    "!=": NEQ,
+    "<=": LE,
+    "<": LT,
+    ">=": GE,
+    ">": GT,
+    "->": THIN_ARROW,
+    "-": MINUS,
+    ":=": ASSIGN,
+    "::": DCOLON,
+    **_SINGLE_OPS,
+}
+
+_OPERATOR_NAME_CHARS: frozenset[str] = frozenset("!$%&*+-/<>=" "\\^|")
 
 # JSON escape decoding table (excluding \uXXXX and \$, handled separately)
 _JSON_ESCAPES: dict[str, str] = {
@@ -776,44 +795,15 @@ class _Scanner:
             yield from self._scan_template(start_pos, start_line, start_col, quote="'")
             return
 
-        # Multi-char operators (maximal munch)
-        if ch == "=" and self._peek() == ">":
-            self._advance()
-            yield self._make_token(ARROW, "=>", start_pos, start_line, start_col)
-            return
-        if ch == "=" and self._peek() == "=":
-            self._advance()
-            yield self._make_token(EQ_EQ, "==", start_pos, start_line, start_col)
-            return
-        if ch == "=":
-            yield self._make_token(EQ, "=", start_pos, start_line, start_col)
-            return
-        if ch == "!" and self._peek() == "=":
-            self._advance()
-            yield self._make_token(NEQ, "!=", start_pos, start_line, start_col)
-            return
-        if ch == "<" and self._peek() == "=":
-            self._advance()
-            yield self._make_token(LE, "<=", start_pos, start_line, start_col)
-            return
-        if ch == "<":
-            yield self._make_token(LT, "<", start_pos, start_line, start_col)
-            return
-        if ch == ">" and self._peek() == "=":
-            self._advance()
-            yield self._make_token(GE, ">=", start_pos, start_line, start_col)
-            return
-        if ch == ">":
-            yield self._make_token(GT, ">", start_pos, start_line, start_col)
-            return
-        # "->" is THIN_ARROW (v2 function/return type); bare "-" is MINUS.
-        # Maximal munch: check the next character before deciding.
-        if ch == "-" and self._peek() == ">":
-            self._advance()
-            yield self._make_token(THIN_ARROW, "->", start_pos, start_line, start_col)
-            return
-        if ch == "-":
-            yield self._make_token(MINUS, "-", start_pos, start_line, start_col)
+        if ch in _OPERATOR_NAME_CHARS:
+            while not self._at_end() and self._peek() in _OPERATOR_NAME_CHARS:
+                self._advance()
+            value = self._src[start_pos:self._pos]
+            reserved_type = _RESERVED_OPERATOR_NAMES.get(value)
+            if reserved_type is not None:
+                yield self._make_token(reserved_type, value, start_pos, start_line, start_col)
+            else:
+                yield self._make_token(OP_NAME, value, start_pos, start_line, start_col)
             return
 
         # ":=" is destructive assignment and "::" introduces typed calls.

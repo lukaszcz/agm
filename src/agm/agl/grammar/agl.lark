@@ -79,7 +79,7 @@
 // Identifier / number / operator tokens (%declare — no regex; from custom lexer)
 // ---------------------------------------------------------------------------
 
-%declare NAME
+%declare NAME OP_NAME
 %declare IMPORT QUALIFIED USING HIDING EXPORT PRIVATE MODQUAL MODPATH
 %declare AS_QUESTION
 // AGENT: the reserved word `agent`.  Declared (rather than written as the
@@ -173,7 +173,7 @@ field_def: field_name COLON type_expr
 // receives the name Token (type NAME, AGENT, TO, DOWNTO, or BY) directly.
 ?field_name: NAME | AGENT | TO | DOWNTO | BY
 
-?name: NAME
+?name: NAME | OP_NAME
 
 // enum_def: flat variant list using the |-continuation layout rule.
 // The |-continuation layout rule suppresses every _NEWLINE / _INDENT / _DEDENT

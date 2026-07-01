@@ -10,7 +10,7 @@ Every AgL program flows through one pipeline, whether run as a whole or one REPL
 
 ```
 source (.agl)
-  → lexer        (INDENT/DEDENT, string interpolation, one case-neutral NAME token)
+  → lexer        (INDENT/DEDENT, string interpolation, NAME/OP_NAME tokens)
   → parser       (Lark LALR grammar)
   → AST          (plain dataclasses — the firewall)
   → scope        (name resolution; full static pass)
@@ -28,7 +28,7 @@ The lexer and parser are the only Lark-aware code. The AST is the firewall: ever
 
 Two consequences shape the whole codebase:
 
-- **Identifier case carries no semantic category.** Identifiers are case-sensitive (distinct spellings are distinct names), but the lexer emits a single `NAME` token for all of them; types, constructors, and variables are distinguished by their declaration and binding namespace, never by capitalization. No pass branches on the case of a name.
+- **Identifier case carries no semantic category.** Identifiers are case-sensitive (distinct spellings are distinct names), but capitalization never classifies a name. The lexer emits `NAME` for word-starting identifiers and `OP_NAME` for operator-character names; types, constructors, and variables are distinguished by their declaration and binding namespace, not by spelling style. No pass branches on the case of a name.
 - **Passes never mutate the AST.** Later passes attach their results in *side tables* keyed by a stable per-node id, carried in the resolved/checked program objects rather than written back onto nodes.
 
 ## Shared AGM Layers

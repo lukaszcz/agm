@@ -22,6 +22,7 @@ Contextual keywords:
 
 Identifiers:
     NAME -- any identifier (case-neutral: both upper- and lower-case start are NAME).
+    OP_NAME -- any operator-name identifier, formed from operator characters.
     Policy: ``_`` (the wildcard) is NOT a distinct token -- it lexes as a plain
     NAME; wildcard interpretation happens at the grammar / AST-builder level.
 
@@ -155,6 +156,7 @@ KEYWORDS: frozenset[str] = frozenset(
 # Identifiers
 # ---------------------------------------------------------------------------
 NAME = "NAME"  # any identifier (case-neutral)
+OP_NAME = "OP_NAME"  # operator-name identifier
 
 # ---------------------------------------------------------------------------
 # Numbers (no float type; decimal is exact fixed-point)

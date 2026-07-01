@@ -159,14 +159,22 @@ the operator characters `-`, `?`, `!`, `<`, `>`, `=` may appear *inside*
 an identifier, so names like `ask-prompt`, `ask?`, and `do-it-now!` scan as a
 single token.
 
-There is a **single** lexical class of identifier — the grammar terminal
-`NAME`. It is used for every name in the language: type names, record/enum
-declarations and their variant constructors, type aliases, variables, fields,
-agent names, function names, parameter names, and type-parameter names.
+Operator names are a second lexical class of identifier: the grammar terminal
+`OP_NAME`. They start with an operator character and continue while the next
+character is also an operator-name character. Exact reserved operator and
+punctuation tokens such as `=`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `->`, `=>`,
+`:=`, `::`, `+`, `-`, `*`, `/`, `|`, `.`, `:`, and `@` keep their syntactic
+meaning. Non-reserved standalone runs such as `==>`, `>>`, `|>`, `<|`, `>=>`,
+and `%$` are operator names.
+
+AgL has two lexical classes of identifier: `NAME` and `OP_NAME`. Both are
+ordinary names in declaration and reference positions, so they can name
+variables, functions, and constructors.
 
 | Token | Start | Used for |
 | ----- | ----- | -------- |
 | `NAME` | a letter (any Unicode letter, not just ASCII) or `_` | Every kind of name: types, constructors, variables, fields, agents, functions, parameters, type parameters |
+| `OP_NAME` | an operator-name character | Variables, functions, constructors, and other grammar positions that accept a name |
 
 **Capitalization carries no syntactic or semantic meaning.** The case of an
 identifier's first letter never classifies it: `option` and `Option`, `some`
@@ -186,11 +194,10 @@ and `catch` positions it is interpreted as the wildcard
 
 ### Operator disambiguation
 
-Because the operator characters `-`, `<`, `>`, `=`, `!`, `+`, `*` are also
-identifier-continuation characters, whether such a run is an identifier or a
-sequence of operator tokens depends entirely on **whitespace** (or another
-delimiter).  Whitespace and the structural punctuators above are the only
-characters that break an identifier scan.
+Because many operator characters are also identifier-continuation characters,
+whether such a run is part of a word-starting `NAME`, a standalone `OP_NAME`,
+or a sequence of operator tokens depends on maximal munch plus reserved-token
+disambiguation.
 
 | Source | Tokens | |
 | ----- | ----- | - |
@@ -201,7 +208,9 @@ characters that break an identifier scan.
 | `a->b` | `NAME "a->b"` | one identifier (no spaces) |
 | `x == 3` | `NAME "x"`, `EQ_EQ "=="`, `INT "3"` | equality operator, whitespace-delimited |
 | `x != 3` | `NAME "x"`, `NEQ "!="`, `INT "3"` | not-equal operator, whitespace-delimited |
-| `x!=3` | `NAME "x!=3"` | one identifier (no spaces) |
+| `>>` | `OP_NAME ">>"` | standalone operator name |
+| `|>` | `OP_NAME "|>"` | standalone operator name |
+| `%$` | `OP_NAME "%$"` | standalone operator name |
 | `a+b` | `NAME "a+b"` | one identifier (`+` is not a delimiter) |
 | `a + b` | `NAME "a"`, `PLUS "+"`, `NAME "b"` | spaces break the identifier, `+` is an operator |
 | `n*x` | `NAME "n*x"` | one identifier (`*` is not a delimiter) |

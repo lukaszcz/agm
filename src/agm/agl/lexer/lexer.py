@@ -53,6 +53,7 @@ from agm.agl.lexer.tokens import (
     MODPATH,
     MODQUAL,
     NAME,
+    OP_NAME,
     PRIVATE,
     QUALIFIED,
     RSQB,
@@ -62,6 +63,7 @@ from agm.agl.lexer.tokens import (
 _INDEX_PREDECESSORS = frozenset(
     {
         "NAME",
+        OP_NAME,
         INT,
         "DECIMAL",
         "TRUE",

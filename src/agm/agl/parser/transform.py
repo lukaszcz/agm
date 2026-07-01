@@ -27,7 +27,7 @@ from __future__ import annotations
 import decimal
 from dataclasses import dataclass, replace
 from itertools import count
-from typing import TypeAlias, cast
+from typing import TypeAlias, TypeGuard, cast
 
 from lark import Transformer, v_args
 from lark.lexer import Token
@@ -115,6 +115,7 @@ class _PatternFieldsSplit:
 # ---------------------------------------------------------------------------
 
 _Args = list[object]  # Rule children after transformation (tokens + AST nodes)
+_NAME_TOKEN_TYPES = frozenset({"NAME", "OP_NAME"})
 
 _ALL_TYPE_EXPRS = (
     TextT, JsonT, BoolT, IntT, DecimalT, NameT, ListT, DictT, UnitT, AgentT, FuncT, AppliedT
@@ -276,7 +277,7 @@ class AstBuilder(Transformer):
     def agent_decl(self, meta: Meta, args: _Args) -> syntax.AgentDecl:
         # Grammar: AGENT name (EQ template)?
         name_tok = next(
-            a for a in args if isinstance(a, Token) and a.type == "NAME"
+            a for a in args if _is_name_token(a)
         )
         runner_node = next(
             (a for a in args if isinstance(a, (syntax.StringLit, syntax.Template))),
@@ -353,7 +354,7 @@ class AstBuilder(Transformer):
 
     def marker_at(self, meta: Meta, args: _Args) -> _ParamMarker:
         """AT NAME → _ParamMarker; NAME must be pos/std/named (else AglSyntaxError)."""
-        name_tok = next(a for a in args if isinstance(a, Token) and a.type == "NAME")
+        name_tok = next(a for a in args if _is_name_token(a))
         label_name = str(name_tok)
         span = self._span_from_meta(meta)
         zone = _AT_ZONE.get(label_name)
@@ -436,7 +437,7 @@ class AstBuilder(Transformer):
     def variant_def(self, meta: Meta, args: _Args) -> syntax.VariantDef:
         # Grammar: PIPE? name variant_payload?
         name_tok = next(
-            (a for a in args if isinstance(a, Token) and a.type == "NAME"),
+            (a for a in args if _is_name_token(a)),
             None,
         )
         assert name_tok is not None, "variant_def: no name token"
@@ -711,7 +712,7 @@ class AstBuilder(Transformer):
     def applied_type(self, meta: Meta, args: _Args) -> TypeExpr:
         """name type_lsqb type_arg_list RSQB — applied generic type."""
         name_tok = next(
-            a for a in args if isinstance(a, Token) and a.type == "NAME"
+            a for a in args if _is_name_token(a)
         )
         name = str(name_tok)
         type_args: tuple[TypeExpr, ...] = cast(
@@ -743,7 +744,7 @@ class AstBuilder(Transformer):
     def qual_applied_type(self, meta: Meta, args: _Args) -> AppliedT:
         """qual_prefix name type_lsqb type_arg_list RSQB — qualified application."""
         qual = next(a for a in args if isinstance(a, Qualifier))
-        name_tok = next(a for a in args if isinstance(a, Token) and a.type == "NAME")
+        name_tok = next(a for a in args if _is_name_token(a))
         type_args = cast(
             tuple[TypeExpr, ...],
             next(
@@ -789,7 +790,7 @@ class AstBuilder(Transformer):
         """type_param_list: name (COMMA name)*"""
         return tuple(
             str(a) for a in args
-            if isinstance(a, Token) and a.type == "NAME"
+            if _is_name_token(a)
         )
 
     def func_type(self, meta: Meta, args: _Args) -> FuncT:
@@ -1266,7 +1267,7 @@ class AstBuilder(Transformer):
     ) -> syntax.IsTest:
         left = cast(syntax.Expr, args[0])
         name_toks = [
-            a for a in args if isinstance(a, Token) and a.type == "NAME"
+            a for a in args if _is_name_token(a)
         ]
         if qualified:
             assert len(name_toks) >= 2
@@ -1620,7 +1621,7 @@ class AstBuilder(Transformer):
         Handles any NAME. Wildcard is "_" (NAME).
         """
         name_toks = [
-            a for a in args if isinstance(a, Token) and a.type == "NAME"
+            a for a in args if _is_name_token(a)
         ]
         if not name_toks:  # pragma: no cover
             return (None, None)
@@ -1715,7 +1716,7 @@ class AstBuilder(Transformer):
     def pat_qualified_constructor(self, meta: Meta, args: _Args) -> syntax.ConstructorPattern:
         """pat_qualified_constructor: name DOT name (LPAR pattern_fields? RPAR)?"""
         name_toks = [
-            a for a in args if isinstance(a, Token) and a.type == "NAME"
+            a for a in args if _is_name_token(a)
         ]
         assert len(name_toks) >= 2, "pat_qualified_constructor: expected 2 name tokens"
         qualifier: str | None = str(name_toks[0])
@@ -1734,7 +1735,7 @@ class AstBuilder(Transformer):
     def pat_constructor(self, meta: Meta, args: _Args) -> syntax.ConstructorPattern:
         """pat_constructor: name LPAR pattern_fields? RPAR"""
         name_toks = [
-            a for a in args if isinstance(a, Token) and a.type == "NAME"
+            a for a in args if _is_name_token(a)
         ]
         assert len(name_toks) >= 1, "pat_constructor: expected name token"
         name = str(name_toks[0])
@@ -1818,16 +1819,7 @@ class AstBuilder(Transformer):
 
     def pat_field_named(self, meta: Meta, args: _Args) -> syntax.PatternField:
         """pat_field_named: name EQ pattern"""
-        name_tok = next(
-            (
-                a
-                for a in args
-                if isinstance(a, Token)
-                and a.type in ("NAME", "AGENT", "TO", "DOWNTO", "BY")
-            ),
-            None,
-        )
-        assert name_tok is not None
+        name_tok = _find_name_token(args)
         pat = next((a for a in args if isinstance(a, _PATTERN_NODE_TYPES)), None)
         assert pat is not None
         assert isinstance(pat, _PATTERN_NODE_TYPES)
@@ -1896,14 +1888,14 @@ class AstBuilder(Transformer):
 
     def import_alias(self, meta: Meta, args: _Args) -> str:
         """import_alias: "as" name — return the alias name as a plain str."""
-        tok = next(a for a in args if isinstance(a, Token) and a.type == "NAME")
+        tok = next(a for a in args if _is_name_token(a))
         return str(tok)
 
     def _hiding_items(
         self, meta: Meta, args: _Args
     ) -> tuple[syntax.ImportItem, ...]:
         """Build hiding ImportItem tuples from the names in a HIDING clause."""
-        hiding_names = [str(a) for a in args if isinstance(a, Token) and a.type == "NAME"]
+        hiding_names = [str(a) for a in args if _is_name_token(a)]
         return tuple(
             syntax.ImportItem(
                 name=name,
@@ -1929,7 +1921,7 @@ class AstBuilder(Transformer):
 
     def import_item_rename(self, meta: Meta, args: _Args) -> syntax.ImportItem:
         """import_item_rename: name "as" name"""
-        name_toks = [str(a) for a in args if isinstance(a, Token) and a.type == "NAME"]
+        name_toks = [str(a) for a in args if _is_name_token(a)]
         return syntax.ImportItem(
             name=name_toks[0],
             rename=name_toks[1],
@@ -1939,7 +1931,7 @@ class AstBuilder(Transformer):
 
     def import_item_plain(self, meta: Meta, args: _Args) -> syntax.ImportItem:
         """import_item_plain: name"""
-        name_toks = [str(a) for a in args if isinstance(a, Token) and a.type == "NAME"]
+        name_toks = [str(a) for a in args if _is_name_token(a)]
         return syntax.ImportItem(
             name=name_toks[0],
             rename=None,
@@ -1993,7 +1985,7 @@ class AstBuilder(Transformer):
         self, meta: Meta, args: _Args
     ) -> tuple[syntax.ExportItem, ...]:
         """Build hiding ExportItem tuples from the names in a HIDING clause."""
-        hiding_names = [str(a) for a in args if isinstance(a, Token) and a.type == "NAME"]
+        hiding_names = [str(a) for a in args if _is_name_token(a)]
         return tuple(
             syntax.ExportItem(
                 name=name,
@@ -2019,7 +2011,7 @@ class AstBuilder(Transformer):
 
     def export_item_rename(self, meta: Meta, args: _Args) -> syntax.ExportItem:
         """export_item_rename: name "as" name"""
-        name_toks = [str(a) for a in args if isinstance(a, Token) and a.type == "NAME"]
+        name_toks = [str(a) for a in args if _is_name_token(a)]
         return syntax.ExportItem(
             name=name_toks[0],
             rename=name_toks[1],
@@ -2029,7 +2021,7 @@ class AstBuilder(Transformer):
 
     def export_item_plain(self, meta: Meta, args: _Args) -> syntax.ExportItem:
         """export_item_plain: name"""
-        name_toks = [str(a) for a in args if isinstance(a, Token) and a.type == "NAME"]
+        name_toks = [str(a) for a in args if _is_name_token(a)]
         return syntax.ExportItem(
             name=name_toks[0],
             rename=None,
@@ -2170,7 +2162,7 @@ class AstBuilder(Transformer):
     def qual_var_ref(self, meta: Meta, args: _Args) -> syntax.VarRef:
         """qual_var_ref: qual_prefix NAME"""
         qual = next(a for a in args if isinstance(a, Qualifier))
-        name_tok = next(a for a in args if isinstance(a, Token) and a.type == "NAME")
+        name_tok = next(a for a in args if _is_name_token(a))
         return syntax.VarRef(
             name=str(name_tok),
             span=self._span_from_meta(meta),
@@ -2181,7 +2173,7 @@ class AstBuilder(Transformer):
     def qual_named_type(self, meta: Meta, args: _Args) -> NameT:
         """qual_prefix NAME in type position."""
         qual = next(a for a in args if isinstance(a, Qualifier))
-        name_tok = next(a for a in args if isinstance(a, Token) and a.type == "NAME")
+        name_tok = next(a for a in args if _is_name_token(a))
         return NameT(
             name=str(name_tok),
             span=self._span_from_meta(meta),
@@ -2192,7 +2184,7 @@ class AstBuilder(Transformer):
     def pat_qual_constructor(self, meta: Meta, args: _Args) -> syntax.ConstructorPattern:
         """pat_qual_constructor: qual_prefix NAME (DOT NAME)? (LPAR pattern_fields? RPAR)?"""
         qual = next(a for a in args if isinstance(a, Qualifier))
-        name_toks = [a for a in args if isinstance(a, Token) and a.type == "NAME"]
+        name_toks = [a for a in args if _is_name_token(a)]
         qualifier_str: str | None = None
         if len(name_toks) == 2:
             qualifier_str = str(name_toks[0])
@@ -2342,14 +2334,20 @@ def _find_type_expr(args: _Args) -> TypeExpr:
 def _find_name_token(args: _Args) -> Token:
     """Return the field/key name Token from a ``field_name``-bearing rule.
 
-    ``field_name`` matches a ``NAME`` identifier or any keyword admitted as a
-    field name: ``AGENT``, ``TO``, ``DOWNTO``, ``BY``.  All arrive here as
-    plain Tokens; callers treat ``str(token)`` as the field name string.
+    ``name`` matches ``NAME`` or ``OP_NAME``. ``field_name`` also admits a few
+    keyword tokens: ``AGENT``, ``TO``, ``DOWNTO``, ``BY``. All arrive here as
+    plain Tokens; callers treat ``str(token)`` as the name string.
     """
     for a in args:
-        if isinstance(a, Token) and a.type in ("NAME", "AGENT", "TO", "DOWNTO", "BY"):
+        if _is_name_token(a) or (
+            isinstance(a, Token) and a.type in ("AGENT", "TO", "DOWNTO", "BY")
+        ):
             return a
     raise AssertionError(f"_find_name_token: no name token found in {args!r}")  # pragma: no cover
+
+
+def _is_name_token(value: object) -> TypeGuard[Token]:
+    return isinstance(value, Token) and value.type in _NAME_TOKEN_TYPES
 
 
 def _is_field_tuple(a: object) -> bool:

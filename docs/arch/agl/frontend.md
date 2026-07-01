@@ -4,7 +4,7 @@ The frontend turns source text into a fully resolved, type-checked program. It i
 
 ## Lexer and Parser
 
-The lexer is hand-written because AgL is indentation-sensitive: it produces INDENT/DEDENT tokens, handles multiline strings and string interpolation, and emits a single case-neutral `NAME` token for every identifier. The parser is a Lark LALR grammar that consumes those tokens and an AST builder constructs the AST. These two passes are the only Lark-aware code in the system.
+The lexer is hand-written because AgL is indentation-sensitive: it produces INDENT/DEDENT tokens, handles multiline strings and string interpolation, and emits name tokens for identifiers (`NAME` for word-starting names, `OP_NAME` for operator-character names). The parser is a Lark LALR grammar that consumes those tokens and an AST builder constructs the AST. These two passes are the only Lark-aware code in the system.
 
 ## AST
 
@@ -16,7 +16,7 @@ Each node carries a stable id assigned at build time. Later passes never mutate 
 
 The scope pass performs full name resolution and records its results in side tables. It runs pre-passes before resolving expression bodies so that declarations are visible regardless of order: agents and top-level functions are collected first, enabling mutual recursion, and constructors (from record and enum declarations) are collected into the ordinary value namespace.
 
-Resolution is namespace- and scope-directed, never spelling-directed — a direct consequence of the case-neutral `NAME` token:
+Resolution is namespace- and scope-directed, never capitalization-directed — a direct consequence of AgL's case-neutral name model:
 
 - Built-in calls (`print`, `exec`, `ask`, and friends) are recognized by resolving the callee to a known built-in declaration and recorded as such, rather than by keyword.
 - Constructors live in the value namespace; an ambiguous unqualified constructor name is a static error, disambiguated by type qualification.

@@ -270,6 +270,39 @@ class TestOperators:
         result = tok("==")
         assert result == [("EQ_EQ", "==")]
 
+    def test_operator_name_tokens(self) -> None:
+        assert tok("==> >> |> <| >=> %$") == [
+            ("OP_NAME", "==>"),
+            ("OP_NAME", ">>"),
+            ("OP_NAME", "|>"),
+            ("OP_NAME", "<|"),
+            ("OP_NAME", ">=>"),
+            ("OP_NAME", "%$"),
+        ]
+
+    def test_reserved_operator_tokens_stay_syntax(self) -> None:
+        assert tok("= == != <= < >= > -> => := :: + - * / | @ . :") == [
+            ("EQ", "="),
+            ("EQ_EQ", "=="),
+            ("NEQ", "!="),
+            ("LE", "<="),
+            ("LT", "<"),
+            ("GE", ">="),
+            ("GT", ">"),
+            ("THIN_ARROW", "->"),
+            ("ARROW", "=>"),
+            ("ASSIGN", ":="),
+            ("DCOLON", "::"),
+            ("PLUS", "+"),
+            ("MINUS", "-"),
+            ("STAR", "*"),
+            ("SLASH", "/"),
+            ("PIPE", "|"),
+            ("AT", "@"),
+            ("DOT", "."),
+            ("COLON", ":"),
+        ]
+
     def test_maximal_munch_arrow_vs_eq(self) -> None:
         # "=>" must be ARROW, not EQ + GT
         result = tok("=>")

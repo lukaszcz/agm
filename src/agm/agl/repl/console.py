@@ -148,7 +148,7 @@ def _style_class_for(
     - otherwise a builtin or declared type name renders as a type;
     - a name that is *only* a constructor — e.g. an enum variant ``ok`` used as a
       first-class value — renders as a constructor;
-    - any other ``NAME`` is plain.
+    - any other ``NAME``/``OP_NAME`` is plain.
 
     When no session is available both sets are empty, so only the builtin types
     colour.
@@ -161,7 +161,7 @@ def _style_class_for(
         return "class:agl.number"
     if token_type in _OPERATOR_TOKENS:
         return "class:agl.operator"
-    if token_type == "NAME":
+    if token_type in ("NAME", "OP_NAME"):
         known_type = token_text in BUILTIN_TYPE_NAMES or token_text in type_names
         known_constructor = token_text in constructor_names
         if known_constructor and (not known_type or next_sig_type in _CALL_LOOKAHEAD):
@@ -396,7 +396,7 @@ def _decl_site_styles(
         ttype = token.type
         if ttype in _LAYOUT_TOKENS:
             continue
-        if ttype == "NAME":
+        if ttype in ("NAME", "OP_NAME"):
             name = text[token.start_pos : token.end_pos]
             if expect == "record":
                 forced[index] = "class:agl.type"

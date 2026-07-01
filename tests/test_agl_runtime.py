@@ -65,6 +65,20 @@ class TestPipelineDriverConstructor:
         assert result.ok is True
         assert result.error is None
 
+    def test_operator_name_bindings_run_end_to_end(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        result = PipelineDriver().run(
+            "let >> = 0\n"
+            "def |>[T](x: T, f: T -> T) -> T = f x\n"
+            "print >>\n"
+            "print |>(1, fn(y: int) -> int => y)\n"
+        )
+
+        assert result.ok is True
+        assert result.diagnostics == []
+        assert capsys.readouterr().out == "0\n1\n"
+
 
 class TestRegisterAgent:
     def test_register_agent_accepted(self) -> None:

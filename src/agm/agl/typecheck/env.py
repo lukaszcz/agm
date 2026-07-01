@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import cast
 
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
@@ -384,6 +385,16 @@ class TypeEnvironment:
         # Built-in prelude types (AgL v2: ExecResult, ParsePolicy) are always available.
         for prelude_name, prelude_type in BUILTIN_PRELUDE_TYPES.items():
             self._types[prelude_name] = prelude_type
+            if isinstance(prelude_type, RecordType):
+                self._constructor_field_kinds[(prelude_name, None)] = tuple(
+                    (fname, ParamKind.NAMED_ONLY) for fname in prelude_type.fields
+                )
+                continue
+            enum_type = cast(EnumType, prelude_type)
+            for variant, fields in enum_type.variants.items():
+                self._constructor_field_kinds[(prelude_name, variant)] = tuple(
+                    (fname, ParamKind.NAMED_ONLY) for fname in fields
+                )
         # Pre-register builtin exception field kinds (all non-trace_id fields, NAMED_ONLY).
         for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
             if not exc_type.abstract:

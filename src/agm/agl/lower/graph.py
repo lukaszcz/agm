@@ -19,9 +19,9 @@ from agm.agl.ir.program import (
     VariantDescriptor,
 )
 from agm.agl.ir.validate import validate_ir
-from agm.agl.lower.lowerer import _LinkState, _Lowerer
+from agm.agl.lower.lowerer import _add_builtin_nominals, _LinkState, _Lowerer
 from agm.agl.modules.ids import PRELUDE_ID, STD_CORE_ID, ModuleId
-from agm.agl.semantics.types import BUILTIN_EXCEPTIONS, EnumType, ExceptionType, RecordType
+from agm.agl.semantics.types import EnumType, ExceptionType, RecordType
 from agm.agl.syntax.nodes import AgentDecl, FuncDef
 from agm.agl.typecheck.graph import CheckedModuleGraph
 from agm.util.text import normalize_newlines
@@ -107,17 +107,7 @@ def lower_graph(
                 variants=(),
             )
 
-    # Add built-in exceptions (ExceptionType not yet supported by the grammar, so
-    # these slots are always empty at this point).
-    for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
-        nominal = NominalId(PRELUDE_ID, exc_name)
-        link.nominals[nominal] = NominalDescriptor(
-            nominal=nominal,
-            display_name=exc_name,
-            kind=NominalKind.EXCEPTION,
-            fields=tuple(exc_type.fields.keys()),
-            variants=(),
-        )
+    _add_builtin_nominals(link.nominals)
 
     # Generic declarations live outside graph_type_table. Runtime nominal
     # identity erases type arguments, so register each generic template once.

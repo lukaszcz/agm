@@ -4,7 +4,7 @@ Execution is everything after type checking: lowering the checked AST into a clo
 
 ## Lowering and Linking
 
-Lowering consumes the checked program (a single module, or a whole module graph) and emits one linked executable program. It performs expected-type-directed translation of expressions and allocates stable program-local identities (symbols, functions, contracts, sources, nominal types), linking modules in dependency order. Top-level function closures are initialized before ordinary module initializers so forward references and hoisting work. All type arguments are erased here; nominal identity is preserved as a module-qualified identity.
+Lowering consumes the checked program (a single module, or a whole module graph) and emits one linked executable program. It performs expected-type-directed translation of expressions and allocates stable program-local identities (symbols, functions, contracts, sources, nominal types), linking modules in dependency order. Top-level function closures are initialized before ordinary module initializers so forward references and hoisting work. All type arguments are erased here; nominal identity is preserved as a module-qualified identity. Built-in prelude records/enums and exceptions are registered as ordinary nominal descriptors, so values produced by host operations and values constructed or referenced directly in source share the same IR tables.
 
 The point of lowering is to make the evaluator simple: every decision that needed type information (which built-in path, which codec, which decode schema, which conversion) is resolved now and baked into typeless descriptors, so the evaluator only interprets closed nodes.
 

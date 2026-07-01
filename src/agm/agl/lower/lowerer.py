@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import assert_never
+from typing import assert_never, cast
 
 from agm.agl.ir.contracts import ContractRequest, ConversionFailureMode
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
@@ -133,6 +133,7 @@ from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CORE_ID, ModuleId
 from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
+    BUILTIN_PRELUDE_TYPES,
     BoolType,
     CastKind,
     DecimalType,
@@ -222,6 +223,42 @@ from agm.agl.typecheck.graph import CheckedModule
 from agm.util.text import normalize_newlines
 
 __all__ = ["_LinkState", "lower_program"]
+
+
+def _add_builtin_nominals(nominals: dict[NominalId, NominalDescriptor]) -> None:
+    """Register built-in prelude and exception nominal descriptors."""
+    for name, typ in BUILTIN_PRELUDE_TYPES.items():
+        nominal = NominalId(PRELUDE_ID, name)
+        if isinstance(typ, RecordType):
+            nominals[nominal] = NominalDescriptor(
+                nominal=nominal,
+                display_name=name,
+                kind=NominalKind.RECORD,
+                fields=tuple(typ.fields.keys()),
+                variants=(),
+            )
+            continue
+        enum_type = cast(EnumType, typ)
+        nominals[nominal] = NominalDescriptor(
+            nominal=nominal,
+            display_name=name,
+            kind=NominalKind.ENUM,
+            fields=(),
+            variants=tuple(
+                VariantDescriptor(vname, tuple(vfields.keys()))
+                for vname, vfields in enum_type.variants.items()
+            ),
+        )
+
+    for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
+        nominal = NominalId(PRELUDE_ID, exc_name)
+        nominals[nominal] = NominalDescriptor(
+            nominal=nominal,
+            display_name=exc_name,
+            kind=NominalKind.EXCEPTION,
+            fields=tuple(exc_type.fields.keys()),
+            variants=(),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -2533,10 +2570,8 @@ class _Lowerer:
 
         Adds:
         - All user-declared record/enum nominals from the entry module's type env.
-        - All built-in exception descriptors keyed by NominalId(PRELUDE_ID, name).
-
-        Out of scope: prelude record/enum descriptors (ExecResult, ParsePolicy, …)
-        — those are constructed only via host operations and are not added here.
+        - All built-in prelude record/enum and exception descriptors keyed by
+          NominalId(PRELUDE_ID, name).
         """
         # User-declared nominals for this lowering unit.
         for name, typ in self._checked.type_env.non_builtin_type_items():
@@ -2598,17 +2633,7 @@ class _Lowerer:
                     ),
                 )
 
-        # Built-in exceptions: always keyed by NominalId(PRELUDE_ID, name).
-        for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
-            nominal = NominalId(PRELUDE_ID, exc_name)
-            if nominal not in self._link.nominals:  # pragma: no cover — always true for builtins
-                self._link.nominals[nominal] = NominalDescriptor(
-                    nominal=nominal,
-                    display_name=exc_name,
-                    kind=NominalKind.EXCEPTION,
-                    fields=tuple(exc_type.fields.keys()),
-                    variants=(),
-                )
+        _add_builtin_nominals(self._link.nominals)
 
     def lower(self) -> ExecutableProgram:
         """Lower the checked program to an ``ExecutableProgram``."""

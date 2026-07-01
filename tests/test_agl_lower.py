@@ -761,25 +761,31 @@ class TestSourcesTable:
 
 
 class TestNominalsEmpty:
-    def test_nominals_contains_builtin_exceptions(self) -> None:
-        """program.nominals always contains at least the built-in exception types.
+    def test_nominals_contains_builtin_prelude_and_exceptions(self) -> None:
+        """program.nominals always contains built-in prelude and exception types.
 
-        Even an empty program populates nominals with all built-in exceptions
-        (they are always in scope).  User-declared records/enums are added on top.
+        Even an empty program populates nominals with all built-in prelude
+        records/enums and exceptions. User-declared records/enums are added on top.
         """
+        from agm.agl.ir.ids import NominalId
         from agm.agl.ir.program import NominalKind
-        from agm.agl.semantics.types import BUILTIN_EXCEPTIONS
+        from agm.agl.modules.ids import PRELUDE_ID
+        from agm.agl.semantics.types import BUILTIN_EXCEPTIONS, BUILTIN_PRELUDE_TYPES
 
         prog = _lower("()")
-        # All built-in exception names must appear in the table
-        exception_names = {desc.nominal.declared_name for desc in prog.nominals.values()}
+        nominal_names = {desc.nominal.declared_name for desc in prog.nominals.values()}
+        for builtin_name in BUILTIN_PRELUDE_TYPES:
+            assert builtin_name in nominal_names, (
+                f"Built-in prelude type {builtin_name!r} missing from program.nominals"
+            )
         for builtin_name in BUILTIN_EXCEPTIONS:
-            assert builtin_name in exception_names, (
+            assert builtin_name in nominal_names, (
                 f"Built-in exception {builtin_name!r} missing from program.nominals"
             )
-        # Every entry in an empty program uses NominalKind.EXCEPTION (only builtins present)
-        for _nominal_id, desc in prog.nominals.items():
-            assert desc.kind is NominalKind.EXCEPTION
+
+        assert prog.nominals[NominalId(PRELUDE_ID, "ExecResult")].kind is NominalKind.RECORD
+        assert prog.nominals[NominalId(PRELUDE_ID, "ParsePolicy")].kind is NominalKind.ENUM
+        assert prog.nominals[NominalId(PRELUDE_ID, "Abort")].kind is NominalKind.EXCEPTION
 
     def test_type_alias_does_not_create_spurious_nominal(self) -> None:
         """A type alias does NOT register a spurious NominalId in program.nominals.

@@ -88,6 +88,29 @@ class TestStdlib:
         assert some_result.ok, some_result.diagnostics
         assert none_result.ok, none_result.diagnostics
 
+    def test_prelude_record_name_echoes_as_constructor(self) -> None:
+        s = ReplSession()
+
+        result = s.eval_entry("ExecResult")
+
+        assert result.ok, result.diagnostics
+        assert result.kind == "expression"
+        assert result.value is not None
+        assert result.value_type is not None
+        assert "ExecResult" in repr(result.value_type)
+
+    def test_prelude_record_constructor_is_available(self) -> None:
+        s = ReplSession()
+
+        result = s.eval_entry(
+            'ExecResult(stdout = "ok", exit_code = 0, stderr = "", timed_out = false)'
+        )
+
+        assert result.ok, result.diagnostics
+        assert result.value is not None
+        assert result.value_type is not None
+        assert result.value_type.name == "ExecResult"
+
 
 # ---------------------------------------------------------------------------
 # Redefinition / shadowing

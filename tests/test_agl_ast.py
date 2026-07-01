@@ -2668,6 +2668,22 @@ class TestModuleSystemNodes:
         assert any(isinstance(n, ExportDecl) for n in visited)
         assert any(isinstance(n, ExportItem) for n in visited)
 
+    def test_infix_decl_walk_is_leaf(self) -> None:
+        from agm.agl.syntax import InfixAssoc, InfixDecl
+        from agm.agl.syntax.visitor import walk
+        decl = InfixDecl(
+            name="|>",
+            assoc=InfixAssoc.LEFT,
+            priority=12,
+            priority_base=None,
+            priority_delta=0,
+            span=self._sp(),
+            node_id=0,
+        )
+        visited: list[object] = []
+        walk(decl, visited.append)
+        assert visited == [decl]
+
     def test_qualifier_walk_is_leaf(self) -> None:
         from agm.agl.syntax import Qualifier
         from agm.agl.syntax.visitor import walk

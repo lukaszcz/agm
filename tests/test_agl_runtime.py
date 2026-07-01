@@ -71,13 +71,39 @@ class TestPipelineDriverConstructor:
         result = PipelineDriver().run(
             "let >> = 0\n"
             "def |>[T](x: T, f: T -> T) -> T = f x\n"
-            "print >>\n"
-            "print |>(1, fn(y: int) -> int => y)\n"
+            "print(>>)\n"
+            "print((|>)(1, fn(y: int) -> int => y))\n"
         )
 
         assert result.ok is True
         assert result.diagnostics == []
         assert capsys.readouterr().out == "0\n1\n"
+
+    def test_user_defined_left_infix_operator_run_end_to_end(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        result = PipelineDriver().run(
+            "infixl |> at prio > + 1\n"
+            "def |>(x: int, y: int) -> int = x * 10 + y\n"
+            "print(1 + 2 |> 3 > 20)\n"
+        )
+
+        assert result.ok is True
+        assert result.diagnostics == []
+        assert capsys.readouterr().out == "true\n"
+
+    def test_user_defined_right_infix_operator_run_end_to_end(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        result = PipelineDriver().run(
+            "infixr << at 40\n"
+            'def <<(x: text, y: text) -> text = "(" + x + y + ")"\n'
+            'print("a" << "b" << "c")\n'
+        )
+
+        assert result.ok is True
+        assert result.diagnostics == []
+        assert capsys.readouterr().out == "(a(bc))\n"
 
 
 class TestRegisterAgent:

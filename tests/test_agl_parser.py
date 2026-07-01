@@ -28,6 +28,8 @@ import logging
 import logging.handlers
 
 import pytest
+from lark.exceptions import UnexpectedToken
+from lark.lexer import Token
 
 import agm.agl.syntax as syntax
 from agm.agl.parser import (
@@ -38,6 +40,7 @@ from agm.agl.parser import (
     parse_program_seeded,
     parse_type_expr,
 )
+from agm.agl.parser.errors import syntax_error_from_lark
 from agm.agl.syntax import (
     AgentDecl,
     AssignStmt,
@@ -64,6 +67,8 @@ from agm.agl.syntax import (
     IfBranch,
     IndexAccess,
     IndexTarget,
+    InfixAssoc,
+    InfixDecl,
     InterpSegment,
     IntLit,
     IsTest,
@@ -1630,6 +1635,74 @@ class TestIndexAccess:
 
 
 class TestBinaryOperators:
+    def test_infix_decl_literal_priority(self) -> None:
+        decl = first(parse("infixl |> at 12"))
+        assert isinstance(decl, InfixDecl)
+        assert decl.name == "|>"
+        assert decl.assoc is InfixAssoc.LEFT
+        assert decl.priority == 12
+        assert decl.priority_base is None
+        assert decl.priority_delta == 0
+
+    def test_infix_decl_relative_priority(self) -> None:
+        decl = first(parse("infixr << at prio > + 1"))
+        assert isinstance(decl, InfixDecl)
+        assert decl.name == "<<"
+        assert decl.assoc is InfixAssoc.RIGHT
+        assert decl.priority is None
+        assert decl.priority_base == ">"
+        assert decl.priority_delta == 1
+
+    def test_infix_decl_relative_priority_minus(self) -> None:
+        decl = first(parse("infixr << at prio > - 1"))
+        assert isinstance(decl, InfixDecl)
+        assert decl.priority_base == ">"
+        assert decl.priority_delta == -1
+
+    def test_infix_priority_requires_at_contextual_keyword(self) -> None:
+        with pytest.raises(AglSyntaxError, match="must start with 'at'"):
+            parse("infixl |> near 12")
+
+    def test_infix_decl_cannot_redeclare_builtin_operator(self) -> None:
+        with pytest.raises(AglSyntaxError, match="Cannot redeclare"):
+            parse("infixl + at 12")
+
+    def test_infix_decl_cannot_be_duplicated(self) -> None:
+        with pytest.raises(AglSyntaxError, match="already declared"):
+            parse("infixl |>\ninfixr |> at 45")
+
+    def test_infix_decl_priority_reference_must_be_known(self) -> None:
+        with pytest.raises(AglSyntaxError, match="Unknown operator"):
+            parse("infixl |> at prio << + 1")
+
+    def test_user_infix_operator_must_be_declared_before_use(self) -> None:
+        with pytest.raises(AglSyntaxError, match="must be declared"):
+            parse("1 |> 2")
+
+    def test_user_infix_left_associative(self) -> None:
+        e = items(parse("infixl |>\n1 |> 2 |> 3"))[1]
+        assert isinstance(e, Call)
+        left_arg = e.args[0]
+        assert isinstance(left_arg, Call)
+        assert isinstance(left_arg.callee, VarRef)
+        assert left_arg.callee.name == "|>"
+
+    def test_user_infix_right_associative(self) -> None:
+        e = items(parse("infixr <<\n1 << 2 << 3"))[1]
+        assert isinstance(e, Call)
+        right_arg = e.args[1]
+        assert isinstance(right_arg, Call)
+        assert isinstance(right_arg.callee, VarRef)
+        assert right_arg.callee.name == "<<"
+
+    def test_user_infix_relative_priority_groups_with_builtins(self) -> None:
+        e = items(parse("infixl |> at prio > + 1\n1 + 2 |> 3 > 4"))[1]
+        assert isinstance(e, BinaryOp)
+        assert e.op is BinOp.GT
+        assert isinstance(e.left, Call)
+        assert isinstance(e.left.args[0], BinaryOp)
+        assert e.left.args[0].op is BinOp.ADD
+
     def test_arithmetic(self) -> None:
         e = first(parse("1 + 2 * 3"))
         # Should parse as 1 + (2 * 3) due to precedence.
@@ -1654,6 +1727,14 @@ class TestBinaryOperators:
     def test_not(self) -> None:
         e = first(parse("not x"))
         assert isinstance(e, UnaryNot)
+
+    def test_not_binds_looser_than_in_but_tighter_than_or(self) -> None:
+        e = first(parse("not k in numbers or k > 0"))
+        assert isinstance(e, BinaryOp)
+        assert e.op is BinOp.OR
+        assert isinstance(e.left, UnaryNot)
+        assert isinstance(e.left.operand, BinaryOp)
+        assert e.left.operand.op is BinOp.IN
 
     def test_unary_neg(self) -> None:
         e = first(parse("-1"))
@@ -3635,6 +3716,17 @@ class TestFieldAssignmentSyntax:
         parenthesized expression is a syntax error."""
         with pytest.raises(AglSyntaxError):
             parse("let same = (x = 3)")
+
+    def test_lark_chained_comparison_error_adapter(self) -> None:
+        tok = Token("LT", "<")
+        tok.line = 1
+        tok.column = 7
+        tok.start_pos = 6
+        tok.end_line = 1
+        tok.end_column = 8
+        tok.end_pos = 7
+        err = syntax_error_from_lark(UnexpectedToken(tok, expected={"PLUS"}))
+        assert "Comparisons are non-associative" in str(err)
 
 
 class TestModifierDecoratorNewline:

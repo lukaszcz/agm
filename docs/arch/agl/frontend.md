@@ -4,7 +4,7 @@ The frontend turns source text into a fully resolved, type-checked program. It i
 
 ## Lexer and Parser
 
-The lexer is hand-written because AgL is indentation-sensitive: it produces INDENT/DEDENT tokens, handles multiline strings and string interpolation, and emits name tokens for identifiers (`NAME` for word-starting names, `OP_NAME` for operator-character names). The parser is a Lark LALR grammar that consumes those tokens and an AST builder constructs the AST. These two passes are the only Lark-aware code in the system.
+The lexer is hand-written because AgL is indentation-sensitive: it produces INDENT/DEDENT tokens, handles multiline strings and string interpolation, and emits name tokens for identifiers (`NAME` for word-starting names, `OP_NAME` for operator-character names). The parser is a Lark LALR grammar that consumes those tokens and an AST builder constructs the AST. User `infixl`/`infixr` declarations are parser metadata: the builder collects their associativity and integer priorities, then rewrites flat infix chains into builtin `BinaryOp` nodes or ordinary two-argument `Call` nodes before the AST crosses the firewall. These two passes are the only Lark-aware code in the system.
 
 ## AST
 

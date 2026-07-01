@@ -132,6 +132,7 @@ _sep: _NEWLINE | SEMICOLON
             | program_decl
             | agent_decl
             | config_decl
+            | infix_decl
             | func_def
             | builtin_record_def
             | builtin_enum_def
@@ -227,6 +228,17 @@ agent_decl: AGENT name (EQ template)?
 // config_decl: "config" NAME [= expr] — root-only engine-key binding;
 // the optional value is a general expression resolved at runtime.
 config_decl: "config" name (EQ expr)?
+
+// infix declaration: user-defined symbolic binary operator associativity and priority.
+// Priority may be a literal integer or relative to an existing operator priority.
+infix_decl: "infixl" infix_op infix_priority? -> infixl_decl
+          | "infixr" infix_op infix_priority? -> infixr_decl
+
+infix_priority: NAME INT                            -> infix_priority_literal
+              | NAME "prio" infix_op priority_delta -> infix_priority_relative
+
+priority_delta: PLUS INT  -> priority_delta_plus
+              | MINUS INT -> priority_delta_minus
 
 // ---------------------------------------------------------------------------
 // Function definition
@@ -459,37 +471,35 @@ suite_expr: _INDENT block _DEDENT
 //   comparison (non-assoc) > not > and > or
 // ---------------------------------------------------------------------------
 
-?or_expr:  or_expr "or" and_expr   -> bin_or
-         | and_expr
+?or_expr: infix_expr
 
-?and_expr: and_expr "and" not_expr -> bin_and
-         | not_expr
-
-?not_expr: "not" not_expr          -> unary_not
-         | comparison
+infix_expr: infix_operand (infix_op infix_operand)* -> infix_chain
+infix_operand: not_prefix* is_expr
 
 // comparison: non-associative.
 // Qualified forms (name DOT name) must come BEFORE bare name forms.
-?comparison: additive "is" "not" name DOT name                  -> is_not_test_qualified
-           | additive "is" "not" name                           -> is_not_test_simple
-           | additive "is" name DOT name                        -> is_test_qualified
-           | additive "is" name                                 -> is_test_simple
-           | additive "in" additive                             -> bin_in
-           | additive EQ_EQ additive                            -> bin_eq
-           | additive NEQ additive                              -> bin_neq
-           | additive LT additive                               -> bin_lt
-           | additive LE additive                               -> bin_le
-           | additive GT additive                               -> bin_gt
-           | additive GE additive                               -> bin_ge
-           | additive
+?is_expr: cast "is" "not" name DOT name                  -> is_not_test_qualified
+        | cast "is" "not" name                           -> is_not_test_simple
+        | cast "is" name DOT name                        -> is_test_qualified
+        | cast "is" name                                 -> is_test_simple
+        | cast
 
-?additive: additive PLUS multiplicative   -> bin_add
-         | additive MINUS multiplicative  -> bin_sub
-         | multiplicative
+not_prefix: "not" -> not_prefix
 
-?multiplicative: multiplicative STAR cast   -> bin_mul
-               | multiplicative SLASH cast  -> bin_div
-               | cast
+?infix_op: "or"  -> op_or
+        | "and" -> op_and
+        | "in"  -> op_in
+        | EQ_EQ -> op_eq
+        | NEQ   -> op_neq
+        | LT    -> op_lt
+        | LE    -> op_le
+        | GT    -> op_gt
+        | GE    -> op_ge
+        | PLUS  -> op_add
+        | MINUS -> op_sub
+        | STAR  -> op_mul
+        | SLASH -> op_div
+        | OP_NAME -> op_user
 
 ?cast: cast "as" type_expr        -> cast_expr
      | cast AS_QUESTION type_expr -> cast_test
@@ -535,9 +545,11 @@ juxt_suffix: DOT field_name       -> juxt_field_suffix
           | lit_false
           | lit_null
           | template
-          | var_ref
+          | juxt_var_ref
           | lit_list
           | lit_dict
+
+juxt_var_ref: NAME -> var_ref
 
 // ---------------------------------------------------------------------------
 // Postfix: paren-calls and field access (left-associative chain, transparent)

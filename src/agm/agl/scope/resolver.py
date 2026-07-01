@@ -88,6 +88,7 @@ from agm.agl.syntax.nodes import (
     ImportDecl,
     IndexAccess,
     IndexTarget,
+    InfixDecl,
     InterpSegment,
     IntLit,
     IsTest,
@@ -800,7 +801,8 @@ class _Resolver:
         In graph mode (``_import_env is not None``), additional enforcement:
 
         - Non-entry modules: only ``FuncDef``, ``RecordDef``, ``EnumDef``,
-          ``TypeAlias``, ``ImportDecl``, and ``ExportDecl`` are allowed at the module root.
+          ``TypeAlias``, ``InfixDecl``, ``ImportDecl``, and ``ExportDecl`` are
+          allowed at the module root.
           ``LetDecl``, ``VarDecl``, ``AssignStmt``, bare expressions, and
           entry-only constructs (``AgentDecl``, ``ParamDecl``, ``ProgramDecl``)
           are rejected with a scope error.
@@ -830,6 +832,15 @@ class _Resolver:
                         span=item.span,
                     )
                 # The graph module-system pass processes imports/exports; this pass skips them.
+                continue
+            if isinstance(item, InfixDecl):
+                if not self._at_root:
+                    raise AglScopeError(
+                        "infix declarations are only allowed at the program root.",
+                        span=item.span,
+                    )
+                if is_non_entry_root:
+                    self._seen_non_import_item = True
                 continue
             # Non-entry enforcement: track that a non-import item has been seen.
             if is_non_entry_root:

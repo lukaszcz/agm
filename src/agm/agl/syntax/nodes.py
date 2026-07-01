@@ -76,6 +76,13 @@ class BinOp(enum.Enum):
     DIV = "/"
 
 
+class InfixAssoc(enum.Enum):
+    """Associativity declared for a user-defined infix operator."""
+
+    LEFT = "left"
+    RIGHT = "right"
+
+
 # ---------------------------------------------------------------------------
 # Module system nodes
 # ---------------------------------------------------------------------------
@@ -992,6 +999,19 @@ class ConfigDecl:
     node_id: int = dc_field(compare=False)
 
 
+@dataclass(frozen=True, slots=True)
+class InfixDecl:
+    """``infixl OP [at priority]`` or ``infixr OP [at priority]`` declaration."""
+
+    name: str
+    assoc: InfixAssoc
+    priority: int | None
+    priority_base: str | None
+    priority_delta: int
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
 # Closed union of declaration nodes.
 # FuncDef is a declaration (top-level or block-level named function).
 Declaration = (
@@ -1004,6 +1024,7 @@ Declaration = (
     | ProgramDecl
     | AgentDecl
     | ConfigDecl
+    | InfixDecl
     | ImportDecl
     | ExportDecl
 )

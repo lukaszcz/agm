@@ -327,6 +327,19 @@ From loosest to tightest binding (the bottom binds tightest):
 | 10 | `.field` access, `.Variant` qualification, `[index]`, `( args )` call | left |
 | 11 | atoms: literals, names, `( expr )`, `()` unit, templates | — |
 
+User-defined symbolic infix operators are declared with `infixl` or `infixr`:
+
+```agl
+infixl |> at 45
+infixr << at prio > + 1
+```
+
+Priorities are integers where lower numbers bind looser and higher numbers bind
+tighter. A priority can be a literal integer or relative to an existing operator
+with `prio <op> + N` / `prio <op> - N`; omitted priority uses the `+`/`-` level.
+User infix use lowers to a normal two-argument function call, so the operator
+must also be declared as a function with the same name.
+
 **Cast operators (level 7)** — `as` and `as?` — sit between unary `-` and
 `* /`. They are left-associative: `x as json as text` = `(x as json) as text`.
 See [Types](types.md#casts-and-convertibility) and
@@ -338,6 +351,10 @@ See [Types](types.md#casts-and-convertibility) and
 `f g x` is a parse error — only one juxtaposition per expression. A nested
 postfix call can be the single sugar argument, so `f g(x)` parses as
 `f(g(x))`.
+
+Because `OP_NAME` after an expression is parsed as an infix operator position,
+an operator-name value used as an argument should be parenthesized:
+`print(>>)`, not `print >>`.
 
 **Calls with parentheses (level 10)** are left-associative postfix and
 support multiple arguments: `f(a, b)`.

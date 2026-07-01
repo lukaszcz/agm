@@ -27,6 +27,7 @@ item       ::= import_decl                  (* header position only *)
              | param_decl                   (* root only *)
              | program_decl                 (* root only *)
              | agent_decl                   (* root only *)
+             | infix_decl                   (* root only *)
              | modifier? func_def           (* root only *)
              | let_decl | var_decl
              | expr
@@ -184,6 +185,23 @@ may follow a defaulted one in the same zone. An optional `type_params` list
 after the function name makes the `def` generic (e.g. `def id[T](x: T) -> T`);
 see [Generics](generics.md).
 
+## Infix declarations
+
+```ebnf
+infix_decl      ::= ("infixl" | "infixr") infix_op infix_priority?
+infix_priority  ::= "at" INT
+                  | "at" "prio" infix_op ("+" | "-") INT
+infix_op        ::= "or" | "and" | "in"
+                  | "==" | "!=" | "<" | "<=" | ">" | ">="
+                  | "+" | "-" | "*" | "/"
+                  | OP_NAME
+```
+
+`infixl` and `infixr` declare a symbolic operator's associativity and optional
+integer priority. Larger priorities bind tighter; omitted priority defaults to
+the `+`/`-` level. `prio <op> +/- <int>` is resolved from an existing builtin or
+previously declared user operator.
+
 ## Bindings and mutation
 
 ```ebnf
@@ -276,21 +294,13 @@ A `STRING` pattern may not contain interpolation.
 ## Expressions
 
 ```ebnf
-expr      ::= case_expr | if_expr | or_expr
+expr      ::= case_expr | if_expr | infix_expr
 
-or_expr   ::= and_expr ("or" and_expr)*
-and_expr  ::= not_expr ("and" not_expr)*
-not_expr  ::= "not" not_expr | comparison
+infix_expr    ::= infix_operand (infix_op infix_operand)*
+infix_operand ::= "not"* is_expr
 
-comparison ::= additive comparison_tail?
-comparison_tail
-           ::= "is" "not"? qualified_constructor
-            | cmp_op additive
-cmp_op     ::= "==" | "!=" | "<" | "<=" | ">" | ">=" | "in"
-              (* at most one comparison per expression: non-associative *)
-
-additive       ::= multiplicative (("+" | "-") multiplicative)*
-multiplicative ::= cast (("*" | "/") cast)*
+is_expr   ::= cast "is" "not"? qualified_constructor
+            | cast
 
 cast           ::= cast "as" type_expr      (* type cast; may raise CastError *)
                | cast "as?" type_expr      (* convertibility test; yields bool *)
@@ -410,8 +420,8 @@ default) and must have the engine-key's declared type; see
 
 - `==` is the equality operator; a single `=` is reserved for bindings, named
   arguments, and declarations, and is not an expression operator.
-- Chained comparisons are unparseable by construction (one optional
-  comparison tail) and rejected with a non-associativity message.
+- Chained comparisons are rejected with a non-associativity message after the
+  infix chain is grouped.
 - The `[N]` after `do` is a single lexical unit, so it never conflicts with
   a list literal.
 - A `|`, `else`, `catch`, or `until` at the start of a line attaches to the

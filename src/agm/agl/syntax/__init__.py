@@ -49,6 +49,8 @@ from agm.agl.syntax.nodes import (
     ImportItem,
     IndexAccess,
     IndexTarget,
+    InfixAssoc,
+    InfixDecl,
     InterpSegment,
     IntLit,
     IsTest,
@@ -145,6 +147,8 @@ __all__ = [
     "AgentDecl",
     "VariantDef",
     "ConfigDecl",
+    "InfixAssoc",
+    "InfixDecl",
     # binders
     "LetDecl",
     "VarDecl",

@@ -104,6 +104,7 @@ from agm.agl.syntax.nodes import (
     ImportDecl,
     IndexAccess,
     IndexTarget,
+    InfixDecl,
     InterpSegment,
     IntLit,
     IsTest,
@@ -459,7 +460,7 @@ class _Checker:
             return UnitType()
         if isinstance(item, ProgramDecl):
             return UnitType()
-        if isinstance(item, (ImportDecl, ExportDecl)):
+        if isinstance(item, (ImportDecl, ExportDecl, InfixDecl)):
             return UnitType()  # The graph module-system pass processes imports/exports.
         # --- Binders ---
         if isinstance(item, (LetDecl, VarDecl)):

@@ -179,6 +179,7 @@ from agm.agl.syntax.nodes import (
     ImportDecl,
     IndexAccess,
     IndexTarget,
+    InfixDecl,
     InterpSegment,
     IntLit,
     IsTest,
@@ -455,7 +456,7 @@ class _Lowerer:
             # Boundaries + declarations introduce no value captures for THIS function:
             case (Lambda() | FuncDef() | RecordDef() | EnumDef() | ExceptionDef() | TypeAlias()
                   | ParamDecl() | ProgramDecl() | AgentDecl() | ConfigDecl() | ImportDecl()
-                  | ExportDecl()):
+                  | ExportDecl() | InfixDecl()):
                 return
             case LetDecl() | VarDecl():
                 local_ids.add(node.node_id)
@@ -2372,6 +2373,7 @@ class _Lowerer:
                 | ProgramDecl()
                 | ImportDecl()
                 | ExportDecl()
+                | InfixDecl()
             ):
                 return None
 

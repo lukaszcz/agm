@@ -80,6 +80,45 @@ class _ParamMarker:
     span: SourceSpan
 
 
+@dataclass(frozen=True, slots=True)
+class _InfixOperator:
+    """Transformer-internal operator token in a flat infix chain."""
+
+    name: str
+    builtin: syntax.BinOp | None
+    span: SourceSpan
+
+
+@dataclass(frozen=True, slots=True)
+class _InfixPriority:
+    """Transformer-internal priority specification for ``infix`` declarations."""
+
+    value: int | None
+    base: str | None
+    delta: int
+
+
+@dataclass(frozen=True, slots=True)
+class _InfixOperand:
+    """Transformer-internal infix operand with pending prefix ``not`` operators."""
+
+    expr: syntax.Expr | _RawInfixChain
+    not_count: int
+    span: SourceSpan
+
+
+@dataclass(frozen=True, slots=True)
+class _RawInfixChain:
+    """Transformer-internal flat chain awaiting declaration-aware regrouping."""
+
+    operands: tuple[_InfixOperand, ...]
+    operators: tuple[_InfixOperator, ...]
+    span: SourceSpan
+
+
+_RawItem: TypeAlias = syntax.Item | _RawInfixChain
+
+
 # Zone ordering for marker validation (strictly increasing).
 _ZONE_ORDER: dict[syntax.ParamKind, int] = {
     syntax.ParamKind.POSITIONAL_ONLY: 0,
@@ -126,6 +165,29 @@ _PATTERN_NODE_TYPES = (
     syntax.WildcardPattern, syntax.LiteralPattern,
     syntax.VarPattern, syntax.ConstructorPattern,
 )
+
+_BUILTIN_INFIX_PRIORITIES: dict[str, int] = {
+    "or": 10,
+    "and": 20,
+    "in": 30,
+    "==": 30,
+    "!=": 30,
+    "<": 30,
+    "<=": 30,
+    ">": 30,
+    ">=": 30,
+    "+": 40,
+    "-": 40,
+    "*": 50,
+    "/": 50,
+}
+_BUILTIN_INFIX_ASSOC: dict[str, syntax.InfixAssoc] = {
+    name: syntax.InfixAssoc.LEFT for name in _BUILTIN_INFIX_PRIORITIES
+}
+_BUILTIN_INFIX_OPS: dict[str, syntax.BinOp] = {op.value: op for op in syntax.BinOp}
+_NON_ASSOC_INFIX: frozenset[str] = frozenset({"in", "==", "!=", "<", "<=", ">", ">="})
+_DEFAULT_USER_INFIX_PRIORITY = 40
+_NOT_PRIORITY = 25
 
 
 def _is_str_tuple(a: object) -> bool:
@@ -227,7 +289,9 @@ class AstBuilder(Transformer):
         (block,) = args
         assert isinstance(block, syntax.Block)
         span = self._span_from_meta(meta)
-        return syntax.Program(body=block, span=span, node_id=self._next_id())
+        table = _operator_table_from_decls(block.items)
+        body = _rewrite_block_infix(block, table, self)
+        return syntax.Program(body=body, span=span, node_id=self._next_id())
 
     def block(self, meta: Meta, args: _Args) -> syntax.Block:
         """block: item (_sep item)* _sep?
@@ -237,12 +301,12 @@ class AstBuilder(Transformer):
         items are Declaration | Binder | Expr (all are AST nodes, not Tokens).
         """
         items = tuple(
-            cast(syntax.Item, a)
+            cast(_RawItem, a)
             for a in args
             if a is not None and not isinstance(a, Token)
         )
         return syntax.Block(
-            items=items,
+            items=cast(tuple[syntax.Item, ...], items),
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
@@ -311,6 +375,53 @@ class AstBuilder(Transformer):
             span=span,
             node_id=self._next_id(),
         )
+
+    def _make_infix_decl(
+        self, meta: Meta, args: _Args, assoc: syntax.InfixAssoc
+    ) -> syntax.InfixDecl:
+        op = next(a for a in args if isinstance(a, _InfixOperator))
+        priority = next((a for a in args if isinstance(a, _InfixPriority)), None)
+        return syntax.InfixDecl(
+            name=op.name,
+            assoc=assoc,
+            priority=None if priority is None else priority.value,
+            priority_base=None if priority is None else priority.base,
+            priority_delta=0 if priority is None else priority.delta,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    def infixl_decl(self, meta: Meta, args: _Args) -> syntax.InfixDecl:
+        """infix_decl: "infixl" infix_op infix_priority?"""
+        return self._make_infix_decl(meta, args, syntax.InfixAssoc.LEFT)
+
+    def infixr_decl(self, meta: Meta, args: _Args) -> syntax.InfixDecl:
+        """infix_decl: "infixr" infix_op infix_priority?"""
+        return self._make_infix_decl(meta, args, syntax.InfixAssoc.RIGHT)
+
+    def infix_priority_literal(self, meta: Meta, args: _Args) -> _InfixPriority:
+        self._require_infix_at_keyword(meta, args)
+        tok = next(a for a in args if isinstance(a, Token) and a.type == "INT")
+        return _InfixPriority(value=int(str(tok)), base=None, delta=0)
+
+    def infix_priority_relative(self, meta: Meta, args: _Args) -> _InfixPriority:
+        self._require_infix_at_keyword(meta, args)
+        op = next(a for a in args if isinstance(a, _InfixOperator))
+        delta = next((a for a in args if isinstance(a, int)), 0)
+        return _InfixPriority(value=None, base=op.name, delta=delta)
+
+    def _require_infix_at_keyword(self, meta: Meta, args: _Args) -> None:
+        first_name = next((a for a in args if isinstance(a, Token) and a.type == "NAME"), None)
+        if first_name is None or str(first_name) != "at":
+            raise syntax_error_from_meta(meta, "infix priority must start with 'at'.")
+
+    def priority_delta_plus(self, meta: Meta, args: _Args) -> int:
+        tok = next(a for a in args if isinstance(a, Token) and a.type == "INT")
+        return int(str(tok))
+
+    def priority_delta_minus(self, meta: Meta, args: _Args) -> int:
+        tok = next(a for a in args if isinstance(a, Token) and a.type == "INT")
+        return -int(str(tok))
 
     # ------------------------------------------------------------------
     # record_def / field_def
@@ -839,7 +950,7 @@ class AstBuilder(Transformer):
     def unit_lit(self, meta: Meta, args: _Args) -> syntax.UnitLit:
         return syntax.UnitLit(span=self._span_from_meta(meta), node_id=self._next_id())
 
-    def paren_expr(self, meta: Meta, args: _Args) -> syntax.Expr:
+    def paren_expr(self, meta: Meta, args: _Args) -> syntax.Expr | _RawInfixChain:
         # args: LPAR, expr, RPAR — find the expr (non-Token)
         for a in args:
             if not isinstance(a, Token) and a is not None:
@@ -1174,52 +1285,78 @@ class AstBuilder(Transformer):
     # Binary operators
     # ------------------------------------------------------------------
 
-    def _binary(self, meta: Meta, args: _Args, op: syntax.BinOp) -> syntax.BinaryOp:
-        left = cast(syntax.Expr, args[0])
-        right = cast(syntax.Expr, args[-1])
-        return syntax.BinaryOp(
-            op=op, left=left, right=right,
-            span=self._span_from_meta(meta), node_id=self._next_id(),
+    def _op(
+        self, meta: Meta, args: _Args, name: str, builtin: syntax.BinOp | None
+    ) -> _InfixOperator:
+        return _InfixOperator(name=name, builtin=builtin, span=self._span_from_meta(meta))
+
+    def op_or(self, meta: Meta, args: _Args) -> _InfixOperator:
+        return self._op(meta, args, "or", syntax.BinOp.OR)
+
+    def op_and(self, meta: Meta, args: _Args) -> _InfixOperator:
+        return self._op(meta, args, "and", syntax.BinOp.AND)
+
+    def op_in(self, meta: Meta, args: _Args) -> _InfixOperator:
+        return self._op(meta, args, "in", syntax.BinOp.IN)
+
+    def op_eq(self, meta: Meta, args: _Args) -> _InfixOperator:
+        return self._op(meta, args, "==", syntax.BinOp.EQ)
+
+    def op_neq(self, meta: Meta, args: _Args) -> _InfixOperator:
+        return self._op(meta, args, "!=", syntax.BinOp.NEQ)
+
+    def op_lt(self, meta: Meta, args: _Args) -> _InfixOperator:
+        return self._op(meta, args, "<", syntax.BinOp.LT)
+
+    def op_le(self, meta: Meta, args: _Args) -> _InfixOperator:
+        return self._op(meta, args, "<=", syntax.BinOp.LE)
+
+    def op_gt(self, meta: Meta, args: _Args) -> _InfixOperator:
+        return self._op(meta, args, ">", syntax.BinOp.GT)
+
+    def op_ge(self, meta: Meta, args: _Args) -> _InfixOperator:
+        return self._op(meta, args, ">=", syntax.BinOp.GE)
+
+    def op_add(self, meta: Meta, args: _Args) -> _InfixOperator:
+        return self._op(meta, args, "+", syntax.BinOp.ADD)
+
+    def op_sub(self, meta: Meta, args: _Args) -> _InfixOperator:
+        return self._op(meta, args, "-", syntax.BinOp.SUB)
+
+    def op_mul(self, meta: Meta, args: _Args) -> _InfixOperator:
+        return self._op(meta, args, "*", syntax.BinOp.MUL)
+
+    def op_div(self, meta: Meta, args: _Args) -> _InfixOperator:
+        return self._op(meta, args, "/", syntax.BinOp.DIV)
+
+    def op_user(self, meta: Meta, args: _Args) -> _InfixOperator:
+        tok = next(a for a in args if isinstance(a, Token))
+        return self._op(meta, args, str(tok), None)
+
+    def not_prefix(self, meta: Meta, args: _Args) -> object:
+        return object()
+
+    def infix_operand(self, meta: Meta, args: _Args) -> _InfixOperand:
+        expr = cast(syntax.Expr | _RawInfixChain, next(a for a in args if _is_expr_node(a)))
+        not_count = sum(1 for a in args if not isinstance(a, Token) and not _is_expr_node(a))
+        return _InfixOperand(
+            expr=expr,
+            not_count=not_count,
+            span=self._span_from_meta(meta),
         )
 
-    def bin_or(self, meta: Meta, args: _Args) -> syntax.BinaryOp:
-        return self._binary(meta, args, syntax.BinOp.OR)
-
-    def bin_and(self, meta: Meta, args: _Args) -> syntax.BinaryOp:
-        return self._binary(meta, args, syntax.BinOp.AND)
-
-    def bin_eq(self, meta: Meta, args: _Args) -> syntax.BinaryOp:
-        return self._binary(meta, args, syntax.BinOp.EQ)
-
-    def bin_neq(self, meta: Meta, args: _Args) -> syntax.BinaryOp:
-        return self._binary(meta, args, syntax.BinOp.NEQ)
-
-    def bin_lt(self, meta: Meta, args: _Args) -> syntax.BinaryOp:
-        return self._binary(meta, args, syntax.BinOp.LT)
-
-    def bin_le(self, meta: Meta, args: _Args) -> syntax.BinaryOp:
-        return self._binary(meta, args, syntax.BinOp.LE)
-
-    def bin_gt(self, meta: Meta, args: _Args) -> syntax.BinaryOp:
-        return self._binary(meta, args, syntax.BinOp.GT)
-
-    def bin_ge(self, meta: Meta, args: _Args) -> syntax.BinaryOp:
-        return self._binary(meta, args, syntax.BinOp.GE)
-
-    def bin_in(self, meta: Meta, args: _Args) -> syntax.BinaryOp:
-        return self._binary(meta, args, syntax.BinOp.IN)
-
-    def bin_add(self, meta: Meta, args: _Args) -> syntax.BinaryOp:
-        return self._binary(meta, args, syntax.BinOp.ADD)
-
-    def bin_sub(self, meta: Meta, args: _Args) -> syntax.BinaryOp:
-        return self._binary(meta, args, syntax.BinOp.SUB)
-
-    def bin_mul(self, meta: Meta, args: _Args) -> syntax.BinaryOp:
-        return self._binary(meta, args, syntax.BinOp.MUL)
-
-    def bin_div(self, meta: Meta, args: _Args) -> syntax.BinaryOp:
-        return self._binary(meta, args, syntax.BinOp.DIV)
+    def infix_chain(self, meta: Meta, args: _Args) -> syntax.Expr | _RawInfixChain:
+        operands = tuple(a for a in args if isinstance(a, _InfixOperand))
+        operators = tuple(a for a in args if isinstance(a, _InfixOperator))
+        if not operators:
+            assert len(operands) == 1
+            if operands[0].not_count == 0:
+                return operands[0].expr
+        return _RawInfixChain(
+            operands=operands,
+            operators=operators,
+            span=self._span_from_meta(meta),
+        )
 
     # ------------------------------------------------------------------
     # Cast operators (as / as?)
@@ -1245,12 +1382,6 @@ class AstBuilder(Transformer):
     # ------------------------------------------------------------------
     # Unary operators
     # ------------------------------------------------------------------
-
-    def unary_not(self, meta: Meta, args: _Args) -> syntax.UnaryNot:
-        operand = cast(syntax.Expr, args[0])
-        return syntax.UnaryNot(
-            operand=operand, span=self._span_from_meta(meta), node_id=self._next_id()
-        )
 
     def unary_neg(self, meta: Meta, args: _Args) -> syntax.UnaryNeg:
         operand = cast(syntax.Expr, args[-1])
@@ -2483,7 +2614,7 @@ def _is_expr_obj(a: object) -> bool:
 
 def _is_expr_node(a: object) -> bool:
     """Return True if *a* is an expression AST node."""
-    return isinstance(a, syntax.Expr)
+    return isinstance(a, syntax.Expr) or isinstance(a, _RawInfixChain)
 
 
 def _find_non_token(args: _Args) -> object:
@@ -2504,6 +2635,391 @@ def _find_expr(args: _Args) -> syntax.Expr:
     the sole non-token element in *args*.
     """
     return cast(syntax.Expr, _find_non_token(args))
+
+
+def _operator_table_from_decls(
+    items: tuple[syntax.Item, ...],
+) -> dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]]:
+    table: dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]] = {
+        name: (
+            priority,
+            _BUILTIN_INFIX_ASSOC[name],
+            _BUILTIN_INFIX_OPS[name],
+        )
+        for name, priority in _BUILTIN_INFIX_PRIORITIES.items()
+    }
+    seen_user: set[str] = set()
+    for item in items:
+        if not isinstance(item, syntax.InfixDecl):
+            continue
+        if item.name in _BUILTIN_INFIX_PRIORITIES:
+            raise AglSyntaxError(
+                f"Cannot redeclare built-in operator '{item.name}' as a user infix operator.",
+                span=item.span,
+            )
+        if item.name in seen_user:
+            raise AglSyntaxError(
+                f"Infix operator '{item.name}' is already declared.",
+                span=item.span,
+            )
+        seen_user.add(item.name)
+        if item.priority is not None:
+            priority = item.priority
+        elif item.priority_base is not None:
+            base = table.get(item.priority_base)
+            if base is None:
+                raise AglSyntaxError(
+                    f"Unknown operator '{item.priority_base}' in priority reference.",
+                    span=item.span,
+                )
+            priority = base[0] + item.priority_delta
+        else:
+            priority = _DEFAULT_USER_INFIX_PRIORITY
+        table[item.name] = (priority, item.assoc, None)
+    return table
+
+def _rewrite_block_infix(
+    block: syntax.Block,
+    table: dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]],
+    builder: AstBuilder,
+) -> syntax.Block:
+    rewritten = tuple(_rewrite_item(item, table, builder) for item in block.items)
+    return replace(block, items=rewritten)
+
+
+def _rewrite_item(
+    item: _RawItem,
+    table: dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]],
+    builder: AstBuilder,
+) -> syntax.Item:
+    if isinstance(item, _RawInfixChain):
+        return _resolve_infix_chain(item, table, builder)
+    if isinstance(item, syntax.Expr):
+        return _rewrite_expr(item, table, builder)
+    if isinstance(item, syntax.LetDecl):
+        return replace(item, value=_rewrite_expr(item.value, table, builder))
+    if isinstance(item, syntax.VarDecl):
+        return replace(item, value=_rewrite_expr(item.value, table, builder))
+    if isinstance(item, syntax.AssignStmt):
+        return replace(
+            item,
+            target=_rewrite_assign_target(item.target, table, builder),
+            value=_rewrite_expr(item.value, table, builder),
+        )
+    if isinstance(item, syntax.FuncDef):
+        return replace(
+            item,
+            params=tuple(_rewrite_param(p, table, builder) for p in item.params),
+            body=None if item.body is None else _rewrite_expr(item.body, table, builder),
+        )
+    if isinstance(item, syntax.RecordDef):
+        return replace(item, fields=tuple(_rewrite_param(p, table, builder) for p in item.fields))
+    if isinstance(item, syntax.EnumDef):
+        return replace(
+            item,
+            variants=tuple(
+                replace(
+                    v,
+                    fields=tuple(_rewrite_param(p, table, builder) for p in v.fields),
+                )
+                for v in item.variants
+            ),
+        )
+    if isinstance(item, syntax.ExceptionDef):
+        return replace(item, fields=tuple(_rewrite_param(p, table, builder) for p in item.fields))
+    if isinstance(item, syntax.ParamDecl):
+        return replace(
+            item,
+            default=None if item.default is None else _rewrite_expr(item.default, table, builder),
+        )
+    if isinstance(item, syntax.ConfigDecl):
+        return replace(
+            item,
+            value=None if item.value is None else _rewrite_expr(item.value, table, builder),
+        )
+    return item
+
+
+def _rewrite_param(
+    param: syntax.Param,
+    table: dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]],
+    builder: AstBuilder,
+) -> syntax.Param:
+    if param.default is None:
+        return param
+    return replace(param, default=_rewrite_expr(param.default, table, builder))
+
+
+def _rewrite_assign_target(
+    target: syntax.AssignTarget,
+    table: dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]],
+    builder: AstBuilder,
+) -> syntax.AssignTarget:
+    if isinstance(target, syntax.IndexTarget):
+        return replace(
+            target,
+            obj=_rewrite_expr(target.obj, table, builder),
+            index=_rewrite_expr(target.index, table, builder),
+        )
+    return target
+
+
+def _rewrite_expr(
+    expr: syntax.Expr | _RawInfixChain,
+    table: dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]],
+    builder: AstBuilder,
+) -> syntax.Expr:
+    if isinstance(expr, _RawInfixChain):
+        return _resolve_infix_chain(expr, table, builder)
+    if isinstance(expr, syntax.FieldAccess):
+        return replace(expr, obj=_rewrite_expr(expr.obj, table, builder))
+    if isinstance(expr, syntax.IndexAccess):
+        return replace(
+            expr,
+            obj=_rewrite_expr(expr.obj, table, builder),
+            index=_rewrite_expr(expr.index, table, builder),
+        )
+    if isinstance(expr, syntax.Template):
+        return replace(
+            expr,
+            segments=tuple(_rewrite_template_segment(s, table, builder) for s in expr.segments),
+        )
+    if isinstance(expr, syntax.UnaryNeg):
+        return replace(expr, operand=_rewrite_expr(expr.operand, table, builder))
+    if isinstance(expr, syntax.Cast):
+        return replace(expr, expr=_rewrite_expr(expr.expr, table, builder))
+    if isinstance(expr, syntax.IsTest):
+        return replace(expr, expr=_rewrite_expr(expr.expr, table, builder))
+    if isinstance(expr, syntax.TypeApply):
+        return replace(expr, expr=_rewrite_expr(expr.expr, table, builder))
+    if isinstance(expr, syntax.Call):
+        return replace(
+            expr,
+            callee=_rewrite_expr(expr.callee, table, builder),
+            args=tuple(_rewrite_expr(arg, table, builder) for arg in expr.args),
+            named_args=tuple(_rewrite_named_arg(arg, table, builder) for arg in expr.named_args),
+        )
+    if isinstance(expr, syntax.Lambda):
+        return replace(
+            expr,
+            params=tuple(_rewrite_param(p, table, builder) for p in expr.params),
+            body=_rewrite_expr(expr.body, table, builder),
+        )
+    if isinstance(expr, syntax.Block):
+        return _rewrite_block_infix(expr, table, builder)
+    if isinstance(expr, syntax.If):
+        return replace(
+            expr,
+            branches=tuple(_rewrite_if_branch(b, table, builder) for b in expr.branches),
+        )
+    if isinstance(expr, syntax.Case):
+        return replace(
+            expr,
+            subject=_rewrite_expr(expr.subject, table, builder),
+            branches=tuple(_rewrite_case_branch(b, table, builder) for b in expr.branches),
+        )
+    if isinstance(expr, syntax.Loop):
+        return syntax.Loop(
+            for_var=expr.for_var,
+            for_iter=(
+                None if expr.for_iter is None else _rewrite_expr(expr.for_iter, table, builder)
+            ),
+            for_range_to=(
+                None
+                if expr.for_range_to is None
+                else _rewrite_expr(expr.for_range_to, table, builder)
+            ),
+            for_range_down=expr.for_range_down,
+            for_range_by=(
+                None
+                if expr.for_range_by is None
+                else _rewrite_expr(expr.for_range_by, table, builder)
+            ),
+            while_cond=(
+                None if expr.while_cond is None else _rewrite_expr(expr.while_cond, table, builder)
+            ),
+            bound=None if expr.bound is None else _rewrite_expr(expr.bound, table, builder),
+            body=_rewrite_expr(expr.body, table, builder),
+            until_cond=(
+                None if expr.until_cond is None else _rewrite_expr(expr.until_cond, table, builder)
+            ),
+            span=expr.span,
+            node_id=expr.node_id,
+        )
+    if isinstance(expr, syntax.Try):
+        return replace(
+            expr,
+            body=_rewrite_expr(expr.body, table, builder),
+            handlers=tuple(_rewrite_catch_clause(h, table, builder) for h in expr.handlers),
+        )
+    if isinstance(expr, syntax.Raise):
+        return replace(expr, exc=_rewrite_expr(expr.exc, table, builder))
+    if isinstance(expr, syntax.ListLit):
+        return replace(
+            expr,
+            elements=tuple(_rewrite_expr(element, table, builder) for element in expr.elements),
+        )
+    if isinstance(expr, syntax.DictLit):
+        return replace(
+            expr,
+            entries=tuple(_rewrite_dict_entry(entry, table, builder) for entry in expr.entries),
+        )
+    return expr
+
+
+def _rewrite_template_segment(
+    segment: syntax.TemplateSegment,
+    table: dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]],
+    builder: AstBuilder,
+) -> syntax.TemplateSegment:
+    if isinstance(segment, syntax.InterpSegment):
+        return replace(segment, expr=_rewrite_expr(segment.expr, table, builder))
+    return segment
+
+
+def _rewrite_named_arg(
+    arg: syntax.NamedArg,
+    table: dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]],
+    builder: AstBuilder,
+) -> syntax.NamedArg:
+    return replace(arg, value=_rewrite_expr(arg.value, table, builder))
+
+
+def _rewrite_if_branch(
+    branch: syntax.IfBranch,
+    table: dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]],
+    builder: AstBuilder,
+) -> syntax.IfBranch:
+    cond: syntax.Expr | syntax.ElseSentinel
+    if isinstance(branch.cond, syntax.ElseSentinel):
+        cond = branch.cond
+    else:
+        cond = _rewrite_expr(branch.cond, table, builder)
+    return replace(branch, cond=cond, body=_rewrite_expr(branch.body, table, builder))
+
+
+def _rewrite_case_branch(
+    branch: syntax.CaseBranch,
+    table: dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]],
+    builder: AstBuilder,
+) -> syntax.CaseBranch:
+    return replace(branch, body=_rewrite_expr(branch.body, table, builder))
+
+
+def _rewrite_catch_clause(
+    clause: syntax.CatchClause,
+    table: dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]],
+    builder: AstBuilder,
+) -> syntax.CatchClause:
+    return replace(clause, body=_rewrite_expr(clause.body, table, builder))
+
+
+def _rewrite_dict_entry(
+    entry: syntax.DictEntry,
+    table: dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]],
+    builder: AstBuilder,
+) -> syntax.DictEntry:
+    return replace(entry, value=_rewrite_expr(entry.value, table, builder))
+
+
+def _resolve_infix_chain(
+    chain: _RawInfixChain,
+    table: dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]],
+    builder: AstBuilder,
+) -> syntax.Expr:
+    operands = [_rewrite_expr(operand.expr, table, builder) for operand in chain.operands]
+    not_counts = [operand.not_count for operand in chain.operands]
+    operand_spans = [operand.span for operand in chain.operands]
+    operators = list(chain.operators)
+
+    def parse_prefix(operand_index: int) -> tuple[syntax.Expr, int]:
+        if not_counts[operand_index] > 0:
+            not_counts[operand_index] -= 1
+            operand, next_operand_index = parse_at(_NOT_PRIORITY, operand_index)
+            return (
+                syntax.UnaryNot(
+                    operand=operand,
+                    span=operand_spans[operand_index],
+                    node_id=builder._next_id(),
+                ),
+                next_operand_index,
+            )
+        return operands[operand_index], operand_index + 1
+
+    def parse_at(min_priority: int, operand_index: int) -> tuple[syntax.Expr, int]:
+        left, next_operand_index = parse_prefix(operand_index)
+        op_index = next_operand_index - 1
+        while op_index < len(operators):
+            op = operators[op_index]
+            spec = table.get(op.name)
+            if spec is None:
+                raise AglSyntaxError(
+                    f"Operator '{op.name}' must be declared with infixl or infixr before use.",
+                    span=op.span,
+                )
+            priority, assoc, builtin = spec
+            if priority < min_priority:
+                break
+            next_min = priority + 1 if assoc is syntax.InfixAssoc.LEFT else priority
+            right, next_index = parse_at(next_min, op_index + 1)
+            left = _make_infix_node(left, op, right, builtin, builder)
+            next_operand_index = next_index
+            op_index = next_operand_index - 1
+        return left, next_operand_index
+
+    result, final_index = parse_at(0, 0)
+    assert final_index == len(operands)
+    return result
+
+
+def _make_infix_node(
+    left: syntax.Expr,
+    op: _InfixOperator,
+    right: syntax.Expr,
+    builtin: syntax.BinOp | None,
+    builder: AstBuilder,
+) -> syntax.Expr:
+    span = _span_covering(left.span, right.span)
+    if builtin is not None:
+        if op.name in _NON_ASSOC_INFIX and (
+            _is_nonassoc_binary(left) or _is_nonassoc_binary(right)
+        ):
+            raise AglSyntaxError(
+                "Comparisons are non-associative; parenthesize explicitly, "
+                "e.g. `(x == y) == z`.",
+                span=op.span,
+            )
+        return syntax.BinaryOp(
+            op=builtin,
+            left=left,
+            right=right,
+            span=span,
+            node_id=builder._next_id(),
+        )
+    callee = syntax.VarRef(name=op.name, span=op.span, node_id=builder._next_id())
+    return syntax.Call(
+        callee=callee,
+        args=(left, right),
+        named_args=(),
+        span=span,
+        node_id=builder._next_id(),
+    )
+
+
+def _is_nonassoc_binary(expr: syntax.Expr) -> bool:
+    return isinstance(expr, syntax.BinaryOp) and expr.op.value in _NON_ASSOC_INFIX
+
+
+def _span_covering(left: SourceSpan, right: SourceSpan) -> SourceSpan:
+    return SourceSpan(
+        start_line=left.start_line,
+        start_col=left.start_col,
+        end_line=right.end_line,
+        end_col=right.end_col,
+        start_offset=left.start_offset,
+        end_offset=right.end_offset,
+        source=left.source,
+    )
 
 
 def _extract_ann_and_value(

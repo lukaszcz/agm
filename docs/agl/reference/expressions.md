@@ -292,6 +292,10 @@ Application binds **tighter than all operators**:
 print x + 1           # parsed as (print x) + 1
 ```
 
+With user-defined symbolic infix operators, `OP_NAME` after an expression is an
+operator position. To pass an operator-name value as a call argument, use
+parentheses: `print(>>)`.
+
 For details on named arguments, defaults, and function types, see
 [Functions](functions.md). For `ask`'s named parameters, see
 [Agent calls](agent-calls.md).

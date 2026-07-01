@@ -16,7 +16,8 @@ Design
   collected BEFORE resolving any body, enabling cross-module mutual recursion
   (D8).
 - **Declaration-only enforcement**: non-entry modules may only contain
-  declarations (``def``, ``record``, ``enum``, ``type``, ``import``).
+  declarations (``def``, ``record``, ``enum``, ``type``, ``infixl``/``infixr``,
+  ``import``).
 - **Entry-only enforcement**: ``agent``, ``param``, ``program`` only in entry.
 - **Header-only imports** (non-entry): imports must appear before any
   declaration.

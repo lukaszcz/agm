@@ -800,6 +800,15 @@ class TestHeaderOnlyImports:
         with pytest.raises(AglScopeError):
             resolve_graph(graph)
 
+    def test_import_after_infix_decl_in_non_entry_errors(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(tmp_path, {
+            "entry": "import mylib\n()",
+            "mylib": "infixl |> at 12\nimport libB\ndef |>(x: int, y: int) -> int = x",
+            "libB": "def bar() -> int = 2",
+        })
+        with pytest.raises(AglScopeError, match="Import and export"):
+            resolve_graph(graph)
+
     def test_import_at_top_of_non_entry_allowed(self, tmp_path: Path) -> None:
         """Import declarations at the top of a non-entry module are allowed."""
         graph = _make_graph_from_files(tmp_path, {

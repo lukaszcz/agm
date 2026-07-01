@@ -1874,6 +1874,13 @@ class TestDirectASTConstruction:
         assert "program" in msg.lower()
         assert "root" in msg.lower()
 
+    def test_infix_decl_inside_if_rejected(self) -> None:
+        err = reject_scope("if true =>\n  infixl |> at 12\n| else =>\n  ()\n")
+        line, msg = diag(err)
+        assert line == 2
+        assert "infix" in msg.lower()
+        assert "root" in msg.lower()
+
     def test_duplicate_program_rejected(self) -> None:
         err = reject_scope("program first\nprogram second\n1\n")
         line, msg = diag(err)

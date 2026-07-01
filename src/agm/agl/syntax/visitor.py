@@ -59,6 +59,7 @@ from agm.agl.syntax.nodes import (
     ImportItem,
     IndexAccess,
     IndexTarget,
+    InfixDecl,
     InterpSegment,
     IntLit,
     IsTest,
@@ -179,6 +180,7 @@ class Visitor:
     def visit_AgentDecl(self, node: AgentDecl) -> None: ...
     def visit_FuncDef(self, node: FuncDef) -> None: ...
     def visit_ConfigDecl(self, node: ConfigDecl) -> None: ...
+    def visit_InfixDecl(self, node: InfixDecl) -> None: ...
 
     # Binder nodes
     def visit_LetDecl(self, node: LetDecl) -> None: ...
@@ -280,6 +282,7 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         AgentDecl,
         FuncDef,
         ConfigDecl,
+        InfixDecl,
         # binder nodes
         LetDecl,
         VarDecl,
@@ -451,6 +454,9 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
     elif isinstance(node, ConfigDecl):
         if node.value is not None:
             walk(node.value, callback)
+
+    elif isinstance(node, InfixDecl):
+        pass  # leaf — operator metadata only
 
     # --- Binder nodes ---
     elif isinstance(node, LetDecl):

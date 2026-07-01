@@ -21,6 +21,7 @@ from agm.agl.parser.parser import (
     parse_program_seeded,
     parse_type_expr,
 )
+from agm.agl.parser.transform import resolve_infix_fixity
 
 __all__ = [
     "AglSyntaxError",
@@ -29,4 +30,5 @@ __all__ = [
     "parse_program",
     "parse_program_seeded",
     "parse_type_expr",
+    "resolve_infix_fixity",
 ]

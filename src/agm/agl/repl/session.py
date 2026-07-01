@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import Frame, Value
-    from agm.agl.syntax.nodes import ImportDecl, Program
+    from agm.agl.syntax.nodes import ImportDecl, InfixAssoc, Program
     from agm.agl.syntax.spans import SourceSpan
     from agm.agl.typecheck.env import CheckedProgram, TypeEnvironment
 
@@ -196,6 +196,11 @@ class ReplSession:
         # These are prepended to each new entry's program in graph mode so that
         # open imports (e.g. ``import util``) persist across entries.
         self._accumulated_imports: list["ImportDecl"] = []
+        # Resolved user infix fixity declared in prior promoted entries
+        # (operator name → ``(priority, associativity)``). Passed to the parser
+        # as ambient fixity so an ``infixl``/``infixr`` declaration made in one
+        # entry makes the operator usable in later entries.
+        self._accumulated_infix: dict[str, tuple[int, "InfixAssoc"]] = {}
         self._graph_session = GraphSession(self)
 
     @staticmethod
@@ -321,7 +326,7 @@ class ReplSession:
         with tab_warning_collector() as tab_sink:
             try:
                 program, next_start_id = parse_program_seeded(
-                    text, start_id=self._next_node_id
+                    text, start_id=self._next_node_id, ambient_infix=self._accumulated_infix
                 )
             except AglSyntaxError as exc:
                 return self._fail([exc.to_diagnostic()], list(tab_sink))
@@ -716,6 +721,20 @@ class ReplSession:
             self._active_config = entry_active_config
         if not partial:
             self._source_log.append(text)
+        # Promote infix fixity: declarations that parsed (and, on partial
+        # failure, were declared before the failing point) persist so the
+        # operator is usable in later entries. Fixity is resolved against the
+        # already-accumulated table so relative priorities bind correctly.
+        from agm.agl.parser import resolve_infix_fixity
+        from agm.agl.syntax.nodes import InfixDecl
+
+        promoted_infix = [
+            item
+            for item in program.body.items
+            if isinstance(item, InfixDecl) and _before_failure(item.span.end_offset)
+        ]
+        if promoted_infix:
+            self._accumulated_infix = resolve_infix_fixity(promoted_infix, self._accumulated_infix)
         self._next_node_id = next_start_id
         return tuple(installed)
 
@@ -839,7 +858,9 @@ class ReplSession:
         # Throwaway ids: type_of never promotes and never advances the session
         # counter, so seeding at ``_next_node_id`` is safe — all promoted ids are
         # strictly below it, making this parse's ids disjoint from the session's.
-        program, _ = parse_program_seeded(text, start_id=self._next_node_id)
+        program, _ = parse_program_seeded(
+            text, start_id=self._next_node_id, ambient_infix=self._accumulated_infix
+        )
         items = program.body.items
         if len(items) != 1 or isinstance(items[0], (Binder, Declaration)):
             raise AglError(
@@ -967,6 +988,7 @@ class ReplSession:
         self._roots = None
         self._loaded_lib_modules = {}
         self._accumulated_imports = []
+        self._accumulated_infix = {}
 
     def load_file(self, path: "Path") -> list[EntryResult]:
         """Evaluate the contents of *path* INCREMENTALLY, one item per entry.

@@ -27,7 +27,7 @@ from __future__ import annotations
 import decimal
 from dataclasses import dataclass, replace
 from itertools import count
-from typing import TypeAlias, TypeGuard, cast
+from typing import Iterable, Mapping, TypeAlias, TypeGuard, cast
 
 from lark import Transformer, v_args
 from lark.lexer import Token
@@ -224,7 +224,13 @@ class AstBuilder(Transformer):
     stay globally unique across entries.
     """
 
-    def __init__(self, *, start_id: int = 0, source: SourceId | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        start_id: int = 0,
+        source: SourceId | None = None,
+        ambient_infix: "Mapping[str, tuple[int, syntax.InfixAssoc]] | None" = None,
+    ) -> None:
         super().__init__()
         self._counter = count(start_id)
         # The next id the counter will hand out.  Tracked explicitly so callers
@@ -235,6 +241,11 @@ class AstBuilder(Transformer):
         # Source identity stamped on every span this builder constructs.
         # Defaults to UNKNOWN_SOURCE when no source is supplied.
         self._source: SourceId = source if source is not None else UNKNOWN_SOURCE
+        # Already-resolved user infix fixity carried over from a prior context
+        # (REPL entries). Merged into the operator table so an operator declared
+        # in an earlier entry can be used in a later one. ``None`` for a standalone
+        # whole-program parse.
+        self._ambient_infix = ambient_infix
 
     def _span_from_meta(self, meta: Meta) -> SourceSpan:
         """Build a SourceSpan from Lark tree Meta, stamped with self._source."""
@@ -289,7 +300,7 @@ class AstBuilder(Transformer):
         (block,) = args
         assert isinstance(block, syntax.Block)
         span = self._span_from_meta(meta)
-        table = _operator_table_from_decls(block.items)
+        table = _operator_table_from_decls(block.items, self._ambient_infix)
         body = _rewrite_block_infix(block, table, self)
         return syntax.Program(body=body, span=span, node_id=self._next_id())
 
@@ -2637,8 +2648,70 @@ def _find_expr(args: _Args) -> syntax.Expr:
     return cast(syntax.Expr, _find_non_token(args))
 
 
+def resolve_infix_fixity(
+    decls: "Iterable[syntax.InfixDecl]",
+    ambient: "Mapping[str, tuple[int, syntax.InfixAssoc]] | None" = None,
+) -> dict[str, tuple[int, syntax.InfixAssoc]]:
+    """Resolve an ordered sequence of infix declarations into a fixity table.
+
+    Returns a mapping of user operator name → ``(priority, associativity)``.
+    *ambient* is an already-resolved fixity table carried over from a prior
+    context (e.g. earlier REPL entries); its entries may be overridden by a
+    later redeclaration in *decls*, mirroring how ``let``/``record``
+    redefinitions shadow in the REPL.  Relative priorities (``at prio OP ±``
+    *n*) resolve against built-in operators, the ambient table, and any earlier
+    declaration in *decls*.
+
+    Validates: a user operator may not redeclare a built-in, and the same name
+    may not be declared twice within *decls* (redeclaration across the ambient
+    boundary is allowed and overrides).  This is the single source of truth for
+    infix-priority resolution, shared by the parser and the REPL session.
+    """
+    # Built-in operators are read-only inputs for relative-priority resolution
+    # (they can never be user-redeclared, so they are never emitted in the result).
+    resolved: dict[str, tuple[int, syntax.InfixAssoc]] = dict(ambient) if ambient else {}
+    seen_user: set[str] = set()
+    for decl in decls:
+        if decl.name in _BUILTIN_INFIX_PRIORITIES:
+            raise AglSyntaxError(
+                f"Cannot redeclare built-in operator '{decl.name}' as a user infix operator.",
+                span=decl.span,
+            )
+        if decl.name in seen_user:
+            raise AglSyntaxError(
+                f"Infix operator '{decl.name}' is already declared.",
+                span=decl.span,
+            )
+        seen_user.add(decl.name)
+        priority = _resolve_infix_priority(decl, resolved)
+        resolved[decl.name] = (priority, decl.assoc)
+    return resolved
+
+
+def _resolve_infix_priority(
+    decl: syntax.InfixDecl,
+    resolved: "Mapping[str, tuple[int, syntax.InfixAssoc]]",
+) -> int:
+    """Resolve a single declaration's priority against built-ins + *resolved*."""
+    if decl.priority is not None:
+        return decl.priority
+    if decl.priority_base is not None:
+        base = resolved.get(decl.priority_base)
+        if base is None:
+            base_priority = _BUILTIN_INFIX_PRIORITIES.get(decl.priority_base)
+            if base_priority is None:
+                raise AglSyntaxError(
+                    f"Unknown operator '{decl.priority_base}' in priority reference.",
+                    span=decl.span,
+                )
+            base = (base_priority, _BUILTIN_INFIX_ASSOC[decl.priority_base])
+        return base[0] + decl.priority_delta
+    return _DEFAULT_USER_INFIX_PRIORITY
+
+
 def _operator_table_from_decls(
     items: tuple[syntax.Item, ...],
+    ambient: "Mapping[str, tuple[int, syntax.InfixAssoc]] | None" = None,
 ) -> dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]]:
     table: dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]] = {
         name: (
@@ -2648,34 +2721,9 @@ def _operator_table_from_decls(
         )
         for name, priority in _BUILTIN_INFIX_PRIORITIES.items()
     }
-    seen_user: set[str] = set()
-    for item in items:
-        if not isinstance(item, syntax.InfixDecl):
-            continue
-        if item.name in _BUILTIN_INFIX_PRIORITIES:
-            raise AglSyntaxError(
-                f"Cannot redeclare built-in operator '{item.name}' as a user infix operator.",
-                span=item.span,
-            )
-        if item.name in seen_user:
-            raise AglSyntaxError(
-                f"Infix operator '{item.name}' is already declared.",
-                span=item.span,
-            )
-        seen_user.add(item.name)
-        if item.priority is not None:
-            priority = item.priority
-        elif item.priority_base is not None:
-            base = table.get(item.priority_base)
-            if base is None:
-                raise AglSyntaxError(
-                    f"Unknown operator '{item.priority_base}' in priority reference.",
-                    span=item.span,
-                )
-            priority = base[0] + item.priority_delta
-        else:
-            priority = _DEFAULT_USER_INFIX_PRIORITY
-        table[item.name] = (priority, item.assoc, None)
+    user_decls = [item for item in items if isinstance(item, syntax.InfixDecl)]
+    for name, (priority, assoc) in resolve_infix_fixity(user_decls, ambient).items():
+        table[name] = (priority, assoc, None)
     return table
 
 def _rewrite_block_infix(

@@ -938,6 +938,29 @@ class TestStyledLinesBucketing:
         assert len(styled) == 1
         assert "".join(t for _s, t in styled[0]) == text
 
+    def test_infix_at_keyword_is_highlighted(self) -> None:
+        # The contextual ``at`` keyword in an infix declaration must be styled
+        # as a keyword (it is a plain NAME token, so it needs positional rules).
+        fragments = AglPromptLexer().lex_document(Document("infixl |> at 5"))(0)
+        assert ("class:agl.keyword", "at") in fragments
+        # The relative-priority form: ``at`` is still a keyword (``prio`` already
+        # is one as a true keyword).
+        fragments = AglPromptLexer().lex_document(Document("infixr << at prio > + 1"))(0)
+        assert ("class:agl.keyword", "at") in fragments
+
+    def test_infix_at_not_highlighted_outside_infix_decl(self) -> None:
+        # ``at`` is a contextual keyword: as a plain identifier elsewhere it must
+        # NOT be styled as a keyword.
+        fragments = AglPromptLexer().lex_document(Document("let at = 1"))(0)
+        assert ("class:agl.keyword", "at") not in fragments
+
+    def test_infix_decl_without_priority_clause(self) -> None:
+        # An infix decl with no ``at priority`` clause: the operator is followed
+        # by the next item, so nothing is mis-highlighted as the ``at`` keyword.
+        fragments = AglPromptLexer().lex_document(Document("infixl |>\n1 + 2"))(0)
+        assert ("class:agl.keyword", "infixl") in fragments
+        assert not any(t == "at" for _s, t in fragments)
+
     def test_empty_line_in_middle(self) -> None:
         """An empty line in a multi-line input produces an empty fragment list."""
         text = "let x = 1\n\nlet y = 2"

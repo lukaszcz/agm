@@ -390,13 +390,28 @@ def _decl_site_styles(
     constructors: set[str] = set()
     expect: str | None = None
     in_enum_variants = False
+    # Infix-declaration state for the contextual ``at`` keyword: after
+    # ``infixl``/``infixr`` the next significant token is the operator, and the
+    # NAME after it — when it is literally ``at`` — introduces the priority.
+    # ``at`` is a plain NAME token (not a reserved keyword), so it is only
+    # coloured as a keyword in this position.
+    infix_state: str | None = None
     prev_sig: str | None = None
 
     for index, token in enumerate(tokens):
         ttype = token.type
         if ttype in _LAYOUT_TOKENS:
             continue
-        if ttype in ("NAME", "OP_NAME"):
+        is_name = ttype in ("NAME", "OP_NAME")
+
+        if infix_state == "expect_op":
+            infix_state = "expect_at"
+        elif infix_state == "expect_at":
+            if is_name and text[token.start_pos : token.end_pos] == "at":
+                forced[index] = "class:agl.keyword"
+            infix_state = None
+
+        if is_name:
             name = text[token.start_pos : token.end_pos]
             if expect == "record":
                 forced[index] = "class:agl.type"
@@ -416,6 +431,8 @@ def _decl_site_styles(
         elif ttype in KEYWORDS:
             expect = ttype if ttype in _DECL_TYPE_KEYWORDS else None
             in_enum_variants = False
+            if ttype in ("infixl", "infixr"):
+                infix_state = "expect_op"
         else:
             expect = None
         prev_sig = ttype

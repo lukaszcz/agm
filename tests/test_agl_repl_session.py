@@ -1421,6 +1421,87 @@ class TestFuncDef:
 # ---------------------------------------------------------------------------
 
 
+class TestInfixDecl:
+    """REPL persistence of user-defined infix operator declarations."""
+
+    def test_infixl_usable_in_subsequent_entry(self) -> None:
+        # ``infixl`` declared in one entry must make the operator usable in a
+        # later entry (the fixity persists across entries for parsing).
+        s = ReplSession()
+        s.eval_entry("infixl +++ at 5")
+        s.eval_entry("def +++(x: int, y: int) -> int = x + y")
+        r = s.eval_entry("1 +++ 2")
+        assert r.ok, r.diagnostics
+        assert r.value is not None
+        assert _int(r.value) == 3
+
+    def test_infixr_usable_in_subsequent_entry(self) -> None:
+        s = ReplSession()
+        s.eval_entry("infixr << at 40")
+        s.eval_entry('def <<(x: text, y: text) -> text = "(" + x + y + ")"')
+        r = s.eval_entry('"a" << "b" << "c"')
+        assert r.ok, r.diagnostics
+        assert r.value is not None
+        assert _text(r.value) == "(a(bc))"
+
+    def test_infix_relative_priority_persists(self) -> None:
+        # A relative priority (``at prio > + 1``) declared in one entry must
+        # keep binding correctly when the operator is used in a later entry.
+        s = ReplSession()
+        s.eval_entry("infixl |> at prio > + 1")
+        s.eval_entry("def |>(x: int, y: int) -> int = x * 10 + y")
+        r = s.eval_entry("1 + 2 |> 3 > 20")
+        assert r.ok, r.diagnostics
+        assert r.value is not None
+        # ((1+2) |> 3) > 20  =>  33 > 20  =>  true
+        assert isinstance(r.value, BoolValue)
+        assert r.value.value is True
+
+    def test_infix_redefinition_shadows(self) -> None:
+        # Redeclaring an infix operator in a later entry updates its fixity
+        # (mirrors how ``let``/``record`` redefinitions shadow in the REPL).
+        s = ReplSession()
+        s.eval_entry("infixl +++ at 5")
+        s.eval_entry("def +++(x: int, y: int) -> int = x + y")
+        # Redeclare with a different priority; the operator is still usable.
+        r_decl = s.eval_entry("infixl +++ at 7")
+        assert r_decl.ok, r_decl.diagnostics
+        r = s.eval_entry("1 +++ 2")
+        assert r.ok, r.diagnostics
+        assert _int(r.value) == 3
+
+    def test_infix_relative_priority_to_user_operator_persists(self) -> None:
+        # A relative priority may reference a user operator declared in an earlier
+        # entry; the reference resolves against the accumulated fixity.
+        s = ReplSession()
+        s.eval_entry("infixl +++ at 5")
+        s.eval_entry("infixl *** at prio +++ + 1")
+        s.eval_entry("def +++(x: int, y: int) -> int = x + y")
+        s.eval_entry("def ***(x: int, y: int) -> int = x * y")
+        # ``+++`` binds at 5, ``***`` at 6 (tighter), so ``1 +++ 2 *** 3``
+        # groups as ``1 +++ (2 *** 3)`` = 1 + (2*3) = 7.
+        r = s.eval_entry("1 +++ 2 *** 3")
+        assert r.ok, r.diagnostics
+        assert r.value is not None
+        assert _int(r.value) == 7
+
+    def test_infix_decl_survives_reset(self) -> None:
+        # ``:reset`` clears ALL session state, including accumulated fixity.
+        s = ReplSession()
+        s.eval_entry("infixl +++ at 5")
+        s.eval_entry("def +++(x: int, y: int) -> int = x + y")
+        s.reset()
+        r = s.eval_entry("1 +++ 2")
+        assert not r.ok  # fixity gone after reset
+
+    def test_type_of_uses_accumulated_infix(self) -> None:
+        # ``:type`` parses with the session's accumulated fixity too.
+        s = ReplSession()
+        s.eval_entry("infixl +++ at 5")
+        s.eval_entry("def +++(x: int, y: int) -> int = x + y")
+        assert s.type_of("1 +++ 2") == "int"
+
+
 class TestImports:
     """REPL import declaration support."""
 

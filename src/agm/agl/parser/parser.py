@@ -15,7 +15,7 @@ from __future__ import annotations
 import importlib.resources
 import re
 from dataclasses import replace as dc_replace
-from typing import NoReturn
+from typing import Mapping, NoReturn
 
 from lark import Lark, Tree
 from lark.exceptions import (
@@ -141,13 +141,14 @@ def _transform_tree(
     start_id: int,
     filename: str,
     source: SourceId | None,
+    ambient_infix: "Mapping[str, tuple[int, syntax.InfixAssoc]] | None" = None,
 ) -> tuple[object, int]:
     """Transform a Lark tree via ``AstBuilder``, unwrapping ``VisitError``.
 
     Returns ``(result, next_node_id)`` where ``next_node_id`` is the first id NOT
     consumed by the builder's counter (the seed for the next incremental parse).
     """
-    builder = AstBuilder(start_id=start_id, source=source)
+    builder = AstBuilder(start_id=start_id, source=source, ambient_infix=ambient_infix)
     try:
         result = builder.transform(tree)
     except VisitError as exc:
@@ -161,7 +162,12 @@ def _transform_tree(
 
 
 def _parse_to_program(
-    text: str, *, filename: str, start_id: int, source: SourceId | None = None
+    text: str,
+    *,
+    filename: str,
+    start_id: int,
+    source: SourceId | None = None,
+    ambient_infix: "Mapping[str, tuple[int, syntax.InfixAssoc]] | None" = None,
 ) -> tuple[syntax.Program, int]:
     """Parse *text* into a ``Program`` and report the next unused node id.
 
@@ -173,10 +179,14 @@ def _parse_to_program(
     When *source* is supplied, every ``SourceSpan`` the builder constructs is
     stamped with that ``SourceId``; the same id is also stamped on any
     ``AglSyntaxError`` raised during parsing.
+
+    *ambient_infix* is an already-resolved user infix fixity table carried over
+    from a prior context (REPL entries); it is merged into the operator table so
+    an operator declared in an earlier entry can be used in a later one.
     """
     tree = _parse_tree(_PARSER, text, filename=filename, source=source)
     result, next_id = _transform_tree(
-        tree, start_id=start_id, filename=filename, source=source
+        tree, start_id=start_id, filename=filename, source=source, ambient_infix=ambient_infix
     )
     assert isinstance(result, syntax.Program)
     return result, next_id
@@ -263,6 +273,7 @@ def parse_program(
     filename: str = "<agl>",
     start_id: int = 0,
     source: SourceId | None = None,
+    ambient_infix: "Mapping[str, tuple[int, syntax.InfixAssoc]] | None" = None,
 ) -> syntax.Program:
     """Parse *text* as an AgL program and return a ``syntax.Program`` AST.
 
@@ -282,6 +293,11 @@ def parse_program(
         ``SourceSpan`` in the resulting AST.  When ``None`` (the default),
         spans carry ``UNKNOWN_SOURCE`` (label ``"<agl>"``).  Pass this from
         the module loader so that multi-file diagnostics identify the origin file.
+    ambient_infix:
+        Already-resolved user infix fixity carried over from earlier REPL
+        entries (name → ``(priority, associativity)``). Merged into the operator
+        table so an operator declared in a prior entry parses correctly here.
+        ``None`` (the default) for a standalone whole-program parse.
 
     Returns
     -------
@@ -296,7 +312,7 @@ def parse_program(
         the error span is stamped with that ``SourceId``.
     """
     program, _next_id = _parse_to_program(
-        text, filename=filename, start_id=start_id, source=source
+        text, filename=filename, start_id=start_id, source=source, ambient_infix=ambient_infix
     )
     return program
 
@@ -307,6 +323,7 @@ def parse_program_seeded(
     start_id: int,
     filename: str = "<agl>",
     source: SourceId | None = None,
+    ambient_infix: "Mapping[str, tuple[int, syntax.InfixAssoc]] | None" = None,
 ) -> tuple[syntax.Program, int]:
     """Parse *text* with node ids starting at *start_id* for incremental use.
 
@@ -326,6 +343,11 @@ def parse_program_seeded(
     source:
         Optional :class:`~agm.agl.syntax.spans.SourceId` stamped on every span.
         See :func:`parse_program` for details.
+    ambient_infix:
+        Already-resolved user infix fixity carried over from earlier REPL
+        entries (name → ``(priority, associativity)``). Merged into the operator
+        table so an operator declared in a prior entry parses correctly in this
+        one. ``None`` for a standalone whole-program parse.
 
     Returns
     -------
@@ -337,7 +359,13 @@ def parse_program_seeded(
     AglSyntaxError
         On any lex or parse error.
     """
-    return _parse_to_program(text, filename=filename, start_id=start_id, source=source)
+    return _parse_to_program(
+        text,
+        filename=filename,
+        start_id=start_id,
+        source=source,
+        ambient_infix=ambient_infix,
+    )
 
 
 def parse_type_expr(

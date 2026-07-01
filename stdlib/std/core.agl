@@ -2,64 +2,112 @@ enum Option[T] =
   | None
   | Some(value: T)
 
-builtin record ExecResult(
-  stdout: text,
-  exit_code: int,
-  stderr: text,
-  timed_out: bool,
-)
+builtin
+record ExecResult
+  stdout: text
+  exit_code: int
+  stderr: text
+  timed_out: bool
 
-builtin enum ParsePolicy =
+builtin
+enum ParsePolicy =
   | Abort
   | Retry(n: int)
 
-builtin record AgentRequest(
-  agent: text,
-  prompt: text,
-  target_type: Option[text],
-  format_instructions: Option[text],
-  json_schema: Option[json],
-  attempt: int,
-  previous_error: Option[text],
-  metadata: json,
-)
+builtin
+record AgentRequest
+  agent: text
+  prompt: text
+  target_type: Option[text]
+  format_instructions: Option[text]
+  json_schema: Option[json]
+  attempt: int
+  previous_error: Option[text]
+  metadata: json
 
-builtin exception Exception(message: text, trace_id: text)
-builtin exception AgentCallError extends Exception(agent: text, cause: text, metadata: json)
-builtin exception AgentParseError extends Exception(
-  agent: text,
-  target_type: text,
-  expected_schema: json,
-  raw: text,
-  normalized_raw: text,
-  validation_errors: json,
-  attempts: int,
-  metadata: json,
-)
-builtin exception ExecError extends Exception(
-  command: text,
-  exit_code: int,
-  stdout: text,
-  stderr: text,
-  timed_out: bool,
-)
-builtin exception MaxIterationsExceeded extends Exception(
-  limit: int,
-  condition: text,
-  last_condition_value: bool,
-  metadata: json,
-)
-builtin exception MatchError extends Exception(scrutinee_type: text, scrutinee: json)
-builtin exception IndexError extends Exception(index: int, length: int)
-builtin exception KeyError extends Exception(key: text)
-builtin exception TypeError extends Exception()
-builtin exception ArithmeticError extends Exception(operation: text)
-builtin exception UndefinedVariableError extends Exception(name: text)
-builtin exception ImmutableBindingError extends Exception(name: text, operation: text)
-builtin exception Abort extends Exception()
-builtin exception RecursionError extends Exception(limit: int)
-builtin exception CastError extends Exception(source_type: text, target_type: text, raw: text)
-builtin exception JsonParseError extends Exception(raw: text)
+builtin
+exception Exception
+  message: text
+  trace_id: text
+
+builtin
+exception AgentCallError extends Exception
+  agent: text
+  cause: text
+  metadata: json
+
+builtin
+exception AgentParseError extends Exception
+  agent: text
+  target_type: text
+  expected_schema: json
+  raw: text
+  normalized_raw: text
+  validation_errors: json
+  attempts: int
+  metadata: json
+
+builtin
+exception ExecError extends Exception
+  command: text
+  exit_code: int
+  stdout: text
+  stderr: text
+  timed_out: bool
+
+builtin
+exception MaxIterationsExceeded extends Exception
+  limit: int
+  condition: text
+  last_condition_value: bool
+  metadata: json
+
+builtin
+exception MatchError extends Exception
+  scrutinee_type: text
+  scrutinee: json
+
+builtin
+exception IndexError extends Exception
+  index: int
+  length: int
+
+builtin
+exception KeyError extends Exception
+  key: text
+
+builtin
+exception TypeError extends Exception()
+
+builtin
+exception ArithmeticError extends Exception
+  operation: text
+
+builtin
+exception UndefinedVariableError extends Exception
+  name: text
+
+builtin
+exception ImmutableBindingError extends Exception
+  name: text
+  operation: text
+
+builtin
+exception Abort extends Exception()
+
+builtin
+exception RecursionError extends Exception
+  limit: int
+
+builtin
+exception CastError extends Exception
+  source_type: text
+  target_type: text
+  raw: text
+
+builtin
+exception JsonParseError extends Exception
+  raw: text
 
 builtin def print[T](value: T) -> unit
 builtin def render[T](value: T) -> text

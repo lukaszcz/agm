@@ -17,7 +17,19 @@ import pytest
 from agm.agl.diagnostics import AglError
 from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.runtime.request import AgentRequest, AgentResponse
-from agm.agl.semantics.types import IntType, TextType
+from agm.agl.semantics.types import (
+    BUILTIN_EXCEPTIONS,
+    BUILTIN_PRELUDE_TYPES,
+    COMPATIBILITY_PRELUDE_TYPE_NAMES,
+    BoolType,
+    EnumType,
+    ExceptionType,
+    IntType,
+    JsonType,
+    RecordType,
+    TextType,
+    Type,
+)
 from agm.agl.semantics.values import VOID_VALUE, BoolValue, IntValue, UnitValue
 
 # ---------------------------------------------------------------------------
@@ -37,6 +49,24 @@ class CountingAgent:
         reply = self._responses[idx]
         self.calls += 1
         return AgentResponse(content=reply)
+
+
+def _literal_for_type(typ: Type) -> str:
+    if isinstance(typ, TextType):
+        return '"x"'
+    if isinstance(typ, IntType):
+        return "1"
+    if isinstance(typ, BoolType):
+        return "false"
+    if isinstance(typ, JsonType):
+        return "{}"
+    if isinstance(typ, EnumType) and typ.name == "Option":
+        return "None"
+    raise AssertionError(f"no test literal for {typ!r}")
+
+
+def _constructor_args(fields: dict[str, Type]) -> str:
+    return ", ".join(f"{name} = {_literal_for_type(typ)}" for name, typ in fields.items())
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +140,46 @@ class TestStdlib:
         assert result.value is not None
         assert result.value_type is not None
         assert result.value_type.name == "ExecResult"
+
+    def test_all_public_builtin_prelude_constructors_are_available(self) -> None:
+        s = ReplSession()
+
+        for name, typ in BUILTIN_PRELUDE_TYPES.items():
+            if name in COMPATIBILITY_PRELUDE_TYPE_NAMES:
+                continue
+            if isinstance(typ, RecordType):
+                result = s.eval_entry(f"{name}({_constructor_args(dict(typ.fields))})")
+                assert result.ok, (name, result.diagnostics)
+                assert result.value_type is not None
+                assert result.value_type.name == name
+            elif isinstance(typ, EnumType):
+                for variant, fields in typ.variants.items():
+                    args = _constructor_args(dict(fields))
+                    call = f"{name}.{variant}({args})" if args else f"{name}.{variant}"
+                    result = s.eval_entry(call)
+                    assert result.ok, (name, variant, result.diagnostics)
+                    assert result.value_type is not None
+                    assert result.value_type.name == name
+
+    def test_all_concrete_builtin_exceptions_are_available(self) -> None:
+        s = ReplSession()
+
+        for name, typ in BUILTIN_EXCEPTIONS.items():
+            assert isinstance(typ, ExceptionType)
+            if typ.abstract:
+                result = s.eval_entry(f'{name}(message = "x")')
+                assert not result.ok
+                assert any("abstract" in diagnostic.message for diagnostic in result.diagnostics)
+                continue
+            fields = {
+                field_name: field_type
+                for field_name, field_type in typ.fields.items()
+                if field_name != "trace_id"
+            }
+            result = s.eval_entry(f"{name}({_constructor_args(fields)})")
+            assert result.ok, (name, result.diagnostics)
+            assert result.value_type is not None
+            assert result.value_type.name == name
 
 
 # ---------------------------------------------------------------------------

@@ -12,7 +12,11 @@ from agm.agl.modules.roots import RootSet
 from agm.agl.parser import parse_program
 from agm.agl.scope import AglScopeError, resolve
 from agm.agl.scope.graph import resolve_graph
+from agm.agl.scope.symbols import BUILTIN_CALL_NAMES
 from agm.agl.semantics.types import (
+    BUILTIN_EXCEPTIONS,
+    BUILTIN_PRELUDE_TYPES,
+    COMPATIBILITY_PRELUDE_TYPE_NAMES,
     AgentType,
     BoolType,
     EnumType,
@@ -35,6 +39,7 @@ from agm.agl.typecheck.graph import check_graph
 
 _ROOTS = RootSet(frozenset({Path(__file__).resolve().parents[1] / "stdlib"}))
 _CAPS = HostCapabilities()
+_STD_CORE = Path(__file__).resolve().parents[1] / "stdlib" / "std" / "core.agl"
 
 
 def _check(source: str, *, default_stdlib: bool = True) -> None:
@@ -154,6 +159,38 @@ def test_builtin_signature_helpers_cover_negative_paths() -> None:
         ),
     )
     assert not _type_shape_matches(IntType(), TextType())
+
+
+def test_std_core_declares_every_public_builtin() -> None:
+    from agm.agl.parser import parse_program
+    from agm.agl.syntax.nodes import EnumDef, ExceptionDef, FuncDef, RecordDef
+
+    program = parse_program(_STD_CORE.read_text())
+    records = {
+        item.name
+        for item in program.body.items
+        if isinstance(item, RecordDef) and item.is_builtin
+    }
+    enums = {
+        item.name
+        for item in program.body.items
+        if isinstance(item, EnumDef) and item.is_builtin
+    }
+    exceptions = {
+        item.name
+        for item in program.body.items
+        if isinstance(item, ExceptionDef) and item.is_builtin
+    }
+    functions = {
+        item.name
+        for item in program.body.items
+        if isinstance(item, FuncDef) and item.is_builtin
+    }
+
+    public_prelude = set(BUILTIN_PRELUDE_TYPES) - set(COMPATIBILITY_PRELUDE_TYPE_NAMES)
+    assert records | enums == public_prelude
+    assert exceptions == set(BUILTIN_EXCEPTIONS)
+    assert functions == set(BUILTIN_CALL_NAMES)
 
 
 def test_unknown_builtin_type_is_rejected() -> None:

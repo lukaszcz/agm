@@ -109,6 +109,9 @@ builtin
 exception JsonParseError extends Exception
   raw: text
 
+builtin
+exception RangeError extends Exception()
+
 builtin def print[T](value: T) -> unit
 builtin def render[T](value: T) -> text
 builtin def parse_json(value: text) -> json

@@ -70,8 +70,8 @@ and or not is in to downto by true false null
 
 **`as?`** is a single reserved keyword/token — the `?` is part of the
 lexeme. There is no whitespace permitted between `as` and `?`; with
-whitespace, `as` is the cast keyword and `?` would start a separate (invalid)
-token. `as?` is always reserved and cannot be used as an identifier.
+whitespace, `as` is the cast keyword and `?` starts a separate operator name.
+`as?` is always reserved and cannot be used as an identifier.
 
 `agent` is reserved (it leads an `agent` declaration) but is accepted
 as a **field name** (record/enum field definitions, named constructor
@@ -161,11 +161,13 @@ single token.
 
 Operator names are a second lexical class of identifier: the grammar terminal
 `OP_NAME`. They start with an operator character and continue while the next
-character is also an operator-name character. Exact reserved operator and
-punctuation tokens such as `=`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `->`, `=>`,
-`:=`, `::`, `+`, `-`, `*`, `/`, `|`, `.`, `:`, and `@` keep their syntactic
-meaning. Non-reserved standalone runs such as `==>`, `>>`, `|>`, `<|`, `>=>`,
-and `%$` are operator names.
+character is also an operator-name character. Operator-name characters are
+Unicode punctuation or symbol characters, except AgL structural delimiters:
+parentheses, brackets, braces, `:`, `,`, `.`, `;`, quotes, `@`, `#`, and `_`.
+Exact reserved operator and punctuation tokens such as `=`, `==`, `!=`, `<`,
+`<=`, `>`, `>=`, `->`, `=>`, `:=`, `::`, `+`, `-`, `*`, `/`, `|`, `.`, `:`,
+and `@` keep their syntactic meaning. Non-reserved standalone runs such as
+`==>`, `>>`, `|>`, `<|`, `>=>`, `%$`, `%?`, `~`, and `⊕` are operator names.
 
 AgL has two lexical classes of identifier: `NAME` and `OP_NAME`. Both are
 ordinary names in declaration and reference positions, so they can name

@@ -30,6 +30,7 @@ original bytes.  Offsets are 0-based and end-exclusive; lines and columns are
 
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass
 from typing import Iterator
 
@@ -162,7 +163,19 @@ _RESERVED_OPERATOR_NAMES: dict[str, str] = {
     **_SINGLE_OPS,
 }
 
-_OPERATOR_NAME_CHARS: frozenset[str] = frozenset("!$%&*+-/<>=" "\\^|")
+# Operator names are Unicode punctuation/symbol runs, minus AgL's structural
+# delimiters. Exact reserved spellings such as "=", "==", "->", and "|" are
+# retyped via _RESERVED_OPERATOR_NAMES after maximal munch.
+_OPERATOR_NAME_EXCLUDED_CHARS: frozenset[str] = frozenset(
+    ("(", ")", "[", "]", "{", "}", ":", ",", ".", ";", '"', "'", "@", "#", "_")
+)
+
+
+def _is_operator_name_char(ch: str) -> bool:
+    """Return True when *ch* can participate in a standalone operator name."""
+    if ch == "" or ch.isspace() or ch in _OPERATOR_NAME_EXCLUDED_CHARS:
+        return False
+    return unicodedata.category(ch)[0] in ("P", "S")
 
 # JSON escape decoding table (excluding \uXXXX and \$, handled separately)
 _JSON_ESCAPES: dict[str, str] = {
@@ -752,8 +765,8 @@ class _Scanner:
         # arbitrary Unicode letters/digits as well as the symbol characters
         # ``-``, ``?``, ``!``, so names like ``ask-prompt`` or ``do-it-now!``
         # scan as a single token.  Operator tokens (``->``, ``=>``, ``!=``,
-        # ``<=``, ``>=``, field access ``.``, etc.) still lex as operators when
-        # they appear as standalone, whitespace-delimited tokens.
+        # ``<=``, ``>=``, field access ``.``, etc.) still lex as operators
+        # when they appear as standalone reserved spellings.
         if ch.isalpha() or ch == "_":
             while not self._at_end() and self._peek() not in _IDENT_STOP:
                 self._advance()
@@ -795,8 +808,8 @@ class _Scanner:
             yield from self._scan_template(start_pos, start_line, start_col, quote="'")
             return
 
-        if ch in _OPERATOR_NAME_CHARS:
-            while not self._at_end() and self._peek() in _OPERATOR_NAME_CHARS:
+        if _is_operator_name_char(ch):
+            while not self._at_end() and _is_operator_name_char(self._peek()):
                 self._advance()
             value = self._src[start_pos:self._pos]
             reserved_type = _RESERVED_OPERATOR_NAMES.get(value)

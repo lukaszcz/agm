@@ -313,8 +313,9 @@ class TestLexer:
     def test_half_typed_line_does_not_raise(self) -> None:
         lexer = AglPromptLexer()
         # An invalid character mid-line must fall back to plain text, not raise.
-        fragments = lexer.lex_document(Document("let x = ~bad"))(0)
-        assert "".join(text for _style, text in fragments) == "let x = ~bad"
+        source = "let x = \u200bbad"
+        fragments = lexer.lex_document(Document(source))(0)
+        assert "".join(text for _style, text in fragments) == source
 
     @pytest.mark.parametrize("quote", ['"""', "'''"])
     def test_unterminated_triple_quoted_string_preserves_prefix_highlighting(

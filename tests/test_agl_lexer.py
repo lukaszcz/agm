@@ -271,13 +271,16 @@ class TestOperators:
         assert result == [("EQ_EQ", "==")]
 
     def test_operator_name_tokens(self) -> None:
-        assert tok("==> >> |> <| >=> %$") == [
+        assert tok("==> >> |> <| >=> %$ %? ~ ⊕") == [
             ("OP_NAME", "==>"),
             ("OP_NAME", ">>"),
             ("OP_NAME", "|>"),
             ("OP_NAME", "<|"),
             ("OP_NAME", ">=>"),
             ("OP_NAME", "%$"),
+            ("OP_NAME", "%?"),
+            ("OP_NAME", "~"),
+            ("OP_NAME", "⊕"),
         ]
 
     def test_reserved_operator_tokens_stay_syntax(self) -> None:
@@ -1114,9 +1117,9 @@ class TestLexErrorSpan:
         assert exc_info.value.span is not None
 
     def test_unknown_character_raises_lex_error(self) -> None:
-        # Characters that are not valid in AgL code (~ is not a valid AgL token)
+        # Format/control characters are not valid AgL code tokens.
         with pytest.raises(LexError) as exc_info:
-            tok("~")
+            tok("\u200b")
         assert exc_info.value.span is not None
 
     def test_triple_quoted_with_escape(self) -> None:
@@ -2196,10 +2199,9 @@ class TestAsQuestionKeyword:
 
     def test_as_space_question_is_not_as_question(self) -> None:
         # `as ?` (spaced) is NOT the test operator: only the contiguous lexeme
-        # `as?` is the keyword. With a space, `as` scans as the keyword and the
-        # lone `?` cannot start an identifier, so the scanner errors.
-        with pytest.raises(LexError):
-            tok("as ?")
+        # `as?` is the keyword. With a space, `as` scans as the keyword and `?`
+        # scans as a separate operator name.
+        assert tok("as ?") == [("as", "as"), ("OP_NAME", "?")]
         # And `as` followed by an ordinary word stays the keyword, not `as?`.
         assert lark_tok("as x") == [("AS", "as"), ("NAME", "x")]
 

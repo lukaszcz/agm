@@ -336,9 +336,9 @@ class TestBinders:
         assert isinstance(let.type_ann, IntT)
 
     def test_operator_name_let_binding(self) -> None:
-        let = first(parse("let >> = 0"))
+        let = first(parse("let %? = 0"))
         assert isinstance(let, LetDecl)
-        assert let.name == ">>"
+        assert let.name == "%?"
         assert isinstance(let.value, IntLit)
 
     def test_var_decl(self) -> None:

@@ -4,7 +4,7 @@ Drives the full ``parse → scope → typecheck → lower/link → IR eval`` pip
 registers agents/codecs, validates host params, materializes output
 contracts, and executes the program (or stops after static checking for
 ``agm exec --dry-run``).  Structured outputs use the JSON codec with
-lenient-by-default recovery (design §2.8).
+lenient-by-default recovery.
 
 ``agm.agl.runtime`` is the eval-free services layer (agents, codecs, params,
 types).  This module is the top-of-stack host façade that depends on both
@@ -254,7 +254,7 @@ class RunResult:
     ``trace_path``
         Path of the JSONL trace file written during this run, or ``None``
         when logging was disabled (``--no-log``) or the run was a dry-run.
-        This is the handle referred to in plan §8.3.
+        This handle identifies the prepared graph.
     """
 
     ok: bool
@@ -286,7 +286,7 @@ class PipelineDriver:
     default_strict_json : bool
         When ``True`` the JSON codec defaults to strict parsing (only a bare
         JSON value with surrounding whitespace is accepted).  The default
-        ``False`` enables lenient JSON recovery (design §2.8, Q3).
+        ``False`` enables lenient JSON recovery.
     default_loop_limit : int or None
         The host's global ``max-iters`` safety valve for unguarded loops
         (``while``/``do…until`` with no ``[n]`` bound and no ``for`` clause).
@@ -303,9 +303,9 @@ class PipelineDriver:
         Idle timeout (in seconds) applied to every ``exec`` shell call (design
         §4.12, §11.13).  ``None`` means no timeout (the shell command may run
         indefinitely).  This is the ``[exec] timeout`` config value, threaded
-        in from the CLI (plan §10.3).
+        in from the CLI.
     default_call_depth_limit : int or None
-        Maximum call depth for recursive functions (design §D8).  Exceeding
+        Maximum call depth for recursive functions.  Exceeding
         this limit raises a ``RecursionError`` in the AgL program.  ``None``
         applies the canonical default (``IrInterpreter.DEFAULT_MAX_CALL_DEPTH``).
         Resolved by the caller as ``--max-call-depth`` > ``[exec] max-call-depth``.
@@ -366,7 +366,7 @@ class PipelineDriver:
 
         The codec must expose ``supported_kinds: frozenset[str]``; those kinds
         are surfaced in ``HostCapabilities.codec_kinds`` so the type-checker
-        can validate ``format`` options at a call site (design §7.6 / CARRY-IN 1).
+        can validate ``format`` options at a call site.
 
         Raises ``ValueError`` for reserved or duplicate names.
         """
@@ -563,8 +563,7 @@ class PipelineDriver:
 
         ``log_file`` is the path of the JSONL trace file to write.  When
         ``None`` (the default) no trace is written.  Dry-run (``check_only``)
-        never writes a trace regardless of *log_file* (plan §10.1: dry-run
-        is side-effect-free).
+        never writes a trace regardless of *log_file*.
 
         Returns a ``RunResult`` capturing the outcome.
         """
@@ -624,7 +623,7 @@ class PipelineDriver:
         capabilities = host_env.capabilities
 
         # ----------------------------------------------------------------
-        # [2b] Source↔host agent reconciliation (plan §8, decisions 1 & 11)
+        # [2b] Source↔host agent reconciliation
         #
         # Enforce the source/host contract BEFORE execution (preferred over
         # waiting for typecheck — a broken contract should preempt execution).
@@ -719,7 +718,7 @@ class PipelineDriver:
         # validation, and contract materialization have all succeeded.  Stop
         # before executing any statement (no program output, no side effects).
         # Build the §10.1 static call-site inventory before returning.
-        # Dry-run is side-effect-free: no trace is written (plan §10.1).
+        # Dry-run is side-effect-free: no trace is written.
         # ----------------------------------------------------------------
         if check_only:
             inventory = _build_call_inventory_from_ir(executable.dry_run_inventory)
@@ -770,8 +769,7 @@ class PipelineDriver:
             # exception is an interpreter bug and must propagate (crash loudly)
             # rather than masquerade as a user-facing pre-execution diagnostic.
             error = exception_value_to_run_error(exc.exc, span=exc.span)
-            # Record the uncaught exception in the trace (design §12.6: include
-            # the source span when the raise site threaded it through AglRaise).
+            # Record the uncaught exception in the trace.
             trace_id = str(error.fields.get("trace_id", ""))
             trace.exception(
                 type_name=error.type_name,
@@ -1312,7 +1310,7 @@ def _reconcile_agents(
     registry: "AgentRegistry",
     declared_agents: "Mapping[str, AgentDeclNode]",
 ) -> list[Diagnostic]:
-    """Enforce the source↔host agent contract (plan §8, decisions 1 & 11).
+    """Enforce the source↔host agent contract.
 
     Returns error :class:`Diagnostic`s for BOTH contract violations (never
     stopping at the first) so the user sees every mismatch at once:
@@ -1418,10 +1416,9 @@ def exception_value_to_run_error(
     Field values are converted via the shared serializer, which preserves
     ``Decimal`` exactness (never routed through binary ``float``; design §5.1).
 
-    *span* is the optional raise-site source span threaded from ``AglRaise``
-    (design §12.6); when present, ``RunError.line`` and ``RunError.col`` are
-    populated from it so the CLI can include the source location in its
-    exit-2 error output.
+    *span* is the optional raise-site source span threaded from ``AglRaise``;
+    when present, ``RunError.line`` and ``RunError.col`` are populated from it
+    so the CLI can include the source location in its exit-2 error output.
     """
     from agm.agl.ir.ids import Location
     from agm.agl.runtime.serialize import value_to_json_obj

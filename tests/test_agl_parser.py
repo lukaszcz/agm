@@ -1783,7 +1783,7 @@ class TestBinaryOperators:
         ],
     )
     def test_chained_comparison_raises(self, src: str) -> None:
-        """Chained comparisons are non-associative in AgL (design §4.3)."""
+        """Chained comparisons are non-associative in AgL."""
         with pytest.raises(AglSyntaxError, match="non-associative"):
             parse(src)
 
@@ -2772,7 +2772,7 @@ class TestSpacedBrackets:
 
 
 # ---------------------------------------------------------------------------
-# Case-neutral names (M1 generics)
+# Case-neutral names
 # ---------------------------------------------------------------------------
 
 
@@ -2930,7 +2930,7 @@ class TestCaseNeutralPatterns:
 
 
 # ---------------------------------------------------------------------------
-# Cast expression tests (M1)
+# Cast expression tests
 # ---------------------------------------------------------------------------
 
 

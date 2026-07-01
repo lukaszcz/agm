@@ -1,4 +1,4 @@
-"""AgL lowering phase — compile-time IR emission (M2-A).
+"""AgL lowering phase — compile-time IR emission.
 
 Transforms a type-checked ``CheckedProgram`` into an ``ExecutableProgram``
 for evaluation.  All implicit coercions are resolved at compile time and

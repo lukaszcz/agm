@@ -31,7 +31,7 @@ failed.  The ``AgentRegistry.dispatch`` method catches it and re-raises as
 handle it as a catchable in-language exception.
 
 This design was chosen because:
-1. The registry IS owned by this milestone (M5a).
+1. The registry IS owned by this implementation phase.
 2. The interpreter (``eval/``) is off-limits for this agent.
 3. Converting at the dispatch boundary is the right abstraction: the registry
    is the single chokepoint through which every agent call flows, so the
@@ -141,10 +141,9 @@ class AgentRegistry:
         ``AgentCallHostError`` raised by the callable is converted to
         ``AglRaise(ExceptionValue("AgentCallError", ...))`` so that the AgL
         interpreter can handle it as a catchable in-language exception.
-        Transport failures are NOT eligible for ``on_parse_error`` retries
-        (design §7.11): the ``AglRaise`` propagates directly to the
-        interpreter's ``try/catch`` or the top-level ``PipelineDriver.run``
-        dispatcher.
+        Transport failures are NOT eligible for ``on_parse_error`` retries: the
+        ``AglRaise`` propagates directly to the interpreter's ``try/catch`` or
+        the top-level ``PipelineDriver.run`` dispatcher.
         """
         fn: AgentFn | None = self._named.get(name)
         if fn is None:
@@ -204,7 +203,7 @@ def _raise_agent_call_error(agent_name: str, err: AgentCallHostError) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Runner-backed agent factory (M5a)
+# Runner-backed agent factory
 # ---------------------------------------------------------------------------
 
 
@@ -302,7 +301,7 @@ def runner_backed_agent_factory(
                 elapsed=run_result.elapsed,
             )
 
-        # 6. Exit 0 with empty stdout is a valid empty response (plan §9.5).
+        # 6. Exit 0 with empty stdout is a valid empty response.
         return AgentResponse(content=run_result.stdout, metadata={"elapsed": run_result.elapsed})
 
     return agent_fn

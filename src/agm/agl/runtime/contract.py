@@ -5,7 +5,7 @@ it combines the static spec (codec name, target type, strict_json flag) with
 the live codec implementation to produce the format instructions that will be
 passed to agents and the parsing parameters for the codec.
 
-M2: contracts for JSON-typed targets carry a ``json_schema`` and
+contracts for JSON-typed targets carry a ``json_schema`` and
 ``format_instructions`` (the latter embedding the schema) built by
 ``JsonCodec.make_contract``.
 """

@@ -1,4 +1,4 @@
-"""Frontend-free cast/conversion executor for the AgL IR evaluator (M3e-2).
+"""Frontend-free cast/conversion executor for the AgL IR evaluator.
 
 ``run_recipe(recipe, value)`` executes a typeless ``ConversionRecipe`` against a
 runtime ``Value`` and returns the converted ``Value``.  On an expected fallible

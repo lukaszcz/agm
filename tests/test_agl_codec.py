@@ -1,6 +1,6 @@
-"""Tests for the AgL JsonCodec, schema derivation, and wire-up (M2b).
+"""Tests for the AgL JsonCodec, schema derivation, and wire-up.
 
-Covers (per PLAN_DSL §9.3 and §13):
+Covers (per the AgL DSL contract):
 1. Schema derivation (schema.py): every Type kind → JSON Schema dict.
 2. JsonCodec.supports_type: json/record/enum/list/dict/int/decimal/bool;
    NOT text (text stays TextCodec).
@@ -13,7 +13,7 @@ Covers (per PLAN_DSL §9.3 and §13):
    type, bad $case).
 6. Typed Value construction: RecordValue, EnumValue, ListValue, DictValue,
    scalars; int→decimal widening where the target type says decimal.
-7. Multiple JSON values / ambiguous output → failure (design §2.8: exactly one).
+7. Multiple JSON values / ambiguous output → failure.
 8. PipelineDriver wire-up: JsonCodec registered; checker passes json/record/enum
    targets; format_instructions reach AgentRequest; make_contract API.
 9. decimal exactness end-to-end: 1.5 parsed from agent response stays Decimal("1.5").
@@ -128,7 +128,7 @@ def _variant_schema_for_case(schema: dict[str, object], case: str) -> dict[str, 
 
 
 # ---------------------------------------------------------------------------
-# Direct-AST execution helpers (for record/enum targets that M2a parser adds)
+# Direct-AST execution helpers for record/enum targets.
 # ---------------------------------------------------------------------------
 
 
@@ -641,7 +641,7 @@ class TestStrictParsing:
 
 
 class TestDecimalExactness:
-    """Decimal values must never round-trip through float (design §5.1)."""
+    """Decimal values must never round-trip through float."""
 
     def test_decimal_stays_decimal_in_lenient(self) -> None:
         codec = JsonCodec()
@@ -1241,7 +1241,7 @@ class TestPipelineDriverWireUp:
     """JsonCodec registered in runtime; checker passes json/record/enum targets.
 
     Note: typed agent-call bindings (let x: T = agent "...") are tested via the
-    direct-AST helpers because the M1 parser wraps agent calls in an 'access'
+    direct-AST helpers because the parser wraps agent calls in an 'access'
     tree node for non-text typed bindings.  PipelineDriver.run() tests cover the
     static pipeline (codec_kinds) and the error reporting paths.
     """
@@ -1544,7 +1544,7 @@ class TestNormalizedRaw:
 
 
 # ---------------------------------------------------------------------------
-# 12. Record/enum params accepted via json codec (M2 extension of runtime)
+# 12. Record/enum params accepted via json codec
 # ---------------------------------------------------------------------------
 
 
@@ -1846,8 +1846,7 @@ class TestDecodeValueErrorBranches:
 
         Normalization routes the integral Decimal through int, and the
         int→decimal widening in ``decode_value`` re-widens it: the resulting
-        value equals ``1`` exactly (design §5.1 — no value/precision loss;
-        ``Decimal('1') == Decimal('1.0')``).
+        value equals ``1`` exactly == Decimal('1.0')``).
         """
         codec = JsonCodec()
         result = codec.parse("1.0", DecimalType(), strict_json=False)
@@ -2340,7 +2339,7 @@ class TestRegisterCodec:
             rt.register_codec(JsonCodec())
 
     def test_custom_codec_make_contract_and_parse_exercised_in_pipeline(self) -> None:
-        """F3 (M3b): a custom codec selected via ``format:`` is genuinely used.
+        """F3: a custom codec selected via ``format:`` is genuinely used.
 
         The codec is chosen with ``ask("Q", format: "tagcodec")`` on a ``text``
         target.  Both its ``make_contract`` (observable via the format

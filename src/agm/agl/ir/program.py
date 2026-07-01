@@ -10,11 +10,8 @@ All descriptors are immutable frozen dataclasses.  The dict fields on
 program; they are treated as immutable after construction even though the Python
 ``dict`` type is technically mutable.  Do not mutate these tables at runtime.
 
-M1 fields only.  Fields deferred to later milestones are noted in comments:
-  M3  — richer field/variant metadata on ``NominalDescriptor``
-  M4  — ``functions`` and ``params`` tables on ``ExecutableProgram``
-  M5  — ``exports`` and ``agents`` on ``ExecutableModule``
-  M6  — call-site and host-prep metadata on ``ExecutableProgram``
+The descriptor keeps the runtime program tables used by lowering, linking,
+and evaluation.
 """
 
 from __future__ import annotations
@@ -80,7 +77,7 @@ class SymbolDescriptor:
 
 @dataclass(frozen=True, slots=True)
 class VariantDescriptor:
-    """Descriptor for one enum variant (M3d).
+    """Descriptor for one enum variant.
 
     ``name``   — the variant name.
     ``fields`` — declared field names in declaration order (names only; no
@@ -105,8 +102,8 @@ class NominalDescriptor:
                        (one per variant, in declaration order).  ``()`` for
                        RECORD and EXCEPTION.
 
-    Safe defaults for ``fields`` and ``variants`` are ``()`` so existing M1/M2
-    construction sites remain valid without keyword arguments for these fields.
+    Safe defaults for ``fields`` and ``variants`` are ``()`` so construction sites
+    can omit them when the descriptor does not need nominal details.
     """
 
     nominal: NominalId
@@ -161,9 +158,6 @@ class ExecutableModule:
                        module-level initialiser (executed once, in order, when
                        the module is first loaded).
 
-    Deferred to later milestones:
-      M5 — ``exports: dict[str, SymbolId]``   (exported public names)
-      M6 — ``agents: tuple[...]``              (declared agent bindings)
     """
 
     module_id: ModuleId
@@ -171,13 +165,13 @@ class ExecutableModule:
 
 
 # ---------------------------------------------------------------------------
-# Entry param descriptor (M6a)
+# Entry param descriptor
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
 class IrParam:
-    """Descriptor for an entry-module ``param`` declaration (M6a).
+    """Descriptor for an entry-module ``param`` declaration.
 
     ``symbol``      — the linker-allocated ``SymbolId`` for this param binding.
     ``public_name`` — the user-facing param name (used as the key in the
@@ -243,17 +237,12 @@ class ExecutableProgram:
     underlying Python ``dict``s are mutable — the dataclass reference itself
     is frozen).
 
-    Fields present in M1:
-      ``entry_module`` — the module id of the program entry point.
+    ``entry_module`` — the module id of the program entry point.
       ``modules``      — map from ``ModuleId`` to ``ExecutableModule``.
       ``symbols``      — map from ``SymbolId`` to ``SymbolDescriptor``.
       ``nominals``     — map from ``NominalId`` to ``NominalDescriptor``.
       ``sources``      — map from ``SourceId`` to ``SourceFile``.
 
-    Deferred to later milestones:
-      M4 — ``functions: dict[FunctionId, FunctionDescriptor]``
-      M4 — ``params: dict[ParamId, ParamDescriptor]``
-      M6 — ``call_sites: dict[CallSiteId, CallSiteDescriptor]``
     """
 
     entry_module: ModuleId

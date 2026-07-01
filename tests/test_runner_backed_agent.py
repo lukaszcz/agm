@@ -1,4 +1,4 @@
-"""Tests for the runner-backed agent (M5a).
+"""Tests for the runner-backed agent.
 
 Covers:
 - agm.agent.runner: prepare_rendered_prompt_run / run_prepared_prompt_result / PromptRunResult
@@ -1078,7 +1078,7 @@ class TestAgentCallErrorViaRuntime:
         assert out == "spawn_failure"
 
     def test_exit_0_empty_stdout_is_valid_response(self) -> None:
-        """Exit 0 with empty stdout = valid empty response (plan §9.5)."""
+        """Exit 0 with empty stdout = valid empty response."""
         from agm.agl import PipelineDriver
 
         rt = PipelineDriver(default_agent=lambda req: "")
@@ -1089,7 +1089,7 @@ class TestAgentCallErrorViaRuntime:
         assert result.bindings["x"] == TextValue("")
 
     def test_nonzero_exit_not_retried(self) -> None:
-        """AgentCallError cause=nonzero_exit is NOT retried (design §7.11)."""
+        """AgentCallError cause=nonzero_exit is NOT retried."""
         call_count = [0]
         from agm.agl.runtime.agents import AgentCallHostError
 
@@ -1108,7 +1108,7 @@ class TestAgentCallErrorViaRuntime:
 
 
 # ---------------------------------------------------------------------------
-# PipelineDriver: runner config wiring (M5a)
+# PipelineDriver: runner config wiring
 # ---------------------------------------------------------------------------
 
 

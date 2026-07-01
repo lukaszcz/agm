@@ -13,7 +13,7 @@ diagnostic severity is included in compiler-style output, e.g.
 ``path.agl:1:5: warning: message`` or ``1:5: error: message`` for inline
 ``-c/--command`` source.
 
-Exit-code contract (plan §10.1):
+Exit-code contract:
     0  success (or a clean ``--dry-run`` static check)
     1  pre-execution failure (unreadable file, static errors, param validation)
     2  program executed but ended with an uncaught AgL exception
@@ -367,7 +367,7 @@ def run(args: ExecArgs) -> None:
         startup_values = startup_result.values if startup_result.ok else {}
 
     # Resolve + validate the trace log file up front (F2a/F6).  --dry-run is
-    # side-effect-free: no trace is written regardless of --log-file (plan §10.1).
+    # side-effect-free: no trace is written regardless of --log-file.
     # Source config log/log-file values are wired here.
     if dry_run.enabled():
         log_file = None
@@ -398,11 +398,11 @@ def run(args: ExecArgs) -> None:
     # unclosed quote) and whitespace-only values are caught here via
     # split_command, which also handles the ValueError from shlex.split for
     # malformed quoting.  This honours the exit-1 = pre-execution contract
-    # (plan §10.1) and deduplicates the logic already in split_command.
+    # and deduplicates the logic already in split_command.
     split_command(runner_cmd, kind="runner")
 
     # ----------------------------------------------------------------
-    # Resolve declared agents and wire each one explicitly (plan §9).
+    # Resolve declared agents and wire each one explicitly.
     #
     # The source program OWNS the agent name set: every named agent must be
     # declared.  We register each DECLARED agent against a single runner-backed
@@ -462,8 +462,8 @@ def run(args: ExecArgs) -> None:
     )
 
     # Register every declared agent so the registered set equals the declared
-    # set: M4 reconciliation always passes; config-only agents the source never
-    # declares stay inert (NOT registered), per plan §9.
+    # set: reconciliation always passes; config-only agents the source never
+    # declares stay inert (NOT registered).
     for d in decls:
         runtime.register_agent(d.name, factory)
 
@@ -569,8 +569,6 @@ def run(args: ExecArgs) -> None:
             print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
         raise SystemExit(1)
 
-    # Uncaught AgL exception: print and exit 2 (design §12.6: include source
-    # location and trace_id in the error line so the caller can correlate the
-    # error with the trace file and the source program).
+    # Uncaught AgL exception: print and exit 2.
     print(result.error.to_message(include_trace_id=True), file=sys.stderr)
     raise SystemExit(2)

@@ -236,7 +236,7 @@ def _jsonl_default(obj: object) -> str:
 def append_jsonl(path: Path | None, record: Mapping[str, object]) -> None:
     """Append *record* as a single JSONL line to *path*.
 
-    A DSL-agnostic helper (plan §11.1): any command that needs structured
+    A DSL-agnostic helper: any command that needs structured
     append-a-record logging can use this rather than writing its own JSONL
     emitter.
 

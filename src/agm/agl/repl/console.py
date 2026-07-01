@@ -719,12 +719,12 @@ def run_console(
     persist the choice to config).
 
     The loop is intentionally thin: formatting lives in ``render`` and meta
-    handling in ``meta`` so M3 can extend both without touching it.
+    handling in ``meta`` so both paths can evolve without touching it.
     """
     prompt_session = build_prompt_session(
         session, theme=theme, history_path=history_path, input=input, output=output
     )
-    # A shared, mutable agent-mode holder: ``:agent`` mutates it here, and M4
+    # A shared, mutable agent-mode holder: ``:agent`` mutates it here, and the wrapper
     # will pass this SAME instance to the confirming agent wrapper so the wrapper
     # observes the mutation.  Defaults to confirm-each-call per plan decision 2.
     ctx = meta_mod.MetaContext(

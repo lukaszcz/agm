@@ -1,4 +1,4 @@
-"""Graph-aware type-checking pass for the AgL module system (M4).
+"""Graph-aware type-checking pass for the AgL module system.
 
 ``check_graph(resolved_graph, capabilities)`` runs the full type-checking pass
 over a :class:`~agm.agl.scope.graph.ResolvedModuleGraph`, producing a
@@ -33,8 +33,8 @@ Algorithm
    annotations for EVERY top-level ``FuncDef`` in EVERY module (using the
    ``graph_type_table`` and each module's ``ImportEnv`` for cross-module type
    refs), producing a ``graph_func_sig_table`` mapping each ``FuncDef.node_id``
-   (globally unique per M2) to ``(FunctionSignature, FunctionType)``.  No
-   function body is checked in this phase.  The result is used in Phase 3 to
+   to ``(FunctionSignature, FunctionType)``. No function body is checked in this
+   phase. The result is used in Phase 3 to
    seed EVERY module's env with ALL function binding types before any body is
    checked, enabling cross-file mutual recursion (D8/§8.2): a call to a not-yet-
    checked module's function resolves its callee type from the pre-pass table.
@@ -104,7 +104,7 @@ class CheckedModule:
     ``module_id``
         The :class:`~agm.agl.modules.ids.ModuleId` of this module.
     ``resolved``
-        The :class:`~agm.agl.scope.symbols.ResolvedProgram` from M3.
+        The :class:`~agm.agl.scope.symbols.ResolvedProgram` from graph scope resolution.
     ``node_types``
         Maps ``node_id`` → resolved :class:`~agm.agl.semantics.types.Type`
         for every expression node that was type-checked in this module.
@@ -622,7 +622,7 @@ def _build_graph_func_sig_table(
 ) -> dict[int, tuple[str, FunctionSignature, FunctionType]]:
     """Phase 2: compute function signatures for ALL top-level FuncDefs across all modules.
 
-    Returns a table mapping each ``FuncDef.node_id`` (globally unique per M2)
+    Returns a table mapping each ``FuncDef.node_id``
     to ``(name, FunctionSignature, FunctionType)`` — the declared function name,
     the full declared signature (names, types, has-default flags), and the erased
     value type.
@@ -742,10 +742,10 @@ def _check_module(
       §8.2 cross-file mutual recursion) — can look up callee types regardless of
       per-module checking order.  The pre-pass computed ``(name, FunctionSignature,
       FunctionType)`` for ALL top-level ``FuncDef``s across ALL modules;
-      ``node_id``s are globally unique (M2), so seeding the whole table into
+      ``node_id``s are globally unique, so seeding the whole table into
       every module's env is safe and collision-free.
     - ``entry_seed_env``: when given and ``mid`` is the entry module, the session
-      type env is seeded first so that prior REPL bindings are available (M6).
+      type env is seeded first so that prior REPL bindings are available.
     """
     import_env = import_env_map[mid]
     assert isinstance(import_env, ImportEnv)
@@ -759,7 +759,7 @@ def _check_module(
         module_id=mid,
     )
 
-    # Seed from the REPL session type env first (for the entry module in M6 REPL
+    # Seed from the REPL session type env first (for the entry module in REPL
     # graph mode).  Graph tables override on collision, so the entry's own types
     # and function signatures always shadow any session binding with the same name.
     if mid.is_entry and entry_seed_env is not None:
@@ -779,7 +779,7 @@ def _check_module(
     # - _binding_types (node_id-keyed, globally unique): used by _check_varref to
     #   look up the callee type when the callee VarRef resolves to a cross-module
     #   FuncDef's decl_node_id.  Seeding the entire pre-pass table is safe because
-    #   node_ids are globally unique per M2.
+    #   node_ids are globally unique.
     # - _function_signatures_by_node_id (node_id-keyed, globally unique): used by
     #   _check_declared_name_call to look up the CORRECT signature for any callee
     #   by its globally-unique decl_node_id.  Unlike the name-keyed table below,
@@ -842,7 +842,7 @@ def check_graph(
     entry_seed_env:
         When given, the entry module's ``TypeEnvironment`` is seeded from this
         environment before the graph type table and function signatures are
-        installed.  Used by the REPL graph mode (M6) to make prior session
+        installed.  Used by the REPL graph mode to make prior session
         bindings available in graph-mode entries.
 
     Returns
@@ -870,7 +870,7 @@ def check_graph(
     # Resolves parameter/return TypeExprs for every top-level FuncDef in every
     # module using the graph_type_table (so cross-module type refs in annotations
     # resolve), WITHOUT checking any function body.  Keyed by FuncDef.node_id
-    # (globally unique per M2).
+    #.
     graph_func_sig_table = _build_graph_func_sig_table(
         resolved_graph, graph_type_table, graph_generic_table
     )

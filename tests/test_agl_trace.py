@@ -1,4 +1,4 @@
-"""Behavior tests for the AgL trace store (M4d).
+"""Behavior tests for the AgL trace store.
 
 All assertions are on *observable* outcomes: what ends up in the trace file,
 whether a file is created at all, and whether exception trace_ids match

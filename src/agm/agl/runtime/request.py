@@ -20,16 +20,14 @@ if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract, TypelessOutputContract
 
 
-# The documented validation-error categories (design §7.5, extended for F4):
+# The documented validation-error categories:
 # - ``missing_field``  — a required field was absent.
 # - ``unknown_field``  — an undeclared field was present (``additionalProperties``).
 # - ``wrong_type``     — a field's JSON type did not match the schema.
 # - ``bad_case``       — an enum object's ``$case`` did not name a known variant
 #                        (or was missing / not a string).
 # - ``invalid_json``   — the agent response contained no extractable JSON value
-#                        at all (design §7.5 extension, F4: an honest category for
-#                        totally-unparseable output so the reason is fed back on
-#                        the next retry attempt rather than being silently dropped).
+#                        at all.
 ValidationErrorCategory = Literal[
     "missing_field",
     "unknown_field",
@@ -57,7 +55,7 @@ class AgentCancelled(Exception):
 
 @dataclass(frozen=True, slots=True)
 class ValidationError:
-    """A structured parse/validation error (design §7.5 / §7.7).
+    """A structured parse/validation error.
 
     Produced by the JSON codec when an agent response parses as JSON but fails
     strict schema validation.  Carries enough structure that retry feedback and
@@ -110,10 +108,10 @@ class AgentRequest:
         on the first attempt. Useful for retry-feedback messages.
     ``validation_errors``
         Structured :class:`ValidationError` records from the previous failed
-        attempt (design §7.5 / §7.8).  Empty on the first attempt; populated on
+        attempt.  Empty on the first attempt; populated on
         retries so the agent can be told *what* was wrong.
     ``output_contract``
-        The materialized output contract for this call site (design §7.5).
+        The materialized output contract for this call site.
         Carries ``format_instructions`` and ``json_schema`` so agents can
         relay them to the underlying model.  ``None`` for ``unit`` calls,
         whose response is intentionally ignored.

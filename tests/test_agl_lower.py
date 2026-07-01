@@ -1,8 +1,8 @@
-"""Tests for the AgL lowering phase (M2-A).
+"""Tests for the AgL lowering phase.
 
 Covers:
 - ``compile_coercion`` — every branch of the coercion compiler.
-- ``lower_program`` — lowering of the M2 node subset, including coercion
+- ``lower_program`` — lowering of supported nodes, including coercion
   insertion, binding/assignment lowering, and validate_ir pass.
 
 Pipeline helper: reuses the ``parse_resolve_check`` pattern from
@@ -587,7 +587,7 @@ class TestBindingLowering:
     def test_let_var_ref_identity_no_coerce(self) -> None:
         # let a: list[int] = [1]; let b: list[int] = a — no coercion needed
         # (list[int] → list[decimal] is rejected by the type checker, so
-        # MapList(IntToDecimal) on an IrLoad can only arise in later milestones
+        # MapList(IntToDecimal) on an IrLoad can only arise in future work
         # that extend assignability.  The contract example is forward-looking.)
         prog = _lower("let _a: list[int] = [1]\nlet _b: list[int] = _a\n()")
         inits = prog.modules[prog.entry_module].initializers
@@ -687,10 +687,10 @@ class TestAssignStmtLowering:
 # lower_program: Block lowering
 #
 # A Block node appears as an expression only inside branches of control-flow
-# (if/case/do/try) and function bodies — all of which are M3+.  We test the
+# (if/case/do/try) and function bodies. We test the
 # Block lowering path by calling the lowerer's internal API directly with a
 # synthetic Block node constructed from a lowered CheckedProgram.  This
-# exercises the Block arm of lower_expr and _lower_block without needing M3
+# exercises the Block arm of lower_expr and _lower_block without extra syntax
 # control-flow in the source.
 # ---------------------------------------------------------------------------
 
@@ -756,7 +756,7 @@ class TestSourcesTable:
 
 
 # ---------------------------------------------------------------------------
-# lower_program: nominals table is empty in M2
+# lower_program: nominals table starts empty
 # ---------------------------------------------------------------------------
 
 
@@ -845,8 +845,8 @@ class TestNominalsEmpty:
 
 class TestUnsupportedNodes:
     def test_user_function_call_lowers_correctly(self) -> None:
-        """Direct user function calls are supported in M4a and must lower without error."""
-        # f() is a direct user function call — M4a supports this.
+        """Direct user function calls must lower without error."""
+        # f() is a direct user function call supports this.
         prog = _lower("def f() -> int = 1\nlet result = f()\n()")
         # Verify the program has a function in the functions table
         assert len(prog.functions) == 1
@@ -863,7 +863,7 @@ class TestUnsupportedNodes:
     def test_iife_lambda_call_lowers_to_indirect_call(self) -> None:
         """Calling an immediately-invoked lambda (non-VarRef, non-FieldAccess callee).
 
-        When the callee of a Call is a Lambda (M4b), lowering produces an IrIndirectCall
+        When the callee of a Call is a Lambda, lowering produces an IrIndirectCall
         whose callee is an IrMakeClosure.
         """
         prog = _lower("(fn() -> int => 42)()\n()")
@@ -879,7 +879,7 @@ class TestUnsupportedNodes:
     def test_qualified_enum_constructor_lowers_correctly(self) -> None:
         """Qualified constructor (e.g. Color.Red) lowers to IrMakeEnum/IrMakeConstructor.
 
-        M3d implemented qualified constructor lowering.  A nullary variant (no fields)
+        Qualified constructor lowering supports a nullary variant (no fields)
         lowers to IrMakeEnum (eagerly constructed).  A variant with fields lowers to
         IrMakeConstructor.  Here Red is nullary, so the binding value must be IrMakeEnum.
         """
@@ -903,7 +903,7 @@ let c = Color.Red
         assert found, "Expected IrBind(value=IrMakeEnum(variant='Red')) in initializers"
 
     def test_lambda_lowers_to_make_closure_in_unsupported_class(self) -> None:
-        """Lambda expressions now lower to IrMakeClosure (M4b implemented)."""
+        """Lambda expressions now lower to IrMakeClosure."""
         prog = _lower("let f = fn(x: int) -> int => x + 1\n()")
         inits = prog.modules[prog.entry_module].initializers
         f_bind = inits[0]
@@ -911,7 +911,7 @@ let c = Color.Red
         assert isinstance(f_bind.value, IrMakeClosure)
 
     def test_if_lowers_correctly(self) -> None:
-        """If expressions are lowered to IrIf in M3f-A."""
+        """If expressions are lowered to IrIf in A."""
         from agm.agl.ir.nodes import IrBind, IrIf
 
         prog = _lower("let x = if true => 1 | else => 2\n()")
@@ -924,7 +924,7 @@ let c = Color.Red
         assert found, "Expected IrBind(value=IrIf(has_else=True)) in initializers"
 
     def test_indexed_assign_lowers_to_ir_assign_with_path(self) -> None:
-        """IndexTarget assignment lowers to IrAssign with a non-empty path (M3c)."""
+        """IndexTarget assignment lowers to IrAssign with a non-empty path."""
         from agm.agl.ir import IrAssign
         prog = _lower('var _d: dict[text, int] = {"a": 1}\n_d["a"] := 2\n()')
         entry = prog.modules[prog.entry_module]
@@ -996,7 +996,7 @@ class TestIrFieldLowering:
     FieldAccess nodes that resolve to records/exceptions (rather than
     qualified constructor references) lower to IrField.  These tests exercise
     the _Lowerer directly because end-to-end lowering of FieldAccess requires
-    constructor calls (M4, deferred).
+    constructor calls.
     """
 
     def test_field_access_lowers_to_ir_field(self) -> None:
@@ -1056,12 +1056,12 @@ class TestIrFieldLowering:
 
 
 # ---------------------------------------------------------------------------
-# M4a lower: function-related coverage
+# Function-related lowering coverage
 # ---------------------------------------------------------------------------
 
 
 class TestM4aLowerFunctions:
-    """Tests for M4a function lowering coverage."""
+    """Tests for function lowering coverage."""
 
     def test_try_with_bound_exception_in_function_body(self) -> None:
         """Function body with try-catch-as (bound handler) exercises clause.binding path."""
@@ -1091,7 +1091,7 @@ class TestM4aLowerFunctions:
         )
 
     def test_builtin_print_in_function_body_lowers_to_ir_print(self) -> None:
-        """print() inside a function body lowers to IrPrint (M6a implemented)."""
+        """print() inside a function body lowers to IrPrint."""
         from agm.agl.ir.nodes import IrPrint
 
         source = (
@@ -1110,7 +1110,7 @@ class TestM4aLowerFunctions:
         assert any(isinstance(item, IrPrint) for item in fn_desc.body.items)
 
     def test_indirect_call_via_let_binding_lowers_to_indirect_call(self) -> None:
-        """Calling a let-bound function reference lowers to IrIndirectCall (M4b)."""
+        """Calling a let-bound function reference lowers to IrIndirectCall."""
         source = (
             "def f(x: int) -> int = x + 1\n"
             "let fn_ref = f\n"
@@ -1260,7 +1260,7 @@ class TestScanCapturesLoopForIterWhileCond:
 
 
 # ===========================================================================
-# M4b — Lambda lowering and indirect call lowering (golden tests)
+# Lambda lowering and indirect call lowering (golden tests)
 # ===========================================================================
 
 
@@ -1434,12 +1434,12 @@ class TestM4bIndirectCallLowering:
 
 
 # ---------------------------------------------------------------------------
-# M5 — lower_graph: multi-module golden test
+# lower_graph: multi-module golden test
 # ---------------------------------------------------------------------------
 
 
 class TestLowerGraph:
-    """Golden tests for lower_graph (M5 whole-graph module linking)."""
+    """Golden tests for lower_graph."""
 
     def test_lower_graph_simple(self, tmp_path: Path) -> None:
         """lower_graph on a two-module program builds a valid ExecutableProgram.
@@ -1667,12 +1667,12 @@ class TestLowerGraph:
 
 
 # ---------------------------------------------------------------------------
-# M6a golden lowering: print, parse_json, param declarations
+# Golden lowering: print, parse_json, param declarations
 # ---------------------------------------------------------------------------
 
 
 class TestM6aLowering:
-    """Golden lowering tests for M6a host operations."""
+    """Golden lowering tests for host operations."""
 
     def test_print_lowers_to_ir_print(self) -> None:
         """print(x) lowers to IrPrint wrapping the argument expression."""
@@ -1762,7 +1762,7 @@ class TestM6aLowering:
         assert required_map["y"] is False
 
     def test_ask_lowers_to_ir_ask_m6b(self) -> None:
-        """ask() now lowers to IrAsk (M6b implemented)."""
+        """ask() now lowers to IrAsk."""
         from agm.agl.ir.nodes import IrAsk, IrBind
 
         source = "agent impl\nlet r: text = ask(\"prompt\", agent = impl)\n()"
@@ -1774,7 +1774,7 @@ class TestM6aLowering:
         assert len(prog.contracts) == 1
 
     def test_exec_lowers_to_ir_exec(self) -> None:
-        """exec() lowers to IrExec now that M6c is implemented."""
+        """exec() lowers to IrExec."""
         from agm.agl.ir.nodes import IrExec
 
         source = "exec(\"ls -la\")\n()"
@@ -1784,7 +1784,7 @@ class TestM6aLowering:
         assert len(exec_nodes) == 1, f"Expected 1 IrExec, found {len(exec_nodes)}"
 
     def test_agent_decl_lowers_to_ir_agent_handle_bind(self) -> None:
-        """AgentDecl lowers to IrBind(symbol, IrAgentHandle(name)) (M6b golden lowering)."""
+        """AgentDecl lowers to IrBind(symbol, IrAgentHandle(name))."""
         from agm.agl.ir.nodes import IrAgentHandle, IrBind
 
         source = "agent my_agent\n()"
@@ -1801,7 +1801,7 @@ class TestM6aLowering:
         assert handle_binds[0].value.agent_name == "my_agent"
 
     def test_ask_request_lowers_to_ir_ask_request_with_contract(self) -> None:
-        """ask-request lowers to IrAskRequest + ContractRequest in program.contracts (M6b)."""
+        """ask-request lowers to IrAskRequest + ContractRequest in program.contracts."""
         from agm.agl.ir.nodes import IrAskRequest, IrBind
 
         source = "agent worker\nlet req = ask-request(\"my prompt\", agent = worker)\n()"

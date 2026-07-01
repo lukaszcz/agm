@@ -182,7 +182,7 @@ def test_list_decimal_element_coercion() -> None:
 # What we CAN prove is that these coercions are correctly applied at
 # literal-element boundaries (already covered in test 3 above) and via ToJson
 # (covered in tests 8–10 below).  The whole-value container widening path will
-# be exercised once the type checker is extended in a later milestone.
+# be exercised once the type checker is extended in a future change.
 # ---------------------------------------------------------------------------
 
 
@@ -465,7 +465,7 @@ def test_coercion_evaluates_operand_once() -> None:
     All current AgL expressions are pure (no side effects), so the strong version
     of this property (observable side effects fired exactly once) cannot be
     violated.  The IR pipeline produces the correct coercion result.  The stronger
-    test (with counters/exec side-effects) is deferred to a future milestone.
+    test (with counters/exec side-effects) is deferred to a future implementation phase.
 
     We exercise this with a multi-step program where each binding's RHS is a
     constant; the IR pipeline must produce the correct value for each binding.

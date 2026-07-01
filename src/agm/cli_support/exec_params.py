@@ -7,7 +7,7 @@ help/completion machinery.
 
 It also provides ``resolve_param_values`` for merging config-file values with
 CLI values (CLI wins) and detecting undeclared config keys.  This helper is
-reusable by M6 (REPL config resolution).
+reusable by REPL config resolution.
 
 Collision detection is **verbatim**: a param whose name is ``foo`` produces the
 flag ``--foo``; that exact string is checked against ``RESERVED_FLAGS``.  There
@@ -248,7 +248,7 @@ def resolve_param_values(
     Precedence: CLI > config.  Config keys that are not declared as params
     produce warning messages (non-fatal, O4) and are excluded from the result.
     CLI values are assumed to be all-declared (unknown CLI options are a hard
-    error, handled upstream in M4).
+    error, handled upstream).
 
     Args:
         declared_names: The set of param names declared in the program.

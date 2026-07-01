@@ -71,7 +71,7 @@ class CmpOp(enum.Enum):
 
     Derived from the equality/ordering branches of ``BinOp`` in
     ``agm.agl.syntax.nodes``: EQ(==), NEQ(!=), LT(<), LE(<=), GT(>), GE(>=).
-    The ``in`` operator is a separate ``IrContains`` node (see M3).
+    The ``in`` operator is a separate ``IrContains`` node.
     """
 
     EQ = "=="

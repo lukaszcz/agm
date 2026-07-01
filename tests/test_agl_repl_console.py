@@ -666,7 +666,7 @@ class TestDryRun:
 
 
 # ---------------------------------------------------------------------------
-# Meta-commands through the loop (M3)
+# Meta-commands through the loop
 # ---------------------------------------------------------------------------
 
 
@@ -696,7 +696,7 @@ class TestMetaThroughLoop:
 
     def test_agent_meta_mutates_shared_mode(self) -> None:
         # The shared AgentMode passed to run_console reflects :agent mutations,
-        # which is exactly the instance M4 will also hand to its wrapper.
+        # which is exactly the instance the wrapper also receives.
         from agm.agl.repl.agentmode import AgentMode
 
         mode = AgentMode()

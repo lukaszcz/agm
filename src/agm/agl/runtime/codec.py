@@ -4,10 +4,9 @@
 codecs are:
 
 - ``TextCodec`` — passthrough for the ``text`` type.
-- ``JsonCodec`` — structured output with lenient-by-default JSON recovery
-  (design §2.8 / §9.3): extracts exactly one JSON value from chatty output
-  (fences/prose) using ``json-repair``, then validates strictly via
-  ``jsonschema``.
+- ``JsonCodec`` — structured output with lenient-by-default JSON recovery:
+  extracts exactly one JSON value from chatty output (fences/prose) using
+  ``json-repair``, then validates strictly via ``jsonschema``.
 
 Codec names (e.g. ``TextCodec.name == "text"``) are the values used in
 ``HostCapabilities.codec_kinds`` and ``OutputContractSpec.codec_name``.
@@ -53,7 +52,7 @@ class ParseResult:
     ``value``           — The typed Value on success; ``None`` on failure.
     ``error_msg``       — A human-readable failure description (empty on success).
     ``errors``          — Structured :class:`ValidationError` records describing
-                          schema-validation failures (design §7.5 / §7.7).  Empty
+                          schema-validation failures.  Empty
                           on success and for non-validation failures (e.g. no JSON
                           could be extracted, ambiguous multi-value output).
     ``normalized_raw``  — The canonical JSON text that was actually parsed (after
@@ -234,7 +233,7 @@ def _try_direct_parse(text: str) -> tuple[bool, str]:
 
 
 # Sentinel returned by extraction when the candidate yields an *ambiguous*
-# multi-value result (design §2.8: "exactly one JSON value").  See F3 ruling.
+# multi-value result.  See F3 ruling.
 _AMBIGUOUS_MULTI_VALUE = object()
 
 
@@ -287,7 +286,7 @@ _SCALAR_NUMBER_RE = re.compile(r"(?<![A-Za-z0-9_.])(-?\d+(?:\.\d+)?)(?![A-Za-z0-
 def _scan_bare_scalar(text: str) -> str | None | object:
     """Recover a single bare JSON scalar (bool/null/number) embedded in prose.
 
-    Lenient recovery (design §2.8) strips prose around a single JSON value.
+    Lenient recovery strips prose around a single JSON value.
     ``json-repair`` does not pull bare scalars out of prose (e.g.
     ``"The flag is:\\nfalse"``), so this fallback finds keyword/number tokens
     via word-boundary-anchored regexes and returns the value's JSON text when
@@ -523,7 +522,7 @@ def _parse_json_core(
     if json_text is _AMBIGUOUS_MULTI_VALUE:
         return ParseResult.failure(
             "Ambiguous agent response: multiple JSON values were found, but "
-            "exactly one is required (design §2.8)."
+            "exactly one is required."
         )
     if json_text is None or not isinstance(json_text, str):
         return ParseResult.failure(
@@ -593,7 +592,7 @@ def _parse_contract_output(
 
 
 # ---------------------------------------------------------------------------
-# JsonCodec — M2 structured-output codec
+# JsonCodec structured-output codec
 # ---------------------------------------------------------------------------
 
 # The type kinds this codec handles (matches Type.kind property strings).
@@ -603,14 +602,14 @@ _JSON_CODEC_KINDS: frozenset[str] = frozenset(
 
 
 class JsonCodec:
-    """Built-in ``json`` codec for structured AgL outputs (M2).
+    """Built-in ``json`` codec for structured AgL outputs.
 
-    Parsing strategy (design §2.8):
+    Parsing strategy:
     - **Lenient** (default): extract exactly one JSON value from chatty output
       (fences/prose), repair trivially malformed JSON via ``json-repair``
       (which returns a repaired JSON *string*), then re-parse with
-      ``json.loads(parse_float=Decimal)`` to preserve decimal exactness
-      (design §5.1).  Validate against the derived JSON Schema.
+      ``json.loads(parse_float=Decimal)`` to preserve decimal exactness.
+      Validate against the derived JSON Schema.
     - **Strict** (``strict_json=True``): parse exactly one bare JSON value
       via stdlib ``json.loads`` (surrounding whitespace permitted; nothing
       else).  No fence stripping or repair.
@@ -644,7 +643,7 @@ class JsonCodec:
         return t.kind in _JSON_CODEC_KINDS
 
     def make_contract(self, type_ref: Type) -> "OutputContract":
-        """Build an ``OutputContract`` for *type_ref* (design §7.7).
+        """Build an ``OutputContract`` for *type_ref*.
 
         The ``TypeEnvironment`` parameter was removed (CARRY-IN 2): it was
         never used by this implementation.  ``derive_schema`` is called exactly
@@ -690,7 +689,7 @@ class JsonCodec:
         ``OutputContract`` should pass ``schema=contract.json_schema`` to
         avoid redundant schema derivation.
 
-        Decimal exactness (design §5.1): ``json-repair`` always produces a
+        Decimal exactness: ``json-repair`` always produces a
         JSON *string* (not Python objects), which is then re-parsed via
         ``json.loads(parse_float=Decimal)``.  Decimal values are never
         routed through Python ``float``.

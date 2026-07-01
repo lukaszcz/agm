@@ -84,7 +84,6 @@ class NominalId:
     module with the same declared name structurally equal — which is the
     correct behaviour since module + declared name uniquely identifies a type.
 
-    See plan §3 D2.
     """
 
     module_id: ModuleId

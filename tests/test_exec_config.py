@@ -1,4 +1,4 @@
-"""Tests for ExecConfig and load_exec_config (M0)."""
+"""Tests for ExecConfig and load_exec_config."""
 
 from __future__ import annotations
 

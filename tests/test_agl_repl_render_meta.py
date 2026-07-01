@@ -5,7 +5,7 @@ These are pure-data modules (no terminal), so they are tested directly:
 - :func:`agm.agl.repl.render.render_entry_result` for each entry kind, warnings,
   pre-execution diagnostics, and runtime-error rendering;
 - :func:`agm.agl.repl.meta.dispatch_meta` for ``:help`` / ``:quit`` / ``:exit`` /
-  unknown commands, plus the ``register_meta_command`` extension hook used by M3.
+  unknown commands, plus the ``register_meta_command`` extension hook.
 """
 
 from __future__ import annotations
@@ -324,7 +324,7 @@ class TestDispatchMeta:
         assert ":exit" in names
 
     def test_register_meta_command_extends_registry(self) -> None:
-        # M3 extension hook: a newly registered command becomes dispatchable and
+        # Extension hook: a newly registered command becomes dispatchable and
         # is offered by ``meta_command_names`` (the completer's source).
         seen: list[str] = []
 
@@ -784,7 +784,7 @@ class TestTheme:
 
 
 # ---------------------------------------------------------------------------
-# M3: nominal value rendering (record/enum in AgL form and declaration order)
+# nominal value rendering (record/enum in AgL form and declaration order)
 # ---------------------------------------------------------------------------
 
 

@@ -2112,12 +2112,12 @@ class TestV2LoopBoundPreserved:
 
 
 # ---------------------------------------------------------------------------
-# Case-neutral identifiers (M1 generics)
+# Case-neutral identifiers
 # ---------------------------------------------------------------------------
 
 
 class TestCaseNeutralNames:
-    """All identifiers lex as NAME regardless of case (M1: case-neutral names)."""
+    """All identifiers lex as NAME regardless of case."""
 
     def test_box_uppercase_is_name(self) -> None:
         result = tok("Box")
@@ -2159,7 +2159,7 @@ class TestCaseNeutralNames:
 
 
 # ---------------------------------------------------------------------------
-# as? keyword tests (M1: cast operator)
+# as? keyword tests
 # ---------------------------------------------------------------------------
 
 

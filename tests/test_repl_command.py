@@ -4,7 +4,7 @@ Covers:
 - the CLI surface maps each flag onto ``ReplArgs`` (parser-contract style;
   ``repl.run`` is mocked so no real terminal is needed);
 - ``--no-log`` / ``--log-file`` are mutually exclusive (usage error, exit 1);
-- ``--input`` option has been REMOVED in M6 (params resolve eagerly from
+- ``--input`` option has been removed (params resolve eagerly from
   config/defaults; there is no pre-seed CLI option);
 - ``repl.run`` resolves ``[exec]`` config, builds a session, and hands off to
   ``run_console`` (mocked) with the echo flag and a history path derived from
@@ -73,7 +73,7 @@ class TestReplArgsParsing:
     def test_input_option_removed(
         self, runner: CliRunner, recorded_runs: list[object]
     ) -> None:
-        # M6: --input has been removed from agm repl.
+        # --input has been removed from agm repl.
         result = invoke(runner, ["repl", "--input", "a=1"])
         assert result.exit_code != 0  # unknown option
 
@@ -358,7 +358,7 @@ class TestReplRun:
 
 
 # ---------------------------------------------------------------------------
-# M4 wiring: agent mode and trace path resolution
+# Wiring: agent mode and trace path resolution
 # ---------------------------------------------------------------------------
 
 

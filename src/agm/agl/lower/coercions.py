@@ -1,4 +1,4 @@
-"""Coercion compiler for the AgL lowering phase (M2-A).
+"""Coercion compiler for the AgL lowering phase.
 
 ``compile_coercion(source, target)`` is the ONLY place that reads checker
 ``Type`` objects to produce a ``Coercion`` descriptor.  Once this function

@@ -1,7 +1,7 @@
-"""Golden structural tests for the agm.agl.ir package (M1 skeleton).
+"""Golden structural tests for the agm.agl.ir package.
 
 These tests pin the structural contract of the IR data model so that later
-milestones notice accidental shape changes.  They cover:
+implementation phases notice accidental shape changes.  They cover:
 - Every node, descriptor, and id type.
 - Frozenness (mutating a field raises FrozenInstanceError).
 - Field values round-trip correctly.

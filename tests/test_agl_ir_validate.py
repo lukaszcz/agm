@@ -1,7 +1,7 @@
-"""Tests for agm.agl.ir.validate — structural IR validator (M1-C).
+"""Tests for agm.agl.ir.validate — structural IR validator.
 
 TDD: these tests were written before the implementation.  Each invariant from
-the M1-C task spec has at least one failing case to exercise the error path.
+the C task spec has at least one failing case to exercise the error path.
 
 Sections:
 - Helpers / factories
@@ -944,12 +944,12 @@ class TestIrRenderTemplateValidation:
             validate_ir(prog, deep=True)
 
 # ===========================================================================
-# M4a — FunctionDescriptor table, IrMakeClosure, IrDirectCall
+# FunctionDescriptor table, IrMakeClosure, IrDirectCall
 # ===========================================================================
 
 
 def _fn_sym_desc() -> SymbolDescriptor:
-    """A symbol descriptor with FunctionId owner (valid in M4a)."""
+    """A symbol descriptor with FunctionId owner."""
     return SymbolDescriptor(symbol_id=SYM1, mutable=False, public_name="f", owner=FN0)
 
 
@@ -1151,7 +1151,7 @@ class TestM4aIrDirectCall:
 
 
 # ===========================================================================
-# M4b — IrIndirectCall validation invariants
+# IrIndirectCall validation invariants
 # ===========================================================================
 
 
@@ -1244,7 +1244,7 @@ class TestM4bIrIndirectCall:
 
 
 # ===========================================================================
-# M6a: IrPrint / IrParseJson validation
+# IrPrint / IrParseJson validation
 # ===========================================================================
 
 
@@ -1339,7 +1339,7 @@ class TestM6aPrintParseJsonValidation:
 
 
 # ===========================================================================
-# M6a: IrParam validation
+# IrParam validation
 # ===========================================================================
 
 
@@ -1454,12 +1454,12 @@ class TestM6aIrParamValidation:
 
 
 # ===========================================================================
-# M6c — IrExec validation
+# IrExec validation
 # ===========================================================================
 
 
 class TestM6cIrExecValidation:
-    """Validation tests for IrExec nodes (M6c)."""
+    """Validation tests for IrExec nodes."""
 
     def _make_prog_with_contract(
         self,

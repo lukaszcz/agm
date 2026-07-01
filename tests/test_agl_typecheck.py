@@ -4119,7 +4119,7 @@ class TestValueCallErrors:
 
 
 # ---------------------------------------------------------------------------
-# M2 generics: GenericTypeDef, ConstructorSignature, FunctionSignature.type_params
+# Generics: GenericTypeDef, ConstructorSignature, FunctionSignature.type_params
 # ---------------------------------------------------------------------------
 
 
@@ -4492,12 +4492,12 @@ class TestTypeVarTypeSchema:
 
 
 # ---------------------------------------------------------------------------
-# M3a: Generic def checking, type-argument solver, parametricity gates
+# Generic def checking, type-argument solver, parametricity gates
 # ---------------------------------------------------------------------------
 
 
 class TestGenerics:
-    """Tests for M3a: generic def type-checking, inference, D2 parametricity,
+    """Tests for generic def type-checking, inference, D2 parametricity,
     D3 target guard, and D5 generic-def-as-value instantiation."""
 
     # ------------------------------------------------------------------
@@ -4938,7 +4938,7 @@ class TestGenerics:
         )
 
 # ---------------------------------------------------------------------------
-# M3b: Generic record/enum type declarations
+# Generic record/enum type declarations
 # ---------------------------------------------------------------------------
 
 
@@ -5405,7 +5405,7 @@ class TestNonGenericConstructorsUnchanged:
 
 
 class TestNonGenericConstructorAsValue:
-    """M4 Gap 1: non-generic constructor with fields used in value position."""
+    """Non-generic constructor with fields used in value position."""
 
     def test_record_ctor_with_fields_as_value_is_function_type(self) -> None:
         r = accept_type(
@@ -5590,12 +5590,12 @@ class TestGenericEnumQualifiersAndTypeVarScoping:
 
 
 # ---------------------------------------------------------------------------
-# M3b: additional coverage tests
+# additional coverage tests
 # ---------------------------------------------------------------------------
 
 
 class TestGenericCoverageEdgeCases:
-    """Tests for M3b code paths not yet exercised by the main test classes."""
+    """Tests for code paths not yet exercised by the main test classes."""
 
     def test_generic_field_type_references_generic_record(self) -> None:
         """AppliedT branch (record path) in _ensure_referenced_type_built."""
@@ -5851,7 +5851,7 @@ class TestGenericAbstractInstanceAccess:
 
 
 # ---------------------------------------------------------------------------
-# Cast typecheck tests (M3)
+# Cast typecheck tests
 # ---------------------------------------------------------------------------
 
 

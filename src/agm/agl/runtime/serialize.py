@@ -3,7 +3,7 @@
 This is the single source of truth for converting AgL ``Value`` objects to
 JSON-shaped Python objects and for emitting them as JSON text.
 
-Design constraint (design §5.1: *no binary floating-point anywhere*): a
+Design constraint: a
 ``DecimalValue`` carries an exact :class:`decimal.Decimal`.  It is **never**
 routed through :class:`float`.  Instead :func:`value_to_json_obj` preserves the
 ``Decimal`` in the JSON-shaped object, and :func:`dumps_exact` emits it as

@@ -12,7 +12,7 @@ cells across entries. Runtime failure is non-transactional: every initializer
 completed before the failure remains visible, while unreached initializers do not.
 
 This module is intentionally UI-free — it returns plain ``EntryResult`` data;
-rendering, meta-commands, and the prompt_toolkit console are later milestones.
+rendering, meta-commands, and the prompt_toolkit console are future work.
 """
 
 from __future__ import annotations
@@ -179,7 +179,7 @@ class ReplSession:
         # access (``Owner.variant``) across REPL entries.
         self._ambient_type_names: frozenset[str] = frozenset()
 
-        # Module roots configuration (M6 REPL import support).
+        # Module roots configuration.
         # These are stored so _ensure_roots() can assemble the RootSet lazily.
         self._cwd: Path | None = cwd
         self._stdlib_root: Path | None = (
@@ -218,7 +218,7 @@ class ReplSession:
         self._runtime.register_codec(codec)
 
     # ------------------------------------------------------------------
-    # Module roots (M6)
+    # Module roots
     # ------------------------------------------------------------------
 
     def _ensure_roots(self) -> "RootSet":
@@ -963,7 +963,7 @@ class ReplSession:
             loop_limit=self._initial_loop_limit,
             shell_exec_timeout=self._initial_shell_exec_timeout,
         )
-        # Clear module state (M6).
+        # Clear module state.
         self._roots = None
         self._loaded_lib_modules = {}
         self._accumulated_imports = []

@@ -4,9 +4,9 @@ This module holds closed tagged-data descriptors that the lowerer compiles
 while checker types are still available, and that the evaluator executes
 WITHOUT any checker ``Type``.  Currently it defines the cast/conversion
 descriptors (``ConversionRecipe`` and the ``DecodeSchema`` union); host
-contract / param-decoder descriptors arrive in later milestones.
+contract / param-decoder descriptors arrive in future work.
 
-Dependency rule (enforced in M9, designed toward now): ``agm.agl.ir`` imports
+Dependency rule: ``agm.agl.ir`` imports
 only stdlib + ``ir.ids`` / ``ir.operations`` + ``modules.ids``.  It imports
 nothing from ``typecheck``, ``eval``, or ``runtime``, and stores no callables —
 every descriptor is immutable, runtime-neutral data.
@@ -161,13 +161,13 @@ class ConversionRecipe:
 
 
 # ---------------------------------------------------------------------------
-# Contract request — per-call ask/ask-request descriptor (M6b)
+# Contract request — per-call ask/ask-request descriptor
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
 class ContractRequest:
-    """Typeless contract descriptor for an ask/ask-request call site (M6b).
+    """Typeless contract descriptor for an ask/ask-request call site.
 
     Built at lowering while checker types are available; evaluated WITHOUT any
     checker ``Type``.  The evaluator parses agent output using only this descriptor.

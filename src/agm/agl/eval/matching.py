@@ -36,7 +36,7 @@ __all__ = ["_describe_value", "make_match_error"]
 
 
 def _describe_value(value: Value) -> str:
-    """Return the AgL type-name of *value* (design §8.1 ``scrutinee_type``).
+    """Return the AgL type-name of *value*.
 
     Mirrors ``interpreter._describe_value`` exactly — this is the single
     authoritative implementation.  Both evaluators call this function.

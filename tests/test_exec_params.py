@@ -1,4 +1,4 @@
-"""Tests for the exec_params helper module (M4: per-param CLI options for agm exec)."""
+"""Tests for the exec_params helper module."""
 
 from __future__ import annotations
 
@@ -394,7 +394,7 @@ class TestRenderParamHelpSection:
 
 
 # ---------------------------------------------------------------------------
-# resolve_param_values (M5)
+# resolve_param_values
 # ---------------------------------------------------------------------------
 
 

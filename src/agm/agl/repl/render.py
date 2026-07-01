@@ -1,10 +1,9 @@
 """Format an :class:`~agm.agl.repl.session.EntryResult` into REPL output text.
 
-This is the **minimal** M2 renderer.  It turns the pure-data ``EntryResult``
+This renderer turns the pure-data ``EntryResult``
 into the plain-text lines the console prints after evaluating one entry.  It is
-deliberately small and styling-free so M3 can enrich it (richer value
-formatting, the ``:set echo`` toggle already threads through the ``echo`` flag)
-without rewriting the loop.
+deliberately small and styling-free so richer value formatting and echo handling
+can evolve without rewriting the loop.
 
 Channels mirror ``agm exec`` severity formatting; REPL diagnostics omit a
 source filename:

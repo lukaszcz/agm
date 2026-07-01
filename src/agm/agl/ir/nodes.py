@@ -1,30 +1,7 @@
-"""IR node types for the AgL typeless execution IR — M1 skeleton subset.
+"""IR node types for the AgL typeless execution IR.
 
 Every node is a frozen dataclass with a ``location: Location`` field.
 Child collections are ``tuple`` (never ``list``).
-
-This module contains the M1 subset only.  Families deferred to later
-milestones (left as comments so later agents know what to add):
-
-  M3 — arithmetic/comparison/contains/and/or nodes (IrArith, IrCompare,
-        IrContains, IrAnd, IrOr); constructors (IrMakeRecord, IrMakeVariant);
-        field/index access (IrFieldAccess, IrIndexAccess); cast/is-test
-        (IrCast, IrIsTest); unary (IrUnaryNeg, IrUnaryNot);
-        template strings (IrTemplate); if/case/do/try/raise expressions;
-        pattern-match plans (IrMatchPlan and friends).
-
-        Forward warnings for M3:
-        - ``IrArith(ADD, ...)`` currently pairs ``ArithOp.ADD`` only with
-          ``NumericKind`` (INT/DECIMAL), but AgL allows ``text + text`` string
-          concatenation — M3 must add a text/string representation for ADD.
-        - ``IrCompare`` equality (EQ/NEQ) is broader than ordering: the
-          checker's ``comparable_types`` permits bool/record/enum/list/dict
-          equality, so M3 needs an equality kind wider than the current
-          ``CompareKind`` (INT/DECIMAL/TEXT), which covers only ordering.
-  M4 — functions/lambdas/closures (IrFuncDef, IrLambda, IrCall, IrTailCall,
-        IrReturn); param binding (IrParam); free-var capture descriptors.
-  M5 — cross-module symbol references; module init ordering.
-  M6 — host-prep metadata (agent declarations, param descriptors).
 
 ``IrExpr`` is the closed union of all expression node types defined here.
 The evaluator and lowerer dispatch over it with a structural ``match`` whose
@@ -34,7 +11,7 @@ missing case a compile-time error.
 ``IrIndexStep`` is a helper child record used by ``IrAssign``; it is NOT a
 member of ``IrExpr``.
 
-Invariant (enforced by the validator in M1-C): ``IrSequence`` and ``IrBlock``
+Invariant: ``IrSequence`` and ``IrBlock``
 must be non-empty (``len(items) >= 1``).  The validator checks this; do not
 rely on the constructor to enforce it, so that the linker can build nodes
 incrementally.
@@ -316,7 +293,7 @@ class IrSequence:
 
     The value of an ``IrSequence`` is the value of its last item.
 
-    Invariant: ``len(items) >= 1`` (enforced by ``validate_ir`` in M1-C).
+    Invariant: ``len(items) >= 1`` (enforced by ``validate_ir``).
 
     Distinguished from ``IrBlock``: ``IrSequence`` is a lowering-internal
     construct used by the lowerer to sequence an effectful sub-expression
@@ -334,7 +311,7 @@ class IrBlock:
 
     The value of an ``IrBlock`` is the value of its last item.
 
-    Invariant: ``len(items) >= 1`` (enforced by ``validate_ir`` in M1-C).
+    Invariant: ``len(items) >= 1`` (enforced by ``validate_ir``).
 
     Distinguished from ``IrSequence``: ``IrBlock`` corresponds one-to-one
     with a ``Block`` node in the source AST.  ``IrSequence`` is used for
@@ -346,7 +323,7 @@ class IrBlock:
 
 
 # ---------------------------------------------------------------------------
-# Operator nodes (M3)
+# Operator nodes
 # ---------------------------------------------------------------------------
 
 
@@ -414,7 +391,7 @@ class IrUnary:
 
 
 # ---------------------------------------------------------------------------
-# Field/index access and template nodes (M3c)
+# Field/index access and template nodes
 # ---------------------------------------------------------------------------
 
 
@@ -464,7 +441,7 @@ class IrRenderTemplate:
 
 
 # ---------------------------------------------------------------------------
-# Constructor nodes (M3d)
+# Constructor nodes
 # ---------------------------------------------------------------------------
 
 
@@ -590,7 +567,7 @@ class IrVariantIs:
 
 
 # ---------------------------------------------------------------------------
-# Control-flow nodes (M3f-A)
+# Control-flow nodes
 # ---------------------------------------------------------------------------
 
 
@@ -677,7 +654,7 @@ class IrTry:
 
 
 # ---------------------------------------------------------------------------
-# Match plan nodes (M3f-B) — closed tagged-data union for case patterns
+# Match plan nodes — closed tagged-data union for case patterns
 # ---------------------------------------------------------------------------
 # These are NOT members of IrExpr; they appear only as IrCaseArm.plan.
 # Dispatch over IrMatchPlan uses a closed match/assert_never (D4).
@@ -723,7 +700,7 @@ IrMatchPlan = IrWildcardPlan | IrBindPlan | IrLiteralPlan | IrVariantPlan | IrCo
 
 
 # ---------------------------------------------------------------------------
-# Case expression helper and node (M3f-B)
+# Case expression helper and node
 # ---------------------------------------------------------------------------
 
 
@@ -849,7 +826,7 @@ class IrIterNext:
 
 
 # ---------------------------------------------------------------------------
-# Function/closure nodes (M4a)
+# Function/closure nodes
 # ---------------------------------------------------------------------------
 
 
@@ -917,7 +894,7 @@ class IrIndirectCall:
 
 
 # ---------------------------------------------------------------------------
-# Host operation nodes (M6a)
+# Host operation nodes
 # ---------------------------------------------------------------------------
 
 
@@ -1046,7 +1023,7 @@ class IrConfigBind:
 # ---------------------------------------------------------------------------
 
 #: Closed union of all IR expression node types defined in this module.
-#: Grows in M4 as function/call families are wired in.
+#: Closed union of all expression node types.
 #:
 #: Dispatch with a structural ``match`` whose final arm is
 #: ``assert_never(node)`` (D4) so mypy exhaustiveness makes a missing case a

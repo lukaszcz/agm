@@ -43,7 +43,7 @@ def get_engine_key_type(name: str) -> Type | None:
 # Program names that collide with AGM top-level command and TOML config-section
 # names.  A ``program NAME`` declaration whose name is in this set is a scope
 # error because it would conflict with an existing ``[NAME]`` section in the
-# config file schema (plan §15 / D7).
+# config file schema.
 #
 # Sources: the shared CLI command catalog (:mod:`agm.command_catalog`) plus the
 # reserved structural config-section names (:mod:`agm.config.sections`).

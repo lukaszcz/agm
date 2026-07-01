@@ -18,8 +18,8 @@ Design decisions implemented
 - **D10** — unified namespace: any top-level non-private ``FuncDef``, ``RecordDef``,
   ``EnumDef``, or ``TypeAlias`` name may appear in ``using``/``hiding``.
 
-The :class:`ImportEnv` produced here is consumed by M3b (graph resolver) and M4
-(typecheck) so both of those layers agree on import semantics.
+The :class:`ImportEnv` produced here is consumed by graph resolution and
+typechecking so both layers agree on import semantics.
 """
 
 from __future__ import annotations

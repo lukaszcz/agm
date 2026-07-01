@@ -14,7 +14,7 @@ semantic :class:`~agm.agl.semantics.types.Type`.  The derived schema is used:
 reconstruct typed ``Value`` objects from validated JSON without holding
 checker ``Type`` references.
 
-Derivation rules (design §7.3 / §7.4):
+Derivation rules:
 - ``text``    → ``{"type": "string"}``
 - ``int``     → ``{"type": "integer"}``
 - ``decimal`` → ``{"type": "number"}``
@@ -118,7 +118,7 @@ def derive_schema(typ: Type) -> dict[str, object]:
 
 
 def _record_schema(typ: RecordType) -> dict[str, object]:
-    """Derive the JSON Schema for a record type (design §7.3)."""
+    """Derive the JSON Schema for a record type."""
     properties: dict[str, object] = {
         field_name: derive_schema(field_type)
         for field_name, field_type in typ.fields.items()
@@ -132,7 +132,7 @@ def _record_schema(typ: RecordType) -> dict[str, object]:
 
 
 def _enum_schema(typ: EnumType) -> dict[str, object]:
-    """Derive the JSON Schema for an enum type (design §7.4).
+    """Derive the JSON Schema for an enum type.
 
     Each variant becomes a ``oneOf`` alternative.  The ``"$case"`` property
     is a ``const`` string that identifies the selected variant; payload fields

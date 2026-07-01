@@ -1,4 +1,4 @@
-"""Tests for PipelineDriver — M0 shell behaviors preserved, M1 additions.
+"""Tests for PipelineDriver shell behaviors and runtime additions.
 
 Covers:
 - PipelineDriver constructor with default kwargs
@@ -8,7 +8,7 @@ Covers:
 - RunResult has .ok (bool), .diagnostics (list), .error (None for pre-exec failures)
 - AglError and SourceSpan
 - Token constants
-- M1 additions: agent registration/fallback, capability derivation, param validation,
+- Runtime additions: agent registration/fallback, capability derivation, param validation,
   text-codec behavior, AgentCallError, empty-response valid case
 """
 
@@ -37,7 +37,7 @@ _STDLIB_ROOT = pathlib.Path(__file__).resolve().parents[1] / "stdlib"
 class TestPipelineDriverConstructor:
     def test_default_constructor_uses_documented_defaults(self) -> None:
         rt = PipelineDriver()
-        # Documented constructor defaults (design §2.8/§2.11).
+        # Documented constructor defaults.
         # The max-iters valve defaults to OFF (None): unbounded loops run until
         # they self-terminate; an explicit max-iters turns the valve on.
         assert rt.default_loop_limit is None
@@ -60,7 +60,7 @@ class TestPipelineDriverConstructor:
         rt = PipelineDriver(default_agent=my_agent)
         rt.register_agent("reviewer", my_agent)  # should not raise
         # The source declares the registered agent so the source↔host contract
-        # holds (M4); a valid program then returns ok=True.
+        # holds; a valid program then returns ok=True.
         result = rt.run("agent reviewer\nlet x = 1\nx")
         assert result.ok is True
         assert result.error is None
@@ -163,7 +163,7 @@ class TestRegisterAgent:
 
 
 class TestRunBehavior:
-    """M1 run() behavior: valid programs run, static errors fail cleanly."""
+    """run() behavior: valid programs run, static errors fail cleanly."""
 
     def test_run_returns_run_result(self) -> None:
         rt = PipelineDriver()
@@ -341,7 +341,7 @@ class TestInputValidationRuntime:
 
 
 class TestEmptyResponse:
-    """Exit 0 with empty stdout is a valid empty response (plan §9.5)."""
+    """Exit 0 with empty stdout is a valid empty response."""
 
     def test_empty_string_response_is_valid_text(self) -> None:
         rt = PipelineDriver(default_agent=lambda req: "")
@@ -395,7 +395,7 @@ class TestUncaughtAgentCallErrorSpan:
 
     ``AgentRegistry.dispatch`` raises ``AglRaise`` without a span; the
     interpreter must attach the agent-call node's span so the exit-2 error
-    reports ``at line N`` (design §12.6).
+    reports ``at line N``.
     """
 
     def _failing_runtime(self) -> PipelineDriver:
@@ -852,7 +852,7 @@ class TestWarningsThreadedOnFailurePaths:
     def test_warning_and_missing_param_both_visible(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # M1 produces no checker warnings organically, so inject one through the
+        # Inject a checker warning through the
         # CheckedProgram the runtime threads from ``check``.  This exercises the
         # real failure path (missing param) while a warning is present.
         import agm.agl.typecheck as tc_mod
@@ -949,7 +949,7 @@ class TestParamBindingInvariant:
 
 
 # ---------------------------------------------------------------------------
-# CARRY-IN 1 — capabilities built from registrations (M3b)
+# CARRY-IN 1 — capabilities built from registrations
 # ---------------------------------------------------------------------------
 
 
@@ -1968,7 +1968,7 @@ class TestRuntimeErrorPaths:
         assert result == JsonValue([1, 2, 3])
 
     def test_convert_param_value_list_type_parsed_via_json_codec(self) -> None:
-        # M2: list/dict/record/enum params are now accepted via the JsonCodec.
+        # list/dict/record/enum params are now accepted via the JsonCodec.
         from agm.agl.runtime.params import convert_param_value
         from agm.agl.semantics.types import ListType, TextType
         from agm.agl.semantics.values import ListValue, TextValue
@@ -2183,7 +2183,7 @@ class TestMaxIterationsExceededSchema:
     def test_metadata_field_is_accessible(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        # ``metadata`` is a json placeholder (null until the M4 trace store), but
+        # ``metadata`` is a json placeholder, but
         # it is part of the schema and must be readable as a field.
         rt = PipelineDriver()
         program = (
@@ -2252,7 +2252,7 @@ class TestExhaustivenessWarningSurfaces:
 
 
 class TestShellExecTimeoutProperty:
-    """M4: shell_exec_timeout is a readable constructor parameter."""
+    """shell_exec_timeout is a readable constructor parameter."""
 
     def test_default_shell_exec_timeout_is_none(self) -> None:
         rt = PipelineDriver()
@@ -2374,7 +2374,7 @@ class TestTabWarningsInRunResult:
 
 
 # ---------------------------------------------------------------------------
-# declared_agents() API (M4)
+# declared_agents() API
 # ---------------------------------------------------------------------------
 
 
@@ -2419,7 +2419,7 @@ class TestDeclaredAgentsApi:
 
 
 # ---------------------------------------------------------------------------
-# Source↔host reconciliation in run() (M4, plan §8, decisions 1 & 11)
+# Source↔host reconciliation in run()
 # ---------------------------------------------------------------------------
 
 
@@ -3028,12 +3028,12 @@ class TestV2AskWithAgentValue:
 
 
 # ---------------------------------------------------------------------------
-# M5b: PreparedGraph / prepare_program / run_prepared_graph / discover_params_graph
+# PreparedGraph / prepare_program / run_prepared_graph / discover_params_graph
 # ---------------------------------------------------------------------------
 
 
 class TestPrepareProgram:
-    """PipelineDriver.prepare_program: graph-mode front-end (M5b)."""
+    """PipelineDriver.prepare_program: graph-mode front-end."""
 
     def test_prepare_program_no_imports_returns_prepared_graph(
         self, tmp_path: pathlib.Path
@@ -3146,7 +3146,7 @@ class TestPrepareProgram:
 
 
 class TestRunPreparedGraph:
-    """PipelineDriver.run_prepared_graph: graph execution (M5b)."""
+    """PipelineDriver.run_prepared_graph: graph execution."""
 
     def test_single_entry_graph_behaves_like_run(
         self, tmp_path: pathlib.Path
@@ -3293,7 +3293,7 @@ class TestRunPreparedGraph:
 
 
 class TestDiscoverParamsGraph:
-    """PipelineDriver.discover_params_graph: typed param discovery (M5b)."""
+    """PipelineDriver.discover_params_graph: typed param discovery."""
 
     def test_discover_params_no_params(
         self, tmp_path: pathlib.Path
@@ -3344,7 +3344,7 @@ class TestDiscoverParamsGraph:
 
 
 # ---------------------------------------------------------------------------
-# M5b: coverage gap tests for defensive/exceptional paths
+# coverage gap tests for defensive/exceptional paths
 # ---------------------------------------------------------------------------
 
 

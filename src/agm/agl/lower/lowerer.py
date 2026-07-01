@@ -1,11 +1,11 @@
-"""Single-module lowerer for the AgL typeless execution IR (M2-A).
+"""Single-module lowerer for the AgL typeless execution IR.
 
-Transforms a ``CheckedProgram`` into an ``ExecutableProgram`` for the M2 node
-subset.  Every implicit coercion is inserted explicitly at compile time via
+Transforms a ``CheckedProgram`` into an ``ExecutableProgram`` for the supported
+node subset.  Every implicit coercion is inserted explicitly at compile time via
 ``compile_coercion``; the evaluator switches only on pre-resolved ``Coercion``
 descriptors and never inspects value types at runtime.
 
-M2 supported AST nodes
+Supported AST nodes
 -----------------------
   Expressions
     UnitLit, IntLit, DecimalLit, BoolLit, NullLit, StringLit
@@ -402,7 +402,7 @@ class _Lowerer:
     # Binder kinds whose values live in evaluation frames and can therefore be
     # captured by a closure (D5).  function_binding is resolved through the function
     # table (via the base frame, which always contains all module-level bindings);
-    # agent_binding/constructor_binding are not frame values in the M4 IR
+    # agent_binding/constructor_binding are not frame values in the IR
     # (host prep / constructors are handled elsewhere) so they are not captures here.
     _CAPTURABLE_KINDS = frozenset({
         BinderKind.let_binding,
@@ -880,7 +880,7 @@ class _Lowerer:
                 return self._lower_block(items, span)
 
             # ----------------------------------------------------------
-            # Operator nodes — M3b
+            # Operator nodes
             # ----------------------------------------------------------
             case BinaryOp(op=op, left=left_expr, right=right_expr, span=span):
                 return self._lower_binary_op(op, left_expr, right_expr, span)
@@ -904,7 +904,7 @@ class _Lowerer:
                 )
 
             # ----------------------------------------------------------
-            # Field access — qualified constructor ref or IrField (M3c/M3d)
+            # Field access — qualified constructor ref or IrField
             # ----------------------------------------------------------
             case FieldAccess(obj=obj_expr, field=field_name, span=span, node_id=nid):
                 qcr = self._checked.resolved.qualified_constructor_refs.get(nid)
@@ -930,7 +930,7 @@ class _Lowerer:
                 )
 
             # ----------------------------------------------------------
-            # Index access → IrIndex (M3c)
+            # Index access → IrIndex
             # ----------------------------------------------------------
             case IndexAccess(obj=obj_expr, index=index_expr, span=span):
                 container_type = self._node_type(obj_expr.node_id)
@@ -943,7 +943,7 @@ class _Lowerer:
                 )
 
             # ----------------------------------------------------------
-            # Template string → IrRenderTemplate (M3c)
+            # Template string → IrRenderTemplate
             # ----------------------------------------------------------
             case Template(segments=segments, span=span):
                 ir_segs: list[IrTemplateText | IrTemplateValue] = []
@@ -957,7 +957,7 @@ class _Lowerer:
                 return IrRenderTemplate(location=self._loc(span), segments=tuple(ir_segs))
 
             # ----------------------------------------------------------
-            # Call — constructor calls lowered here; all other calls deferred (M4)
+            # Call — constructor calls lowered here; all other calls deferred
             # ----------------------------------------------------------
             case Call(node_id=nid, span=span) as call_node:
                 return self._lower_call(call_node, nid, span)
@@ -1011,7 +1011,7 @@ class _Lowerer:
                 )
 
             # ----------------------------------------------------------
-            # Control flow — M3f-A: if, raise, try
+            # Control flow — if, raise, try
             # ----------------------------------------------------------
             case If(branches=branches, span=span, node_id=nid):
                 return self._lower_if(branches, span, self._node_type(nid))
@@ -1026,7 +1026,7 @@ class _Lowerer:
                 return self._lower_try(body_expr, handlers, span)
 
             # ----------------------------------------------------------
-            # Case expression — M3f-B
+            # Case expression
             # ----------------------------------------------------------
             case Case(subject=subject_expr, branches=branches, span=span, node_id=nid):
                 return self._lower_case(
@@ -1073,7 +1073,7 @@ class _Lowerer:
                 return IrContinue(location=self._loc(span))
 
             # ----------------------------------------------------------
-            # Lambda expression — M4b
+            # Lambda expression
             # ----------------------------------------------------------
             case Lambda(params=params, body=body_expr, span=span, node_id=nid):
                 return self._lower_lambda(params, body_expr, span, nid)
@@ -1521,7 +1521,7 @@ class _Lowerer:
         return IrMakeDict(location=self._loc(node.span), entries=ir_entries)
 
     # ------------------------------------------------------------------
-    # Operator helpers (M3b)
+    # Operator helpers
     # ------------------------------------------------------------------
 
     def _lower_binary_op(
@@ -1648,7 +1648,7 @@ class _Lowerer:
         )
 
     # ------------------------------------------------------------------
-    # Constructor lowering helpers (M3d)
+    # Constructor lowering helpers
     # ------------------------------------------------------------------
 
     def _nominal_for_cref_owner(
@@ -1710,9 +1710,8 @@ class _Lowerer:
     ) -> IrExpr:
         """Lower a builtin call node by dispatching on ``BuiltinKind`` (D4).
 
-        M6a builtins (``PRINT``, ``PARSE_JSON``) are lowered here.
-        M6b builtins (``ASK``, ``ASK_REQUEST``) are lowered here.
-        M6c builtins (``EXEC``) are lowered here.
+        Host builtins (``PRINT``, ``PARSE_JSON``, ``ASK``, ``ASK_REQUEST``,
+        and ``EXEC``) are lowered here.
         """
         loc = self._loc(span)
         match kind:
@@ -1783,7 +1782,7 @@ class _Lowerer:
                     cref.variant,
                     span,
                 )
-            # (b) VarRef callee resolving via BinderKind.constructor_binding (M5).
+            # (b) VarRef callee resolving via BinderKind.constructor_binding.
             callee_ref = self._checked.resolved.resolution.get(callee.node_id)
             if (
                 callee_ref is not None
@@ -1813,7 +1812,7 @@ class _Lowerer:
                     span,
                 )
 
-        # Indirect/value call (M4b): callee is an arbitrary expression (lambda, let-bound
+        # Indirect/value call: callee is an arbitrary expression (lambda, let-bound
         # closure, function-value param, etc.).  Named args are rejected by the checker at
         # value-call sites, so only positional args exist here.
         return self._lower_indirect_call(call_node, nid, span)
@@ -1999,7 +1998,7 @@ class _Lowerer:
         return IrBlock(location=self._loc(span), items=tuple(real))
 
     # ------------------------------------------------------------------
-    # Control-flow helpers (M3f-A)
+    # Control-flow helpers
     # ------------------------------------------------------------------
 
     def _lower_if(
@@ -2072,7 +2071,7 @@ class _Lowerer:
         )
 
     # ------------------------------------------------------------------
-    # Case expression helpers (M3f-B)
+    # Case expression helpers
     # ------------------------------------------------------------------
 
     def _lower_case(
@@ -2133,7 +2132,7 @@ class _Lowerer:
                 assert_never(unreachable)
 
     # ------------------------------------------------------------------
-    # Ask/ask-request lowering (M6b)
+    # Ask/ask-request lowering
     # ------------------------------------------------------------------
 
     def _lower_ask_call(
@@ -2220,7 +2219,7 @@ class _Lowerer:
         )
 
     # ------------------------------------------------------------------
-    # Exec lowering (M6c)
+    # Exec lowering
     # ------------------------------------------------------------------
 
     def _lower_exec_call(
@@ -2300,7 +2299,7 @@ class _Lowerer:
 
         Returns an ``IrExpr`` for nodes with runtime action, or ``None`` for
         purely compile-time declarations (type definitions, function defs, etc.)
-        that have no IR representation in M2.
+        that have no IR representation.
 
         The IrBlock construction must then filter out the ``None`` values.
 
@@ -2336,7 +2335,7 @@ class _Lowerer:
                 return self._lower_assign(target, rhs, span, nid)
 
             # ----------------------------------------------------------
-            # Declarations with no runtime action in M2
+            # Declarations with no runtime action
             # ----------------------------------------------------------
             case FuncDef() as funcdef:
                 if funcdef.is_builtin:
@@ -2722,7 +2721,7 @@ def lower_program(
     :param source_label: human-readable label for the source (display_name).
     :param validate: when ``True``, run ``validate_ir`` before returning.
     :returns: the linked ``ExecutableProgram`` ready for evaluation.
-    :raises NotImplementedError: for AST nodes outside the M2 subset.
+    :raises NotImplementedError: for unsupported AST nodes.
     :raises AssertionError: for missing checker side-table entries (compiler bugs).
     """
     link = _LinkState()

@@ -1,4 +1,4 @@
-"""Whole-graph module lowering for the AgL typeless execution IR (M5).
+"""Whole-graph module lowering for the AgL typeless execution IR.
 
 ``lower_graph`` links a :class:`~agm.agl.typecheck.graph.CheckedModuleGraph`
 into a single :class:`~agm.agl.ir.program.ExecutableProgram` with one shared

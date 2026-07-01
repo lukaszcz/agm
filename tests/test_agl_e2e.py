@@ -7,17 +7,17 @@ tests/agl/rejections/**/*.agl file is an invalid program that the static
 pipeline must reject before executing anything. The data format is documented
 in tests/agl/README.md.
 
-Public contract exercised here (notes/PLAN_DSL.md §9, notes/dsl_design.md §7.6):
+Public contract exercised here (AgL implementation requirements §9, the AgL DSL design §7.6):
 
     from agm.agl import PipelineDriver
 
     runtime = PipelineDriver(
-        default_strict_json=False,  # lenient JSON recovery is the default (design §2.8)
+        default_strict_json=False,  # lenient JSON recovery is the default
         default_agent=fn,           # the built-in `ask` agent (a host callable;
                                     # `ask` cannot be registered by name)
     )
     runtime.register_agent(name, fn)   # fn(request) -> str; request.prompt is the
-                                       # rendered user prompt (design §7.5)
+                                       # rendered user prompt
     result = runtime.run(source, param_values={...})
 
 RunResult surface asserted:
@@ -52,7 +52,7 @@ REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 
 
 def _load_json(path: Path) -> Any:
-    # parse_float=Decimal: AgL has no binary floats (design §5.1); scenario
+    # parse_float=Decimal: AgL has no binary floats; scenario
     # params and expected exception fields must round-trip decimals exactly.
     return json.loads(path.read_text(encoding="utf-8"), parse_float=Decimal)
 

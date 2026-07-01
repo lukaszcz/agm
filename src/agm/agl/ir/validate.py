@@ -1,4 +1,4 @@
-"""Structural IR validator for the AgL typeless execution IR (M1-C).
+"""Structural IR validator for the AgL typeless execution IR.
 
 Two tiers (D6 — validate_ir runs ONLY when explicitly called):
 
@@ -13,8 +13,8 @@ Two tiers (D6 — validate_ir runs ONLY when explicitly called):
        ``ExecutableModule.module_id`` equals its dict key.
     2. Each ``program.symbols`` entry: ``descriptor.symbol_id`` equals its
        key; ``descriptor.owner``, when a ``ModuleId``, exists in
-       ``program.modules``; a ``FunctionId`` owner is a violation in M1
-       (no functions table yet).
+       ``program.modules``; a ``FunctionId`` owner must exist in the
+       functions table.
     3. Each ``program.nominals`` entry: ``descriptor.nominal`` equals its key.
     4. Every ``SymbolId`` referenced by ``IrLoad``/``IrBind``/``IrAssign``
        exists in ``program.symbols``.
@@ -25,7 +25,7 @@ Two tiers (D6 — validate_ir runs ONLY when explicitly called):
 
 The expression dispatcher uses a closed structural ``match`` with a final
 ``assert_never(node)`` arm (D4) so that adding an ``IrExpr`` variant in a
-later milestone without a validator arm produces a mypy exhaustiveness error.
+future change without a validator arm produces a mypy exhaustiveness error.
 
 ``validate_ir`` raises ``InvalidIrError`` on the *first* violation found.
 """
@@ -198,7 +198,7 @@ def _validate_location(loc: Location, ctx: _Context) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Nominal completeness check helpers (deep tier, M3d)
+# Nominal completeness check helpers (deep tier)
 # ---------------------------------------------------------------------------
 
 
@@ -285,7 +285,7 @@ def _validate_index_step(step: IrIndexStep, ctx: _Context) -> None:
 
 
 # ---------------------------------------------------------------------------
-# IrCatchHandler validation (deep tier, M3f-A)
+# IrCatchHandler validation (deep tier)
 # ---------------------------------------------------------------------------
 
 

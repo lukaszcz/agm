@@ -99,7 +99,7 @@ class _TypeBuilder:
     - Alias cycles.
 
     Implementation uses a two-phase approach so that type declarations are
-    order-independent (design §0 "type-decl ordering"):
+    order-independent:
 
     Phase 1  Register all user-declared type names and alias targets.
              Empty shells (RecordType/EnumType with empty fields/variants)

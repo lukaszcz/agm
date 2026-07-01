@@ -3,8 +3,7 @@
 Records every agent-call attempt, parse result, retry, mutation, ``print``,
 ``exec`` command (with exit code, duration, and outputs), and exception, with a
 ``trace_id`` + source span.  Persisted under ``.agent-files/`` via
-``core/log`` helpers.  Honors ``--no-log``/``--log-file`` (plan §9.6,
-§10.1).
+``core/log`` helpers.  Honors ``--no-log``/``--log-file``.
 
 Design §12.6 record format followed:
 - Every record carries: ``run_id``, ``kind``, ``trace_id``, ``line``,
@@ -70,10 +69,9 @@ class TraceStore:
         Cheap and always valid, even when logging is disabled (``path`` is
         ``None``).  Callers (e.g. the interpreter at a built-in raise site) mint
         an id here and place it in both an ``ExceptionValue.fields['trace_id']``
-        and the eventual ``exception`` record so the two can be cross-referenced
-        (design §8.1 / §12.6).  When logging is disabled the id still exists; a
-        ``trace_id`` that references no record is acceptable (§8.1 only requires
-        the field be present).
+        and the eventual ``exception`` record so the two can be cross-referenced.
+        When logging is disabled the id still exists; a ``trace_id`` that
+        references no record is acceptable as long as the field is present.
         """
         return new_trace_id()
 
@@ -256,7 +254,7 @@ class TraceStore:
         *trace_id* is the same value placed in
         ``ExceptionValue.fields['trace_id']`` — this linkage lets callers
         cross-reference the exception record in the trace file with the raised
-        exception (design §12.6 / §8.1).
+        exception.
         """
         if self._path is None:
             return

@@ -362,7 +362,7 @@ class TestFailureEffects:
         ]
 
     def test_runtime_raise_excludes_param_declared_after_failure(self) -> None:
-        # Regression (M7 review, P2): a runtime failure that precedes a later
+        # Regression: a runtime failure that precedes a later
         # ``param`` declaration must not record that param. The IR interpreter
         # installs every param into the base frame up front, so a naive
         # ``symbol in base frame`` check would record the later param even though
@@ -1048,7 +1048,7 @@ class TestAgentCancellation:
         assert vals["v"] == 2
 
     def test_cancellation_preserves_completed_record(self) -> None:
-        # Regression (M7 review, P3): a record (or enum / type alias) declared
+        # Regression: a record (or enum / type alias) declared
         # before a cancelled agent call must be promoted, mirroring the
         # partial-effects behavior for runtime raises. Previously cancellation
         # carried no failure span, so every type declaration was dropped.
@@ -1417,12 +1417,12 @@ class TestFuncDef:
 
 
 # ---------------------------------------------------------------------------
-# REPL import support (M6)
+# REPL import support
 # ---------------------------------------------------------------------------
 
 
 class TestImports:
-    """REPL import declaration support (M6)."""
+    """REPL import declaration support."""
 
     def _make_session_with_root(self, root: Path) -> ReplSession:
         """Create a ReplSession with *root* as the only module search root."""
@@ -1565,7 +1565,7 @@ class TestImports:
         assert not s._accumulated_imports
 
     def test_runtime_failure_does_not_mark_module_linked(self, tmp_path: Path) -> None:
-        # Regression (M7 review, P1): when an entry imports a previously unseen
+        # Regression: when an entry imports a previously unseen
         # module and then raises at runtime, the module must NOT be marked as
         # persistently linked. Otherwise the next import reloads it with fresh
         # declaration IDs but skips lowering it (already linked), crashing with

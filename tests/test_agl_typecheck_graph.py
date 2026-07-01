@@ -131,8 +131,8 @@ def test_graph_func_signature_prepass_skips_inferred_return_type(tmp_path: Path)
 def test_module_id_on_record_type_default_entry_id() -> None:
     """RecordType('Foo', {}) has module_id == ENTRY_ID by default."""
     rt = RecordType("Foo", {})
-    # M4 adds module_id: ModuleId = ENTRY_ID to RecordType
-    assert hasattr(rt, "module_id"), "RecordType must have a module_id field after M4"
+    # RecordType exposes module_id.
+    assert hasattr(rt, "module_id"), "RecordType must have a module_id field"
     assert rt.module_id == ENTRY_ID
 
 
@@ -144,7 +144,7 @@ def test_module_id_on_record_type_default_entry_id() -> None:
 def test_module_id_on_enum_type_default_entry_id() -> None:
     """EnumType('Color', {}) has module_id == ENTRY_ID by default."""
     et = EnumType("Color", {})
-    assert hasattr(et, "module_id"), "EnumType must have a module_id field after M4"
+    assert hasattr(et, "module_id"), "EnumType must have a module_id field"
     assert et.module_id == ENTRY_ID
 
 

@@ -1,9 +1,9 @@
-"""IR evaluator for the AgL typeless execution IR (M2-B).
+"""IR evaluator for the AgL typeless execution IR.
 
 ``IrInterpreter`` executes an ``ExecutableProgram`` using the D5 per-invocation
 frame / let-by-value / var-by-cell model.
 
-Allowed imports (per M2 contract):
+Allowed imports:
 - ``agm.agl.ir.*``
 - ``agm.agl.semantics.values`` (all value types, Cell, Frame)
 - ``agm.agl.semantics.exceptions`` (AglRaise, make_builtin_exception)
@@ -265,8 +265,8 @@ def _apply_coercion(value: Value, coercion: Coercion) -> Value:
 class IrInterpreter:
     """Evaluates an ``ExecutableProgram`` using the D5 frame/cell model.
 
-    In M2 there is exactly one frame: the entry-module frame.  No function
-    calls, closures, or per-iteration frames are present yet (M4).
+    The entry module starts with a root frame; function calls, closures, and loop
+    iterations allocate additional frames as needed.
 
     ``run()`` executes the entry module's initializers in order and returns
     ``{public_name: Value}`` for every top-level binding that has a
@@ -1355,7 +1355,7 @@ class IrInterpreter:
                             ) from exc
 
     # ------------------------------------------------------------------
-    # Pattern matching helper (M3f-B)
+    # Pattern matching helper
     # ------------------------------------------------------------------
 
     def _try_match(

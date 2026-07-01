@@ -284,7 +284,7 @@ def prepare_rendered_prompt_run(
 
     - Does **not** call ``expand_prompt_env_vars``: AgL interpolation has
       already produced the final text and interpolated values may legitimately
-      contain ``$NAME``/``${NAME}`` syntax (plan §9.5).
+      contain ``$NAME``/``${NAME}`` syntax.
     - Does **not** call ``validate_command``: that helper prints to stderr and
       raises ``SystemExit``, bypassing the ``AgentCallError`` structured path.
       Executable-not-found is instead represented in the ``PromptRunResult``

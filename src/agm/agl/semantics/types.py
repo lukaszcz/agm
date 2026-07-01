@@ -21,11 +21,11 @@ Type hierarchy
 - ``FunctionType(params, result)`` — a first-class function type (AgL v2),
   positional only; named/optional arguments are erased from the value type.
 - ``TypeVarType(name)`` — a rigid type variable bound by an enclosing generic
-  declaration (AgL generics M2).
+  declaration.
 
 ``Type`` is the closed union of all semantic types.
 
-Single coercion rule (design §5.8)
+Single coercion rule
 -------------------------------------
 ``int → decimal`` widening is the **only** implicit type coercion.  Use
 :func:`is_assignable` to check assignability with this single coercion
@@ -319,7 +319,7 @@ class TypeVarType:
     """A rigid type variable bound by an enclosing generic declaration.
 
     ``TypeVarType`` is used during type resolution and type checking of
-    generic definitions (M2).  It is never user-visible at the value level
+    generic definitions.  It is never user-visible at the value level
     — generic instantiation substitutes all type variables before a value
     is constructed.
 
@@ -366,7 +366,7 @@ Type = (
 
 
 def is_json_shaped(value_type: Type) -> bool:
-    """Return ``True`` if ``value_type`` is JSON-shaped (design §5.8 rule 3).
+    """Return ``True`` if ``value_type`` is JSON-shaped.
 
     JSON-shaped types are the values that may inhabit a ``json`` slot:
     ``null``/``json``, ``bool``, ``int``, ``decimal``, ``text``, and
@@ -422,7 +422,7 @@ def _has_no_value_equality(t: Type) -> bool:
 
 
 def comparable_types(left: Type, right: Type) -> bool:
-    """Return ``True`` if ``left`` and ``right`` may be compared (design §5.8 r4).
+    """Return ``True`` if ``left`` and ``right`` may be compared.
 
     Equality (``=``, ``!=``) and ordering comparisons require both operands to
     have the **same** type after the single ``int → decimal`` widening.  Unlike
@@ -456,7 +456,7 @@ def comparable_types(left: Type, right: Type) -> bool:
 def is_assignable(value_type: Type, target_type: Type) -> bool:
     """Return ``True`` if ``value_type`` is assignable to ``target_type``.
 
-    Implicit coercions (design §5.8):
+    Implicit coercions:
 
     1. ``int → decimal`` widening is the only scalar coercion.
     2. ``json`` accepts any JSON-shaped value (rule 3): ``null``/``json``,
@@ -489,7 +489,7 @@ def is_assignable(value_type: Type, target_type: Type) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Generic type helpers (M2: free_type_vars, substitute, contains_type_var)
+# Generic type helpers
 # ---------------------------------------------------------------------------
 
 
@@ -583,7 +583,7 @@ def contains_type_var(t: Type) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Built-in exception types (design §8.1)
+# Built-in exception types
 # ---------------------------------------------------------------------------
 
 # Abstract base: only message + trace_id fields.
@@ -606,7 +606,7 @@ EXCEPTION_BASE = ExceptionType(
 #   - ImmutableBindingError: added with name: text, operation: text (§8.1)
 #   - ValidationError: REMOVED — §8.1 does not list it as a catchable exception;
 #     agm.agl.runtime.request.ValidationError is a Python-level record shape
-#     embedded in AgentParseError.validation_errors (design §7.5), not an AgL type.
+#     embedded in AgentParseError.validation_errors, not an AgL type.
 BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
     "Exception": EXCEPTION_BASE,
     # §8.1 AgentCallError: agent/cause/metadata (§0 resolution 11: cause is
@@ -887,7 +887,7 @@ COMPATIBILITY_PRELUDE_TYPE_NAMES: frozenset[str] = frozenset(
 
 
 # ---------------------------------------------------------------------------
-# Cast classification (M3b)
+# Cast classification
 # ---------------------------------------------------------------------------
 
 

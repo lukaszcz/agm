@@ -29,7 +29,7 @@ Rules implemented
 15. ``loop`` — yields ``unit``; until/while conditions must be bool; bound must be int.
 16. ``try/catch`` — body and handler types must unify.
 17. ``raise`` — yields ``BottomType`` (bottom, assignable to any target).
-18. Assignability (design §5.8): ``int`` widens to ``decimal``; ``json``
+18. Assignability: ``int`` widens to ``decimal``; ``json``
     accepts any JSON-shaped value.  Bottom type is assignable to any target.
 19. Duplicate constructor argument names, duplicate dict keys, and all the
     constructor checks carried over from v1.

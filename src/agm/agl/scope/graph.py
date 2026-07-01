@@ -1,4 +1,4 @@
-"""Graph-aware scope resolver for the AgL module system (M3b).
+"""Graph-aware scope resolver for the AgL module system.
 
 This module provides :func:`resolve_graph`, which runs the scope-resolution
 pass over an entire :class:`~agm.agl.modules.loader.ModuleGraph`, producing
@@ -346,10 +346,10 @@ def resolve_graph(
     entry_parent_scope:
         When given, the entry module's root scope is parented to this scope
         so name lookups fall through to session bindings (REPL incremental
-        mode, M6).
+        mode).
     entry_repl_session_scope:
         When given, passed to the entry resolver so ``::name`` self-references
-        can fall back to prior session bindings (REPL graph mode, M6).
+        can fall back to prior session bindings (REPL graph mode).
 
     Returns
     -------

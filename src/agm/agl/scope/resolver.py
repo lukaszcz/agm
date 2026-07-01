@@ -191,7 +191,7 @@ class _Resolver:
         )
         # Whether this module is the entry module (graph mode only).
         self._is_entry: bool = is_entry
-        # Optional REPL session scope for ``::name`` self-ref fallback (M6).
+        # Optional REPL session scope for ``::name`` self-ref fallback.
         # When set, ``_lookup_own_root`` falls back to this scope for names not
         # in the entry's own root scope, allowing ``::name`` to resolve to a
         # prior session binding.
@@ -1289,7 +1289,7 @@ class _Resolver:
         ``lookup()`` (which walks the parent chain and would fall through to a session
         parent scope or find nested shadows first).
 
-        In the REPL graph mode (M6), if *name* is not in the entry's own root scope,
+        In the REPL graph mode, if *name* is not in the entry's own root scope,
         we fall back to the session scope (``_repl_session_scope``) so that
         ``::name`` can resolve to a prior session binding.
         """

@@ -7,7 +7,7 @@ Special cases:
 - If the unexpected token is any comparison operator (``==``, ``!=``, ``<``,
   ``<=``, ``>``, ``>=``) and that operator is NOT in the expected set, the
   parser has already consumed one complete comparison expression and a second
-  one was chained, which is non-associative in AgL (design §4.3).  A targeted
+  one was chained, which is non-associative in AgL.  A targeted
   "comparisons are non-associative; parenthesize" message is emitted instead of
   the generic "Unexpected token" fallback.
 """
@@ -25,7 +25,7 @@ _CMP_OPS: frozenset[str] = frozenset({"EQ_EQ", "NEQ", "LT", "LE", "GT", "GE"})
 
 # Compound forms (``if`` / ``case`` / ``try``) whose statement spelling is only
 # valid in an indented block (a *suite*), never inline after ``=>``, ``until``,
-# or in a ``case`` *expression* branch (design §12.5 item 9, plan §4.4).  When
+# or in a ``case`` *expression* branch.  When
 # one of these tokens is the unexpected token, the parser was at a position
 # where the grammar's bar-safe inline forms forbid a nested compound statement.
 _INLINE_BLOCKED: frozenset[str] = frozenset({"IF", "CASE", "TRY"})
@@ -100,7 +100,7 @@ def _span_from_token(
 
 
 def _make_chained_comparison_error(span: SourceSpan) -> AglSyntaxError:
-    """Targeted diagnostic for chained comparisons (design §4.3).
+    """Targeted diagnostic for chained comparisons.
 
     All comparison operators (``==``, ``!=``, ``<``, ``<=``, ``>``, ``>=``) are
     non-associative in AgL: ``x == y == z``, ``1 < 2 < 3``, ``a <= b != c`` are
@@ -119,7 +119,7 @@ def _make_chained_comparison_error(span: SourceSpan) -> AglSyntaxError:
 def _make_inline_compound_error(
     keyword: str, span: SourceSpan, *, stmt_context: bool
 ) -> AglSyntaxError:
-    """Targeted diagnostic for a compound form blocked inline (design §12.5/§4.4).
+    """Targeted diagnostic for a compound form blocked inline.
 
     ``if`` / ``case`` / ``try`` may not appear directly in a bar-safe inline
     position (an inline ``=>`` branch body, an inline ``catch`` body, after
@@ -197,7 +197,7 @@ def syntax_error_from_lark(
             source_text=source_text, token_pos=pos, expected=set(exc.expected)
         ):
             return _make_missing_else_arrow_error(span)
-        # Chained comparison detection (design §4.3): the unexpected token is
+        # Chained comparison detection: the unexpected token is
         # a comparison operator AND that operator is NOT in the expected set.
         # When the operator IS expected, we are still before the first comparison
         # (valid start of, e.g., ``x == y``); when it is absent, a full comparison
@@ -206,7 +206,7 @@ def syntax_error_from_lark(
         # ``a <= b != c``.
         if tok.type in _CMP_OPS and tok.type not in exc.expected:
             return _make_chained_comparison_error(span)
-        # Bar-safe inline-form rejections (design §12.5 item 9, plan §4.4): a
+        # Bar-safe inline-form rejections: a
         # nested ``if`` / ``case`` / ``try`` appears where the grammar's inline
         # forms forbid it (inline ``=>``/``catch`` body, after ``until``, or a
         # ``case`` expression branch).  Differentiate "needs a suite" (a

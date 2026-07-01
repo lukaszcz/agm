@@ -1,7 +1,7 @@
-"""Tests for the IrInterpreter (M2-B) — hand-built ExecutableProgram programs.
+"""Tests for the IrInterpreter — hand-built ExecutableProgram programs.
 
 These tests drive the evaluator with manually constructed IR programs; they do
-NOT depend on the lowerer (M2-A, built in parallel).  Helper factories keep
+NOT depend on the lowerer.  Helper factories keep
 boilerplate minimal.
 
 Coverage targets:
@@ -703,7 +703,7 @@ class TestCoerceMapRecordFields:
 
     def test_map_record_fields(self) -> None:
         """MapRecordFields coerces only the named fields; others pass through."""
-        # M2 has no record constructors yet; exercise via the module-level _apply_coercion.
+        # Exercise record coercion via the module-level _apply_coercion helper.
         from agm.agl.eval.ir_interpreter import _apply_coercion
 
         rec = self._make_record_value()
@@ -1320,7 +1320,7 @@ class TestImportIsolation:
 
 
 # ---------------------------------------------------------------------------
-# M4a: IrMakeClosure and IrDirectCall evaluation + defensive error paths
+# IrMakeClosure and IrDirectCall evaluation + defensive error paths
 # ---------------------------------------------------------------------------
 
 _FN_SID = SymbolId(100)
@@ -1644,7 +1644,7 @@ class TestM4aInterpreterDefensivePaths:
 
 
 # ---------------------------------------------------------------------------
-# M4b: IrIndirectCall evaluation + defensive error paths
+# IrIndirectCall evaluation + defensive error paths
 # ---------------------------------------------------------------------------
 
 
@@ -1786,12 +1786,12 @@ class TestM4bInterpreterDefensivePaths:
 
 
 # ===========================================================================
-# M6a: IrPrint / IrParseJson / IrParam evaluator tests
+# IrPrint / IrParseJson / IrParam evaluator tests
 # ===========================================================================
 
 
 class TestM6aPrintParseJsonParam:
-    """Unit tests for M6a host operations in the IrInterpreter."""
+    """Unit tests for host operations in the IrInterpreter."""
 
     def test_required_param_without_value_raises_invalid_ir_error(self) -> None:
         """run() raises InvalidIrError when a required param has no value supplied."""
@@ -1864,12 +1864,12 @@ class TestM6aPrintParseJsonParam:
 
 
 # ===========================================================================
-# M6c: IrExec evaluator unit tests
+# IrExec evaluator unit tests
 # ===========================================================================
 
 
 class TestM6cIrExec:
-    """Unit tests for _eval_ir_exec in IrInterpreter (M6c)."""
+    """Unit tests for _eval_ir_exec in IrInterpreter."""
 
     def _make_exec_program(
         self,

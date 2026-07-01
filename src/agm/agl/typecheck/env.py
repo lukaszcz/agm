@@ -151,7 +151,7 @@ class CallSiteRecord:
 
     Captured in ``_check_agent_call`` — the one place where the call's resolved
     callee kind, parse policy, and source span are all already in hand — so the
-    ``--dry-run`` inventory (design §10.1) is derived from the checker's work
+    ``--dry-run`` inventory is derived from the checker's work
     rather than from a second AST walk.
 
     ``node_id``
@@ -186,14 +186,14 @@ class OutputContractSpec:
     ``target_type``
         The resolved semantic type the agent's output will be parsed into.
     ``codec_name``
-        The codec selected for this call (e.g. ``"text"`` in M1, ``"json"``
-        in M2).  When ``structured_exec`` is ``True`` this field holds the
-        placeholder value ``"text"`` and is **unused** — S5 will branch on
-        ``structured_exec`` to skip codec lookup and return the raw
-        ``ExecResult`` handle instead.
+        The codec selected for this call (e.g. ``"text"`` or ``"json"``).
+        When ``structured_exec`` is ``True`` this field holds the placeholder
+        value ``"text"`` and is **unused** — S5 will branch on
+        ``structured_exec`` to skip codec lookup and return the raw ``ExecResult``
+        handle instead.
     ``strict_json``
         The effective strict-JSON flag for this call (``None`` means the
-        codec is not JSON-based and the flag is irrelevant; in M1 this is
+        codec is not JSON-based and the flag is irrelevant; this is
         always ``None`` since the only codec is ``"text"``).
     ``structured_exec``
         ``True`` for the structured ``exec`` form (target is ``ExecResult``):
@@ -301,7 +301,7 @@ class TypeEnvironment:
     The ``TypeEnvironment`` is constructed and populated by the
     ``_TypeBuilder`` pre-pass; the main ``_Checker`` visitor then queries it.
 
-    Graph mode (M4)
+    Graph mode
     ---------------
     When ``graph_type_table``, ``import_env``, and ``module_id`` are supplied,
     the environment becomes module-aware:
@@ -310,7 +310,7 @@ class TypeEnvironment:
       ``Type`` objects stamped with their owning ``module_id``.  Built once by
       the graph pre-pass; shared (read-only) across all per-module envs.
     - ``import_env`` is the per-module :class:`~agm.agl.scope.imports.ImportEnv`
-      produced by M3.  Used to resolve qualified and open-imported type names.
+      produced by graph scope resolution. Used to resolve qualified and open-imported type names.
     - ``module_id`` is the owning module of the current env.  ``::Name``
       (empty-segment qualifier) resolves against this module's own types.
 
@@ -342,11 +342,11 @@ class TypeEnvironment:
         self._binding_types: dict[int, Type] = {}
         # Function signatures — name → FunctionSignature (for declared-name calls).
         self._function_signatures: dict[str, FunctionSignature] = {}
-        # Generic type definitions — name → GenericTypeDef (M2).
+        # Generic type definitions — name → GenericTypeDef.
         self._generic_types: dict[str, GenericTypeDef] = {}
-        # Constructor signatures — (owner_name, variant | None) → ConstructorSignature (M2).
+        # Constructor signatures — (owner_name, variant | None) → ConstructorSignature.
         self._constructor_sigs: dict[tuple[str, str | None], ConstructorSignature] = {}
-        # Alias type-params — name → tuple of type-param names (M2).
+        # Alias type-params — name → tuple of type-param names.
         self._alias_type_params: dict[str, tuple[str, ...]] = {}
         # Node-id-keyed function signatures — decl_node_id → FunctionSignature.
         # Populated in graph mode by the whole-graph function-signature pre-pass so
@@ -366,7 +366,7 @@ class TypeEnvironment:
         self._graph_ctor_field_kinds_table: Mapping[
             tuple[ModuleId, str, str | None], tuple[tuple[str, ParamKind], ...]
         ] | None = graph_ctor_field_kinds_table
-        # Graph-mode context (M4): None in single-program path.
+        # Graph-mode context: None in single-program path.
         self._graph_type_table: Mapping[tuple[ModuleId, str], Type] | None = graph_type_table
         # Cross-module generic type definitions: (ModuleId, name) → GenericTypeDef.
         # Populated by the graph type pre-pass for qualified generic constructor calls.
@@ -456,7 +456,7 @@ class TypeEnvironment:
         """Return the type-parameter names for a parameterized alias, or ``()``."""
         return self._alias_type_params.get(name, ())
 
-    # --- Generic type registry (M2) ---
+    # --- Generic type registry ---
 
     def register_generic_type(self, name: str, gdef: GenericTypeDef) -> None:
         """Register a generic type definition under *name*."""
@@ -525,7 +525,7 @@ class TypeEnvironment:
             name=name, variants=new_variants, type_args=args, module_id=template.module_id
         )
 
-    # --- Constructor signature registry (M2) ---
+    # --- Constructor signature registry ---
 
     def register_constructor_signature(self, sig: ConstructorSignature) -> None:
         """Register a constructor signature for a record or enum variant."""
@@ -545,7 +545,7 @@ class TypeEnvironment:
         type; ``None`` if the name is unknown or names a non-nominal alias
         target (e.g. an alias of ``list[int]``, which has no single name).
         Used for alias-transparent qualifier resolution in qualified
-        constructors and ``is`` tests (design §5.4).
+        constructors and ``is`` tests.
 
         In graph mode, also searches open-imported types when the name is not
         found locally.
@@ -583,7 +583,7 @@ class TypeEnvironment:
 
         Used by the graph pre-pass to seed every module's env with ALL
         function signatures before any body is checked.  Because ``node_id``
-        is globally unique (M2), signatures from different modules never
+        is globally unique, signatures from different modules never
         collide here even when two modules define functions with the same name.
         """
         self._function_signatures_by_node_id[node_id] = sig
@@ -1001,7 +1001,7 @@ class TypeEnvironment:
 
         Combines registered nominal types (records, enums, exceptions, and
         built-ins) with registered alias names.  Retained for generic type
-        resolution in later milestones, where the complete type-namespace must
+        resolution in future work, where the complete type-namespace must
         be enumerable to validate applied-type names (e.g. ``Pair[int, text]``).
         """
         return frozenset(self._types) | frozenset(self._alias_targets)

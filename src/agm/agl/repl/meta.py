@@ -165,7 +165,7 @@ def _handle_set(arg: str, ctx: MetaContext) -> MetaOutcome:
     """``:set echo on|off`` — toggle result echoing.
 
     Only ``echo on|off`` is supported.  Input-setting via ``:set name=value``
-    is no longer available (M6): params are resolved eagerly from config or
+    is no longer available: params are resolved eagerly from config or
     defaults when declared.
     """
     echo_outcome = _try_set_echo(arg, ctx)
@@ -192,7 +192,7 @@ def _try_set_echo(arg: str, ctx: MetaContext) -> MetaOutcome | None:
 def _handle_agent(arg: str, ctx: MetaContext) -> MetaOutcome:
     """``:agent confirm|auto`` — set the agent-call mode; no arg reports it.
 
-    The mode is recorded in the shared :class:`AgentMode` holder so M4's
+    The mode is recorded in the shared :class:`AgentMode` holder so the console's
     confirming wrapper can read it; it has no observable effect until then.
     """
     if not arg:
@@ -268,7 +268,7 @@ def _handle_theme(arg: str, ctx: MetaContext) -> MetaOutcome:
     return MetaOutcome(text=f"Theme set to {arg!r}.")
 
 
-# Registry: the authoritative table of built-in meta-commands.  M3 appends to
+# Registry: the authoritative table of built-in meta-commands. Extensions append to
 # this list (or calls ``register_meta_command``); both the dispatcher and the
 # completer's ``META_COMMANDS`` read from it, so there is a single source of
 # truth for the command names.
@@ -369,7 +369,7 @@ def _rebuild_caches() -> None:
 
 
 def register_meta_command(command: MetaCommand) -> None:
-    """Register an additional meta-command (the M3 extension entry point)."""
+    """Register an additional meta-command."""
     _COMMANDS.append(command)
     _rebuild_caches()
 

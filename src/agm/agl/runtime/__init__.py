@@ -9,7 +9,7 @@ Public API
 - :class:`AgentRegistry` — registry of host agents.
 - :class:`OutputCodec` — protocol for output codecs.
 - :class:`TextCodec` — the built-in passthrough text codec.
-- :class:`JsonCodec` — the built-in structured-output codec (M2).
+- :class:`JsonCodec` — the built-in structured-output codec.
 - :class:`OutputContract` — materialized per-call output contract.
 - :func:`render_value` — option-driven value renderer for interpolation, print,
   casts, builtin ``render``, and REPL echo.

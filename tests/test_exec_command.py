@@ -1,4 +1,4 @@
-"""Tests for the `agm exec` CLI command (M0).
+"""Tests for the `agm exec` CLI command.
 
 Covers:
 - CLI wires FILE argument and params, --strict-json/--no-strict-json,
@@ -421,7 +421,7 @@ class TestExecCommandBehavior:
             no_log=False,
             log_file=None,
         )
-        # M1: a simple valid program succeeds
+        # a simple valid program succeeds
         result = exec_command.run(args)
         assert result is None  # returns None on success (exit 0)
 
@@ -505,7 +505,7 @@ class TestExecCommandEdgePaths:
     """Real-program coverage of the ok=True and pre-execution-error branches.
 
     The exit-2 (uncaught-AgL-exception) seam is exercised separately in
-    ``TestExecExitCodeMapping`` because no real M1 source reaches it after F6.
+    ``TestExecExitCodeMapping`` because no real source reaches it.
     """
 
     def test_ok_result_returns_normally(
@@ -565,10 +565,8 @@ class TestExecCommandEdgePaths:
 class TestExecExitCodeMapping:
     """F13a: the exit-2 (uncaught AgL exception) seam.
 
-    Exit 2 is unreachable through real source in M1 — F6 removed the only path
-    that produced an uncaught AgL exception from a statically-valid program (the
-    fabricated exec ExecError). These mocked tests pin the CLI's RunResult→exit
-    mapping until a real M2+ program can drive it.
+    Exit 2 is unreachable through current real source. These mocked tests pin the
+    CLI's RunResult-to-exit mapping for uncaught AgL exceptions.
     """
 
     @pytest.mark.parametrize(
@@ -623,9 +621,8 @@ class TestExecExitCodeMapping:
 class TestExecCommandWarnings:
     """Warning-severity diagnostics are reported but never affect the exit code.
 
-    No AgL checker warning is organically producible in M1 (warnings such as
-    non-exhaustive ``case`` land with M2/M3 analysis), so the warning paths are
-    driven through a mocked ``run_prepared`` that injects a warning diagnostic.
+    These warning paths are driven through a mocked ``run_prepared`` that injects
+    a warning diagnostic.
     The error→exit-1 path IS reachable through real source and is covered by
     ``test_error_diagnostic_still_exits_1`` below.
     """
@@ -633,7 +630,7 @@ class TestExecCommandWarnings:
     def test_warning_with_ok_returns_normally_and_prints_to_stderr(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        # Mocked: no organic M1 warning exists (lands in M2/M3). This pins that a
+        # Mocked warning: this pins that a
         # warning prints to stderr and never raises SystemExit (exit 0).
         from agm.agl.diagnostics import Diagnostic
         from agm.agl.pipeline import PipelineDriver, RunResult
@@ -712,7 +709,7 @@ class TestExecCommandWarnings:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
         # Mocked: combining a warning with an error requires an organic warning,
-        # which does not exist until M2/M3 — pins that both print and exit is 1.
+        # which is injected here to pin that both print and exit is 1.
         from agm.agl.diagnostics import Diagnostic
         from agm.agl.pipeline import PipelineDriver, RunResult
 
@@ -845,7 +842,7 @@ class TestExecCLIPaths:
 
 
 class TestExecCommandM1:
-    """M1 exec command behavior: exit codes, params, agent calls."""
+    """Exec command behavior: exit codes, params, agent calls."""
 
     def test_valid_program_exits_0(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"
@@ -941,7 +938,7 @@ class TestExecCommandM1:
     def test_ask_program_dispatches_to_runner_backed_agent(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """M5a: ``agm exec`` always wires a runner-backed default agent; prompt
+        """``agm exec`` always wires a runner-backed default agent; prompt
         calls are dispatched at runtime (not rejected statically), producing an
         AgentCallError (exit 2) when the runner subprocess fails."""
         import agm.commands.exec as exec_mod
@@ -1228,7 +1225,7 @@ def _exec_args_with_fallback_runtime(
 ) -> ExecArgs:
     """Return ExecArgs for *agl_file* and patch PipelineDriver to have a fallback agent.
 
-    In real use the CLI wires the runner-backed default agent (M5); in tests we
+    In real use the CLI wires the runner-backed default agent; in tests we
     patch the runtime to avoid the "no default agent" static error on prompt/named-agent calls.
     """
     from agm.agl.pipeline import PipelineDriver as RealRuntime
@@ -1262,7 +1259,7 @@ def _exec_args_with_fallback_runtime(
 
 
 class TestDryRunInventory:
-    """M2: --dry-run prints the §10.1 static call-site inventory."""
+    """--dry-run prints the §10.1 static call-site inventory."""
 
     def test_dry_run_inventory_ask_call(
         self,
@@ -1417,7 +1414,7 @@ class TestDryRunInventory:
 
 
 class TestJsonParamsCLI:
-    """M2: --param with structured (record/list/decimal) types via JsonCodec."""
+    """--param with structured (record/list/decimal) types via JsonCodec."""
 
     def test_record_param_parsed_from_json_string(self, tmp_path: Path) -> None:
         """A record-typed param provided as a JSON string is parsed and usable."""
@@ -1941,7 +1938,7 @@ class TestExecMalformedQuotingRunner:
 
 
 # ---------------------------------------------------------------------------
-# M5: per-declared-agent registration + runner precedence
+# per-declared-agent registration + runner precedence
 # (config > source runner hint > default runner)
 # ---------------------------------------------------------------------------
 
@@ -2003,7 +2000,7 @@ def _install_argv_echo_runner(
 
 
 class TestExecAgentPrecedence:
-    """M5: declared agents resolve via config > source hint > default runner.
+    """declared agents resolve via config > source hint > default runner.
 
     Driven through real fake-runner binaries (CLI subprocess), asserting which
     runner produced the agent response — a user-visible behavior, not an
@@ -2225,7 +2222,7 @@ class TestExecAgentPrecedence:
 
 
 # ---------------------------------------------------------------------------
-# M3: source config declaration wiring — CLI > source > config precedence
+# source config declaration wiring — CLI > source > config precedence
 # ---------------------------------------------------------------------------
 
 
@@ -2239,7 +2236,7 @@ def _exec_args_no_log(
     log_file: str | None = None,
     log: bool = False,
 ) -> ExecArgs:
-    """Build a minimal ExecArgs for M3 source-config-precedence tests."""
+    """Build a minimal ExecArgs for source-config-precedence tests."""
     return ExecArgs(
         file=str(agl_file),
         param_tokens=[],
@@ -2343,7 +2340,7 @@ class TestExecStartupConfigPrepass:
 
 
 class TestExecSourceConfigPrecedence:
-    """M3: source ``config`` declarations (CLI > source > config precedence).
+    """source ``config`` declarations (CLI > source > config precedence).
 
     Each test uses behavioral assertions — observable exit codes and output —
     rather than internal call counts, following the testing policy.
@@ -2944,7 +2941,7 @@ def _exec_args_inline_no_log(
 
 
 class TestExecModuleRoots:
-    """M5b: ``agm exec`` uses graph pipeline and module roots.
+    """``agm exec`` uses graph pipeline and module roots.
 
     Tests verify that:
     - ``agm exec <file>`` uses the file's directory as invocation root.
@@ -3189,7 +3186,7 @@ class TestExecModuleRoots:
 
 
 class TestExecCliModulePaths:
-    """M6: ``-I/--module-path`` roots are threaded into ``assemble_roots``.
+    """``-I/--module-path`` roots are threaded into ``assemble_roots``.
 
     Tests verify that a module placed only in a ``-I DIR`` root is resolvable
     by ``agm exec`` when that root is passed via ``ExecArgs.module_paths``.

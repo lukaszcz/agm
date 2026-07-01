@@ -1,4 +1,4 @@
-"""Conversion-recipe compiler for the AgL lowering phase (M3e-2).
+"""Conversion-recipe compiler for the AgL lowering phase.
 
 ``compile_recipe(source, target, kind)`` is the ONLY place that reads checker
 ``Type`` objects to produce a typeless ``ConversionRecipe`` for a cast.  Once

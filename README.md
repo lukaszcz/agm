@@ -25,7 +25,8 @@ just setup
 ```
 
 Install the CLI into an isolated `uv tool` environment and copy AGM config files,
-prompts, sandbox templates, and the AgL standard library into `$HOME/.agm/`:
+prompts, sandbox templates, and the AgL standard library into `$HOME/.agm/`.
+This also installs the AgL Micro syntax file into `$HOME/.config/micro/syntax/`:
 
 ```bash
 just install

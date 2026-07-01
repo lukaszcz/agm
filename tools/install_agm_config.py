@@ -73,6 +73,7 @@ def install_user_config(
     sandbox_dir = agm_config_dir / "sandbox"
     prompts_dir = agm_config_dir / "prompts"
     stdlib_dir = agm_config_dir / "stdlib"
+    micro_syntax_dir = install_root / ".config" / "micro" / "syntax"
     sandbox_dir.mkdir(parents=True, exist_ok=True)
     prompts_dir.mkdir(parents=True, exist_ok=True)
     stdlib_dir.mkdir(parents=True, exist_ok=True)
@@ -112,6 +113,16 @@ def install_user_config(
         installed=installed,
         skipped=skipped,
     )
+
+    micro_source_dir = repo_root / "config" / "micro"
+    if micro_source_dir.exists():
+        _install_tree_files(
+            source_dir=micro_source_dir,
+            destination_dir=micro_syntax_dir,
+            force=force,
+            installed=installed,
+            skipped=skipped,
+        )
 
     return InstallUserConfigResult(installed=installed, skipped=skipped)
 

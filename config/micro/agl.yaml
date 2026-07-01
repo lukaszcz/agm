@@ -1,0 +1,71 @@
+filetype: agl
+
+detect:
+    filename: "\\.agl$"
+
+rules:
+    # Root declarations and declaration modifiers.
+    - preproc: "\\b(import|qualified|using|hiding|private|builtin)\\b"
+    - statement: "\\b(record|enum|type|exception|extends|param|program|agent|config|def|fn|let|var)\\b"
+
+    # Control flow and expression keywords.
+    - statement: "\\b(for|while|do|until|done|if|else|case|of|try|catch|raise|break|continue)\\b"
+    - statement: "\\bas\\?|\\b(as|and|or|not|is|in|to|downto|by)\\b"
+
+    # Contextual built-ins and primitive type names.
+    - identifier: "\\b(print|render|parse_json|ask-request|ask|exec)\\b"
+    - type: "\\b(unit|text|json|bool|int|decimal|list|dict)\\b"
+
+    # By AgL convention, uppercase-leading names are types or constructors.
+    - type: "\\b[A-Z][^\\s()\\[\\]{}:,.|;/]*"
+
+    # Literals.
+    - constant.bool: "\\b(true|false)\\b"
+    - constant: "\\b(null)\\b"
+    - constant.number: "\\b[0-9]+\\.[0-9]+\\b"
+    - constant.number: "\\b[0-9]+\\b"
+
+    # Operators, punctuation, and zone markers.
+    - symbol.operator: "(=>|->|:=|==|!=|<=|>=|::|[-+*/=<>@])"
+    - symbol: "([:;,.|])"
+    - symbol.brackets: "([(){}]|\\[|\\])"
+
+    # Template strings. AgL strings may contain ${...}; this highlights the
+    # interpolation delimiters without trying to parse nested AgL expressions.
+    - constant.string:
+        start: "\"\"\""
+        end: "\"\"\""
+        skip: "\\\\."
+        rules:
+            - constant.specialChar: "\\\\."
+            - special: "\\$\\{|\\}"
+
+    - constant.string:
+        start: "'''"
+        end: "'''"
+        skip: "\\\\."
+        rules:
+            - constant.specialChar: "\\\\."
+            - special: "\\$\\{|\\}"
+
+    - constant.string:
+        start: "\""
+        end: "(\"|$)"
+        skip: "\\\\."
+        rules:
+            - constant.specialChar: "\\\\."
+            - special: "\\$\\{|\\}"
+
+    - constant.string:
+        start: "'"
+        end: "('|$)"
+        skip: "\\\\."
+        rules:
+            - constant.specialChar: "\\\\."
+            - special: "\\$\\{|\\}"
+
+    - comment:
+        start: "#"
+        end: "$"
+        rules:
+            - todo: "(TODO|XXX|FIXME|NOTE|BUG):?"

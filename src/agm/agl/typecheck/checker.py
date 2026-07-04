@@ -40,7 +40,7 @@ The checker raises ``AglTypeError`` on the first error (first-error abort).
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from typing import TypeGuard
+from typing import Literal, TypeGuard
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
@@ -951,6 +951,8 @@ class _Checker:
         node: Call,
         binding: tuple[Expr | None, ...],
         hole_indices: Mapping[int, int],
+        *,
+        callee_kind: Literal["declared", "constructor", "value"] = "declared",
     ) -> None:
         self._partial_calls[node.node_id] = PartialCallSpec(
             arity=len(hole_indices),
@@ -958,6 +960,7 @@ class _Checker:
                 hole_indices[expr.node_id] if isinstance(expr, Placeholder) else None
                 for expr in binding
             ),
+            callee_kind=callee_kind,
         )
 
     def _check_bound_non_hole_call_args(
@@ -981,6 +984,21 @@ class _Checker:
                 span=node.span,
             )
 
+        if (
+            isinstance(node.callee, VarRef)
+            and node.callee.node_id in self._resolved.constructor_refs
+        ):
+            return self._constructors.check_partial_constructor_callee_call(
+                node, expected=expected
+            )
+        if (
+            isinstance(node.callee, FieldAccess)
+            and node.callee.node_id in self._resolved.qualified_constructor_refs
+        ):
+            return self._constructors.check_partial_qualified_constructor_callee_call(
+                node, expected=expected
+            )
+
         if isinstance(node.callee, VarRef):
             callee_ref = self._resolved.resolution.get(node.callee.node_id)
             if callee_ref is not None and callee_ref.kind is BinderKind.function_binding:
@@ -990,8 +1008,16 @@ class _Checker:
                     expected=expected,
                     callee_node_id=callee_ref.decl_node_id,
                 )
+            if (
+                callee_ref is not None
+                and callee_ref.kind is BinderKind.constructor_binding
+                and not callee_ref.module_id.is_entry
+            ):
+                return self._constructors.check_partial_cross_module_constructor_call(
+                    node, callee_ref, expected=expected
+                )
 
-        return self._check_complete_call(node, expected=expected)
+        return self._check_partial_value_call(node, expected=expected)
 
     def _check_complete_call(self, node: Call, *, expected: Type | None) -> Type:
         # Built-in?
@@ -1488,6 +1514,48 @@ class _Checker:
             at = self._check_expr(arg, expected=ptype)
             self._assert_assignable(at, ptype, arg.span)
         return callee_type.result
+
+    def _check_partial_value_call(self, node: Call, *, expected: Type | None) -> FunctionType:
+        if node.named_args:
+            raise AglTypeError(
+                "Named arguments are not allowed when calling a function value; "
+                "they are only allowed at declared-function call sites.",
+                span=node.span,
+            )
+        callee_type = self._check_expr(node.callee, expected=None)
+        if not isinstance(callee_type, FunctionType):
+            raise AglTypeError(
+                f"callee is not a function; got '{callee_type!r}'.",
+                span=node.callee.span,
+            )
+        if len(node.args) != len(callee_type.params):
+            raise AglTypeError(
+                f"Arity mismatch: function expects {len(callee_type.params)} argument(s), "
+                f"got {len(node.args)}.",
+                span=node.span,
+            )
+        hole_indices = self._partial_hole_indices(node)
+        binding: tuple[Expr | None, ...] = node.args
+        self._record_partial_call(node, binding, hole_indices, callee_kind="value")
+        for arg, ptype in zip(node.args, callee_type.params):
+            if isinstance(arg, Placeholder):
+                continue
+            at = self._check_expr(arg, expected=ptype)
+            self._assert_assignable(at, ptype, arg.span)
+        return self._partial_call_function_type(
+            tuple(
+                ParamSpec(
+                    name=f"arg{index}",
+                    type=ptype,
+                    kind=ParamKind.STANDARD,
+                    has_default=False,
+                )
+                for index, ptype in enumerate(callee_type.params)
+            ),
+            callee_type.result,
+            binding,
+            hole_indices,
+        )
 
     # --- Lambda ---
 

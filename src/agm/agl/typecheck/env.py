@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import cast
+from typing import Literal, cast
 
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
@@ -256,6 +256,7 @@ class ArgumentBindings:
 class PartialCallSpec:
     """Checker-computed routing metadata for a call that produces a function.
 
+    ``callee_kind`` identifies which lowering path the underlying call uses.
     ``arity`` is the number of parameters on the produced function.
     ``argument_holes`` is ordered like the checked call binding for that callee;
     each item is the produced-function parameter index for a placeholder slot,
@@ -264,6 +265,7 @@ class PartialCallSpec:
 
     arity: int
     argument_holes: tuple[int | None, ...]
+    callee_kind: Literal["declared", "constructor", "value"] = "declared"
 
 
 # ---------------------------------------------------------------------------

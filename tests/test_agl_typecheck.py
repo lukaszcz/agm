@@ -1548,6 +1548,198 @@ class TestPartialDeclaredCalls:
             check(resolved, default_capabilities())
 
 
+class TestPartialConstructorAndValueCalls:
+    def _let_call(self, checked: CheckedProgram, name: str) -> Call:
+        for item in checked.resolved.program.body.items:
+            if isinstance(item, LetDecl) and item.name == name:
+                assert isinstance(item.value, Call)
+                return item.value
+        raise AssertionError(f"no call-valued let named {name!r}")
+
+    def test_record_constructor_numbered_named_holes_and_side_table(self) -> None:
+        checked = accept_type(
+            "record Point\n"
+            "  @std\n"
+            "  x: int\n"
+            "  y: text\n"
+            "  z: bool\n"
+            "let make = Point(?2, y = ?3, z = ?1)\n"
+            "make"
+        )
+        call = self._let_call(checked, "make")
+        assert checked.node_types[call.node_id] == FunctionType(
+            params=(BoolType(), IntType(), TextType()),
+            result=checked.type_env.get_type("Point"),
+        )
+        assert checked.partial_calls[call.node_id] == PartialCallSpec(
+            arity=3,
+            argument_holes=(1, 2, 0),
+            callee_kind="constructor",
+        )
+
+    def test_enum_variant_and_exception_constructor_partials(self) -> None:
+        checked = accept_type(
+            "enum Status\n"
+            "  | failed(reason: text)\n"
+            "exception Boom extends Exception\n"
+            "  code: int\n"
+            "let make_status = Status.failed(reason = ?)\n"
+            "let make_boom = Boom(message = ?, code = 7)\n"
+            "make_boom"
+        )
+        status_call = self._let_call(checked, "make_status")
+        boom_call = self._let_call(checked, "make_boom")
+        assert checked.node_types[status_call.node_id] == FunctionType(
+            params=(TextType(),), result=checked.type_env.get_type("Status")
+        )
+        assert checked.node_types[boom_call.node_id] == FunctionType(
+            params=(TextType(),), result=checked.type_env.get_type("Boom")
+        )
+        assert checked.partial_calls[status_call.node_id].callee_kind == "constructor"
+        assert checked.partial_calls[boom_call.node_id].argument_holes == (0, None)
+
+    def test_generic_constructor_uses_expected_function_type_for_hole(self) -> None:
+        checked = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "let make: (text) -> Box[text] = Box(value = ?)\n"
+            "make"
+        )
+        call = self._let_call(checked, "make")
+        assert checked.node_types[call.node_id] == FunctionType(
+            params=(TextType(),), result=checked.type_env.instantiate_nominal("Box", (TextType(),))
+        )
+
+    def test_qualified_generic_constructor_partial(self) -> None:
+        checked = accept_type(
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "let make: (int) -> Option[int] = Option.some(?)\n"
+            "make"
+        )
+        call = self._let_call(checked, "make")
+        assert checked.node_types[call.node_id] == FunctionType(
+            params=(IntType(),),
+            result=checked.type_env.instantiate_nominal("Option", (IntType(),)),
+        )
+        assert checked.partial_calls[call.node_id].callee_kind == "constructor"
+
+    def test_generic_constructor_infers_from_non_hole_and_explicit_type_args(self) -> None:
+        checked = accept_type(
+            "record Pair[T]\n"
+            "  @std\n"
+            "  left: T\n"
+            "  right: T\n"
+            "record Box[T]\n"
+            "  value: T\n"
+            "let pair_with_one = Pair(1, ?)\n"
+            "let make_box = Box::[text](value = ?)\n"
+            "make_box"
+        )
+        pair_call = self._let_call(checked, "pair_with_one")
+        box_call = self._let_call(checked, "make_box")
+        assert checked.node_types[pair_call.node_id] == FunctionType(
+            params=(IntType(),), result=checked.type_env.instantiate_nominal("Pair", (IntType(),))
+        )
+        assert checked.node_types[box_call.node_id] == FunctionType(
+            params=(TextType(),), result=checked.type_env.instantiate_nominal("Box", (TextType(),))
+        )
+
+    def test_partial_constructor_type_arg_errors_and_abstract_exception(self) -> None:
+        non_generic_err = reject_type("record Point\n  x: int\nlet make = Point::[int](?)\nmake")
+        assert "type argument" in str(non_generic_err).lower()
+        arity_err = reject_type(
+            "record Box[T]\n  value: T\nlet make = Box::[int, text](value = ?)\nmake"
+        )
+        assert "type argument" in str(arity_err).lower()
+        abstract_err = reject_type("let make = Exception(message = ?)\nmake")
+        assert "abstract" in str(abstract_err).lower()
+
+    def test_cross_module_constructor_partial(self, tmp_path: object) -> None:
+        from pathlib import Path
+
+        from agm.agl.modules.ids import ENTRY_ID, ModuleId
+        from agm.agl.scope.graph import resolve_graph
+        from agm.agl.typecheck.graph import check_graph
+        from tests.agl.ir_harness import make_graph_from_files
+
+        modules = {
+            "entry": (
+                "import mylib\n"
+                "let make: (int) -> mylib::Point = mylib::Point(x = ?)\n"
+                "let make_open: (int) -> Point = Point(x = ?)\n"
+                "let make_box: (text) -> mylib::Box[text] = mylib::Box(value = ?)\n"
+                "make_box"
+            ),
+            "mylib": "record Point\n  x: int\nrecord Box[T]\n  value: T",
+        }
+        checked_graph = check_graph(
+            resolve_graph(make_graph_from_files(Path(tmp_path), modules)),
+            default_capabilities(),
+        )
+        entry = checked_graph.modules[ENTRY_ID]
+        calls = {
+            item.name: item.value
+            for item in entry.resolved.program.body.items
+            if isinstance(item, LetDecl) and isinstance(item.value, Call)
+        }
+        point_type = RecordType("Point", {"x": IntType()}, module_id=ModuleId.from_dotted("mylib"))
+        assert entry.node_types[calls["make"].node_id] == FunctionType(
+            params=(IntType(),), result=point_type
+        )
+        assert entry.node_types[calls["make_open"].node_id] == FunctionType(
+            params=(IntType(),), result=point_type
+        )
+        assert entry.node_types[calls["make_box"].node_id] == FunctionType(
+            params=(TextType(),),
+            result=RecordType(
+                "Box",
+                {"value": TextType()},
+                type_args=(TextType(),),
+                module_id=ModuleId.from_dotted("mylib"),
+            ),
+        )
+        assert entry.partial_calls[calls["make"].node_id].callee_kind == "constructor"
+        assert entry.partial_calls[calls["make_open"].node_id].callee_kind == "constructor"
+        assert entry.partial_calls[calls["make_box"].node_id].callee_kind == "constructor"
+
+    def test_value_calls_from_bindings_lambdas_and_partial_results(self) -> None:
+        checked = accept_type(
+            "def add(x: int, y: int) -> int = x + y\n"
+            "def digits(x: int, y: int, z: int) -> int = x * 100 + y * 10 + z\n"
+            "let add_value: (int, int) -> int = add\n"
+            "let from_value = add_value(?, 1)\n"
+            "let lambda_value = fn(x: int, y: text) -> text => y\n"
+            "let from_lambda = lambda_value(1, ?)\n"
+            "let partial_digits = digits(?, 1, ?)\n"
+            "let finish_digits = partial_digits(?, 2)\n"
+            "finish_digits"
+        )
+        from_value = self._let_call(checked, "from_value")
+        from_lambda = self._let_call(checked, "from_lambda")
+        finish_digits = self._let_call(checked, "finish_digits")
+        assert checked.node_types[from_value.node_id] == FunctionType(
+            params=(IntType(),), result=IntType()
+        )
+        assert checked.node_types[from_lambda.node_id] == FunctionType(
+            params=(TextType(),), result=TextType()
+        )
+        assert checked.node_types[finish_digits.node_id] == FunctionType(
+            params=(IntType(),), result=IntType()
+        )
+        assert checked.partial_calls[from_value.node_id] == PartialCallSpec(
+            arity=1, argument_holes=(0, None), callee_kind="value"
+        )
+        assert checked.partial_calls[finish_digits.node_id].callee_kind == "value"
+
+    def test_value_call_arity_and_named_arg_rejections_with_holes(self) -> None:
+        arity_err = reject_type("let f = fn(x: int) -> int => x\nlet g = f(?, 1)\ng")
+        assert "arity" in str(arity_err).lower()
+        named_err = reject_type("let f = fn(x: int) -> int => x\nlet g = f(x = ?)\ng")
+        assert "named arguments" in str(named_err).lower()
+
+
 class TestLambda:
     def test_lambda_with_return_type(self) -> None:
         r = accept_type("fn(x: int) -> int => x")

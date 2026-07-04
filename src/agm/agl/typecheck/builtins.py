@@ -26,7 +26,6 @@ from agm.agl.syntax.nodes import (
     BoolLit,
     Call,
     Expr,
-    FieldAccess,
     IntLit,
     NamedArg,
     StringLit,
@@ -469,24 +468,21 @@ class BuiltinCallChecker:
 
     def _extract_parse_policy_str(self, arg: Expr, span: SourceSpan) -> str:
         """Extract a static ``ParsePolicy`` constructor as an inventory string."""
-        if isinstance(arg, Call) and isinstance(arg.callee, FieldAccess):
-            qualifier = arg.callee.obj
-            if not (isinstance(qualifier, VarRef) and qualifier.name == "ParsePolicy"):
-                raise AglTypeError(
-                    "'on_parse_error' must be a static ParsePolicy constructor "
-                    "(Abort or Retry(n: <int>)).",
-                    span=span,
-                )
-            return self._extract_parse_policy_variant(arg.callee.field, arg.named_args, span)
         if isinstance(arg, Call) and isinstance(arg.callee, VarRef):
+            if arg.callee.module_qualifier is not None:
+                if arg.callee.module_qualifier.segments not in ((), ("ParsePolicy",)):
+                    raise AglTypeError(
+                        "'on_parse_error' must be a static ParsePolicy constructor "
+                        "(Abort or Retry(n: <int>)).",
+                        span=span,
+                    )
             return self._extract_parse_policy_variant(arg.callee.name, arg.named_args, span)
-        # Bare VarRef: ``Abort`` (no parens) is also accepted as abort policy.
+        # Bare VarRef: ``Abort`` or ``ParsePolicy::Abort`` (no parens) is also accepted.
         if isinstance(arg, VarRef) and arg.name == "Abort":
-            return "abort"
-        # Bare FieldAccess: ``ParsePolicy.Abort`` (no parens) is also accepted.
-        if isinstance(arg, FieldAccess) and arg.field == "Abort":
-            qualifier = arg.obj
-            if isinstance(qualifier, VarRef) and qualifier.name == "ParsePolicy":
+            if (
+                arg.module_qualifier is None
+                or arg.module_qualifier.segments in ((), ("ParsePolicy",))
+            ):
                 return "abort"
         raise AglTypeError(
             "'on_parse_error' must be a static ParsePolicy constructor "

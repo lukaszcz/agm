@@ -174,7 +174,7 @@ class TestStdlib:
             elif isinstance(typ, EnumType):
                 for variant, fields in typ.variants.items():
                     args = _constructor_args(dict(fields))
-                    call = f"{name}.{variant}({args})" if args else f"{name}.{variant}"
+                    call = f"{name}::{variant}({args})" if args else f"{name}::{variant}"
                     result = s.eval_entry(call)
                     assert result.ok, (name, variant, result.diagnostics)
                     assert result.value_type is not None
@@ -1438,7 +1438,7 @@ class TestFuncDef:
             "enum Opt[T]\n"
             "  | None\n"
             "def f(x: Opt[int]) -> bool = false\n"
-            "f Opt.None::[int]()"
+            'f Opt[int]::None()'
         )
         assert r.ok, r.diagnostics
         assert isinstance(r.value, BoolValue)

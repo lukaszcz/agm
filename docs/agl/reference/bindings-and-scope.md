@@ -295,7 +295,7 @@ enum Holder[T]
 enum Other
   | tagged(label: text)      # same unqualified name 'tagged'
 
-let h: Holder[int] = Holder.tagged(by = 7)   # qualified — unambiguous
+let h: Holder[int] = Holder::tagged(by = 7)   # qualified — unambiguous
 ```
 
 A **nearer ordinary binding shadows** a constructor (or an overload set): an

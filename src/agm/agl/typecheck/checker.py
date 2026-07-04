@@ -139,7 +139,7 @@ from agm.agl.syntax.nodes import (
     WildcardPattern,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import TypeExpr
+from agm.agl.syntax.types import Qualifier, TypeExpr
 from agm.agl.typecheck.arguments import bind_call_args, bind_pattern_args
 from agm.agl.typecheck.builder import _BUILTIN_TYPE_NAMES as _BUILTIN_TYPE_NAMES
 from agm.agl.typecheck.builder import _TypeBuilder
@@ -759,6 +759,25 @@ class _Checker:
     # --- VarRef ---
 
     def _check_varref(self, node: VarRef, *, expected: Type | None = None) -> Type:
+        if node.node_id in self._resolved.qualified_constructor_refs:
+            owner_name, variant, owner_module_id = self._resolved.qualified_constructor_refs[
+                node.node_id
+            ]
+            if node.type_qualifier is not None and node.type_qualifier.type_args is not None:
+                return self._constructors.check_qualified_constructor_type_apply(
+                    owner_name=owner_name,
+                    variant=variant,
+                    owner_module_id=owner_module_id,
+                    type_args=node.type_qualifier.type_args,
+                    span=node.span,
+                )
+            return self._constructors.check_qualified_constructor_as_value(
+                owner_name=owner_name,
+                variant=variant,
+                owner_module_id=owner_module_id,
+                span=node.span,
+                expected=expected,
+            )
         # Bare constructor reference → zero-arg construction or generic constructor as value.
         if node.node_id in self._resolved.constructor_refs:
             ctor_ref = self._resolved.constructor_refs[node.node_id]
@@ -777,7 +796,7 @@ class _Checker:
         if ref.kind is BinderKind.constructor_binding:
             raise AglTypeError(
                 f"'{node.name}' is a type name, not a value; "
-                "use it with a constructor call (e.g. 'EnumName.Variant' or 'RecordName(...)').",
+                "use it with a constructor call (e.g. 'EnumName::Variant' or 'RecordName(...)').",
                 span=node.span,
             )
         typ = self._require_binding_type(ref)
@@ -845,7 +864,7 @@ class _Checker:
 
     def _check_type_apply(self, node: TypeApply) -> Type:
         # A constructor used as a value with explicit type arguments
-        # (e.g. ``some::[int]`` or ``Option.none::[int]``): delegate to the
+        # (e.g. ``some::[int]``; qualified refs use ``Option[int]::none``): delegate to the
         # constructor checker, which instantiates the constructor with the
         # supplied type arguments and returns a function value (payload) or
         # the constructed nominal value (nullary variant).
@@ -857,21 +876,10 @@ class _Checker:
             self._node_types[node.expr.node_id] = typ
             return typ
         if (
-            isinstance(node.expr, FieldAccess)
+            isinstance(node.expr, VarRef)
             and node.expr.node_id in self._resolved.qualified_constructor_refs
         ):
-            owner_name, variant, owner_module_id = (
-                self._resolved.qualified_constructor_refs[node.expr.node_id]
-            )
-            typ = self._constructors.check_qualified_constructor_type_apply(
-                owner_name=owner_name,
-                variant=variant,
-                owner_module_id=owner_module_id,
-                type_args=node.type_args,
-                span=node.span,
-            )
-            self._node_types[node.expr.node_id] = typ
-            return typ
+            raise self._qualified_constructor_typed_call_error(node.span)
 
         if not isinstance(node.expr, VarRef):
             raise AglTypeError(
@@ -952,9 +960,11 @@ class _Checker:
         ):
             return self._constructors.check_constructor_callee_call(node, expected=expected)
         if (
-            isinstance(node.callee, FieldAccess)
+            isinstance(node.callee, VarRef)
             and node.callee.node_id in self._resolved.qualified_constructor_refs
         ):
+            if node.type_args:
+                raise self._qualified_constructor_typed_call_error(node.span)
             return self._constructors.check_qualified_constructor_callee_call(
                 node, expected=expected
             )
@@ -1811,14 +1821,41 @@ class _Checker:
                 f"got '{expr_type!r}'.",
                 span=node.span,
             )
-        if node.qualifier is not None:
-            self._check_variant_qualifier(node.qualifier, expr_type, node.span)
+        self._check_variant_qualification(
+            qualifier=node.qualifier,
+            module_qualifier=node.module_qualifier,
+            enum_type=expr_type,
+            span=node.span,
+        )
         if node.variant not in expr_type.variants:
             raise AglTypeError(
                 f"Variant '{node.variant}' does not belong to enum '{expr_type.name}'.",
                 span=node.span,
             )
         return BoolType()
+
+    def _qualified_constructor_typed_call_error(self, span: SourceSpan) -> AglTypeError:
+        return AglTypeError(
+            "Type-qualified constructors take explicit type arguments on the type name; "
+            "write 'Type[T]::Ctor(...)' instead of applying '::[T]' to the constructor.",
+            span=span,
+        )
+
+    def _check_variant_qualification(
+        self,
+        *,
+        qualifier: str | None,
+        module_qualifier: Qualifier | None,
+        enum_type: EnumType,
+        span: SourceSpan,
+    ) -> None:
+        """Validate the optional enum-type qualifier on a variant reference."""
+        if qualifier is not None and module_qualifier is not None:
+            self._check_module_qualified_variant(module_qualifier, qualifier, enum_type, span)
+        elif module_qualifier is not None:
+            self._check_qualified_variant_prefix(
+                module_qualifier, enum_type.name, enum_type, span
+            )
 
     def _check_variant_qualifier(
         self, qualifier: str, enum_type: EnumType, span: SourceSpan
@@ -1850,17 +1887,42 @@ class _Checker:
                 span=span,
             )
 
+    def _check_qualified_variant_prefix(
+        self,
+        module_qualifier: Qualifier,
+        enum_name: str,
+        enum_type: EnumType,
+        span: SourceSpan,
+    ) -> None:
+        """Validate a lone ``prefix::Variant`` qualifier."""
+        if len(module_qualifier.segments) == 1:
+            qualifier = module_qualifier.segments[0]
+            type_known = (
+                self._env.get_generic_type(qualifier) is not None
+                or self._env.resolve_named_type(qualifier) is not None
+            )
+            handle_match = self._env.has_qualified_import_handle(module_qualifier.segments)
+            if type_known and handle_match:
+                raise AglTypeError(
+                    f"Qualifier '{qualifier}' is both a type name and an import handle; "
+                    "rename the import alias to disambiguate.",
+                    span=span,
+                )
+            if type_known:
+                self._check_variant_qualifier(qualifier, enum_type, span)
+                return
+
+        self._check_module_qualified_variant(module_qualifier, enum_name, enum_type, span)
+
     def _check_module_qualified_variant(
         self,
-        module_qualifier: object,  # Qualifier
+        module_qualifier: Qualifier,
         enum_name: str,
         enum_type: EnumType,
         span: SourceSpan,
     ) -> None:
         """Validate a module-qualified enum-type qualifier, e.g. ``mylib::Color``."""
-        from agm.agl.syntax.types import NameT, Qualifier
-
-        assert isinstance(module_qualifier, Qualifier)
+        from agm.agl.syntax.types import NameT
         fake_name_t = NameT(
             name=enum_name,
             span=span,
@@ -1892,15 +1954,6 @@ class _Checker:
     # --- field access ---
 
     def _check_field_access(self, node: FieldAccess, expected: Type | None = None) -> Type:
-        # Bare qualified constructor reference → value-position construction.
-        if node.node_id in self._resolved.qualified_constructor_refs:
-            owner_name, variant, owner_module_id = (
-                self._resolved.qualified_constructor_refs[node.node_id]
-            )
-            return self._constructors.check_qualified_constructor_as_value(
-                owner_name=owner_name, variant=variant, owner_module_id=owner_module_id,
-                span=node.span, expected=expected,
-            )
         obj_type = self._check_expr(node.obj, expected=None)
         # reject operations on bare type variables.
         if isinstance(obj_type, TypeVarType):
@@ -2074,14 +2127,12 @@ class _Checker:
                     f"non-enum type '{subj_type!r}'.",
                     span=pattern.span,
                 )
-            if pattern.qualifier is not None:
-                if pattern.module_qualifier is not None:
-                    # Module-qualified variant qualifier, e.g. ``mylib::Color.Red``.
-                    self._check_module_qualified_variant(
-                        pattern.module_qualifier, pattern.qualifier, subj_type, pattern.span
-                    )
-                else:
-                    self._check_variant_qualifier(pattern.qualifier, subj_type, pattern.span)
+            self._check_variant_qualification(
+                qualifier=pattern.qualifier,
+                module_qualifier=pattern.module_qualifier,
+                enum_type=subj_type,
+                span=pattern.span,
+            )
             variant_name = pattern.name
             if variant_name not in subj_type.variants:
                 raise AglTypeError(

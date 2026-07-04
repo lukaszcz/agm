@@ -28,7 +28,7 @@
           {
             "agent": "impl",
             "call": 1,
-            "contains": ["Fix valid issues.", "Review.Fail(issues =", "off by one", "draft"]
+            "contains": ["Fix valid issues.", "Review::Fail(issues =", "off by one", "draft"]
           }
         ]
       }

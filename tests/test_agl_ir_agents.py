@@ -1795,8 +1795,8 @@ def test_ir_ask_no_errors_when_failed_covers_else_branch() -> None:
             interp.run()
 
 
-def test_lower_on_parse_error_field_access_retry() -> None:
-    """_extract_max_attempts: FieldAccess callee (qualified Retry) → correct attempt count."""
+def test_lower_on_parse_error_self_qualified_retry() -> None:
+    """Self-qualified Retry parse policy produces the correct attempt count."""
     source = """\
 agent a
 let n: int = ask("?", agent = a, on_parse_error = ::Retry(n = 2))

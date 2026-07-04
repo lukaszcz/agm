@@ -107,7 +107,7 @@ enum Option[T]
 print(id::[int](9))
 let be = Box::[int](value = 99)
 let s = some::[int](value = 8)
-let qs = Option.some::[int](value = 13)
+let qs = Option[int]::some(value = 13)
 let _r = apply::[int, int](10, fn(n: int) -> int => n + 1)
 print be.value
 ```
@@ -192,7 +192,7 @@ let v = mk(7)
 let z: Option[int] = none::[int]            # nullary value, no call needed
 ```
 
-The qualified forms `Option.some::[int]` and `Option.none::[int]` work the
+The qualified forms `Option[int]::some` and `Option[int]::none` work the
 same way. The result is an ordinary function value (payload) or nominal value
 (nullary) and can be passed and called like any other.
 
@@ -247,17 +247,17 @@ enum Option[T]
 
 def describe_option(o: Option[int]) -> text =
   case o of
-    | Option.none => "missing"
-    | Option.some(value) => "found ${value}"
+    | Option::none => "missing"
+    | Option::some(value) => "found ${value}"
 
-let d: Option[int] = Option.some(value = 11)
+let d: Option[int] = Option::some(value = 11)
 let line = describe_option(d)
 print line
 ```
 
 Qualification works in expression, pattern, and `is`-test positions
-(`Option.some(value = 1)`, `case … | Option.none => …`,
-`probe is Option.some`). A nearer ordinary binding (a `let`, `var`, or
+(`Option::some(value = 1)`, `case … | Option::none => …`,
+`probe is Option::some`). A nearer ordinary binding (a `let`, `var`, or
 function parameter) **shadows** a constructor or overload set, exactly like
 any other shadowing (see [Bindings and scope](bindings-and-scope.md)).
 

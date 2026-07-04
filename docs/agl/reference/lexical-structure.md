@@ -125,7 +125,7 @@ and type position:
 foo.bar::thing       # module foo.bar, name thing
 ::name               # current module, name name (self-reference)
 A.baz::y             # alias-rooted qualifier, name y
-foo.bar::Color.Red   # module foo.bar, enum Color, variant Red
+foo.bar::Color::Red   # module foo.bar, enum Color, variant Red
 ```
 
 A qualifier is a dotted module path followed by `::` immediately before the
@@ -324,7 +324,7 @@ From loosest to tightest binding (the bottom binds tightest):
 | 7 | `as` `as?` (cast / convertibility test) | left |
 | 8 | `-` (unary prefix) | — |
 | 9 | function application (single-arg sugar) | **non-chaining** |
-| 10 | `.field` access, `.Variant` qualification, `[index]`, `( args )` call | left |
+| 10 | `.field` access, `[index]`, `( args )` call | left |
 | 11 | atoms: literals, names, `( expr )`, `()` unit, templates | — |
 
 User-defined symbolic infix operators are declared with `infixl` or `infixr`:

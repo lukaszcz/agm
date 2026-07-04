@@ -177,7 +177,7 @@ class ReplSession:
         # so that subsequent entries can reference constructors from prior entries.
         self._ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] = {}
         # Type names declared in prior promoted entries, for qualified constructor
-        # access (``Owner.variant``) across REPL entries.
+        # access (``Owner::variant``) across REPL entries.
         self._ambient_type_names: frozenset[str] = frozenset()
 
         # Module roots configuration.

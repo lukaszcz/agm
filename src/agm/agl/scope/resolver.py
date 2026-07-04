@@ -227,7 +227,7 @@ class _Resolver:
         self._constructor_candidates: dict[str, list[ConstructorRef]] = {}
         # Resolved single-candidate constructor refs: VarRef.node_id -> ConstructorRef.
         self._constructor_refs: dict[int, ConstructorRef] = {}
-        # Qualified constructor refs: FieldAccess.node_id -> (owner_name, member, owner_module_id).
+        # Qualified constructor refs: VarRef.node_id -> (owner_name, member, owner_module_id).
         self._qualified_constructor_refs: dict[int, tuple[str, str, ModuleId | None]] = {}
         # VarPattern.node_id of bare names that denote a constructor (nullary
         # variant patterns), not variable binders.
@@ -270,7 +270,7 @@ class _Resolver:
         earlier entries resolve correctly in subsequent entries.
 
         *ambient_type_names* carries type names from prior entries so that
-        qualified constructor access (``Owner.variant``) resolves for types
+        qualified constructor access (``Owner::variant``) resolves for types
         declared in earlier REPL entries.
         """
         # Seed ambient constructor candidates (from prior REPL entries) before
@@ -389,7 +389,7 @@ class _Resolver:
         type declarations use the same name.
 
         Builtin prelude type names are seeded first so that qualified
-        constructor access (e.g. ``ParsePolicy.Abort``) resolves correctly.
+        constructor access (e.g. ``ParsePolicy::Abort``) resolves correctly.
         """
         for type_name in BUILTIN_PRELUDE_TYPES:
             self._declared_type_names.add(type_name)
@@ -432,8 +432,8 @@ class _Resolver:
 
         For builtin prelude ENUM types (e.g. ParsePolicy), we register each
         variant whose name does NOT conflict with any builtin exception type name.
-        Conflicting variants (like ``ParsePolicy.Abort``) must be accessed via
-        qualified syntax (e.g. ``ParsePolicy.Abort``).
+        Conflicting variants (like ``ParsePolicy::Abort``) must be accessed via
+        qualified syntax (e.g. ``ParsePolicy::Abort``).
 
         The ``owner_decl_node_id`` is set to -1 (a sentinel) because these types have
         no AST declaration node.
@@ -454,7 +454,7 @@ class _Resolver:
                 continue
             if isinstance(type_val, EnumType):
                 # Register variants that don't conflict with exception names.
-                # Conflicting variants (e.g. ParsePolicy.Abort ↔ Abort exception)
+                # Conflicting variants (e.g. ParsePolicy::Abort ↔ Abort exception)
                 # must be used in qualified form.
                 for variant_name in type_val.variants:
                     if variant_name not in exception_names:
@@ -1197,10 +1197,24 @@ class _Resolver:
         - ``node.module_qualifier.segments == ()`` (``::name``) → self-ref to own scope.
         - ``node.module_qualifier.segments != ()`` → qualified cross-module access.
         """
-        # Graph mode: handle module_qualifier and ImportEnv lookup.
-        if self._import_env is not None and node.module_qualifier is not None:
-            self._resolve_varref_qualified(node)
+        if node.type_qualifier is not None:
+            self._resolve_type_qualified_constructor(node)
             return
+
+        # Single-segment qualifiers can name either a type or an import handle.
+        if node.module_qualifier is not None:
+            if self._resolve_single_qualifier_constructor(node):
+                return
+            if self._import_env is not None:
+                self._resolve_varref_qualified(node)
+                return
+            if node.module_qualifier.segments != ():
+                qualifier_str = ".".join(node.module_qualifier.segments)
+                raise AglScopeError(
+                    f"No module imported under qualifier '{qualifier_str}' or type named "
+                    f"'{qualifier_str}'.",
+                    span=node.module_qualifier.span,
+                )
 
         # Standard lexical lookup (single-program mode or bare name in graph mode).
         ref = self._current_scope().lookup(node.name)
@@ -1232,11 +1246,102 @@ class _Resolver:
                 raise AglScopeError(
                     f"'{node.name}' is ambiguous: it is declared as a constructor "
                     f"in multiple types ({owner_names}). "
-                    f"Qualify the reference, e.g. '{candidates[0].owner_name}.{node.name}'.",
+                    f"Qualify the reference, e.g. '{candidates[0].owner_name}::{node.name}'.",
                     span=node.span,
                 )
             elif len(candidates) == 1:
                 self._constructor_refs[node.node_id] = candidates[0]
+
+    def _resolve_type_qualified_constructor(self, node: VarRef) -> None:
+        """Resolve an explicit ``[module::]Type[args]::Ctor`` reference."""
+        assert node.type_qualifier is not None
+        type_name = node.type_qualifier.name
+        if node.module_qualifier is None:
+            if type_name not in self._declared_type_names:
+                raise AglScopeError(
+                    f"'{type_name}' is not a known type.",
+                    span=node.type_qualifier.span,
+                )
+            self._qualified_constructor_refs[node.node_id] = (type_name, node.name, None)
+            return
+        if node.module_qualifier.segments == ():
+            if type_name not in self._declared_type_names:
+                raise AglScopeError(
+                    f"'{type_name}' is not defined in this module.",
+                    span=node.type_qualifier.span,
+                )
+            owner_module = self._module_id if self._import_env is not None else None
+            self._qualified_constructor_refs[node.node_id] = (type_name, node.name, owner_module)
+            return
+        if self._import_env is None:
+            qualifier_str = ".".join(node.module_qualifier.segments)
+            raise AglScopeError(
+                f"No module imported under qualifier '{qualifier_str}'.",
+                span=node.module_qualifier.span,
+            )
+        src_name, owning_module = self._resolve_qualified_type_name(
+            node.module_qualifier.segments, type_name, node.type_qualifier.span
+        )
+        self._qualified_constructor_refs[node.node_id] = (src_name, node.name, owning_module)
+
+    def _resolve_single_qualifier_constructor(self, node: VarRef) -> bool:
+        """Resolve ``Type::Ctor`` when the qualifier denotes a type name."""
+        assert node.module_qualifier is not None
+        segments = node.module_qualifier.segments
+        if len(segments) != 1:
+            return False
+        type_name = segments[0]
+        type_match = type_name in self._declared_type_names
+        handle_match = (
+            self._import_env is not None
+            and self._import_env.qualified.get(segments) is not None
+        )
+        if type_match and handle_match:
+            raise AglScopeError(
+                f"Qualifier '{type_name}' is both a type name and an import handle; "
+                "rename the import alias to disambiguate.",
+                span=node.module_qualifier.span,
+            )
+        if not type_match:
+            return False
+        self._qualified_constructor_refs[node.node_id] = (type_name, node.name, None)
+        return True
+
+    def _resolve_qualified_type_name(
+        self, handle: tuple[str, ...], type_name: str, span: SourceSpan
+    ) -> tuple[str, ModuleId]:
+        """Resolve ``handle::type_name`` as a constructible type owner."""
+        assert self._import_env is not None
+        qual_map = self._import_env.qualified.get(handle)
+        qualifier_str = ".".join(handle)
+        if qual_map is None:
+            raise AglScopeError(
+                f"No module imported under qualifier '{qualifier_str}'.",
+                span=span,
+            )
+        qname = qual_map.get(type_name)
+        if qname is None:
+            owning_module: ModuleId = next(iter(qual_map.values()))[0]
+            if self._private_info.get((owning_module, type_name)):
+                raise AglScopeError(
+                    f"'{type_name}' in module '{owning_module.dotted()}' is declared private "
+                    f"and cannot be accessed from outside the module.",
+                    span=span,
+                )
+            raise AglScopeError(
+                f"'{type_name}' is not in the imported set of '{qualifier_str}'.",
+                span=span,
+            )
+        owning_module, src_name = qname[0], qname[1]
+        _decl_node_id, _decl_span, kind = self._decl_info.get(
+            (owning_module, src_name), (-1, span, BinderKind.let_binding)
+        )
+        if kind is not BinderKind.constructor_binding:
+            raise AglScopeError(
+                f"'{qualifier_str}::{type_name}' is not a constructible type.",
+                span=span,
+            )
+        return (src_name, owning_module)
 
     def _lookup_import_env_unqualified(self, node: VarRef) -> BindingRef | None:
         """Look up a bare name in the open-import environment (graph mode).
@@ -1393,72 +1498,19 @@ class _Resolver:
             self._resolve_expr(named.value)
 
     def _resolve_field_access(self, expr: FieldAccess) -> None:
-        """Resolve a field-access expression.
-
-        If ``expr.obj`` is a ``VarRef`` whose name is in ``declared_type_names``
-        AND is NOT shadowed by a visible non-type value binding, this is a
-        **type-qualified constructor access** (e.g. ``Option.some``).  In that
-        case record it in ``qualified_constructor_refs`` and skip resolving the
-        object as a value.
-
-        For cross-module qualified access (``mylib::Color.Red``), the obj is a
-        VarRef with a module_qualifier.  Detect this via the import env and
-        decl_info, and record in ``qualified_constructor_refs`` similarly.
-
-        Otherwise resolve ``expr.obj`` normally as a value expression.
-        """
-        obj = expr.obj
-        if isinstance(obj, VarRef):
-            if obj.module_qualifier is None and obj.name in self._declared_type_names:
-                # Type-qualified constructor access (e.g. ``Color.Red``).
-                # This handles both locally-declared types and open-imported types
-                # whose names are seeded into ``_declared_type_names`` via
-                # ``ambient_type_names`` in graph mode.
-                existing = self._current_scope().lookup(obj.name)
-                if existing is None or existing.kind == BinderKind.constructor_binding:
-                    self._qualified_constructor_refs[expr.node_id] = (
-                        obj.name, expr.field, None
-                    )
-                    return
-            elif obj.module_qualifier is not None and self._import_env is not None:
-                # Explicitly-qualified type access (e.g. ``mylib::Color.Red``).
-                result = self._resolve_cross_module_type_name(obj)
-                if result is not None:
-                    src_name, owning_module = result
-                    self._qualified_constructor_refs[expr.node_id] = (
-                        src_name, expr.field, owning_module
-                    )
-                    return
-        # Ordinary field access: resolve the object as a value.
-        self._resolve_expr(obj)
-
-    def _resolve_cross_module_type_name(
-        self, obj: VarRef
-    ) -> tuple[str, ModuleId] | None:
-        """Return ``(src_type_name, owning_module)`` if ``obj`` is a cross-module type ref.
-
-        Returns ``None`` if not a cross-module type reference.
-        """
-        assert self._import_env is not None
-        assert obj.module_qualifier is not None
-        if obj.module_qualifier.segments == ():
-            # Self-ref (::TypeName) — check declared type names of own module.
-            if obj.name in self._declared_type_names:
-                return (obj.name, self._module_id)
-            return None
-        handle = obj.module_qualifier.segments
-        qual_map = self._import_env.qualified.get(handle)
-        if qual_map is None:
-            return None
-        qname = qual_map.get(obj.name)
-        if qname is None:
-            return None
-        owning_module, src_name = qname[0], qname[1]
-        key = (owning_module, src_name)
-        _, _, kind = self._decl_info.get(key, (-1, obj.span, BinderKind.let_binding))
-        if kind == BinderKind.constructor_binding:
-            return (src_name, owning_module)
-        return None
+        """Resolve a field-access expression by resolving its object as a value."""
+        if isinstance(expr.obj, VarRef) and expr.obj.module_qualifier is None:
+            existing = self._current_scope().lookup(expr.obj.name)
+            if (
+                expr.obj.name in self._declared_type_names
+                and (existing is None or existing.kind is BinderKind.constructor_binding)
+            ):
+                raise AglScopeError(
+                    f"'{expr.obj.name}' is a type name, not a value; use '::' for "
+                    f"constructor qualification (for example, '{expr.obj.name}::{expr.field}').",
+                    span=expr.obj.span,
+                )
+        self._resolve_expr(expr.obj)
 
     def _resolve_template(self, node: Template) -> None:
         for seg in node.segments:
@@ -1710,7 +1762,7 @@ def resolve(
         entries resolve correctly.  Default ``None`` → no ambient candidates.
     ambient_type_names:
         Type names from prior REPL entries, used for qualified constructor
-        access (``Owner.variant``).  Default empty.
+        access (``Owner::variant``).  Default empty.
 
     Returns
     -------

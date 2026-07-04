@@ -334,7 +334,7 @@ print review          # equivalent to print(review)
 ask "Hello?"          # equivalent to ask("Hello?")
 print res.stdout      # field-access path is a valid sugar argument
 print classify(x)     # equivalent to print(classify(x))
-f Opt.Some(x = 1)      # equivalent to f(Opt.Some(x = 1))
+f Opt::Some(x = 1)      # equivalent to f(Opt::Some(x = 1))
 ```
 
 Application binds **tighter than all operators**:
@@ -472,7 +472,7 @@ can be stored in bindings and passed to functions:
 
 ```agl
 def make_policy(retries: int) -> ParsePolicy =
-  if retries == 0 => ParsePolicy.Abort else => Retry(n = retries)
+  if retries == 0 => ParsePolicy::Abort else => Retry(n = retries)
 ```
 
 ## Complete example

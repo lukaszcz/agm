@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from dataclasses import field as dc_field
 
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import ImportMode, Qualifier, TypeExpr
+from agm.agl.syntax.types import ImportMode, Qualifier, TypeExpr, TypeQualifier
 
 # ---------------------------------------------------------------------------
 # Sentinel for the else-branch of If
@@ -172,12 +172,13 @@ TemplateSegment = TextSegment | InterpSegment
 
 @dataclass(frozen=True, slots=True)
 class VarRef:
-    """Reference to a variable or param binding."""
+    """Reference to a variable, param binding, or qualified constructor."""
 
     name: str
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     module_qualifier: Qualifier | None = None
+    type_qualifier: TypeQualifier | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,7 +266,7 @@ class Cast:
 
 @dataclass(frozen=True, slots=True)
 class IsTest:
-    """Pattern membership test: ``expr is [not] [Qualifier.]Variant``."""
+    """Pattern membership test: ``expr is [not] [Qualifier::]Variant``."""
 
     expr: Expr
     qualifier: str | None
@@ -273,6 +274,7 @@ class IsTest:
     negated: bool
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    module_qualifier: Qualifier | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -46,6 +46,10 @@ def lower_graph(
     """
     link = _link if _link is not None else _LinkState()
 
+    # Every per-module TypeEnvironment shares one TypeTable instance (built
+    # during checking); pick the entry module's env to reach it.
+    type_table = checked_graph.modules[checked_graph.entry_id].type_env.type_table
+
     # Step 1: Register a SourceFile for every module.
     module_source_ids: dict[ModuleId, SourceId] = {}
     for mid, cm in checked_graph.modules.items():
@@ -79,7 +83,7 @@ def lower_graph(
                 nominal=nominal,
                 display_name=name,
                 kind=NominalKind.RECORD,
-                fields=tuple(typ.fields.keys()),
+                fields=tuple(type_table.record_fields(typ).keys()),
                 variants=(),
             )
         elif isinstance(typ, EnumType):
@@ -88,7 +92,7 @@ def lower_graph(
             nominal = NominalId(typ.module_id, name)
             variants = tuple(
                 VariantDescriptor(name=vname, fields=tuple(vfields.keys()))
-                for vname, vfields in typ.variants.items()
+                for vname, vfields in type_table.enum_variants(typ).items()
             )
             link.nominals[nominal] = NominalDescriptor(
                 nominal=nominal,
@@ -107,20 +111,26 @@ def lower_graph(
                 variants=(),
             )
 
-    _add_builtin_nominals(link.nominals)
+    _add_builtin_nominals(link.nominals, type_table)
 
     # Generic declarations live outside graph_type_table. Runtime nominal
     # identity erases type arguments, so register each generic template once.
+    # Field/variant NAMES are read directly off the registered TypeDef (never
+    # instantiated — a generic template has no concrete type_args).
     for cm in checked_graph.modules.values():
         for name, generic in cm.type_env.all_generic_types().items():
             typ = generic.template
             nominal = NominalId(typ.module_id, name)
+            typedef = type_table.get(typ.module_id, name)
+            assert typedef is not None, (
+                f"compiler bug: generic type {name!r} has no TypeDef registered"
+            )
             if isinstance(typ, RecordType):
                 link.nominals[nominal] = NominalDescriptor(
                     nominal=nominal,
                     display_name=name,
                     kind=NominalKind.RECORD,
-                    fields=tuple(typ.fields),
+                    fields=tuple(fname for fname, _ in typedef.fields),
                 )
             else:
                 link.nominals[nominal] = NominalDescriptor(
@@ -128,8 +138,8 @@ def lower_graph(
                     display_name=name,
                     kind=NominalKind.ENUM,
                     variants=tuple(
-                        VariantDescriptor(vname, tuple(vfields))
-                        for vname, vfields in typ.variants.items()
+                        VariantDescriptor(vname, tuple(fname for fname, _ in vfields))
+                        for vname, vfields in typedef.variants
                     ),
                 )
 

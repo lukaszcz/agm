@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from agm.agl.ir.program import ExecutableProgram
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.contract import OutputContract
+    from agm.agl.semantics.type_table import TypeTable
     from agm.agl.semantics.types import Type as AglType
     from agm.agl.semantics.values import Value
 
@@ -71,15 +72,21 @@ def build_engine_config_base(raw_values: "Mapping[str, object]") -> "dict[str, V
     Each caller is responsible for constructing *raw_values* with its own
     layering (CLI/program/exec config).  This helper performs only the
     decoding step, keeping the layering logic in the callers.
+
+    Engine keys are always built-in scalar or ``Option[text]`` types, never a
+    user-declared nominal type, so this builds its own fresh seeded
+    ``TypeTable`` rather than requiring one from the caller.
     """
     from agm.agl.semantics.engine_keys import get_engine_key_type
+    from agm.agl.semantics.type_table import create_seeded_type_table
 
+    type_table = create_seeded_type_table()
     result: dict[str, Value] = {}
     for key_name, default_raw in _ENGINE_DEFAULTS.items():
         raw = raw_values.get(key_name, default_raw)
         key_type = get_engine_key_type(key_name)
         assert key_type is not None, f"unknown engine key: {key_name!r}"
-        result[key_name] = convert_config_value(key_name, raw, key_type)
+        result[key_name] = convert_config_value(key_name, raw, key_type, type_table)
     return result
 
 
@@ -180,7 +187,9 @@ def _materialize_ir_contracts(
     return materialized, errors
 
 
-def convert_param_value(name: str, raw: object, type_obj: "AglType") -> "Value":
+def convert_param_value(
+    name: str, raw: object, type_obj: "AglType", type_table: "TypeTable"
+) -> "Value":
     """Convert a raw host param value to the declared AgL type.
 
     Builds the same :class:`~agm.agl.ir.contracts.ParamDecoder` the lowerer
@@ -191,13 +200,14 @@ def convert_param_value(name: str, raw: object, type_obj: "AglType") -> "Value":
     ``text`` params are taken verbatim; every other value crosses the canonical
     JSON boundary — either a JSON string or a JSON-compatible Python value, both
     parsed strictly (no json-repair of user typos).  Types with no wire
-    schema (unit/agent/exception/…) are rejected up front.
+    schema (unit/agent/exception/…) are rejected up front.  *type_table*
+    resolves record/enum field/variant shapes for *type_obj*.
     """
     from agm.agl.runtime.convert import StrictJsonParseError
     from agm.agl.type_schema import build_param_decoder
 
     try:
-        decoder = build_param_decoder(type_obj)
+        decoder = build_param_decoder(type_obj, type_table)
     except TypeError as exc:
         raise ValueError(f"Param {name!r} has unsupported type {type_obj!r}.") from exc
     try:
@@ -208,23 +218,35 @@ def convert_param_value(name: str, raw: object, type_obj: "AglType") -> "Value":
         ) from exc
 
 
-def convert_config_value(name: str, raw: object, key_type: "AglType") -> "Value":
+def convert_config_value(
+    name: str, raw: object, key_type: "AglType", type_table: "TypeTable | None" = None
+) -> "Value":
     """Convert a raw host config value to the declared engine-key AgL type.
 
     For ``Option[T]`` engine keys (``timeout``, ``log-file``) the raw value is
     projected into the Option enum: a present *raw* becomes ``some(value)`` with
     its inner ``T`` decoded via :func:`convert_param_value`, and ``None`` becomes
     ``none``.  Non-Option keys fall back to :func:`convert_param_value`.
+    *type_table* is threaded through to both; the Option unwrap itself reads
+    ``key_type.type_args`` directly and never needs variant shapes from it.
+
+    Engine keys are always built-in scalar or ``Option[text]`` types, never a
+    user-declared nominal type, so *type_table* defaults to a fresh seeded
+    ``TypeTable`` when the caller has none in hand (e.g. CLI-flag config
+    projection); callers that already hold the session/program table (the
+    REPL) pass it explicitly.
     """
     from agm.agl.runtime.option import none_value, some_value
+    from agm.agl.semantics.type_table import create_seeded_type_table
     from agm.agl.semantics.types import EnumType, TextType
 
+    table = type_table if type_table is not None else create_seeded_type_table()
     if isinstance(key_type, EnumType) and key_type.name == "Option":
         if raw is None:
             return none_value()
         inner: AglType = key_type.type_args[0] if key_type.type_args else TextType()
-        return some_value(convert_param_value(name, raw, inner))
-    return convert_param_value(name, raw, key_type)
+        return some_value(convert_param_value(name, raw, inner, table))
+    return convert_param_value(name, raw, key_type, table)
 
 
 def _is_json_shaped(obj: object) -> bool:

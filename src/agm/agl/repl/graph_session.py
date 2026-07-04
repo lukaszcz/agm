@@ -215,7 +215,7 @@ class GraphSession:
         contract_errors: list[Diagnostic] = []
         for spec in checked.contract_specs.values():
             try:
-                materialize_contract(spec, host_env.codecs)
+                materialize_contract(spec, host_env.codecs, checked.type_env.type_table)
             except ValueError as exc:
                 contract_errors.append(Diagnostic(message=f"Contract error: {exc}", line=1))
         if contract_errors:

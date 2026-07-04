@@ -965,7 +965,7 @@ class TestContractError:
     ) -> None:
         import agm.agl.runtime.contract as contract_mod
 
-        def bad_materialize(spec: object, codecs: object) -> object:
+        def bad_materialize(spec: object, codecs: object, type_table: object = None) -> object:
             raise ValueError("bad contract")
 
         monkeypatch.setattr(contract_mod, "materialize_contract", bad_materialize)
@@ -1781,7 +1781,7 @@ class TestImports:
         # returns a failed entry with a "Contract error:" diagnostic.
         import agm.agl.runtime.contract as contract_mod
 
-        def bad_materialize(spec: object, codecs: object) -> object:
+        def bad_materialize(spec: object, codecs: object, type_table: object = None) -> object:
             raise ValueError("bad contract")
 
         monkeypatch.setattr(contract_mod, "materialize_contract", bad_materialize)

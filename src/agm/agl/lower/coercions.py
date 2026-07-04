@@ -1,9 +1,10 @@
 """Coercion compiler for the AgL lowering phase.
 
-``compile_coercion(source, target)`` is the ONLY place that reads checker
-``Type`` objects to produce a ``Coercion`` descriptor.  Once this function
-returns, the coercion is fully pre-resolved; the evaluator only switches on
-the returned ``Coercion`` union and never sniffs value types at runtime.
+``compile_coercion(source, target, type_table)`` is the ONLY place that reads
+checker ``Type`` objects to produce a ``Coercion`` descriptor.  Once this
+function returns, the coercion is fully pre-resolved; the evaluator only
+switches on the returned ``Coercion`` union and never sniffs value types at
+runtime.
 
 Ordering follows the contract exactly (mirrors legacy eval/interpreter._coerce):
   1. target is JsonType and source is not JsonType → ToJson
@@ -15,7 +16,9 @@ Ordering follows the contract exactly (mirrors legacy eval/interpreter._coerce):
   7. otherwise → None (identity / opaque / no implicit coercion)
 
 TypeVarType sources or targets, equal types, and the json→json identity all
-return None.
+return None.  Record/enum field and variant shapes are resolved through the
+shared ``TypeTable`` (``table.record_fields``/``table.enum_variants``) rather
+than the handle's own embedded maps.
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ from agm.agl.ir.operations import (
     MapRecordFields,
     ToJson,
 )
+from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import (
     DecimalType,
     DictType,
@@ -44,11 +48,12 @@ from agm.agl.semantics.types import (
 __all__ = ["compile_coercion"]
 
 
-def compile_coercion(source: Type, target: Type) -> Coercion | None:
+def compile_coercion(source: Type, target: Type, type_table: TypeTable) -> Coercion | None:
     """Compile an implicit coercion from *source* to *target*.
 
     Returns a ``Coercion`` descriptor to be wrapped in an ``IrCoerce`` node, or
     ``None`` when no coercion node is needed (identity / opaque / equal types).
+    *type_table* resolves record/enum field and variant shapes.
 
     Ordering (mirrors legacy eval/interpreter._coerce):
       1. target is JsonType and source is not JsonType → ToJson
@@ -71,27 +76,31 @@ def compile_coercion(source: Type, target: Type) -> Coercion | None:
 
     # 5. Both record → per shared field (before equality check; see note above).
     if isinstance(target, RecordType) and isinstance(source, RecordType):
+        src_fields = type_table.record_fields(source)
+        tgt_fields = type_table.record_fields(target)
         field_ops: list[tuple[str, Coercion]] = []
-        for field_name, tgt_field_type in target.fields.items():
-            src_field_type = source.fields.get(field_name)
+        for field_name, tgt_field_type in tgt_fields.items():
+            src_field_type = src_fields.get(field_name)
             if src_field_type is None:
                 continue
-            child = compile_coercion(src_field_type, tgt_field_type)
+            child = compile_coercion(src_field_type, tgt_field_type, type_table)
             if child is not None:
                 field_ops.append((field_name, child))
         return MapRecordFields(tuple(field_ops)) if field_ops else None
 
     # 6. Both enum → per variant, per field (before equality check).
     if isinstance(target, EnumType) and isinstance(source, EnumType):
+        src_variants = type_table.enum_variants(source)
+        tgt_variants = type_table.enum_variants(target)
         variant_ops: list[tuple[str, tuple[tuple[str, Coercion], ...]]] = []
-        for variant_name, tgt_vfields in target.variants.items():
-            src_vfields = source.variants.get(variant_name, {})
+        for variant_name, tgt_vfields in tgt_variants.items():
+            src_vfields = src_variants.get(variant_name, {})
             field_ops_v: list[tuple[str, Coercion]] = []
             for field_name, tgt_ftype in tgt_vfields.items():
                 src_ftype = src_vfields.get(field_name)
                 if src_ftype is None:
                     continue
-                child = compile_coercion(src_ftype, tgt_ftype)
+                child = compile_coercion(src_ftype, tgt_ftype, type_table)
                 if child is not None:
                     field_ops_v.append((field_name, child))
             if field_ops_v:
@@ -114,12 +123,12 @@ def compile_coercion(source: Type, target: Type) -> Coercion | None:
 
     # 3. Both list → recurse on element type.
     if isinstance(target, ListType) and isinstance(source, ListType):
-        child = compile_coercion(source.elem, target.elem)
+        child = compile_coercion(source.elem, target.elem, type_table)
         return MapList(child) if child is not None else None
 
     # 4. Both dict → recurse on value type.
     if isinstance(target, DictType) and isinstance(source, DictType):
-        child = compile_coercion(source.value, target.value)
+        child = compile_coercion(source.value, target.value, type_table)
         return MapDictValues(child) if child is not None else None
 
     # 7. Otherwise: no implicit coercion.

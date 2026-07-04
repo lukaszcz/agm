@@ -8,7 +8,8 @@ pre-resolved ``Coercion`` descriptors and never sniffs value types at runtime.
 Public API
 ----------
 - :func:`lower_program` — single-module lowering entry point.
-- :func:`compile_coercion` — coercion compiler (``Type × Type → Coercion | None``).
+- :func:`compile_coercion` — coercion compiler
+  (``Type × Type × TypeTable → Coercion | None``).
 """
 
 from agm.agl.lower.coercions import compile_coercion

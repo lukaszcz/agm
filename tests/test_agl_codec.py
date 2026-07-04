@@ -35,6 +35,7 @@ from agm.agl.runtime.contract import OutputContract, materialize_contract
 from agm.agl.runtime.request import AgentRequest
 from agm.agl.scope import resolve
 from agm.agl.semantics.exceptions import AglRaise
+from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import (
     BoolType,
     DecimalType,
@@ -68,7 +69,7 @@ from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import build_decode_schema, derive_schema
 from agm.agl.typecheck import check
 from agm.agl.typecheck.env import CheckedProgram, OutputContractSpec
-from tests._agl_helpers import ambient_agents_for
+from tests._agl_helpers import ambient_agents_for, type_table_for
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -109,9 +110,14 @@ def _make_review_type() -> EnumType:
 
 
 def _make_contract_for(typ: Type) -> OutputContract:
-    """Build an OutputContract for a type via JsonCodec.make_contract."""
+    """Build an OutputContract for a type via JsonCodec.make_contract.
+
+    Builds a fresh ``TypeTable`` seeded with *typ*'s own ad-hoc shape (see
+    ``tests._agl_helpers.type_table_for``) since *typ* is constructed directly
+    rather than through the real type builder.
+    """
     codec = JsonCodec()
-    return codec.make_contract(typ)
+    return codec.make_contract(typ, type_table_for(typ))
 
 
 def _parse_typed(
@@ -130,11 +136,12 @@ def _parse_typed(
     and decode once and threading both into ``parse``); ``decode`` is always
     built from *typ* and cannot be overridden.
     """
+    table = type_table_for(typ)
     return codec.parse(
         raw,
         strict_json=strict_json,
-        schema=schema if schema is not None else derive_schema(typ),
-        decode=build_decode_schema(typ),
+        schema=schema if schema is not None else derive_schema(typ, table),
+        decode=build_decode_schema(typ, table),
     )
 
 
@@ -329,52 +336,52 @@ def _enum_def(name: str, *variants: ast.VariantDef) -> ast.EnumDef:
 
 class TestDeriveSchema:
     def test_text_type(self) -> None:
-        schema = derive_schema(TextType())
+        schema = derive_schema(TextType(), type_table_for())
         assert schema == {"type": "string"}
 
     def test_int_type(self) -> None:
-        schema = derive_schema(IntType())
+        schema = derive_schema(IntType(), type_table_for())
         assert schema == {"type": "integer"}
 
     def test_decimal_type(self) -> None:
-        schema = derive_schema(DecimalType())
+        schema = derive_schema(DecimalType(), type_table_for())
         assert schema == {"type": "number"}
 
     def test_bool_type(self) -> None:
-        schema = derive_schema(BoolType())
+        schema = derive_schema(BoolType(), type_table_for())
         assert schema == {"type": "boolean"}
 
     def test_json_type_is_permissive(self) -> None:
         # json type accepts anything: {}
-        schema = derive_schema(JsonType())
+        schema = derive_schema(JsonType(), type_table_for())
         assert schema == {}
 
     def test_list_of_text(self) -> None:
-        schema = derive_schema(ListType(elem=TextType()))
+        schema = derive_schema(ListType(elem=TextType()), type_table_for())
         assert schema == {"type": "array", "items": {"type": "string"}}
 
     def test_list_of_int(self) -> None:
-        schema = derive_schema(ListType(elem=IntType()))
+        schema = derive_schema(ListType(elem=IntType()), type_table_for())
         assert schema == {"type": "array", "items": {"type": "integer"}}
 
     def test_list_nested(self) -> None:
-        schema = derive_schema(ListType(elem=ListType(elem=BoolType())))
+        schema = derive_schema(ListType(elem=ListType(elem=BoolType())), type_table_for())
         assert schema == {
             "type": "array",
             "items": {"type": "array", "items": {"type": "boolean"}},
         }
 
     def test_dict_of_text(self) -> None:
-        schema = derive_schema(DictType(value=TextType()))
+        schema = derive_schema(DictType(value=TextType()), type_table_for())
         assert schema == {"type": "object", "additionalProperties": {"type": "string"}}
 
     def test_dict_of_int(self) -> None:
-        schema = derive_schema(DictType(value=IntType()))
+        schema = derive_schema(DictType(value=IntType()), type_table_for())
         assert schema == {"type": "object", "additionalProperties": {"type": "integer"}}
 
     def test_record_schema(self) -> None:
         issue_type = _make_issue_type()
-        schema = derive_schema(issue_type)
+        schema = derive_schema(issue_type, type_table_for(issue_type))
         assert schema == {
             "type": "object",
             "additionalProperties": False,
@@ -391,7 +398,7 @@ class TestDeriveSchema:
             name="Pair",
             fields={"a": IntType(), "b": TextType()},
         )
-        schema = derive_schema(typ)
+        schema = derive_schema(typ, type_table_for(typ))
         required = schema["required"]
         assert isinstance(required, list)
         assert set(required) == {"a", "b"}
@@ -399,7 +406,7 @@ class TestDeriveSchema:
     def test_record_nested_record(self) -> None:
         inner = RecordType(name="Inner", fields={"x": IntType()})
         outer = RecordType(name="Outer", fields={"inner": inner})
-        schema = derive_schema(outer)
+        schema = derive_schema(outer, type_table_for(outer))
         properties = schema["properties"]
         assert isinstance(properties, dict)
         assert properties["inner"] == {
@@ -411,7 +418,7 @@ class TestDeriveSchema:
 
     def test_enum_schema_pass_only(self) -> None:
         typ = EnumType(name="Status", variants={"Done": {}})
-        schema = derive_schema(typ)
+        schema = derive_schema(typ, type_table_for(typ))
         assert schema == {
             "oneOf": [
                 {
@@ -424,7 +431,8 @@ class TestDeriveSchema:
         }
 
     def test_enum_schema_review(self) -> None:
-        schema = derive_schema(_make_review_type())
+        review_type = _make_review_type()
+        schema = derive_schema(review_type, type_table_for(review_type))
         assert schema == {
             "oneOf": [
                 {
@@ -447,7 +455,7 @@ class TestDeriveSchema:
 
     def test_enum_nullary_variant_has_only_case_field(self) -> None:
         typ = EnumType(name="E", variants={"A": {}, "B": {"x": IntType()}})
-        schema = derive_schema(typ)
+        schema = derive_schema(typ, type_table_for(typ))
         # First variant (A) should have only $case in required.
         a_schema = _variant_schema_for_case(schema, "A")
         required_a = a_schema["required"]
@@ -456,7 +464,7 @@ class TestDeriveSchema:
 
     def test_enum_payload_variant_has_case_plus_fields(self) -> None:
         typ = EnumType(name="E", variants={"A": {}, "B": {"x": IntType()}})
-        schema = derive_schema(typ)
+        schema = derive_schema(typ, type_table_for(typ))
         b_schema = _variant_schema_for_case(schema, "B")
         required_b = b_schema["required"]
         assert isinstance(required_b, list)
@@ -1242,12 +1250,15 @@ class TestMakeContract:
 
     def test_materialize_contract_with_json_codec(self) -> None:
         codec = JsonCodec()
+        issue_type = _make_issue_type()
         spec = OutputContractSpec(
-            target_type=_make_issue_type(),
+            target_type=issue_type,
             codec_name="json",
             strict_json=False,
         )
-        contract = materialize_contract(spec, {"json": codec, "text": TextCodec()})
+        contract = materialize_contract(
+            spec, {"json": codec, "text": TextCodec()}, type_table_for(issue_type)
+        )
         assert isinstance(contract.codec, JsonCodec)
         assert contract.json_schema is not None
 
@@ -1617,7 +1628,9 @@ issue
         from agm.agl.runtime.params import convert_param_value
         from agm.agl.semantics.values import IntValue, ListValue
 
-        result = convert_param_value("xs", [1, 2, 3], ListType(elem=IntType()))
+        result = convert_param_value(
+            "xs", [1, 2, 3], ListType(elem=IntType()), type_table_for()
+        )
         assert isinstance(result, ListValue)
         assert result.elements == (IntValue(1), IntValue(2), IntValue(3))
 
@@ -1626,17 +1639,21 @@ issue
         from agm.agl.runtime.params import convert_param_value
 
         with pytest.raises(ValueError, match="JSON"):
-            convert_param_value("xs", object(), ListType(elem=IntType()))
+            convert_param_value("xs", object(), ListType(elem=IntType()), type_table_for())
 
     def test_invalid_structured_param_raises(self) -> None:
         """A JSON string that fails schema validation for the declared type raises."""
         from agm.agl.runtime.params import convert_param_value
 
         with pytest.raises(ValueError, match="could not parse"):
+            issue_type = RecordType(
+                name="Issue", fields={"title": TextType(), "severity": IntType()}
+            )
             convert_param_value(
                 "issue",
                 '{"title": "Bug"}',  # missing severity
-                RecordType(name="Issue", fields={"title": TextType(), "severity": IntType()}),
+                issue_type,
+                type_table_for(issue_type),
             )
 
     def test_unsupported_type_in_convert_param_value_raises(self) -> None:
@@ -1645,7 +1662,7 @@ issue
         from agm.agl.semantics.types import ExceptionType
 
         with pytest.raises(ValueError, match="unsupported type"):
-            convert_param_value("e", "val", ExceptionType(name="Boom"))
+            convert_param_value("e", "val", ExceptionType(name="Boom"), type_table_for())
 
     def test_structured_param_is_strict_no_repair(self) -> None:
         """host --param values are parsed strictly; typos are NOT repaired.
@@ -1657,10 +1674,14 @@ issue
         from agm.agl.runtime.params import convert_param_value
 
         with pytest.raises(ValueError, match="JSON parse error"):
+            issue_type = RecordType(
+                name="Issue", fields={"title": TextType(), "severity": IntType()}
+            )
             convert_param_value(
                 "issue",
                 '{"title": "Bug", "severity": 5,}',  # trailing comma typo
-                RecordType(name="Issue", fields={"title": TextType(), "severity": IntType()}),
+                issue_type,
+                type_table_for(issue_type),
             )
 
     def test_structured_param_rejects_fenced_json(self) -> None:
@@ -1672,6 +1693,7 @@ issue
                 "tags",
                 "```json\n[1, 2]\n```",
                 ListType(elem=IntType()),
+                type_table_for(),
             )
 
 
@@ -1894,7 +1916,7 @@ class TestSchemaExceptionType:
         from agm.agl.semantics.types import ExceptionType
 
         with pytest.raises(TypeError, match="ExceptionType"):
-            derive_schema(ExceptionType(name="Boom"))
+            derive_schema(ExceptionType(name="Boom"), type_table_for())
 
 
 # ---------------------------------------------------------------------------
@@ -2090,14 +2112,14 @@ class TestValidationMappingCoverage:
         from agm.agl.runtime.codec import _find_enum_decode_at_path
 
         rec = RecordType(name="R", fields={"a": IntType()})
-        decode = build_decode_schema(rec)
+        decode = build_decode_schema(rec, type_table_for(rec))
         assert _find_enum_decode_at_path(decode, ["missing"]) is None
 
     def test_find_enum_decode_at_path_scalar_with_remaining_path(self) -> None:
         """_find_enum_decode_at_path returns None when path descends past a scalar."""
         from agm.agl.runtime.codec import _find_enum_decode_at_path
 
-        decode = build_decode_schema(IntType())
+        decode = build_decode_schema(IntType(), type_table_for())
         assert _find_enum_decode_at_path(decode, ["deeper"]) is None
 
     def test_classify_enum_failure_no_enum_decode_at_path(self) -> None:
@@ -2138,7 +2160,8 @@ class TestMakeContractNoTypeEnv:
 
     def test_json_codec_make_contract_no_env(self) -> None:
         codec = JsonCodec()
-        contract = codec.make_contract(_make_issue_type())
+        issue_type = _make_issue_type()
+        contract = codec.make_contract(issue_type, type_table_for(issue_type))
         assert contract.json_schema is not None
 
     def test_materialize_contract_no_longer_constructs_type_env(self) -> None:
@@ -2146,14 +2169,17 @@ class TestMakeContractNoTypeEnv:
         from agm.agl.runtime.contract import materialize_contract
         from agm.agl.typecheck.env import OutputContractSpec
 
+        issue_type = _make_issue_type()
         spec = OutputContractSpec(
-            target_type=_make_issue_type(),
+            target_type=issue_type,
             codec_name="json",
             strict_json=False,
         )
         # If TypeEnvironment() were still constructed it would not fail, but we
         # verify the contract comes out correctly to confirm the wire-up works.
-        contract = materialize_contract(spec, {"json": JsonCodec(), "text": TextCodec()})
+        contract = materialize_contract(
+            spec, {"json": JsonCodec(), "text": TextCodec()}, type_table_for(issue_type)
+        )
         assert contract.json_schema is not None
 
 
@@ -2170,8 +2196,9 @@ class TestSchemaPrecomputedInParse:
     def test_parse_with_precomputed_schema_succeeds(self) -> None:
         codec = JsonCodec()
         typ = _make_issue_type()
-        schema = derive_schema(typ)
-        decode = build_decode_schema(typ)
+        table = type_table_for(typ)
+        schema = derive_schema(typ, table)
+        decode = build_decode_schema(typ, table)
         raw = '{"title": "Bug", "severity": 5, "description": "A bug"}'
         result = codec.parse(raw, strict_json=False, schema=schema, decode=decode)
         assert result.ok is True
@@ -2179,8 +2206,9 @@ class TestSchemaPrecomputedInParse:
     def test_parse_with_precomputed_schema_validation_failure(self) -> None:
         codec = JsonCodec()
         typ = _make_issue_type()
-        schema = derive_schema(typ)
-        decode = build_decode_schema(typ)
+        table = type_table_for(typ)
+        schema = derive_schema(typ, table)
+        decode = build_decode_schema(typ, table)
         # Missing required fields → schema validation fails even with a precomputed schema.
         result = codec.parse('{"title": "Bug"}', strict_json=False, schema=schema, decode=decode)
         assert result.ok is False
@@ -2195,10 +2223,11 @@ class TestSchemaPrecomputedInParse:
         """
         codec = JsonCodec()
         typ = RecordType(name="Issue", fields={"title": TextType(), "severity": IntType()})
-        contract_schema = codec.make_contract(typ).json_schema
+        table = type_table_for(typ)
+        contract_schema = codec.make_contract(typ, table).json_schema
         assert isinstance(contract_schema, dict)
-        fresh_schema = derive_schema(typ)
-        decode = build_decode_schema(typ)
+        fresh_schema = derive_schema(typ, table)
+        decode = build_decode_schema(typ, table)
 
         good = '{"title": "x", "severity": 1}'
         bad = '{"title": "x"}'  # missing required field
@@ -2225,7 +2254,7 @@ class TestSchemaPrecomputedInParse:
         """
         codec = JsonCodec()
         typ = RecordType(name="Issue", fields={"title": TextType(), "severity": IntType()})
-        contract = codec.make_contract(typ)
+        contract = codec.make_contract(typ, type_table_for(typ))
         schema = contract.json_schema
         decode = contract.decode
         assert isinstance(schema, dict)
@@ -2243,14 +2272,22 @@ class TestSchemaPrecomputedInParse:
         codec = JsonCodec()
         with pytest.raises(ValueError, match="schema and decode"):
             codec.parse(
-                "42", strict_json=False, schema=None, decode=build_decode_schema(IntType())
+                "42",
+                strict_json=False,
+                schema=None,
+                decode=build_decode_schema(IntType(), type_table_for()),
             )
 
     def test_parse_without_decode_raises(self) -> None:
         """parse() with decode=None raises: no derivation fallback from a Type."""
         codec = JsonCodec()
         with pytest.raises(ValueError, match="schema and decode"):
-            codec.parse("42", strict_json=False, schema=derive_schema(IntType()), decode=None)
+            codec.parse(
+                "42",
+                strict_json=False,
+                schema=derive_schema(IntType(), type_table_for()),
+                decode=None,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -2356,7 +2393,7 @@ class TestRegisterCodec:
             def supports_type(self, t: Type) -> bool:
                 return False
 
-            def make_contract(self, type_ref: Type) -> OC:
+            def make_contract(self, type_ref: Type, type_table: TypeTable | None = None) -> OC:
                 raise NotImplementedError
 
             def parse(
@@ -2409,7 +2446,9 @@ class TestRegisterCodec:
                 from agm.agl.semantics.types import TextType as TT
                 return isinstance(t, TT)
 
-            def make_contract(self, type_ref: Type) -> "OutputContract":
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> "OutputContract":
                 from agm.agl.runtime.contract import OutputContract
                 return OutputContract(
                     target_type_label=repr(type_ref),

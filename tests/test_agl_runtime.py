@@ -27,6 +27,7 @@ from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
 from agm.agl.pipeline import RunResult
 from agm.agl.runtime import AgentRequest
 from agm.agl.semantics.types import Type
+from tests._agl_helpers import type_table_for
 
 if TYPE_CHECKING:
     from agm.agl.runtime.codec import OutputCodec
@@ -973,6 +974,7 @@ class TestCapabilitiesBuiltFromRegistrations:
         """A custom codec registered before run() makes its kinds available to typecheck."""
         from agm.agl.runtime.codec import ParseResult, TextCodec
         from agm.agl.runtime.contract import OutputContract
+        from agm.agl.semantics.type_table import TypeTable
         from agm.agl.semantics.types import TextType
         from agm.agl.semantics.values import TextValue as TV
 
@@ -988,7 +990,9 @@ class TestCapabilitiesBuiltFromRegistrations:
             def supports_type(self, t: Type) -> bool:
                 return isinstance(t, TextType)
 
-            def make_contract(self, type_ref: Type) -> OutputContract:
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
                 return OutputContract(
                     target_type_label=repr(type_ref),
                     codec=TextCodec(),
@@ -1815,7 +1819,7 @@ class TestRuntimeErrorPaths:
         from agm.agl.semantics.types import TextType
 
         with pytest.raises(ValueError, match="expected a text value"):
-            convert_param_value("msg", 42, TextType())
+            convert_param_value("msg", 42, TextType(), type_table_for())
 
     def test_int_param_decimal_integral_widened(self) -> None:
         """convert_param_value: integral Decimal → IntValue for int type."""
@@ -1825,7 +1829,7 @@ class TestRuntimeErrorPaths:
         from agm.agl.semantics.types import IntType
         from agm.agl.semantics.values import IntValue
 
-        result = convert_param_value("n", Decimal("3"), IntType())
+        result = convert_param_value("n", Decimal("3"), IntType(), type_table_for())
         assert result == IntValue(3)
 
     def test_int_param_non_integral_fails(self) -> None:
@@ -1834,7 +1838,7 @@ class TestRuntimeErrorPaths:
         from agm.agl.semantics.types import IntType
 
         with pytest.raises(ValueError, match="not of type 'integer'"):
-            convert_param_value("n", "1.5", IntType())
+            convert_param_value("n", "1.5", IntType(), type_table_for())
 
     def test_decimal_param_from_int(self) -> None:
         """convert_param_value: int value → DecimalValue for decimal type."""
@@ -1844,7 +1848,7 @@ class TestRuntimeErrorPaths:
         from agm.agl.semantics.types import DecimalType
         from agm.agl.semantics.values import DecimalValue
 
-        result = convert_param_value("d", 3, DecimalType())
+        result = convert_param_value("d", 3, DecimalType(), type_table_for())
         assert isinstance(result, DecimalValue)
         assert result.value == Decimal(3)
 
@@ -1854,7 +1858,7 @@ class TestRuntimeErrorPaths:
         from agm.agl.semantics.types import DecimalType
 
         with pytest.raises(ValueError, match="not of type 'number'"):
-            convert_param_value("d", "true", DecimalType())
+            convert_param_value("d", "true", DecimalType(), type_table_for())
 
     def test_bool_param_invalid_type_fails(self) -> None:
         """convert_param_value: non-bool value → ValueError for bool type."""
@@ -1862,7 +1866,7 @@ class TestRuntimeErrorPaths:
         from agm.agl.semantics.types import BoolType
 
         with pytest.raises(ValueError, match="not of type 'boolean'"):
-            convert_param_value("b", "1", BoolType())
+            convert_param_value("b", "1", BoolType(), type_table_for())
 
     def test_bool_param_true_succeeds(self) -> None:
         """convert_param_value: bool value → BoolValue for bool type."""
@@ -1870,7 +1874,7 @@ class TestRuntimeErrorPaths:
         from agm.agl.semantics.types import BoolType
         from agm.agl.semantics.values import BoolValue
 
-        result = convert_param_value("b", True, BoolType())
+        result = convert_param_value("b", True, BoolType(), type_table_for())
         assert result == BoolValue(True)
 
     # --- assertions migrated from TestRuntimeExceptionHandlers (eval tests) ---
@@ -1964,7 +1968,7 @@ class TestRuntimeErrorPaths:
         from agm.agl.semantics.types import JsonType
         from agm.agl.semantics.values import JsonValue
 
-        result = convert_param_value("meta", [1, 2, 3], JsonType())
+        result = convert_param_value("meta", [1, 2, 3], JsonType(), type_table_for())
         assert result == JsonValue([1, 2, 3])
 
     def test_convert_param_value_list_type_parsed_via_json_codec(self) -> None:
@@ -1973,7 +1977,9 @@ class TestRuntimeErrorPaths:
         from agm.agl.semantics.types import ListType, TextType
         from agm.agl.semantics.values import ListValue, TextValue
 
-        result = convert_param_value("xs", '["a", "b"]', ListType(elem=TextType()))
+        result = convert_param_value(
+            "xs", '["a", "b"]', ListType(elem=TextType()), type_table_for()
+        )
         assert isinstance(result, ListValue)
         assert result.elements == (TextValue("a"), TextValue("b"))
 
@@ -2018,7 +2024,10 @@ class TestRuntimeErrorPaths:
         from agm.agl.semantics.values import DecimalValue, ListValue
 
         result = convert_param_value(
-            "xs", [_decimal.Decimal("1.5"), _decimal.Decimal("2.75")], ListType(elem=DecimalType())
+            "xs",
+            [_decimal.Decimal("1.5"), _decimal.Decimal("2.75")],
+            ListType(elem=DecimalType()),
+            type_table_for(),
         )
         assert isinstance(result, ListValue)
         assert result.elements == (
@@ -2035,7 +2044,7 @@ class TestRuntimeErrorPaths:
         from agm.agl.semantics.types import ListType, TextType
 
         with pytest.raises(ValueError, match="xs") as exc_info:
-            convert_param_value("xs", {1, 2, 3}, ListType(elem=TextType()))
+            convert_param_value("xs", {1, 2, 3}, ListType(elem=TextType()), type_table_for())
         # The error message must name the param and mention the type, not
         # contain a raw repr of the set or a json.dumps traceback.
         msg = str(exc_info.value)
@@ -2522,26 +2531,27 @@ class TestDeriveSchema:
         from agm.agl.semantics.types import BoolType
         from agm.agl.type_schema import derive_schema
 
-        assert derive_schema(BoolType()) == {"type": "boolean"}
+        assert derive_schema(BoolType(), type_table_for()) == {"type": "boolean"}
 
     def test_json_type(self) -> None:
         from agm.agl.semantics.types import JsonType
         from agm.agl.type_schema import derive_schema
 
-        assert derive_schema(JsonType()) == {}
+        assert derive_schema(JsonType(), type_table_for()) == {}
 
     def test_dict_type(self) -> None:
         from agm.agl.semantics.types import DictType, IntType
         from agm.agl.type_schema import derive_schema
 
-        result = derive_schema(DictType(value=IntType()))
+        result = derive_schema(DictType(value=IntType()), type_table_for())
         assert result == {"type": "object", "additionalProperties": {"type": "integer"}}
 
     def test_record_type(self) -> None:
         from agm.agl.semantics.types import RecordType, TextType
         from agm.agl.type_schema import derive_schema
 
-        result = derive_schema(RecordType(name="Point", fields={"x": TextType()}))
+        typ = RecordType(name="Point", fields={"x": TextType()})
+        result = derive_schema(typ, type_table_for(typ))
         assert result["type"] == "object"
         assert result["required"] == ["x"]
         assert result["additionalProperties"] is False
@@ -2554,7 +2564,7 @@ class TestDeriveSchema:
             name="Status",
             variants={"Pass": {}, "Fail": {"reason": TextType()}},
         )
-        result = derive_schema(typ)
+        result = derive_schema(typ, type_table_for(typ))
         assert "oneOf" in result
         assert len(result["oneOf"]) == 2
 
@@ -2563,35 +2573,35 @@ class TestDeriveSchema:
         from agm.agl.type_schema import derive_schema
 
         with pytest.raises(TypeError, match="ExceptionType"):
-            derive_schema(ExceptionType(name="MyErr", fields={}))
+            derive_schema(ExceptionType(name="MyErr", fields={}), type_table_for())
 
     def test_unit_type_raises(self) -> None:
         from agm.agl.semantics.types import UnitType
         from agm.agl.type_schema import derive_schema
 
         with pytest.raises(TypeError, match="UnitType"):
-            derive_schema(UnitType())
+            derive_schema(UnitType(), type_table_for())
 
     def test_agent_type_raises(self) -> None:
         from agm.agl.semantics.types import AgentType
         from agm.agl.type_schema import derive_schema
 
         with pytest.raises(TypeError, match="AgentType"):
-            derive_schema(AgentType())
+            derive_schema(AgentType(), type_table_for())
 
     def test_function_type_raises(self) -> None:
         from agm.agl.semantics.types import FunctionType, TextType
         from agm.agl.type_schema import derive_schema
 
         with pytest.raises(TypeError, match="FunctionType"):
-            derive_schema(FunctionType(params=(TextType(),), result=TextType()))
+            derive_schema(FunctionType(params=(TextType(),), result=TextType()), type_table_for())
 
     def test_bottom_type_raises(self) -> None:
         from agm.agl.semantics.types import BottomType
         from agm.agl.type_schema import derive_schema
 
         with pytest.raises(TypeError, match="BottomType"):
-            derive_schema(BottomType())
+            derive_schema(BottomType(), type_table_for())
 
 
 # ---------------------------------------------------------------------------
@@ -2607,7 +2617,7 @@ class TestBuildParamDecoder:
         from agm.agl.semantics.types import TextType
         from agm.agl.type_schema import build_param_decoder
 
-        decoder = build_param_decoder(TextType())
+        decoder = build_param_decoder(TextType(), type_table_for())
         assert decoder.text_verbatim is True
 
     def test_text_type_target_label(self) -> None:
@@ -2615,7 +2625,7 @@ class TestBuildParamDecoder:
         from agm.agl.semantics.types import TextType
         from agm.agl.type_schema import build_param_decoder
 
-        decoder = build_param_decoder(TextType())
+        decoder = build_param_decoder(TextType(), type_table_for())
         assert decoder.target_type_label == repr(TextType())
 
     def test_int_type_not_verbatim(self) -> None:
@@ -2623,7 +2633,7 @@ class TestBuildParamDecoder:
         from agm.agl.semantics.types import IntType
         from agm.agl.type_schema import build_param_decoder
 
-        decoder = build_param_decoder(IntType())
+        decoder = build_param_decoder(IntType(), type_table_for())
         assert decoder.text_verbatim is False
 
     def test_int_type_json_schema_matches_derive_schema(self) -> None:
@@ -2634,8 +2644,9 @@ class TestBuildParamDecoder:
         from agm.agl.type_schema import build_param_decoder, derive_schema
 
         typ = IntType()
-        decoder = build_param_decoder(typ)
-        expected_schema = json.dumps(derive_schema(typ), sort_keys=True)
+        table = type_table_for(typ)
+        decoder = build_param_decoder(typ, table)
+        expected_schema = json.dumps(derive_schema(typ, table), sort_keys=True)
         assert decoder.json_schema == expected_schema
         # Parses as valid JSON
         parsed = json.loads(decoder.json_schema)
@@ -2649,8 +2660,9 @@ class TestBuildParamDecoder:
         from agm.agl.type_schema import build_param_decoder, derive_schema
 
         typ = RecordType(name="Point", fields={"x": TextType()})
-        decoder = build_param_decoder(typ)
-        expected_schema = json.dumps(derive_schema(typ), sort_keys=True)
+        table = type_table_for(typ)
+        decoder = build_param_decoder(typ, table)
+        expected_schema = json.dumps(derive_schema(typ, table), sort_keys=True)
         assert decoder.json_schema == expected_schema
         # Sanity: the schema is valid JSON with expected structure
         parsed = json.loads(decoder.json_schema)
@@ -2663,7 +2675,7 @@ class TestBuildParamDecoder:
         from agm.agl.type_schema import build_param_decoder
 
         typ = IntType()
-        decoder = build_param_decoder(typ)
+        decoder = build_param_decoder(typ, type_table_for())
         assert decoder.target_type_label == repr(typ)
 
     def test_undecodable_type_raises_type_error(self) -> None:
@@ -2672,21 +2684,21 @@ class TestBuildParamDecoder:
         from agm.agl.type_schema import build_param_decoder
 
         with pytest.raises(TypeError):
-            build_param_decoder(UnitType())
+            build_param_decoder(UnitType(), type_table_for())
 
     def test_agent_type_raises_type_error(self) -> None:
         from agm.agl.semantics.types import AgentType
         from agm.agl.type_schema import build_param_decoder
 
         with pytest.raises(TypeError):
-            build_param_decoder(AgentType())
+            build_param_decoder(AgentType(), type_table_for())
 
     def test_exception_type_raises_type_error(self) -> None:
         from agm.agl.semantics.types import ExceptionType
         from agm.agl.type_schema import build_param_decoder
 
         with pytest.raises(TypeError):
-            build_param_decoder(ExceptionType(name="MyErr", fields={}))
+            build_param_decoder(ExceptionType(name="MyErr", fields={}), type_table_for())
 
 
 class TestBuildFormatInstructions:
@@ -2875,6 +2887,7 @@ class TestRegisterCodecErrors:
     def _make_codec(self, name: str) -> OutputCodec:
         from agm.agl.runtime.codec import OutputCodec, ParseResult, TextCodec
         from agm.agl.runtime.contract import OutputContract
+        from agm.agl.semantics.type_table import TypeTable
         from agm.agl.semantics.types import TextType
         from agm.agl.semantics.values import TextValue
 
@@ -2890,7 +2903,9 @@ class TestRegisterCodecErrors:
             def supports_type(self, t: Type) -> bool:
                 return isinstance(t, TextType)
 
-            def make_contract(self, type_ref: Type) -> OutputContract:
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
                 return OutputContract(
                     target_type_label=repr(type_ref),
                     codec=TextCodec(),
@@ -2947,7 +2962,7 @@ class TestConvertInputUnsupportedType:
         from agm.agl.semantics.types import AgentType
 
         with pytest.raises(ValueError, match="unsupported type"):
-            convert_param_value("x", "agent_val", AgentType())
+            convert_param_value("x", "agent_val", AgentType(), type_table_for())
 
 
 # ---------------------------------------------------------------------------

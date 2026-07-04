@@ -30,12 +30,15 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from agm.agl.ir.contracts import ContractRequest, DecodeSchema
 from agm.agl.runtime.codec import BUILTIN_CODEC_NAMES, OutputCodec
 from agm.agl.semantics.types import TextType, Type, UnitType
 from agm.agl.typecheck.env import OutputContractSpec
+
+if TYPE_CHECKING:
+    from agm.agl.semantics.type_table import TypeTable
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,7 +120,7 @@ def materialize_ir_contract(
         placeholder_type: Type = (
             TextType() if request.target_type_label == "text" else UnitType()
         )
-        base = codec.make_contract(placeholder_type)
+        base = codec.make_contract(placeholder_type, None)
         return OutputContract(
             target_type_label=request.target_type_label,
             codec=codec,
@@ -144,6 +147,7 @@ def materialize_ir_contract(
 def materialize_contract(
     spec: OutputContractSpec,
     codecs: Mapping[str, OutputCodec],
+    type_table: "TypeTable | None" = None,
 ) -> OutputContract:
     """Build an ``OutputContract`` from a static ``OutputContractSpec``.
 
@@ -151,7 +155,9 @@ def materialize_contract(
     derive format instructions, JSON Schema, and the decode walk (a real
     checker ``Type`` is in hand here — this runs at check time / REPL
     contract-preview time, before lowering erases it), then overlays the
-    per-call ``strict_json`` flag from the spec.
+    per-call ``strict_json`` flag from the spec.  *type_table* resolves
+    record/enum field/variant shapes and is passed straight through to
+    ``codec.make_contract``.
 
     For ``structured_exec`` specs, returns a passthrough text contract without
     consulting the codec table (the codec field is unused for structured exec).
@@ -178,7 +184,7 @@ def materialize_contract(
             "This is a host-configuration error."
         )
     # Delegate format_instructions/json_schema/decode derivation to the codec.
-    base = codec.make_contract(spec.target_type)
+    base = codec.make_contract(spec.target_type, type_table)
     # Overlay the per-call strict_json from the spec (the codec's make_contract
     # sets a default; the static spec overrides it for the specific call site).
     return OutputContract(

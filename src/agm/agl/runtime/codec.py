@@ -33,6 +33,7 @@ from agm.agl.ir.contracts import (
 )
 from agm.agl.runtime.convert import decode_value, normalize_integral_decimals
 from agm.agl.runtime.request import ValidationError
+from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import TextType, Type
 from agm.agl.semantics.values import TextValue, Value
 from agm.agl.type_schema import build_decode_schema, build_format_instructions, derive_schema
@@ -111,9 +112,11 @@ class OutputCodec(Protocol):
     - ``supported_kinds`` — frozenset of semantic type-kind strings this codec handles.
       This is the authoritative source for ``HostCapabilities.codec_kinds``.
     - ``supports_type(t)`` — True iff this codec can handle the given type.
-    - ``make_contract(type_ref)`` — build an ``OutputContract``.  Runs at check
-      time (or REPL contract-preview time), when a real checker ``Type`` is in
-      hand.
+    - ``make_contract(type_ref, type_table)`` — build an ``OutputContract``.
+      Runs at check time (or REPL contract-preview time), when a real checker
+      ``Type`` is in hand.  ``type_table`` resolves record/enum field/variant
+      shapes for *type_ref* (or one nested inside it); ``None`` is only valid
+      when *type_ref* carries no nominal type.
     - ``parse(raw, *, strict_json, schema, decode)`` — parse a raw string.
       Runs at execution time against the typeless contract data the lowerer
       already compiled (``schema`` is the JSON Schema dict, ``decode`` the
@@ -129,7 +132,9 @@ class OutputCodec(Protocol):
 
     def supports_type(self, t: Type) -> bool: ...
 
-    def make_contract(self, type_ref: Type) -> "OutputContract": ...
+    def make_contract(
+        self, type_ref: Type, type_table: TypeTable | None = None
+    ) -> "OutputContract": ...
 
     def parse(
         self,
@@ -178,13 +183,17 @@ class TextCodec:
     def supports_type(self, t: Type) -> bool:
         return isinstance(t, TextType)
 
-    def make_contract(self, type_ref: Type) -> "OutputContract":
+    def make_contract(
+        self, type_ref: Type, type_table: TypeTable | None = None
+    ) -> "OutputContract":
         """Build an ``OutputContract`` for *type_ref*.
 
         For ``text`` targets ``format_instructions`` is left empty (absent):
         a text target imposes no format on the agent's response, so there are
         no instructions to relay.  ``decode`` is ``None``: a text target has
         no schema-driven decode walk, since the raw string is the value.
+        *type_table* is accepted for protocol conformance but unused — a
+        ``text`` target never carries a nominal type.
         """
         from agm.agl.runtime.contract import OutputContract
 
@@ -644,7 +653,9 @@ class JsonCodec:
     def supports_type(self, t: Type) -> bool:
         return t.kind in _JSON_CODEC_KINDS
 
-    def make_contract(self, type_ref: Type) -> "OutputContract":
+    def make_contract(
+        self, type_ref: Type, type_table: TypeTable | None = None
+    ) -> "OutputContract":
         """Build an ``OutputContract`` for *type_ref*.
 
         Derives the JSON Schema, format instructions, and typeless decode
@@ -652,12 +663,19 @@ class JsonCodec:
         contract-preview use only: execution-time parsing never calls this —
         it uses the ``json_schema``/``decode`` the lowerer already compiled
         into the IR contract request.
+
+        *type_table* resolves record/enum field/variant shapes.  ``None`` is
+        only valid when *type_ref* carries no nominal type: passing ``None``
+        for a record/enum target is an internal error, surfaced as the
+        ``KeyError`` an empty table's lookup naturally raises rather than a
+        user-facing diagnostic.
         """
         from agm.agl.runtime.contract import OutputContract
 
-        schema = derive_schema(type_ref)
+        table = type_table if type_table is not None else TypeTable()
+        schema = derive_schema(type_ref, table)
         instructions = build_format_instructions(schema)
-        decode_schema = build_decode_schema(type_ref)
+        decode_schema = build_decode_schema(type_ref, table)
         return OutputContract(
             target_type_label=repr(type_ref),
             codec=self,

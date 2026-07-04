@@ -24,14 +24,21 @@ import json
 from typing import assert_never
 
 from agm.agl.ir.contracts import ConversionRecipe, ConversionStrategy
+from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import CastKind, DecimalType, IntType, JsonType, TextType, Type
 from agm.agl.type_schema import build_decode_schema, derive_schema
 
 __all__ = ["compile_recipe"]
 
 
-def compile_recipe(source: Type, target: Type, kind: CastKind) -> ConversionRecipe:
-    """Compile a cast ``(source, target, kind)`` into a ``ConversionRecipe``."""
+def compile_recipe(
+    source: Type, target: Type, kind: CastKind, type_table: TypeTable
+) -> ConversionRecipe:
+    """Compile a cast ``(source, target, kind)`` into a ``ConversionRecipe``.
+
+    *type_table* resolves record/enum field/variant shapes for the fallible
+    branch's ``derive_schema``/``build_decode_schema`` calls.
+    """
     source_label = repr(source)
     target_label = repr(target)
 
@@ -76,8 +83,8 @@ def compile_recipe(source: Type, target: Type, kind: CastKind) -> ConversionReci
                 target_label=target_label,
                 # Serialize the schema to a canonical JSON string so the recipe
                 # stays hashable (sort_keys → deterministic recipe equality).
-                json_schema=json.dumps(derive_schema(target), sort_keys=True),
-                decode=build_decode_schema(target),
+                json_schema=json.dumps(derive_schema(target, type_table), sort_keys=True),
+                decode=build_decode_schema(target, type_table),
             )
         case CastKind.STATIC_ERROR:  # pragma: no cover
             # The checker rejects statically-impossible casts before lowering.

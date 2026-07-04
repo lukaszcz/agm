@@ -1,7 +1,12 @@
 """Compile-time JSON Schema and decode-schema derivation.
 
 :func:`derive_schema` produces a JSON Schema ``dict[str, object]`` from a
-semantic :class:`~agm.agl.semantics.types.Type`.  The derived schema is used:
+semantic :class:`~agm.agl.semantics.types.Type`.  Every entry point in this
+module takes an explicit :class:`~agm.agl.semantics.type_table.TypeTable` and
+resolves record/enum field and variant shapes through it
+(``table.record_fields``/``table.enum_variants``) rather than through the
+``RecordType``/``EnumType`` handle's own embedded maps — the handle carries
+only its declaration identity.  The derived schema is used:
 
 1. Embedded in ``OutputContract.format_instructions`` (pretty-printed) so the
    agent receives the precise shape, and as ``OutputContract.json_schema`` so
@@ -45,6 +50,7 @@ from agm.agl.ir.contracts import (
     VariantDecode,
 )
 from agm.agl.ir.ids import NominalId
+from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import (
     AgentType,
     BoolType,
@@ -65,13 +71,14 @@ from agm.agl.semantics.types import (
 )
 
 
-def derive_schema(typ: Type) -> dict[str, object]:
+def derive_schema(typ: Type, type_table: TypeTable) -> dict[str, object]:
     """Derive a JSON Schema from a semantic AgL *typ*.
 
     The returned dictionary is a valid JSON Schema object.  ``Decimal`` and
     ``int`` values round-trip correctly through JSON Schema validation (both
     are acceptable for ``"type": "number"``; ``"type": "integer"`` accepts
-    only whole numbers).
+    only whole numbers).  *type_table* resolves record/enum field and variant
+    shapes for a ``RecordType``/``EnumType`` *typ* (or one nested inside it).
 
     :raises TypeError: if *typ* is an ``ExceptionType`` (exceptions are not
         wire-serialised and have no JSON Schema).
@@ -88,13 +95,13 @@ def derive_schema(typ: Type) -> dict[str, object]:
         # Permissive: accepts any JSON value.
         return {}
     if isinstance(typ, ListType):
-        return {"type": "array", "items": derive_schema(typ.elem)}
+        return {"type": "array", "items": derive_schema(typ.elem, type_table)}
     if isinstance(typ, DictType):
-        return {"type": "object", "additionalProperties": derive_schema(typ.value)}
+        return {"type": "object", "additionalProperties": derive_schema(typ.value, type_table)}
     if isinstance(typ, RecordType):
-        return _record_schema(typ)
+        return _record_schema(typ, type_table)
     if isinstance(typ, EnumType):
-        return _enum_schema(typ)
+        return _enum_schema(typ, type_table)
     if isinstance(typ, ExceptionType):
         raise TypeError(
             f"ExceptionType {typ.name!r} has no JSON Schema; exceptions are not "
@@ -117,21 +124,22 @@ def derive_schema(typ: Type) -> dict[str, object]:
     assert_never(typ)  # pragma: no cover
 
 
-def _record_schema(typ: RecordType) -> dict[str, object]:
+def _record_schema(typ: RecordType, type_table: TypeTable) -> dict[str, object]:
     """Derive the JSON Schema for a record type."""
+    fields = type_table.record_fields(typ)
     properties: dict[str, object] = {
-        field_name: derive_schema(field_type)
-        for field_name, field_type in typ.fields.items()
+        field_name: derive_schema(field_type, type_table)
+        for field_name, field_type in fields.items()
     }
     return {
         "type": "object",
         "additionalProperties": False,
-        "required": list(typ.fields.keys()),
+        "required": list(fields.keys()),
         "properties": properties,
     }
 
 
-def _enum_schema(typ: EnumType) -> dict[str, object]:
+def _enum_schema(typ: EnumType, type_table: TypeTable) -> dict[str, object]:
     """Derive the JSON Schema for an enum type.
 
     Each variant becomes a ``oneOf`` alternative.  The ``"$case"`` property
@@ -139,13 +147,13 @@ def _enum_schema(typ: EnumType) -> dict[str, object]:
     follow alongside it.
     """
     variant_schemas: list[object] = []
-    for variant_name, variant_fields in typ.variants.items():
+    for variant_name, variant_fields in type_table.enum_variants(typ).items():
         required: list[str] = ["$case"]
         properties: dict[str, object] = {
             "$case": {"const": variant_name},
         }
         for field_name, field_type in variant_fields.items():
-            properties[field_name] = derive_schema(field_type)
+            properties[field_name] = derive_schema(field_type, type_table)
             required.append(field_name)
         variant_schemas.append(
             {
@@ -158,11 +166,12 @@ def _enum_schema(typ: EnumType) -> dict[str, object]:
     return {"oneOf": variant_schemas}
 
 
-def build_decode_schema(typ: Type) -> DecodeSchema:
+def build_decode_schema(typ: Type, type_table: TypeTable) -> DecodeSchema:
     """Compile a checker ``Type`` into a typeless ``DecodeSchema``.
 
     Mirrors the type recursion of ``runtime.convert.decode_value`` so the
     evaluator can reconstruct the typed value without the checker ``Type``.
+    *type_table* resolves record/enum field and variant shapes.
     """
     if isinstance(typ, TextType):
         return ScalarDecode(ScalarKind.TEXT)
@@ -175,18 +184,20 @@ def build_decode_schema(typ: Type) -> DecodeSchema:
     if isinstance(typ, JsonType):
         return ScalarDecode(ScalarKind.JSON)
     if isinstance(typ, ListType):
-        return ListDecode(build_decode_schema(typ.elem))
+        return ListDecode(build_decode_schema(typ.elem, type_table))
     if isinstance(typ, DictType):
-        return DictDecode(build_decode_schema(typ.value))
+        return DictDecode(build_decode_schema(typ.value, type_table))
     if isinstance(typ, RecordType):
+        fields = type_table.record_fields(typ)
         return RecordDecode(
             nominal=NominalId(typ.module_id, typ.name),
             display_name=typ.name,
             fields=tuple(
-                (fname, build_decode_schema(ftype)) for fname, ftype in typ.fields.items()
+                (fname, build_decode_schema(ftype, type_table)) for fname, ftype in fields.items()
             ),
         )
     if isinstance(typ, EnumType):
+        variants = type_table.enum_variants(typ)
         return EnumDecode(
             nominal=NominalId(typ.module_id, typ.name),
             display_name=typ.name,
@@ -194,10 +205,11 @@ def build_decode_schema(typ: Type) -> DecodeSchema:
                 VariantDecode(
                     name=vname,
                     fields=tuple(
-                        (fname, build_decode_schema(ftype)) for fname, ftype in vfields.items()
+                        (fname, build_decode_schema(ftype, type_table))
+                        for fname, ftype in vfields.items()
                     ),
                 )
-                for vname, vfields in typ.variants.items()
+                for vname, vfields in variants.items()
             ),
         )
     # Non-data targets (unit/agent/function/exception/bottom/typevar) are not
@@ -207,7 +219,7 @@ def build_decode_schema(typ: Type) -> DecodeSchema:
     )
 
 
-def build_param_decoder(typ: Type) -> ParamDecoder:
+def build_param_decoder(typ: Type, type_table: TypeTable) -> ParamDecoder:
     """Compile a checker ``Type`` into the typeless ``ParamDecoder`` used to
     decode one host-supplied entry parameter.
 
@@ -216,15 +228,15 @@ def build_param_decoder(typ: Type) -> ParamDecoder:
     (:func:`agm.agl.runtime.params.convert_param_value`).  ``text`` params are
     taken verbatim; every other type round-trips through the canonical JSON
     boundary (``derive_schema`` for validation, ``build_decode_schema`` for the
-    typeless decode walk).
+    typeless decode walk).  *type_table* resolves record/enum shapes.
 
     :raises TypeError: if *typ* has no wire schema (unit/agent/exception/…);
         :func:`derive_schema` rejects such types.
     """
     return ParamDecoder(
         target_type_label=repr(typ),
-        json_schema=json.dumps(derive_schema(typ), sort_keys=True),
-        decode=build_decode_schema(typ),
+        json_schema=json.dumps(derive_schema(typ, type_table), sort_keys=True),
+        decode=build_decode_schema(typ, type_table),
         text_verbatim=isinstance(typ, TextType),
     )
 

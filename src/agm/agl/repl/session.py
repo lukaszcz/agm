@@ -474,7 +474,9 @@ class ReplSession:
             if raw is not None:
                 key_type = get_engine_key_type(key_name)
                 assert key_type is not None
-                config_base[key_name] = convert_config_value(key_name, raw, key_type)
+                config_base[key_name] = convert_config_value(
+                    key_name, raw, key_type, self._type_env.type_table
+                )
 
         return config_base
 
@@ -544,7 +546,7 @@ class ReplSession:
                     assert declared_type is not None
                     try:
                         param_values[item.name] = convert_param_value(
-                            item.name, raw_config, declared_type
+                            item.name, raw_config, declared_type, checked.type_env.type_table
                         )
                     except (TypeError, ValueError) as exc:
                         return (

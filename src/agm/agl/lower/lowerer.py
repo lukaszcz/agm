@@ -131,6 +131,7 @@ from agm.agl.lower.coercions import compile_coercion
 from agm.agl.lower.conversions import compile_recipe
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CORE_ID, ModuleId
 from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind
+from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPES,
@@ -226,8 +227,16 @@ from agm.util.text import normalize_newlines
 __all__ = ["_LinkState", "lower_program"]
 
 
-def _add_builtin_nominals(nominals: dict[NominalId, NominalDescriptor]) -> None:
-    """Register built-in prelude and exception nominal descriptors."""
+def _add_builtin_nominals(
+    nominals: dict[NominalId, NominalDescriptor], type_table: TypeTable
+) -> None:
+    """Register built-in prelude and exception nominal descriptors.
+
+    Record/enum field and variant names are resolved through *type_table*
+    (every prelude type is seeded into every table by
+    ``create_seeded_type_table``); exception descriptors still read the
+    embedded ``ExceptionType.fields`` directly.
+    """
     for name, typ in BUILTIN_PRELUDE_TYPES.items():
         nominal = NominalId(PRELUDE_ID, name)
         if isinstance(typ, RecordType):
@@ -235,7 +244,7 @@ def _add_builtin_nominals(nominals: dict[NominalId, NominalDescriptor]) -> None:
                 nominal=nominal,
                 display_name=name,
                 kind=NominalKind.RECORD,
-                fields=tuple(typ.fields.keys()),
+                fields=tuple(type_table.record_fields(typ).keys()),
                 variants=(),
             )
             continue
@@ -247,7 +256,7 @@ def _add_builtin_nominals(nominals: dict[NominalId, NominalDescriptor]) -> None:
             fields=(),
             variants=tuple(
                 VariantDescriptor(vname, tuple(vfields.keys()))
-                for vname, vfields in enum_type.variants.items()
+                for vname, vfields in type_table.enum_variants(enum_type).items()
             ),
         )
 
@@ -314,6 +323,10 @@ class _Lowerer:
         self._source_id = source_id
         self._source_text = normalize_newlines(source_text)
         self._params: list[IrParam] = []
+        # Shared TypeTable built during checking; resolves record/enum field
+        # and variant shapes for constructor lowering, nominal descriptors,
+        # and contract/param schema derivation.
+        self._type_table: TypeTable = checked.type_env.type_table
 
     # ------------------------------------------------------------------
     # SymbolId allocation
@@ -800,7 +813,7 @@ class _Lowerer:
         """
         ir = self.lower_expr(node)
         own_type = self._node_type(node.node_id)
-        op = compile_coercion(own_type, expected)
+        op = compile_coercion(own_type, expected, self._type_table)
         if op is None:
             return ir
         return IrCoerce(location=self._loc(node.span), value=ir, operation=op)
@@ -968,7 +981,9 @@ class _Lowerer:
             case Cast(expr=operand, test_only=test_only, span=span, node_id=nid):
                 spec = self._checked.cast_specs[nid]
                 source_type = self._node_type(operand.node_id)
-                recipe = compile_recipe(source_type, spec.target_type, spec.kind)
+                recipe = compile_recipe(
+                    source_type, spec.target_type, spec.kind, self._type_table
+                )
                 inner = self.lower_expr(operand)
                 if not test_only:
                     return IrConvert(
@@ -1920,9 +1935,11 @@ class _Lowerer:
 
         if isinstance(typ, RecordType):
             nominal = NominalId(typ.module_id, typ.name)
-            # Build fields in declaration order from typ.fields.
+            # Build fields in declaration order via the shared TypeTable (its
+            # TypeDef stores fields as a declaration-ordered tuple).
+            fields_map = self._type_table.record_fields(typ)
             ir_fields: list[tuple[str, IrExpr]] = []
-            for fname, ftype in typ.fields.items():
+            for fname, ftype in fields_map.items():
                 ir_fields.append((fname, self.lower_coerced(arg_exprs[fname], ftype)))
             return IrMakeRecord(
                 location=loc,
@@ -1951,7 +1968,7 @@ class _Lowerer:
         if isinstance(typ, EnumType):
             assert variant is not None, "compiler bug: enum constructor must have variant"
             nominal = NominalId(typ.module_id, typ.name)
-            variant_fields = typ.variants.get(variant, {})
+            variant_fields = self._type_table.enum_variants(typ).get(variant, {})
             enum_fields: list[tuple[str, IrExpr]] = []
             for fname, ftype in variant_fields.items():
                 # The checker enforces all variant fields are present in arg_exprs.
@@ -2181,10 +2198,10 @@ class _Lowerer:
         else:
             # Build format_instructions and json_schema from the spec.
             if spec.codec_name == "json":
-                schema_dict = derive_schema(spec.target_type)
+                schema_dict = derive_schema(spec.target_type, self._type_table)
                 json_schema_str: str | None = json.dumps(schema_dict)
                 fmt_instr = build_format_instructions(schema_dict)
-                decode_schema = build_decode_schema(spec.target_type)
+                decode_schema = build_decode_schema(spec.target_type, self._type_table)
             else:
                 json_schema_str = None
                 fmt_instr = ""
@@ -2239,10 +2256,10 @@ class _Lowerer:
         assert spec is not None, "exec always has a contract spec after checking"
         structured_exec = spec.structured_exec
         if spec.codec_name == "json":
-            schema_dict = derive_schema(spec.target_type)
+            schema_dict = derive_schema(spec.target_type, self._type_table)
             json_schema_str: str | None = json.dumps(schema_dict)
             fmt_instr = build_format_instructions(schema_dict)
-            decode_schema = build_decode_schema(spec.target_type)
+            decode_schema = build_decode_schema(spec.target_type, self._type_table)
         else:
             json_schema_str = None
             fmt_instr = ""
@@ -2409,7 +2426,7 @@ class _Lowerer:
             required=(param.default is None),
             default=default_ir,
             location=self._loc(param.span),
-            external_decoder=build_param_decoder(binding_type),
+            external_decoder=build_param_decoder(binding_type, self._type_table),
         )
         self._params.append(ir_param)
 
@@ -2573,7 +2590,11 @@ class _Lowerer:
         - All user-declared record/enum nominals from the entry module's type env.
         - All built-in prelude record/enum and exception descriptors keyed by
           NominalId(PRELUDE_ID, name).
+
+        Record/enum field and variant names are resolved through the shared
+        ``TypeTable`` rather than the embedded ``RecordType``/``EnumType`` maps.
         """
+        table = self._type_table
         # User-declared nominals for this lowering unit.
         for name, typ in self._checked.type_env.non_builtin_type_items():
             if isinstance(typ, RecordType):
@@ -2582,14 +2603,14 @@ class _Lowerer:
                     nominal=nominal,
                     display_name=name,
                     kind=NominalKind.RECORD,
-                    fields=tuple(typ.fields.keys()),
+                    fields=tuple(table.record_fields(typ).keys()),
                     variants=(),
                 )
             elif isinstance(typ, EnumType):
                 nominal = NominalId(typ.module_id, name)
                 variants = tuple(
                     VariantDescriptor(name=vname, fields=tuple(vfields.keys()))
-                    for vname, vfields in typ.variants.items()
+                    for vname, vfields in table.enum_variants(typ).items()
                 )
                 self._link.nominals[nominal] = NominalDescriptor(
                     nominal=nominal,
@@ -2613,15 +2634,22 @@ class _Lowerer:
         # Generic definitions are stored separately from the ordinary type
         # namespace. Runtime nominal identity erases type arguments, so one
         # descriptor per generic declaration is sufficient for every instance.
+        # Field/variant NAMES are read directly off the registered TypeDef
+        # template (never instantiated — a generic template has no concrete
+        # type_args to substitute).
         for name, generic in self._checked.type_env.all_generic_types().items():
             typ = generic.template
             nominal = NominalId(typ.module_id, name)
+            typedef = table.get(typ.module_id, name)
+            assert typedef is not None, (
+                f"compiler bug: generic type {name!r} has no TypeDef registered"
+            )
             if isinstance(typ, RecordType):
                 self._link.nominals[nominal] = NominalDescriptor(
                     nominal=nominal,
                     display_name=name,
                     kind=NominalKind.RECORD,
-                    fields=tuple(typ.fields),
+                    fields=tuple(fname for fname, _ in typedef.fields),
                 )
             else:
                 self._link.nominals[nominal] = NominalDescriptor(
@@ -2629,12 +2657,12 @@ class _Lowerer:
                     display_name=name,
                     kind=NominalKind.ENUM,
                     variants=tuple(
-                        VariantDescriptor(vname, tuple(vfields))
-                        for vname, vfields in typ.variants.items()
+                        VariantDescriptor(vname, tuple(fname for fname, _ in vfields))
+                        for vname, vfields in typedef.variants
                     ),
                 )
 
-        _add_builtin_nominals(self._link.nominals)
+        _add_builtin_nominals(self._link.nominals, table)
 
     def lower(self) -> ExecutableProgram:
         """Lower the checked program to an ``ExecutableProgram``."""

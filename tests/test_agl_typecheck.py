@@ -4527,9 +4527,10 @@ class TestResolveTypeExprTypeVars:
 
 class TestTypeVarTypeSchema:
     def test_typevar_type_not_wire_serialisable(self) -> None:
+        from agm.agl.semantics.type_table import create_seeded_type_table
         from agm.agl.type_schema import derive_schema
         with pytest.raises(TypeError, match="TypeVarType"):
-            derive_schema(TypeVarType("T"))
+            derive_schema(TypeVarType("T"), create_seeded_type_table())
 
 
 # ---------------------------------------------------------------------------

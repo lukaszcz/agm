@@ -876,7 +876,9 @@ class ReplSession:
         checked = check(resolved, host_env.capabilities, seed_env=self._type_env)
         typ = checked.node_types.get(expr_item.node_id)
         assert typ is not None
-        return repr(typ)
+        from agm.agl.repl.type_display import format_type_for_repl
+
+        return format_type_for_repl(typ)
 
     # ------------------------------------------------------------------
     # Introspection

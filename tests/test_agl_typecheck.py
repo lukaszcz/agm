@@ -61,6 +61,7 @@ from agm.agl.syntax.nodes import (
     Param,
     ParamDecl,
     ParamKind,
+    Placeholder,
     Program,
     Raise,
     StringLit,
@@ -97,6 +98,7 @@ from agm.agl.typecheck import (
     IntType,
     JsonType,
     ListType,
+    PartialCallSpec,
     RecordType,
     TextType,
     TypeEnvironment,
@@ -1380,6 +1382,170 @@ class TestFuncDef:
 # ---------------------------------------------------------------------------
 # Lambda
 # ---------------------------------------------------------------------------
+
+
+class TestPartialDeclaredCalls:
+    def _checked_call_value(self, source: str) -> tuple[CheckedProgram, Call]:
+        checked = accept_type(source)
+        decl = checked.resolved.program.body.items[-2]
+        assert isinstance(decl, LetDecl)
+        assert isinstance(decl.value, Call)
+        return checked, decl.value
+
+    def test_single_bare_hole_result_type(self) -> None:
+        checked, call = self._checked_call_value(
+            'def f(x: int, y: text) -> bool = true\nlet g = f(?, "ok")\ng'
+        )
+        assert checked.node_types[call.node_id] == FunctionType(
+            params=(IntType(),), result=BoolType()
+        )
+
+    def test_multiple_bare_holes_keep_written_order(self) -> None:
+        checked, call = self._checked_call_value(
+            'def f(x: int, y: text, z: bool) -> decimal = 1.0\nlet g = f(?, "ok", ?)\ng'
+        )
+        assert checked.node_types[call.node_id] == FunctionType(
+            params=(IntType(), BoolType()), result=DecimalType()
+        )
+
+    def test_numbered_holes_reorder_result_params(self) -> None:
+        checked, call = self._checked_call_value(
+            'def f(x: int, y: text, z: bool) -> unit = ()\nlet g = f(?2, "ok", ?1)\ng'
+        )
+        assert checked.node_types[call.node_id] == FunctionType(
+            params=(BoolType(), IntType()), result=UnitType()
+        )
+
+    def test_named_hole_uses_named_parameter_type(self) -> None:
+        checked, call = self._checked_call_value(
+            'def f(x: int, y: text) -> text = y\nlet g = f(1, y = ?)\ng'
+        )
+        assert checked.node_types[call.node_id] == FunctionType(
+            params=(TextType(),), result=TextType()
+        )
+
+    def test_all_holes_and_unsupplied_default(self) -> None:
+        checked, call = self._checked_call_value(
+            'def f(x: int, y: text = "d") -> text = y\nlet g = f(?)\ng'
+        )
+        assert checked.node_types[call.node_id] == FunctionType(
+            params=(IntType(),), result=TextType()
+        )
+
+    def test_generic_hole_type_from_concrete_arg(self) -> None:
+        checked, call = self._checked_call_value(
+            'def keep[T](x: T, y: T) -> T = x\nlet g = keep(1, ?)\ng'
+        )
+        assert checked.node_types[call.node_id] == FunctionType(
+            params=(IntType(),), result=IntType()
+        )
+
+    def test_generic_hole_type_from_expected_function_type(self) -> None:
+        checked = accept_type(
+            'def make[T](x: T) -> T = x\nlet g: (text) -> text = make(?)\ng'
+        )
+        decl = checked.resolved.program.body.items[1]
+        assert isinstance(decl, LetDecl)
+        assert isinstance(decl.value, Call)
+        assert checked.node_types[decl.value.node_id] == FunctionType(
+            params=(TextType(),), result=TextType()
+        )
+
+    def test_generic_unsolved_hole_error_suggests_explicit_type_args(self) -> None:
+        err = reject_type('def pair[A, B](a: A, b: B) -> A = a\nlet g = pair(?, "x")\ng')
+        assert "infer" in str(err).lower()
+        assert "pair::[…]" in str(err)
+
+    def test_explicit_type_args_compose_with_partial_call(self) -> None:
+        checked, call = self._checked_call_value(
+            'def f[T](x: T, y: T) -> T = x\nlet g = f::[int](?, 1)\ng'
+        )
+        assert checked.node_types[call.node_id] == FunctionType(
+            params=(IntType(),), result=IntType()
+        )
+
+    def test_generic_partial_explicit_type_arg_arity_error(self) -> None:
+        err = reject_type('def f[T](x: T) -> T = x\nlet g = f::[int, text](?)\ng')
+        assert "type argument" in str(err).lower()
+
+    def test_non_generic_partial_explicit_type_args_rejected(self) -> None:
+        err = reject_type("def f(x: int) -> int = x\nlet g = f::[int](?)\ng")
+        assert "not a generic function" in str(err)
+
+    def test_partial_call_to_unannotated_later_function_needs_return_annotation(self) -> None:
+        err = reject_type("let g = f(?)\ndef f(x: int) = x\ng")
+        assert "return type" in str(err)
+        assert "annotation" in str(err)
+
+    @pytest.mark.parametrize(
+        "name", ["print", "render", "exec", "ask", "ask-request", "parse_json"]
+    )
+    def test_special_builtin_partial_call_rejected(self, name: str) -> None:
+        err = reject_type(f"let g = {name}(?)\ng")
+        assert "partial" in str(err).lower()
+        assert name in str(err)
+
+    @pytest.mark.parametrize(
+        "source, expected",
+        [
+            ("def f(x: int) -> int = x\nlet g = f(?, 1)\ng", "too many"),
+            ("def f(x: int) -> int = x\nlet g = f(z = ?)\ng", "unknown"),
+            ("def f(x: int) -> int = x\nlet g = f(?, x = 1)\ng", "duplicate"),
+            ("def f(*, x: int) -> int = x\nlet g = f(?)\ng", "named-only"),
+            ("def f(x: int, y: int) -> int = x\nlet g = f(?)\ng", "missing"),
+        ],
+    )
+    def test_binding_errors_unchanged_with_holes(self, source: str, expected: str) -> None:
+        err = reject_type(source)
+        assert expected in str(err).lower()
+
+    def test_side_table_records_bound_hole_slots(self) -> None:
+        checked, call = self._checked_call_value(
+            'def f(x: int, y: text, z: bool) -> unit = ()\nlet g = f(?2, "ok", z = ?1)\ng'
+        )
+        assert checked.partial_calls[call.node_id] == PartialCallSpec(
+            arity=2,
+            argument_holes=(1, None, 0),
+        )
+        assert checked.argument_bindings.function_calls[call.node_id][1] is not None
+
+    def test_placeholder_on_non_declared_synthetic_call_falls_through(self) -> None:
+        sp = mk_span()
+        call = Call(
+            callee=IntLit(value=1, span=sp, node_id=_mk_node_id()),
+            args=(Placeholder(index=None, span=sp, node_id=_mk_node_id()),),
+            named_args=(),
+            span=sp,
+            node_id=_mk_node_id(),
+        )
+        block = Block(items=(call,), span=sp, node_id=_mk_node_id())
+        program = Program(body=block, span=sp, node_id=_mk_node_id())
+        resolved = _ResolvedProgram(
+            program=program,
+            resolution={},
+            builtin_calls={},
+            root_scope=ScopeNode(node_id=program.node_id),
+        )
+        with pytest.raises(AglTypeError, match="callee"):
+            check(resolved, default_capabilities())
+
+    def test_placeholder_on_non_function_value_call_uses_existing_callee_error(self) -> None:
+        err = reject_type("let x = 1\nx(?)")
+        assert "callee" in str(err)
+
+    def test_placeholder_outside_partial_call_is_guarded(self) -> None:
+        sp = mk_span()
+        placeholder = Placeholder(index=None, span=sp, node_id=_mk_node_id())
+        block = Block(items=(placeholder,), span=sp, node_id=_mk_node_id())
+        program = Program(body=block, span=sp, node_id=_mk_node_id())
+        resolved = _ResolvedProgram(
+            program=program,
+            resolution={},
+            builtin_calls={},
+            root_scope=ScopeNode(node_id=program.node_id),
+        )
+        with pytest.raises(AssertionError, match="placeholder"):
+            check(resolved, default_capabilities())
 
 
 class TestLambda:

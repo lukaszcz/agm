@@ -101,6 +101,7 @@ from agm.agl.syntax.nodes import (
     ParamDecl,
     Pattern,
     PatternField,
+    Placeholder,
     Program,
     ProgramDecl,
     Raise,
@@ -1146,11 +1147,9 @@ class _Resolver:
                 self._resolve_expr(entry.key)
                 self._resolve_expr(entry.value)
         else:
-            # Literals: IntLit, DecimalLit, BoolLit, NullLit, StringLit,
-            # UnitLit, TextSegment — no names to resolve.
             assert isinstance(
                 expr,
-                (IntLit, DecimalLit, BoolLit, NullLit, StringLit, UnitLit),
+                (IntLit, DecimalLit, BoolLit, NullLit, StringLit, UnitLit, Placeholder),
             ), f"unhandled expr node: {type(expr)}"  # pragma: no cover
 
     def _resolve_varref(self, node: VarRef) -> None:

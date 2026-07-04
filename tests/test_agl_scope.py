@@ -848,6 +848,34 @@ class TestBuiltinCallClassification:
 # ---------------------------------------------------------------------------
 
 
+class TestPlaceholderCallResolution:
+    def test_positional_placeholder_args_resolve_without_diagnostics(self) -> None:
+        r = parse_and_resolve("def f(x: int, y: int) -> int = x\nlet h = f(?1, ?2)\nh")
+        assert _ref(r, "f").kind == BinderKind.function_binding
+        assert _ref(r, "h").kind == BinderKind.let_binding
+
+    def test_named_placeholder_args_resolve_without_diagnostics(self) -> None:
+        r = parse_and_resolve("def f(x: int, y: int) -> int = x\nlet h = f(x = ?, y = ?)\nh")
+        assert _ref(r, "f").kind == BinderKind.function_binding
+        assert _ref(r, "h").kind == BinderKind.let_binding
+
+    def test_nested_placeholder_calls_resolve_without_diagnostics(self) -> None:
+        r = parse_and_resolve(
+            "def f(x: int, y: int) -> int = x\n"
+            "def g(x: int) -> int = x\n"
+            "let h = f(g(?), ?)\n"
+            "h"
+        )
+        assert _ref(r, "f").kind == BinderKind.function_binding
+        assert _ref(r, "g").kind == BinderKind.function_binding
+        assert _ref(r, "h").kind == BinderKind.let_binding
+
+    def test_non_placeholder_args_still_resolve(self) -> None:
+        r = parse_and_resolve("def f(x: int, y: int) -> int = x\nlet x = 1\nlet h = f(?, x)\nh")
+        assert _ref(r, "f").kind == BinderKind.function_binding
+        assert _ref(r, "x", occurrence=1).kind == BinderKind.let_binding
+
+
 class TestCallResolution:
     def test_call_named_arg_value_resolved(self) -> None:
         """Named-arg values in a call are resolved."""

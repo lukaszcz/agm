@@ -195,6 +195,7 @@ from agm.agl.syntax.nodes import (
     Param,
     ParamDecl,
     Pattern,
+    Placeholder,
     ProgramDecl,
     Raise,
     RecordDef,
@@ -537,7 +538,7 @@ class _Lowerer:
                         self._scan_captures(seg.expr, local_ids, captured)
             case Raise():
                 self._scan_captures(node.exc, local_ids, captured)
-            case Break() | Continue():
+            case Break() | Continue() | Placeholder():
                 pass  # leaf — no captures
             case UnitLit() | IntLit() | DecimalLit() | BoolLit() | NullLit() | StringLit():
                 pass
@@ -1077,6 +1078,9 @@ class _Lowerer:
             # ----------------------------------------------------------
             case Lambda(params=params, body=body_expr, span=span, node_id=nid):
                 return self._lower_lambda(params, body_expr, span, nid)
+
+            case Placeholder():
+                raise AssertionError("placeholder reached lowering outside a partial call")
 
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)

@@ -81,6 +81,7 @@
 
 %declare NAME OP_NAME
 %declare IMPORT QUALIFIED USING HIDING EXPORT PRIVATE MODQUAL MODPATH
+%declare PLACEHOLDER PLACEHOLDER_NUM
 %declare AS_QUESTION
 // AGENT: the reserved word `agent`.  Declared (rather than written as the
 // string literal "agent") so it can be referenced by name in `field_name`,
@@ -614,11 +615,15 @@ paren_expr_or_unit: LPAR RPAR         -> unit_lit
 
 arg_list: arg (COMMA arg)* COMMA?
 
-?arg: named_arg | pos_arg
+?arg: named_arg | pos_arg | placeholder_arg
 
 pos_arg: expr
 
-named_arg: field_name EQ expr
+placeholder_arg: PLACEHOLDER | PLACEHOLDER_NUM
+
+named_arg: field_name EQ named_arg_value
+
+?named_arg_value: expr | placeholder_arg
 
 // ---------------------------------------------------------------------------
 // Literal nodes

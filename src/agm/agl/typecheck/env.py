@@ -252,6 +252,20 @@ class ArgumentBindings:
     constructor_patterns: dict[int, tuple[tuple[str, Pattern], ...]]
 
 
+@dataclass(frozen=True, slots=True)
+class PartialCallSpec:
+    """Checker-computed routing metadata for a call that produces a function.
+
+    ``arity`` is the number of parameters on the produced function.
+    ``argument_holes`` is ordered like the checked call binding for that callee;
+    each item is the produced-function parameter index for a placeholder slot,
+    or ``None`` for a supplied non-placeholder argument or a defaulted slot.
+    """
+
+    arity: int
+    argument_holes: tuple[int | None, ...]
+
+
 # ---------------------------------------------------------------------------
 # CheckedProgram — output of the type-checking pass
 # ---------------------------------------------------------------------------
@@ -297,6 +311,7 @@ class CheckedProgram:
     function_signatures: dict[str, FunctionSignature]
     cast_specs: dict[int, CastSpec]
     argument_bindings: ArgumentBindings
+    partial_calls: dict[int, PartialCallSpec]
 
 
 # ---------------------------------------------------------------------------

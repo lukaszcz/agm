@@ -46,6 +46,7 @@ from agm.agl.typecheck.env import (
     GenericTypeDef,
     OutputContractSpec,
     ParamSpec,
+    PartialCallSpec,
     TypeEnvironment,
 )
 from agm.agl.typecheck.graph import CheckedModule, CheckedModuleGraph, check_graph
@@ -72,6 +73,7 @@ __all__ = [
     "ListType",
     "OutputContractSpec",
     "ParamSpec",
+    "PartialCallSpec",
     "RecordType",
     "TextType",
     "Type",

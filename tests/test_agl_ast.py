@@ -92,6 +92,7 @@ from agm.agl.syntax import (
     ParamKind,
     Pattern,
     PatternField,
+    Placeholder,
     Program,
     ProgramDecl,
     Raise,
@@ -470,6 +471,12 @@ class TestExpressions:
             expr=expr, qualifier=None, variant="None_", negated=True, span=self._s(), node_id=1
         )
         assert node.negated is True
+
+    def test_placeholder(self) -> None:
+        bare = Placeholder(index=None, span=self._s(), node_id=1)
+        numbered = Placeholder(index=2, span=self._s(), node_id=2)
+        assert bare.index is None
+        assert numbered.index == 2
 
     def test_equality_ignores_span_node_id(self) -> None:
         a = VarRef(name="x", span=span(1, 0, 1, 1), node_id=10)
@@ -1417,9 +1424,10 @@ class TestVisitorWalk:
         ask_ref = VarRef(name="ask", span=s, node_id=408)
         reviewer_ref = VarRef(name="reviewer", span=s, node_id=409)
         named_agent = NamedArg(name="agent", value=reviewer_ref, span=s, node_id=410)
+        placeholder = Placeholder(index=None, span=s, node_id=4100)
         call_node = Call(
             callee=ask_ref,
-            args=(template,),
+            args=(template, placeholder),
             named_args=(named_agent,),
             span=s,
             node_id=411,
@@ -1582,7 +1590,7 @@ class TestVisitorWalk:
         kinds = {type(n) for n in visited}
 
         expr_kinds = {
-            VarRef, FieldAccess, IndexAccess, NamedArg,
+            VarRef, FieldAccess, IndexAccess, NamedArg, Placeholder,
             BinaryOp, UnaryNot, UnaryNeg, IsTest,
             Call, Lambda, Block, If, IfBranch, Case, CaseBranch,
             Loop, Try, CatchClause, Raise, Break, Continue,
@@ -2272,6 +2280,11 @@ class TestUnionAliases:
         import typing
         args = typing.get_args(Expr)
         assert Call in args
+
+    def test_placeholder_is_expr(self) -> None:
+        import typing
+        args = typing.get_args(Expr)
+        assert Placeholder in args
 
     def test_index_access_is_expr(self) -> None:
         import typing

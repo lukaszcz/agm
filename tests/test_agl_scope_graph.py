@@ -948,6 +948,19 @@ class TestCrossFileMutualRecursion:
         assert call_a is not None
         assert result.modules[mod_b].resolved.resolution[call_a.node_id].module_id == mod_a
 
+    def test_placeholder_call_in_imported_module_function_body_resolves(
+        self, tmp_path: Path
+    ) -> None:
+        graph = _make_graph_from_files(tmp_path, {
+            "entry": "import modA\nmake()",
+            "modA": "def f(x: int) -> int = x\ndef make() -> int = f(?)",
+        })
+        result = resolve_graph(graph)
+        mod_a = ModuleId.from_dotted("modA")
+        call_f = _find_varref(graph.modules[mod_a].program, "f")
+        assert call_f is not None
+        assert result.modules[mod_a].resolved.resolution[call_f.node_id].module_id == mod_a
+
 
 # ---------------------------------------------------------------------------
 # Test: BindingRef.module_id

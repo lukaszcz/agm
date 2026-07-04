@@ -53,6 +53,7 @@ _STMT_STARTERS: frozenset[str] = frozenset(
 )
 
 _ELSE_BEFORE_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_])else\s*$")
+_PLACEHOLDER_BEFORE_TOKEN_RE = re.compile(r"\?[0-9]*\s*$")
 
 
 class AglSyntaxError(AglError):
@@ -153,6 +154,13 @@ def _make_missing_else_arrow_error(span: SourceSpan) -> AglSyntaxError:
     return AglSyntaxError("Missing `=>` after `else`.", span=span)
 
 
+def _make_placeholder_position_error(span: SourceSpan) -> AglSyntaxError:
+    return AglSyntaxError(
+        "placeholder is only allowed as a whole parenthesized call argument.",
+        span=span,
+    )
+
+
 def _is_missing_arrow_after_else(
     *, source_text: str | None, token_pos: int, expected: set[str]
 ) -> bool:
@@ -160,6 +168,15 @@ def _is_missing_arrow_after_else(
         source_text is not None
         and expected == {"ARROW"}
         and _ELSE_BEFORE_TOKEN_RE.search(source_text[:token_pos]) is not None
+    )
+
+
+def _is_placeholder_position_error(
+    *, token_type: str, source_text: str | None, token_pos: int
+) -> bool:
+    return token_type in {"PLACEHOLDER", "PLACEHOLDER_NUM"} or (
+        source_text is not None
+        and _PLACEHOLDER_BEFORE_TOKEN_RE.search(source_text[:token_pos]) is not None
     )
 
 
@@ -197,6 +214,10 @@ def syntax_error_from_lark(
             source_text=source_text, token_pos=pos, expected=set(exc.expected)
         ):
             return _make_missing_else_arrow_error(span)
+        if _is_placeholder_position_error(
+            token_type=tok.type, source_text=source_text, token_pos=pos
+        ):
+            return _make_placeholder_position_error(span)
         # Chained comparison detection: the unexpected token is
         # a comparison operator AND that operator is NOT in the expected set.
         # When the operator IS expected, we are still before the first comparison

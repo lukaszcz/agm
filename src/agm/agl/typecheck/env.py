@@ -14,13 +14,16 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import cast
 
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
 from agm.agl.scope.imports import ImportEnv, QName
 from agm.agl.scope.symbols import BindingRef, ResolvedProgram
-from agm.agl.semantics.type_table import TypeTable, create_seeded_type_table
+from agm.agl.semantics.type_table import (
+    BUILTIN_PRELUDE_TYPE_DEFS,
+    TypeTable,
+    create_seeded_type_table,
+)
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPE_NAMES,
@@ -95,8 +98,10 @@ class GenericTypeDef:
 
     ``kind``        — ``"record"`` or ``"enum"``.
     ``type_params`` — ordered tuple of type-parameter names.
-    ``template``    — a ``RecordType`` or ``EnumType`` whose fields/variants
-                      may contain ``TypeVarType`` nodes.
+    ``template``    — a bare ``RecordType``/``EnumType`` handle whose
+                      ``type_args`` are ``TypeVarType`` nodes for each of
+                      ``type_params``; field/variant shapes are looked up by
+                      handle in the shared ``TypeTable``.
     """
 
     kind: str  # "record" | "enum"
@@ -410,18 +415,21 @@ class TypeEnvironment:
         # Built-in exception types are always available.
         for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
             self._types[exc_name] = exc_type
-        # Built-in prelude types (AgL: ExecResult, ParsePolicy) are always available.
+        # Built-in prelude types (AgL: ExecResult, ParsePolicy) are always
+        # available.  Field/variant names for constructor-kind registration
+        # come from the shared prelude ``TypeDef`` literals — the handles
+        # themselves carry no shape data.
         for prelude_name, prelude_type in BUILTIN_PRELUDE_TYPES.items():
             self._types[prelude_name] = prelude_type
-            if isinstance(prelude_type, RecordType):
+            typedef = BUILTIN_PRELUDE_TYPE_DEFS[prelude_name]
+            if typedef.kind == "record":
                 self._constructor_field_kinds[(prelude_name, None)] = tuple(
-                    (fname, ParamKind.NAMED_ONLY) for fname in prelude_type.fields
+                    (fname, ParamKind.NAMED_ONLY) for fname, _ in typedef.fields
                 )
                 continue
-            enum_type = cast(EnumType, prelude_type)
-            for variant, fields in enum_type.variants.items():
+            for variant, vfields in typedef.variants:
                 self._constructor_field_kinds[(prelude_name, variant)] = tuple(
-                    (fname, ParamKind.NAMED_ONLY) for fname in fields
+                    (fname, ParamKind.NAMED_ONLY) for fname, _ in vfields
                 )
         # Pre-register builtin exception field kinds (all non-trace_id fields, NAMED_ONLY).
         for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
@@ -486,9 +494,6 @@ class TypeEnvironment:
         self._alias_targets[name] = target_expr
         self._alias_type_params[name] = type_params
 
-    def get_alias_target_expr(self, name: str) -> object | None:
-        return self._alias_targets.get(name)
-
     def get_alias_type_params(self, name: str) -> tuple[str, ...]:
         """Return the type-parameter names for a parameterized alias, or ``()``."""
         return self._alias_type_params.get(name, ())
@@ -511,9 +516,9 @@ class TypeEnvironment:
     ) -> RecordType | EnumType:
         """Instantiate a generic type named *name* with *args*.
 
-        Substitutes the type parameters in the template with *args* and
-        returns a concrete ``RecordType`` or ``EnumType`` with ``type_args``
-        set to the supplied arguments.
+        Returns a ``RecordType``/``EnumType`` handle with ``type_args`` set to
+        the supplied arguments; field/variant shapes are resolved later, by
+        handle, from the shared ``TypeTable``.
 
         Raises ``AglTypeError`` for unknown names or arity mismatches.
         The optional *span* is forwarded to the error for source-location reporting.
@@ -538,29 +543,20 @@ class TypeEnvironment:
         in the own-module ``_generic_types`` table.
         The optional *span* is forwarded to any ``AglTypeError`` raised.
         """
-        from agm.agl.semantics.types import substitute as _subst
-
         if len(args) != len(gdef.type_params):
             raise AglTypeError(
                 f"Type '{name}' requires {len(gdef.type_params)} type argument(s), "
                 f"got {len(args)}.",
                 span=span,
             )
-        subst = dict(zip(gdef.type_params, args))
+        # No field/variant substitution: the result is a bare handle with the
+        # supplied type_args; field/variant shapes are looked up by handle in
+        # the shared TypeTable (which substitutes type_args into the
+        # registered TypeDef's templates on demand).
         template = gdef.template
         if isinstance(template, RecordType):
-            new_fields = {k: _subst(v, subst) for k, v in template.fields.items()}
-            return RecordType(
-                name=name, fields=new_fields, type_args=args, module_id=template.module_id
-            )
-        # EnumType: substitute into each variant's field types.
-        new_variants = {
-            vname: {k: _subst(v, subst) for k, v in vfields.items()}
-            for vname, vfields in template.variants.items()
-        }
-        return EnumType(
-            name=name, variants=new_variants, type_args=args, module_id=template.module_id
-        )
+            return RecordType(name=name, type_args=args, module_id=template.module_id)
+        return EnumType(name=name, type_args=args, module_id=template.module_id)
 
     def instantiate_alias(
         self,

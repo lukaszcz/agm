@@ -1,12 +1,10 @@
 """Shared nominal type-declaration table for AgL.
 
-``RecordType``/``EnumType`` (see ``semantics.types``) still embed their own
-field/variant maps directly. This module introduces a second representation
-of the same declarations: a table of ``TypeDef`` templates keyed by
-``(module_id, name)``, populated by the type builder *alongside* the embedded
-representation (dual-write, no behavior change). It is the foundation for
-turning nominal types into lightweight handles whose field/variant shapes are
-looked up here instead of carried by value.
+``RecordType``/``EnumType`` (see ``semantics.types``) are lightweight
+handles — ``(module_id, name, type_args)`` — carrying no field/variant data
+of their own. This module holds the single source of truth for their
+shapes: a table of ``TypeDef`` templates keyed by ``(module_id, name)``,
+populated by the type builder as each declaration is resolved.
 
 ``TypeDef`` stores field/variant type *templates*: finite ``Type`` trees that
 may reference the declaration's own type parameters via ``TypeVarType`` nodes
@@ -26,11 +24,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal, assert_never, cast
+from typing import Literal, assert_never
 
-from agm.agl.modules.ids import STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import PRELUDE_ID, STD_CORE_ID, ModuleId
 from agm.agl.semantics.types import (
-    BUILTIN_PRELUDE_TYPES,
     AgentType,
     BoolType,
     BottomType,
@@ -78,12 +75,26 @@ class TypeDef:
     abstract: bool = False
     base: str | None = None
 
+    def handle(self, type_args: tuple[Type, ...] = ()) -> RecordType | EnumType:
+        """Return the ``RecordType``/``EnumType`` handle naming this ``TypeDef``.
+
+        Convenience for call sites that hold a ``TypeDef`` and need the
+        corresponding handle (e.g. to register a value, or to pass to
+        :meth:`TypeTable.record_fields`/:meth:`TypeTable.enum_variants`).
+        *type_args* defaults to ``()`` for non-generic defs.
+        """
+        if self.kind == "record":
+            return RecordType(name=self.name, type_args=type_args, module_id=self.module_id)
+        if self.kind == "enum":
+            return EnumType(name=self.name, type_args=type_args, module_id=self.module_id)
+        raise ValueError(f"TypeDef.handle() does not support kind {self.kind!r}")
+
 
 class TypeTable:
     """Mutable registry of ``TypeDef``s keyed by ``(module_id, name)``.
 
-    Populated by the type builder alongside the embedded
-    ``RecordType``/``EnumType`` representation; a single instance is shared
+    Populated by the type builder as each declaration's body is resolved;
+    a single instance is shared
     across a module graph's per-module environments so every module's
     declarations land in the same table.
     """
@@ -309,54 +320,117 @@ def comparable_types(left: Type, right: Type, table: TypeTable) -> bool:
     return isinstance(left, numeric) and isinstance(right, numeric)
 
 
+# ---------------------------------------------------------------------------
+# Prelude type shapes — the single source of truth for built-in nominal types
+#
+# These ``TypeDef`` literals are the canonical shapes for AgL's built-in
+# prelude types (``ExecResult``, ``ParsePolicy``, ``OutputContract``,
+# ``OutputContractOption``, ``AgentRequest``) and the generic ``Option``
+# template.  ``create_seeded_type_table``, the scope resolver's builtin
+# constructor-candidate seeding, ``TypeEnvironment`` init seeding, and builtin
+# shape validation in the type builder all read these same literals — there
+# is exactly one definition of each prelude shape.
+# ---------------------------------------------------------------------------
+
+BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = {
+    "ExecResult": TypeDef(
+        kind="record",
+        name="ExecResult",
+        module_id=PRELUDE_ID,
+        fields=(
+            ("stdout", TextType()),
+            ("exit_code", IntType()),
+            ("stderr", TextType()),
+            ("timed_out", BoolType()),
+        ),
+    ),
+    "ParsePolicy": TypeDef(
+        kind="enum",
+        name="ParsePolicy",
+        module_id=PRELUDE_ID,
+        variants=(
+            ("Abort", ()),
+            ("Retry", (("n", IntType()),)),
+        ),
+    ),
+    "OutputContract": TypeDef(
+        kind="record",
+        name="OutputContract",
+        module_id=PRELUDE_ID,
+        fields=(
+            ("target_type", TextType()),
+            ("codec_name", TextType()),
+            ("strict_json", JsonType()),
+            ("format_instructions", TextType()),
+            ("json_schema", JsonType()),
+            ("structured_exec", BoolType()),
+        ),
+    ),
+    "OutputContractOption": TypeDef(
+        kind="enum",
+        name="OutputContractOption",
+        module_id=PRELUDE_ID,
+        variants=(
+            ("None", ()),
+            ("Some", (("value", RecordType(name="OutputContract", module_id=PRELUDE_ID)),)),
+        ),
+    ),
+    "AgentRequest": TypeDef(
+        kind="record",
+        name="AgentRequest",
+        module_id=PRELUDE_ID,
+        fields=(
+            ("agent", TextType()),
+            ("prompt", TextType()),
+            (
+                "target_type",
+                EnumType(name="Option", type_args=(TextType(),), module_id=STD_CORE_ID),
+            ),
+            (
+                "format_instructions",
+                EnumType(name="Option", type_args=(TextType(),), module_id=STD_CORE_ID),
+            ),
+            (
+                "json_schema",
+                EnumType(name="Option", type_args=(JsonType(),), module_id=STD_CORE_ID),
+            ),
+            ("attempt", IntType()),
+            (
+                "previous_error",
+                EnumType(name="Option", type_args=(TextType(),), module_id=STD_CORE_ID),
+            ),
+            ("metadata", JsonType()),
+        ),
+    ),
+}
+
+# Generic ``Option`` template under ``STD_CORE_ID`` (type parameter ``T``,
+# variants ``None``/``Some(value: T)``), matching the shape of the concrete
+# ``Option[text]``/``Option[json]`` prelude constants, so single-module runs
+# without the stdlib module graph can still resolve ``enum_variants`` on
+# ``Option`` handles.
+OPTION_TYPE_DEF = TypeDef(
+    kind="enum",
+    name="Option",
+    module_id=STD_CORE_ID,
+    type_params=("T",),
+    variants=(
+        ("None", ()),
+        ("Some", (("value", TypeVarType("T")),)),
+    ),
+)
+
+
 def create_seeded_type_table() -> TypeTable:
     """Return a fresh ``TypeTable`` pre-populated with built-in prelude defs.
 
-    Derives ``TypeDef``s for ``BUILTIN_PRELUDE_TYPES`` (``ExecResult``,
-    ``ParsePolicy``, ``OutputContract``, ``OutputContractOption``,
-    ``AgentRequest``) from the existing embedded constants in
-    ``semantics.types``. Built-in *exceptions* are not seeded here —
+    Registers ``BUILTIN_PRELUDE_TYPE_DEFS`` (``ExecResult``, ``ParsePolicy``,
+    ``OutputContract``, ``OutputContractOption``, ``AgentRequest``) and the
+    generic ``OPTION_TYPE_DEF``.  Built-in *exceptions* are not seeded here —
     ``ExceptionType`` has no ``module_id`` yet.
-
-    Also seeds a generic ``Option`` template under ``STD_CORE_ID`` (type
-    parameter ``T``, variants ``None``/``Some(value: T)``), matching the
-    shape of the concrete ``Option[text]``/``Option[json]`` prelude
-    constants, so single-module runs without the stdlib module graph can
-    still resolve ``enum_variants`` on ``Option`` handles.
     """
     table = TypeTable()
-    for name, typ in BUILTIN_PRELUDE_TYPES.items():
-        if isinstance(typ, RecordType):
-            table.register(
-                TypeDef(
-                    kind="record",
-                    name=name,
-                    module_id=typ.module_id,
-                    fields=tuple(typ.fields.items()),
-                )
-            )
-            continue
-        enum_typ = cast(EnumType, typ)
-        table.register(
-            TypeDef(
-                kind="enum",
-                name=name,
-                module_id=enum_typ.module_id,
-                variants=tuple(
-                    (vname, tuple(vfields.items())) for vname, vfields in enum_typ.variants.items()
-                ),
-            )
-        )
-    table.register(
-        TypeDef(
-            kind="enum",
-            name="Option",
-            module_id=STD_CORE_ID,
-            type_params=("T",),
-            variants=(
-                ("None", ()),
-                ("Some", (("value", TypeVarType("T")),)),
-            ),
-        )
-    )
+    for typedef in BUILTIN_PRELUDE_TYPE_DEFS.values():
+        table.register(typedef)
+    table.register(OPTION_TYPE_DEF)
     return table

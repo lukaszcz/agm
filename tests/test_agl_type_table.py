@@ -1,8 +1,8 @@
 """Tests for the shared nominal type-declaration table.
 
-Covers ``TypeDef``/``TypeTable`` in ``agm.agl.semantics.type_table`` and the
-dual-write path that populates it alongside the embedded
-``RecordType``/``EnumType`` representation: the type builder
+Covers ``TypeDef``/``TypeTable`` in ``agm.agl.semantics.type_table`` — the
+sole source of record/enum field and variant shapes, since ``RecordType``/
+``EnumType`` handles carry none — and how it is populated: the type builder
 (``typecheck/builder.py``), the graph pre-pass (``typecheck/graph.py``), and
 REPL session accumulation (``TypeEnvironment.seed_from``).
 """
@@ -20,6 +20,7 @@ from agm.agl.repl import ReplSession
 from agm.agl.scope import resolve
 from agm.agl.scope.graph import resolve_graph
 from agm.agl.semantics.type_table import (
+    BUILTIN_PRELUDE_TYPE_DEFS,
     TypeDef,
     TypeTable,
     comparable_types,
@@ -84,6 +85,26 @@ def _binding_value_type(checked: CheckedProgram, name: str):
 # ---------------------------------------------------------------------------
 
 
+class TestTypeDefHandle:
+    def test_record_handle(self) -> None:
+        typedef = TypeDef(kind="record", name="Point", module_id=ENTRY_ID)
+        assert typedef.handle() == RecordType(name="Point", module_id=ENTRY_ID)
+
+    def test_enum_handle(self) -> None:
+        typedef = TypeDef(kind="enum", name="Color", module_id=ENTRY_ID)
+        assert typedef.handle() == EnumType(name="Color", module_id=ENTRY_ID)
+
+    def test_generic_record_handle_with_type_args(self) -> None:
+        typedef = TypeDef(kind="record", name="Box", module_id=ENTRY_ID, type_params=("T",))
+        handle = typedef.handle(type_args=(IntType(),))
+        assert handle == RecordType(name="Box", type_args=(IntType(),), module_id=ENTRY_ID)
+
+    def test_exception_kind_unsupported(self) -> None:
+        typedef = TypeDef(kind="exception", name="Boom", module_id=ENTRY_ID)
+        with pytest.raises(ValueError, match="does not support kind"):
+            typedef.handle()
+
+
 class TestRegisterAndGet:
     def test_register_and_get_record_in_entry_module(self) -> None:
         table = TypeTable()
@@ -141,7 +162,7 @@ class TestNonGenericAccessors:
                 fields=(("x", IntType()), ("y", IntType())),
             )
         )
-        handle = RecordType(name="Point", fields={}, module_id=ENTRY_ID)
+        handle = RecordType(name="Point", module_id=ENTRY_ID)
         assert dict(table.record_fields(handle)) == {"x": IntType(), "y": IntType()}
 
     def test_enum_variants_non_generic(self) -> None:
@@ -154,7 +175,7 @@ class TestNonGenericAccessors:
                 variants=(("Red", ()), ("Custom", (("hex", TextType()),))),
             )
         )
-        handle = EnumType(name="Color", variants={}, module_id=ENTRY_ID)
+        handle = EnumType(name="Color", module_id=ENTRY_ID)
         result = table.enum_variants(handle)
         assert {v: dict(f) for v, f in result.items()} == {
             "Red": {},
@@ -163,13 +184,13 @@ class TestNonGenericAccessors:
 
     def test_record_fields_missing_def_raises_keyerror(self) -> None:
         table = TypeTable()
-        handle = RecordType(name="Ghost", fields={}, module_id=ENTRY_ID)
+        handle = RecordType(name="Ghost", module_id=ENTRY_ID)
         with pytest.raises(KeyError):
             table.record_fields(handle)
 
     def test_enum_variants_missing_def_raises_keyerror(self) -> None:
         table = TypeTable()
-        handle = EnumType(name="Ghost", variants={}, module_id=ENTRY_ID)
+        handle = EnumType(name="Ghost", module_id=ENTRY_ID)
         with pytest.raises(KeyError):
             table.enum_variants(handle)
 
@@ -178,7 +199,7 @@ class TestNonGenericAccessors:
         table.register(
             TypeDef(kind="enum", name="Color", module_id=ENTRY_ID, variants=(("Red", ()),))
         )
-        handle = RecordType(name="Color", fields={}, module_id=ENTRY_ID)
+        handle = RecordType(name="Color", module_id=ENTRY_ID)
         with pytest.raises(AssertionError):
             table.record_fields(handle)
 
@@ -187,7 +208,7 @@ class TestNonGenericAccessors:
         table.register(
             TypeDef(kind="record", name="Point", module_id=ENTRY_ID, fields=(("x", IntType()),))
         )
-        handle = EnumType(name="Point", variants={}, module_id=ENTRY_ID)
+        handle = EnumType(name="Point", module_id=ENTRY_ID)
         with pytest.raises(AssertionError):
             table.enum_variants(handle)
 
@@ -215,7 +236,7 @@ class TestGenericSubstitution:
             )
         )
         handle = RecordType(
-            name="Pair", fields={}, type_args=(IntType(), TextType()), module_id=ENTRY_ID
+            name="Pair", type_args=(IntType(), TextType()), module_id=ENTRY_ID
         )
         result = table.record_fields(handle)
         assert dict(result) == {
@@ -237,7 +258,7 @@ class TestGenericSubstitution:
             )
         )
         handle = EnumType(
-            name="Maybe", variants={}, type_args=(IntType(),), module_id=ENTRY_ID
+            name="Maybe", type_args=(IntType(),), module_id=ENTRY_ID
         )
         result = table.enum_variants(handle)
         assert {v: dict(f) for v, f in result.items()} == {
@@ -257,7 +278,7 @@ class TestMemoization:
         table.register(
             TypeDef(kind="record", name="Point", module_id=ENTRY_ID, fields=(("x", IntType()),))
         )
-        handle = RecordType(name="Point", fields={}, module_id=ENTRY_ID)
+        handle = RecordType(name="Point", module_id=ENTRY_ID)
         first = table.record_fields(handle)
         second = table.record_fields(handle)
         assert first is second
@@ -267,7 +288,7 @@ class TestMemoization:
         table.register(
             TypeDef(kind="enum", name="Color", module_id=ENTRY_ID, variants=(("Red", ()),))
         )
-        handle = EnumType(name="Color", variants={}, module_id=ENTRY_ID)
+        handle = EnumType(name="Color", module_id=ENTRY_ID)
         first = table.enum_variants(handle)
         second = table.enum_variants(handle)
         assert first is second
@@ -284,10 +305,10 @@ class TestMemoization:
             )
         )
         int_handle = RecordType(
-            name="Box", fields={}, type_args=(IntType(),), module_id=ENTRY_ID
+            name="Box", type_args=(IntType(),), module_id=ENTRY_ID
         )
         text_handle = RecordType(
-            name="Box", fields={}, type_args=(TextType(),), module_id=ENTRY_ID
+            name="Box", type_args=(TextType(),), module_id=ENTRY_ID
         )
         assert dict(table.record_fields(int_handle)) == {"value": IntType()}
         assert dict(table.record_fields(text_handle)) == {"value": TextType()}
@@ -306,10 +327,10 @@ class TestMemoization:
             )
         )
         int_handle = EnumType(
-            name="Maybe", variants={}, type_args=(IntType(),), module_id=ENTRY_ID
+            name="Maybe", type_args=(IntType(),), module_id=ENTRY_ID
         )
         text_handle = EnumType(
-            name="Maybe", variants={}, type_args=(TextType(),), module_id=ENTRY_ID
+            name="Maybe", type_args=(TextType(),), module_id=ENTRY_ID
         )
         assert {v: dict(f) for v, f in table.enum_variants(int_handle).items()} == {
             "Just": {"value": IntType()}
@@ -385,7 +406,7 @@ class TestUnregister:
         table.register(
             TypeDef(kind="record", name="Point", module_id=ENTRY_ID, fields=(("x", IntType()),))
         )
-        handle = RecordType(name="Point", fields={}, module_id=ENTRY_ID)
+        handle = RecordType(name="Point", module_id=ENTRY_ID)
         assert dict(table.record_fields(handle)) == {"x": IntType()}
 
         table.unregister(ENTRY_ID, "Point")
@@ -399,7 +420,7 @@ class TestUnregister:
         table.register(
             TypeDef(kind="enum", name="Color", module_id=ENTRY_ID, variants=(("Red", ()),))
         )
-        handle = EnumType(name="Color", variants={}, module_id=ENTRY_ID)
+        handle = EnumType(name="Color", module_id=ENTRY_ID)
         assert {v: dict(f) for v, f in table.enum_variants(handle).items()} == {"Red": {}}
 
         table.unregister(ENTRY_ID, "Color")
@@ -477,7 +498,7 @@ class TestEntriesAndMerge:
 
         target = TypeTable()
         target.register(shared)
-        handle = RecordType(name="Shared", fields={}, module_id=ENTRY_ID)
+        handle = RecordType(name="Shared", module_id=ENTRY_ID)
         before = target.record_fields(handle)
 
         target.merge_from(source)
@@ -494,7 +515,7 @@ class TestEntriesAndMerge:
         target.register(
             TypeDef(kind="record", name="X", module_id=ENTRY_ID, fields=(("a", TextType()),))
         )
-        handle = RecordType(name="X", fields={}, module_id=ENTRY_ID)
+        handle = RecordType(name="X", module_id=ENTRY_ID)
         assert dict(target.record_fields(handle)) == {"a": TextType()}
 
         target.merge_from(source)
@@ -513,14 +534,15 @@ class TestBuiltinSeeding:
         for name, typ in BUILTIN_PRELUDE_TYPES.items():
             typedef = table.get(PRELUDE_ID, name)
             assert typedef is not None
+            expected = BUILTIN_PRELUDE_TYPE_DEFS[name]
             if isinstance(typ, RecordType):
-                handle = RecordType(name=name, fields={}, module_id=PRELUDE_ID)
-                assert dict(table.record_fields(handle)) == dict(typ.fields)
+                handle = RecordType(name=name, module_id=PRELUDE_ID)
+                assert dict(table.record_fields(handle)) == dict(expected.fields)
             else:
-                handle = EnumType(name=name, variants={}, module_id=PRELUDE_ID)
+                handle = EnumType(name=name, module_id=PRELUDE_ID)
                 result = table.enum_variants(handle)
                 assert {v: dict(f) for v, f in result.items()} == {
-                    v: dict(f) for v, f in typ.variants.items()
+                    vname: dict(vfields) for vname, vfields in expected.variants
                 }
 
     def test_generic_option_seeded_under_std_core(self) -> None:
@@ -529,7 +551,7 @@ class TestBuiltinSeeding:
         assert typedef is not None
         assert typedef.type_params == ("T",)
         handle = EnumType(
-            name="Option", variants={}, type_args=(TextType(),), module_id=STD_CORE_ID
+            name="Option", type_args=(TextType(),), module_id=STD_CORE_ID
         )
         result = table.enum_variants(handle)
         assert {v: dict(f) for v, f in result.items()} == {
@@ -539,11 +561,14 @@ class TestBuiltinSeeding:
 
 
 # ---------------------------------------------------------------------------
-# Dual-write consistency: single-module
+# Every env-registered type has a matching table def: single-module
 # ---------------------------------------------------------------------------
 
 
-class TestDualWriteSingleModule:
+class TestEnvTypeHasMatchingTableDefSingleModule:
+    """Every type registered in the env has a matching ``TypeDef`` in the
+    shared table (the only place shapes live now that handles carry none)."""
+
     def test_non_generic_record(self) -> None:
         checked = _check(
             "record Point\n  x: int\n  y: int\nlet p = Point(x = 1, y = 2)\np"
@@ -551,7 +576,10 @@ class TestDualWriteSingleModule:
         point = checked.type_env.get_type("Point")
         assert isinstance(point, RecordType)
         table = checked.type_env.type_table
-        assert dict(table.record_fields(point)) == dict(point.fields)
+        typedef = table.get(point.module_id, "Point")
+        assert typedef is not None
+        assert typedef.kind == "record"
+        assert dict(table.record_fields(point)) == {"x": IntType(), "y": IntType()}
 
     def test_generic_record(self) -> None:
         checked = _check(
@@ -560,7 +588,10 @@ class TestDualWriteSingleModule:
         box = _binding_value_type(checked, "b")
         assert isinstance(box, RecordType)
         table = checked.type_env.type_table
-        assert dict(table.record_fields(box)) == dict(box.fields)
+        typedef = table.get(box.module_id, "Box")
+        assert typedef is not None
+        assert typedef.type_params == ("T",)
+        assert dict(table.record_fields(box)) == {"value": IntType()}
 
     def test_non_generic_enum(self) -> None:
         checked = _check(
@@ -569,9 +600,14 @@ class TestDualWriteSingleModule:
         color = checked.type_env.get_type("Color")
         assert isinstance(color, EnumType)
         table = checked.type_env.type_table
+        typedef = table.get(color.module_id, "Color")
+        assert typedef is not None
+        assert typedef.kind == "enum"
         result = table.enum_variants(color)
         assert {v: dict(f) for v, f in result.items()} == {
-            v: dict(f) for v, f in color.variants.items()
+            "Red": {},
+            "Green": {},
+            "Blue": {},
         }
 
     def test_generic_enum(self) -> None:
@@ -581,18 +617,22 @@ class TestDualWriteSingleModule:
         maybe = _binding_value_type(checked, "m")
         assert isinstance(maybe, EnumType)
         table = checked.type_env.type_table
+        typedef = table.get(maybe.module_id, "Maybe")
+        assert typedef is not None
+        assert typedef.type_params == ("T",)
         result = table.enum_variants(maybe)
         assert {v: dict(f) for v, f in result.items()} == {
-            v: dict(f) for v, f in maybe.variants.items()
+            "none": {},
+            "just": {"value": IntType()},
         }
 
 
 # ---------------------------------------------------------------------------
-# Dual-write consistency: graph mode
+# Every env-registered type has a matching table def: graph mode
 # ---------------------------------------------------------------------------
 
 
-class TestDualWriteGraphMode:
+class TestEnvTypeHasMatchingTableDefGraphMode:
     def test_record_declared_in_one_module_reachable_from_another(
         self, tmp_path: Path
     ) -> None:
@@ -614,7 +654,9 @@ class TestDualWriteGraphMode:
         assert isinstance(point, RecordType)
 
         mylib_table = cg.modules[mylib_id].type_env.type_table
-        assert dict(mylib_table.record_fields(point)) == dict(point.fields)
+        typedef = mylib_table.get(mylib_id, "Point")
+        assert typedef is not None
+        assert dict(mylib_table.record_fields(point)) == {"x": IntType(), "y": IntType()}
 
         # The table is shared graph-wide: the entry module's env reaches the
         # same def for mylib's type.
@@ -671,7 +713,7 @@ class TestComparableTypesTableAware:
                 fields=(("x", IntType()), ("y", IntType())),
             )
         )
-        handle = RecordType(name="Point", fields={}, module_id=ENTRY_ID)
+        handle = RecordType(name="Point", module_id=ENTRY_ID)
         assert comparable_types(handle, handle, table) is True
 
     def test_generic_record_agent_field_via_instantiation_not_comparable(self) -> None:
@@ -690,12 +732,12 @@ class TestComparableTypesTableAware:
             )
         )
         agent_handle = RecordType(
-            name="Box", fields={}, type_args=(AgentType(),), module_id=ENTRY_ID
+            name="Box", type_args=(AgentType(),), module_id=ENTRY_ID
         )
         assert comparable_types(agent_handle, agent_handle, table) is False
 
         int_handle = RecordType(
-            name="Box", fields={}, type_args=(IntType(),), module_id=ENTRY_ID
+            name="Box", type_args=(IntType(),), module_id=ENTRY_ID
         )
         assert comparable_types(int_handle, int_handle, table) is True
 
@@ -712,12 +754,12 @@ class TestComparableTypesTableAware:
         )
         fn_type = FunctionType(params=(IntType(),), result=IntType())
         fn_handle = EnumType(
-            name="Holder", variants={}, type_args=(fn_type,), module_id=ENTRY_ID
+            name="Holder", type_args=(fn_type,), module_id=ENTRY_ID
         )
         assert comparable_types(fn_handle, fn_handle, table) is False
 
         text_handle = EnumType(
-            name="Holder", variants={}, type_args=(TextType(),), module_id=ENTRY_ID
+            name="Holder", type_args=(TextType(),), module_id=ENTRY_ID
         )
         assert comparable_types(text_handle, text_handle, table) is True
 
@@ -736,7 +778,7 @@ class TestComparableTypesTableAware:
             )
         )
         handle = RecordType(
-            name="Wrapper", fields={}, type_args=(UnitType(),), module_id=ENTRY_ID
+            name="Wrapper", type_args=(UnitType(),), module_id=ENTRY_ID
         )
         assert comparable_types(handle, handle, table) is False
 
@@ -752,7 +794,7 @@ class TestComparableTypesTableAware:
             )
         )
         handle = EnumType(
-            name="Bag", variants={}, type_args=(AgentType(),), module_id=ENTRY_ID
+            name="Bag", type_args=(AgentType(),), module_id=ENTRY_ID
         )
         assert comparable_types(handle, handle, table) is False
 
@@ -779,5 +821,5 @@ class TestComparableTypesTableAware:
         table.register(
             TypeDef(kind="record", name="Report", module_id=ENTRY_ID, fields=(("cause", exc),))
         )
-        handle = RecordType(name="Report", fields={}, module_id=ENTRY_ID)
+        handle = RecordType(name="Report", module_id=ENTRY_ID)
         assert comparable_types(handle, handle, table) is False

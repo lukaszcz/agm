@@ -69,7 +69,7 @@ from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import build_decode_schema, derive_schema
 from agm.agl.typecheck import check
 from agm.agl.typecheck.env import CheckedProgram, OutputContractSpec
-from tests._agl_helpers import ambient_agents_for, type_table_for
+from tests._agl_helpers import ambient_agents_for, enum_type, record_type, type_table_for
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -86,43 +86,50 @@ def _sp() -> SourceSpan:
     return SourceSpan(1, 1, 1, 5, 0, 4)
 
 
+_ISSUE_TYPE, _ISSUE_TYPEDEF = record_type(
+    "Issue",
+    {"title": TextType(), "severity": IntType(), "description": TextType()},
+)
+_REVIEW_TYPE, _REVIEW_TYPEDEF = enum_type(
+    "Review",
+    {"Pass": {}, "Fail": {"issues": ListType(elem=TextType())}},
+)
+# Shared table pre-seeded with the two ad-hoc composite shapes reused across
+# most of this suite (see ``_make_issue_type``/``_make_review_type``); tests
+# that build a different ad-hoc type pass their own table explicitly.
+_DEFAULT_TABLE = type_table_for(_ISSUE_TYPEDEF, _REVIEW_TYPEDEF)
+
+
 def _make_issue_type() -> RecordType:
     """A three-field record: title: text, severity: int, description: text."""
-    return RecordType(
-        name="Issue",
-        fields={
-            "title": TextType(),
-            "severity": IntType(),
-            "description": TextType(),
-        },
-    )
+    return _ISSUE_TYPE
 
 
 def _make_review_type() -> EnumType:
     """enum Review | Pass | Fail(issues: list[text])"""
-    return EnumType(
-        name="Review",
-        variants={
-            "Pass": {},
-            "Fail": {"issues": ListType(elem=TextType())},
-        },
-    )
+    return _REVIEW_TYPE
 
 
-def _make_contract_for(typ: Type) -> OutputContract:
+def _make_contract_for(typ: Type, table: TypeTable | None = None) -> OutputContract:
     """Build an OutputContract for a type via JsonCodec.make_contract.
 
-    Builds a fresh ``TypeTable`` seeded with *typ*'s own ad-hoc shape (see
-    ``tests._agl_helpers.type_table_for``) since *typ* is constructed directly
-    rather than through the real type builder.
+    *table* defaults to :data:`_DEFAULT_TABLE` (the ad-hoc Issue/Review
+    shapes); callers using a different ad-hoc type must pass their own table
+    (built via ``tests._agl_helpers.type_table_for``) since *typ* is
+    constructed directly rather than through the real type builder.
     """
     codec = JsonCodec()
-    return codec.make_contract(typ, type_table_for(typ))
+    return codec.make_contract(typ, table if table is not None else _DEFAULT_TABLE)
 
 
 def _parse_typed(
-    codec: JsonCodec, raw: str, typ: Type, *, strict_json: bool = False,
+    codec: JsonCodec,
+    raw: str,
+    typ: Type,
+    *,
+    strict_json: bool = False,
     schema: dict[str, object] | None = None,
+    table: TypeTable | None = None,
 ) -> ParseResult:
     """Call ``codec.parse`` with the schema/decode derived from *typ*.
 
@@ -134,9 +141,10 @@ def _parse_typed(
     ``DecodeSchema`` at every call site.  *schema*, when given, overrides only
     the derived schema (mirrors ``JsonCodec.make_contract`` computing schema
     and decode once and threading both into ``parse``); ``decode`` is always
-    built from *typ* and cannot be overridden.
+    built from *typ* and cannot be overridden.  *table* defaults to
+    :data:`_DEFAULT_TABLE` (see :func:`_make_contract_for`).
     """
-    table = type_table_for(typ)
+    table = table if table is not None else _DEFAULT_TABLE
     return codec.parse(
         raw,
         strict_json=strict_json,
@@ -190,9 +198,7 @@ def _check_program_with_json(body: tuple[Item, ...]) -> CheckedProgram:
         has_default_agent=True,
         codec_kinds={
             "text": frozenset({"text"}),
-            "json": frozenset(
-                {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
-            ),
+            "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
         },
     )
     return check(resolved, caps)
@@ -381,7 +387,7 @@ class TestDeriveSchema:
 
     def test_record_schema(self) -> None:
         issue_type = _make_issue_type()
-        schema = derive_schema(issue_type, type_table_for(issue_type))
+        schema = derive_schema(issue_type, _DEFAULT_TABLE)
         assert schema == {
             "type": "object",
             "additionalProperties": False,
@@ -394,19 +400,16 @@ class TestDeriveSchema:
         }
 
     def test_record_required_has_all_fields(self) -> None:
-        typ = RecordType(
-            name="Pair",
-            fields={"a": IntType(), "b": TextType()},
-        )
-        schema = derive_schema(typ, type_table_for(typ))
+        typ, typedef = record_type("Pair", {"a": IntType(), "b": TextType()})
+        schema = derive_schema(typ, type_table_for(typedef))
         required = schema["required"]
         assert isinstance(required, list)
         assert set(required) == {"a", "b"}
 
     def test_record_nested_record(self) -> None:
-        inner = RecordType(name="Inner", fields={"x": IntType()})
-        outer = RecordType(name="Outer", fields={"inner": inner})
-        schema = derive_schema(outer, type_table_for(outer))
+        inner, inner_def = record_type("Inner", {"x": IntType()})
+        outer, outer_def = record_type("Outer", {"inner": inner})
+        schema = derive_schema(outer, type_table_for(outer_def, inner_def))
         properties = schema["properties"]
         assert isinstance(properties, dict)
         assert properties["inner"] == {
@@ -417,8 +420,8 @@ class TestDeriveSchema:
         }
 
     def test_enum_schema_pass_only(self) -> None:
-        typ = EnumType(name="Status", variants={"Done": {}})
-        schema = derive_schema(typ, type_table_for(typ))
+        typ, typedef = enum_type("Status", {"Done": {}})
+        schema = derive_schema(typ, type_table_for(typedef))
         assert schema == {
             "oneOf": [
                 {
@@ -432,7 +435,7 @@ class TestDeriveSchema:
 
     def test_enum_schema_review(self) -> None:
         review_type = _make_review_type()
-        schema = derive_schema(review_type, type_table_for(review_type))
+        schema = derive_schema(review_type, _DEFAULT_TABLE)
         assert schema == {
             "oneOf": [
                 {
@@ -454,8 +457,8 @@ class TestDeriveSchema:
         }
 
     def test_enum_nullary_variant_has_only_case_field(self) -> None:
-        typ = EnumType(name="E", variants={"A": {}, "B": {"x": IntType()}})
-        schema = derive_schema(typ, type_table_for(typ))
+        typ, typedef = enum_type("E", {"A": {}, "B": {"x": IntType()}})
+        schema = derive_schema(typ, type_table_for(typedef))
         # First variant (A) should have only $case in required.
         a_schema = _variant_schema_for_case(schema, "A")
         required_a = a_schema["required"]
@@ -463,8 +466,8 @@ class TestDeriveSchema:
         assert required_a == ["$case"]
 
     def test_enum_payload_variant_has_case_plus_fields(self) -> None:
-        typ = EnumType(name="E", variants={"A": {}, "B": {"x": IntType()}})
-        schema = derive_schema(typ, type_table_for(typ))
+        typ, typedef = enum_type("E", {"A": {}, "B": {"x": IntType()}})
+        schema = derive_schema(typ, type_table_for(typedef))
         b_schema = _variant_schema_for_case(schema, "B")
         required_b = b_schema["required"]
         assert isinstance(required_b, list)
@@ -548,7 +551,7 @@ class TestLenientParsing:
     def test_prose_wrapped_json_extracted(self) -> None:
         codec = self._codec()
         typ = JsonType()
-        result = _parse_typed(codec, 'Here you go:\n[1, 2]', typ, strict_json=False)
+        result = _parse_typed(codec, "Here you go:\n[1, 2]", typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
 
@@ -691,8 +694,10 @@ class TestDecimalExactness:
 
     def test_decimal_in_record_field(self) -> None:
         codec = JsonCodec()
-        typ = RecordType(name="Foo", fields={"w": DecimalType()})
-        result = _parse_typed(codec, '{"w": 1.5}', typ, strict_json=False)
+        typ, typedef = record_type("Foo", {"w": DecimalType()})
+        result = _parse_typed(
+            codec, '{"w": 1.5}', typ, strict_json=False, table=type_table_for(typedef)
+        )
         assert result.ok is True
         assert isinstance(result.value, RecordValue)
         w = result.value.fields["w"]
@@ -731,8 +736,10 @@ class TestDecimalExactness:
     def test_decimal_in_repaired_json(self) -> None:
         """Decimal exactness through json-repair path (single-quote input)."""
         codec = JsonCodec()
-        typ = RecordType(name="Foo", fields={"w": DecimalType()})
-        result = _parse_typed(codec, "{'w': 1.5}", typ, strict_json=False)
+        typ, typedef = record_type("Foo", {"w": DecimalType()})
+        result = _parse_typed(
+            codec, "{'w': 1.5}", typ, strict_json=False, table=type_table_for(typedef)
+        )
         assert result.ok is True
         assert isinstance(result.value, RecordValue)
         w = result.value.fields["w"]
@@ -775,7 +782,7 @@ class TestTypedValueConstruction:
     def test_list_of_int(self) -> None:
         codec = JsonCodec()
         typ = ListType(elem=IntType())
-        result = _parse_typed(codec, '[1, 2, 3]', typ, strict_json=False)
+        result = _parse_typed(codec, "[1, 2, 3]", typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, ListValue)
         assert result.value.elements == (IntValue(1), IntValue(2), IntValue(3))
@@ -830,10 +837,12 @@ class TestTypedValueConstruction:
 
     def test_nested_record(self) -> None:
         codec = JsonCodec()
-        inner = RecordType(name="Inner", fields={"x": IntType()})
-        outer = RecordType(name="Outer", fields={"inner": inner, "n": IntType()})
+        inner, inner_def = record_type("Inner", {"x": IntType()})
+        outer, outer_def = record_type("Outer", {"inner": inner, "n": IntType()})
         raw = '{"inner": {"x": 7}, "n": 3}'
-        result = _parse_typed(codec, raw, outer, strict_json=False)
+        result = _parse_typed(
+            codec, raw, outer, strict_json=False, table=type_table_for(outer_def, inner_def)
+        )
         assert result.ok is True
         assert isinstance(result.value, RecordValue)
         inner_val = result.value.fields["inner"]
@@ -842,8 +851,10 @@ class TestTypedValueConstruction:
 
     def test_list_in_record_field(self) -> None:
         codec = JsonCodec()
-        typ = RecordType(name="Doc", fields={"tags": ListType(elem=TextType())})
-        result = _parse_typed(codec, '{"tags": ["x", "y"]}', typ, strict_json=False)
+        typ, typedef = record_type("Doc", {"tags": ListType(elem=TextType())})
+        result = _parse_typed(
+            codec, '{"tags": ["x", "y"]}', typ, strict_json=False, table=type_table_for(typedef)
+        )
         assert result.ok is True
         assert isinstance(result.value, RecordValue)
         tags = result.value.fields["tags"]
@@ -900,12 +911,12 @@ class TestSchemaValidationErrors:
 
     def test_failure_result_has_no_value(self) -> None:
         codec = JsonCodec()
-        result = _parse_typed(codec, '{}', _make_issue_type(), strict_json=False)
+        result = _parse_typed(codec, "{}", _make_issue_type(), strict_json=False)
         assert result.value is None
 
     def test_failure_result_has_error_msg(self) -> None:
         codec = JsonCodec()
-        result = _parse_typed(codec, '{}', _make_issue_type(), strict_json=False)
+        result = _parse_typed(codec, "{}", _make_issue_type(), strict_json=False)
         assert result.error_msg
         assert isinstance(result.error_msg, str)
 
@@ -988,8 +999,14 @@ class TestStructuredValidationErrors:
     def test_nested_enum_wrong_type_path(self) -> None:
         """Type-directed enum resolution works under a record field path."""
         codec = JsonCodec()
-        typ = RecordType(name="Wrapper", fields={"review": _make_review_type()})
-        result = _parse_typed(codec, '{"review": {"$case": "Bogus"}}', typ, strict_json=False)
+        typ, typedef = record_type("Wrapper", {"review": _make_review_type()})
+        result = _parse_typed(
+            codec,
+            '{"review": {"$case": "Bogus"}}',
+            typ,
+            strict_json=False,
+            table=type_table_for(typedef, _REVIEW_TYPEDEF),
+        )
         assert result.ok is False
         assert self._categories(result) == ["bad_case"]
         assert "Bogus" in result.errors[0].message
@@ -1143,14 +1160,14 @@ class TestMultiValueAmbiguity:
 
     def test_bare_array_parses(self) -> None:
         codec = JsonCodec()
-        result = _parse_typed(codec, '[1, 2]', JsonType(), strict_json=False)
+        result = _parse_typed(codec, "[1, 2]", JsonType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
         assert result.value.raw == [1, 2]
 
     def test_fenced_array_parses(self) -> None:
         codec = JsonCodec()
-        result = _parse_typed(codec, '```json\n[1, 2]\n```', JsonType(), strict_json=False)
+        result = _parse_typed(codec, "```json\n[1, 2]\n```", JsonType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
         assert result.value.raw == [1, 2]
@@ -1158,7 +1175,7 @@ class TestMultiValueAmbiguity:
     def test_prose_wrapped_array_recovers(self) -> None:
         """A genuine single array wrapped in prose is recovered (not ambiguous)."""
         codec = JsonCodec()
-        result = _parse_typed(codec, 'Here you go:\n[1, 2]', JsonType(), strict_json=False)
+        result = _parse_typed(codec, "Here you go:\n[1, 2]", JsonType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
         assert result.value.raw == [1, 2]
@@ -1256,9 +1273,7 @@ class TestMakeContract:
             codec_name="json",
             strict_json=False,
         )
-        contract = materialize_contract(
-            spec, {"json": codec, "text": TextCodec()}, type_table_for(issue_type)
-        )
+        contract = materialize_contract(spec, {"json": codec, "text": TextCodec()}, _DEFAULT_TABLE)
         assert isinstance(contract.codec, JsonCodec)
         assert contract.json_schema is not None
 
@@ -1288,9 +1303,7 @@ class TestPipelineDriverWireUp:
     def test_json_target_type_accepted_via_direct_ast(self) -> None:
         """A call targeting json type should pass type checking and execute."""
         let_x = _let("x", _ask_call("Get data."), type_ann=_json_ty())
-        scope = _run_with_json_codec(
-            (let_x,), default_agent=lambda req: '{"x": 1}'
-        )
+        scope = _run_with_json_codec((let_x,), default_agent=lambda req: '{"x": 1}')
         x = scope.snapshot()["x"]
         assert isinstance(x, JsonValue)
 
@@ -1301,9 +1314,7 @@ class TestPipelineDriverWireUp:
 
     def test_bool_target_accepted(self) -> None:
         let_b = _let("b", _ask_call("Is it true?"), type_ann=_bool_ty())
-        scope = _run_with_json_codec(
-            (let_b,), default_agent=lambda req: "true"
-        )
+        scope = _run_with_json_codec((let_b,), default_agent=lambda req: "true")
         assert scope.snapshot()["b"] == BoolValue(True)
 
     def test_decimal_target_accepted(self) -> None:
@@ -1361,9 +1372,7 @@ class TestPipelineDriverWireUp:
             _ask_call("List items."),
             type_ann=_list_ty(_text_ty()),
         )
-        scope = _run_with_json_codec(
-            (let_xs,), default_agent=lambda req: '["a", "b"]'
-        )
+        scope = _run_with_json_codec((let_xs,), default_agent=lambda req: '["a", "b"]')
         xs = scope.snapshot()["xs"]
         assert isinstance(xs, ListValue)
         assert xs.elements == (TextValue("a"), TextValue("b"))
@@ -1374,9 +1383,7 @@ class TestPipelineDriverWireUp:
             _ask_call("Dict."),
             type_ann=_dict_ty(_text_ty()),
         )
-        scope = _run_with_json_codec(
-            (let_d,), default_agent=lambda req: '{"k": "v"}'
-        )
+        scope = _run_with_json_codec((let_d,), default_agent=lambda req: '{"k": "v"}')
         d = scope.snapshot()["d"]
         assert isinstance(d, DictValue)
         assert d.entries == {"k": TextValue("v")}
@@ -1486,9 +1493,9 @@ class TestPipelineDriverWireUp:
         json_codec = JsonCodec()
         kinds = {
             text_codec.name: frozenset({"text"}),
-            json_codec.name: frozenset({
-                "json", "record", "enum", "list", "dict", "int", "decimal", "bool"
-            }),
+            json_codec.name: frozenset(
+                {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
+            ),
         }
         caps = HostCapabilities(
             codec_kinds=kinds,
@@ -1508,14 +1515,20 @@ class TestPipelineDriverWireUp:
 class TestCaseDispatch:
     def test_correct_case_dispatched(self) -> None:
         codec = JsonCodec()
-        typ = EnumType(
-            name="Status",
-            variants={
+        typ, typedef = enum_type(
+            "Status",
+            {
                 "Done": {},
                 "Running": {"progress": IntType()},
             },
         )
-        result = _parse_typed(codec, '{"$case": "Running", "progress": 50}', typ, strict_json=False)
+        result = _parse_typed(
+            codec,
+            '{"$case": "Running", "progress": 50}',
+            typ,
+            strict_json=False,
+            table=type_table_for(typedef),
+        )
         assert result.ok is True
         assert isinstance(result.value, EnumValue)
         assert result.value.variant == "Running"
@@ -1523,20 +1536,26 @@ class TestCaseDispatch:
 
     def test_bad_case_fails(self) -> None:
         codec = JsonCodec()
-        typ = EnumType(name="Status", variants={"Done": {}})
-        result = _parse_typed(codec, '{"$case": "Exploded"}', typ, strict_json=False)
+        typ, typedef = enum_type("Status", {"Done": {}})
+        result = _parse_typed(
+            codec, '{"$case": "Exploded"}', typ, strict_json=False, table=type_table_for(typedef)
+        )
         assert result.ok is False
 
     def test_missing_case_tag_fails(self) -> None:
         codec = JsonCodec()
-        typ = EnumType(name="Status", variants={"Done": {}})
-        result = _parse_typed(codec, '{"done": true}', typ, strict_json=False)
+        typ, typedef = enum_type("Status", {"Done": {}})
+        result = _parse_typed(
+            codec, '{"done": true}', typ, strict_json=False, table=type_table_for(typedef)
+        )
         assert result.ok is False
 
     def test_nullary_enum_no_extra_fields(self) -> None:
         codec = JsonCodec()
-        typ = EnumType(name="Status", variants={"Done": {}})
-        result = _parse_typed(codec, '{"$case": "Done"}', typ, strict_json=False)
+        typ, typedef = enum_type("Status", {"Done": {}})
+        result = _parse_typed(
+            codec, '{"$case": "Done"}', typ, strict_json=False, table=type_table_for(typedef)
+        )
         assert result.ok is True
         assert isinstance(result.value, EnumValue)
         assert result.value.fields == {}
@@ -1609,8 +1628,10 @@ issue
     def test_enum_param_parsed_from_json_string(self) -> None:
         """Enum can be parsed via JsonCodec from a JSON string."""
         codec = JsonCodec()
-        typ = EnumType(name="Status", variants={"Done": {}, "Pending": {}})
-        result = _parse_typed(codec, '{"$case": "Done"}', typ, strict_json=False)
+        typ, typedef = enum_type("Status", {"Done": {}, "Pending": {}})
+        result = _parse_typed(
+            codec, '{"$case": "Done"}', typ, strict_json=False, table=type_table_for(typedef)
+        )
         assert result.ok is True
         assert isinstance(result.value, EnumValue)
         assert result.value.variant == "Done"
@@ -1628,9 +1649,7 @@ issue
         from agm.agl.runtime.params import convert_param_value
         from agm.agl.semantics.values import IntValue, ListValue
 
-        result = convert_param_value(
-            "xs", [1, 2, 3], ListType(elem=IntType()), type_table_for()
-        )
+        result = convert_param_value("xs", [1, 2, 3], ListType(elem=IntType()), type_table_for())
         assert isinstance(result, ListValue)
         assert result.elements == (IntValue(1), IntValue(2), IntValue(3))
 
@@ -1646,14 +1665,14 @@ issue
         from agm.agl.runtime.params import convert_param_value
 
         with pytest.raises(ValueError, match="could not parse"):
-            issue_type = RecordType(
-                name="Issue", fields={"title": TextType(), "severity": IntType()}
+            issue_type, issue_def = record_type(
+                "Issue", {"title": TextType(), "severity": IntType()}
             )
             convert_param_value(
                 "issue",
                 '{"title": "Bug"}',  # missing severity
                 issue_type,
-                type_table_for(issue_type),
+                type_table_for(issue_def),
             )
 
     def test_unsupported_type_in_convert_param_value_raises(self) -> None:
@@ -1674,14 +1693,14 @@ issue
         from agm.agl.runtime.params import convert_param_value
 
         with pytest.raises(ValueError, match="JSON parse error"):
-            issue_type = RecordType(
-                name="Issue", fields={"title": TextType(), "severity": IntType()}
+            issue_type, issue_def = record_type(
+                "Issue", {"title": TextType(), "severity": IntType()}
             )
             convert_param_value(
                 "issue",
                 '{"title": "Bug", "severity": 5,}',  # trailing comma typo
                 issue_type,
-                type_table_for(issue_type),
+                type_table_for(issue_def),
             )
 
     def test_structured_param_rejects_fenced_json(self) -> None:
@@ -1937,7 +1956,7 @@ class TestFencedMalformedJson:
 
     def test_fenced_trailing_comma_repaired(self) -> None:
         codec = JsonCodec()
-        raw = "```json\n{\"a\": 1,}\n```"
+        raw = '```json\n{"a": 1,}\n```'
         result = _parse_typed(codec, raw, JsonType(), strict_json=False)
         assert result.ok is True
 
@@ -2015,33 +2034,45 @@ class TestValidationMappingCoverage:
 
     def test_enum_two_field_variant_reports_first_missing(self) -> None:
         codec = JsonCodec()
-        typ = EnumType(name="E", variants={"V": {"a": IntType(), "b": IntType()}})
+        typ, typedef = enum_type("E", {"V": {"a": IntType(), "b": IntType()}})
         # "a" present, "b" missing → loop skips a, reports b.
-        result = _parse_typed(codec, '{"$case": "V", "a": 1}', typ, strict_json=False)
+        result = _parse_typed(
+            codec, '{"$case": "V", "a": 1}', typ, strict_json=False, table=type_table_for(typedef)
+        )
         assert result.ok is False
         assert result.errors[0].category == "missing_field"
         assert result.errors[0].field == "b"
 
     def test_enum_non_object_instance_is_bad_case(self) -> None:
         codec = JsonCodec()
-        typ = EnumType(name="E", variants={"A": {}})
-        result = _parse_typed(codec, "42", typ, strict_json=False)
+        typ, typedef = enum_type("E", {"A": {}})
+        result = _parse_typed(codec, "42", typ, strict_json=False, table=type_table_for(typedef))
         assert result.ok is False
         assert result.errors[0].category == "bad_case"
 
     def test_list_nested_enum_bad_case(self) -> None:
         codec = JsonCodec()
-        enum = EnumType(name="E", variants={"A": {}, "B": {"x": IntType()}})
-        result = _parse_typed(codec, '[{"$case": "Z"}]', ListType(elem=enum), strict_json=False)
+        enum, enum_def = enum_type("E", {"A": {}, "B": {"x": IntType()}})
+        result = _parse_typed(
+            codec,
+            '[{"$case": "Z"}]',
+            ListType(elem=enum),
+            strict_json=False,
+            table=type_table_for(enum_def),
+        )
         assert result.ok is False
         assert result.errors[0].category == "bad_case"
         assert result.errors[0].path == "$[0]"
 
     def test_dict_nested_enum_bad_case(self) -> None:
         codec = JsonCodec()
-        enum = EnumType(name="E", variants={"A": {}, "B": {"x": IntType()}})
+        enum, enum_def = enum_type("E", {"A": {}, "B": {"x": IntType()}})
         result = _parse_typed(
-            codec, '{"k": {"$case": "Z"}}', DictType(value=enum), strict_json=False
+            codec,
+            '{"k": {"$case": "Z"}}',
+            DictType(value=enum),
+            strict_json=False,
+            table=type_table_for(enum_def),
         )
         assert result.ok is False
         assert result.errors[0].category == "bad_case"
@@ -2111,8 +2142,8 @@ class TestValidationMappingCoverage:
         """_find_enum_decode_at_path returns None when path names unknown field."""
         from agm.agl.runtime.codec import _find_enum_decode_at_path
 
-        rec = RecordType(name="R", fields={"a": IntType()})
-        decode = build_decode_schema(rec, type_table_for(rec))
+        rec, rec_def = record_type("R", {"a": IntType()})
+        decode = build_decode_schema(rec, type_table_for(rec_def))
         assert _find_enum_decode_at_path(decode, ["missing"]) is None
 
     def test_find_enum_decode_at_path_scalar_with_remaining_path(self) -> None:
@@ -2161,7 +2192,7 @@ class TestMakeContractNoTypeEnv:
     def test_json_codec_make_contract_no_env(self) -> None:
         codec = JsonCodec()
         issue_type = _make_issue_type()
-        contract = codec.make_contract(issue_type, type_table_for(issue_type))
+        contract = codec.make_contract(issue_type, _DEFAULT_TABLE)
         assert contract.json_schema is not None
 
     def test_materialize_contract_no_longer_constructs_type_env(self) -> None:
@@ -2178,7 +2209,7 @@ class TestMakeContractNoTypeEnv:
         # If TypeEnvironment() were still constructed it would not fail, but we
         # verify the contract comes out correctly to confirm the wire-up works.
         contract = materialize_contract(
-            spec, {"json": JsonCodec(), "text": TextCodec()}, type_table_for(issue_type)
+            spec, {"json": JsonCodec(), "text": TextCodec()}, _DEFAULT_TABLE
         )
         assert contract.json_schema is not None
 
@@ -2196,7 +2227,7 @@ class TestSchemaPrecomputedInParse:
     def test_parse_with_precomputed_schema_succeeds(self) -> None:
         codec = JsonCodec()
         typ = _make_issue_type()
-        table = type_table_for(typ)
+        table = _DEFAULT_TABLE
         schema = derive_schema(typ, table)
         decode = build_decode_schema(typ, table)
         raw = '{"title": "Bug", "severity": 5, "description": "A bug"}'
@@ -2206,7 +2237,7 @@ class TestSchemaPrecomputedInParse:
     def test_parse_with_precomputed_schema_validation_failure(self) -> None:
         codec = JsonCodec()
         typ = _make_issue_type()
-        table = type_table_for(typ)
+        table = _DEFAULT_TABLE
         schema = derive_schema(typ, table)
         decode = build_decode_schema(typ, table)
         # Missing required fields → schema validation fails even with a precomputed schema.
@@ -2222,8 +2253,8 @@ class TestSchemaPrecomputedInParse:
         identical parse outcome (ok/value/errors).
         """
         codec = JsonCodec()
-        typ = RecordType(name="Issue", fields={"title": TextType(), "severity": IntType()})
-        table = type_table_for(typ)
+        typ, typedef = record_type("Issue", {"title": TextType(), "severity": IntType()})
+        table = type_table_for(typedef)
         contract_schema = codec.make_contract(typ, table).json_schema
         assert isinstance(contract_schema, dict)
         fresh_schema = derive_schema(typ, table)
@@ -2253,8 +2284,8 @@ class TestSchemaPrecomputedInParse:
         straight through rather than re-deriving them.
         """
         codec = JsonCodec()
-        typ = RecordType(name="Issue", fields={"title": TextType(), "severity": IntType()})
-        contract = codec.make_contract(typ, type_table_for(typ))
+        typ, typedef = record_type("Issue", {"title": TextType(), "severity": IntType()})
+        contract = codec.make_contract(typ, type_table_for(typedef))
         schema = contract.json_schema
         decode = contract.decode
         assert isinstance(schema, dict)
@@ -2321,6 +2352,7 @@ class TestCodecSupportedKinds:
             RecordType,
             TextType,
         )
+
         kind_to_type: dict[str, Type] = {
             "text": TextType(),
             "int": IntType(),
@@ -2329,8 +2361,8 @@ class TestCodecSupportedKinds:
             "json": JsonType(),
             "list": ListType(elem=TextType()),
             "dict": DictType(value=TextType()),
-            "record": RecordType(name="R", fields={}),
-            "enum": EnumType(name="E", variants={}),
+            "record": RecordType(name="R"),
+            "enum": EnumType(name="E"),
         }
         for codec in (TextCodec(), JsonCodec()):
             for kind in codec.supported_kinds:
@@ -2351,11 +2383,13 @@ class TestRegisterCodec:
     def _make_custom_codec(self) -> TextCodec:
         """A minimal custom codec (reuses TextCodec but with a different name for testing)."""
         import copy
+
         codec = copy.copy(TextCodec())
         return codec
 
     def test_register_codec_accepted(self, capsys: pytest.CaptureFixture[str]) -> None:
         from agm.agl.runtime.codec import TextCodec as TC
+
         rt = PipelineDriver(default_agent=lambda request: "response")
 
         class AltTextCodec(TC):
@@ -2444,12 +2478,14 @@ class TestRegisterCodec:
 
             def supports_type(self, t: Type) -> bool:
                 from agm.agl.semantics.types import TextType as TT
+
                 return isinstance(t, TT)
 
             def make_contract(
                 self, type_ref: Type, type_table: TypeTable | None = None
             ) -> "OutputContract":
                 from agm.agl.runtime.contract import OutputContract
+
                 return OutputContract(
                     target_type_label=repr(type_ref),
                     codec=self,
@@ -2467,6 +2503,7 @@ class TestRegisterCodec:
                 decode: DecodeSchema | None = None,
             ) -> "ParseResult":
                 from agm.agl.runtime.codec import ParseResult
+
                 # Distinctive transform proving THIS codec parsed the output.
                 return ParseResult.success(TextValue(f"PARSED::{raw}"))
 
@@ -2485,10 +2522,7 @@ class TestRegisterCodec:
         assert result.bindings["y"] == TextValue("PARSED::hello")
         # make_contract() ran: its format instructions reached the agent.
         assert received[0].output_contract is not None
-        assert (
-            received[0].output_contract.format_instructions
-            == "TAGCODEC-INSTRUCTIONS"
-        )
+        assert received[0].output_contract.format_instructions == "TAGCODEC-INSTRUCTIONS"
 
 
 class TestRuntimeBuildsCodecKinds:

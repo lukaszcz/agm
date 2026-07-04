@@ -28,7 +28,6 @@ from agm.agl.semantics.types import (
 )
 from agm.agl.syntax.nodes import ParamKind
 from agm.agl.typecheck import check
-from agm.agl.typecheck.builder import _type_shape_matches
 from agm.agl.typecheck.checker import (
     _builtin_function_signature,
     _builtin_function_signature_alternates,
@@ -134,31 +133,30 @@ def test_builtin_signature_helpers_cover_negative_paths() -> None:
     assert not _signature_matches(
         FunctionSignature(params=(_ps("value", IntType()),), result=TextType()),
         FunctionSignature(
-            params=(_ps("value", RecordType(name="R", fields={})),),
+            params=(_ps("value", RecordType(name="R")),),
             result=TextType(),
         ),
     )
     assert _signature_matches(
         FunctionSignature(
-            params=(_ps("value", RecordType(name="R", fields={})),),
+            params=(_ps("value", RecordType(name="R")),),
             result=TextType(),
         ),
         FunctionSignature(
-            params=(_ps("value", RecordType(name="R", fields={})),),
+            params=(_ps("value", RecordType(name="R")),),
             result=TextType(),
         ),
     )
     assert not _signature_matches(
         FunctionSignature(
-            params=(_ps("value", EnumType(name="Actual", variants={})),),
+            params=(_ps("value", EnumType(name="Actual")),),
             result=TextType(),
         ),
         FunctionSignature(
-            params=(_ps("value", EnumType(name="Expected", variants={})),),
+            params=(_ps("value", EnumType(name="Expected")),),
             result=TextType(),
         ),
     )
-    assert not _type_shape_matches(IntType(), TextType())
 
 
 def test_std_core_declares_every_public_builtin() -> None:
@@ -201,6 +199,20 @@ def test_unknown_builtin_type_is_rejected() -> None:
 def test_builtin_type_shape_must_match() -> None:
     with pytest.raises(AglTypeError, match="Builtin type 'ExecResult' has an invalid definition"):
         _check("builtin record ExecResult\n  stdout: text\n()\n")
+
+
+def test_builtin_exception_shape_must_match() -> None:
+    with pytest.raises(AglTypeError, match="Builtin type 'ExecError' has an invalid definition"):
+        _check(
+            "builtin\n"
+            "exception Exception\n"
+            "  message: text\n"
+            "  trace_id: text\n"
+            "builtin\n"
+            "exception ExecError extends Exception\n"
+            "  command: text\n"
+            "()\n"
+        )
 
 
 def test_exception_base_must_be_exception_type() -> None:

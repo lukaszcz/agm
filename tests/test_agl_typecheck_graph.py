@@ -45,9 +45,7 @@ _CAPS = HostCapabilities(
     supports_shell_exec=True,
     codec_kinds={
         "text": frozenset({"text"}),
-        "json": frozenset(
-            {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
-        ),
+        "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
     },
 )
 
@@ -130,7 +128,7 @@ def test_graph_func_signature_prepass_skips_inferred_return_type(tmp_path: Path)
 
 def test_module_id_on_record_type_default_entry_id() -> None:
     """RecordType('Foo', {}) has module_id == ENTRY_ID by default."""
-    rt = RecordType("Foo", {})
+    rt = RecordType("Foo")
     # RecordType exposes module_id.
     assert hasattr(rt, "module_id"), "RecordType must have a module_id field"
     assert rt.module_id == ENTRY_ID
@@ -143,7 +141,7 @@ def test_module_id_on_record_type_default_entry_id() -> None:
 
 def test_module_id_on_enum_type_default_entry_id() -> None:
     """EnumType('Color', {}) has module_id == ENTRY_ID by default."""
-    et = EnumType("Color", {})
+    et = EnumType("Color")
     assert hasattr(et, "module_id"), "EnumType must have a module_id field"
     assert et.module_id == ENTRY_ID
 
@@ -157,11 +155,9 @@ def test_distinct_module_qualified_type_identity() -> None:
     """RecordType('Color', {}, module_id=mid_foo) != RecordType('Color', {}, module_id=mid_bar)."""
     mid_foo = ModuleId.from_dotted("foo")
     mid_bar = ModuleId.from_dotted("bar")
-    rt_foo = RecordType("Color", {}, module_id=mid_foo)
-    rt_bar = RecordType("Color", {}, module_id=mid_bar)
-    assert rt_foo != rt_bar, (
-        "Same-name record types from different modules must be distinct types"
-    )
+    rt_foo = RecordType("Color", module_id=mid_foo)
+    rt_bar = RecordType("Color", module_id=mid_bar)
+    assert rt_foo != rt_bar, "Same-name record types from different modules must be distinct types"
 
 
 # ---------------------------------------------------------------------------
@@ -172,8 +168,8 @@ def test_distinct_module_qualified_type_identity() -> None:
 def test_same_module_same_type_identity() -> None:
     """Two RecordType instances with identical name+fields+module_id are equal."""
     mid = ModuleId.from_dotted("mylib")
-    rt1 = RecordType("Point", {"x": IntType(), "y": IntType()}, module_id=mid)
-    rt2 = RecordType("Point", {"x": IntType(), "y": IntType()}, module_id=mid)
+    rt1 = RecordType("Point", module_id=mid)
+    rt2 = RecordType("Point", module_id=mid)
     assert rt1 == rt2
 
 
@@ -209,22 +205,16 @@ def test_check_graph_basic(tmp_path: Path) -> None:
     """Entry imports mylib with a record; annotated let binding typechecks successfully."""
     modules = {
         "entry": (
-            "import mylib\n"
-            "def make() -> Point = mylib::makePoint()\n"
-            "let p: Point = make()\n"
-            "p"
+            "import mylib\ndef make() -> Point = mylib::makePoint()\nlet p: Point = make()\np"
         ),
         "mylib": (
-            "record Point\n"
-            "  x: int\n"
-            "  y: int\n"
-            "def makePoint() -> Point = Point(x = 0, y = 0)"
+            "record Point\n  x: int\n  y: int\ndef makePoint() -> Point = Point(x = 0, y = 0)"
         ),
     }
     cg = _check_graph(tmp_path, modules)
     assert ENTRY_ID in cg.modules
     mylib_id = ModuleId.from_dotted("mylib")
-    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Point", {}, module_id=mylib_id)
+    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Point", module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -244,18 +234,8 @@ def test_cross_module_type_not_assignable(tmp_path: Path) -> None:
             "let c = get_foo_color()\n"
             "expect_bar(c)"  # type mismatch: foo::Color ≠ bar::Color
         ),
-        "foo": (
-            "enum Color\n"
-            "  | Red\n"
-            "  | Blue\n"
-            "def makeColor() -> Color = Red"
-        ),
-        "bar": (
-            "enum Color\n"
-            "  | Red\n"
-            "  | Blue\n"
-            "def makeColor() -> Color = Red"
-        ),
+        "foo": ("enum Color\n  | Red\n  | Blue\ndef makeColor() -> Color = Red"),
+        "bar": ("enum Color\n  | Red\n  | Blue\ndef makeColor() -> Color = Red"),
     }
     with pytest.raises(AglTypeError):
         _check_graph(tmp_path, modules)
@@ -275,18 +255,13 @@ def test_qualified_type_ref_in_annotation(tmp_path: Path) -> None:
             "let p: mylib::Point = get()\n"
             "p"
         ),
-        "mylib": (
-            "record Point\n"
-            "  x: int\n"
-            "  y: int\n"
-            "def mkPoint() -> Point = Point(x = 1, y = 2)"
-        ),
+        "mylib": ("record Point\n  x: int\n  y: int\ndef mkPoint() -> Point = Point(x = 1, y = 2)"),
     }
     mylib_id = ModuleId.from_dotted("mylib")
     cg = _check_graph(tmp_path, modules)
     # Pin the specific binding type — not any(t == point_type) over all nodes,
     # which could pass spuriously via an intermediate call node of the same type.
-    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Point", {}, module_id=mylib_id)
+    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Point", module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -297,20 +272,12 @@ def test_qualified_type_ref_in_annotation(tmp_path: Path) -> None:
 def test_qualified_type_ref_in_constructor(tmp_path: Path) -> None:
     """'foo::Color.Red' constructor resolves through ImportEnv correctly."""
     modules = {
-        "entry": (
-            "import mylib qualified\n"
-            "let c: mylib::Color = mylib::Color.Red\n"
-            "c"
-        ),
-        "mylib": (
-            "enum Color\n"
-            "  | Red\n"
-            "  | Blue"
-        ),
+        "entry": ("import mylib qualified\nlet c: mylib::Color = mylib::Color.Red\nc"),
+        "mylib": ("enum Color\n  | Red\n  | Blue"),
     }
     mylib_id = ModuleId.from_dotted("mylib")
     cg = _check_graph(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "c") == EnumType("Color", {}, module_id=mylib_id)
+    assert _binding_value_type(cg, ENTRY_ID, "c") == EnumType("Color", module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -323,19 +290,15 @@ def test_qualified_type_ref_in_cast(tmp_path: Path) -> None:
     modules = {
         "entry": (
             "import mylib qualified\n"
-            "let raw: json = {\"x\": 1, \"y\": 2}\n"
+            'let raw: json = {"x": 1, "y": 2}\n'
             "let p: mylib::Point = raw as mylib::Point\n"
             "p"
         ),
-        "mylib": (
-            "record Point\n"
-            "  x: int\n"
-            "  y: int"
-        ),
+        "mylib": ("record Point\n  x: int\n  y: int"),
     }
     mylib_id = ModuleId.from_dotted("mylib")
     cg = _check_graph(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Point", {}, module_id=mylib_id)
+    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Point", module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -349,20 +312,16 @@ def test_qualified_type_ref_in_constructor_pattern(tmp_path: Path) -> None:
         "entry": (
             "import mylib qualified\n"
             "def describe(c: mylib::Color) -> text =\n"
-            "  case c of | mylib::Color.Red => \"red\" | mylib::Color.Blue => \"blue\"\n"
+            '  case c of | mylib::Color.Red => "red" | mylib::Color.Blue => "blue"\n'
             "let c = mylib::Color.Red\n"
             "describe(c)"
         ),
-        "mylib": (
-            "enum Color\n"
-            "  | Red\n"
-            "  | Blue"
-        ),
+        "mylib": ("enum Color\n  | Red\n  | Blue"),
     }
     mylib_id = ModuleId.from_dotted("mylib")
     cg = _check_graph(tmp_path, modules)
     # Pin c's binding type as mylib::Color — not an any(TextType) scan over "red"/"blue".
-    assert _binding_value_type(cg, ENTRY_ID, "c") == EnumType("Color", {}, module_id=mylib_id)
+    assert _binding_value_type(cg, ENTRY_ID, "c") == EnumType("Color", module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -373,22 +332,12 @@ def test_qualified_type_ref_in_constructor_pattern(tmp_path: Path) -> None:
 def test_unqualified_open_import_type(tmp_path: Path) -> None:
     """Open import brings record type name into scope for unqualified use."""
     modules = {
-        "entry": (
-            "import mylib\n"
-            "def mkp() -> Point = mkPoint()\n"
-            "let p: Point = mkp()\n"
-            "p"
-        ),
-        "mylib": (
-            "record Point\n"
-            "  x: int\n"
-            "  y: int\n"
-            "def mkPoint() -> Point = Point(x = 0, y = 0)"
-        ),
+        "entry": ("import mylib\ndef mkp() -> Point = mkPoint()\nlet p: Point = mkp()\np"),
+        "mylib": ("record Point\n  x: int\n  y: int\ndef mkPoint() -> Point = Point(x = 0, y = 0)"),
     }
     mylib_id = ModuleId.from_dotted("mylib")
     cg = _check_graph(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Point", {}, module_id=mylib_id)
+    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Point", module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -406,16 +355,8 @@ def test_unqualified_type_clash_on_use(tmp_path: Path) -> None:
             "let c: Color = libA::Color.Red\n"
             "c"
         ),
-        "libA": (
-            "enum Color\n"
-            "  | Red\n"
-            "  | Blue"
-        ),
-        "libB": (
-            "enum Color\n"
-            "  | Green\n"
-            "  | Yellow"
-        ),
+        "libA": ("enum Color\n  | Red\n  | Blue"),
+        "libB": ("enum Color\n  | Green\n  | Yellow"),
     }
     with pytest.raises(AglTypeError, match="Ambiguous type"):
         _check_graph(tmp_path, modules)
@@ -462,11 +403,7 @@ def test_private_type_not_importable(tmp_path: Path) -> None:
             "let h: Hidden = mylib::mkHidden()\n"
             "h"
         ),
-        "mylib": (
-            "private record Hidden\n"
-            "  x: int\n"
-            "def mkHidden() -> Hidden = Hidden(x = 1)"
-        ),
+        "mylib": ("private record Hidden\n  x: int\ndef mkHidden() -> Hidden = Hidden(x = 1)"),
     }
     with pytest.raises(AglTypeError, match="Unknown type"):
         _check_graph(tmp_path, modules)
@@ -487,18 +424,9 @@ def test_whole_graph_type_pre_pass_with_cycles(tmp_path: Path) -> None:
             "let fb = modB::wrapA(modA::Foo(x = 1))\n"
             "()"
         ),
-        "modA": (
-            "import modB\n"
-            "record Foo\n"
-            "  x: int\n"
-            "def wrapB(c: modB::Color) -> text = \"ok\""
-        ),
+        "modA": ('import modB\nrecord Foo\n  x: int\ndef wrapB(c: modB::Color) -> text = "ok"'),
         "modB": (
-            "import modA\n"
-            "enum Color\n"
-            "  | Red\n"
-            "  | Blue\n"
-            "def wrapA(f: modA::Foo) -> text = \"ok\""
+            'import modA\nenum Color\n  | Red\n  | Blue\ndef wrapA(f: modA::Foo) -> text = "ok"'
         ),
     }
     cg = _check_graph(tmp_path, modules)
@@ -513,23 +441,16 @@ def test_whole_graph_type_pre_pass_with_cycles(tmp_path: Path) -> None:
 def test_imported_exception_base_is_built_before_child(tmp_path: Path) -> None:
     """A child exception inherits fields from an open-imported base exception."""
     modules = {
-        "entry": (
-            "import a\n"
-            "let value = a::make()\n"
-            "value"
-        ),
+        "entry": ("import a\nlet value = a::make()\nvalue"),
         "a": (
             "import z\n"
             "exception Child extends Base\n"
             "  code: int\n"
             "def make() -> text =\n"
-            "  let err = Child(message = \"m\", detail = \"d\", code = 1)\n"
+            '  let err = Child(message = "m", detail = "d", code = 1)\n'
             "  err.detail"
         ),
-        "z": (
-            "exception Base extends Exception\n"
-            "  detail: text"
-        ),
+        "z": ("exception Base extends Exception\n  detail: text"),
     }
     cg = _check_graph(tmp_path, modules)
     child_type = cg.graph_type_table[(ModuleId.from_dotted("a"), "Child")]
@@ -542,11 +463,7 @@ def test_imported_exception_base_ignores_non_type_export(tmp_path: Path) -> None
     """A same-named imported value is not treated as an exception-base dependency."""
     modules = {
         "entry": "import a\n()",
-        "a": (
-            "import z\n"
-            "exception Child extends Base\n"
-            "  code: int"
-        ),
+        "a": ("import z\nexception Child extends Base\n  code: int"),
         "z": "def Base() -> int = 1",
     }
     with pytest.raises(AglTypeError, match="extends unknown exception 'Base'"):
@@ -561,17 +478,8 @@ def test_imported_exception_base_ignores_non_type_export(tmp_path: Path) -> None
 def test_enum_variant_qualification(tmp_path: Path) -> None:
     """'mylib::Color.Red' where Color is an enum in module mylib resolves correctly."""
     modules = {
-        "entry": (
-            "import mylib qualified\n"
-            "let c: mylib::Color = mylib::Color.Red\n"
-            "c"
-        ),
-        "mylib": (
-            "enum Color\n"
-            "  | Red\n"
-            "  | Green\n"
-            "  | Blue"
-        ),
+        "entry": ("import mylib qualified\nlet c: mylib::Color = mylib::Color.Red\nc"),
+        "mylib": ("enum Color\n  | Red\n  | Green\n  | Blue"),
     }
     cg = _check_graph(tmp_path, modules)
     mylib_id = ModuleId.from_dotted("mylib")
@@ -579,7 +487,7 @@ def test_enum_variant_qualification(tmp_path: Path) -> None:
     color_type = cg.graph_type_table[(mylib_id, "Color")]
     assert isinstance(color_type, EnumType)
     assert color_type.module_id == mylib_id
-    assert _binding_value_type(cg, ENTRY_ID, "c") == EnumType("Color", {}, module_id=mylib_id)
+    assert _binding_value_type(cg, ENTRY_ID, "c") == EnumType("Color", module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -590,11 +498,7 @@ def test_enum_variant_qualification(tmp_path: Path) -> None:
 def test_self_ref_type(tmp_path: Path) -> None:
     """'::Point' in a module references its own module's Point record."""
     modules = {
-        "entry": (
-            "import mylib\n"
-            "let p: mylib::Point = mylib::origin()\n"
-            "p"
-        ),
+        "entry": ("import mylib\nlet p: mylib::Point = mylib::origin()\np"),
         "mylib": (
             "record Point\n"
             "  x: int\n"
@@ -605,7 +509,7 @@ def test_self_ref_type(tmp_path: Path) -> None:
     }
     mylib_id = ModuleId.from_dotted("mylib")
     cg = _check_graph(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Point", {}, module_id=mylib_id)
+    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Point", module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -621,21 +525,14 @@ def test_agent_typed_arg_in_imported_function(tmp_path: Path) -> None:
         supports_shell_exec=True,
         codec_kinds={
             "text": frozenset({"text"}),
-            "json": frozenset(
-                {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
-            ),
+            "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
         },
     )
     modules = {
         "entry": (
-            "import mylib\n"
-            "agent bot = \"claude\"\n"
-            "let result: text = mylib::greet(bot)\n"
-            "result"
+            'import mylib\nagent bot = "claude"\nlet result: text = mylib::greet(bot)\nresult'
         ),
-        "mylib": (
-            "def greet(a: agent) -> text = \"hello\""
-        ),
+        "mylib": ('def greet(a: agent) -> text = "hello"'),
     }
     mg = _make_graph_from_files(tmp_path, modules)
     rg = resolve_graph(mg)
@@ -660,11 +557,7 @@ def test_unqualified_constructor_from_open_import(tmp_path: Path) -> None:
             "let c: Color = Color.Red\n"
             "c"
         ),
-        "mylib": (
-            "enum Color\n"
-            "  | Red\n"
-            "  | Blue"
-        ),
+        "mylib": ("enum Color\n  | Red\n  | Blue"),
     }
     mylib_id = ModuleId.from_dotted("mylib")
     cg = _check_graph(tmp_path, modules)
@@ -673,7 +566,7 @@ def test_unqualified_constructor_from_open_import(tmp_path: Path) -> None:
     assert isinstance(color_type, EnumType)
     assert color_type.module_id == mylib_id
     # Pin c's binding type: must be mylib::Color, not ENTRY_ID::Color
-    assert _binding_value_type(cg, ENTRY_ID, "c") == EnumType("Color", {}, module_id=mylib_id)
+    assert _binding_value_type(cg, ENTRY_ID, "c") == EnumType("Color", module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -684,18 +577,8 @@ def test_unqualified_constructor_from_open_import(tmp_path: Path) -> None:
 def test_graph_type_table_populated(tmp_path: Path) -> None:
     """graph_type_table in CheckedModuleGraph contains all public types stamped with module_id."""
     modules = {
-        "entry": (
-            "import mylib\n"
-            "()"
-        ),
-        "mylib": (
-            "record Point\n"
-            "  x: int\n"
-            "  y: int\n"
-            "enum Direction\n"
-            "  | North\n"
-            "  | South"
-        ),
+        "entry": ("import mylib\n()"),
+        "mylib": ("record Point\n  x: int\n  y: int\nenum Direction\n  | North\n  | South"),
     }
     cg = _check_graph(tmp_path, modules)
     mylib_id = ModuleId.from_dotted("mylib")
@@ -719,15 +602,8 @@ def test_graph_type_table_populated(tmp_path: Path) -> None:
 def test_checked_module_shape(tmp_path: Path) -> None:
     """CheckedModule has node_types, contract_specs, warnings, function_signatures."""
     modules = {
-        "entry": (
-            "import mylib\n"
-            "def foo() -> int = mylib::getValue()\n"
-            "let x = foo()\n"
-            "x"
-        ),
-        "mylib": (
-            "def getValue() -> int = 42"
-        ),
+        "entry": ("import mylib\ndef foo() -> int = mylib::getValue()\nlet x = foo()\nx"),
+        "mylib": ("def getValue() -> int = 42"),
     }
     cg = _check_graph(tmp_path, modules)
     entry_mod = cg.modules[ENTRY_ID]
@@ -758,11 +634,7 @@ def test_checked_module_graph_entry_id(tmp_path: Path) -> None:
 def test_type_alias_in_module_graph(tmp_path: Path) -> None:
     """A type alias in a library module is stored in the graph type table."""
     modules = {
-        "entry": (
-            "import mylib\n"
-            "let n: mylib::Number = 42\n"
-            "n"
-        ),
+        "entry": ("import mylib\nlet n: mylib::Number = 42\nn"),
         "mylib": "type Number = int",
     }
     cg = _check_graph(tmp_path, modules)
@@ -782,11 +654,7 @@ def test_type_alias_in_module_graph(tmp_path: Path) -> None:
 def test_qualified_ref_to_function_is_type_error(tmp_path: Path) -> None:
     """'mylib::getValue' in a type annotation position → type error (not a type)."""
     modules = {
-        "entry": (
-            "import mylib qualified\n"
-            "let n: mylib::getValue = 1\n"
-            "n"
-        ),
+        "entry": ("import mylib qualified\nlet n: mylib::getValue = 1\nn"),
         "mylib": "def getValue() -> int = 42",
     }
     with pytest.raises(AglTypeError, match="does not name a type"):
@@ -801,16 +669,8 @@ def test_qualified_ref_to_function_is_type_error(tmp_path: Path) -> None:
 def test_unknown_module_qualifier_error(tmp_path: Path) -> None:
     """Reference to an un-imported module qualifier → type error."""
     modules = {
-        "entry": (
-            "import mylib\n"
-            "let n: other::Point = mylib::mkPoint()\n"
-            "n"
-        ),
-        "mylib": (
-            "record Point\n"
-            "  x: int\n"
-            "def mkPoint() -> Point = Point(x = 1)"
-        ),
+        "entry": ("import mylib\nlet n: other::Point = mylib::mkPoint()\nn"),
+        "mylib": ("record Point\n  x: int\ndef mkPoint() -> Point = Point(x = 1)"),
     }
     with pytest.raises(AglTypeError, match="Unknown module qualifier"):
         _check_graph(tmp_path, modules)
@@ -824,15 +684,8 @@ def test_unknown_module_qualifier_error(tmp_path: Path) -> None:
 def test_module_qualified_constructor_not_enum_error(tmp_path: Path) -> None:
     """'mylib::Point.Red' where Point is a record, not an enum → type error."""
     modules = {
-        "entry": (
-            "import mylib qualified\n"
-            "let p = mylib::Point.Red\n"
-            "p"
-        ),
-        "mylib": (
-            "record Point\n"
-            "  x: int"
-        ),
+        "entry": ("import mylib qualified\nlet p = mylib::Point.Red\np"),
+        "mylib": ("record Point\n  x: int"),
     }
     with pytest.raises(AglTypeError, match="not a known enum type"):
         _check_graph(tmp_path, modules)
@@ -846,16 +699,8 @@ def test_module_qualified_constructor_not_enum_error(tmp_path: Path) -> None:
 def test_module_qualified_constructor_missing_variant_error(tmp_path: Path) -> None:
     """'mylib::Color.Purple' where Purple doesn't exist → type error."""
     modules = {
-        "entry": (
-            "import mylib qualified\n"
-            "let c = mylib::Color.Purple\n"
-            "c"
-        ),
-        "mylib": (
-            "enum Color\n"
-            "  | Red\n"
-            "  | Blue"
-        ),
+        "entry": ("import mylib qualified\nlet c = mylib::Color.Purple\nc"),
+        "mylib": ("enum Color\n  | Red\n  | Blue"),
     }
     with pytest.raises(AglTypeError, match="does not exist in enum"):
         _check_graph(tmp_path, modules)
@@ -869,20 +714,12 @@ def test_module_qualified_constructor_missing_variant_error(tmp_path: Path) -> N
 def test_module_qualified_record_constructor(tmp_path: Path) -> None:
     """'mylib::Point(x = 1, y = 2)' constructs a record from an imported module."""
     modules = {
-        "entry": (
-            "import mylib qualified\n"
-            "let p: mylib::Point = mylib::Point(x = 1, y = 2)\n"
-            "p"
-        ),
-        "mylib": (
-            "record Point\n"
-            "  x: int\n"
-            "  y: int"
-        ),
+        "entry": ("import mylib qualified\nlet p: mylib::Point = mylib::Point(x = 1, y = 2)\np"),
+        "mylib": ("record Point\n  x: int\n  y: int"),
     }
     mylib_id = ModuleId.from_dotted("mylib")
     cg = _check_graph(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Point", {}, module_id=mylib_id)
+    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Point", module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -893,21 +730,14 @@ def test_module_qualified_record_constructor(tmp_path: Path) -> None:
 def test_self_ref_type_graph_mode(tmp_path: Path) -> None:
     """'::Point' self-reference resolves to the current module's own Point type."""
     modules = {
-        "entry": (
-            "import mylib\n"
-            "let p: mylib::Point = mylib::origin()\n"
-            "p"
-        ),
+        "entry": ("import mylib\nlet p: mylib::Point = mylib::origin()\np"),
         "mylib": (
-            "record Point\n"
-            "  x: int\n"
-            "  y: int\n"
-            "def origin() -> ::Point = Point(x = 0, y = 0)"
+            "record Point\n  x: int\n  y: int\ndef origin() -> ::Point = Point(x = 0, y = 0)"
         ),
     }
     mylib_id = ModuleId.from_dotted("mylib")
     cg = _check_graph(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Point", {}, module_id=mylib_id)
+    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Point", module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -922,20 +752,12 @@ def test_module_qualified_variant_qualifier_mismatch(tmp_path: Path) -> None:
             "import libA\n"
             "import libB\n"
             "def check(c: libB::Color) -> text =\n"
-            "  case c of | libA::Color.Red => \"red\" | _ => \"other\"\n"
+            '  case c of | libA::Color.Red => "red" | _ => "other"\n'
             "let c = libB::Color.Red\n"
             "check(c)"
         ),
-        "libA": (
-            "enum Color\n"
-            "  | Red\n"
-            "  | Blue"
-        ),
-        "libB": (
-            "enum Color\n"
-            "  | Red\n"
-            "  | Blue"
-        ),
+        "libA": ("enum Color\n  | Red\n  | Blue"),
+        "libB": ("enum Color\n  | Red\n  | Blue"),
     }
     with pytest.raises(AglTypeError, match="resolves to enum"):
         _check_graph(tmp_path, modules)
@@ -977,17 +799,11 @@ def test_module_qualified_variant_qualifier_is_not_enum(tmp_path: Path) -> None:
         "entry": (
             "import mylib\n"
             "def check(c: mylib::Color) -> text =\n"
-            "  case c of | mylib::Point.Red => \"red\" | _ => \"other\"\n"
+            '  case c of | mylib::Point.Red => "red" | _ => "other"\n'
             "let c = mylib::Color.Red\n"
             "check(c)"
         ),
-        "mylib": (
-            "record Point\n"
-            "  x: int\n"
-            "enum Color\n"
-            "  | Red\n"
-            "  | Blue"
-        ),
+        "mylib": ("record Point\n  x: int\nenum Color\n  | Red\n  | Blue"),
     }
     with pytest.raises(AglTypeError, match="not a known enum type"):
         _check_graph(tmp_path, modules)
@@ -1004,15 +820,11 @@ def test_module_qualified_variant_unknown_enum_in_pattern(tmp_path: Path) -> Non
         "entry": (
             "import mylib\n"
             "def check(c: mylib::Color) -> text =\n"
-            "  case c of | mylib::Unknown.Red => \"red\" | _ => \"other\"\n"
+            '  case c of | mylib::Unknown.Red => "red" | _ => "other"\n'
             "let c = mylib::Color.Red\n"
             "check(c)"
         ),
-        "mylib": (
-            "enum Color\n"
-            "  | Red\n"
-            "  | Blue"
-        ),
+        "mylib": ("enum Color\n  | Red\n  | Blue"),
     }
     with pytest.raises(AglTypeError, match="not a known enum type"):
         _check_graph(tmp_path, modules)
@@ -1026,16 +838,8 @@ def test_module_qualified_variant_unknown_enum_in_pattern(tmp_path: Path) -> Non
 def test_module_qualified_enum_as_constructor_error(tmp_path: Path) -> None:
     """'mylib::Color' used as constructor (without .Variant) → type error."""
     modules = {
-        "entry": (
-            "import mylib qualified\n"
-            "let c = mylib::Color\n"
-            "c"
-        ),
-        "mylib": (
-            "enum Color\n"
-            "  | Red\n"
-            "  | Blue"
-        ),
+        "entry": ("import mylib qualified\nlet c = mylib::Color\nc"),
+        "mylib": ("enum Color\n  | Red\n  | Blue"),
     }
     with pytest.raises(AglTypeError, match="is a type name, not a value"):
         _check_graph(tmp_path, modules)
@@ -1049,16 +853,8 @@ def test_module_qualified_enum_as_constructor_error(tmp_path: Path) -> None:
 def test_module_qualified_unknown_constructor_error(tmp_path: Path) -> None:
     """'mylib::Unknown' when Unknown doesn't exist in mylib → type error."""
     modules = {
-        "entry": (
-            "import mylib qualified\n"
-            "let c = mylib::Unknown\n"
-            "c"
-        ),
-        "mylib": (
-            "enum Color\n"
-            "  | Red\n"
-            "  | Blue"
-        ),
+        "entry": ("import mylib qualified\nlet c = mylib::Unknown\nc"),
+        "mylib": ("enum Color\n  | Red\n  | Blue"),
     }
     with pytest.raises(AglScopeError, match="not in the imported set"):
         _check_graph(tmp_path, modules)
@@ -1078,15 +874,11 @@ def test_open_imported_enum_variant_unqualified_bare(tmp_path: Path) -> None:
             "let c = Red\n"
             "c"
         ),
-        "mylib": (
-            "enum Color\n"
-            "  | Red\n"
-            "  | Blue"
-        ),
+        "mylib": ("enum Color\n  | Red\n  | Blue"),
     }
     mylib_id = ModuleId.from_dotted("mylib")
     cg = _check_graph(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "c") == EnumType("Color", {}, module_id=mylib_id)
+    assert _binding_value_type(cg, ENTRY_ID, "c") == EnumType("Color", module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1097,15 +889,11 @@ def test_open_imported_enum_variant_unqualified_bare(tmp_path: Path) -> None:
 def test_self_ref_type_builtin_exception_fallback(tmp_path: Path) -> None:
     """'::Abort' self-reference in a module falls back to built-in exception type."""
     modules = {
-        "entry": (
-            "import mylib\n"
-            "let e = mylib::boom()\n"
-            "e"
-        ),
+        "entry": ("import mylib\nlet e = mylib::boom()\ne"),
         "mylib": (
             # ::Abort references the built-in Abort exception type (not in graph table)
             # This exercises the fallback at env.py line 509
-            "def boom() -> ::Abort = raise Abort(message = \"oops\")"
+            'def boom() -> ::Abort = raise Abort(message = "oops")'
         ),
     }
     cg = _check_graph(tmp_path, modules)
@@ -1122,16 +910,8 @@ def test_self_ref_type_builtin_exception_fallback(tmp_path: Path) -> None:
 def test_qualified_type_not_in_s_error(tmp_path: Path) -> None:
     """Using mylib::Secret when Secret is private in mylib → type error."""
     modules = {
-        "entry": (
-            "import mylib qualified using pub\n"
-            "let n: mylib::Secret = mylib::pub()\n"
-            "n"
-        ),
-        "mylib": (
-            "private record Secret\n"
-            "  x: int\n"
-            "def pub() -> int = 1"
-        ),
+        "entry": ("import mylib qualified using pub\nlet n: mylib::Secret = mylib::pub()\nn"),
+        "mylib": ("private record Secret\n  x: int\ndef pub() -> int = 1"),
     }
     with pytest.raises(AglTypeError, match="not accessible via qualifier"):
         _check_graph(tmp_path, modules)
@@ -1145,22 +925,9 @@ def test_qualified_type_not_in_s_error(tmp_path: Path) -> None:
 def test_ambiguous_open_import_type_error(tmp_path: Path) -> None:
     """Both libA and libB export 'Color': using 'Color' unqualified is ambiguous → error."""
     modules = {
-        "entry": (
-            "import libA\n"
-            "import libB\n"
-            "let c: Color = libA::Color.Red\n"
-            "c"
-        ),
-        "libA": (
-            "enum Color\n"
-            "  | Red\n"
-            "  | Blue"
-        ),
-        "libB": (
-            "enum Color\n"
-            "  | Green\n"
-            "  | Yellow"
-        ),
+        "entry": ("import libA\nimport libB\nlet c: Color = libA::Color.Red\nc"),
+        "libA": ("enum Color\n  | Red\n  | Blue"),
+        "libB": ("enum Color\n  | Green\n  | Yellow"),
     }
     with pytest.raises(AglTypeError, match="Ambiguous type"):
         _check_graph(tmp_path, modules)
@@ -1181,17 +948,11 @@ def test_open_import_non_enum_type_skipped_in_variant_lookup(tmp_path: Path) -> 
             "let c = Red\n"
             "c"
         ),
-        "mylib": (
-            "record Point\n"
-            "  x: int\n"
-            "enum Color\n"
-            "  | Red\n"
-            "  | Blue"
-        ),
+        "mylib": ("record Point\n  x: int\nenum Color\n  | Red\n  | Blue"),
     }
     mylib_id = ModuleId.from_dotted("mylib")
     cg = _check_graph(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "c") == EnumType("Color", {}, module_id=mylib_id)
+    assert _binding_value_type(cg, ENTRY_ID, "c") == EnumType("Color", module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1206,20 +967,13 @@ def test_open_import_dedup_in_variant_lookup(tmp_path: Path) -> None:
             # Two import declarations expose (mylib, "Color") under two unqualified names:
             # "Color" (via using Color) and "C" (via using Color as C).
             # The seen-set dedup fires when the same type is open-imported under two names.
-            "import mylib using Color\n"
-            "import mylib using Color as C\n"
-            "let x: Color = Red\n"
-            "x"
+            "import mylib using Color\nimport mylib using Color as C\nlet x: Color = Red\nx"
         ),
-        "mylib": (
-            "enum Color\n"
-            "  | Red\n"
-            "  | Blue"
-        ),
+        "mylib": ("enum Color\n  | Red\n  | Blue"),
     }
     mylib_id = ModuleId.from_dotted("mylib")
     cg = _check_graph(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "x") == EnumType("Color", {}, module_id=mylib_id)
+    assert _binding_value_type(cg, ENTRY_ID, "x") == EnumType("Color", module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1244,40 +998,35 @@ def test_cross_module_field_type_single_direction(tmp_path: Path) -> None:
     and the whole program typechecks successfully.
     """
     modules = {
-        "entry": (
-            "import lib\n"
-            "let w: lib::Wrapper = lib::mk()\n"
-            "let inner = w.c\n"
-            "inner"
-        ),
+        "entry": ("import lib\nlet w: lib::Wrapper = lib::mk()\nlet inner = w.c\ninner"),
         "lib": (
             "import payload\n"
             "record Wrapper\n"
             "  c: payload::Data\n"
             "def mk() -> Wrapper = Wrapper(c = payload::Data(n = 1))"
         ),
-        "payload": (
-            "record Data\n"
-            "  n: int"
-        ),
+        "payload": ("record Data\n  n: int"),
     }
     cg = _check_graph(tmp_path, modules)
 
     payload_id = ModuleId.from_dotted("payload")
     lib_id = ModuleId.from_dotted("lib")
+    table = cg.modules[ENTRY_ID].type_env.type_table
 
     data_type = cg.graph_type_table[(payload_id, "Data")]
     assert isinstance(data_type, RecordType)
-    assert data_type.fields == {"n": IntType()}, (
-        f"payload::Data must have field 'n: int', got {data_type.fields}"
+    data_fields = table.record_fields(data_type)
+    assert data_fields == {"n": IntType()}, (
+        f"payload::Data must have field 'n: int', got {data_fields}"
     )
 
     wrapper_type = cg.graph_type_table[(lib_id, "Wrapper")]
     assert isinstance(wrapper_type, RecordType)
     # Wrapper.c must hold the CANONICAL (fully built) Data type, not an empty shell
-    assert wrapper_type.fields.get("c") == data_type, (
+    wrapper_fields = table.record_fields(wrapper_type)
+    assert wrapper_fields.get("c") == data_type, (
         f"lib::Wrapper.c field type must equal payload::Data: "
-        f"got {wrapper_type.fields.get('c')!r}, expected {data_type!r}"
+        f"got {wrapper_fields.get('c')!r}, expected {data_type!r}"
     )
 
 
@@ -1299,8 +1048,8 @@ def test_cross_module_field_type_mutual_import_cycle(tmp_path: Path) -> None:
             # Exercise round-trip field access and assignability
             "let foo: modA::Foo = modA::makeFoo()\n"
             "let bar: modB::Bar = modB::makeBar()\n"
-            "let c = foo.c\n"      # should have type modB::Color
-            "let f = bar.f\n"      # should have type modA::Foo
+            "let c = foo.c\n"  # should have type modB::Color
+            "let f = bar.f\n"  # should have type modA::Foo
             "()"
         ),
         "modA": (
@@ -1323,6 +1072,7 @@ def test_cross_module_field_type_mutual_import_cycle(tmp_path: Path) -> None:
 
     mod_a = ModuleId.from_dotted("modA")
     mod_b = ModuleId.from_dotted("modB")
+    table = cg.modules[ENTRY_ID].type_env.type_table
 
     foo_type = cg.graph_type_table[(mod_a, "Foo")]
     color_type = cg.graph_type_table[(mod_b, "Color")]
@@ -1333,14 +1083,15 @@ def test_cross_module_field_type_mutual_import_cycle(tmp_path: Path) -> None:
     assert isinstance(bar_type, RecordType)
 
     # modA::Foo.c must be the CANONICAL modB::Color (not an empty shell)
-    assert foo_type.fields.get("c") == color_type, (
+    foo_fields = table.record_fields(foo_type)
+    assert foo_fields.get("c") == color_type, (
         f"modA::Foo.c must equal modB::Color: "
-        f"got {foo_type.fields.get('c')!r}, expected {color_type!r}"
+        f"got {foo_fields.get('c')!r}, expected {color_type!r}"
     )
     # modB::Bar.f must be the CANONICAL modA::Foo (not an empty shell)
-    assert bar_type.fields.get("f") == foo_type, (
-        f"modB::Bar.f must equal modA::Foo: "
-        f"got {bar_type.fields.get('f')!r}, expected {foo_type!r}"
+    bar_fields = table.record_fields(bar_type)
+    assert bar_fields.get("f") == foo_type, (
+        f"modB::Bar.f must equal modA::Foo: got {bar_fields.get('f')!r}, expected {foo_type!r}"
     )
 
 
@@ -1365,24 +1116,22 @@ def test_cross_module_enum_variant_field_type(tmp_path: Path) -> None:
             "  | Some(value: payload::Data)\n"
             "def wrap(d: payload::Data) -> Envelope = Envelope.Some(value = d)"
         ),
-        "payload": (
-            "record Data\n"
-            "  n: int"
-        ),
+        "payload": ("record Data\n  n: int"),
     }
     cg = _check_graph(tmp_path, modules)
 
     payload_id = ModuleId.from_dotted("payload")
     carrier_id = ModuleId.from_dotted("carrier")
+    table = cg.modules[ENTRY_ID].type_env.type_table
 
     data_type = cg.graph_type_table[(payload_id, "Data")]
     envelope_type = cg.graph_type_table[(carrier_id, "Envelope")]
 
     assert isinstance(data_type, RecordType)
-    assert data_type.fields == {"n": IntType()}
+    assert table.record_fields(data_type) == {"n": IntType()}
 
     assert isinstance(envelope_type, EnumType)
-    some_fields = envelope_type.variants.get("Some", {})
+    some_fields = table.enum_variants(envelope_type).get("Some", {})
     assert some_fields.get("value") == data_type, (
         f"carrier::Envelope.Some.value must equal payload::Data: "
         f"got {some_fields.get('value')!r}, expected {data_type!r}"
@@ -1405,18 +1154,57 @@ def test_structural_type_cycle_across_modules_is_error(tmp_path: Path) -> None:
     from agm.agl.typecheck.env import AglTypeError as _AglTypeError
 
     modules = {
-        "entry": (
-            "import lib\n"
-            "()"
-        ),
+        "entry": ("import lib\n()"),
         "lib": (
             # Node is directly structurally recursive (Node.child: Node)
-            "record Node\n"
-            "  child: Node"
+            "record Node\n  child: Node"
         ),
     }
     with pytest.raises(_AglTypeError):
         _check_graph(tmp_path, modules)
+
+
+def test_cross_module_generic_argument_cycle_is_error(tmp_path: Path) -> None:
+    """A cross-module cycle through a generic type argument is rejected.
+
+    Neither ``lib1::A`` nor ``lib2::B`` is itself generic, but each applies
+    the generic ``lib1::Box`` to the other, forming a structural cycle
+    through the argument position across module boundaries.
+    """
+    from agm.agl.typecheck.env import AglTypeError as _AglTypeError
+
+    modules = {
+        "entry": ("import lib1\nimport lib2\n()"),
+        "lib1": (
+            "import lib2\n"
+            "record Box[T]\n  v: T\n"
+            "record A\n  b: Box[lib2::B]\n"
+        ),
+        "lib2": ("import lib1\nrecord B\n  a: lib1::Box[lib1::A]\n"),
+    }
+    with pytest.raises(_AglTypeError) as exc_info:
+        _check_graph(tmp_path, modules)
+    msg = str(exc_info.value).lower()
+    assert "recursive" in msg or "structural type cycle" in msg
+
+
+def test_record_exception_field_cycle_across_check_is_error(tmp_path: Path) -> None:
+    """A record/exception field cycle is rejected in graph mode.
+
+    ``R.e: E`` and ``E.r: R`` reference each other; both the whole-graph
+    structural type-dependency pre-pass and the per-module builder check
+    treat ``E`` and ``R`` symmetrically and reject the cycle.
+    """
+    from agm.agl.typecheck.env import AglTypeError as _AglTypeError
+
+    modules = {
+        "entry": ("import lib\n()"),
+        "lib": ("record R\n  e: E\nexception E extends Exception\n  r: R\n"),
+    }
+    with pytest.raises(_AglTypeError) as exc_info:
+        _check_graph(tmp_path, modules)
+    msg = str(exc_info.value).lower()
+    assert "recursive" in msg or "structural type cycle" in msg
 
 
 # ---------------------------------------------------------------------------
@@ -1442,18 +1230,8 @@ def test_cross_module_mismatch_message_qualifies_type(tmp_path: Path) -> None:
             "let c = get_foo()\n"
             "expect_bar(c)"
         ),
-        "foo": (
-            "enum Color\n"
-            "  | Red\n"
-            "  | Blue\n"
-            "def makeColor() -> Color = Red"
-        ),
-        "bar": (
-            "enum Color\n"
-            "  | Red\n"
-            "  | Blue\n"
-            "def makeColor() -> Color = Red"
-        ),
+        "foo": ("enum Color\n  | Red\n  | Blue\ndef makeColor() -> Color = Red"),
+        "bar": ("enum Color\n  | Red\n  | Blue\ndef makeColor() -> Color = Red"),
     }
     from agm.agl.typecheck.env import AglTypeError as _AglTypeError
 
@@ -1475,11 +1253,7 @@ def test_cross_module_mismatch_message_qualifies_type(tmp_path: Path) -> None:
 def test_type_expr_deps_self_ref_qualifier(tmp_path: Path) -> None:
     """A field typed '::OwnType' creates a self-dep (::Name qualifier path)."""
     modules = {
-        "entry": (
-            "import mylib\n"
-            "let p: mylib::Wrapper = mylib::mk()\n"
-            "p"
-        ),
+        "entry": ("import mylib\nlet p: mylib::Wrapper = mylib::mk()\np"),
         "mylib": (
             # ::Inner is a self-reference (same module)
             "record Inner\n"
@@ -1491,123 +1265,87 @@ def test_type_expr_deps_self_ref_qualifier(tmp_path: Path) -> None:
     }
     mylib_id = ModuleId.from_dotted("mylib")
     cg = _check_graph(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Wrapper", {}, module_id=mylib_id)
+    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Wrapper", module_id=mylib_id)
 
 
 def test_type_expr_deps_qualified_field(tmp_path: Path) -> None:
     """A field typed 'other::Type' creates a cross-module dep (qualified path)."""
     modules = {
-        "entry": (
-            "import mylib qualified\n"
-            "let p: mylib::Wrapper = mylib::mk()\n"
-            "p"
-        ),
+        "entry": ("import mylib qualified\nlet p: mylib::Wrapper = mylib::mk()\np"),
         "mylib": (
             "import payload qualified\n"
             "record Wrapper\n"
             "  c: payload::Data\n"
             "def mk() -> Wrapper = Wrapper(c = payload::Data(n = 1))"
         ),
-        "payload": (
-            "record Data\n"
-            "  n: int"
-        ),
+        "payload": ("record Data\n  n: int"),
     }
     mylib_id = ModuleId.from_dotted("mylib")
     cg = _check_graph(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Wrapper", {}, module_id=mylib_id)
+    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Wrapper", module_id=mylib_id)
 
 
 def test_type_expr_deps_unqualified_open_import_field(tmp_path: Path) -> None:
     """A field typed with an open-imported name creates a dep (unqualified path)."""
     modules = {
-        "entry": (
-            "import mylib\n"
-            "let p: mylib::Wrapper = mylib::mk()\n"
-            "p"
-        ),
+        "entry": ("import mylib\nlet p: mylib::Wrapper = mylib::mk()\np"),
         "mylib": (
             # Open import: 'import payload' — Data is an open-imported type
             "import payload\n"
             "record Wrapper\n"
-            "  c: Data\n"       # unqualified reference to open-imported type
+            "  c: Data\n"  # unqualified reference to open-imported type
             "def mk() -> Wrapper = Wrapper(c = Data(n = 1))"
         ),
-        "payload": (
-            "record Data\n"
-            "  n: int"
-        ),
+        "payload": ("record Data\n  n: int"),
     }
     mylib_id = ModuleId.from_dotted("mylib")
     cg = _check_graph(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Wrapper", {}, module_id=mylib_id)
+    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Wrapper", module_id=mylib_id)
 
 
 def test_type_expr_deps_list_field(tmp_path: Path) -> None:
     """A field typed 'list[other::Type]' recurses into the elem type for deps."""
     modules = {
-        "entry": (
-            "import mylib\n"
-            "let p: mylib::Wrapper = mylib::mk()\n"
-            "p"
-        ),
+        "entry": ("import mylib\nlet p: mylib::Wrapper = mylib::mk()\np"),
         "mylib": (
             "import payload\n"
             "record Wrapper\n"
             "  items: list[payload::Data]\n"
             "def mk() -> Wrapper = Wrapper(items = [payload::Data(n = 1)])"
         ),
-        "payload": (
-            "record Data\n"
-            "  n: int"
-        ),
+        "payload": ("record Data\n  n: int"),
     }
     mylib_id = ModuleId.from_dotted("mylib")
     cg = _check_graph(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Wrapper", {}, module_id=mylib_id)
+    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Wrapper", module_id=mylib_id)
 
 
 def test_type_expr_deps_dict_field(tmp_path: Path) -> None:
     """A field typed 'dict[text, other::Type]' recurses into the value type."""
     modules = {
-        "entry": (
-            "import mylib\n"
-            "let p: mylib::Wrapper = mylib::mk()\n"
-            "p"
-        ),
+        "entry": ("import mylib\nlet p: mylib::Wrapper = mylib::mk()\np"),
         "mylib": (
             "import payload\n"
             "record Wrapper\n"
             "  items: dict[text, payload::Data]\n"
             "def mk() -> Wrapper = Wrapper(items = {})"
         ),
-        "payload": (
-            "record Data\n"
-            "  n: int"
-        ),
+        "payload": ("record Data\n  n: int"),
     }
     mylib_id = ModuleId.from_dotted("mylib")
     cg = _check_graph(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Wrapper", {}, module_id=mylib_id)
+    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Wrapper", module_id=mylib_id)
 
 
 def test_type_expr_deps_alias_to_cross_module(tmp_path: Path) -> None:
     """A type alias whose target is a cross-module type creates a dep (alias path)."""
     modules = {
-        "entry": (
-            "import mylib\n"
-            "let n: mylib::MyNum = 42\n"
-            "n"
-        ),
+        "entry": ("import mylib\nlet n: mylib::MyNum = 42\nn"),
         "mylib": (
             # TypeAlias whose target is a cross-module record
-            "import payload\n"
-            "type MyNum = int"
+            "import payload\ntype MyNum = int"
         ),
-        "payload": (
-            "record Data\n"
-            "  n: int"
-        ),
+        "payload": ("record Data\n  n: int"),
     }
     cg = _check_graph(tmp_path, modules)
     mylib_id = ModuleId.from_dotted("mylib")
@@ -1634,21 +1372,9 @@ def test_cross_module_structural_cycle_raises_error(tmp_path: Path) -> None:
     from agm.agl.typecheck.env import AglTypeError as _AglTypeError
 
     modules = {
-        "entry": (
-            "import modA\n"
-            "import modB\n"
-            "()"
-        ),
-        "modA": (
-            "import modB\n"
-            "record Foo\n"
-            "  other: modB::Bar"
-        ),
-        "modB": (
-            "import modA\n"
-            "record Bar\n"
-            "  other: modA::Foo"
-        ),
+        "entry": ("import modA\nimport modB\n()"),
+        "modA": ("import modB\nrecord Foo\n  other: modB::Bar"),
+        "modB": ("import modA\nrecord Bar\n  other: modA::Foo"),
     }
     with pytest.raises(_AglTypeError):
         _check_graph(tmp_path, modules)
@@ -1672,18 +1398,8 @@ def test_record_type_repr_qualified_with_module(tmp_path: Path) -> None:
             "let p = get_foo()\n"
             "expect_bar(p)"  # foo::Point ≠ bar::Point
         ),
-        "foo": (
-            "record Point\n"
-            "  x: int\n"
-            "  y: int\n"
-            "def makePoint() -> Point = Point(x = 0, y = 0)"
-        ),
-        "bar": (
-            "record Point\n"
-            "  x: int\n"
-            "  y: int\n"
-            "def makePoint() -> Point = Point(x = 1, y = 1)"
-        ),
+        "foo": ("record Point\n  x: int\n  y: int\ndef makePoint() -> Point = Point(x = 0, y = 0)"),
+        "bar": ("record Point\n  x: int\n  y: int\ndef makePoint() -> Point = Point(x = 1, y = 1)"),
     }
     with pytest.raises(_AglTypeError) as exc_info:
         _check_graph(tmp_path, modules)
@@ -1709,28 +1425,21 @@ def test_type_alias_with_cross_module_dep_creates_dep(tmp_path: Path) -> None:
     but does not reach 0 (diamond dependency pattern for Kahn's algorithm).
     """
     modules = {
-        "entry": (
-            "import mylib\n"
-            "let w: mylib::Wrapper = mylib::mk()\n"
-            "w"
-        ),
+        "entry": ("import mylib\nlet w: mylib::Wrapper = mylib::mk()\nw"),
         "mylib": (
             "import payload\n"
             # TypeAlias whose target is a user type in another module
             "type DataAlias = payload::Data\n"
             "record Wrapper\n"
-            "  a: DataAlias\n"    # depends on alias, alias depends on payload::Data
+            "  a: DataAlias\n"  # depends on alias, alias depends on payload::Data
             "  b: payload::Data\n"  # direct dep on payload::Data (diamond dep!)
             "def mk() -> Wrapper = Wrapper(a = payload::Data(n = 1), b = payload::Data(n = 2))"
         ),
-        "payload": (
-            "record Data\n"
-            "  n: int"
-        ),
+        "payload": ("record Data\n  n: int"),
     }
     mylib_id = ModuleId.from_dotted("mylib")
     cg = _check_graph(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "w") == RecordType("Wrapper", {}, module_id=mylib_id)
+    assert _binding_value_type(cg, ENTRY_ID, "w") == RecordType("Wrapper", module_id=mylib_id)
 
 
 def test_type_expr_deps_func_field(tmp_path: Path) -> None:
@@ -1741,27 +1450,20 @@ def test_type_expr_deps_func_field(tmp_path: Path) -> None:
     walker must descend into the param to find the dependency.
     """
     modules = {
-        "entry": (
-            "import mylib\n"
-            "let p: mylib::Wrapper = mylib::mk()\n"
-            "p"
-        ),
+        "entry": ("import mylib\nlet p: mylib::Wrapper = mylib::mk()\np"),
         "mylib": (
             "import payload\n"
             # Field with a function type whose param is a cross-module user type
             # This exercises the FuncT branch in _collect_type_expr_deps
             "record Wrapper\n"
             "  transform: (payload::Data) -> text\n"
-            "def mk() -> Wrapper = Wrapper(transform = fn(d: payload::Data) -> text => \"ok\")"
+            'def mk() -> Wrapper = Wrapper(transform = fn(d: payload::Data) -> text => "ok")'
         ),
-        "payload": (
-            "record Data\n"
-            "  n: int"
-        ),
+        "payload": ("record Data\n  n: int"),
     }
     mylib_id = ModuleId.from_dotted("mylib")
     cg = _check_graph(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Wrapper", {}, module_id=mylib_id)
+    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Wrapper", module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1778,21 +1480,15 @@ def test_type_expr_deps_self_ref_to_builtin(tmp_path: Path) -> None:
     self-ref target is a built-in type (not in all_type_keys), so no dep is added.
     """
     modules = {
-        "entry": (
-            "import mylib\n"
-            "let w: mylib::Wrapper = mylib::mk()\n"
-            "w"
-        ),
+        "entry": ("import mylib\nlet w: mylib::Wrapper = mylib::mk()\nw"),
         "mylib": (
             # ::ExecResult is a built-in prelude type (not in all_type_keys)
-            "record Wrapper\n"
-            "  c: ::ExecResult\n"
-            "def mk() -> Wrapper = Wrapper(c = exec(\"echo hi\"))"
+            'record Wrapper\n  c: ::ExecResult\ndef mk() -> Wrapper = Wrapper(c = exec("echo hi"))'
         ),
     }
     mylib_id = ModuleId.from_dotted("mylib")
     cg = _check_graph(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "w") == RecordType("Wrapper", {}, module_id=mylib_id)
+    assert _binding_value_type(cg, ENTRY_ID, "w") == RecordType("Wrapper", module_id=mylib_id)
 
 
 def test_type_expr_deps_open_import_to_builtin_variant(tmp_path: Path) -> None:
@@ -1808,21 +1504,15 @@ def test_type_expr_deps_open_import_to_builtin_variant(tmp_path: Path) -> None:
     # it's already a resolved primitive type — hard to trigger with valid programs.
     # Instead test the 'no candidates' path (dep lookup is empty, deps stay []).
     modules = {
-        "entry": (
-            "import mylib\n"
-            "let w: mylib::Wrapper = mylib::mk()\n"
-            "w"
-        ),
+        "entry": ("import mylib\nlet w: mylib::Wrapper = mylib::mk()\nw"),
         "mylib": (
             # Field typed 'int' (builtin) via bare name — candidates list is empty
-            "record Wrapper\n"
-            "  n: int\n"
-            "def mk() -> Wrapper = Wrapper(n = 42)"
+            "record Wrapper\n  n: int\ndef mk() -> Wrapper = Wrapper(n = 42)"
         ),
     }
     mylib_id = ModuleId.from_dotted("mylib")
     cg = _check_graph(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "w") == RecordType("Wrapper", {}, module_id=mylib_id)
+    assert _binding_value_type(cg, ENTRY_ID, "w") == RecordType("Wrapper", module_id=mylib_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1843,14 +1533,10 @@ def test_builtin_shadowing_type_raises_type_error(tmp_path: Path) -> None:
     from agm.agl.typecheck.env import AglTypeError as _AglTypeError
 
     modules = {
-        "entry": (
-            "import mylib\n"
-            "()"
-        ),
+        "entry": ("import mylib\n()"),
         "mylib": (
             # ExecResult shadows BUILTIN_PRELUDE_TYPES — rejected in _collect_shells_only
-            "record ExecResult\n"
-            "  x: int"
+            "record ExecResult\n  x: int"
         ),
     }
     with pytest.raises(_AglTypeError, match="built-in type name"):
@@ -1868,14 +1554,10 @@ def test_field_type_with_unimported_qualifier_is_type_error(tmp_path: Path) -> N
     from agm.agl.typecheck.env import AglTypeError as _AglTypeError
 
     modules = {
-        "entry": (
-            "import mylib\n"
-            "()"
-        ),
+        "entry": ("import mylib\n()"),
         "mylib": (
             # 'other' is not imported — handle_map will be None in dep-collection
-            "record MyRec\n"
-            "  c: other::Data"
+            "record MyRec\n  c: other::Data"
         ),
     }
     with pytest.raises(_AglTypeError):
@@ -1893,20 +1575,14 @@ def test_field_type_with_unknown_qualified_name_is_type_error(tmp_path: Path) ->
     from agm.agl.typecheck.env import AglTypeError as _AglTypeError
 
     modules = {
-        "entry": (
-            "import mylib\n"
-            "()"
-        ),
+        "entry": ("import mylib\n()"),
         "mylib": (
             "import payload qualified\n"
             # 'Unknown' does not exist in payload — qname will be None
             "record MyRec\n"
             "  c: payload::Unknown"
         ),
-        "payload": (
-            "record Data\n"
-            "  n: int"
-        ),
+        "payload": ("record Data\n  n: int"),
     }
     with pytest.raises(_AglTypeError):
         _check_graph(tmp_path, modules)
@@ -1924,19 +1600,14 @@ def test_field_type_with_qualified_function_name_is_type_error(tmp_path: Path) -
     from agm.agl.typecheck.env import AglTypeError as _AglTypeError
 
     modules = {
-        "entry": (
-            "import mylib\n"
-            "()"
-        ),
+        "entry": ("import mylib\n()"),
         "mylib": (
             "import payload qualified\n"
             # 'getValue' is a function in payload, not a type — key not in all_type_keys
             "record MyRec\n"
             "  c: payload::getValue"
         ),
-        "payload": (
-            "def getValue() -> int = 42"
-        ),
+        "payload": ("def getValue() -> int = 42"),
     }
     with pytest.raises(_AglTypeError):
         _check_graph(tmp_path, modules)
@@ -1955,20 +1626,13 @@ def test_field_type_with_open_imported_function_name_is_type_error(tmp_path: Pat
     from agm.agl.typecheck.env import AglTypeError as _AglTypeError
 
     modules = {
-        "entry": (
-            "import mylib\n"
-            "()"
-        ),
+        "entry": ("import mylib\n()"),
         "mylib": (
             # Open-import brings 'getValue' (a function) into the unqualified namespace.
             # Using it as a field type triggers the unqualified candidates False branch.
-            "import payload\n"
-            "record MyRec\n"
-            "  c: getValue"
+            "import payload\nrecord MyRec\n  c: getValue"
         ),
-        "payload": (
-            "def getValue() -> int = 42"
-        ),
+        "payload": ("def getValue() -> int = 42"),
     }
     with pytest.raises(_AglTypeError):
         _check_graph(tmp_path, modules)
@@ -2004,11 +1668,7 @@ def test_cross_file_mutual_recursion_qualified(tmp_path: Path) -> None:
             "  if n == 0 => false\n"
             "  | else => even::is_even(n - 1)"
         ),
-        "entry": (
-            "import even\n"
-            "let result = even::is_even(10)\n"
-            "result"
-        ),
+        "entry": ("import even\nlet result = even::is_even(10)\nresult"),
     }
     cg = _check_graph(tmp_path, modules)
     mid_even = ModuleId.from_dotted("even")
@@ -2040,11 +1700,7 @@ def test_cross_file_mutual_recursion_open_import(tmp_path: Path) -> None:
             "  if n == 0 => false\n"
             "  | else => is_even(n - 1)"
         ),
-        "entry": (
-            "import even\n"
-            "let result = is_even(10)\n"
-            "result"
-        ),
+        "entry": ("import even\nlet result = is_even(10)\nresult"),
     }
     cg = _check_graph(tmp_path, modules)
     mid_even = ModuleId.from_dotted("even")
@@ -2134,10 +1790,7 @@ def test_cross_module_same_name_qualified_call_false_reject(tmp_path: Path) -> N
     modules = {
         "lib": "def helper(n: int) -> int = n + 1",
         "entry": (
-            "import lib qualified\n"
-            "def helper(s: text) -> text = s\n"
-            "let r = lib::helper(5)\n"
-            "r"
+            "import lib qualified\ndef helper(s: text) -> text = s\nlet r = lib::helper(5)\nr"
         ),
     }
     # Must NOT raise — the qualified call uses lib's signature (int param).
@@ -2161,12 +1814,7 @@ def test_cross_module_same_name_qualified_call_false_accept(tmp_path: Path) -> N
 
     modules = {
         "lib": "def helper(s: text) -> text = s",
-        "entry": (
-            "import lib qualified\n"
-            "def helper(n: int) -> int = n\n"
-            "let r = lib::helper(5)\n"
-            "r"
-        ),
+        "entry": ("import lib qualified\ndef helper(n: int) -> int = n\nlet r = lib::helper(5)\nr"),
     }
     with pytest.raises(_AglTypeError, match="Type mismatch"):
         _check_graph(tmp_path, modules)
@@ -2190,7 +1838,7 @@ def test_two_library_functions_same_name_different_signatures(tmp_path: Path) ->
     # Correct types → should typecheck
     modules_ok = {
         "a": "def helper(n: int) -> int = n + 1",
-        "b": 'def helper(s: text) -> text = s',
+        "b": "def helper(s: text) -> text = s",
         "entry": (
             "import a qualified\n"
             "import b qualified\n"
@@ -2209,7 +1857,7 @@ def test_two_library_functions_same_name_different_signatures(tmp_path: Path) ->
     tmp_path2.mkdir()
     modules_bad = {
         "a": "def helper(n: int) -> int = n + 1",
-        "b": 'def helper(s: text) -> text = s',
+        "b": "def helper(s: text) -> text = s",
         "entry": (
             "import a qualified\n"
             "import b qualified\n"
@@ -2250,7 +1898,7 @@ def test_cross_module_generic_constructor_call_explicit_type_args(tmp_path: Path
     }
     cg = _check_graph(tmp_path, modules)
     assert _binding_value_type(cg, ENTRY_ID, "r") == RecordType(
-        "Box", {}, module_id=lib_id, type_args=(IntType(),)
+        "Box", module_id=lib_id, type_args=(IntType(),)
     )
 
 
@@ -2263,7 +1911,7 @@ def test_cross_module_generic_constructor_call_inferred_type_args(tmp_path: Path
     }
     cg = _check_graph(tmp_path, modules)
     assert _binding_value_type(cg, ENTRY_ID, "r") == RecordType(
-        "Box", {}, module_id=lib_id, type_args=(IntType(),)
+        "Box", module_id=lib_id, type_args=(IntType(),)
     )
 
 
@@ -2275,7 +1923,7 @@ def test_open_imported_generic_type_in_annotation(tmp_path: Path) -> None:
     }
     cg = _check_graph(tmp_path, modules)
     assert _binding_value_type(cg, ENTRY_ID, "x") == RecordType(
-        "Box", {}, module_id=lib_id, type_args=(IntType(),)
+        "Box", module_id=lib_id, type_args=(IntType(),)
     )
 
 
@@ -2287,12 +1935,11 @@ def test_qualified_generic_type_in_annotation(tmp_path: Path) -> None:
     }
     cg = _check_graph(tmp_path, modules)
     assert _binding_value_type(cg, ENTRY_ID, "x") == RecordType(
-        "Box", {}, module_id=lib_id, type_args=(IntType(),)
+        "Box", module_id=lib_id, type_args=(IntType(),)
     )
 
 
 def test_qualified_imported_generic_type_in_type_definition(tmp_path: Path) -> None:
-    lib_id = ModuleId.from_dotted("lib")
     modules = {
         "lib": "record Box[T]\n  value: T",
         "wrapper": "import lib qualified\nenum Wrapped = item(value: lib::Box[int])",
@@ -2302,15 +1949,10 @@ def test_qualified_imported_generic_type_in_type_definition(tmp_path: Path) -> N
     cg = _check_graph(tmp_path, modules)
 
     wrapped = cg.graph_type_table[(ModuleId.from_dotted("wrapper"), "Wrapped")]
-    assert wrapped == EnumType(
-        "Wrapped",
-        {"item": {"value": RecordType("Box", {}, module_id=lib_id, type_args=(IntType(),))}},
-        module_id=ModuleId.from_dotted("wrapper"),
-    )
+    assert wrapped == EnumType("Wrapped", module_id=ModuleId.from_dotted("wrapper"))
 
 
 def test_open_imported_generic_type_in_type_definition(tmp_path: Path) -> None:
-    lib_id = ModuleId.from_dotted("lib")
     modules = {
         "lib": "record Box[T]\n  value: T",
         "wrapper": "import lib\nrecord Wrapped\n  value: Box[int]",
@@ -2320,11 +1962,7 @@ def test_open_imported_generic_type_in_type_definition(tmp_path: Path) -> None:
     cg = _check_graph(tmp_path, modules)
 
     wrapped = cg.graph_type_table[(ModuleId.from_dotted("wrapper"), "Wrapped")]
-    assert wrapped == RecordType(
-        "Wrapped",
-        {"value": RecordType("Box", {}, module_id=lib_id, type_args=(IntType(),))},
-        module_id=ModuleId.from_dotted("wrapper"),
-    )
+    assert wrapped == RecordType("Wrapped", module_id=ModuleId.from_dotted("wrapper"))
 
 
 def test_ambiguous_open_imported_generic_type_rejected(tmp_path: Path) -> None:
@@ -2364,16 +2002,10 @@ def test_open_imported_non_generic_type_application_rejected(tmp_path: Path) -> 
         ),
     ],
 )
-def test_qualified_type_application_errors(
-    tmp_path: Path, entry: str, message: str
-) -> None:
+def test_qualified_type_application_errors(tmp_path: Path, entry: str, message: str) -> None:
     modules = {
         "lib": (
-            "record Box[T]\n"
-            "  value: T\n"
-            "record Point\n"
-            "  value: int\n"
-            "def helper(x: int) -> int = x"
+            "record Box[T]\n  value: T\nrecord Point\n  value: int\ndef helper(x: int) -> int = x"
         ),
         "entry": entry,
     }
@@ -2398,7 +2030,7 @@ def test_cross_module_qualified_generic_enum_explicit_type_args(tmp_path: Path) 
     }
     cg = _check_graph(tmp_path, modules)
     assert _binding_value_type(cg, ENTRY_ID, "r") == EnumType(
-        "Option", {}, module_id=lib_id, type_args=(IntType(),)
+        "Option", module_id=lib_id, type_args=(IntType(),)
     )
 
 
@@ -2417,7 +2049,7 @@ def test_open_imported_generic_constructor_payload_type_apply_as_value(tmp_path:
     }
     cg = _check_graph(tmp_path, modules)
     assert _binding_value_type(cg, ENTRY_ID, "f") == FunctionType(
-        (IntType(),), EnumType("Choice", {}, module_id=lib_id, type_args=(IntType(),))
+        (IntType(),), EnumType("Choice", module_id=lib_id, type_args=(IntType(),))
     )
 
 
@@ -2433,7 +2065,7 @@ def test_open_imported_generic_constructor_nullary_type_apply_as_value(tmp_path:
     }
     cg = _check_graph(tmp_path, modules)
     assert _binding_value_type(cg, ENTRY_ID, "z") == EnumType(
-        "Choice", {}, module_id=lib_id, type_args=(IntType(),)
+        "Choice", module_id=lib_id, type_args=(IntType(),)
     )
 
 
@@ -2452,19 +2084,18 @@ def test_qualified_same_named_exceptions_keep_module_field_kinds(tmp_path: Path)
     modules = {
         "a": "exception Boom extends Exception\n  a: int",
         "b": "exception Boom extends Exception\n  b: text",
-        "entry": "import a qualified\nimport b qualified\na::Boom(message = \"x\", a = 1)",
+        "entry": 'import a qualified\nimport b qualified\na::Boom(message = "x", a = 1)',
     }
     _check_graph(tmp_path, modules)
 
 
-
-
 def test_cross_module_generic_enum_body_resolved(tmp_path: Path) -> None:
-    """Coverage: _resolve_body_for_one EnumDef branch with generic enum (t is None).
+    """A cross-module generic enum's body resolves into the shared TypeTable.
 
-    A cross-module generic enum causes ensure_built_enum to register in _generic_types
-    and unregister from _types, so get_type returns None.
-    The graph_type_table retains the shell (EnumType with module_id set) from Step A.
+    A generic enum is never registered as a plain name in ``graph_type_table``
+    (there is no non-generic handle for it — see ``GenericTypeDef``); its
+    template and field/variant shapes are reachable via the module's own
+    ``all_generic_types()`` and the shared ``TypeTable`` instead.
     """
     lib_id = ModuleId.from_dotted("lib")
     modules = {
@@ -2472,11 +2103,19 @@ def test_cross_module_generic_enum_body_resolved(tmp_path: Path) -> None:
         "entry": "import lib qualified\n()",
     }
     cg = _check_graph(tmp_path, modules)
-    # The shell for Opt is in graph_type_table with the correct module_id.
-    opt_type = cg.graph_type_table[(lib_id, "Opt")]
-    assert isinstance(opt_type, EnumType)
-    assert opt_type.name == "Opt"
-    assert opt_type.module_id == lib_id
+    assert (lib_id, "Opt") not in cg.graph_type_table
+
+    lib_generics = cg.modules[lib_id].type_env.all_generic_types()
+    gdef = lib_generics["Opt"]
+    template = gdef.template
+    assert isinstance(template, EnumType)
+    assert template.name == "Opt"
+    assert template.module_id == lib_id
+
+    table = cg.modules[ENTRY_ID].type_env.type_table
+    typedef = table.get(lib_id, "Opt")
+    assert typedef is not None
+    assert typedef.type_params == ("T",)
 
 
 # ---------------------------------------------------------------------------
@@ -2567,15 +2206,8 @@ def test_parameterized_alias_in_graph_mode(tmp_path: Path) -> None:
         # lib declares Pair[A,B] and uses it in a record field —
         # this goes through _resolve_body_for_one → _ensure_built_record →
         # resolve_type_expr(AppliedT("Pair", ...)) via the cross-module builder.
-        "lib": (
-            "type Pair[A,B] = dict[text, json]\n"
-            "record Wrapper\n"
-            "  data: Pair[int,text]"
-        ),
-        "entry": (
-            "import lib qualified\n"
-            "()"
-        ),
+        "lib": ("type Pair[A,B] = dict[text, json]\nrecord Wrapper\n  data: Pair[int,text]"),
+        "entry": ("import lib qualified\n()"),
     }
     cg = _check_graph(tmp_path, modules)
     # Wrapper is in the graph type table with the correct module_id
@@ -2596,7 +2228,7 @@ def test_imported_parameterized_alias_in_type_definition(tmp_path: Path) -> None
     cg = _check_graph(tmp_path, modules)
 
     assert cg.graph_type_table[(wrapper_id, "Wrapped")] == RecordType(
-        "Wrapped", {"value": IntType()}, module_id=wrapper_id
+        "Wrapped", module_id=wrapper_id
     )
 
 
@@ -2620,7 +2252,7 @@ def test_open_imported_parameterized_alias_in_type_definition(tmp_path: Path) ->
     cg = _check_graph(tmp_path, modules)
 
     assert cg.graph_type_table[(wrapper_id, "Wrapped")] == RecordType(
-        "Wrapped", {"value": IntType()}, module_id=wrapper_id
+        "Wrapped", module_id=wrapper_id
     )
 
 
@@ -2654,9 +2286,7 @@ def test_generic_arity_mismatch_has_span(tmp_path: Path) -> None:
     assert err.span is not None, (
         "AglTypeError for generic arity mismatch must carry a non-None span"
     )
-    assert err.span.start_line > 0, (
-        f"Span start_line must be > 0, got {err.span.start_line!r}"
-    )
+    assert err.span.start_line > 0, f"Span start_line must be > 0, got {err.span.start_line!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -2737,11 +2367,7 @@ def test_cross_module_generic_func_call_inferred(tmp_path: Path) -> None:
     """
     modules = {
         "lib": "def id[T](x: T) -> T = x",
-        "entry": (
-            "import lib qualified\n"
-            "let r = lib::id(5)\n"
-            "r"
-        ),
+        "entry": ("import lib qualified\nlet r = lib::id(5)\nr"),
     }
     cg = _check_graph(tmp_path, modules)
     assert _binding_value_type(cg, ENTRY_ID, "r") == IntType()
@@ -2758,11 +2384,7 @@ def test_cross_module_generic_func_call_open_import_inferred(tmp_path: Path) -> 
     """
     modules = {
         "lib": "def id[T](x: T) -> T = x",
-        "entry": (
-            "import lib\n"
-            "let r = id(5)\n"
-            "r"
-        ),
+        "entry": ("import lib\nlet r = id(5)\nr"),
     }
     cg = _check_graph(tmp_path, modules)
     assert _binding_value_type(cg, ENTRY_ID, "r") == IntType()
@@ -2781,11 +2403,7 @@ def test_cross_module_generic_func_call_explicit_type_args(tmp_path: Path) -> No
     """
     modules = {
         "lib": "def id[T](x: T) -> T = x",
-        "entry": (
-            "import lib qualified\n"
-            "let r = lib::id::[int](5)\n"
-            "r"
-        ),
+        "entry": ("import lib qualified\nlet r = lib::id::[int](5)\nr"),
     }
     cg = _check_graph(tmp_path, modules)
     assert _binding_value_type(cg, ENTRY_ID, "r") == IntType()
@@ -2809,11 +2427,7 @@ def test_cross_module_generic_func_as_value_d5(tmp_path: Path) -> None:
     """
     modules = {
         "lib": "def id[T](x: T) -> T = x",
-        "entry": (
-            "import lib\n"
-            "let f: (int) -> int = id\n"
-            "f(1)"
-        ),
+        "entry": ("import lib\nlet f: (int) -> int = id\nf(1)"),
     }
     cg = _check_graph(tmp_path, modules)
     assert _binding_value_type(cg, ENTRY_ID, "f") == FunctionType(
@@ -2832,10 +2446,7 @@ def test_cross_module_generic_func_call_wrong_type_rejected(tmp_path: Path) -> N
     """
     modules = {
         "lib": "def add[T](x: T, y: T) -> T = x",
-        "entry": (
-            "import lib qualified\n"
-            'lib::add(5, "hello")'
-        ),
+        "entry": ('import lib qualified\nlib::add(5, "hello")'),
     }
     with pytest.raises(AglTypeError):
         _check_graph(tmp_path, modules)
@@ -2852,11 +2463,7 @@ def test_named_only_param_in_graph_function(tmp_path: Path) -> None:
 
     modules = {
         "lib": "def add_named(x: int, *, z: int) -> int = x + z",
-        "entry": (
-            "import lib\n"
-            "let z = 5\n"
-            "add_named(3, z)"
-        ),
+        "entry": ("import lib\nlet z = 5\nadd_named(3, z)"),
     }
     cg: object = _check_graph(tmp_path, modules)
     assert isinstance(cg, CheckedModuleGraph)

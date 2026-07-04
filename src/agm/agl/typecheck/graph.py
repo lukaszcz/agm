@@ -7,27 +7,32 @@ over a :class:`~agm.agl.scope.graph.ResolvedModuleGraph`, producing a
 Algorithm
 ---------
 1. **Graph type pre-pass** — collect ALL public type declarations across every
-   module, resolve their bodies (stamping each ``RecordType``/``EnumType`` with
-   the owning ``ModuleId``), and build the shared ``graph_type_table``.  Because
-   imported modules are declaration-only and type bodies cannot be structurally
-   recursive across files (cycles are allowed in the *import* graph, but not in
-   the *structural-type-definition* graph), every type in the table can be built
-   before any function or expression body is checked.
+   module and resolve their bodies (stamping each ``RecordType``/``EnumType``
+   handle with the owning ``ModuleId``), building the shared
+   ``graph_type_table``.  ``RecordType``/``EnumType`` carry no field/variant
+   data of their own (their shapes live in the shared ``TypeTable``), so a
+   reference to another module's type is a valid handle whether or not that
+   type's own body has been resolved yet — body resolution is therefore
+   order-free.
 
    The pre-pass is genuinely whole-graph two-phase:
 
-   a. **Shells** — ALL type shells for ALL modules are registered into the shared
-      ``graph_type_table`` first (records and enums as empty shells; type aliases
-      are tracked separately in a per-module env).
-   b. **Bodies in topological order** — the structural type-definition dependency
-      graph (a record/enum/alias depends on every module-qualified or unqualified
-      type named in its field/variant/alias-target type expressions, across modules)
-      is computed, and bodies are resolved in topological order so that each
-      referenced type is fully built (fields/variants populated) BEFORE it is
-      embedded by-value as another type's field/variant/element type.  Ties are
-      broken by ``(ModuleId.segments, name)`` for determinism.  A genuine
-      structural type cycle (type that contains itself infinitely) is a static
-      error, consistent with the existing single-module behaviour.
+   a. **Headers** — every declared name's handle (or, for a generic
+      declaration, its ``GenericTypeDef``) is registered into the shared
+      ``graph_type_table`` first; type aliases are tracked separately in a
+      per-module env.
+   b. **Bodies, order-free** — each declaration's body (field/variant type
+      expressions) is resolved in a fixed deterministic order (sorted by
+      ``(ModuleId.segments, name)``), with no dependency-ordering
+      constraint.  Before resolving any body, the structural
+      type-definition dependency graph (a record/enum/alias depends on
+      every module-qualified or unqualified type named in its
+      field/variant/alias-target type expressions, across modules) is
+      checked for cycles: a genuine structural type cycle (a type that
+      contains itself infinitely) is rejected as a static error — a
+      temporary restriction, consistent with the existing single-module
+      behaviour, pending an inhabitation-based analysis that will allow
+      well-founded recursion.
 
 2. **Graph function-signature pre-pass** — resolve the parameter and return type
    annotations for EVERY top-level ``FuncDef`` in EVERY module (using the
@@ -217,8 +222,9 @@ def _resolve_body_for_one(
 ) -> None:
     """Resolve the body of one type ``(mid, name)`` and update the graph table.
 
-    Called in topological order so all types this one depends on are already
-    fully built before their types are captured by-value here.
+    Called once per key in a fixed deterministic order (no dependency
+    ordering): every type reference is a handle, valid regardless of whether
+    the referenced type's own body has been resolved yet.
     """
     cross_env = cross_envs[mid]
     builder = per_module_builders[mid]
@@ -228,23 +234,23 @@ def _resolve_body_for_one(
 
     for item in program.body.items:
         if isinstance(item, RecordDef) and item.name == name:
-            builder.ensure_built_record(item.name)
+            builder.build_record(item.name)
             t = cross_env.get_type(item.name)
             if t is not None:
                 # Non-generic record: update the graph table with the fully-built type.
                 graph_type_table[(mid, item.name)] = t
             # Generic record: body registered in _generic_types (no _types entry);
-            # graph_type_table retains the shell from Step A.  Cross-module generic
+            # graph_type_table retains the handle from Step A.  Cross-module generic
             # constructor calls use _graph_generic_table / _graph_ctor_sig_table instead.
             break
         if isinstance(item, EnumDef) and item.name == name:
-            builder.ensure_built_enum(item.name)
+            builder.build_enum(item.name)
             t = cross_env.get_type(item.name)
             if t is not None:
                 graph_type_table[(mid, item.name)] = t
             break
         if isinstance(item, ExceptionDef) and item.name == name:
-            builder.ensure_built_exception(name)
+            builder.build_exception(name)
             typ = cross_env.get_type(name)
             assert typ is not None, f"Exception type {name!r} not registered"
             graph_type_table[(mid, name)] = typ
@@ -396,6 +402,34 @@ def _collect_unqualified_type_name_deps(
     return deps
 
 
+def _compute_exception_base_deps(
+    resolved_graph: ResolvedModuleGraph,
+) -> dict[tuple[ModuleId, str], list[tuple[ModuleId, str]]]:
+    """Return each exception's ``extends`` dependency, keyed by ``(mid, name)``.
+
+    This is the minimal, exception-only cross-module ordering dependency:
+    ``_build_exception`` copies its base's already-resolved embedded fields,
+    so the base must be resolved first.  Record/enum field/element
+    references need no such ordering (they resolve to handles, valid
+    whether or not the referenced declaration's own body has been resolved
+    yet), so this deliberately does not participate in the general
+    structural-cycle dependency graph.
+    """
+    all_type_keys = _collect_all_type_keys(resolved_graph)
+    deps: dict[tuple[ModuleId, str], list[tuple[ModuleId, str]]] = {}
+    for mid, rmod in resolved_graph.modules.items():
+        program = rmod.resolved.program
+        import_env = rmod.import_env
+        assert isinstance(program, Program)
+        for item in program.body.items:
+            if isinstance(item, ExceptionDef) and item.base is not None:
+                key = (mid, item.name)
+                deps[key] = _collect_unqualified_type_name_deps(
+                    item.base, mid, import_env, all_type_keys
+                )
+    return deps
+
+
 def _compute_type_deps(
     resolved_graph: ResolvedModuleGraph,
     all_type_keys: set[tuple[ModuleId, str]],
@@ -466,39 +500,44 @@ def _compute_type_deps(
     return deps
 
 
-def _topological_sort_types(
+def _type_key_sort_key(k: tuple[ModuleId, str]) -> tuple[tuple[str, ...], str]:
+    return (k[0].segments, k[1])
+
+
+def _check_no_structural_cycle(
     all_type_keys: set[tuple[ModuleId, str]],
     deps: dict[tuple[ModuleId, str], list[tuple[ModuleId, str]]],
-) -> list[tuple[ModuleId, str]]:
-    """Kahn's algorithm: return keys in topological order (leaves first).
+) -> None:
+    """Raise ``AglTypeError`` if the structural type-definition dependency graph
+    has a cycle (a type that directly or indirectly contains itself by value).
 
-    Ties broken by ``(ModuleId.segments, name)`` for determinism.
+    This is a temporary restriction — recursive types are not yet supported —
+    consistent with the per-module structural recursion ban applied to a
+    single module's own declarations (which also catches direct
+    self-reference, excluded from *deps*).  Import-graph cycles are allowed
+    (see the module docstring); this only rejects genuine structural cycles.
 
-    Returns the list of keys in an order suitable for body resolution: each key
-    appears AFTER all of its dependencies.
-
-    Raises ``_CycleInTypeDeps`` if a structural type cycle is detected (a type
-    that contains itself, directly or indirectly, by value).  Structural self-
-    recursion within a single module is also detected here and converted to the
-    standard error by the per-type resolution step.
+    Uses Kahn's algorithm purely for cycle *detection*: the topological order
+    it produces is discarded — body resolution runs in a fixed
+    ``(ModuleId.segments, name)`` order with no dependency-ordering
+    constraint, since every type reference resolves to a handle regardless of
+    build order.
     """
-
-    def _sort_key(k: tuple[ModuleId, str]) -> tuple[tuple[str, ...], str]:
-        return (k[0].segments, k[1])
+    from agm.agl.typecheck.env import AglTypeError
 
     try:
-        return toposort(all_type_keys, deps, key=_sort_key)
+        toposort(all_type_keys, deps, key=_type_key_sort_key)
     except GraphCycleError as exc:
         # Reconstruct the typed set from all_type_keys (exc.cycle is set[object]).
         remaining = {k for k in all_type_keys if k in exc.cycle}
-        raise _CycleInTypeDeps(remaining) from exc
-
-
-class _CycleInTypeDeps(Exception):
-    """Internal: raised when a structural type cycle is detected."""
-
-    def __init__(self, cycle_keys: set[tuple[ModuleId, str]]) -> None:
-        self.cycle_keys = cycle_keys
+        sorted_keys = sorted(remaining, key=_type_key_sort_key)
+        mid, name = sorted_keys[0]
+        raise AglTypeError(
+            f"Type '{name}' in module '{mid.dotted()}' is part of a structural "
+            "type cycle (a type that directly or indirectly contains itself by "
+            "value). Recursive types are not supported in AgL.",
+            span=None,
+        ) from exc
 
 
 def _build_graph_type_table(
@@ -514,63 +553,63 @@ def _build_graph_type_table(
 ]:
     """Phase 1: collect and resolve all public type declarations across all modules.
 
-    Returns a ``graph_type_table`` mapping ``(ModuleId, name)`` → fully-built
-    ``RecordType`` / ``EnumType`` / resolved-alias ``Type``.
+    Returns a ``graph_type_table`` mapping ``(ModuleId, name)`` → the
+    ``RecordType``/``EnumType`` handle or resolved-alias ``Type``.
 
     The pre-pass is genuinely whole-graph two-phase:
 
-    Step A: Register ALL type shells for ALL modules.  Record and enum shells
-            (empty fields/variants) are entered into ``graph_type_table`` so that
-            forward references within the same module work during body resolution.
-            Type aliases are registered in per-module envs (their target type is
-            not known until the alias body is resolved, so they have no shell in
-            the table).  All shells are registered before any body is resolved.
+    Step A: Register every declared name's handle for ALL modules.  Records
+            and enums get their handle entered into ``graph_type_table``
+            directly (a handle carries no field/variant data, so there is
+            nothing left to fill in later — forward references within or
+            across modules are valid immediately).  Type aliases are
+            registered in per-module envs (their target type is not known
+            until the alias body is resolved, so they have no entry in the
+            table yet).
 
     Step B: Compute the structural type-definition dependency graph across all
             modules using the complete set of declared type keys (records, enums,
             and aliases).  A type definition depends on every type named in its
             field/variant/alias-target type expressions, cross-module included.
+            Check it for cycles (a temporary restriction — recursive types are
+            not yet supported); a genuine structural type cycle (a type that
+            structurally contains itself, making it infinitely sized) is
+            reported as an ``AglTypeError``, consistent with how single-module
+            structural recursion is handled by the per-module ``_TypeBuilder``.
 
-    Step C: Topologically sort the type definitions by the dependency graph
-            (Kahn's algorithm, ties broken by ``(ModuleId.segments, name)``).
-            Resolve each type body in that order so every referenced type is
-            fully built (fields/variants populated) before it is embedded
-            by-value as another type's field/variant/element type.
-
-    A genuine structural type cycle (a type that structurally contains itself,
-    making it infinitely sized) is detected and reported as an ``AglTypeError``,
-    consistent with how single-module structural recursion is handled by the
-    existing ``_TypeBuilder``.
+    Step C: Resolve every type body in a fixed deterministic order (sorted by
+            ``(ModuleId.segments, name)``), with no dependency-ordering
+            constraint — every field/variant/element type reference is a
+            handle, valid regardless of whether the referenced declaration's
+            own body has been resolved yet.
 
     Import-graph cycles are allowed and do NOT imply structural type cycles
     — the structural dependency graph may be acyclic even when the import graph
     has cycles (e.g. modA imports modB for a Color enum used in modA.Foo fields,
     and modB imports modA for modA.Foo used in modB.Bar fields: the structural
-    order is Color → Foo → Bar, which is acyclic).
+    dependency graph Color → Foo, Foo → Bar is acyclic).
     """
-    from agm.agl.typecheck.env import AglTypeError
-
     # Shared TypeTable: one instance dual-written by every cross-module env
     # below, so declarations from all modules land in the same table.  Step A's
-    # per-module envs are transient shell-only scaffolding and never dual-write,
-    # so they keep their own private (default) tables.
+    # per-module envs are transient header-only scaffolding and never
+    # dual-write, so they keep their own private (default) tables.
     shared_type_table = type_table if type_table is not None else create_seeded_type_table()
 
-    # Step A: register all type shells for all modules.
-    # For records/enums: register empty shells in both the per-module env AND
+    # Step A: register every declared name's handle for all modules.
+    # For records/enums: register the handle in both the per-module env AND
     # graph_type_table.  For aliases: register in the per-module env only
-    # (no shell in graph_type_table — the resolved type is added in Step C).
+    # (their entry is added to graph_type_table in Step C, once resolved).
     per_module_envs: dict[ModuleId, TypeEnvironment] = {}
 
     for mid, rmod in resolved_graph.modules.items():
         env = TypeEnvironment(module_id=mid)
-        # The builder is transient: it only collects shells into ``env`` (which
-        # bootstraps ``graph_type_table`` below).  Body resolution uses the
-        # cross-module builders built later, not this one.
+        # The builder is transient: it only collects headers into ``env``
+        # (which bootstraps ``graph_type_table`` below).  Body resolution
+        # uses the cross-module builders built later, not this one.
         _collect_shells_only(_TypeBuilder(env, module_id=mid), rmod.resolved.program)
         per_module_envs[mid] = env
 
-    # Collect record/enum shells into the shared graph type table.
+    # Collect record/enum handles into the shared graph type table.
     # Aliases are NOT added here — their entries will be written in Step C
     # after their target type is resolved.
     graph_type_table: dict[tuple[ModuleId, str], Type] = {}
@@ -580,9 +619,9 @@ def _build_graph_type_table(
 
     # Cross-module generic type definitions, parameterized aliases, constructor
     # signatures, and constructor field kinds are filled as each type body is
-    # resolved.  The dicts are passed by reference into per-module environments
-    # so later type definitions can resolve applied types from dependencies
-    # already built by the topological order.
+    # resolved in Step C.  The dicts are passed by reference into per-module
+    # environments so later type definitions can resolve applied types from
+    # dependencies resolved earlier in that fixed order.
     graph_generic_table: dict[tuple[ModuleId, str], GenericTypeDef] = {}
     graph_alias_table: dict[tuple[ModuleId, str], GenericAliasDef] = {}
     graph_ctor_sig_table: dict[tuple[ModuleId, str, str | None], ConstructorSignature] = {}
@@ -613,42 +652,25 @@ def _build_graph_type_table(
             cross_env.register_type(name, t)
         cross_envs[mid] = cross_env
         # Build a _TypeBuilder that uses the cross-module env and has the
-        # shells and alias targets registered (for _ensure_built_* to work).
+        # headers and alias targets registered (for build_record/build_enum/
+        # build_exception to work).
         builder = _TypeBuilder(cross_env, module_id=mid)
         _collect_shells_only(builder, rmod.resolved.program)
         cross_builders[mid] = builder
 
     # Step B: compute the structural type-definition dependency graph.
     # Use the COMPLETE set of declared type keys (including aliases), NOT just
-    # the record/enum shells in graph_type_table.  Aliases depend on their
-    # target types just like record fields do.
+    # the record/enum handles in graph_type_table.  Aliases depend on their
+    # target types just like record fields do.  A cycle here is a genuine
+    # structural type cycle (rejected below); same-module direct
+    # self-reference is excluded from the deps graph and is instead caught by
+    # each module's own per-module structural recursion check (Step C, via
+    # the full per-module ``_TypeBuilder.collect`` re-check in Phase 3).
     all_type_keys = _collect_all_type_keys(resolved_graph)
     deps = _compute_type_deps(resolved_graph, all_type_keys)
+    _check_no_structural_cycle(all_type_keys, deps)
 
-    # Step C: resolve bodies in topological order.
-    # This guarantees that when type A's body references type B, B's
-    # RecordType/EnumType is already fully populated (fields/variants filled in)
-    # before A captures it by-value.
-    try:
-        topo_order = _topological_sort_types(all_type_keys, deps)
-    except _CycleInTypeDeps as exc:
-        # Structural type cycle across modules: surface a clear error.
-        # For same-module structural cycles the _TypeBuilder's within-module
-        # detection fires naturally (cycle key in _building set).  For cross-
-        # module cycles we report a graph-level error naming one participant.
-        def _cycle_sort_key(k: tuple[ModuleId, str]) -> tuple[tuple[str, ...], str]:
-            return (k[0].segments, k[1])
-
-        sorted_keys = sorted(exc.cycle_keys, key=_cycle_sort_key)
-        mid, name = sorted_keys[0]
-        raise AglTypeError(
-            f"Type '{name}' in module '{mid.dotted()}' is part of a structural "
-            "type cycle (a type that directly or indirectly contains itself by "
-            "value). Recursive types are not supported in AgL.",
-            span=None,
-        ) from exc
-
-    for key in topo_order:
+    def _resolve_one(key: tuple[ModuleId, str]) -> None:
         mid, name = key
         _resolve_body_for_one(
             mid=mid,
@@ -662,6 +684,41 @@ def _build_graph_type_table(
             resolved_graph=resolved_graph,
             cross_envs=cross_envs,
         )
+
+    # Exceptions: resolve in extends-dependency order first (a minimal,
+    # exception-only ordering step — NOT the generalized ordering removed
+    # above).  ``_build_exception`` copies its base's already-resolved
+    # embedded fields, so a cross-module base must be resolved before its
+    # child.  ``building``/``resolved`` guard against infinite recursion on a
+    # cyclic ``extends`` chain without raising here (same-module cycles are
+    # rejected by each module's own per-module structural recursion check,
+    # via the full per-module ``_TypeBuilder.collect`` re-check in Phase 3).
+    exception_base_deps = _compute_exception_base_deps(resolved_graph)
+    _building: set[tuple[ModuleId, str]] = set()
+    _resolved: set[tuple[ModuleId, str]] = set()
+
+    def _ensure_exception_resolved(key: tuple[ModuleId, str]) -> None:
+        if key in _resolved or key in _building:
+            return
+        _building.add(key)
+        for dep in exception_base_deps.get(key, []):
+            _ensure_exception_resolved(dep)
+        _resolve_one(key)
+        _building.discard(key)
+        _resolved.add(key)
+
+    for key in sorted(exception_base_deps, key=_type_key_sort_key):
+        _ensure_exception_resolved(key)
+
+    # Step C: resolve every remaining type body in a fixed deterministic
+    # order — no dependency-ordering constraint, since every reference is a
+    # handle, valid whether or not the referenced declaration's own body has
+    # been resolved yet.  Exceptions resolved above are re-visited here too
+    # (idempotent — ``build_exception`` is a no-op once already built).
+    body_order = sorted(all_type_keys, key=_type_key_sort_key)
+
+    for key in body_order:
+        _resolve_one(key)
 
     return (
         graph_type_table,

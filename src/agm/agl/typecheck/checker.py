@@ -196,7 +196,7 @@ def _builtin_function_signature(name: str) -> FunctionSignature | None:
                     _std_param("strict_json", BoolType(), has_default=True),
                     _std_param(
                         "on_parse_error",
-                        EnumType(name="ParsePolicy", variants={}),
+                        EnumType(name="ParsePolicy"),
                         has_default=True,
                     ),
                 ),
@@ -206,12 +206,12 @@ def _builtin_function_signature(name: str) -> FunctionSignature | None:
         case "ask-request":
             return FunctionSignature(
                 params=(_std_param("prompt", TextType()),),
-                result=RecordType(name="AgentRequest", fields={}),
+                result=RecordType(name="AgentRequest"),
             )
         case "exec":
             return FunctionSignature(
                 params=(_std_param("command", TextType()),),
-                result=RecordType(name="ExecResult", fields={}),
+                result=RecordType(name="ExecResult"),
             )
         case _:
             return None

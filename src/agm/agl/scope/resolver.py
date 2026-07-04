@@ -52,6 +52,7 @@ from agm.agl.scope.symbols import (
     ScopeNode,
 )
 from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES, RESERVED_PROGRAM_NAMES
+from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPES,
@@ -451,8 +452,11 @@ class _Resolver:
             if isinstance(type_val, EnumType):
                 # Register variants that don't conflict with exception names.
                 # Conflicting variants (e.g. ParsePolicy.Abort ↔ Abort exception)
-                # must be used in qualified form.
-                for variant_name in type_val.variants:
+                # must be used in qualified form.  Variant names come from the
+                # shared prelude TypeDef literal — the handle itself carries
+                # no shape data.
+                typedef = BUILTIN_PRELUDE_TYPE_DEFS[type_name]
+                for variant_name, _vfields in typedef.variants:
                     if variant_name not in exception_names:
                         cref = ConstructorRef(
                             owner_name=type_name,

@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from agm.agl.semantics.values import Frame, Value
     from agm.agl.syntax.nodes import ImportDecl, InfixAssoc, Program
     from agm.agl.syntax.spans import SourceSpan
+    from agm.agl.syntax.types import TypeExpr
     from agm.agl.typecheck.env import CheckedProgram, TypeEnvironment
 
 
@@ -258,9 +259,10 @@ class ReplSession:
 
         REPL-only fallback: when the entry fails to evaluate as a program, the
         loop tries to read it as a bare type expression (e.g. ``int``, a declared
-        enum/record name, ``list[T]``).  If that resolves to a known type, a
-        ``kind == "type"`` result echoing the type is returned instead of the
-        original ``'X' is not defined`` error.  Entries that evaluate
+        enum/record name, a bare generic type definition, ``list[T]``).  If
+        that resolves to a known type, a ``kind == "type"`` result echoing the
+        type is returned instead of the original ``'X' is not defined`` error.
+        Entries that evaluate
         successfully as values are never intercepted, so record constructors and
         bindings keep their normal echo.
         """
@@ -283,7 +285,8 @@ class ReplSession:
         type is not a value expression, so previously it surfaced ``'X' is not
         defined.``.  Like :meth:`type_of`, this never evaluates, promotes,
         advances the node-id counter, or mutates session state.  The parse uses
-        throwaway node ids; only the resolved :class:`Type` is kept.
+        throwaway node ids; only the resolved :class:`Type` or generic type
+        definition display is kept.
         """
         from agm.agl.parser import AglSyntaxError, parse_type_expr
         from agm.agl.typecheck import AglTypeError
@@ -292,20 +295,128 @@ class ReplSession:
             type_expr = parse_type_expr(text, start_id=self._next_node_id)
         except AglSyntaxError:
             return None
+
+        type_envs = [self._type_env]
+        graph_type_env = self._build_type_entry_graph_env()
+        if graph_type_env is not None:
+            type_envs.append(graph_type_env)
+
+        for type_env in type_envs:
+            generic_result = self._try_generic_type_entry(type_expr, type_env)
+            if generic_result is not None:
+                return generic_result
+            try:
+                typ = type_env.resolve_type_expr(type_expr)
+            except AglTypeError:
+                continue
+            return EntryResult(
+                kind="type",
+                name=None,
+                value=None,
+                value_type=typ,
+                diagnostics=[],
+                warnings=[],
+                error=None,
+                ok=True,
+            )
+        return None
+
+    def _try_generic_type_entry(
+        self,
+        type_expr: "TypeExpr",
+        type_env: "TypeEnvironment",
+    ) -> EntryResult | None:
+        """Return a type-entry result for a bare unapplied generic, if any."""
+        from agm.agl.repl.type_display import format_generic_type_def_for_repl
+        from agm.agl.syntax.types import NameT
+        from agm.agl.typecheck import AglTypeError
+
+        if not isinstance(type_expr, NameT):
+            return None
         try:
-            typ = self._type_env.resolve_type_expr(type_expr)
+            if type_expr.module_qualifier is None:
+                resolved = type_env.resolve_unapplied_generic_type(
+                    type_expr.name,
+                    span=type_expr.span,
+                )
+            else:
+                resolved = type_env.resolve_qualified_unapplied_generic_type(
+                    type_expr.module_qualifier,
+                    type_expr.name,
+                    span=type_expr.span,
+                )
         except AglTypeError:
             return None
+        if resolved is None:
+            return None
+        display_name, gdef = resolved
         return EntryResult(
             kind="type",
             name=None,
             value=None,
-            value_type=typ,
+            value_type=None,
+            type_display=format_generic_type_def_for_repl(display_name, gdef),
             diagnostics=[],
             warnings=[],
             error=None,
             ok=True,
         )
+
+    def _build_type_entry_graph_env(self) -> "TypeEnvironment | None":
+        """Build a throwaway graph-aware type env for std/imported type entries."""
+        from agm.agl.modules.errors import (
+            AmbiguousModule,
+            ImportEntryError,
+            ModuleNotFound,
+            ModulePrefixNotFound,
+        )
+        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.modules.loader import build_repl_graph
+        from agm.agl.parser import AglSyntaxError, parse_program_seeded
+        from agm.agl.scope import AglScopeError
+        from agm.agl.scope.graph import resolve_graph
+        from agm.agl.typecheck import AglTypeError
+        from agm.agl.typecheck.graph import check_graph
+
+        host_env = self._runtime.host_environment()
+        try:
+            program, next_start_id = parse_program_seeded(
+                "()",
+                start_id=self._next_node_id,
+                ambient_infix=self._accumulated_infix,
+            )
+            program = self._graph_session._inject_accumulated_imports(program)
+            graph, _new_next_id, _new_modules = build_repl_graph(
+                program,
+                next_start_id,
+                path=None,
+                cached=self._loaded_lib_modules,
+                roots=self._ensure_roots(),
+            )
+            rgraph = resolve_graph(
+                graph,
+                ambient_agents=self._ambient_agents(host_env),
+                entry_ambient_constructor_candidates=self._ambient_constructor_candidates,
+                entry_ambient_type_names=self._ambient_type_names,
+                entry_parent_scope=self._session_scope,
+                entry_repl_session_scope=self._session_scope,
+            )
+            cgraph = check_graph(
+                rgraph,
+                host_env.capabilities,
+                entry_seed_env=self._type_env,
+            )
+        except (
+            AglSyntaxError,
+            AglScopeError,
+            AglTypeError,
+            ModuleNotFound,
+            AmbiguousModule,
+            ModulePrefixNotFound,
+            ImportEntryError,
+        ):
+            return None
+        return cgraph.modules[ENTRY_ID].type_env
 
     def _eval_entry_pipeline(self, text: str, *, check_only: bool = False) -> EntryResult:
         """Parse → resolve → check → (eval) one entry against the session (core).

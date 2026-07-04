@@ -1163,6 +1163,29 @@ class TestFuncDef:
         assert isinstance(fd.body.items[0], LetDecl)
         assert isinstance(fd.body.items[1], IntLit)
 
+    def test_def_suite_body_without_equals(self) -> None:
+        src = "def summarize(doc: text) -> text\n  let head = ask\n  head"
+        fd = first(parse(src))
+        assert isinstance(fd, FuncDef)
+        assert isinstance(fd.body, Block)
+        assert len(fd.body.items) == 2
+
+    def test_def_multiline_signature_suite_body_without_equals(self) -> None:
+        src = "def summarize(\n  doc: text,\n  limit: int = 3,\n) -> text\n  doc"
+        fd = first(parse(src))
+        assert isinstance(fd, FuncDef)
+        assert len(fd.params) == 2
+        assert isinstance(fd.return_type, TextT)
+        assert isinstance(fd.body, Block)
+
+    def test_def_multiline_signature_suite_body_with_equals(self) -> None:
+        src = "def summarize(\n  doc: text,\n  limit: int = 3,\n) -> text =\n  doc"
+        fd = first(parse(src))
+        assert isinstance(fd, FuncDef)
+        assert len(fd.params) == 2
+        assert isinstance(fd.return_type, TextT)
+        assert isinstance(fd.body, Block)
+
     def test_def_if_body(self) -> None:
         src = "def classify(n: int) -> text = if n > 0 => pos | else => neg"
         fd = first(parse(src))
@@ -2564,6 +2587,20 @@ class TestParserErrorCoverage:
         """A character the lexer cannot tokenize raises AglSyntaxError."""
         with pytest.raises(AglSyntaxError):
             parse("@@@")
+
+    def test_missing_function_body_indent_does_not_report_newline_width(self) -> None:
+        """A newline after ``=`` must not surface the layout token's width value."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("def f() -> int =\n11\n")
+        msg = str(exc_info.value)
+        assert "indented block" in msg
+        assert "Unexpected '0'" not in msg
+
+    def test_unexpected_newline_does_not_report_indentation_width(self) -> None:
+        """Unexpected layout newlines should be named, not rendered as ``'0'``."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("let x =\n11\n")
+        assert str(exc_info.value) == "Unexpected newline."
 
 
 # ---------------------------------------------------------------------------

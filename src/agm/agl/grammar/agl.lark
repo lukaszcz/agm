@@ -244,12 +244,11 @@ priority_delta: PLUS INT  -> priority_delta_plus
 // Function definition
 // ---------------------------------------------------------------------------
 
-// func_def: def name type_params? (params) [-> RetType] = body
+// func_def: def name type_params? (params) [-> RetType] (= body | suite_body)
 // The return type may be omitted when it can be inferred from the body.
-// func_body is either a suite (indented block starting with _NEWLINE) or an
-// inline expression.  The suite_expr alternative is unambiguous because
-// _NEWLINE does not start any expr form.
-func_def: "def" name type_params? LPAR param_list? RPAR (THIN_ARROW type_expr)? EQ func_body
+// Inline bodies require `=`. Suite bodies may either keep `=` before the newline
+// or omit it, because _INDENT does not start any expr form.
+func_def: "def" name type_params? LPAR param_list? RPAR (THIN_ARROW type_expr)? (EQ func_body | suite_expr)
 
 // Host-implemented builtin function declaration. It has a signature but no body.
 // `builtin` is a decorator-style modifier: the `_NEWLINE?` makes the newline

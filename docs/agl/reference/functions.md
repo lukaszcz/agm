@@ -11,7 +11,7 @@ from other functions. The type of a function value is written
 ## `def` — named function declarations
 
 ```ebnf
-func_def      ::= "def" NAME type_params? "(" param_list? ")" ("->" type_expr)? "=" func_body
+func_def      ::= "def" NAME type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
                 | "builtin" "def" NAME type_params? "(" param_list? ")" "->" type_expr
 func_body     ::= expr | suite | inline_binder_block
 type_params   ::= "[" NAME ("," NAME)* "]"
@@ -21,8 +21,10 @@ param         ::= NAME ":" type_expr ("=" expr)?
 param_marker  ::= "/" | "*" | "@" NAME    (* @pos, @std, @named *)
 ```
 
-A `def` is a top-level declaration. The body is a single expression — which
-may be a block (a sequence of items ending in an expression):
+A `def` is a top-level declaration. An inline body requires `=`. For an
+indented suite body, the `=` before the newline is optional. The body is a
+single expression — which may be a block (a sequence of items ending in an
+expression):
 
 ```agl
 def classify(n: int) -> text =

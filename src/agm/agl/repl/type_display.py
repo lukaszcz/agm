@@ -10,6 +10,7 @@ field / constructor declarations rather than only the nominal name.
 from __future__ import annotations
 
 from agm.agl.semantics.types import EnumType, RecordType, Type
+from agm.agl.typecheck.env import GenericTypeDef
 
 
 def format_type_for_repl(typ: Type) -> str:
@@ -34,14 +35,30 @@ def format_type_echo_for_repl(typ: Type) -> str:
     record / enum declarations are wrapped on their own lines so the declaration
     indentation stays readable.
     """
-    rendered = format_type_for_repl(typ)
+    return format_type_text_echo_for_repl(format_type_for_repl(typ))
+
+
+def format_type_text_echo_for_repl(rendered: str) -> str:
+    """Wrap pre-rendered type display text in the REPL ``<type…>`` echo form."""
     if "\n" in rendered:
         return f"<type:\n{rendered}\n>"
     return f"<type: {rendered}>"
 
 
+def format_generic_type_def_for_repl(name: str, gdef: GenericTypeDef) -> str:
+    """Return a declaration-like display for an unapplied generic type definition."""
+    display_name = f"{name}[{', '.join(gdef.type_params)}]"
+    template = gdef.template
+    if isinstance(template, RecordType):
+        return _format_record_type_with_name(template, display_name)
+    return _format_enum_type_with_name(template, display_name)
+
+
 def _format_record_type(typ: RecordType) -> str:
-    name = repr(typ)
+    return _format_record_type_with_name(typ, repr(typ))
+
+
+def _format_record_type_with_name(typ: RecordType, name: str) -> str:
     if not typ.fields:
         return f"record {name}()"
     lines = [f"record {name}"]
@@ -53,7 +70,11 @@ def _format_record_type(typ: RecordType) -> str:
 
 
 def _format_enum_type(typ: EnumType) -> str:
-    lines = [f"enum {typ!r}"]
+    return _format_enum_type_with_name(typ, repr(typ))
+
+
+def _format_enum_type_with_name(typ: EnumType, name: str) -> str:
+    lines = [f"enum {name}"]
     for variant_name, fields in typ.variants.items():
         if fields:
             field_list = ", ".join(

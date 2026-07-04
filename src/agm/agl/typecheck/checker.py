@@ -51,6 +51,7 @@ from agm.agl.scope.symbols import (
     BuiltinKind,
     ResolvedProgram,
 )
+from agm.agl.semantics.type_table import comparable_types
 from agm.agl.semantics.types import (
     AgentType,
     BoolType,
@@ -71,7 +72,6 @@ from agm.agl.semantics.types import (
     TypeVarType,
     UnitType,
     cast_classification,
-    comparable_types,
     contains_type_var,
     is_assignable,
     substitute,
@@ -1527,7 +1527,7 @@ class _Checker:
                     f"variable '{right_type.name}'.",
                     span=node.span,
                 )
-            if not comparable_types(left_type, right_type):
+            if not comparable_types(left_type, right_type, self._env.type_table):
                 raise AglTypeError(
                     f"Equality operands must have the same type; "
                     f"got '{left_type!r}' and '{right_type!r}'.",
@@ -1727,7 +1727,7 @@ class _Checker:
             )
         if node.qualifier is not None:
             self._check_variant_qualifier(node.qualifier, expr_type, node.span)
-        if node.variant not in expr_type.variants:
+        if node.variant not in self._env.type_table.enum_variants(expr_type):
             raise AglTypeError(
                 f"Variant '{node.variant}' does not belong to enum '{expr_type.name}'.",
                 span=node.span,
@@ -1830,12 +1830,13 @@ class _Checker:
                 )
             return obj_type.fields[node.field]
         if isinstance(obj_type, RecordType):
-            if node.field not in obj_type.fields:
+            record_fields = self._env.type_table.record_fields(obj_type)
+            if node.field not in record_fields:
                 raise AglTypeError(
                     f"Record '{obj_type.name}' has no field '{node.field}'.",
                     span=node.span,
                 )
-            return obj_type.fields[node.field]
+            return record_fields[node.field]
         raise AglTypeError(
             f"Field access requires a record or exception value; got '{obj_type!r}'.",
             span=node.span,
@@ -1965,7 +1966,7 @@ class _Checker:
             pass
         elif isinstance(pattern, LiteralPattern):
             lit_type = self._check_expr(pattern.literal, expected=None)
-            if not comparable_types(lit_type, subj_type):
+            if not comparable_types(lit_type, subj_type, self._env.type_table):
                 raise AglTypeError(
                     f"Literal pattern of type '{lit_type!r}' is incompatible with "
                     f"scrutinee of type '{subj_type!r}'.",
@@ -1997,13 +1998,14 @@ class _Checker:
                 else:
                     self._check_variant_qualifier(pattern.qualifier, subj_type, pattern.span)
             variant_name = pattern.name
-            if variant_name not in subj_type.variants:
+            enum_variants = self._env.type_table.enum_variants(subj_type)
+            if variant_name not in enum_variants:
                 raise AglTypeError(
                     f"Variant '{variant_name}' does not belong to enum "
                     f"'{subj_type.name}'.",
                     span=pattern.span,
                 )
-            vfields = subj_type.variants[variant_name]
+            vfields = enum_variants[variant_name]
 
             # Retrieve the registered field kinds for this variant constructor.
             field_kinds = self._env.get_constructor_field_kinds(
@@ -2045,12 +2047,13 @@ class _Checker:
                 f"non-enum type '{subj_type!r}'.",
                 span=pattern.span,
             )
-        if pattern.name not in subj_type.variants:
+        enum_variants = self._env.type_table.enum_variants(subj_type)
+        if pattern.name not in enum_variants:
             raise AglTypeError(
                 f"Variant '{pattern.name}' does not belong to enum '{subj_type.name}'.",
                 span=pattern.span,
             )
-        if subj_type.variants[pattern.name]:
+        if enum_variants[pattern.name]:
             raise AglTypeError(
                 f"'{pattern.name}' is a variant of enum '{subj_type.name}' that has "
                 f"fields, so a bare name cannot match it. Write '{pattern.name}(...)' "
@@ -2078,7 +2081,9 @@ class _Checker:
                 f"unexpected pattern kind on enum scrutinee: {type(pattern).__name__}"
             )
             covered.add(pattern.name)
-        missing = [name for name in subj_type.variants if name not in covered]
+        missing = [
+            name for name in self._env.type_table.enum_variants(subj_type) if name not in covered
+        ]
         if not missing:
             return
         self._warnings.append(

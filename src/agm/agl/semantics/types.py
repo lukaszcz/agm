@@ -43,7 +43,6 @@ from __future__ import annotations
 import enum as _enum
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import assert_never
 
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CORE_ID, ModuleId
 
@@ -325,7 +324,8 @@ class TypeVarType:
 
     Capability notes:
     - Not JSON-shaped (``is_json_shaped`` returns ``False``).
-    - Not comparable (``comparable_types`` returns ``False`` for either side).
+    - Not comparable (``semantics.type_table.comparable_types`` returns
+      ``False`` for either side).
     - Assignable only to an identical ``TypeVarType`` (same name); ``json``
       does NOT absorb it; ``BottomType`` is still assignable to it.
     """
@@ -386,71 +386,6 @@ def is_json_shaped(value_type: Type) -> bool:
     # RecordType, EnumType, ExceptionType, UnitType, AgentType, FunctionType
     # are not JSON-shaped.
     return False
-
-
-def _has_no_value_equality(t: Type) -> bool:
-    """True if ``t`` is, or transitively contains, a type with no value equality.
-
-    Function, agent, and unit values are opaque / identity-only and AgL gives
-    them no ``=``/``!=`` operator; ``unit`` has a single value but no equality
-    operator.  A list, dict, record, enum, or exception that transitively holds
-    such a type is therefore itself not comparable.  Recursive types are
-    rejected, so this recursion terminates.
-    """
-    match t:
-        case FunctionType() | AgentType() | UnitType():
-            return True
-        case ListType():
-            return _has_no_value_equality(t.elem)
-        case DictType():
-            return _has_no_value_equality(t.value)
-        case RecordType():
-            return any(_has_no_value_equality(ft) for ft in t.fields.values())
-        case EnumType():
-            return any(
-                _has_no_value_equality(ft)
-                for variant in t.variants.values()
-                for ft in variant.values()
-            )
-        case ExceptionType():
-            return any(_has_no_value_equality(ft) for ft in t.fields.values())
-        case (TextType() | JsonType() | BoolType() | IntType() | DecimalType()
-              | BottomType() | TypeVarType()):
-            return False
-        case _ as unreachable:  # pragma: no cover
-            assert_never(unreachable)
-
-
-def comparable_types(left: Type, right: Type) -> bool:
-    """Return ``True`` if ``left`` and ``right`` may be compared.
-
-    Equality (``=``, ``!=``) and ordering comparisons require both operands to
-    have the **same** type after the single ``int → decimal`` widening.  Unlike
-    :func:`is_assignable`, ``json`` does **not** absorb JSON-shaped scalars here:
-    ``json = json`` is allowed but ``json`` vs any non-``json`` type is a static
-    error (rule 4 as written).  Records/enums/exceptions compare only with their
-    own exact type.
-
-    AgL: ``AgentType``, ``FunctionType``, and ``UnitType`` operands are
-    NON-comparable — using ``=``/``!=``/``<`` on them is a static error. Agents
-    have no equality in AgL; function values are opaque.
-    This rule is **transitive**: a ``list``, ``dict``, ``record``, ``enum``, or
-    ``exception`` that (at any depth) contains a function, agent, or ``unit``
-    value likewise has no equality and cannot be compared with ``=``/``!=``.
-    """
-    # Function/agent/unit values — and any container/record/enum that transitively
-    # holds one — have no value equality.
-    if _has_no_value_equality(left) or _has_no_value_equality(right):
-        return False
-    # Bare type variables and the bottom type are never comparable here (the
-    # checker additionally rejects bare type variables at the comparison site).
-    if isinstance(left, (BottomType, TypeVarType)) or isinstance(right, (BottomType, TypeVarType)):
-        return False
-    if left == right:
-        return True
-    # The only cross-type comparison is numeric int↔decimal (either direction).
-    numeric = (IntType, DecimalType)
-    return isinstance(left, numeric) and isinstance(right, numeric)
 
 
 def is_assignable(value_type: Type, target_type: Type) -> bool:

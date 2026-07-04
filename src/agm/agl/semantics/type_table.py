@@ -15,21 +15,38 @@ may reference the declaration's own type parameters via ``TypeVarType`` nodes
 representation shared by records, enums, and (eventually) exceptions.
 ``TypeTable.record_fields``/``enum_variants`` substitute a handle's
 ``type_args`` into those templates and memoize the result per handle.
+
+``comparable_types``/``_has_no_value_equality`` live here rather than in
+``semantics.types`` because their record/enum arms recurse through the table
+instead of through embedded fields; ``semantics.types`` cannot import this
+module without a circular import.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import Literal, assert_never, cast
 
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
+    AgentType,
+    BoolType,
+    BottomType,
+    DecimalType,
+    DictType,
     EnumType,
+    ExceptionType,
+    FunctionType,
+    IntType,
+    JsonType,
+    ListType,
     RecordType,
+    TextType,
     Type,
     TypeVarType,
+    UnitType,
     substitute,
 )
 
@@ -219,6 +236,77 @@ class TypeTable:
                 continue
             self._defs[key] = typedef
             self._invalidate_cache_for(key)
+
+
+def _has_no_value_equality(t: Type, table: TypeTable) -> bool:
+    """True if ``t`` is, or transitively contains, a type with no value equality.
+
+    Function, agent, and unit values are opaque / identity-only and AgL gives
+    them no ``=``/``!=`` operator; ``unit`` has a single value but no equality
+    operator.  A list, dict, record, enum, or exception that transitively holds
+    such a type is therefore itself not comparable.  Record and enum handles are
+    walked through *table* (``record_fields``/``enum_variants``); exceptions
+    still carry their fields embedded, so that arm walks them directly.
+    Recursive types are rejected, so this recursion terminates — the walk
+    relies on the declaration graph being acyclic.
+    """
+    match t:
+        case FunctionType() | AgentType() | UnitType():
+            return True
+        case ListType():
+            return _has_no_value_equality(t.elem, table)
+        case DictType():
+            return _has_no_value_equality(t.value, table)
+        case RecordType():
+            return any(
+                _has_no_value_equality(ft, table) for ft in table.record_fields(t).values()
+            )
+        case EnumType():
+            return any(
+                _has_no_value_equality(ft, table)
+                for variant in table.enum_variants(t).values()
+                for ft in variant.values()
+            )
+        case ExceptionType():
+            return any(_has_no_value_equality(ft, table) for ft in t.fields.values())
+        case (TextType() | JsonType() | BoolType() | IntType() | DecimalType()
+              | BottomType() | TypeVarType()):
+            return False
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
+
+
+def comparable_types(left: Type, right: Type, table: TypeTable) -> bool:
+    """Return ``True`` if ``left`` and ``right`` may be compared.
+
+    Equality (``=``, ``!=``) and ordering comparisons require both operands to
+    have the **same** type after the single ``int → decimal`` widening.  Unlike
+    :func:`~agm.agl.semantics.types.is_assignable`, ``json`` does **not** absorb
+    JSON-shaped scalars here: ``json = json`` is allowed but ``json`` vs any
+    non-``json`` type is a static error.  Records/enums/exceptions compare only
+    with their own exact type.
+
+    ``AgentType``, ``FunctionType``, and ``UnitType`` operands are
+    NON-comparable — using ``=``/``!=``/``<`` on them is a static error. Agents
+    have no equality in AgL; function values are opaque.
+    This rule is **transitive**: a ``list``, ``dict``, ``record``, ``enum``, or
+    ``exception`` that (at any depth) contains a function, agent, or ``unit``
+    value likewise has no equality and cannot be compared with ``=``/``!=``.
+    ``table`` resolves record/enum field shapes for that transitive walk.
+    """
+    # Function/agent/unit values — and any container/record/enum that transitively
+    # holds one — have no value equality.
+    if _has_no_value_equality(left, table) or _has_no_value_equality(right, table):
+        return False
+    # Bare type variables and the bottom type are never comparable here (the
+    # checker additionally rejects bare type variables at the comparison site).
+    if isinstance(left, (BottomType, TypeVarType)) or isinstance(right, (BottomType, TypeVarType)):
+        return False
+    if left == right:
+        return True
+    # The only cross-type comparison is numeric int↔decimal (either direction).
+    numeric = (IntType, DecimalType)
+    return isinstance(left, numeric) and isinstance(right, numeric)
 
 
 def create_seeded_type_table() -> TypeTable:

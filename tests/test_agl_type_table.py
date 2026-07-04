@@ -19,16 +19,25 @@ from agm.agl.parser import parse_program
 from agm.agl.repl import ReplSession
 from agm.agl.scope import resolve
 from agm.agl.scope.graph import resolve_graph
-from agm.agl.semantics.type_table import TypeDef, TypeTable, create_seeded_type_table
+from agm.agl.semantics.type_table import (
+    TypeDef,
+    TypeTable,
+    comparable_types,
+    create_seeded_type_table,
+)
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
+    AgentType,
     DictType,
     EnumType,
+    ExceptionType,
+    FunctionType,
     IntType,
     ListType,
     RecordType,
     TextType,
     TypeVarType,
+    UnitType,
 )
 from agm.agl.syntax.nodes import LetDecl, VarDecl
 from agm.agl.typecheck import CheckedProgram, check
@@ -644,3 +653,131 @@ class TestReplSeeding:
         typedef = s._type_env.type_table.get(ENTRY_ID, "R")
         assert typedef is not None
         assert dict(typedef.fields) == {"b": TextType()}
+
+
+# ---------------------------------------------------------------------------
+# comparable_types / _has_no_value_equality: table-aware record/enum walk
+# ---------------------------------------------------------------------------
+
+
+class TestComparableTypesTableAware:
+    def test_record_with_only_scalar_fields_comparable(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Point",
+                module_id=ENTRY_ID,
+                fields=(("x", IntType()), ("y", IntType())),
+            )
+        )
+        handle = RecordType(name="Point", fields={}, module_id=ENTRY_ID)
+        assert comparable_types(handle, handle, table) is True
+
+    def test_generic_record_agent_field_via_instantiation_not_comparable(self) -> None:
+        # A generic record's field template is a bare type variable; only once
+        # a concrete handle instantiates it with an agent type does the field
+        # actually carry a no-equality type — record_fields substitutes
+        # type_args into the template to expose this.
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Box",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(("value", TypeVarType("T")),),
+            )
+        )
+        agent_handle = RecordType(
+            name="Box", fields={}, type_args=(AgentType(),), module_id=ENTRY_ID
+        )
+        assert comparable_types(agent_handle, agent_handle, table) is False
+
+        int_handle = RecordType(
+            name="Box", fields={}, type_args=(IntType(),), module_id=ENTRY_ID
+        )
+        assert comparable_types(int_handle, int_handle, table) is True
+
+    def test_generic_enum_function_variant_via_instantiation_not_comparable(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="enum",
+                name="Holder",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                variants=(("None", ()), ("Some", (("value", TypeVarType("T")),))),
+            )
+        )
+        fn_type = FunctionType(params=(IntType(),), result=IntType())
+        fn_handle = EnumType(
+            name="Holder", variants={}, type_args=(fn_type,), module_id=ENTRY_ID
+        )
+        assert comparable_types(fn_handle, fn_handle, table) is False
+
+        text_handle = EnumType(
+            name="Holder", variants={}, type_args=(TextType(),), module_id=ENTRY_ID
+        )
+        assert comparable_types(text_handle, text_handle, table) is True
+
+    def test_record_with_unit_nested_in_list_field_not_comparable(self) -> None:
+        # Nested depth: the record field itself is a list, whose element type
+        # is the type parameter — instantiating with unit makes the list of
+        # unit values transitively non-comparable.
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Wrapper",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(("items", ListType(TypeVarType("T"))),),
+            )
+        )
+        handle = RecordType(
+            name="Wrapper", fields={}, type_args=(UnitType(),), module_id=ENTRY_ID
+        )
+        assert comparable_types(handle, handle, table) is False
+
+    def test_enum_variant_with_agent_nested_in_dict_field_not_comparable(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="enum",
+                name="Bag",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                variants=(("Full", (("byKey", DictType(TypeVarType("T"))),)),),
+            )
+        )
+        handle = EnumType(
+            name="Bag", variants={}, type_args=(AgentType(),), module_id=ENTRY_ID
+        )
+        assert comparable_types(handle, handle, table) is False
+
+    def test_exception_with_function_field_not_comparable_via_embedded_fields(self) -> None:
+        # Exceptions are not registered in the TypeTable yet — the exception
+        # arm walks the embedded ``fields`` mapping directly, independent of
+        # whatever (possibly unrelated) table is passed in.
+        table = TypeTable()
+        handler_type = FunctionType(params=(), result=IntType())
+        exc = ExceptionType(name="Failure", fields={"handler": handler_type})
+        assert comparable_types(exc, exc, table) is False
+
+    def test_exception_with_only_scalar_fields_comparable_via_embedded_fields(self) -> None:
+        table = TypeTable()
+        exc = ExceptionType(name="Failure", fields={"code": IntType()})
+        assert comparable_types(exc, exc, table) is True
+
+    def test_record_containing_exception_with_function_field_not_comparable(self) -> None:
+        # A record field of exception type still walks that exception's
+        # embedded fields even though the record itself is table-resolved.
+        table = TypeTable()
+        handler_type = FunctionType(params=(), result=IntType())
+        exc = ExceptionType(name="Failure", fields={"handler": handler_type})
+        table.register(
+            TypeDef(kind="record", name="Report", module_id=ENTRY_ID, fields=(("cause", exc),))
+        )
+        handle = RecordType(name="Report", fields={}, module_id=ENTRY_ID)
+        assert comparable_types(handle, handle, table) is False

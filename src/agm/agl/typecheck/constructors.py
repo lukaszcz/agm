@@ -551,7 +551,7 @@ class ConstructorChecker:
                 f"'{owner_name}' is not a known enum type.",
                 span=span,
             )
-        if variant not in enum_type.variants:
+        if variant not in self._ctx._env.type_table.enum_variants(enum_type):
             raise AglTypeError(
                 f"Variant '{variant}' does not exist in enum '{owner_name}'.",
                 span=span,
@@ -584,9 +584,9 @@ class ConstructorChecker:
             )
         if isinstance(owner, EnumType):
             assert variant is not None, "variant is required for EnumType"
-            fields = owner.variants[variant]
+            fields = self._ctx._env.type_table.enum_variants(owner)[variant]
         else:
-            fields = owner.fields
+            fields = self._ctx._env.type_table.record_fields(owner)
         if fields:
             params = tuple(fields.values())
             return FunctionType(params=params, result=owner)
@@ -799,10 +799,10 @@ class ConstructorChecker:
     ) -> RecordType | EnumType | ExceptionType:
         if isinstance(owner, EnumType):
             assert variant is not None, "variant is required for EnumType"
-            fields = owner.variants[variant]
+            fields = self._ctx._env.type_table.enum_variants(owner)[variant]
             context_desc = f"variant '{owner.name}.{variant}'"
         elif isinstance(owner, RecordType):
-            fields = owner.fields
+            fields = self._ctx._env.type_table.record_fields(owner)
             context_desc = f"constructor '{owner.name}'"
         else:
             fields = owner.fields

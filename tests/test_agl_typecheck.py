@@ -26,13 +26,13 @@ from agm.agl.parser import parse_program
 from agm.agl.scope import resolve
 from agm.agl.scope.symbols import BinderKind, BindingRef, ScopeNode
 from agm.agl.scope.symbols import ResolvedProgram as _ResolvedProgram
+from agm.agl.semantics.type_table import TypeDef, TypeTable, comparable_types
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTION_NAMES,
     BUILTIN_PRELUDE_TYPE_NAMES,
     BUILTIN_PRELUDE_TYPES,
     EXCEPTION_BASE,
     TypeVarType,
-    comparable_types,
     is_assignable,
     is_json_shaped,
 )
@@ -220,10 +220,10 @@ class TestBottomType:
         assert not is_json_shaped(BottomType())
 
     def test_not_comparable_left(self) -> None:
-        assert not comparable_types(BottomType(), IntType())
+        assert not comparable_types(BottomType(), IntType(), _EMPTY_TABLE)
 
     def test_not_comparable_right(self) -> None:
-        assert not comparable_types(IntType(), BottomType())
+        assert not comparable_types(IntType(), BottomType(), _EMPTY_TABLE)
 
     def test_frozen(self) -> None:
         b = BottomType()
@@ -281,83 +281,124 @@ class TestIsJsonShaped:
         assert not is_json_shaped(BottomType())
 
 
+def _table_for(*nominal_types: RecordType | EnumType) -> TypeTable:
+    """Build a ``TypeTable`` with a ``TypeDef`` registered for each nominal type.
+
+    Lets ``comparable_types``' record/enum arms resolve field/variant shapes
+    for ad hoc types constructed directly in these tests, rather than through
+    a real program's type builder.
+    """
+    table = TypeTable()
+    for t in nominal_types:
+        if isinstance(t, RecordType):
+            table.register(
+                TypeDef(
+                    kind="record",
+                    name=t.name,
+                    module_id=t.module_id,
+                    fields=tuple(t.fields.items()),
+                )
+            )
+        else:
+            table.register(
+                TypeDef(
+                    kind="enum",
+                    name=t.name,
+                    module_id=t.module_id,
+                    variants=tuple(
+                        (vname, tuple(vfields.items())) for vname, vfields in t.variants.items()
+                    ),
+                )
+            )
+    return table
+
+
+_EMPTY_TABLE = TypeTable()
+
+
 class TestComparableTypes:
     def test_same_int(self) -> None:
-        assert comparable_types(IntType(), IntType())
+        assert comparable_types(IntType(), IntType(), _EMPTY_TABLE)
 
     def test_same_text(self) -> None:
-        assert comparable_types(TextType(), TextType())
+        assert comparable_types(TextType(), TextType(), _EMPTY_TABLE)
 
     def test_same_bool(self) -> None:
-        assert comparable_types(BoolType(), BoolType())
+        assert comparable_types(BoolType(), BoolType(), _EMPTY_TABLE)
 
     def test_int_decimal_cross(self) -> None:
-        assert comparable_types(IntType(), DecimalType())
-        assert comparable_types(DecimalType(), IntType())
+        assert comparable_types(IntType(), DecimalType(), _EMPTY_TABLE)
+        assert comparable_types(DecimalType(), IntType(), _EMPTY_TABLE)
 
     def test_agent_not_comparable(self) -> None:
-        assert not comparable_types(AgentType(), AgentType())
+        assert not comparable_types(AgentType(), AgentType(), _EMPTY_TABLE)
 
     def test_function_not_comparable(self) -> None:
         ft = FunctionType(params=(), result=IntType())
-        assert not comparable_types(ft, ft)
+        assert not comparable_types(ft, ft, _EMPTY_TABLE)
 
     def test_unit_not_comparable(self) -> None:
-        assert not comparable_types(UnitType(), UnitType())
+        assert not comparable_types(UnitType(), UnitType(), _EMPTY_TABLE)
 
     def test_bottom_not_comparable_left(self) -> None:
-        assert not comparable_types(BottomType(), IntType())
+        assert not comparable_types(BottomType(), IntType(), _EMPTY_TABLE)
 
     def test_bottom_not_comparable_right(self) -> None:
-        assert not comparable_types(IntType(), BottomType())
+        assert not comparable_types(IntType(), BottomType(), _EMPTY_TABLE)
 
     def test_cross_type_not_comparable(self) -> None:
-        assert not comparable_types(TextType(), IntType())
-        assert not comparable_types(JsonType(), TextType())
+        assert not comparable_types(TextType(), IntType(), _EMPTY_TABLE)
+        assert not comparable_types(JsonType(), TextType(), _EMPTY_TABLE)
 
     # Transitive rejection: containers/records/enums holding non-comparable types.
     def test_list_of_function_not_comparable(self) -> None:
         ft = FunctionType(params=(), result=IntType())
-        assert not comparable_types(ListType(elem=ft), ListType(elem=ft))
+        assert not comparable_types(ListType(elem=ft), ListType(elem=ft), _EMPTY_TABLE)
 
     def test_list_of_agent_not_comparable(self) -> None:
-        assert not comparable_types(ListType(elem=AgentType()), ListType(elem=AgentType()))
+        assert not comparable_types(
+            ListType(elem=AgentType()), ListType(elem=AgentType()), _EMPTY_TABLE
+        )
 
     def test_list_of_unit_not_comparable(self) -> None:
-        assert not comparable_types(ListType(elem=UnitType()), ListType(elem=UnitType()))
+        assert not comparable_types(
+            ListType(elem=UnitType()), ListType(elem=UnitType()), _EMPTY_TABLE
+        )
 
     def test_dict_of_function_not_comparable(self) -> None:
         ft = FunctionType(params=(IntType(),), result=TextType())
-        assert not comparable_types(DictType(value=ft), DictType(value=ft))
+        assert not comparable_types(DictType(value=ft), DictType(value=ft), _EMPTY_TABLE)
 
     def test_record_with_agent_field_not_comparable(self) -> None:
         rt = RecordType(name="R", fields={"a": AgentType()})
-        assert not comparable_types(rt, rt)
+        assert not comparable_types(rt, rt, _table_for(rt))
 
     def test_record_with_function_field_not_comparable(self) -> None:
         ft = FunctionType(params=(), result=IntType())
         rt = RecordType(name="R", fields={"f": ft})
-        assert not comparable_types(rt, rt)
+        assert not comparable_types(rt, rt, _table_for(rt))
 
     def test_enum_with_function_field_not_comparable(self) -> None:
         ft = FunctionType(params=(), result=IntType())
         et = EnumType(name="E", variants={"A": {"fn": ft}})
-        assert not comparable_types(et, et)
+        assert not comparable_types(et, et, _table_for(et))
 
     def test_exception_with_function_field_not_comparable(self) -> None:
         ft = FunctionType(params=(), result=IntType())
         et = ExceptionType(name="E", fields={"handler": ft})
-        assert not comparable_types(et, et)
+        assert not comparable_types(et, et, _EMPTY_TABLE)
 
     def test_record_with_only_scalars_comparable(self) -> None:
         rt = RecordType(name="R", fields={"x": IntType(), "y": TextType()})
-        assert comparable_types(rt, rt)
+        assert comparable_types(rt, rt, _table_for(rt))
 
     def test_list_of_int_comparable(self) -> None:
-        assert comparable_types(ListType(elem=IntType()), ListType(elem=IntType()))
+        assert comparable_types(ListType(elem=IntType()), ListType(elem=IntType()), _EMPTY_TABLE)
 
     def test_dict_of_text_comparable(self) -> None:
-        assert comparable_types(DictType(value=TextType()), DictType(value=TextType()))
+        assert comparable_types(
+            DictType(value=TextType()), DictType(value=TextType()), _EMPTY_TABLE
+        )
 
 
 class TestIsAssignable:

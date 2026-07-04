@@ -19,6 +19,7 @@ from __future__ import annotations
 import pytest
 
 from agm.agl.modules.ids import ModuleId
+from agm.agl.semantics.type_table import TypeTable, comparable_types
 from agm.agl.semantics.types import (
     AgentType,
     BoolType,
@@ -35,7 +36,6 @@ from agm.agl.semantics.types import (
     TextType,
     TypeVarType,
     UnitType,
-    comparable_types,
     contains_type_var,
     free_type_vars,
     is_assignable,
@@ -43,6 +43,11 @@ from agm.agl.semantics.types import (
     substitute,
 )
 from agm.agl.typecheck.env import TypeEnvironment
+
+# Comparability tests below only exercise scalar/agent/unit/function/typevar
+# operands, whose comparable_types arms never consult the TypeTable; an empty
+# table is a valid (unused) argument for those calls.
+_EMPTY_TABLE = TypeTable()
 
 # ---------------------------------------------------------------------------
 # UnitType
@@ -245,51 +250,51 @@ class TestIsAssignable:
 class TestComparableTypes:
     # New types: never comparable (even with themselves).
     def test_agent_vs_agent_not_comparable(self) -> None:
-        assert comparable_types(AgentType(), AgentType()) is False
+        assert comparable_types(AgentType(), AgentType(), _EMPTY_TABLE) is False
 
     def test_unit_vs_unit_not_comparable(self) -> None:
-        assert comparable_types(UnitType(), UnitType()) is False
+        assert comparable_types(UnitType(), UnitType(), _EMPTY_TABLE) is False
 
     def test_function_vs_same_function_not_comparable(self) -> None:
         f = FunctionType(params=(IntType(),), result=IntType())
-        assert comparable_types(f, f) is False
+        assert comparable_types(f, f, _EMPTY_TABLE) is False
 
     def test_function_vs_function_not_comparable(self) -> None:
         f1 = FunctionType(params=(IntType(),), result=IntType())
         f2 = FunctionType(params=(IntType(),), result=IntType())
-        assert comparable_types(f1, f2) is False
+        assert comparable_types(f1, f2, _EMPTY_TABLE) is False
 
     def test_agent_vs_int_not_comparable(self) -> None:
-        assert comparable_types(AgentType(), IntType()) is False
+        assert comparable_types(AgentType(), IntType(), _EMPTY_TABLE) is False
 
     def test_int_vs_agent_not_comparable(self) -> None:
-        assert comparable_types(IntType(), AgentType()) is False
+        assert comparable_types(IntType(), AgentType(), _EMPTY_TABLE) is False
 
     def test_unit_vs_text_not_comparable(self) -> None:
-        assert comparable_types(UnitType(), TextType()) is False
+        assert comparable_types(UnitType(), TextType(), _EMPTY_TABLE) is False
 
     def test_function_vs_text_not_comparable(self) -> None:
         f = FunctionType(params=(), result=UnitType())
-        assert comparable_types(f, TextType()) is False
+        assert comparable_types(f, TextType(), _EMPTY_TABLE) is False
 
     # Regression: existing scalar comparability is unchanged.
     def test_int_vs_int_comparable(self) -> None:
-        assert comparable_types(IntType(), IntType()) is True
+        assert comparable_types(IntType(), IntType(), _EMPTY_TABLE) is True
 
     def test_text_vs_text_comparable(self) -> None:
-        assert comparable_types(TextType(), TextType()) is True
+        assert comparable_types(TextType(), TextType(), _EMPTY_TABLE) is True
 
     def test_int_vs_decimal_comparable(self) -> None:
-        assert comparable_types(IntType(), DecimalType()) is True
+        assert comparable_types(IntType(), DecimalType(), _EMPTY_TABLE) is True
 
     def test_decimal_vs_int_comparable(self) -> None:
-        assert comparable_types(DecimalType(), IntType()) is True
+        assert comparable_types(DecimalType(), IntType(), _EMPTY_TABLE) is True
 
     def test_bool_vs_bool_comparable(self) -> None:
-        assert comparable_types(BoolType(), BoolType()) is True
+        assert comparable_types(BoolType(), BoolType(), _EMPTY_TABLE) is True
 
     def test_int_vs_text_not_comparable(self) -> None:
-        assert comparable_types(IntType(), TextType()) is False
+        assert comparable_types(IntType(), TextType(), _EMPTY_TABLE) is False
 
 
 # ---------------------------------------------------------------------------
@@ -477,13 +482,13 @@ class TestTypeVarType:
         assert is_json_shaped(TypeVarType("T")) is False
 
     def test_not_comparable_left(self) -> None:
-        assert comparable_types(TypeVarType("T"), IntType()) is False
+        assert comparable_types(TypeVarType("T"), IntType(), _EMPTY_TABLE) is False
 
     def test_not_comparable_right(self) -> None:
-        assert comparable_types(IntType(), TypeVarType("T")) is False
+        assert comparable_types(IntType(), TypeVarType("T"), _EMPTY_TABLE) is False
 
     def test_not_comparable_with_itself(self) -> None:
-        assert comparable_types(TypeVarType("T"), TypeVarType("T")) is False
+        assert comparable_types(TypeVarType("T"), TypeVarType("T"), _EMPTY_TABLE) is False
 
     def test_assignable_to_same_typevar(self) -> None:
         assert is_assignable(TypeVarType("T"), TypeVarType("T")) is True
@@ -659,13 +664,13 @@ class TestCapabilityGates:
         assert is_json_shaped(TypeVarType("T")) is False
 
     def test_typevar_not_comparable_left(self) -> None:
-        assert comparable_types(TypeVarType("T"), IntType()) is False
+        assert comparable_types(TypeVarType("T"), IntType(), _EMPTY_TABLE) is False
 
     def test_typevar_not_comparable_right(self) -> None:
-        assert comparable_types(IntType(), TypeVarType("T")) is False
+        assert comparable_types(IntType(), TypeVarType("T"), _EMPTY_TABLE) is False
 
     def test_typevar_not_comparable_with_itself(self) -> None:
-        assert comparable_types(TypeVarType("T"), TypeVarType("T")) is False
+        assert comparable_types(TypeVarType("T"), TypeVarType("T"), _EMPTY_TABLE) is False
 
     def test_typevar_assignable_to_same(self) -> None:
         assert is_assignable(TypeVarType("T"), TypeVarType("T")) is True

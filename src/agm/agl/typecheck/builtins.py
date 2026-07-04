@@ -14,6 +14,7 @@ from agm.agl.diagnostics import Diagnostic
 from agm.agl.semantics.types import (
     AgentType,
     BoolType,
+    BottomType,
     FunctionType,
     JsonType,
     TextType,
@@ -93,8 +94,8 @@ class BuiltinCallChecker:
                 "print() requires exactly one positional argument.",
                 span=node.span,
             )
-        self._ctx._check_expr(node.args[0], expected=None)
-        return UnitType()
+        arg_type = self._ctx._check_expr(node.args[0], expected=None)
+        return BottomType() if isinstance(arg_type, BottomType) else UnitType()
 
     # --- render ---
 
@@ -113,8 +114,8 @@ class BuiltinCallChecker:
                 )
             option_type = self._ctx._check_expr(named.value, expected=BoolType())
             self._ctx._assert_assignable(option_type, BoolType(), named.value.span)
-        self._ctx._check_expr(node.args[0], expected=None)
-        return TextType()
+        arg_type = self._ctx._check_expr(node.args[0], expected=None)
+        return BottomType() if isinstance(arg_type, BottomType) else TextType()
 
     # --- parse_json ---
 
@@ -126,7 +127,7 @@ class BuiltinCallChecker:
             )
         arg_type = self._ctx._check_expr(node.args[0], expected=TextType())
         self._ctx._assert_assignable(arg_type, TextType(), node.args[0].span)
-        return JsonType()
+        return BottomType() if isinstance(arg_type, BottomType) else JsonType()
 
     # --- ask ---
 

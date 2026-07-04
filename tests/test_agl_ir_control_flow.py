@@ -237,6 +237,42 @@ r
     assert ir["r"] == IntValue(7)
 
 
+def test_return_in_binding_rhs_makes_following_items_unreachable() -> None:
+    source = """\
+def f() -> int =
+  let unused: int = return 1
+  "unreachable"
+let r = f()
+r
+"""
+    ir = evaluate_ir(source)
+    assert ir["r"] == IntValue(1)
+
+
+def test_return_in_enclosing_expression_makes_expression_bottom() -> None:
+    source = """\
+def f() -> int =
+  print(return 1)
+  "unreachable"
+let r = f()
+r
+"""
+    ir = evaluate_ir(source)
+    assert ir["r"] == IntValue(1)
+
+
+def test_return_in_binary_operand_makes_expression_bottom() -> None:
+    source = """\
+def f() -> int =
+  (return 1) and false
+  "unreachable"
+let r = f()
+r
+"""
+    ir = evaluate_ir(source)
+    assert ir["r"] == IntValue(1)
+
+
 # ---------------------------------------------------------------------------
 # IR evaluation tests — raise
 # ---------------------------------------------------------------------------

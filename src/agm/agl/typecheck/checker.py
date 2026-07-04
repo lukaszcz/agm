@@ -472,11 +472,9 @@ class _Checker:
             return UnitType()  # The graph module-system pass processes imports/exports.
         # --- Binders ---
         if isinstance(item, (LetDecl, VarDecl)):
-            self._check_binding(item)
-            return UnitType()
+            return self._check_binding(item)
         if isinstance(item, AssignStmt):
-            self._check_assign_stmt(item)
-            return UnitType()
+            return self._check_assign_stmt(item)
         # --- Expr ---
         return self._check_expr(item, expected=expected)
 
@@ -623,7 +621,7 @@ class _Checker:
                 self._assert_assignable(val_type, declared_type, stmt.span)
         self._env.set_binding_type(stmt.node_id, declared_type)
 
-    def _check_binding(self, stmt: LetDecl | VarDecl) -> None:
+    def _check_binding(self, stmt: LetDecl | VarDecl) -> Type:
         ann_type = self._resolve_annotation(stmt.type_ann, stmt.span)
         val_type = self._check_expr(stmt.value, expected=ann_type)
         if ann_type is not None:
@@ -637,25 +635,25 @@ class _Checker:
                 )
             declared_type = val_type
         self._env.set_binding_type(stmt.node_id, declared_type)
+        return BottomType() if isinstance(val_type, BottomType) else UnitType()
 
-    def _check_assign_stmt(self, stmt: AssignStmt) -> None:
+    def _check_assign_stmt(self, stmt: AssignStmt) -> Type:
         if isinstance(stmt.target, NameTarget):
             ref = self._resolved.resolution[stmt.node_id]
             target_type = self._require_binding_type(ref)
             val_type = self._check_expr(stmt.value, expected=target_type)
             self._assert_assignable(val_type, target_type, stmt.span)
-            return
+            return BottomType() if isinstance(val_type, BottomType) else UnitType()
 
         if isinstance(stmt.target, IndexTarget):
-            self._check_indexed_assign_stmt(stmt, stmt.target)
-            return
+            return self._check_indexed_assign_stmt(stmt, stmt.target)
 
         raise AglTypeError(
             "assignment target must be a mutable variable or indexed mutable variable.",
             span=stmt.span,
         )
 
-    def _check_indexed_assign_stmt(self, stmt: AssignStmt, target: IndexTarget) -> None:
+    def _check_indexed_assign_stmt(self, stmt: AssignStmt, target: IndexTarget) -> Type:
         ref = self._resolved.resolution[stmt.node_id]
         if not ref.mutable:
             raise AglTypeError(
@@ -667,6 +665,7 @@ class _Checker:
         elem_type = self._check_index_target_type(target, root_type)
         value_type = self._check_expr(stmt.value, expected=elem_type)
         self._assert_assignable(value_type, elem_type, stmt.span)
+        return BottomType() if isinstance(value_type, BottomType) else UnitType()
 
     def _check_index_target_type(self, target: IndexTarget, root_type: Type) -> Type:
         container_type = self._check_index_target_container_type(target.obj, root_type)
@@ -1572,6 +1571,8 @@ class _Checker:
 
     def _check_binary_op(self, node: BinaryOp) -> Type:
         left_type = self._check_expr(node.left, expected=None)
+        if isinstance(left_type, BottomType):
+            return BottomType()
         right_type = self._check_expr(node.right, expected=None)
         op = node.op
 
@@ -1583,13 +1584,16 @@ class _Checker:
                     f"'{left_type!r}'.",
                     span=node.left.span,
                 )
-            if not isinstance(right_type, BoolType):
+            if not isinstance(right_type, (BoolType, BottomType)):
                 raise AglTypeError(
                     f"'{op_name}' requires bool operands; right operand has type "
                     f"'{right_type!r}'.",
                     span=node.right.span,
                 )
             return BoolType()
+
+        if isinstance(right_type, BottomType):
+            return BottomType()
 
         if op in (BinOp.EQ, BinOp.NEQ):
             # reject operations on bare type variables.

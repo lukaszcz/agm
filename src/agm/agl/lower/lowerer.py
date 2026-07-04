@@ -1557,10 +1557,18 @@ class _Lowerer:
         """Lower a BinaryOp to the appropriate IR node."""
         loc = self._loc(span)
 
+        left_type = self._node_type(left.node_id)
+        if isinstance(left_type, BottomType):
+            return self.lower_expr(left)
+
         if op is BinOp.AND:
             return IrAnd(location=loc, lhs=self.lower_expr(left), rhs=self.lower_expr(right))
         if op is BinOp.OR:
             return IrOr(location=loc, lhs=self.lower_expr(left), rhs=self.lower_expr(right))
+
+        right_type = self._node_type(right.node_id)
+        if isinstance(right_type, BottomType):
+            return IrSequence(location=loc, items=(self.lower_expr(left), self.lower_expr(right)))
         if op is BinOp.IN:
             return self._lower_in_op(left, right, loc)
         if op is BinOp.ADD or op is BinOp.SUB or op is BinOp.MUL:
@@ -2008,12 +2016,11 @@ class _Lowerer:
 
     def _item_is_bottom(self, item: Item) -> bool:
         """Return whether a checked block item unconditionally exits."""
+        if isinstance(item, (LetDecl, VarDecl, AssignStmt)):
+            return isinstance(self._node_type(item.value.node_id), BottomType)
         if isinstance(
             item,
             (
-                LetDecl,
-                VarDecl,
-                AssignStmt,
                 FuncDef,
                 RecordDef,
                 EnumDef,

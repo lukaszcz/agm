@@ -65,7 +65,7 @@ from agm.agl.syntax.nodes import (
     TemplateSegment,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.type_schema import derive_schema
+from agm.agl.type_schema import build_decode_schema, derive_schema
 from agm.agl.typecheck import check
 from agm.agl.typecheck.env import CheckedProgram, OutputContractSpec
 from tests._agl_helpers import ambient_agents_for
@@ -112,6 +112,30 @@ def _make_contract_for(typ: Type) -> OutputContract:
     """Build an OutputContract for a type via JsonCodec.make_contract."""
     codec = JsonCodec()
     return codec.make_contract(typ)
+
+
+def _parse_typed(
+    codec: JsonCodec, raw: str, typ: Type, *, strict_json: bool = False,
+    schema: dict[str, object] | None = None,
+) -> ParseResult:
+    """Call ``codec.parse`` with the schema/decode derived from *typ*.
+
+    Production code never derives schema/decode from a checker ``Type`` at
+    parse time (the IR evaluator always has the contract-carried
+    ``json_schema``/``decode`` on hand); this test-only helper exists so the
+    (still very readable) bulk of this suite can keep expressing expectations
+    in terms of a ``Type`` rather than hand-building a schema dict and a
+    ``DecodeSchema`` at every call site.  *schema*, when given, overrides only
+    the derived schema (mirrors ``JsonCodec.make_contract`` computing schema
+    and decode once and threading both into ``parse``); ``decode`` is always
+    built from *typ* and cannot be overridden.
+    """
+    return codec.parse(
+        raw,
+        strict_json=strict_json,
+        schema=schema if schema is not None else derive_schema(typ),
+        decode=build_decode_schema(typ),
+    )
 
 
 def _variant_schema_for_case(schema: dict[str, object], case: str) -> dict[str, object]:
@@ -489,94 +513,94 @@ class TestLenientParsing:
 
     def test_bare_integer(self) -> None:
         codec = self._codec()
-        result = codec.parse("5", IntType(), strict_json=False)
+        result = _parse_typed(codec, "5", IntType(), strict_json=False)
         assert result.ok is True
         assert result.value == IntValue(5)
 
     def test_bare_json_object(self) -> None:
         codec = self._codec()
         typ = JsonType()
-        result = codec.parse('{"k": 1}', typ, strict_json=False)
+        result = _parse_typed(codec, '{"k": 1}', typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
 
     def test_fenced_json_block_extracted(self) -> None:
         codec = self._codec()
-        result = codec.parse("```json\n5\n```", IntType(), strict_json=False)
+        result = _parse_typed(codec, "```json\n5\n```", IntType(), strict_json=False)
         assert result.ok is True
         assert result.value == IntValue(5)
 
     def test_fenced_json_object_extracted(self) -> None:
         codec = self._codec()
         typ = JsonType()
-        result = codec.parse('```json\n{"k": 1}\n```', typ, strict_json=False)
+        result = _parse_typed(codec, '```json\n{"k": 1}\n```', typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
 
     def test_prose_wrapped_json_extracted(self) -> None:
         codec = self._codec()
         typ = JsonType()
-        result = codec.parse('Here you go:\n[1, 2]', typ, strict_json=False)
+        result = _parse_typed(codec, 'Here you go:\n[1, 2]', typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
 
     def test_prose_and_fence(self) -> None:
         codec = self._codec()
-        result = codec.parse(
-            "Sure thing!\n```json\n5\n```", IntType(), strict_json=False
-        )
+        result = _parse_typed(codec, "Sure thing!\n```json\n5\n```", IntType(), strict_json=False)
         assert result.ok is True
         assert result.value == IntValue(5)
 
     def test_trailing_comma_repaired(self) -> None:
         codec = self._codec()
         typ = JsonType()
-        result = codec.parse('{"k": 1,}', typ, strict_json=False)
+        result = _parse_typed(codec, '{"k": 1,}', typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
 
     def test_single_quoted_keys_repaired(self) -> None:
         codec = self._codec()
         typ = JsonType()
-        result = codec.parse("{'k': 1}", typ, strict_json=False)
+        result = _parse_typed(codec, "{'k': 1}", typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
 
     def test_gibberish_fails(self) -> None:
         codec = self._codec()
-        result = codec.parse("complete gibberish, no number here", IntType(), strict_json=False)
+        result = _parse_typed(
+            codec, "complete gibberish, no number here", IntType(), strict_json=False
+        )
         assert result.ok is False
         assert result.value is None
 
     def test_bare_bool_recovered_from_prose(self) -> None:
         """Lenient recovery pulls a bare ``false`` keyword out of prose."""
         codec = self._codec()
-        result = codec.parse("The flag is:\nfalse", BoolType(), strict_json=False)
+        result = _parse_typed(codec, "The flag is:\nfalse", BoolType(), strict_json=False)
         assert result.ok is True
         assert result.value == BoolValue(False)
 
     def test_bare_null_recovered_from_prose(self) -> None:
         codec = self._codec()
-        result = codec.parse("Answer: null", JsonType(), strict_json=False)
+        result = _parse_typed(codec, "Answer: null", JsonType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
         assert result.value.raw is None
 
     def test_bare_number_recovered_from_prose(self) -> None:
         codec = self._codec()
-        result = codec.parse("the count is 42 items", IntType(), strict_json=False)
+        result = _parse_typed(codec, "the count is 42 items", IntType(), strict_json=False)
         assert result.ok is True
         assert result.value == IntValue(42)
 
     def test_keyword_substring_not_falsely_recovered(self) -> None:
         """``nullable`` must not be mistaken for a bare ``null`` token."""
         codec = self._codec()
-        result = codec.parse("the config is nullable here", BoolType(), strict_json=False)
+        result = _parse_typed(codec, "the config is nullable here", BoolType(), strict_json=False)
         assert result.ok is False
 
     def test_two_bare_scalars_in_prose_are_ambiguous(self) -> None:
         codec = self._codec()
-        result = codec.parse("maybe true or maybe false", BoolType(), strict_json=False)
+        result = _parse_typed(codec, "maybe true or maybe false", BoolType(), strict_json=False)
         assert result.ok is False
         assert "multiple JSON values" in result.error_msg
 
@@ -594,44 +618,44 @@ class TestStrictParsing:
 
     def test_bare_integer_accepted(self) -> None:
         codec = self._codec()
-        result = codec.parse("5", IntType(), strict_json=True)
+        result = _parse_typed(codec, "5", IntType(), strict_json=True)
         assert result.ok is True
         assert result.value == IntValue(5)
 
     def test_whitespace_around_bare_integer_accepted(self) -> None:
         codec = self._codec()
-        result = codec.parse("  5  ", IntType(), strict_json=True)
+        result = _parse_typed(codec, "  5  ", IntType(), strict_json=True)
         assert result.ok is True
         assert result.value == IntValue(5)
 
     def test_fenced_value_rejected(self) -> None:
         codec = self._codec()
-        result = codec.parse("```json\n5\n```", IntType(), strict_json=True)
+        result = _parse_typed(codec, "```json\n5\n```", IntType(), strict_json=True)
         assert result.ok is False
 
     def test_trailing_prose_rejected(self) -> None:
         codec = self._codec()
-        result = codec.parse("5\nThat is my final answer.", IntType(), strict_json=True)
+        result = _parse_typed(codec, "5\nThat is my final answer.", IntType(), strict_json=True)
         assert result.ok is False
 
     def test_single_quotes_rejected(self) -> None:
         codec = self._codec()
-        result = codec.parse("{'k': 1}", JsonType(), strict_json=True)
+        result = _parse_typed(codec, "{'k': 1}", JsonType(), strict_json=True)
         assert result.ok is False
 
     def test_trailing_comma_rejected(self) -> None:
         codec = self._codec()
-        result = codec.parse('{"k": 1,}', JsonType(), strict_json=True)
+        result = _parse_typed(codec, '{"k": 1,}', JsonType(), strict_json=True)
         assert result.ok is False
 
     def test_bare_object_accepted(self) -> None:
         codec = self._codec()
-        result = codec.parse('{"k": 1}', JsonType(), strict_json=True)
+        result = _parse_typed(codec, '{"k": 1}', JsonType(), strict_json=True)
         assert result.ok is True
 
     def test_fenced_object_rejected(self) -> None:
         codec = self._codec()
-        result = codec.parse('```json\n{"k": 1}\n```', JsonType(), strict_json=True)
+        result = _parse_typed(codec, '```json\n{"k": 1}\n```', JsonType(), strict_json=True)
         assert result.ok is False
 
 
@@ -645,14 +669,14 @@ class TestDecimalExactness:
 
     def test_decimal_stays_decimal_in_lenient(self) -> None:
         codec = JsonCodec()
-        result = codec.parse("1.5", DecimalType(), strict_json=False)
+        result = _parse_typed(codec, "1.5", DecimalType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, DecimalValue)
         assert result.value.value == Decimal("1.5")
 
     def test_decimal_stays_decimal_in_strict(self) -> None:
         codec = JsonCodec()
-        result = codec.parse("1.5", DecimalType(), strict_json=True)
+        result = _parse_typed(codec, "1.5", DecimalType(), strict_json=True)
         assert result.ok is True
         assert isinstance(result.value, DecimalValue)
         assert result.value.value == Decimal("1.5")
@@ -660,7 +684,7 @@ class TestDecimalExactness:
     def test_decimal_in_record_field(self) -> None:
         codec = JsonCodec()
         typ = RecordType(name="Foo", fields={"w": DecimalType()})
-        result = codec.parse('{"w": 1.5}', typ, strict_json=False)
+        result = _parse_typed(codec, '{"w": 1.5}', typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, RecordValue)
         w = result.value.fields["w"]
@@ -669,20 +693,20 @@ class TestDecimalExactness:
 
     def test_decimal_from_fenced_stays_exact(self) -> None:
         codec = JsonCodec()
-        result = codec.parse("```json\n1.5\n```", DecimalType(), strict_json=False)
+        result = _parse_typed(codec, "```json\n1.5\n```", DecimalType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, DecimalValue)
         assert result.value.value == Decimal("1.5")
 
     def test_decimal_not_float(self) -> None:
         codec = JsonCodec()
-        result = codec.parse("1.5", DecimalType(), strict_json=False)
+        result = _parse_typed(codec, "1.5", DecimalType(), strict_json=False)
         assert isinstance(result.value, DecimalValue)
         assert not isinstance(result.value.value, float)
 
     def test_int_widened_to_decimal_when_target_says_decimal(self) -> None:
         codec = JsonCodec()
-        result = codec.parse("3", DecimalType(), strict_json=False)
+        result = _parse_typed(codec, "3", DecimalType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, DecimalValue)
         assert result.value.value == Decimal("3")
@@ -691,7 +715,7 @@ class TestDecimalExactness:
         # Bare valid JSON is parsed directly (no json-repair), so Decimal precision
         # is fully preserved by json.loads(parse_float=Decimal).
         codec = JsonCodec()
-        result = codec.parse("1.23456789012345678901", DecimalType(), strict_json=False)
+        result = _parse_typed(codec, "1.23456789012345678901", DecimalType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, DecimalValue)
         assert result.value.value == Decimal("1.23456789012345678901")
@@ -700,7 +724,7 @@ class TestDecimalExactness:
         """Decimal exactness through json-repair path (single-quote input)."""
         codec = JsonCodec()
         typ = RecordType(name="Foo", fields={"w": DecimalType()})
-        result = codec.parse("{'w': 1.5}", typ, strict_json=False)
+        result = _parse_typed(codec, "{'w': 1.5}", typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, RecordValue)
         w = result.value.fields["w"]
@@ -716,26 +740,26 @@ class TestDecimalExactness:
 class TestTypedValueConstruction:
     def test_int_value(self) -> None:
         codec = JsonCodec()
-        result = codec.parse("42", IntType(), strict_json=False)
+        result = _parse_typed(codec, "42", IntType(), strict_json=False)
         assert result.ok is True
         assert result.value == IntValue(42)
 
     def test_bool_value_true(self) -> None:
         codec = JsonCodec()
-        result = codec.parse("true", BoolType(), strict_json=False)
+        result = _parse_typed(codec, "true", BoolType(), strict_json=False)
         assert result.ok is True
         assert result.value == BoolValue(True)
 
     def test_bool_value_false(self) -> None:
         codec = JsonCodec()
-        result = codec.parse("false", BoolType(), strict_json=False)
+        result = _parse_typed(codec, "false", BoolType(), strict_json=False)
         assert result.ok is True
         assert result.value == BoolValue(False)
 
     def test_list_of_text(self) -> None:
         codec = JsonCodec()
         typ = ListType(elem=TextType())
-        result = codec.parse('["a", "b"]', typ, strict_json=False)
+        result = _parse_typed(codec, '["a", "b"]', typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, ListValue)
         assert result.value.elements == (TextValue("a"), TextValue("b"))
@@ -743,7 +767,7 @@ class TestTypedValueConstruction:
     def test_list_of_int(self) -> None:
         codec = JsonCodec()
         typ = ListType(elem=IntType())
-        result = codec.parse('[1, 2, 3]', typ, strict_json=False)
+        result = _parse_typed(codec, '[1, 2, 3]', typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, ListValue)
         assert result.value.elements == (IntValue(1), IntValue(2), IntValue(3))
@@ -751,7 +775,7 @@ class TestTypedValueConstruction:
     def test_dict_of_text(self) -> None:
         codec = JsonCodec()
         typ = DictType(value=TextType())
-        result = codec.parse('{"a": "hello"}', typ, strict_json=False)
+        result = _parse_typed(codec, '{"a": "hello"}', typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, DictValue)
         assert result.value.entries == {"a": TextValue("hello")}
@@ -760,7 +784,7 @@ class TestTypedValueConstruction:
         codec = JsonCodec()
         typ = _make_issue_type()
         raw = '{"title": "Bug", "severity": 5, "description": "Oh no"}'
-        result = codec.parse(raw, typ, strict_json=False)
+        result = _parse_typed(codec, raw, typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, RecordValue)
         assert result.value.display_name == "Issue"
@@ -771,7 +795,7 @@ class TestTypedValueConstruction:
     def test_enum_nullary_variant(self) -> None:
         codec = JsonCodec()
         typ = _make_review_type()
-        result = codec.parse('{"$case": "Pass"}', typ, strict_json=False)
+        result = _parse_typed(codec, '{"$case": "Pass"}', typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, EnumValue)
         assert result.value.display_name == "Review"
@@ -782,7 +806,7 @@ class TestTypedValueConstruction:
         codec = JsonCodec()
         typ = _make_review_type()
         raw = '{"$case": "Fail", "issues": ["a", "b"]}'
-        result = codec.parse(raw, typ, strict_json=False)
+        result = _parse_typed(codec, raw, typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, EnumValue)
         assert result.value.variant == "Fail"
@@ -792,7 +816,7 @@ class TestTypedValueConstruction:
 
     def test_json_value_wraps_raw(self) -> None:
         codec = JsonCodec()
-        result = codec.parse('{"a": 1}', JsonType(), strict_json=False)
+        result = _parse_typed(codec, '{"a": 1}', JsonType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
 
@@ -801,7 +825,7 @@ class TestTypedValueConstruction:
         inner = RecordType(name="Inner", fields={"x": IntType()})
         outer = RecordType(name="Outer", fields={"inner": inner, "n": IntType()})
         raw = '{"inner": {"x": 7}, "n": 3}'
-        result = codec.parse(raw, outer, strict_json=False)
+        result = _parse_typed(codec, raw, outer, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, RecordValue)
         inner_val = result.value.fields["inner"]
@@ -811,7 +835,7 @@ class TestTypedValueConstruction:
     def test_list_in_record_field(self) -> None:
         codec = JsonCodec()
         typ = RecordType(name="Doc", fields={"tags": ListType(elem=TextType())})
-        result = codec.parse('{"tags": ["x", "y"]}', typ, strict_json=False)
+        result = _parse_typed(codec, '{"tags": ["x", "y"]}', typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, RecordValue)
         tags = result.value.fields["tags"]
@@ -829,7 +853,7 @@ class TestSchemaValidationErrors:
         codec = JsonCodec()
         typ = _make_issue_type()
         # missing severity and description
-        result = codec.parse('{"title": "Bug"}', typ, strict_json=False)
+        result = _parse_typed(codec, '{"title": "Bug"}', typ, strict_json=False)
         assert result.ok is False
         assert result.value is None
 
@@ -837,43 +861,43 @@ class TestSchemaValidationErrors:
         codec = JsonCodec()
         typ = _make_issue_type()
         raw = '{"title": "Bug", "severity": 1, "description": "x", "extra": true}'
-        result = codec.parse(raw, typ, strict_json=False)
+        result = _parse_typed(codec, raw, typ, strict_json=False)
         assert result.ok is False
 
     def test_wrong_type_fails(self) -> None:
         codec = JsonCodec()
         typ = _make_issue_type()
         raw = '{"title": "Bug", "severity": "high", "description": "x"}'
-        result = codec.parse(raw, typ, strict_json=False)
+        result = _parse_typed(codec, raw, typ, strict_json=False)
         assert result.ok is False
 
     def test_bad_case_tag_fails(self) -> None:
         codec = JsonCodec()
         typ = _make_review_type()
-        result = codec.parse('{"$case": "Unknown"}', typ, strict_json=False)
+        result = _parse_typed(codec, '{"$case": "Unknown"}', typ, strict_json=False)
         assert result.ok is False
 
     def test_missing_case_field_fails(self) -> None:
         codec = JsonCodec()
         typ = _make_review_type()
-        result = codec.parse('{"issues": ["x"]}', typ, strict_json=False)
+        result = _parse_typed(codec, '{"issues": ["x"]}', typ, strict_json=False)
         assert result.ok is False
 
     def test_enum_missing_payload_field_fails(self) -> None:
         codec = JsonCodec()
         typ = _make_review_type()
         # Fail variant but missing issues
-        result = codec.parse('{"$case": "Fail"}', typ, strict_json=False)
+        result = _parse_typed(codec, '{"$case": "Fail"}', typ, strict_json=False)
         assert result.ok is False
 
     def test_failure_result_has_no_value(self) -> None:
         codec = JsonCodec()
-        result = codec.parse('{}', _make_issue_type(), strict_json=False)
+        result = _parse_typed(codec, '{}', _make_issue_type(), strict_json=False)
         assert result.value is None
 
     def test_failure_result_has_error_msg(self) -> None:
         codec = JsonCodec()
-        result = codec.parse('{}', _make_issue_type(), strict_json=False)
+        result = _parse_typed(codec, '{}', _make_issue_type(), strict_json=False)
         assert result.error_msg
         assert isinstance(result.error_msg, str)
 
@@ -891,7 +915,7 @@ class TestStructuredValidationErrors:
 
     def test_missing_field_category(self) -> None:
         codec = JsonCodec()
-        result = codec.parse('{"title": "Bug"}', _make_issue_type(), strict_json=False)
+        result = _parse_typed(codec, '{"title": "Bug"}', _make_issue_type(), strict_json=False)
         assert result.ok is False
         assert "missing_field" in self._categories(result)
         missing = [e for e in result.errors if e.category == "missing_field"]
@@ -900,7 +924,7 @@ class TestStructuredValidationErrors:
     def test_unknown_field_category(self) -> None:
         codec = JsonCodec()
         raw = '{"title": "Bug", "severity": 1, "description": "x", "extra": true}'
-        result = codec.parse(raw, _make_issue_type(), strict_json=False)
+        result = _parse_typed(codec, raw, _make_issue_type(), strict_json=False)
         assert result.ok is False
         assert self._categories(result) == ["unknown_field"]
         # The opaque jsonschema phrasing must not leak verbatim as the category.
@@ -909,7 +933,7 @@ class TestStructuredValidationErrors:
     def test_wrong_type_category(self) -> None:
         codec = JsonCodec()
         raw = '{"title": "Bug", "severity": "high", "description": "x"}'
-        result = codec.parse(raw, _make_issue_type(), strict_json=False)
+        result = _parse_typed(codec, raw, _make_issue_type(), strict_json=False)
         assert result.ok is False
         wrong = [e for e in result.errors if e.category == "wrong_type"]
         assert wrong
@@ -918,7 +942,7 @@ class TestStructuredValidationErrors:
 
     def test_bad_case_unknown_variant(self) -> None:
         codec = JsonCodec()
-        result = codec.parse('{"$case": "Nope"}', _make_review_type(), strict_json=False)
+        result = _parse_typed(codec, '{"$case": "Nope"}', _make_review_type(), strict_json=False)
         assert result.ok is False
         assert self._categories(result) == ["bad_case"]
         msg = result.errors[0].message
@@ -929,7 +953,7 @@ class TestStructuredValidationErrors:
 
     def test_bad_case_missing_tag(self) -> None:
         codec = JsonCodec()
-        result = codec.parse('{"issues": ["x"]}', _make_review_type(), strict_json=False)
+        result = _parse_typed(codec, '{"issues": ["x"]}', _make_review_type(), strict_json=False)
         assert result.ok is False
         assert self._categories(result) == ["bad_case"]
         assert result.errors[0].field == "$case"
@@ -938,7 +962,7 @@ class TestStructuredValidationErrors:
     def test_enum_missing_payload_field_is_missing_field(self) -> None:
         codec = JsonCodec()
         # Fail variant requires "issues".
-        result = codec.parse('{"$case": "Fail"}', _make_review_type(), strict_json=False)
+        result = _parse_typed(codec, '{"$case": "Fail"}', _make_review_type(), strict_json=False)
         assert result.ok is False
         assert self._categories(result) == ["missing_field"]
         assert result.errors[0].field == "issues"
@@ -946,7 +970,9 @@ class TestStructuredValidationErrors:
 
     def test_enum_unknown_payload_field_is_unknown_field(self) -> None:
         codec = JsonCodec()
-        result = codec.parse('{"$case": "Pass", "junk": 1}', _make_review_type(), strict_json=False)
+        result = _parse_typed(
+            codec, '{"$case": "Pass", "junk": 1}', _make_review_type(), strict_json=False
+        )
         assert result.ok is False
         assert self._categories(result) == ["unknown_field"]
         assert result.errors[0].field == "junk"
@@ -955,7 +981,7 @@ class TestStructuredValidationErrors:
         """Type-directed enum resolution works under a record field path."""
         codec = JsonCodec()
         typ = RecordType(name="Wrapper", fields={"review": _make_review_type()})
-        result = codec.parse('{"review": {"$case": "Bogus"}}', typ, strict_json=False)
+        result = _parse_typed(codec, '{"review": {"$case": "Bogus"}}', typ, strict_json=False)
         assert result.ok is False
         assert self._categories(result) == ["bad_case"]
         assert "Bogus" in result.errors[0].message
@@ -963,14 +989,16 @@ class TestStructuredValidationErrors:
     def test_success_has_no_errors(self) -> None:
         codec = JsonCodec()
         raw = '{"title": "Bug", "severity": 1, "description": "x"}'
-        result = codec.parse(raw, _make_issue_type(), strict_json=False)
+        result = _parse_typed(codec, raw, _make_issue_type(), strict_json=False)
         assert result.ok is True
         assert result.errors == ()
 
     def test_non_validation_failure_has_no_errors(self) -> None:
         """A failure to extract any JSON is not a schema-validation error."""
         codec = JsonCodec()
-        result = codec.parse("complete gibberish ###", _make_issue_type(), strict_json=False)
+        result = _parse_typed(
+            codec, "complete gibberish ###", _make_issue_type(), strict_json=False
+        )
         assert result.ok is False
         assert result.errors == ()
 
@@ -1088,33 +1116,33 @@ class TestValidationErrorsThroughRuntime:
 class TestMultiValueAmbiguity:
     def test_two_objects_rejected(self) -> None:
         codec = JsonCodec()
-        result = codec.parse('{"a":1} {"b":2}', JsonType(), strict_json=False)
+        result = _parse_typed(codec, '{"a":1} {"b":2}', JsonType(), strict_json=False)
         assert result.ok is False
         assert "multiple JSON values" in result.error_msg
 
     def test_two_objects_newline_separated_rejected(self) -> None:
         codec = JsonCodec()
-        result = codec.parse('{"a":1}\n{"b":2}', JsonType(), strict_json=False)
+        result = _parse_typed(codec, '{"a":1}\n{"b":2}', JsonType(), strict_json=False)
         assert result.ok is False
         assert "multiple JSON values" in result.error_msg
 
     def test_text_then_single_object_recovers(self) -> None:
         codec = JsonCodec()
-        result = codec.parse('text then {"a": 1}', JsonType(), strict_json=False)
+        result = _parse_typed(codec, 'text then {"a": 1}', JsonType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
         assert result.value.raw == {"a": 1}
 
     def test_bare_array_parses(self) -> None:
         codec = JsonCodec()
-        result = codec.parse('[1, 2]', JsonType(), strict_json=False)
+        result = _parse_typed(codec, '[1, 2]', JsonType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
         assert result.value.raw == [1, 2]
 
     def test_fenced_array_parses(self) -> None:
         codec = JsonCodec()
-        result = codec.parse('```json\n[1, 2]\n```', JsonType(), strict_json=False)
+        result = _parse_typed(codec, '```json\n[1, 2]\n```', JsonType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
         assert result.value.raw == [1, 2]
@@ -1122,35 +1150,35 @@ class TestMultiValueAmbiguity:
     def test_prose_wrapped_array_recovers(self) -> None:
         """A genuine single array wrapped in prose is recovered (not ambiguous)."""
         codec = JsonCodec()
-        result = codec.parse('Here you go:\n[1, 2]', JsonType(), strict_json=False)
+        result = _parse_typed(codec, 'Here you go:\n[1, 2]', JsonType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
         assert result.value.raw == [1, 2]
 
     def test_ambiguous_inside_fence_rejected(self) -> None:
         codec = JsonCodec()
-        result = codec.parse('```json\n{"a":1} {"b":2}\n```', JsonType(), strict_json=False)
+        result = _parse_typed(codec, '```json\n{"a":1} {"b":2}\n```', JsonType(), strict_json=False)
         assert result.ok is False
         assert "multiple JSON values" in result.error_msg
 
     def test_two_objects_with_inner_array_rejected(self) -> None:
         """``{"a": [1]} {"b": 2}`` is ambiguous despite the inner ``[``."""
         codec = JsonCodec()
-        result = codec.parse('{"a": [1]} {"b": 2}', JsonType(), strict_json=False)
+        result = _parse_typed(codec, '{"a": [1]} {"b": 2}', JsonType(), strict_json=False)
         assert result.ok is False
         assert "multiple JSON values" in result.error_msg
 
     def test_two_values_with_escaped_bracket_string_rejected(self) -> None:
         """a bracket inside an escaped string does not hide the second value."""
         codec = JsonCodec()
-        result = codec.parse('{"a": "[x]"} {"b": 2}', JsonType(), strict_json=False)
+        result = _parse_typed(codec, '{"a": "[x]"} {"b": 2}', JsonType(), strict_json=False)
         assert result.ok is False
         assert "multiple JSON values" in result.error_msg
 
     def test_single_object_with_inner_array_recovers(self) -> None:
         """a single object containing an array is one value (not ambiguous)."""
         codec = JsonCodec()
-        result = codec.parse('{"a": [1, 2]}', JsonType(), strict_json=False)
+        result = _parse_typed(codec, '{"a": [1, 2]}', JsonType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
         assert result.value.raw == {"a": [1, 2]}
@@ -1476,7 +1504,7 @@ class TestCaseDispatch:
                 "Running": {"progress": IntType()},
             },
         )
-        result = codec.parse('{"$case": "Running", "progress": 50}', typ, strict_json=False)
+        result = _parse_typed(codec, '{"$case": "Running", "progress": 50}', typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, EnumValue)
         assert result.value.variant == "Running"
@@ -1485,19 +1513,19 @@ class TestCaseDispatch:
     def test_bad_case_fails(self) -> None:
         codec = JsonCodec()
         typ = EnumType(name="Status", variants={"Done": {}})
-        result = codec.parse('{"$case": "Exploded"}', typ, strict_json=False)
+        result = _parse_typed(codec, '{"$case": "Exploded"}', typ, strict_json=False)
         assert result.ok is False
 
     def test_missing_case_tag_fails(self) -> None:
         codec = JsonCodec()
         typ = EnumType(name="Status", variants={"Done": {}})
-        result = codec.parse('{"done": true}', typ, strict_json=False)
+        result = _parse_typed(codec, '{"done": true}', typ, strict_json=False)
         assert result.ok is False
 
     def test_nullary_enum_no_extra_fields(self) -> None:
         codec = JsonCodec()
         typ = EnumType(name="Status", variants={"Done": {}})
-        result = codec.parse('{"$case": "Done"}', typ, strict_json=False)
+        result = _parse_typed(codec, '{"$case": "Done"}', typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, EnumValue)
         assert result.value.fields == {}
@@ -1511,14 +1539,14 @@ class TestCaseDispatch:
 class TestNormalizedRaw:
     def test_lenient_sets_normalized_raw_when_extraction_occurred(self) -> None:
         codec = JsonCodec()
-        result = codec.parse("```json\n5\n```", IntType(), strict_json=False)
+        result = _parse_typed(codec, "```json\n5\n```", IntType(), strict_json=False)
         assert result.ok is True
         # normalized_raw should be the extracted/repaired JSON text
         assert result.normalized_raw is not None
 
     def test_bare_json_normalized_raw(self) -> None:
         codec = JsonCodec()
-        result = codec.parse("5", IntType(), strict_json=False)
+        result = _parse_typed(codec, "5", IntType(), strict_json=False)
         assert result.ok is True
         # Even bare JSON has a normalized_raw
         assert result.normalized_raw is not None
@@ -1527,7 +1555,7 @@ class TestNormalizedRaw:
         """a fenced-but-schema-invalid response still exposes the recovered text."""
         codec = JsonCodec()
         # Fenced JSON that is valid JSON but the wrong shape for an int target.
-        result = codec.parse('```json\n"oops"\n```', IntType(), strict_json=False)
+        result = _parse_typed(codec, '```json\n"oops"\n```', IntType(), strict_json=False)
         assert result.ok is False
         # The recovered (normalized) JSON text is threaded through the failure,
         # distinct from the fenced raw response.
@@ -1539,7 +1567,7 @@ class TestNormalizedRaw:
         # 1.5 passes a decimal schema check but cannot convert to an int Value;
         # exercises the conversion-failure branch.  Use a shape jsonschema lets
         # through but _json_to_value rejects: a float for an int via repair.
-        result = codec.parse("not json at all", IntType(), strict_json=False)
+        result = _parse_typed(codec, "not json at all", IntType(), strict_json=False)
         assert result.ok is False
 
 
@@ -1571,7 +1599,7 @@ issue
         """Enum can be parsed via JsonCodec from a JSON string."""
         codec = JsonCodec()
         typ = EnumType(name="Status", variants={"Done": {}, "Pending": {}})
-        result = codec.parse('{"$case": "Done"}', typ, strict_json=False)
+        result = _parse_typed(codec, '{"$case": "Done"}', typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, EnumValue)
         assert result.value.variant == "Done"
@@ -1654,9 +1682,6 @@ issue
 
 class TestDecodeValueErrorBranches:
     """Cover the ValueError branches inside decode_value / _decode_scalar."""
-
-    def _parse(self, raw: str, typ: Type) -> ParseResult:
-        return JsonCodec().parse(raw, typ, strict_json=False)
 
     def test_text_type_got_non_string(self) -> None:
         from agm.agl.ir.contracts import ScalarDecode, ScalarKind
@@ -1822,21 +1847,21 @@ class TestDecodeValueErrorBranches:
         ``{"type": "integer"}`` accepts ``1.0``.
         """
         codec = JsonCodec()
-        result = codec.parse("1.0", IntType(), strict_json=False)
+        result = _parse_typed(codec, "1.0", IntType(), strict_json=False)
         assert result.ok is True
         assert result.value == IntValue(1)
 
     def test_integral_decimal_to_int_strict(self) -> None:
         """integral-Decimal normalization also applies on the strict path."""
         codec = JsonCodec()
-        result = codec.parse("1.0", IntType(), strict_json=True)
+        result = _parse_typed(codec, "1.0", IntType(), strict_json=True)
         assert result.ok is True
         assert result.value == IntValue(1)
 
     def test_non_integral_decimal_rejected_for_int(self) -> None:
         """``1.5`` still fails an int target (not integral)."""
         codec = JsonCodec()
-        result = codec.parse("1.5", IntType(), strict_json=False)
+        result = _parse_typed(codec, "1.5", IntType(), strict_json=False)
         assert result.ok is False
         assert result.value is None
         assert any(e.category == "wrong_type" for e in result.errors)
@@ -1849,7 +1874,7 @@ class TestDecodeValueErrorBranches:
         value equals ``1`` exactly == Decimal('1.0')``).
         """
         codec = JsonCodec()
-        result = codec.parse("1.0", DecimalType(), strict_json=False)
+        result = _parse_typed(codec, "1.0", DecimalType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, DecimalValue)
         # Value exactness: numerically equal to both 1 and 1.0.
@@ -1884,14 +1909,14 @@ class TestFencedMalformedJson:
         codec = JsonCodec()
         # Fenced content with single-quoted keys — json-repair fixes it.
         raw = "```json\n{'k': 1}\n```"
-        result = codec.parse(raw, JsonType(), strict_json=False)
+        result = _parse_typed(codec, raw, JsonType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
 
     def test_fenced_trailing_comma_repaired(self) -> None:
         codec = JsonCodec()
         raw = "```json\n{\"a\": 1,}\n```"
-        result = codec.parse(raw, JsonType(), strict_json=False)
+        result = _parse_typed(codec, raw, JsonType(), strict_json=False)
         assert result.ok is True
 
 
@@ -1906,7 +1931,7 @@ class TestLenientParseAfterRepair:
     def test_schema_validation_failure_message(self) -> None:
         # Passing a string for an int target fails schema validation.
         codec = JsonCodec()
-        result = codec.parse('"not an int"', IntType(), strict_json=False)
+        result = _parse_typed(codec, '"not an int"', IntType(), strict_json=False)
         assert result.ok is False
         assert "Schema validation failed" in result.error_msg
 
@@ -1931,7 +1956,7 @@ class TestFencedRepairFallback:
         # Fenced block with gibberish that repairs to "" or empty.
         # The outer prose has the real JSON.
         raw = "Here is the value: 42 ```json\n\n```"
-        result = codec.parse(raw, IntType(), strict_json=False)
+        result = _parse_typed(codec, raw, IntType(), strict_json=False)
         assert result.ok
         assert result.value == IntValue(42)
         assert result.normalized_raw == "42"
@@ -1945,7 +1970,7 @@ class TestFencedRepairFallback:
         codec = JsonCodec()
         # Patch _extract_json_text to return a string that is NOT valid JSON.
         with patch.object(codec_module, "_extract_json_text", return_value="{broken"):
-            result = codec.parse("anything", IntType(), strict_json=False)
+            result = _parse_typed(codec, "anything", IntType(), strict_json=False)
         assert result.ok is False
         assert "JSON parse failed after repair attempt" in result.error_msg
 
@@ -1961,7 +1986,7 @@ class TestValidationMappingCoverage:
     def test_trailing_comma_array_recovers_not_ambiguous(self) -> None:
         """A repaired array whose candidate already starts with '[' is not ambiguous."""
         codec = JsonCodec()
-        result = codec.parse("[1, 2,]", JsonType(), strict_json=False)
+        result = _parse_typed(codec, "[1, 2,]", JsonType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
         assert result.value.raw == [1, 2]
@@ -1970,7 +1995,7 @@ class TestValidationMappingCoverage:
         codec = JsonCodec()
         typ = EnumType(name="E", variants={"V": {"a": IntType(), "b": IntType()}})
         # "a" present, "b" missing → loop skips a, reports b.
-        result = codec.parse('{"$case": "V", "a": 1}', typ, strict_json=False)
+        result = _parse_typed(codec, '{"$case": "V", "a": 1}', typ, strict_json=False)
         assert result.ok is False
         assert result.errors[0].category == "missing_field"
         assert result.errors[0].field == "b"
@@ -1978,14 +2003,14 @@ class TestValidationMappingCoverage:
     def test_enum_non_object_instance_is_bad_case(self) -> None:
         codec = JsonCodec()
         typ = EnumType(name="E", variants={"A": {}})
-        result = codec.parse("42", typ, strict_json=False)
+        result = _parse_typed(codec, "42", typ, strict_json=False)
         assert result.ok is False
         assert result.errors[0].category == "bad_case"
 
     def test_list_nested_enum_bad_case(self) -> None:
         codec = JsonCodec()
         enum = EnumType(name="E", variants={"A": {}, "B": {"x": IntType()}})
-        result = codec.parse('[{"$case": "Z"}]', ListType(elem=enum), strict_json=False)
+        result = _parse_typed(codec, '[{"$case": "Z"}]', ListType(elem=enum), strict_json=False)
         assert result.ok is False
         assert result.errors[0].category == "bad_case"
         assert result.errors[0].path == "$[0]"
@@ -1993,7 +2018,9 @@ class TestValidationMappingCoverage:
     def test_dict_nested_enum_bad_case(self) -> None:
         codec = JsonCodec()
         enum = EnumType(name="E", variants={"A": {}, "B": {"x": IntType()}})
-        result = codec.parse('{"k": {"$case": "Z"}}', DictType(value=enum), strict_json=False)
+        result = _parse_typed(
+            codec, '{"k": {"$case": "Z"}}', DictType(value=enum), strict_json=False
+        )
         assert result.ok is False
         assert result.errors[0].category == "bad_case"
         assert result.errors[0].path == "$.k"
@@ -2061,7 +2088,6 @@ class TestValidationMappingCoverage:
     def test_find_enum_decode_at_path_unknown_record_field(self) -> None:
         """_find_enum_decode_at_path returns None when path names unknown field."""
         from agm.agl.runtime.codec import _find_enum_decode_at_path
-        from agm.agl.type_schema import build_decode_schema
 
         rec = RecordType(name="R", fields={"a": IntType()})
         decode = build_decode_schema(rec)
@@ -2070,7 +2096,6 @@ class TestValidationMappingCoverage:
     def test_find_enum_decode_at_path_scalar_with_remaining_path(self) -> None:
         """_find_enum_decode_at_path returns None when path descends past a scalar."""
         from agm.agl.runtime.codec import _find_enum_decode_at_path
-        from agm.agl.type_schema import build_decode_schema
 
         decode = build_decode_schema(IntType())
         assert _find_enum_decode_at_path(decode, ["deeper"]) is None
@@ -2133,79 +2158,99 @@ class TestMakeContractNoTypeEnv:
 
 
 class TestSchemaPrecomputedInParse:
-    """CARRY-IN 2: parse() accepts a precomputed schema; runtime-side callers pass it."""
+    """parse() takes an explicit schema + decode; it never derives them from a Type.
+
+    Production code (the IR evaluator) always has the contract-carried
+    ``json_schema``/``decode`` on hand and passes them straight through — this
+    class verifies parsing behaves identically whether the schema instance is
+    freshly derived or the one held by a materialized contract, and that
+    omitting either input is a hard error rather than a silent re-derivation.
+    """
 
     def test_parse_with_precomputed_schema_succeeds(self) -> None:
         codec = JsonCodec()
         typ = _make_issue_type()
-        from agm.agl.type_schema import derive_schema
         schema = derive_schema(typ)
+        decode = build_decode_schema(typ)
         raw = '{"title": "Bug", "severity": 5, "description": "A bug"}'
-        result = codec.parse(raw, typ, strict_json=False, schema=schema)
+        result = codec.parse(raw, strict_json=False, schema=schema, decode=decode)
         assert result.ok is True
 
     def test_parse_with_precomputed_schema_validation_failure(self) -> None:
         codec = JsonCodec()
         typ = _make_issue_type()
-        from agm.agl.type_schema import derive_schema
         schema = derive_schema(typ)
-        # Missing required fields → schema validation fails even with precomputed schema.
-        result = codec.parse('{"title": "Bug"}', typ, strict_json=False, schema=schema)
+        decode = build_decode_schema(typ)
+        # Missing required fields → schema validation fails even with a precomputed schema.
+        result = codec.parse('{"title": "Bug"}', strict_json=False, schema=schema, decode=decode)
         assert result.ok is False
         assert result.errors
 
     def test_parse_with_precomputed_schema_matches_derived(self) -> None:
-        """parse(schema=precomputed) is observably equivalent to parse().
+        """parse(schema=materialized contract's schema) matches parse(schema=freshly derived).
 
-        Passing the materialized schema is an optimization, never a behavior
-        change: the parse outcome (ok/value/errors) must be identical to letting
-        the codec derive the schema itself, on both the success and the
-        validation-failure path.
+        The contract's schema and a freshly derived schema are the same JSON
+        Schema, produced by the same function — passing either must yield an
+        identical parse outcome (ok/value/errors).
         """
         codec = JsonCodec()
         typ = RecordType(name="Issue", fields={"title": TextType(), "severity": IntType()})
-        schema = codec.make_contract(typ).json_schema
-        assert isinstance(schema, dict)
+        contract_schema = codec.make_contract(typ).json_schema
+        assert isinstance(contract_schema, dict)
+        fresh_schema = derive_schema(typ)
+        decode = build_decode_schema(typ)
 
         good = '{"title": "x", "severity": 1}'
         bad = '{"title": "x"}'  # missing required field
         for raw in (good, bad):
-            with_schema = codec.parse(raw, typ, strict_json=False, schema=schema)
-            without = codec.parse(raw, typ, strict_json=False)
-            assert with_schema.ok == without.ok
-            assert with_schema.value == without.value
-            assert [e.message for e in with_schema.errors] == [
-                e.message for e in without.errors
+            with_contract_schema = codec.parse(
+                raw, strict_json=False, schema=contract_schema, decode=decode
+            )
+            with_fresh_schema = codec.parse(
+                raw, strict_json=False, schema=fresh_schema, decode=decode
+            )
+            assert with_contract_schema.ok == with_fresh_schema.ok
+            assert with_contract_schema.value == with_fresh_schema.value
+            assert [e.message for e in with_contract_schema.errors] == [
+                e.message for e in with_fresh_schema.errors
             ]
 
     def test_contract_json_schema_reused_across_parses(self) -> None:
-        """the contract's json_schema object is the one threaded into parse.
+        """the contract's json_schema/decode are the objects threaded into parse.
 
-        Observable identity reuse: the schema object the codec materializes on
-        the contract is the same object accepted by ``parse(schema=...)`` — so
-        the interpreter passing ``contract.json_schema`` reuses it rather than
-        re-deriving (BONUS).  We verify it parses correctly and that the schema
-        is a concrete materialized dict.
+        Observable identity reuse: the schema/decode the codec materializes on
+        the contract are the same objects accepted by ``parse(...)`` — the
+        interpreter passes ``contract.json_schema``/``contract.decode``
+        straight through rather than re-deriving them.
         """
         codec = JsonCodec()
         typ = RecordType(name="Issue", fields={"title": TextType(), "severity": IntType()})
         contract = codec.make_contract(typ)
         schema = contract.json_schema
+        decode = contract.decode
         assert isinstance(schema, dict)
+        assert decode is not None
         raw = '{"title": "x", "severity": 1}'
-        # Reuse the very same schema object on repeated parses.
+        # Reuse the very same schema/decode objects on repeated parses.
         for _ in range(3):
-            result = codec.parse(raw, typ, strict_json=False, schema=schema)
+            result = codec.parse(raw, strict_json=False, schema=schema, decode=decode)
             assert result.ok is True
             # Identity: contract still holds the same schema object.
             assert contract.json_schema is schema
 
-    def test_parse_without_schema_still_works(self) -> None:
-        """parse() without schema= falls back to deriving it (backward compat)."""
+    def test_parse_without_schema_raises(self) -> None:
+        """parse() with schema=None raises: no derivation fallback from a Type."""
         codec = JsonCodec()
-        result = codec.parse("42", IntType(), strict_json=False)
-        assert result.ok is True
-        assert result.value == IntValue(42)
+        with pytest.raises(ValueError, match="schema and decode"):
+            codec.parse(
+                "42", strict_json=False, schema=None, decode=build_decode_schema(IntType())
+            )
+
+    def test_parse_without_decode_raises(self) -> None:
+        """parse() with decode=None raises: no derivation fallback from a Type."""
+        codec = JsonCodec()
+        with pytest.raises(ValueError, match="schema and decode"):
+            codec.parse("42", strict_json=False, schema=derive_schema(IntType()), decode=None)
 
 
 # ---------------------------------------------------------------------------
@@ -2295,6 +2340,7 @@ class TestRegisterCodec:
         assert capsys.readouterr().out == "response\n"
 
     def test_register_duplicate_codec_raises(self) -> None:
+        from agm.agl.ir.contracts import DecodeSchema
         from agm.agl.runtime.codec import ParseResult as PR
         from agm.agl.runtime.contract import OutputContract as OC
 
@@ -2316,10 +2362,10 @@ class TestRegisterCodec:
             def parse(
                 self,
                 raw: str,
-                target_type: Type,
                 *,
                 strict_json: bool = False,
                 schema: dict[str, object] | None = None,
+                decode: DecodeSchema | None = None,
             ) -> PR:
                 raise NotImplementedError
 
@@ -2347,6 +2393,7 @@ class TestRegisterCodec:
         (observable as a distinctive prefix on the resulting binding) are
         exercised end-to-end through ``run()`` with a stub agent.
         """
+        from agm.agl.ir.contracts import DecodeSchema
         from agm.agl.semantics.values import TextValue
 
         class TagCodec:
@@ -2365,7 +2412,7 @@ class TestRegisterCodec:
             def make_contract(self, type_ref: Type) -> "OutputContract":
                 from agm.agl.runtime.contract import OutputContract
                 return OutputContract(
-                    target_type=type_ref,
+                    target_type_label=repr(type_ref),
                     codec=self,
                     strict_json=None,
                     format_instructions="TAGCODEC-INSTRUCTIONS",
@@ -2375,10 +2422,10 @@ class TestRegisterCodec:
             def parse(
                 self,
                 raw: str,
-                target_type: Type,
                 *,
                 strict_json: bool = False,
                 schema: dict[str, object] | None = None,
+                decode: DecodeSchema | None = None,
             ) -> "ParseResult":
                 from agm.agl.runtime.codec import ParseResult
                 # Distinctive transform proving THIS codec parsed the output.

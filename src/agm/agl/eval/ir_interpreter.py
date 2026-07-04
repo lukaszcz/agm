@@ -333,9 +333,9 @@ class IrInterpreter:
         )
         return host_contract.codec.parse(
             raw,
-            host_contract.target_type,
             strict_json=effective_strict,
             schema=schema,
+            decode=host_contract.decode,
         )
 
     @property

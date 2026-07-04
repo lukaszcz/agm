@@ -990,7 +990,7 @@ class TestCapabilitiesBuiltFromRegistrations:
 
             def make_contract(self, type_ref: Type) -> OutputContract:
                 return OutputContract(
-                    target_type=type_ref,
+                    target_type_label=repr(type_ref),
                     codec=TextCodec(),
                     strict_json=None,
                     format_instructions="",
@@ -1000,10 +1000,10 @@ class TestCapabilitiesBuiltFromRegistrations:
             def parse(
                 self,
                 raw: str,
-                target_type: Type,
                 *,
                 strict_json: bool = False,
                 schema: dict[str, object] | None = None,
+                decode: object | None = None,
             ) -> ParseResult:
                 return ParseResult.success(TV(raw))
 
@@ -2813,17 +2813,14 @@ class TestIrHostMetadataCoverage:
         assert contracts == {}
         assert "missing" in errors[0].message
 
-    def test_decode_schema_defensive_and_integral_decimal_paths(self) -> None:
+    def test_integral_decimal_decodes_to_int(self) -> None:
         from decimal import Decimal
 
         from agm.agl.eval.conversions import decode_value
         from agm.agl.ir.contracts import ScalarDecode, ScalarKind
-        from agm.agl.runtime.contract import _type_from_decode
         from agm.agl.semantics.values import IntValue
 
         assert decode_value(ScalarDecode(ScalarKind.INT), Decimal("2.0")) == IntValue(2)
-        with pytest.raises(AssertionError, match="Unknown decode schema"):
-            _type_from_decode(object())
 
 
 class TestRunErrorToMessage:
@@ -2895,7 +2892,7 @@ class TestRegisterCodecErrors:
 
             def make_contract(self, type_ref: Type) -> OutputContract:
                 return OutputContract(
-                    target_type=type_ref,
+                    target_type_label=repr(type_ref),
                     codec=TextCodec(),
                     strict_json=None,
                     format_instructions="",
@@ -2905,10 +2902,10 @@ class TestRegisterCodecErrors:
             def parse(
                 self,
                 raw: str,
-                target_type: Type,
                 *,
                 strict_json: bool = False,
                 schema: dict[str, object] | None = None,
+                decode: object | None = None,
             ) -> ParseResult:
                 return ParseResult.success(TextValue(""))
 

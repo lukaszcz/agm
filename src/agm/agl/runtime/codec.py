@@ -109,12 +109,16 @@ class OutputCodec(Protocol):
     Every codec exposes:
     - ``name`` — the codec identifier (e.g. ``"text"``, ``"json"``).
     - ``supported_kinds`` — frozenset of semantic type-kind strings this codec handles.
-      This is the authoritative source for ``HostCapabilities.codec_kinds`` (CARRY-IN 1).
+      This is the authoritative source for ``HostCapabilities.codec_kinds``.
     - ``supports_type(t)`` — True iff this codec can handle the given type.
-    - ``make_contract(type_ref)`` — build an ``OutputContract``.
-    - ``parse(raw, target_type, *, strict_json, schema)`` — parse a raw string.
-      *schema* is an optional precomputed JSON Schema (CARRY-IN 2); when provided,
-      ``JsonCodec`` skips re-deriving it from *target_type*.
+    - ``make_contract(type_ref)`` — build an ``OutputContract``.  Runs at check
+      time (or REPL contract-preview time), when a real checker ``Type`` is in
+      hand.
+    - ``parse(raw, *, strict_json, schema, decode)`` — parse a raw string.
+      Runs at execution time against the typeless contract data the lowerer
+      already compiled (``schema`` is the JSON Schema dict, ``decode`` the
+      typeless ``DecodeSchema`` walk); a codec never sees a checker ``Type``
+      at parse time.
     """
 
     @property
@@ -130,10 +134,10 @@ class OutputCodec(Protocol):
     def parse(
         self,
         raw: str,
-        target_type: Type,
         *,
         strict_json: bool = False,
         schema: dict[str, object] | None = None,
+        decode: DecodeSchema | None = None,
     ) -> ParseResult: ...
 
 
@@ -166,8 +170,8 @@ class TextCodec:
     def supported_kinds(self) -> frozenset[str]:
         """The set of type-kind strings this codec can handle.
 
-        Single source of truth for ``HostCapabilities.codec_kinds["text"]``
-        (CARRY-IN 1 — eliminates a duplicated literal at the host-environment assembly site).
+        Single source of truth for ``HostCapabilities.codec_kinds["text"]``,
+        avoiding a duplicated literal at the host-environment assembly site.
         """
         return frozenset({"text"})
 
@@ -177,33 +181,32 @@ class TextCodec:
     def make_contract(self, type_ref: Type) -> "OutputContract":
         """Build an ``OutputContract`` for *type_ref*.
 
-        The ``TypeEnvironment`` parameter was removed (CARRY-IN 2): it was
-        never used by this implementation.
-
         For ``text`` targets ``format_instructions`` is left empty (absent):
         a text target imposes no format on the agent's response, so there are
-        no instructions to relay.
+        no instructions to relay.  ``decode`` is ``None``: a text target has
+        no schema-driven decode walk, since the raw string is the value.
         """
         from agm.agl.runtime.contract import OutputContract
 
         return OutputContract(
-            target_type=type_ref,
+            target_type_label=repr(type_ref),
             codec=self,
             strict_json=None,
             format_instructions="",
             json_schema=None,
+            decode=None,
         )
 
     def parse(
         self,
         raw: str,
-        target_type: Type,
         *,
         strict_json: bool = False,
         schema: dict[str, object] | None = None,
+        decode: DecodeSchema | None = None,
     ) -> ParseResult:
         # Text codec: always succeeds; the raw string is the value.
-        # ``strict_json`` and ``schema`` are inapplicable for text targets.
+        # ``strict_json``/``schema``/``decode`` are inapplicable for text targets.
         return ParseResult.success(TextValue(raw))
 
 
@@ -616,11 +619,11 @@ class JsonCodec:
     Schema validation is always strict in both modes (rules 3–6 of 
     never relaxed).
 
-    CARRY-IN 2: The ``parse`` method accepts an optional precomputed *schema*
-    keyword argument.  When provided (e.g. by runtime-side callers that already
-    hold the materialized ``OutputContract``), ``derive_schema`` is skipped.
-    This ensures schema derivation happens once per ``make_contract`` call
-    rather than once per parse attempt.
+    ``make_contract`` derives the JSON Schema and typeless decode walk once
+    from a real checker ``Type`` (compile time / REPL contract preview).
+    ``parse`` never derives them: it takes the schema dict and ``DecodeSchema``
+    explicitly, so execution-time parsing runs entirely off the typeless
+    contract data the lowerer already compiled — no checker ``Type`` involved.
     """
 
     @property
@@ -631,8 +634,8 @@ class JsonCodec:
     def supported_kinds(self) -> frozenset[str]:
         """The set of type-kind strings this codec can handle.
 
-        Single source of truth for ``HostCapabilities.codec_kinds["json"]``
-        (CARRY-IN 1 — eliminates a duplicated literal at the host-environment assembly site).
+        Single source of truth for ``HostCapabilities.codec_kinds["json"]``,
+        avoiding a duplicated literal at the host-environment assembly site.
         Matches ``_JSON_CODEC_KINDS`` (kept in this module as a local constant
         to drive ``supports_type``; the runtime no longer duplicates it).
         """
@@ -644,56 +647,64 @@ class JsonCodec:
     def make_contract(self, type_ref: Type) -> "OutputContract":
         """Build an ``OutputContract`` for *type_ref*.
 
-        The ``TypeEnvironment`` parameter was removed (CARRY-IN 2): it was
-        never used by this implementation.  ``derive_schema`` is called exactly
-        once here; callers that subsequently invoke ``parse`` should pass
-        ``schema=contract.json_schema`` to avoid re-derivation.
+        Derives the JSON Schema, format instructions, and typeless decode
+        walk once, from the real checker ``Type``.  Compile time / REPL
+        contract-preview use only: execution-time parsing never calls this —
+        it uses the ``json_schema``/``decode`` the lowerer already compiled
+        into the IR contract request.
         """
         from agm.agl.runtime.contract import OutputContract
 
         schema = derive_schema(type_ref)
         instructions = build_format_instructions(schema)
+        decode_schema = build_decode_schema(type_ref)
         return OutputContract(
-            target_type=type_ref,
+            target_type_label=repr(type_ref),
             codec=self,
             strict_json=False,  # default; overridden per call-site
             format_instructions=instructions,
             json_schema=schema,
+            decode=decode_schema,
         )
 
     def parse(
         self,
         raw: str,
-        target_type: Type,
         *,
         strict_json: bool = False,
         schema: dict[str, object] | None = None,
+        decode: DecodeSchema | None = None,
     ) -> ParseResult:
-        """Parse *raw* agent output into the typed ``Value`` for *target_type*.
+        """Parse *raw* agent output into the typed ``Value`` described by *schema*/*decode*.
 
         Lenient mode (``strict_json=False``, the default per design ):
           1. Attempt to extract/repair exactly one JSON text from *raw*.
           2. Re-parse the repaired text with ``json.loads(parse_float=Decimal)``.
-          3. Validate against the derived JSON Schema.
-          4. Convert to the appropriate typed ``Value``.
+          3. Validate against *schema*.
+          4. Convert to the appropriate typed ``Value`` per *decode*.
 
         Strict mode (``strict_json=True``):
           1. ``json.loads`` on the stripped raw string — no repair, no fence
              stripping.  Fails if there is any surrounding non-whitespace.
           2. Validate and convert as in lenient mode.
 
-        *schema* (CARRY-IN 2): optional precomputed JSON Schema dict.  When
-        ``None`` (the default), ``derive_schema`` is called to produce it.
-        Runtime-side callers that already have the materialized
-        ``OutputContract`` should pass ``schema=contract.json_schema`` to
-        avoid redundant schema derivation.
+        *schema* and *decode* are the JSON Schema dict and typeless
+        ``DecodeSchema`` walk for the target type — both required.  Callers
+        (the IR evaluator, or a test exercising this codec directly) must
+        supply them explicitly; this method never derives them from a
+        checker ``Type``, so there is no re-derivation cost per parse attempt.
 
         Decimal exactness: ``json-repair`` always produces a
         JSON *string* (not Python objects), which is then re-parsed via
         ``json.loads(parse_float=Decimal)``.  Decimal values are never
         routed through Python ``float``.
+
+        :raises ValueError: if *schema* or *decode* is ``None``.
         """
-        if schema is None:
-            schema = derive_schema(target_type)
-        decode_schema = build_decode_schema(target_type)
-        return _parse_json_core(raw, schema, decode_schema, strict=strict_json)
+        if schema is None or decode is None:
+            raise ValueError(
+                "JsonCodec.parse requires an explicit schema and decode walk; "
+                "it no longer derives them from a checker Type. Pass the "
+                "contract-carried json_schema/decode (see ContractRequest)."
+            )
+        return _parse_json_core(raw, schema, decode, strict=strict_json)

@@ -1,1 +1,1 @@
-{"diagnostic": {"line": 4, "message_contains": []}}
+{"diagnostic": {"line": 4, "message_contains": ["named", "function value"]}}

@@ -1,1 +1,1 @@
-{"diagnostic": {"line": 1, "message_contains": []}}
+{"diagnostic": {"line": 1, "message_contains": ["placeholder", "print"]}}

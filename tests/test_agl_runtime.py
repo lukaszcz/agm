@@ -2033,10 +2033,10 @@ class TestRuntimeErrorPaths:
         assert result.error.type_name == "Abort"
         assert result.error.fields.get("message") == "fatal"
 
-    # --- Task 3: structured Decimal params and non-JSON-shaped rejection ---
+    # --- Structured Decimal params and non-JSON-shaped rejection ---
 
     def test_list_decimal_param_validates_exactly(self) -> None:
-        """Task 3: a list[decimal] param with native Decimal values must bind
+        """A list[decimal] param with native Decimal values must bind
         correctly without the old default=str corruption.
 
         Before the fix, Decimal("1.5") was serialized as the JSON string "1.5"
@@ -2058,7 +2058,7 @@ class TestRuntimeErrorPaths:
         )
 
     def test_non_json_shaped_object_yields_clean_diagnostic(self) -> None:
-        """Task 3: a non-JSON-shaped object (e.g. a set) must yield a clean
+        """A non-JSON-shaped object (e.g. a set) must yield a clean
         param-validation error naming the param, not a stringified value or
         traceback.
         """
@@ -2075,7 +2075,7 @@ class TestRuntimeErrorPaths:
     def test_decimal_native_in_list_end_to_end(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """Task 3 e2e: param xs: list[decimal] with Decimal values binds and prints."""
+        """E2e: param xs: list[decimal] with Decimal values binds and prints."""
         import decimal as _decimal
 
         result = PipelineDriver().run(

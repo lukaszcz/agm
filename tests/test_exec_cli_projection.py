@@ -1,4 +1,4 @@
-"""Tests for Task 4: unified exec CLI projection (engine flags + config_cli wiring).
+"""Tests for the unified exec CLI projection (engine flags + config_cli wiring).
 
 Multi-scenario coverage for:
 - New engine flags: --timeout/--no-timeout, --no-log-file

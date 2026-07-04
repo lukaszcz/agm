@@ -6257,12 +6257,12 @@ class TestFieldAssignmentSyntaxChecks:
 
 
 # ---------------------------------------------------------------------------
-# Finding 1 regression: generic inference for named-only shorthand out-of-order
+# Regression: generic inference for named-only shorthand out-of-order
 # ---------------------------------------------------------------------------
 
 
 class TestGenericNamedOnlyShorthandInference:
-    """Regression tests for Finding 1: generic inference must use bind_arguments
+    """Regression tests: generic inference must use bind_arguments
     so that named-only shorthand positional args are matched to their param by
     NAME rather than by raw positional index.
 
@@ -6293,12 +6293,12 @@ class TestGenericNamedOnlyShorthandInference:
 
 
 # ---------------------------------------------------------------------------
-# Finding 2 regression: lambda  required-after-defaulted check
+# Regression: lambda required-after-defaulted check
 # ---------------------------------------------------------------------------
 
 
 class TestLambdaRequiredAfterDefaulted:
-    """Regression tests for Finding 2: the  required-after-defaulted check
+    """Regression tests: the required-after-defaulted check
     must apply to lambdas, not just def declarations.
     """
 

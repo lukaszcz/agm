@@ -384,7 +384,7 @@ class TestMultiFileParams:
 
 
 # ---------------------------------------------------------------------------
-# Scenario 7: wildcard import with using / hiding (Finding 1 surface-syntax fix)
+# Scenario 7: wildcard import with using / hiding
 # ---------------------------------------------------------------------------
 
 

@@ -1223,7 +1223,7 @@ def test_open_import_dedup_in_variant_lookup(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Finding 1 (BLOCKER) + Finding 2 — cross-module record/enum field types
+# Regression — cross-module record/enum field types must not
 # capture stale shells when bodies are resolved in dict order.
 #
 # The fix: resolve type bodies in topological dependency order across ALL
@@ -1390,7 +1390,7 @@ def test_cross_module_enum_variant_field_type(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Finding 1 — structural type cycle detection is preserved (cross-module)
+# Structural type cycle detection is preserved (cross-module)
 # A type that STRUCTURALLY contains itself (infinite size) must still be an
 # error even after the topological-order fix.
 # ---------------------------------------------------------------------------
@@ -1420,7 +1420,7 @@ def test_structural_type_cycle_across_modules_is_error(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Finding 3 (MINOR) — cross-module type mismatch diagnostics qualify the type.
+# Cross-module type mismatch diagnostics qualify the type.
 # A rejection message for foo::Color vs bar::Color must say e.g.
 # "foo::Color" and "bar::Color", not just "Color" twice.
 # ---------------------------------------------------------------------------
@@ -2115,7 +2115,7 @@ def test_graph_func_def_builtin_type_name_error(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Finding 1 regression tests: cross-module same-name function signature collision
+# Regression tests: cross-module same-name function signature collision
 # ---------------------------------------------------------------------------
 
 

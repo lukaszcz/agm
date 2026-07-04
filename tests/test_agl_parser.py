@@ -3225,7 +3225,7 @@ class TestImportDecl:
         assert decl.module_path == ("foo", "bar")
         assert decl.alias == "A"
 
-    # --- Wildcard import with using/hiding (Finding 1) ---
+    # --- Wildcard import with using/hiding ---
 
     def test_import_wildcard_using(self) -> None:
         """import foo.* using x, y — wildcard + using clause."""

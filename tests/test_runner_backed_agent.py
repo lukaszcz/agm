@@ -1392,7 +1392,7 @@ class TestCliRunnerIntegration:
 
 
 # ---------------------------------------------------------------------------
-# Task 1 (MAJOR): split_command ValueError guard — malformed quoting → clean exit
+# split_command ValueError guard — malformed quoting → clean exit
 # ---------------------------------------------------------------------------
 
 

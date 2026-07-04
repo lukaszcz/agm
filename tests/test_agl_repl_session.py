@@ -1579,7 +1579,7 @@ class TestImports:
         assert _int(r.value) == 42
 
     def test_self_qualifier_in_repl_returns_session_binding(self, tmp_path: Path) -> None:
-        # Regression (Finding 4): ::x in the REPL (graph mode) must return the
+        # Regression: ::x in the REPL (graph mode) must return the
         # session-level binding, not a same-named lexical param.
         # A dummy lib import is used to trigger graph mode so ::name resolves correctly.
         lib = tmp_path / 'dummy.agl'
@@ -1820,7 +1820,7 @@ class TestImports:
         assert r.diagnostics
 
     def test_parse_error_in_imported_module_has_source_label(self, tmp_path: Path) -> None:
-        # Regression (Finding 1): parse error in an imported module must surface
+        # Regression: parse error in an imported module must surface
         # with source_label pointing to the module file, not a bare line-1 diagnostic
         # with no location information.
         lib = tmp_path / 'badmod.agl'
@@ -1834,7 +1834,7 @@ class TestImports:
         assert "badmod" in r.diagnostics[0].source_label
 
     def test_module_not_found_surfaces_clean_diagnostic(self, tmp_path: Path) -> None:
-        # Regression (Finding 1): ModuleNotFound must surface as a proper diagnostic
+        # Regression: ModuleNotFound must surface as a proper diagnostic
         # (not a raw exception stringified at line 1 with no module name context).
         s = self._make_session_with_root(tmp_path)
         r = s.eval_entry("import nonexistent_module_xyz")
@@ -1843,7 +1843,7 @@ class TestImports:
         assert "nonexistent_module_xyz" in r.diagnostics[0].message
 
     def test_wildcard_and_plain_import_coexist(self, tmp_path: Path) -> None:
-        # Regression (Finding 2): import foo.* in entry1 and import foo in entry2
+        # Regression: import foo.* in entry1 and import foo in entry2
         # must BOTH persist. The dedup key must include the wildcard flag so they
         # don't clobber each other.
         # Create a submodule foo.a and a top-level module foo.

@@ -2549,7 +2549,7 @@ def _resolve_params(
 ) -> tuple[syntax.Param, ...]:
     """Resolve a marker/param interleaving to ``Param``s with concrete ``kind``s.
 
-    Algorithm (from PLAN_kwargs Step 4 / K3 spec):
+    Algorithm:
 
     - **No marker** → every ``Param`` gets ``default_kind``.
     - **≥1 marker** (pure positional reading; ``default_kind`` is ignored):

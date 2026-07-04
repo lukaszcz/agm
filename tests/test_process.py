@@ -376,7 +376,7 @@ class TestRunCaptureResultCwdEnv:
 
 
 # ---------------------------------------------------------------------------
-# Task 1: ENOEXEC (spawn hole) — run_capture_result must return spawn-error
+# ENOEXEC (spawn hole) — run_capture_result must return spawn-error
 # ---------------------------------------------------------------------------
 
 
@@ -481,7 +481,7 @@ class TestRunCaptureErrnoIntact:
 
 
 # ---------------------------------------------------------------------------
-# Task 2: stdin_text threading — 2MB stdin must not BrokenPipeError or deadlock
+# stdin_text threading — 2MB stdin must not BrokenPipeError or deadlock
 # ---------------------------------------------------------------------------
 
 
@@ -512,17 +512,16 @@ class TestRunCaptureResultLargeStdin:
 
 
 # ---------------------------------------------------------------------------
-# Task 2 (MINOR): NUL-byte spawn failure — run_capture must re-raise ValueError
+# NUL-byte spawn failure — run_capture must re-raise ValueError
 # ---------------------------------------------------------------------------
 
 
 class TestRunCaptureNullByteReraise:
     """run_capture with a NUL-byte argv element must re-raise the original ValueError.
 
-    At origin/main the ValueError from subprocess.Popen propagated to the caller.
-    The Task 2 fix restored that behaviour: _run_capture_result_impl stores the
-    ValueError alongside OSError, and run_capture re-raises it.
-    run_capture_result continues to discard and return the structured result.
+    _run_capture_result_impl stores the ValueError alongside OSError, and
+    run_capture re-raises it, while run_capture_result discards it and returns
+    the structured result.
     """
 
     def test_null_byte_in_run_capture_raises_value_error(self) -> None:

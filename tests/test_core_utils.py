@@ -641,7 +641,7 @@ class TestResolveLogFileUnique:
 
 
 # ===========================================================================
-# Task 3: read_text_arg — UnicodeDecodeError and None strerror handling
+# read_text_arg — UnicodeDecodeError and None strerror handling
 # ===========================================================================
 
 

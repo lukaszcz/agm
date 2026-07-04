@@ -1693,7 +1693,7 @@ class TestUncaughtExceptionOutputFormat:
 
 
 # ---------------------------------------------------------------------------
-# Task 3: binary .agl file → clean error, exit 1
+# Binary .agl file → clean error, exit 1
 # ---------------------------------------------------------------------------
 
 
@@ -1748,7 +1748,7 @@ class TestExecBinaryFileError:
 
 
 # ---------------------------------------------------------------------------
-# Task 4: whitespace-only --runner exits 1 with clean error BEFORE any run
+# Whitespace-only --runner exits 1 with clean error BEFORE any run
 # ---------------------------------------------------------------------------
 
 
@@ -1891,7 +1891,7 @@ class TestExecPerAgentRunnerValidation:
 
 
 # ---------------------------------------------------------------------------
-# Task 1 (MAJOR): malformed-quoting --runner exits 1 with clean Error, no traceback
+# Malformed-quoting --runner exits 1 with clean Error, no traceback
 # ---------------------------------------------------------------------------
 
 
@@ -3548,7 +3548,7 @@ class TestReservedFileStem:
 
 
 class TestRawStringRoundTrip:
-    """Task 5 carry-forward: timeout raw string in config_base (no str(float) loss)."""
+    """Timeout raw string round-trips through config_base (no str(float) loss)."""
 
     def _spy_config_base(
         self, monkeypatch: pytest.MonkeyPatch

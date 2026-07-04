@@ -659,7 +659,7 @@ class TestPrivateBoundary:
     def test_private_error_message_names_owning_module(self, tmp_path: Path) -> None:
         """Qualified access to a private name names the MODULE that owns the private decl.
 
-        Bug (Finding 3): when libA::secret is accessed but 'secret' only exists as
+        Regression: when libA::secret is accessed but 'secret' only exists as
         a private name in libB (a different module), the error used to name libB
         instead of correctly resolving libA as the owning module and emitting 'private'
         (if secret is private in libA) or 'not in imported set of libA' (if it isn't).

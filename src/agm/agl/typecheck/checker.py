@@ -1353,17 +1353,28 @@ class _Checker:
         has_else = any(isinstance(b.cond, ElseSentinel) for b in node.branches)
         branch_types: list[Type] = []
         body_expected = expected if has_else else UnitType()
+        condition_always_exits = False
         for branch in node.branches:
+            branch_reachable = not condition_always_exits
             if not isinstance(branch.cond, ElseSentinel):
                 cond_type = self._check_expr(branch.cond, expected=None)
                 self._require_bool_condition(cond_type, branch.cond.span, "if")
-            bt = self._check_expr(branch.body, expected=body_expected)
+                if isinstance(cond_type, BottomType):
+                    branch_reachable = False
+                    condition_always_exits = True
+            bt = self._check_expr(
+                branch.body, expected=body_expected if branch_reachable else None
+            )
+            if not branch_reachable:
+                continue
             if not has_else:
                 self._assert_assignable(bt, UnitType(), branch.body.span)
             branch_types.append(bt)
 
         if not has_else:
-            return UnitType()
+            return UnitType() if branch_types else BottomType()
+        if not branch_types:
+            return BottomType()
 
         return self._unify_branch_types(branch_types, node.span, "If expression")
 
@@ -1383,9 +1394,12 @@ class _Checker:
     # --- loop ---
 
     def _check_loop(self, node: Loop) -> Type:
+        exits_before_value = False
         if node.bound is not None:
             bound_type = self._check_expr(node.bound, expected=None)
-            if not isinstance(bound_type, IntType):
+            if isinstance(bound_type, BottomType):
+                exits_before_value = True
+            elif not isinstance(bound_type, IntType):
                 raise AglTypeError(
                     f"do-loop bound must be int; got '{bound_type!r}'.",
                     span=node.bound.span,
@@ -1394,20 +1408,26 @@ class _Checker:
             # Integer-range for: for VAR in a to/downto b [by k]
             assert node.for_iter is not None
             start_type = self._check_expr(node.for_iter, expected=None)
-            if not isinstance(start_type, IntType):
+            if isinstance(start_type, BottomType):
+                exits_before_value = True
+            elif not isinstance(start_type, IntType):
                 raise AglTypeError(
                     f"'for' range start must be int; got '{start_type!r}'.",
                     span=node.for_iter.span,
                 )
             to_type = self._check_expr(node.for_range_to, expected=None)
-            if not isinstance(to_type, IntType):
+            if isinstance(to_type, BottomType):
+                exits_before_value = True
+            elif not isinstance(to_type, IntType):
                 raise AglTypeError(
                     f"'for' range bound must be int; got '{to_type!r}'.",
                     span=node.for_range_to.span,
                 )
             if node.for_range_by is not None:
                 by_type = self._check_expr(node.for_range_by, expected=None)
-                if not isinstance(by_type, IntType):
+                if isinstance(by_type, BottomType):
+                    exits_before_value = True
+                elif not isinstance(by_type, IntType):
                     raise AglTypeError(
                         f"'for' range step must be int; got '{by_type!r}'.",
                         span=node.for_range_by.span,
@@ -1430,8 +1450,11 @@ class _Checker:
         elif node.for_iter is not None:
             # Collection for: for VAR in COLLECTION
             iter_type = self._check_expr(node.for_iter, expected=None)
-            if isinstance(iter_type, ListType):
-                elem_type: Type = iter_type.elem
+            if isinstance(iter_type, BottomType):
+                exits_before_value = True
+                elem_type: Type = BottomType()
+            elif isinstance(iter_type, ListType):
+                elem_type = iter_type.elem
             elif isinstance(iter_type, DictType):
                 elem_type = TextType()
             elif isinstance(iter_type, TextType):
@@ -1446,11 +1469,15 @@ class _Checker:
         if node.while_cond is not None:
             while_type = self._check_expr(node.while_cond, expected=None)
             self._require_bool_condition(while_type, node.while_cond.span, "while")
+            if isinstance(while_type, BottomType):
+                exits_before_value = True
         self._check_expr(node.body, expected=None)
         if node.until_cond is not None:
             cond_type = self._check_expr(node.until_cond, expected=None)
             self._require_bool_condition(cond_type, node.until_cond.span, "until")
-        return UnitType()
+            if isinstance(cond_type, BottomType):
+                exits_before_value = True
+        return BottomType() if exits_before_value else UnitType()
 
     # --- try ---
 
@@ -2217,7 +2244,7 @@ class _Checker:
     # ------------------------------------------------------------------
 
     def _require_bool_condition(self, cond_type: Type, span: SourceSpan, kw: str) -> None:
-        if not isinstance(cond_type, BoolType):
+        if not isinstance(cond_type, (BoolType, BottomType)):
             raise AglTypeError(
                 f"'{kw}' condition must be bool; got '{cond_type!r}'.",
                 span=span,

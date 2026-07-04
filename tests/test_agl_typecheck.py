@@ -1430,6 +1430,56 @@ class TestFuncDef:
         t = r.node_types[f_ref.node_id]
         assert isinstance(t, FunctionType)
 
+    def test_return_in_if_condition_is_bottom(self) -> None:
+        r = accept_type('def f() -> int =\n  if (return 1) => "a" | else => "b"\nf')
+        f_ref = r.resolved.program.body.items[1]
+        assert isinstance(f_ref, VarRef)
+        assert r.node_types[f_ref.node_id] == FunctionType(params=(), result=IntType())
+
+    def test_return_in_loop_bound_is_bottom(self) -> None:
+        r = accept_type("def f() -> int =\n  do[(return 1)]\n    ()\nf")
+        f_ref = r.resolved.program.body.items[1]
+        assert isinstance(f_ref, VarRef)
+        assert r.node_types[f_ref.node_id] == FunctionType(params=(), result=IntType())
+
+    def test_return_in_exec_command_is_bottom(self) -> None:
+        r = accept_type("def f() = exec(return 1)\nf")
+        f_ref = r.resolved.program.body.items[1]
+        assert isinstance(f_ref, VarRef)
+        assert r.node_types[f_ref.node_id] == FunctionType(params=(), result=IntType())
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            'def f() = render(return 1)\nf',
+            'def f() = render("x", pretty = (return 1))\nf',
+            'def f() = ask(return 1)\nf',
+            'agent a\ndef f() = ask("x", agent = (return 1))\nf',
+        ],
+    )
+    def test_return_in_builtin_runtime_argument_is_bottom(self, source: str) -> None:
+        r = accept_type(source)
+        f_ref = r.resolved.program.body.items[-1]
+        assert isinstance(f_ref, VarRef)
+        assert r.node_types[f_ref.node_id] == FunctionType(params=(), result=IntType())
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "def f() -> int =\n  for i in (return 1) to 3 do () done\nf",
+            "def f() -> int =\n  for i in 1 to (return 1) do () done\nf",
+            "def f() -> int =\n  for i in 1 to 3 by (return 1) do () done\nf",
+            "def f() -> int =\n  for x in (return 1) do () done\nf",
+            "def f() -> int =\n  while (return 1) do\n    ()\nf",
+            "def f() -> int =\n  do\n    ()\n  until (return 1)\nf",
+        ],
+    )
+    def test_return_in_loop_header_or_guard_is_bottom(self, source: str) -> None:
+        r = accept_type(source)
+        f_ref = r.resolved.program.body.items[-1]
+        assert isinstance(f_ref, VarRef)
+        assert r.node_types[f_ref.node_id] == FunctionType(params=(), result=IntType())
+
 
 # ---------------------------------------------------------------------------
 # Lambda

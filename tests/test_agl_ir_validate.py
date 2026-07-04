@@ -226,6 +226,30 @@ class TestValidProgram:
         prog = _make_program(initializers=(_load_sym0(),))
         validate_ir(prog, deep=False)  # no exception
 
+    def test_lowered_partial_application_program_passes_deep_validation(self) -> None:
+        from agm.agl.capabilities import HostCapabilities
+        from agm.agl.lower import lower_program
+        from agm.agl.parser import parse_program
+        from agm.agl.scope import resolve
+        from agm.agl.typecheck import check
+
+        source = "def add(x: int, y: int) -> int = x + y\nlet add1 = add(1, ?)\nadd1(2)"
+        capabilities = HostCapabilities(
+            agent_names=frozenset(),
+            has_default_agent=True,
+            supports_shell_exec=True,
+            codec_kinds={},
+        )
+        checked = check(resolve(parse_program(source)), capabilities)
+        program = lower_program(
+            checked,
+            source_text=source,
+            source_label="<test>",
+            validate=False,
+        )
+
+        validate_ir(program, deep=True)
+
     def test_assign_with_index_path(self) -> None:
         idx_step = IrIndexStep(kind=IndexKind.LIST, index=_int(0), location=LOC)
         assign = IrAssign(location=LOC, symbol=SYM_MUT, path=(idx_step,), value=_int(99))

@@ -332,6 +332,13 @@ class TestLexer:
         styles = {style for style, _text in fragments}
         assert "class:agl.string" in styles
 
+    def test_partial_application_placeholders_are_styled_as_operators(self) -> None:
+        fragments = AglPromptLexer().lex_document(Document("add(?, ?2)"))(0)
+
+        assert ("class:agl.operator", "?") in fragments
+        assert ("class:agl.operator", "?2") in fragments
+        assert "".join(text for _style, text in fragments) == "add(?, ?2)"
+
     @pytest.mark.parametrize(
         "line",
         [

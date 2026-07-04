@@ -116,7 +116,8 @@ _OPERATOR_TOKENS: frozenset[str] = frozenset(
     {
         "ARROW", "EQ", "NEQ", "LE", "GE", "LT", "GT", "PLUS", "MINUS", "STAR",
         "SLASH", "LPAR", "RPAR", "LSQB", "RSQB", "LBRACE", "RBRACE", "COLON",
-        "COMMA", "DOT", "PIPE", "SEMICOLON", "EQ_EQ",
+        "COMMA", "DOT", "PIPE", "SEMICOLON", "EQ_EQ", "PLACEHOLDER",
+        "PLACEHOLDER_NUM",
     }
 )
 # Layout tokens carry no styleable text and are transparent to look-ahead.

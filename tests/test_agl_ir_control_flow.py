@@ -273,6 +273,18 @@ r
     assert ir["r"] == IntValue(1)
 
 
+def test_return_in_non_short_circuit_right_operand_makes_expression_bottom() -> None:
+    source = """\
+def f() -> int =
+  1 + (return 2)
+  "unreachable"
+let r = f()
+r
+"""
+    ir = evaluate_ir(source)
+    assert ir["r"] == IntValue(2)
+
+
 # ---------------------------------------------------------------------------
 # IR evaluation tests — raise
 # ---------------------------------------------------------------------------

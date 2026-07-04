@@ -2018,24 +2018,6 @@ class _Lowerer:
         """Return whether a checked block item unconditionally exits."""
         if isinstance(item, (LetDecl, VarDecl, AssignStmt)):
             return isinstance(self._node_type(item.value.node_id), BottomType)
-        if isinstance(
-            item,
-            (
-                FuncDef,
-                RecordDef,
-                EnumDef,
-                ExceptionDef,
-                TypeAlias,
-                ProgramDecl,
-                ParamDecl,
-                AgentDecl,
-                ConfigDecl,
-                ImportDecl,
-                ExportDecl,
-                InfixDecl,
-            ),
-        ):
-            return False
         return isinstance(self._node_type(item.node_id), BottomType)
 
     def _lower_block(

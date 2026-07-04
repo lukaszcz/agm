@@ -1,0 +1,336 @@
+"""Tests for the extern boundary-contract artifact and its compiler.
+
+Covers ``build_extern_contract`` (``agm.agl.type_schema``), which compiles a
+checked extern's ``FunctionSignature`` into a typeless ``ExternContract``
+(``agm.agl.ir.contracts``): every scalar/container/nominal boundary
+mapping, type-variable sealing, generic-nominal instantiation, and the
+static function/agent-type ban. NO runtime walkers, lowering integration, or
+registry are exercised here — only the checker-types-to-typeless compiler.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from agm.agl.capabilities import HostCapabilities
+from agm.agl.ir.contracts import (
+    BoundaryDict,
+    BoundaryEnum,
+    BoundaryException,
+    BoundaryList,
+    BoundaryRecord,
+    BoundaryScalar,
+    BoundarySealVar,
+    BoundaryUnit,
+    BoundaryVariantShape,
+    ExternContract,
+    ExternParamSchema,
+    ScalarKind,
+)
+from agm.agl.parser import parse_program
+from agm.agl.scope import resolve
+from agm.agl.semantics.types import (
+    AgentType,
+    FunctionType,
+    IntType,
+    TextType,
+)
+from agm.agl.syntax.nodes import ParamKind
+from agm.agl.type_schema import build_extern_contract
+from agm.agl.typecheck import ParamSpec, check
+from agm.agl.typecheck.env import FunctionSignature
+
+_PATH = Path("/virtual/extern_contracts.agl")
+
+_CAPS = HostCapabilities(
+    agent_names=frozenset(),
+    has_default_agent=True,
+    supports_shell_exec=True,
+    codec_kinds={
+        "text": frozenset({"text"}),
+        "json": frozenset(
+            {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
+        ),
+    },
+)
+
+
+def build_contract(source: str, fn_name: str = "f") -> ExternContract:
+    """Parse + resolve (file-backed) + check *source*, compiling ``fn_name``'s contract."""
+    resolved = resolve(parse_program(source), origin_path=_PATH)
+    cp = check(resolved, _CAPS)
+    sig = cp.function_signatures[fn_name]
+    return build_extern_contract(sig)
+
+
+# ---------------------------------------------------------------------------
+# Scalars, unit, and containers
+# ---------------------------------------------------------------------------
+
+
+class TestScalarsAndContainers:
+    def test_int(self) -> None:
+        contract = build_contract("extern def f(x: int) -> int\n0")
+        assert contract.params == (
+            ExternParamSchema(label=repr(IntType()), schema=BoundaryScalar(ScalarKind.INT)),
+        )
+        assert contract.result == BoundaryScalar(ScalarKind.INT)
+        assert contract.result_label == repr(IntType())
+
+    def test_decimal(self) -> None:
+        contract = build_contract("extern def f(x: decimal) -> decimal\n0")
+        assert contract.result == BoundaryScalar(ScalarKind.DECIMAL)
+
+    def test_bool(self) -> None:
+        contract = build_contract("extern def f(x: bool) -> bool\n0")
+        assert contract.result == BoundaryScalar(ScalarKind.BOOL)
+
+    def test_text(self) -> None:
+        contract = build_contract("extern def f(x: text) -> text\n0")
+        assert contract.result == BoundaryScalar(ScalarKind.TEXT)
+
+    def test_json(self) -> None:
+        contract = build_contract("extern def f(x: json) -> json\n0")
+        assert contract.result == BoundaryScalar(ScalarKind.JSON)
+
+    def test_unit(self) -> None:
+        contract = build_contract("extern def f(x: unit) -> unit\n0")
+        assert contract.params[0].schema == BoundaryUnit()
+        assert contract.result == BoundaryUnit()
+
+    def test_list_nesting(self) -> None:
+        contract = build_contract("extern def f(x: list[int]) -> list[int]\n0")
+        assert contract.result == BoundaryList(BoundaryScalar(ScalarKind.INT))
+
+    def test_dict_nesting(self) -> None:
+        contract = build_contract("extern def f(x: dict[text, int]) -> dict[text, int]\n0")
+        assert contract.result == BoundaryDict(BoundaryScalar(ScalarKind.INT))
+
+    def test_list_of_dict_nesting(self) -> None:
+        contract = build_contract(
+            "extern def f(x: list[dict[text, int]]) -> list[dict[text, int]]\n0"
+        )
+        assert contract.result == BoundaryList(BoundaryDict(BoundaryScalar(ScalarKind.INT)))
+
+
+# ---------------------------------------------------------------------------
+# Records, enums, exceptions
+# ---------------------------------------------------------------------------
+
+
+class TestNominals:
+    def test_record(self) -> None:
+        source = "record Box\n  value: int\n  label: text\nextern def f(b: Box) -> Box\n0"
+        contract = build_contract(source)
+        assert isinstance(contract.result, BoundaryRecord)
+        assert contract.result.display_name == "Box"
+        assert contract.result.fields == (
+            ("value", BoundaryScalar(ScalarKind.INT)),
+            ("label", BoundaryScalar(ScalarKind.TEXT)),
+        )
+
+    def test_enum_variant_names_and_field_order(self) -> None:
+        source = (
+            "enum Shape\n"
+            "  | circle(radius: decimal)\n"
+            "  | rect(width: int, height: int)\n"
+            "extern def f(s: Shape) -> Shape\n0"
+        )
+        contract = build_contract(source)
+        assert isinstance(contract.result, BoundaryEnum)
+        assert contract.result.display_name == "Shape"
+        assert contract.result.variants == (
+            BoundaryVariantShape(
+                name="circle", fields=(("radius", BoundaryScalar(ScalarKind.DECIMAL)),)
+            ),
+            BoundaryVariantShape(
+                name="rect",
+                fields=(
+                    ("width", BoundaryScalar(ScalarKind.INT)),
+                    ("height", BoundaryScalar(ScalarKind.INT)),
+                ),
+            ),
+        )
+
+    def test_exception(self) -> None:
+        source = (
+            "exception BadThing extends Exception\n  detail: text\n"
+            "extern def f(x: int) -> BadThing\n0"
+        )
+        contract = build_contract(source)
+        assert isinstance(contract.result, BoundaryException)
+        assert contract.result.display_name == "BadThing"
+        field_names = [name for name, _ in contract.result.fields]
+        assert "detail" in field_names
+        assert dict(contract.result.fields)["detail"] == BoundaryScalar(ScalarKind.TEXT)
+
+
+# ---------------------------------------------------------------------------
+# Option[T] — an ordinary generic enum, no special-casing
+# ---------------------------------------------------------------------------
+
+
+class TestOption:
+    _OPT = "enum Option[T]\n  | none\n  | some(value: T)\n"
+
+    def test_option_of_int(self) -> None:
+        contract = build_contract(self._OPT + "extern def f(o: Option[int]) -> int\n0")
+        opt_schema = contract.params[0].schema
+        assert isinstance(opt_schema, BoundaryEnum)
+        assert opt_schema.display_name == "Option"
+        variants = {v.name: v for v in opt_schema.variants}
+        assert variants["none"].fields == ()
+        assert variants["some"].fields == (("value", BoundaryScalar(ScalarKind.INT)),)
+
+    def test_option_of_type_var(self) -> None:
+        contract = build_contract(self._OPT + "extern def f[T](o: Option[T]) -> T\n0")
+        opt_schema = contract.params[0].schema
+        assert isinstance(opt_schema, BoundaryEnum)
+        variants = {v.name: v for v in opt_schema.variants}
+        assert variants["some"].fields == (("value", BoundarySealVar("T")),)
+        assert contract.result == BoundarySealVar("T")
+
+
+# ---------------------------------------------------------------------------
+# Deep nesting
+# ---------------------------------------------------------------------------
+
+
+class TestDeepNesting:
+    def test_list_of_dict_of_option(self) -> None:
+        source = (
+            "enum Option[T]\n  | none\n  | some(value: T)\n"
+            "extern def f[T](x: list[dict[text, Option[T]]]) -> int\n0"
+        )
+        contract = build_contract(source)
+        schema = contract.params[0].schema
+        assert isinstance(schema, BoundaryList)
+        assert isinstance(schema.element, BoundaryDict)
+        inner = schema.element.value
+        assert isinstance(inner, BoundaryEnum)
+        variants = {v.name: v for v in inner.variants}
+        assert variants["some"].fields == (("value", BoundarySealVar("T")),)
+
+
+# ---------------------------------------------------------------------------
+# Type parameters — sealed leaves
+# ---------------------------------------------------------------------------
+
+
+class TestTypeParams:
+    def test_reverse_signature_yields_seal_vars(self) -> None:
+        contract = build_contract(
+            "extern def reverse[T](xs: list[T]) -> list[T]\n0", fn_name="reverse"
+        )
+        assert contract.type_params == ("T",)
+        assert contract.params[0].schema == BoundaryList(BoundarySealVar("T"))
+        assert contract.result == BoundaryList(BoundarySealVar("T"))
+
+    def test_two_type_variables_stay_distinct(self) -> None:
+        contract = build_contract(
+            "extern def pair[A, B](a: A, b: B) -> A\n0", fn_name="pair"
+        )
+        assert contract.type_params == ("A", "B")
+        assert contract.params[0].schema == BoundarySealVar("A")
+        assert contract.params[1].schema == BoundarySealVar("B")
+        assert contract.result == BoundarySealVar("A")
+
+
+# ---------------------------------------------------------------------------
+# Generic nominal instantiation — instantiated field types, not templates
+# ---------------------------------------------------------------------------
+
+
+class TestGenericNominalInstantiation:
+    def test_generic_record_instantiated_at_concrete_type(self) -> None:
+        source = (
+            "record Box[T]\n  value: T\n"
+            "extern def f(b: Box[int]) -> int\n0"
+        )
+        contract = build_contract(source)
+        schema = contract.params[0].schema
+        assert isinstance(schema, BoundaryRecord)
+        assert schema.fields == (("value", BoundaryScalar(ScalarKind.INT)),)
+
+    def test_generic_enum_instantiated_at_concrete_type(self) -> None:
+        source = (
+            "enum Holder[T]\n  | empty\n  | full(value: T)\n"
+            "extern def f(h: Holder[text]) -> int\n0"
+        )
+        contract = build_contract(source)
+        schema = contract.params[0].schema
+        assert isinstance(schema, BoundaryEnum)
+        variants = {v.name: v for v in schema.variants}
+        assert variants["full"].fields == (("value", BoundaryScalar(ScalarKind.TEXT)),)
+
+
+# ---------------------------------------------------------------------------
+# Artifact hygiene
+# ---------------------------------------------------------------------------
+
+
+class TestArtifactHygiene:
+    def test_contracts_hashable_and_equal_by_value(self) -> None:
+        c1 = build_contract("extern def f(x: int) -> int\n0")
+        c2 = build_contract("extern def f(x: int) -> int\n0")
+        assert c1 == c2
+        assert hash(c1) == hash(c2)
+        assert {c1, c2} == {c1}
+
+    def test_boundary_schema_nodes_hashable_and_equal_by_value(self) -> None:
+        a = BoundaryList(BoundaryScalar(ScalarKind.INT))
+        b = BoundaryList(BoundaryScalar(ScalarKind.INT))
+        assert a == b
+        assert hash(a) == hash(b)
+
+
+# ---------------------------------------------------------------------------
+# Function/agent-type ban — statically unreachable from source, so exercised
+# by direct invocation of the compiler with a hand-built signature.
+# ---------------------------------------------------------------------------
+
+
+class TestFunctionAgentTypeBan:
+    def test_function_typed_param_rejected(self) -> None:
+        sig = FunctionSignature(
+            params=(
+                ParamSpec(
+                    name="cb",
+                    type=FunctionType(params=(IntType(),), result=IntType()),
+                    kind=ParamKind.STANDARD,
+                    has_default=False,
+                ),
+            ),
+            result=IntType(),
+        )
+        try:
+            build_extern_contract(sig)
+        except TypeError as exc:
+            assert "function" in str(exc).lower()
+        else:
+            raise AssertionError("expected TypeError")
+
+    def test_agent_typed_result_rejected(self) -> None:
+        sig = FunctionSignature(params=(), result=AgentType())
+        try:
+            build_extern_contract(sig)
+        except TypeError as exc:
+            assert "agent" in str(exc).lower()
+        else:
+            raise AssertionError("expected TypeError")
+
+    def test_agent_typed_param_rejected(self) -> None:
+        sig = FunctionSignature(
+            params=(
+                ParamSpec(
+                    name="a", type=AgentType(), kind=ParamKind.STANDARD, has_default=False
+                ),
+            ),
+            result=TextType(),
+        )
+        try:
+            build_extern_contract(sig)
+        except TypeError as exc:
+            assert "agent" in str(exc).lower()
+        else:
+            raise AssertionError("expected TypeError")

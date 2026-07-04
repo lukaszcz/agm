@@ -14,6 +14,15 @@ semantic :class:`~agm.agl.semantics.types.Type`.  The derived schema is used:
 reconstruct typed ``Value`` objects from validated JSON without holding
 checker ``Type`` references.
 
+:func:`build_extern_contract` compiles an extern's checked
+``FunctionSignature`` into a typeless
+:class:`~agm.agl.ir.contracts.ExternContract` describing the shape of every
+value crossing the Python FFI boundary — the argument/return type mapping
+mirrors :func:`build_decode_schema`'s recursion, with two boundary-specific
+differences: ``unit`` compiles (it crosses as Python ``None``, needed for
+extern returns) and type-variable positions compile to a
+``BoundarySealVar`` leaf instead of being rejected.
+
 Derivation rules:
 - ``text``    → ``{"type": "string"}``
 - ``int``     → ``{"type": "integer"}``
@@ -34,9 +43,21 @@ import json
 from typing import assert_never
 
 from agm.agl.ir.contracts import (
+    BoundaryDict,
+    BoundaryEnum,
+    BoundaryException,
+    BoundaryList,
+    BoundaryRecord,
+    BoundaryScalar,
+    BoundarySchema,
+    BoundarySealVar,
+    BoundaryUnit,
+    BoundaryVariantShape,
     DecodeSchema,
     DictDecode,
     EnumDecode,
+    ExternContract,
+    ExternParamSchema,
     ListDecode,
     ParamDecoder,
     RecordDecode,
@@ -45,6 +66,7 @@ from agm.agl.ir.contracts import (
     VariantDecode,
 )
 from agm.agl.ir.ids import NominalId
+from agm.agl.modules.ids import PRELUDE_ID
 from agm.agl.semantics.types import (
     AgentType,
     BoolType,
@@ -63,6 +85,7 @@ from agm.agl.semantics.types import (
     TypeVarType,
     UnitType,
 )
+from agm.agl.typecheck.env import FunctionSignature
 
 
 def derive_schema(typ: Type) -> dict[str, object]:
@@ -243,3 +266,101 @@ def build_format_instructions(schema: dict[str, object]) -> str:
         "\n"
         f"```json\n{schema_text}\n```"
     )
+
+
+def build_extern_contract(sig: FunctionSignature) -> ExternContract:
+    """Compile a checked extern's ``FunctionSignature`` into a typeless ``ExternContract``.
+
+    Walks every parameter type and the result type with :func:`_build_boundary_schema`,
+    recursing through already-instantiated generic nominals exactly as
+    :func:`build_decode_schema` does (checker types carry substituted field/variant
+    types at the use site, so no separate substitution step is needed here).
+
+    :raises TypeError: if a function or agent type occurs anywhere in the signature;
+        the checker statically bans both from extern signatures, so this is
+        unreachable from source and only exercised by direct invocation.
+    """
+    params = tuple(
+        ExternParamSchema(label=repr(param.type), schema=_build_boundary_schema(param.type))
+        for param in sig.params
+    )
+    return ExternContract(
+        params=params,
+        result=_build_boundary_schema(sig.result),
+        type_params=sig.type_params,
+        result_label=repr(sig.result),
+    )
+
+
+def _build_boundary_schema(typ: Type) -> BoundarySchema:
+    """Compile one checker ``Type`` into a typeless ``BoundarySchema`` node.
+
+    Mirrors :func:`build_decode_schema`'s recursion over data types, plus two
+    boundary-specific leaves: ``unit`` (crosses as ``None``) and
+    ``TypeVarType`` (crosses as a sealed opaque handle).
+    """
+    if isinstance(typ, TextType):
+        return BoundaryScalar(ScalarKind.TEXT)
+    if isinstance(typ, IntType):
+        return BoundaryScalar(ScalarKind.INT)
+    if isinstance(typ, DecimalType):
+        return BoundaryScalar(ScalarKind.DECIMAL)
+    if isinstance(typ, BoolType):
+        return BoundaryScalar(ScalarKind.BOOL)
+    if isinstance(typ, JsonType):
+        return BoundaryScalar(ScalarKind.JSON)
+    if isinstance(typ, UnitType):
+        return BoundaryUnit()
+    if isinstance(typ, ListType):
+        return BoundaryList(_build_boundary_schema(typ.elem))
+    if isinstance(typ, DictType):
+        return BoundaryDict(_build_boundary_schema(typ.value))
+    if isinstance(typ, RecordType):
+        return BoundaryRecord(
+            nominal=NominalId(typ.module_id, typ.name),
+            display_name=typ.name,
+            fields=tuple(
+                (fname, _build_boundary_schema(ftype)) for fname, ftype in typ.fields.items()
+            ),
+        )
+    if isinstance(typ, EnumType):
+        return BoundaryEnum(
+            nominal=NominalId(typ.module_id, typ.name),
+            display_name=typ.name,
+            variants=tuple(
+                BoundaryVariantShape(
+                    name=vname,
+                    fields=tuple(
+                        (fname, _build_boundary_schema(ftype))
+                        for fname, ftype in vfields.items()
+                    ),
+                )
+                for vname, vfields in typ.variants.items()
+            ),
+        )
+    if isinstance(typ, ExceptionType):
+        # Exceptions carry no module_id of their own (see ExceptionType);
+        # every exception nominal resolves under PRELUDE_ID, mirroring the
+        # lowerer's constructor/nominal handling for exceptions.
+        return BoundaryException(
+            nominal=NominalId(PRELUDE_ID, typ.name),
+            display_name=typ.name,
+            fields=tuple(
+                (fname, _build_boundary_schema(ftype)) for fname, ftype in typ.fields.items()
+            ),
+        )
+    if isinstance(typ, TypeVarType):
+        return BoundarySealVar(typ.name)
+    if isinstance(typ, AgentType):
+        raise TypeError(
+            "AgentType cannot cross the extern boundary; banned in extern signatures."
+        )
+    if isinstance(typ, FunctionType):
+        raise TypeError(
+            "FunctionType cannot cross the extern boundary; banned in extern signatures."
+        )
+    if isinstance(typ, BottomType):  # pragma: no cover
+        # Never assignable to a declared param/result type; unreachable from a
+        # checked FunctionSignature.
+        raise TypeError("BottomType cannot cross the extern boundary.")
+    assert_never(typ)  # pragma: no cover

@@ -2,9 +2,10 @@
 
 This module holds closed tagged-data descriptors that the lowerer compiles
 while checker types are still available, and that the evaluator executes
-WITHOUT any checker ``Type``.  Currently it defines the cast/conversion
-descriptors (``ConversionRecipe`` and the ``DecodeSchema`` union); host
-contract / param-decoder descriptors arrive in future work.
+WITHOUT any checker ``Type``.  It defines the cast/conversion descriptors
+(``ConversionRecipe`` and the ``DecodeSchema`` union) and the extern boundary
+contract (``BoundarySchema`` and ``ExternContract``); the boundary walkers
+that consume the contract at runtime arrive in future work.
 
 Dependency rule: ``agm.agl.ir`` imports
 only stdlib + ``ir.ids`` / ``ir.operations`` + ``modules.ids``.  It imports
@@ -20,6 +21,16 @@ from dataclasses import dataclass
 from agm.agl.ir.ids import NominalId
 
 __all__ = [
+    "BoundaryDict",
+    "BoundaryEnum",
+    "BoundaryException",
+    "BoundaryList",
+    "BoundaryRecord",
+    "BoundaryScalar",
+    "BoundarySchema",
+    "BoundarySealVar",
+    "BoundaryUnit",
+    "BoundaryVariantShape",
     "ContractRequest",
     "ConversionFailureMode",
     "ConversionRecipe",
@@ -27,6 +38,8 @@ __all__ = [
     "DecodeSchema",
     "DictDecode",
     "EnumDecode",
+    "ExternContract",
+    "ExternParamSchema",
     "ListDecode",
     "ParamDecoder",
     "RecordDecode",
@@ -113,6 +126,139 @@ class ParamDecoder:
     json_schema: str
     decode: DecodeSchema
     text_verbatim: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Boundary schema — typeless shape of one value crossing the extern (Python
+# FFI) boundary.  One schema serves both directions: encoding an outbound
+# argument and strictly decoding an inbound return value walk the same
+# nodes; the walker (a future runtime component) owns the direction.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class BoundaryScalar:
+    """A scalar (or opaque json) leaf crossing the boundary unchanged."""
+
+    kind: ScalarKind
+
+
+@dataclass(frozen=True, slots=True)
+class BoundaryUnit:
+    """``unit`` crosses the boundary as Python ``None``."""
+
+
+@dataclass(frozen=True, slots=True)
+class BoundaryList:
+    """A ``list[T]`` crossing as a Python ``list``, recursing on elements."""
+
+    element: "BoundarySchema"
+
+
+@dataclass(frozen=True, slots=True)
+class BoundaryDict:
+    """A ``dict[text, V]`` crossing as a Python ``dict``, recursing on values."""
+
+    value: "BoundarySchema"
+
+
+@dataclass(frozen=True, slots=True)
+class BoundaryRecord:
+    """A record crossing as a field dict, in declaration order."""
+
+    nominal: NominalId
+    display_name: str
+    fields: "tuple[tuple[str, BoundarySchema], ...]"
+
+
+@dataclass(frozen=True, slots=True)
+class BoundaryVariantShape:
+    """One enum variant: its ``$case`` name and ordered field schemas."""
+
+    name: str
+    fields: "tuple[tuple[str, BoundarySchema], ...]"
+
+
+@dataclass(frozen=True, slots=True)
+class BoundaryEnum:
+    """An enum crossing as a ``{"$case": ..., ...fields}`` dict."""
+
+    nominal: NominalId
+    display_name: str
+    variants: tuple[BoundaryVariantShape, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class BoundaryException:
+    """An exception crossing as a field dict, decoding into an exception value.
+
+    Distinct from ``BoundaryRecord``: an exception is not a record type, and
+    decoding it constructs an exception value rather than a plain record.
+    """
+
+    nominal: NominalId
+    display_name: str
+    fields: "tuple[tuple[str, BoundarySchema], ...]"
+
+
+@dataclass(frozen=True, slots=True)
+class BoundarySealVar:
+    """A type-variable position: the runtime seals/unseals here.
+
+    ``var`` is the declared type-parameter name (unique within one contract).
+    """
+
+    var: str
+
+
+#: Closed union of boundary-schema nodes.  Dispatch with a structural
+#: ``match`` whose final arm is ``assert_never``.
+BoundarySchema = (
+    BoundaryScalar
+    | BoundaryUnit
+    | BoundaryList
+    | BoundaryDict
+    | BoundaryRecord
+    | BoundaryEnum
+    | BoundaryException
+    | BoundarySealVar
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ExternParamSchema:
+    """One extern parameter's boundary schema plus its diagnostic label.
+
+    ``label`` is the human-readable type label (``repr(type)``) used in
+    ``ExternError`` messages and other diagnostics.
+    """
+
+    label: str
+    schema: BoundarySchema
+
+
+@dataclass(frozen=True, slots=True)
+class ExternContract:
+    """Typeless boundary contract for one ``extern def``.
+
+    Built at lowering from the checked ``FunctionSignature`` while checker
+    types are still available; the runtime encodes arguments and decodes the
+    return value using only this descriptor, without any checker ``Type``.
+
+    ``params``       — one schema per declared parameter, in declaration order.
+    ``result``       — the boundary schema for the return value.
+    ``type_params``  — the extern's declared type-parameter names, in
+                        declaration order; each name may appear as a
+                        ``BoundarySealVar`` leaf somewhere in ``params``/
+                        ``result``.
+    ``result_label`` — the human-readable return-type label (``repr(type)``)
+                        used in ``ExternError`` messages.
+    """
+
+    params: tuple[ExternParamSchema, ...]
+    result: BoundarySchema
+    type_params: tuple[str, ...]
+    result_label: str
 
 
 # ---------------------------------------------------------------------------

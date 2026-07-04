@@ -2550,7 +2550,7 @@ class TestDeriveSchema:
         from agm.agl.type_schema import derive_schema
 
         with pytest.raises(TypeError, match="ExceptionType"):
-            derive_schema(ExceptionType(name="MyErr", fields={}), type_table_for())
+            derive_schema(ExceptionType(name="MyErr"), type_table_for())
 
     def test_unit_type_raises(self) -> None:
         from agm.agl.semantics.types import UnitType
@@ -2676,7 +2676,7 @@ class TestBuildParamDecoder:
         from agm.agl.type_schema import build_param_decoder
 
         with pytest.raises(TypeError):
-            build_param_decoder(ExceptionType(name="MyErr", fields={}), type_table_for())
+            build_param_decoder(ExceptionType(name="MyErr"), type_table_for())
 
 
 class TestBuildFormatInstructions:

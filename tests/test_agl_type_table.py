@@ -40,7 +40,7 @@ from agm.agl.semantics.types import (
     TypeVarType,
     UnitType,
 )
-from agm.agl.syntax.nodes import LetDecl, VarDecl
+from agm.agl.syntax.nodes import LetDecl, ParamKind, VarDecl
 from agm.agl.typecheck import CheckedProgram, check
 from agm.agl.typecheck.graph import check_graph
 from tests.agl.ir_harness import make_graph_from_files
@@ -211,6 +211,357 @@ class TestNonGenericAccessors:
         handle = EnumType(name="Point", module_id=ENTRY_ID)
         with pytest.raises(AssertionError):
             table.enum_variants(handle)
+
+
+# ---------------------------------------------------------------------------
+# Exception accessors — exception_fields (base-chain flattening) and
+# exception_def (abstract/base metadata)
+# ---------------------------------------------------------------------------
+
+
+class TestExceptionAccessors:
+    def test_exception_fields_root_only(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Exception",
+                module_id=ENTRY_ID,
+                fields=(("message", TextType()), ("trace_id", TextType())),
+                abstract=True,
+            )
+        )
+        handle = ExceptionType(name="Exception", module_id=ENTRY_ID)
+        assert dict(table.exception_fields(handle)) == {
+            "message": TextType(),
+            "trace_id": TextType(),
+        }
+
+    def test_exception_fields_flattens_base_chain_root_mid_leaf_order(self) -> None:
+        """A three-level ``extends`` chain flattens base-first, in declaration order."""
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Root",
+                module_id=ENTRY_ID,
+                fields=(("message", TextType()), ("trace_id", TextType())),
+                abstract=True,
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Mid",
+                module_id=ENTRY_ID,
+                fields=(("code", IntType()),),
+                base=(ENTRY_ID, "Root"),
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Leaf",
+                module_id=ENTRY_ID,
+                fields=(("detail", TextType()),),
+                base=(ENTRY_ID, "Mid"),
+            )
+        )
+        handle = ExceptionType(name="Leaf", module_id=ENTRY_ID)
+        assert list(table.exception_fields(handle).keys()) == [
+            "message",
+            "trace_id",
+            "code",
+            "detail",
+        ]
+
+    def test_exception_fields_resolves_cross_module_base(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Base",
+                module_id=_LIB_ID,
+                fields=(("message", TextType()), ("trace_id", TextType())),
+                abstract=True,
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Child",
+                module_id=ENTRY_ID,
+                fields=(("code", IntType()),),
+                base=(_LIB_ID, "Base"),
+            )
+        )
+        handle = ExceptionType(name="Child", module_id=ENTRY_ID)
+        assert dict(table.exception_fields(handle)) == {
+            "message": TextType(),
+            "trace_id": TextType(),
+            "code": IntType(),
+        }
+
+    def test_exception_fields_returns_same_object_for_same_handle(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="exception", name="Boom", module_id=ENTRY_ID, fields=(("code", IntType()),)
+            )
+        )
+        handle = ExceptionType(name="Boom", module_id=ENTRY_ID)
+        first = table.exception_fields(handle)
+        second = table.exception_fields(handle)
+        assert first is second
+
+    def test_exception_fields_missing_def_raises_keyerror(self) -> None:
+        table = TypeTable()
+        handle = ExceptionType(name="Ghost", module_id=ENTRY_ID)
+        with pytest.raises(KeyError):
+            table.exception_fields(handle)
+
+    def test_exception_fields_raises_when_key_registered_as_record(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(kind="record", name="Point", module_id=ENTRY_ID, fields=(("x", IntType()),))
+        )
+        handle = ExceptionType(name="Point", module_id=ENTRY_ID)
+        with pytest.raises(AssertionError):
+            table.exception_fields(handle)
+
+    def test_exception_fields_raises_on_cyclic_base_chain(self) -> None:
+        """Internal robustness guard: a cyclic ``base`` chain cannot occur via the
+        builder (the temporary recursion ban rejects it first), but the table
+        itself still guards against infinite recursion."""
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="A",
+                module_id=ENTRY_ID,
+                base=(ENTRY_ID, "B"),
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="B",
+                module_id=ENTRY_ID,
+                base=(ENTRY_ID, "A"),
+            )
+        )
+        handle = ExceptionType(name="A", module_id=ENTRY_ID)
+        with pytest.raises(AssertionError, match="cyclic exception base chain"):
+            table.exception_fields(handle)
+
+    def test_exception_def_returns_abstract_and_base(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Root",
+                module_id=ENTRY_ID,
+                fields=(("message", TextType()),),
+                abstract=True,
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Child",
+                module_id=ENTRY_ID,
+                fields=(("code", IntType()),),
+                base=(ENTRY_ID, "Root"),
+            )
+        )
+        root_def = table.exception_def(ExceptionType(name="Root", module_id=ENTRY_ID))
+        assert root_def.abstract is True
+        assert root_def.base is None
+        child_def = table.exception_def(ExceptionType(name="Child", module_id=ENTRY_ID))
+        assert child_def.abstract is False
+        assert child_def.base == (ENTRY_ID, "Root")
+
+    def test_exception_def_missing_def_raises_keyerror(self) -> None:
+        table = TypeTable()
+        handle = ExceptionType(name="Ghost", module_id=ENTRY_ID)
+        with pytest.raises(KeyError):
+            table.exception_def(handle)
+
+    def test_exception_def_raises_when_key_registered_as_enum(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(kind="enum", name="Color", module_id=ENTRY_ID, variants=(("Red", ()),))
+        )
+        handle = ExceptionType(name="Color", module_id=ENTRY_ID)
+        with pytest.raises(AssertionError):
+            table.exception_def(handle)
+
+
+# ---------------------------------------------------------------------------
+# TypeTable.exception_field_kinds — own fields honor their declared kind;
+# only the extends-chain flattening order (base-first) is exception-specific.
+# ---------------------------------------------------------------------------
+
+
+class TestExceptionFieldKinds:
+    """``exception_field_kinds`` returns ``ParamKind.value`` strings (not the
+    enum): ``semantics`` may not import ``syntax.nodes``, so ``TypeDef.
+    field_kinds`` stores the stable string values instead (converted back to
+    ``ParamKind`` by ``typecheck.env``)."""
+
+    def test_root_only_excludes_trace_id(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Exception",
+                module_id=ENTRY_ID,
+                fields=(("message", TextType()), ("trace_id", TextType())),
+                abstract=True,
+                field_kinds=(ParamKind.NAMED_ONLY.value, ParamKind.NAMED_ONLY.value),
+            )
+        )
+        handle = ExceptionType(name="Exception", module_id=ENTRY_ID)
+        assert table.exception_field_kinds(handle) == (("message", ParamKind.NAMED_ONLY.value),)
+
+    def test_flattens_base_chain_and_honors_each_level_own_marker(self) -> None:
+        """Own fields honor their declared kind at every level of the chain —
+        an exception's own fields are not forced to NAMED_ONLY, only the
+        flattening order (base-first) is exception-specific."""
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Root",
+                module_id=ENTRY_ID,
+                fields=(("message", TextType()), ("trace_id", TextType())),
+                abstract=True,
+                field_kinds=(ParamKind.NAMED_ONLY.value, ParamKind.NAMED_ONLY.value),
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Mid",
+                module_id=ENTRY_ID,
+                fields=(("code", IntType()),),
+                base=(ENTRY_ID, "Root"),
+                field_kinds=(ParamKind.STANDARD.value,),
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Leaf",
+                module_id=ENTRY_ID,
+                fields=(("detail", TextType()),),
+                base=(ENTRY_ID, "Mid"),
+                field_kinds=(ParamKind.POSITIONAL_ONLY.value,),
+            )
+        )
+        handle = ExceptionType(name="Leaf", module_id=ENTRY_ID)
+        assert table.exception_field_kinds(handle) == (
+            ("message", ParamKind.NAMED_ONLY.value),
+            ("code", ParamKind.STANDARD.value),
+            ("detail", ParamKind.POSITIONAL_ONLY.value),
+        )
+
+    def test_resolves_cross_module_base(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Base",
+                module_id=_LIB_ID,
+                fields=(("message", TextType()), ("trace_id", TextType())),
+                abstract=True,
+                field_kinds=(ParamKind.NAMED_ONLY.value, ParamKind.NAMED_ONLY.value),
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Child",
+                module_id=ENTRY_ID,
+                fields=(("code", IntType()),),
+                base=(_LIB_ID, "Base"),
+                field_kinds=(ParamKind.STANDARD.value,),
+            )
+        )
+        handle = ExceptionType(name="Child", module_id=ENTRY_ID)
+        assert table.exception_field_kinds(handle) == (
+            ("message", ParamKind.NAMED_ONLY.value),
+            ("code", ParamKind.STANDARD.value),
+        )
+
+    def test_returns_same_object_for_same_handle(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Boom",
+                module_id=ENTRY_ID,
+                fields=(("code", IntType()),),
+                field_kinds=(ParamKind.STANDARD.value,),
+            )
+        )
+        handle = ExceptionType(name="Boom", module_id=ENTRY_ID)
+        first = table.exception_field_kinds(handle)
+        second = table.exception_field_kinds(handle)
+        assert first is second
+
+    def test_missing_def_raises_keyerror(self) -> None:
+        table = TypeTable()
+        handle = ExceptionType(name="Ghost", module_id=ENTRY_ID)
+        with pytest.raises(KeyError):
+            table.exception_field_kinds(handle)
+
+    def test_raises_when_key_registered_as_record(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(kind="record", name="Point", module_id=ENTRY_ID, fields=(("x", IntType()),))
+        )
+        handle = ExceptionType(name="Point", module_id=ENTRY_ID)
+        with pytest.raises(AssertionError):
+            table.exception_field_kinds(handle)
+
+    def test_raises_on_cyclic_base_chain(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(kind="exception", name="A", module_id=ENTRY_ID, base=(ENTRY_ID, "B"))
+        )
+        table.register(
+            TypeDef(kind="exception", name="B", module_id=ENTRY_ID, base=(ENTRY_ID, "A"))
+        )
+        handle = ExceptionType(name="A", module_id=ENTRY_ID)
+        with pytest.raises(AssertionError, match="cyclic exception base chain"):
+            table.exception_field_kinds(handle)
+
+    def test_unregister_invalidates_cached_field_kinds(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Boom",
+                module_id=ENTRY_ID,
+                fields=(("code", IntType()),),
+                field_kinds=(ParamKind.NAMED_ONLY.value,),
+            )
+        )
+        handle = ExceptionType(name="Boom", module_id=ENTRY_ID)
+        assert table.exception_field_kinds(handle) == (("code", ParamKind.NAMED_ONLY.value),)
+
+        table.unregister(ENTRY_ID, "Boom")
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Boom",
+                module_id=ENTRY_ID,
+                fields=(("code", IntType()),),
+                field_kinds=(ParamKind.STANDARD.value,),
+            )
+        )
+        assert table.exception_field_kinds(handle) == (("code", ParamKind.STANDARD.value),)
 
 
 # ---------------------------------------------------------------------------
@@ -798,26 +1149,44 @@ class TestComparableTypesTableAware:
         )
         assert comparable_types(handle, handle, table) is False
 
-    def test_exception_with_function_field_not_comparable_via_embedded_fields(self) -> None:
-        # Exceptions are not registered in the TypeTable yet — the exception
-        # arm walks the embedded ``fields`` mapping directly, independent of
-        # whatever (possibly unrelated) table is passed in.
+    def test_exception_with_function_field_not_comparable(self) -> None:
         table = TypeTable()
         handler_type = FunctionType(params=(), result=IntType())
-        exc = ExceptionType(name="Failure", fields={"handler": handler_type})
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Failure",
+                module_id=ENTRY_ID,
+                fields=(("handler", handler_type),),
+            )
+        )
+        exc = ExceptionType(name="Failure", module_id=ENTRY_ID)
         assert comparable_types(exc, exc, table) is False
 
-    def test_exception_with_only_scalar_fields_comparable_via_embedded_fields(self) -> None:
+    def test_exception_with_only_scalar_fields_comparable(self) -> None:
         table = TypeTable()
-        exc = ExceptionType(name="Failure", fields={"code": IntType()})
+        table.register(
+            TypeDef(
+                kind="exception", name="Failure", module_id=ENTRY_ID, fields=(("code", IntType()),)
+            )
+        )
+        exc = ExceptionType(name="Failure", module_id=ENTRY_ID)
         assert comparable_types(exc, exc, table) is True
 
     def test_record_containing_exception_with_function_field_not_comparable(self) -> None:
-        # A record field of exception type still walks that exception's
-        # embedded fields even though the record itself is table-resolved.
+        # A record field of exception type walks that exception's flattened
+        # fields via the table, even though the record itself is table-resolved.
         table = TypeTable()
         handler_type = FunctionType(params=(), result=IntType())
-        exc = ExceptionType(name="Failure", fields={"handler": handler_type})
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Failure",
+                module_id=ENTRY_ID,
+                fields=(("handler", handler_type),),
+            )
+        )
+        exc = ExceptionType(name="Failure", module_id=ENTRY_ID)
         table.register(
             TypeDef(kind="record", name="Report", module_id=ENTRY_ID, fields=(("cause", exc),))
         )

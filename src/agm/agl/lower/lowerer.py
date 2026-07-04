@@ -232,10 +232,9 @@ def _add_builtin_nominals(
 ) -> None:
     """Register built-in prelude and exception nominal descriptors.
 
-    Record/enum field and variant names are resolved through *type_table*
-    (every prelude type is seeded into every table by
-    ``create_seeded_type_table``); exception descriptors still read the
-    embedded ``ExceptionType.fields`` directly.
+    Record/enum field and variant names, and exception field names, are all
+    resolved through *type_table* (every built-in prelude and exception type
+    is seeded into every table by ``create_seeded_type_table``).
     """
     for name, typ in BUILTIN_PRELUDE_TYPES.items():
         nominal = NominalId(PRELUDE_ID, name)
@@ -266,7 +265,7 @@ def _add_builtin_nominals(
             nominal=nominal,
             display_name=exc_name,
             kind=NominalKind.EXCEPTION,
-            fields=tuple(exc_type.fields.keys()),
+            fields=tuple(type_table.exception_fields(exc_type).keys()),
             variants=(),
         )
 
@@ -1671,8 +1670,8 @@ class _Lowerer:
     ) -> tuple[NominalId, str]:
         """Return (NominalId, display_name) for a constructor owner by name.
 
-        For exceptions the nominal uses PRELUDE_ID; for records/enums it uses
-        the type's own module_id (which equals ENTRY_ID for single-module programs).
+        Uses the resolved type's own ``module_id`` (which equals ``ENTRY_ID``
+        for single-module programs and ``PRELUDE_ID`` for built-ins).
         """
         typ = (
             self._checked.type_env.resolve_type_by_module_id(owner_module, owner_name)
@@ -1685,7 +1684,7 @@ class _Lowerer:
             return NominalId(typ.module_id, typ.name), typ.name
         if isinstance(typ, ExceptionType):  # pragma: no cover
             # Exception constructors as first-class values are rejected by the checker.
-            return NominalId(PRELUDE_ID, typ.name), typ.name
+            return NominalId(typ.module_id, typ.name), typ.name
         # Fallback for generic types: get from GenericTypeDef template.  # pragma: no cover
         gdef = (
             self._checked.type_env.get_generic_type_from_module(owner_module, owner_name)
@@ -1949,11 +1948,11 @@ class _Lowerer:
             )
 
         if isinstance(typ, ExceptionType):
-            nominal = NominalId(PRELUDE_ID, typ.name)
+            nominal = NominalId(typ.module_id, typ.name)
             # ONE trace id allocation sentinel per construction (auto-fill any
             # declared field not present in arg_exprs).
             exc_fields: list[tuple[str, IrExpr | AutoTraceField]] = []
-            for fname, ftype in typ.fields.items():
+            for fname, ftype in self._type_table.exception_fields(typ).items():
                 if fname in arg_exprs:
                     exc_fields.append((fname, self.lower_coerced(arg_exprs[fname], ftype)))
                 else:
@@ -2060,14 +2059,24 @@ class _Lowerer:
 
     def _lower_catch_clause(self, clause: "CatchClause") -> IrCatchHandler:
         """Lower a ``CatchClause`` to an ``IrCatchHandler``."""
-        # Determine nominal + display_name.
+        # Determine nominal + display_name.  ``nominal`` only needs to name a
+        # valid ``program.nominals`` entry (IR validation checks membership);
+        # actual catch matching at runtime is by ``display_name`` string
+        # equality (see ``IrCatchHandler``), so the resolved type's *real*
+        # module_id (built-in, entry, or a library module for a cross-module
+        # exception) must be used, not a hardcoded one.
         exc_type = clause.exc_type
         if exc_type is None or exc_type == "_" or exc_type == "Exception":
             nominal: NominalId | None = None
             display_name: str | None = None
         else:
-            nominal = NominalId(PRELUDE_ID, exc_type)
-            display_name = exc_type
+            resolved = self._checked.type_env.resolve_named_type(exc_type)
+            assert isinstance(resolved, ExceptionType), (
+                f"compiler bug: catch clause type {exc_type!r} did not resolve "
+                "to an ExceptionType"
+            )
+            nominal = NominalId(resolved.module_id, resolved.name)
+            display_name = resolved.name
 
         # Allocate a SymbolId for the binding variable when present.
         # public=False: catch-clause binders are not top-level exported names.
@@ -2587,12 +2596,13 @@ class _Lowerer:
         """Populate ``self._link.nominals`` with all user-declared and built-in nominals.
 
         Adds:
-        - All user-declared record/enum nominals from the entry module's type env.
+        - All user-declared record/enum/exception nominals from the entry
+          module's type env.
         - All built-in prelude record/enum and exception descriptors keyed by
           NominalId(PRELUDE_ID, name).
 
-        Record/enum field and variant names are resolved through the shared
-        ``TypeTable`` rather than the embedded ``RecordType``/``EnumType`` maps.
+        Field, variant, and exception-field names are resolved through the
+        shared ``TypeTable`` rather than any embedded map on the handle.
         """
         table = self._type_table
         # User-declared nominals for this lowering unit.
@@ -2619,16 +2629,22 @@ class _Lowerer:
                     fields=(),
                     variants=variants,
                 )
-            elif isinstance(typ, ExceptionType):  # pragma: no cover
-                # User-declared exceptions are not supported by the current grammar.
-                # Reserved for a future grammar extension.
-                nominal = NominalId(PRELUDE_ID, name)  # pragma: no cover
-                self._link.nominals[nominal] = NominalDescriptor(  # pragma: no cover
+            elif isinstance(typ, ExceptionType):
+                nominal = NominalId(typ.module_id, name)
+                self._link.nominals[nominal] = NominalDescriptor(
                     nominal=nominal,
                     display_name=name,
                     kind=NominalKind.EXCEPTION,
-                    fields=tuple(typ.fields.keys()),
+                    fields=tuple(table.exception_fields(typ).keys()),
                     variants=(),
+                )
+            else:  # pragma: no cover
+                # non_builtin_type_items() only ever yields Record/Enum/Exception
+                # handles for a non-generic user declaration (generics live in a
+                # separate table, aliases are never registered into _types).
+                raise AssertionError(
+                    f"compiler bug: non-nominal type {typ!r} for {name!r} in "
+                    "non_builtin_type_items()"
                 )
 
         # Generic definitions are stored separately from the ordinary type

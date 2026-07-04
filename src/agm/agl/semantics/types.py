@@ -18,8 +18,9 @@ Type hierarchy
   (``semantics.type_table``), keyed by ``(module_id, name)``.
 - ``EnumType(name, type_args, module_id)`` — an ``enum`` nominal type handle;
   variant shapes live in the shared ``TypeTable``.
-- ``ExceptionType(name, fields)`` — a built-in exception type; still carries
-  its fields embedded.
+- ``ExceptionType(name, module_id)`` — an exception nominal type handle
+  (never generic); field shapes and hierarchy (``abstract``, ``base``) live
+  in the shared ``TypeTable``.
 - ``UnitType`` — the ``unit`` type (AgL; single value ``()``).
 - ``AgentType`` — the opaque ``agent`` type (AgL).
 - ``FunctionType(params, result)`` — a first-class function type (AgL),
@@ -213,25 +214,36 @@ class EnumType:
 
 @dataclass(frozen=True, slots=True)
 class ExceptionType:
-    """A built-in exception type.
+    """An exception nominal type handle.
 
-    ``fields`` maps field name → field type.
-    The abstract ``Exception`` base is represented as an ``ExceptionType``
-    with name ``"Exception"``, only ``message``/``trace_id`` fields, and
-    ``abstract=True`` (it is catchable as the hierarchy root but not
-    constructible).
+    An ``ExceptionType`` carries no field data — it is a lightweight handle
+    whose identity is ``(module_id, name)``; exceptions are never generic, so
+    there is no ``type_args`` component (unlike ``RecordType``/``EnumType``).
+    Field shapes and hierarchy metadata (``abstract``, ``base``) are looked
+    up by handle in the shared ``TypeTable``
+    (``semantics.type_table.TypeTable.exception_fields``/``exception_def``).
+    ``module_id`` is the owning module (defaults to ``ENTRY_ID``, like
+    ``RecordType``/``EnumType``); built-in exceptions carry ``PRELUDE_ID``.
+
+    The abstract ``Exception`` root is the ``TypeDef`` registered under name
+    ``"Exception"`` with ``abstract=True`` and only ``message``/``trace_id``
+    fields — it is catchable as the hierarchy root but not constructible.
     """
 
     name: str
-    fields: Mapping[str, Type] = field(default_factory=dict)
-    abstract: bool = False
+    module_id: ModuleId = field(default_factory=lambda: ENTRY_ID)
 
     @property
     def kind(self) -> str:
         return "exception"
 
     def __repr__(self) -> str:
-        return self.name
+        # Built-in/prelude exceptions always render as the bare name (matching
+        # today's user-visible diagnostics); a module-owned user exception
+        # matches the record/enum qualification style.
+        if self.module_id.is_entry or self.module_id == PRELUDE_ID:
+            return self.name
+        return f"{self.module_id.dotted()}::{self.name}"
 
 
 # ---------------------------------------------------------------------------
@@ -492,182 +504,38 @@ def contains_type_var(t: Type) -> bool:
 
 # ---------------------------------------------------------------------------
 # Built-in exception types
+#
+# These are pure handles — ``module_id=PRELUDE_ID`` — carrying no field data
+# of their own; the shapes are the single source of truth defined once as
+# ``TypeDef`` literals in ``semantics.type_table.BUILTIN_EXCEPTION_TYPE_DEFS``
+# (registered into every fresh ``TypeTable`` by ``create_seeded_type_table``).
 # ---------------------------------------------------------------------------
 
-# Abstract base: only message + trace_id fields.
-EXCEPTION_BASE = ExceptionType(
-    name="Exception",
-    fields={
-        "message": TextType(),
-        "trace_id": TextType(),
-    },
-    abstract=True,
-)
+# Abstract base: the hierarchy root, catchable but not constructible.
+EXCEPTION_BASE = ExceptionType(name="Exception", module_id=PRELUDE_ID)
 
-# Concrete built-in exceptions — exact .
-# Every exception includes the base fields (message, trace_id) plus the
-# additional fields listed in the design's "Additional fields" section.
-#
-# Changes from prior draft vs :
-#   - AgentCallError: added agent: text and metadata: json
-#   - UndefinedVariableError: added with name: text
-#   - ImmutableBindingError: added with name: text, operation: text
-#   - ValidationError: REMOVED — ;
-#     agm.agl.runtime.request.ValidationError is a Python-level record shape
-#     embedded in AgentParseError.validation_errors, not an AgL type.
 BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
     "Exception": EXCEPTION_BASE,
-    # : agent/cause/metadata.
-    "AgentCallError": ExceptionType(
-        name="AgentCallError",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-            "agent": TextType(),
-            "cause": TextType(),
-            "metadata": JsonType(),
-        },
-    ),
-    "AgentParseError": ExceptionType(
-        name="AgentParseError",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-            "agent": TextType(),
-            "target_type": TextType(),
-            "expected_schema": JsonType(),
-            "raw": TextType(),
-            "normalized_raw": TextType(),
-            "validation_errors": JsonType(),
-            "attempts": IntType(),
-            "metadata": JsonType(),
-        },
-    ),
-    "ExecError": ExceptionType(
-        name="ExecError",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-            "command": TextType(),
-            "exit_code": IntType(),
-            "stdout": TextType(),
-            "stderr": TextType(),
-            "timed_out": BoolType(),
-        },
-    ),
-    "MaxIterationsExceeded": ExceptionType(
-        name="MaxIterationsExceeded",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-            "limit": IntType(),
-            "condition": TextType(),
-            "last_condition_value": BoolType(),
-            "metadata": JsonType(),
-        },
-    ),
-    "MatchError": ExceptionType(
-        name="MatchError",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-            "scrutinee_type": TextType(),
-            "scrutinee": JsonType(),
-        },
-    ),
-    "IndexError": ExceptionType(
-        name="IndexError",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-            "index": IntType(),
-            "length": IntType(),
-        },
-    ),
-    "KeyError": ExceptionType(
-        name="KeyError",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-            "key": TextType(),
-        },
-    ),
-    "TypeError": ExceptionType(
-        name="TypeError",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-        },
-    ),
-    "ArithmeticError": ExceptionType(
-        name="ArithmeticError",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-            "operation": TextType(),
-        },
-    ),
+    "AgentCallError": ExceptionType(name="AgentCallError", module_id=PRELUDE_ID),
+    "AgentParseError": ExceptionType(name="AgentParseError", module_id=PRELUDE_ID),
+    "ExecError": ExceptionType(name="ExecError", module_id=PRELUDE_ID),
+    "MaxIterationsExceeded": ExceptionType(name="MaxIterationsExceeded", module_id=PRELUDE_ID),
+    "MatchError": ExceptionType(name="MatchError", module_id=PRELUDE_ID),
+    "IndexError": ExceptionType(name="IndexError", module_id=PRELUDE_ID),
+    "KeyError": ExceptionType(name="KeyError", module_id=PRELUDE_ID),
+    "TypeError": ExceptionType(name="TypeError", module_id=PRELUDE_ID),
+    "ArithmeticError": ExceptionType(name="ArithmeticError", module_id=PRELUDE_ID),
     # Statically prevented by scope/typecheck (assignment to immutable bindings
     # and undeclared names), but still listed as catchable runtime
     # exceptions for any runtime paths that bypass the static passes.
-    "UndefinedVariableError": ExceptionType(
-        name="UndefinedVariableError",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-            "name": TextType(),
-        },
-    ),
-    "ImmutableBindingError": ExceptionType(
-        name="ImmutableBindingError",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-            "name": TextType(),
-            "operation": TextType(),
-        },
-    ),
-    "Abort": ExceptionType(
-        name="Abort",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-        },
-    ),
+    "UndefinedVariableError": ExceptionType(name="UndefinedVariableError", module_id=PRELUDE_ID),
+    "ImmutableBindingError": ExceptionType(name="ImmutableBindingError", module_id=PRELUDE_ID),
+    "Abort": ExceptionType(name="Abort", module_id=PRELUDE_ID),
     # AgL: RecursionError raised when the call-depth limit is exceeded.
-    "RecursionError": ExceptionType(
-        name="RecursionError",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-            "limit": IntType(),
-        },
-    ),
-    "CastError": ExceptionType(
-        name="CastError",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-            "source_type": TextType(),
-            "target_type": TextType(),
-            "raw": TextType(),
-        },
-    ),
-    "JsonParseError": ExceptionType(
-        name="JsonParseError",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-            "raw": TextType(),
-        },
-    ),
-    "RangeError": ExceptionType(
-        name="RangeError",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-        },
-    ),
+    "RecursionError": ExceptionType(name="RecursionError", module_id=PRELUDE_ID),
+    "CastError": ExceptionType(name="CastError", module_id=PRELUDE_ID),
+    "JsonParseError": ExceptionType(name="JsonParseError", module_id=PRELUDE_ID),
+    "RangeError": ExceptionType(name="RangeError", module_id=PRELUDE_ID),
 }
 
 # Names of built-in exception types (cannot be redeclared as records/enums/aliases).

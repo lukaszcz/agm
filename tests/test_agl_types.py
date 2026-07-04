@@ -345,9 +345,10 @@ class TestTypeEnvironmentPrelude:
         env = TypeEnvironment()
         t = env.get_type("RecursionError")
         assert isinstance(t, ExceptionType)
-        assert t.fields["message"] == TextType()
-        assert t.fields["trace_id"] == TextType()
-        assert t.fields["limit"] == IntType()
+        fields = env.type_table.exception_fields(t)
+        assert fields["message"] == TextType()
+        assert fields["trace_id"] == TextType()
+        assert fields["limit"] == IntType()
 
     def test_resolve_named_type_exec_result(self) -> None:
         env = TypeEnvironment()
@@ -699,18 +700,22 @@ class TestNewExceptions:
         assert "JsonParseError" in BUILTIN_EXCEPTION_NAMES
 
     def test_cast_error_fields(self) -> None:
+        from agm.agl.semantics.type_table import create_seeded_type_table
         from agm.agl.semantics.types import BUILTIN_EXCEPTIONS, TextType
         e = BUILTIN_EXCEPTIONS["CastError"]
-        assert "source_type" in e.fields
-        assert "target_type" in e.fields
-        assert "raw" in e.fields
-        assert e.fields["source_type"] == TextType()
+        fields = create_seeded_type_table().exception_fields(e)
+        assert "source_type" in fields
+        assert "target_type" in fields
+        assert "raw" in fields
+        assert fields["source_type"] == TextType()
 
     def test_json_parse_error_fields(self) -> None:
+        from agm.agl.semantics.type_table import create_seeded_type_table
         from agm.agl.semantics.types import BUILTIN_EXCEPTIONS, TextType
         e = BUILTIN_EXCEPTIONS["JsonParseError"]
-        assert "raw" in e.fields
-        assert e.fields["raw"] == TextType()
+        fields = create_seeded_type_table().exception_fields(e)
+        assert "raw" in fields
+        assert fields["raw"] == TextType()
 
 
 class TestCastClassification:
@@ -816,7 +821,7 @@ class TestCastClassification:
             TextType,
             cast_classification,
         )
-        exc = ExceptionType(name="MyError", fields={"message": TextType(), "trace_id": TextType()})
+        exc = ExceptionType(name="MyError")
         assert cast_classification(TextType(), exc) == CastKind.STATIC_ERROR
 
     def test_exception_source_to_text_render(self) -> None:
@@ -826,7 +831,7 @@ class TestCastClassification:
             TextType,
             cast_classification,
         )
-        exc = ExceptionType(name="MyError", fields={"message": TextType(), "trace_id": TextType()})
+        exc = ExceptionType(name="MyError")
         assert cast_classification(exc, TextType()) == CastKind.TOTAL_RENDER
 
     def test_json_to_text_render(self) -> None:

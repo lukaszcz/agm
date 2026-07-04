@@ -20,7 +20,7 @@ from agm.agl.ir.program import (
 )
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.lowerer import _add_builtin_nominals, _LinkState, _Lowerer
-from agm.agl.modules.ids import PRELUDE_ID, STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.semantics.types import EnumType, ExceptionType, RecordType
 from agm.agl.syntax.nodes import AgentDecl, FuncDef
 from agm.agl.typecheck.graph import CheckedModuleGraph
@@ -101,13 +101,15 @@ def lower_graph(
                 fields=(),
                 variants=variants,
             )
-        elif isinstance(typ, ExceptionType):  # pragma: no cover
-            nominal = NominalId(PRELUDE_ID, name)
+        elif isinstance(typ, ExceptionType):
+            if name != typ.name or mid != typ.module_id:
+                continue
+            nominal = NominalId(typ.module_id, name)
             link.nominals[nominal] = NominalDescriptor(
                 nominal=nominal,
                 display_name=name,
                 kind=NominalKind.EXCEPTION,
-                fields=tuple(typ.fields.keys()),
+                fields=tuple(type_table.exception_fields(typ).keys()),
                 variants=(),
             )
 

@@ -878,6 +878,33 @@ class TestNominalsEmpty:
         assert prog.nominals[NominalId(PRELUDE_ID, "ParsePolicy")].kind is NominalKind.ENUM
         assert prog.nominals[NominalId(PRELUDE_ID, "Abort")].kind is NominalKind.EXCEPTION
 
+    def test_user_exception_nominal_stamped_with_declaring_module_id(self) -> None:
+        """A user-declared exception's nominal is stamped with its real module_id.
+
+        Declares the exception before a record so ``_build_nominals``' loop
+        continues past the exception branch onto another declaration.
+        """
+        from agm.agl.ir.ids import NominalId
+        from agm.agl.ir.program import NominalKind
+        from agm.agl.modules.ids import ENTRY_ID
+
+        source = (
+            "exception Boom extends Exception\n"
+            "  code: int\n"
+            "\n"
+            "record Point\n"
+            "  x: int\n"
+            "\n"
+            "let p = Point(x = 1)\n"
+            "p"
+        )
+        prog = _lower(source)
+        boom_nominal = NominalId(ENTRY_ID, "Boom")
+        assert boom_nominal in prog.nominals
+        descriptor = prog.nominals[boom_nominal]
+        assert descriptor.kind is NominalKind.EXCEPTION
+        assert set(descriptor.fields) == {"message", "trace_id", "code"}
+
     def test_type_alias_does_not_create_spurious_nominal(self) -> None:
         """A type alias does NOT register a spurious NominalId in program.nominals.
 
@@ -3126,12 +3153,14 @@ class TestRangeForDesugar:
 
     def test_range_error_in_builtin_exceptions(self) -> None:
         """RangeError is present in BUILTIN_EXCEPTIONS with the expected fields."""
+        from agm.agl.semantics.type_table import create_seeded_type_table
         from agm.agl.semantics.types import BUILTIN_EXCEPTIONS
         from agm.agl.semantics.types import TextType as _TextType
 
         assert "RangeError" in BUILTIN_EXCEPTIONS
         exc = BUILTIN_EXCEPTIONS["RangeError"]
         assert exc.name == "RangeError"
-        assert set(exc.fields.keys()) == {"message", "trace_id"}
-        assert isinstance(exc.fields["message"], _TextType)
-        assert isinstance(exc.fields["trace_id"], _TextType)
+        fields = create_seeded_type_table().exception_fields(exc)
+        assert set(fields.keys()) == {"message", "trace_id"}
+        assert isinstance(fields["message"], _TextType)
+        assert isinstance(fields["trace_id"], _TextType)

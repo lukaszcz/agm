@@ -1823,12 +1823,13 @@ class _Checker:
                 span=node.span,
             )
         if isinstance(obj_type, ExceptionType):
-            if node.field not in obj_type.fields:
+            exc_fields = self._env.type_table.exception_fields(obj_type)
+            if node.field not in exc_fields:
                 raise AglTypeError(
                     f"Exception type '{obj_type.name}' has no field '{node.field}'.",
                     span=node.span,
                 )
-            return obj_type.fields[node.field]
+            return exc_fields[node.field]
         if isinstance(obj_type, RecordType):
             record_fields = self._env.type_table.record_fields(obj_type)
             if node.field not in record_fields:

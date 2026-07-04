@@ -1,23 +1,26 @@
 """Shared nominal type-declaration table for AgL.
 
-``RecordType``/``EnumType`` (see ``semantics.types``) are lightweight
-handles — ``(module_id, name, type_args)`` — carrying no field/variant data
-of their own. This module holds the single source of truth for their
-shapes: a table of ``TypeDef`` templates keyed by ``(module_id, name)``,
+``RecordType``/``EnumType``/``ExceptionType`` (see ``semantics.types``) are
+lightweight handles — ``(module_id, name, type_args)`` for records/enums,
+``(module_id, name)`` for exceptions (never generic) — carrying no field/
+variant data of their own. This module holds the single source of truth for
+their shapes: a table of ``TypeDef`` templates keyed by ``(module_id, name)``,
 populated by the type builder as each declaration is resolved.
 
 ``TypeDef`` stores field/variant type *templates*: finite ``Type`` trees that
 may reference the declaration's own type parameters via ``TypeVarType`` nodes
 — the same kind of template already computed for generic types today
 (``typecheck.env.GenericTypeDef.template``), just captured under one
-representation shared by records, enums, and (eventually) exceptions.
+representation shared by records, enums, and exceptions.
 ``TypeTable.record_fields``/``enum_variants`` substitute a handle's
-``type_args`` into those templates and memoize the result per handle.
+``type_args`` into those templates and memoize the result per handle;
+``TypeTable.exception_fields`` has no ``type_args`` to substitute but instead
+flattens the ``extends`` base chain into one field mapping.
 
 ``comparable_types``/``_has_no_value_equality`` live here rather than in
-``semantics.types`` because their record/enum arms recurse through the table
-instead of through embedded fields; ``semantics.types`` cannot import this
-module without a circular import.
+``semantics.types`` because their record/enum/exception arms recurse through
+the table instead of through embedded fields; ``semantics.types`` cannot
+import this module without a circular import.
 """
 
 from __future__ import annotations
@@ -49,6 +52,13 @@ from agm.agl.semantics.types import (
 
 TypeDefKind = Literal["record", "enum", "exception"]
 
+# ``ParamKind.value`` strings (``"positional_only"``/``"standard"``/
+# ``"named_only"``) — ``semantics`` may not import ``syntax.nodes`` (see
+# ``tests/test_agl_dependencies.py``), so ``TypeDef.field_kinds`` below stores
+# the stable string values instead of the ``ParamKind`` enum itself; the
+# ``typecheck`` layer (which already imports both) converts back with
+# ``ParamKind(value)``.
+
 
 @dataclass(frozen=True, slots=True)
 class TypeDef:
@@ -59,11 +69,30 @@ class TypeDef:
     mapping-shaped accessors that substitute a handle's ``type_args`` in and
     cache the result.
 
-    ``fields``   — field templates for records/exceptions (empty for enums).
+    ``fields``   — field templates for records (empty for enums); for
+                   exceptions, the exception's OWN field templates only —
+                   NOT flattened with the base chain (see
+                   :meth:`TypeTable.exception_fields`).
     ``variants`` — variant templates for enums: ``(name, fields)`` pairs
                    (empty for records/exceptions).
-    ``abstract`` / ``base`` — exception metadata, unused until exceptions are
-                   registered here.
+    ``abstract`` — exception metadata: ``True`` for the hierarchy root
+                   (catchable but not constructible); unused for
+                   records/enums.
+    ``base``     — exception metadata: the resolved ``(module_id, name)`` key
+                   of the ``extends`` target, or ``None`` for the root;
+                   unused for records/enums.
+    ``field_kinds`` — exception metadata: the OWN parameter kind (positional-
+                   only/standard/named-only, from the declaration's ``@pos``/
+                   ``@std``/``@named`` markers) for each entry of ``fields``,
+                   in the same order — a field's declared kind is honored the
+                   same way a record's is, it is not forced to named-only.
+                   Stored as ``ParamKind.value`` strings, not the enum itself
+                   (``semantics`` may not import ``syntax.nodes``); see the
+                   module-level comment above.  Unused for records/enums,
+                   whose constructor kinds live in the separate
+                   ``TypeEnvironment`` registry instead. See
+                   :meth:`TypeTable.exception_field_kinds`, which flattens
+                   this alongside the base chain.
     """
 
     kind: TypeDefKind
@@ -73,7 +102,8 @@ class TypeDef:
     fields: tuple[tuple[str, Type], ...] = ()
     variants: tuple[tuple[str, tuple[tuple[str, Type], ...]], ...] = ()
     abstract: bool = False
-    base: str | None = None
+    base: tuple[ModuleId, str] | None = None
+    field_kinds: tuple[str, ...] = ()
 
     def handle(self, type_args: tuple[Type, ...] = ()) -> RecordType | EnumType:
         """Return the ``RecordType``/``EnumType`` handle naming this ``TypeDef``.
@@ -106,6 +136,15 @@ class TypeTable:
         ] = {}
         self._enum_variants_cache: dict[
             tuple[ModuleId, str], dict[EnumType, Mapping[str, Mapping[str, Type]]]
+        ] = {}
+        # Exceptions are non-generic, so (unlike record_fields/enum_variants)
+        # there is no type_args substitution — the memo is keyed directly by
+        # (module_id, name), one entry per exception.
+        self._exception_fields_cache: dict[tuple[ModuleId, str], Mapping[str, Type]] = {}
+        # Memo for exception_field_kinds — same keying convention as
+        # _exception_fields_cache above.
+        self._exception_field_kinds_cache: dict[
+            tuple[ModuleId, str], tuple[tuple[str, str], ...]
         ] = {}
 
     def register(self, typedef: TypeDef) -> None:
@@ -153,6 +192,8 @@ class TypeTable:
     def _invalidate_cache_for(self, key: tuple[ModuleId, str]) -> None:
         self._record_fields_cache.pop(key, None)
         self._enum_variants_cache.pop(key, None)
+        self._exception_fields_cache.pop(key, None)
+        self._exception_field_kinds_cache.pop(key, None)
 
     def record_fields(self, handle: RecordType) -> Mapping[str, Type]:
         """Return *handle*'s field types with its ``type_args`` substituted in.
@@ -221,6 +262,111 @@ class TypeTable:
         self._enum_variants_cache.setdefault(key, {})[handle] = result
         return result
 
+    def exception_fields(self, handle: ExceptionType) -> Mapping[str, Type]:
+        """Return *handle*'s fully flattened field types (base chain applied).
+
+        Exceptions are non-generic, so unlike :meth:`record_fields`/
+        :meth:`enum_variants` there is no ``type_args`` substitution — the
+        result is memoized directly per ``(module_id, name)`` key. Base
+        fields come first (the root contributes ``message``/``trace_id``),
+        followed by the exception's own fields, matching declaration order.
+
+        Raises ``KeyError`` if no ``TypeDef`` is registered for the handle's
+        ``(module_id, name)``. Raises ``AssertionError`` if the registered
+        def's ``kind`` is not ``"exception"``, or if the base chain contains
+        a cycle — an internal-invariant violation, since the builder's
+        temporary cycle check rejects ``extends`` cycles before this can fire
+        in production; this guard is for internal robustness, not a user
+        diagnostic.
+        """
+        key = (handle.module_id, handle.name)
+        cached = self._exception_fields_cache.get(key)
+        if cached is not None:
+            return cached
+        result = self._flatten_exception_fields(key, _visiting=frozenset())
+        self._exception_fields_cache[key] = result
+        return result
+
+    def _flatten_exception_fields(
+        self, key: tuple[ModuleId, str], *, _visiting: frozenset[tuple[ModuleId, str]]
+    ) -> Mapping[str, Type]:
+        if key in _visiting:
+            raise AssertionError(f"cyclic exception base chain detected at {key!r}")
+        typedef = self._require_exception_def(key, caller="exception_fields")
+        fields: dict[str, Type] = {}
+        if typedef.base is not None:
+            fields.update(
+                self._flatten_exception_fields(typedef.base, _visiting=_visiting | {key})
+            )
+        fields.update(dict(typedef.fields))
+        return fields
+
+    def exception_field_kinds(self, handle: ExceptionType) -> tuple[tuple[str, str], ...]:
+        """Return *handle*'s fully flattened ``(field_name, ParamKind.value)`` pairs.
+
+        Mirrors :meth:`exception_fields`'s base-chain flattening (base fields
+        first, in declaration order, then the exception's own), but carries
+        each field's declared parameter kind instead of its type — an
+        exception's OWN fields honor their declared ``@pos``/``@std``/
+        ``@named`` marker exactly like a record's fields do (see
+        ``TypeDef.field_kinds``); only inheritance is exception-specific.
+        ``trace_id`` (present only on the hierarchy root) is excluded: it is
+        auto-filled at construction time, never supplied by the caller.
+
+        Each kind is a ``ParamKind.value`` string, not the enum itself (see
+        the module-level comment on ``TypeDef.field_kinds``); the caller
+        (``typecheck.env``) converts back with ``ParamKind(value)``.
+
+        Raises ``KeyError``/``AssertionError`` under the same conditions as
+        :meth:`exception_fields`.
+        """
+        key = (handle.module_id, handle.name)
+        cached = self._exception_field_kinds_cache.get(key)
+        if cached is not None:
+            return cached
+        result = self._flatten_exception_field_kinds(key, _visiting=frozenset())
+        self._exception_field_kinds_cache[key] = result
+        return result
+
+    def _flatten_exception_field_kinds(
+        self, key: tuple[ModuleId, str], *, _visiting: frozenset[tuple[ModuleId, str]]
+    ) -> tuple[tuple[str, str], ...]:
+        if key in _visiting:
+            raise AssertionError(f"cyclic exception base chain detected at {key!r}")
+        typedef = self._require_exception_def(key, caller="exception_field_kinds")
+        inherited: tuple[tuple[str, str], ...] = ()
+        if typedef.base is not None:
+            inherited = self._flatten_exception_field_kinds(
+                typedef.base, _visiting=_visiting | {key}
+            )
+        own = tuple(
+            (fname, kind)
+            for (fname, _ftype), kind in zip(typedef.fields, typedef.field_kinds, strict=True)
+            if fname != "trace_id"
+        )
+        return inherited + own
+
+    def exception_def(self, handle: ExceptionType) -> TypeDef:
+        """Return the registered ``TypeDef`` for *handle*.
+
+        Used to read exception hierarchy metadata (``abstract``, ``base``)
+        that ``ExceptionType`` itself no longer carries. Raises ``KeyError``/
+        ``AssertionError`` under the same conditions as
+        :meth:`exception_fields`.
+        """
+        return self._require_exception_def((handle.module_id, handle.name), caller="exception_def")
+
+    def _require_exception_def(self, key: tuple[ModuleId, str], *, caller: str) -> TypeDef:
+        typedef = self._defs.get(key)
+        if typedef is None:
+            raise KeyError(f"no TypeDef registered for exception {key!r}")
+        if typedef.kind != "exception":
+            raise AssertionError(
+                f"{caller} called for {key!r}, which is registered as kind "
+                f"{typedef.kind!r}, not 'exception'"
+            )
+        return typedef
+
     def entries(self) -> tuple[TypeDef, ...]:
         """Return all registered ``TypeDef``s (used for REPL and graph table sharing)."""
         return tuple(self._defs.values())
@@ -255,9 +401,9 @@ def _has_no_value_equality(t: Type, table: TypeTable) -> bool:
     Function, agent, and unit values are opaque / identity-only and AgL gives
     them no ``=``/``!=`` operator; ``unit`` has a single value but no equality
     operator.  A list, dict, record, enum, or exception that transitively holds
-    such a type is therefore itself not comparable.  Record and enum handles are
-    walked through *table* (``record_fields``/``enum_variants``); exceptions
-    still carry their fields embedded, so that arm walks them directly.
+    such a type is therefore itself not comparable.  Record, enum, and
+    exception handles are walked through *table*
+    (``record_fields``/``enum_variants``/``exception_fields``).
     Recursive types are rejected, so this recursion terminates — the walk
     relies on the declaration graph being acyclic.
     """
@@ -279,7 +425,9 @@ def _has_no_value_equality(t: Type, table: TypeTable) -> bool:
                 for ft in variant.values()
             )
         case ExceptionType():
-            return any(_has_no_value_equality(ft, table) for ft in t.fields.values())
+            return any(
+                _has_no_value_equality(ft, table) for ft in table.exception_fields(t).values()
+            )
         case (TextType() | JsonType() | BoolType() | IntType() | DecimalType()
               | BottomType() | TypeVarType()):
             return False
@@ -420,17 +568,199 @@ OPTION_TYPE_DEF = TypeDef(
     ),
 )
 
+# ---------------------------------------------------------------------------
+# Built-in exception shapes — the single source of truth for every entry of
+# ``semantics.types.BUILTIN_EXCEPTIONS``.  ``fields`` holds each exception's
+# OWN fields only (the root's ``message``/``trace_id`` are NOT repeated on
+# every concrete exception — see :meth:`TypeTable.exception_fields`, which
+# flattens the ``base`` chain on demand).  ``field_kinds`` is likewise own-
+# fields-only; every built-in exception field is NAMED_ONLY (there is no
+# ``@pos``/``@std`` source syntax for a Python-literal ``TypeDef``) — see
+# :meth:`TypeTable.exception_field_kinds`.
+# ---------------------------------------------------------------------------
+
+_EXCEPTION_ROOT_KEY = (PRELUDE_ID, "Exception")
+
+
+def _named_only(count: int) -> tuple[str, ...]:
+    """Return *count* copies of the ``ParamKind.NAMED_ONLY`` value (one per own field)."""
+    return ("named_only",) * count
+
+
+BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
+    "Exception": TypeDef(
+        kind="exception",
+        name="Exception",
+        module_id=PRELUDE_ID,
+        fields=(("message", TextType()), ("trace_id", TextType())),
+        abstract=True,
+        field_kinds=_named_only(2),
+    ),
+    "AgentCallError": TypeDef(
+        kind="exception",
+        name="AgentCallError",
+        module_id=PRELUDE_ID,
+        fields=(("agent", TextType()), ("cause", TextType()), ("metadata", JsonType())),
+        base=_EXCEPTION_ROOT_KEY,
+        field_kinds=_named_only(3),
+    ),
+    "AgentParseError": TypeDef(
+        kind="exception",
+        name="AgentParseError",
+        module_id=PRELUDE_ID,
+        fields=(
+            ("agent", TextType()),
+            ("target_type", TextType()),
+            ("expected_schema", JsonType()),
+            ("raw", TextType()),
+            ("normalized_raw", TextType()),
+            ("validation_errors", JsonType()),
+            ("attempts", IntType()),
+            ("metadata", JsonType()),
+        ),
+        base=_EXCEPTION_ROOT_KEY,
+        field_kinds=_named_only(8),
+    ),
+    "ExecError": TypeDef(
+        kind="exception",
+        name="ExecError",
+        module_id=PRELUDE_ID,
+        fields=(
+            ("command", TextType()),
+            ("exit_code", IntType()),
+            ("stdout", TextType()),
+            ("stderr", TextType()),
+            ("timed_out", BoolType()),
+        ),
+        base=_EXCEPTION_ROOT_KEY,
+        field_kinds=_named_only(5),
+    ),
+    "MaxIterationsExceeded": TypeDef(
+        kind="exception",
+        name="MaxIterationsExceeded",
+        module_id=PRELUDE_ID,
+        fields=(
+            ("limit", IntType()),
+            ("condition", TextType()),
+            ("last_condition_value", BoolType()),
+            ("metadata", JsonType()),
+        ),
+        base=_EXCEPTION_ROOT_KEY,
+        field_kinds=_named_only(4),
+    ),
+    "MatchError": TypeDef(
+        kind="exception",
+        name="MatchError",
+        module_id=PRELUDE_ID,
+        fields=(("scrutinee_type", TextType()), ("scrutinee", JsonType())),
+        base=_EXCEPTION_ROOT_KEY,
+        field_kinds=_named_only(2),
+    ),
+    "IndexError": TypeDef(
+        kind="exception",
+        name="IndexError",
+        module_id=PRELUDE_ID,
+        fields=(("index", IntType()), ("length", IntType())),
+        base=_EXCEPTION_ROOT_KEY,
+        field_kinds=_named_only(2),
+    ),
+    "KeyError": TypeDef(
+        kind="exception",
+        name="KeyError",
+        module_id=PRELUDE_ID,
+        fields=(("key", TextType()),),
+        base=_EXCEPTION_ROOT_KEY,
+        field_kinds=_named_only(1),
+    ),
+    "TypeError": TypeDef(
+        kind="exception",
+        name="TypeError",
+        module_id=PRELUDE_ID,
+        base=_EXCEPTION_ROOT_KEY,
+    ),
+    "ArithmeticError": TypeDef(
+        kind="exception",
+        name="ArithmeticError",
+        module_id=PRELUDE_ID,
+        fields=(("operation", TextType()),),
+        base=_EXCEPTION_ROOT_KEY,
+        field_kinds=_named_only(1),
+    ),
+    # Statically prevented by scope/typecheck (assignment to immutable bindings
+    # and undeclared names), but still listed as catchable runtime exceptions
+    # for any runtime paths that bypass the static passes.
+    "UndefinedVariableError": TypeDef(
+        kind="exception",
+        name="UndefinedVariableError",
+        module_id=PRELUDE_ID,
+        fields=(("name", TextType()),),
+        base=_EXCEPTION_ROOT_KEY,
+        field_kinds=_named_only(1),
+    ),
+    "ImmutableBindingError": TypeDef(
+        kind="exception",
+        name="ImmutableBindingError",
+        module_id=PRELUDE_ID,
+        fields=(("name", TextType()), ("operation", TextType())),
+        base=_EXCEPTION_ROOT_KEY,
+        field_kinds=_named_only(2),
+    ),
+    "Abort": TypeDef(
+        kind="exception",
+        name="Abort",
+        module_id=PRELUDE_ID,
+        base=_EXCEPTION_ROOT_KEY,
+    ),
+    # AgL: RecursionError raised when the call-depth limit is exceeded.
+    "RecursionError": TypeDef(
+        kind="exception",
+        name="RecursionError",
+        module_id=PRELUDE_ID,
+        fields=(("limit", IntType()),),
+        base=_EXCEPTION_ROOT_KEY,
+        field_kinds=_named_only(1),
+    ),
+    "CastError": TypeDef(
+        kind="exception",
+        name="CastError",
+        module_id=PRELUDE_ID,
+        fields=(
+            ("source_type", TextType()),
+            ("target_type", TextType()),
+            ("raw", TextType()),
+        ),
+        base=_EXCEPTION_ROOT_KEY,
+        field_kinds=_named_only(3),
+    ),
+    "JsonParseError": TypeDef(
+        kind="exception",
+        name="JsonParseError",
+        module_id=PRELUDE_ID,
+        fields=(("raw", TextType()),),
+        base=_EXCEPTION_ROOT_KEY,
+        field_kinds=_named_only(1),
+    ),
+    "RangeError": TypeDef(
+        kind="exception",
+        name="RangeError",
+        module_id=PRELUDE_ID,
+        base=_EXCEPTION_ROOT_KEY,
+    ),
+}
+
 
 def create_seeded_type_table() -> TypeTable:
-    """Return a fresh ``TypeTable`` pre-populated with built-in prelude defs.
+    """Return a fresh ``TypeTable`` pre-populated with built-in defs.
 
     Registers ``BUILTIN_PRELUDE_TYPE_DEFS`` (``ExecResult``, ``ParsePolicy``,
-    ``OutputContract``, ``OutputContractOption``, ``AgentRequest``) and the
-    generic ``OPTION_TYPE_DEF``.  Built-in *exceptions* are not seeded here —
-    ``ExceptionType`` has no ``module_id`` yet.
+    ``OutputContract``, ``OutputContractOption``, ``AgentRequest``), the
+    generic ``OPTION_TYPE_DEF``, and ``BUILTIN_EXCEPTION_TYPE_DEFS`` (every
+    entry of ``semantics.types.BUILTIN_EXCEPTIONS``).
     """
     table = TypeTable()
     for typedef in BUILTIN_PRELUDE_TYPE_DEFS.values():
         table.register(typedef)
     table.register(OPTION_TYPE_DEF)
+    for typedef in BUILTIN_EXCEPTION_TYPE_DEFS.values():
+        table.register(typedef)
     return table

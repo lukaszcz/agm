@@ -17,7 +17,7 @@ import pytest
 from agm.agl.diagnostics import AglError
 from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.runtime.request import AgentRequest, AgentResponse
-from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS
+from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS, create_seeded_type_table
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPES,
@@ -172,17 +172,18 @@ class TestStdlib:
 
     def test_all_concrete_builtin_exceptions_are_available(self) -> None:
         s = ReplSession()
+        table = create_seeded_type_table()
 
         for name, typ in BUILTIN_EXCEPTIONS.items():
             assert isinstance(typ, ExceptionType)
-            if typ.abstract:
+            if table.exception_def(typ).abstract:
                 result = s.eval_entry(f'{name}(message = "x")')
                 assert not result.ok
                 assert any("abstract" in diagnostic.message for diagnostic in result.diagnostics)
                 continue
             fields = {
                 field_name: field_type
-                for field_name, field_type in typ.fields.items()
+                for field_name, field_type in table.exception_fields(typ).items()
                 if field_name != "trace_id"
             }
             result = s.eval_entry(f"{name}({_constructor_args(fields)})")

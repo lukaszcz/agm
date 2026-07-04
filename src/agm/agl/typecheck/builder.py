@@ -6,10 +6,10 @@ and registers them into a ``TypeEnvironment``.  It was extracted from
 bidirectional type checker) so that ``typecheck/graph.py`` can import it
 without pulling in the full ``_Checker``.
 
-Nominal types (``RecordType``/``EnumType``) are lightweight handles with no
-embedded field/variant data, so declaration order does not matter: every
-reference — forward or backward — resolves to a valid handle.  Building is
-therefore two simple, order-free phases:
+Nominal types (``RecordType``/``EnumType``/``ExceptionType``) are lightweight
+handles with no embedded field/variant data, so declaration order does not
+matter: every reference — forward or backward — resolves to a valid handle.
+Building is therefore two simple, order-free phases:
 
 Phase 1 (``collect_shells_only``)
     Register every declared name's FINAL handle (or, for a generic
@@ -17,12 +17,14 @@ Phase 1 (``collect_shells_only``)
     carries no shape, so this phase never needs revisiting.
 Phase 2 (the loop in ``collect``)
     Resolve each declaration's field/variant type expressions, in source
-    order, into a ``TypeDef`` registered in the shared ``TypeTable``.
-    Exceptions are the one exception (no pun intended): ``ExceptionType``
-    still embeds its fields directly (a later step unifies exceptions into
-    the handle model), so building an exception that ``extends`` a
-    not-yet-built base must build that base first — a minimal,
-    exception-only ordering step, not a general one.
+    order, into a ``TypeDef`` registered in the shared ``TypeTable``.  An
+    exception's ``TypeDef`` stores its OWN fields plus a resolved ``base``
+    key (see ``semantics.type_table.TypeDef``); no ordering is required since
+    the base need not be built yet to resolve the key.  A small post-pass
+    (``_finalize_exceptions``) runs once every exception's own body is
+    resolved to check own-vs-inherited field duplication, using
+    ``TypeTable.exception_fields`` to read the (by-then fully buildable)
+    flattened base chain.
 
 Recursive nominal types are not yet supported.  Because handles make forward
 references trivially resolve, nothing in phase 2 itself detects a
@@ -34,11 +36,16 @@ restriction pending an inhabitation-based analysis.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
-from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS, TypeDef
+from agm.agl.semantics.type_table import (
+    BUILTIN_EXCEPTION_TYPE_DEFS,
+    BUILTIN_PRELUDE_TYPE_DEFS,
+    TypeDef,
+)
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTION_NAMES,
-    BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPE_NAMES,
     DictType,
     EnumType,
@@ -52,7 +59,6 @@ from agm.agl.syntax.nodes import (
     EnumDef,
     ExceptionDef,
     Param,
-    ParamKind,
     Program,
     RecordDef,
     TypeAlias,
@@ -107,9 +113,6 @@ class _TypeBuilder:
         self._record_defs: dict[str, RecordDef] = {}
         self._enum_defs: dict[str, EnumDef] = {}
         self._exception_defs: dict[str, ExceptionDef] = {}
-        # Exceptions already given their final (base-inclusive) field set —
-        # the minimal exception-only ordering step (see module docstring).
-        self._exceptions_built: set[str] = set()
 
     def collect(self, program: Program) -> None:
         """Scan *program* and populate ``self._env``.
@@ -117,8 +120,12 @@ class _TypeBuilder:
         Phase 1 registers every declaration's name and handle
         (:meth:`collect_shells_only`); phase 2 resolves each declaration's
         body, in source order, with no dependency ordering (see the module
-        docstring); a final pass rejects any declaration that structurally
-        contains itself (the temporary recursion ban).
+        docstring); a pass rejects any declaration that structurally contains
+        itself (the temporary recursion ban); a final post-pass
+        (:meth:`_finalize_exceptions`) validates own-vs-inherited exception
+        field duplication now that every exception's flattened field set is
+        buildable (the recursion-ban pass has already rejected any ``extends``
+        cycle).
         """
         self.collect_shells_only(program)
 
@@ -128,25 +135,24 @@ class _TypeBuilder:
             elif isinstance(item, EnumDef):
                 self._build_enum(item)
             elif isinstance(item, ExceptionDef):
-                self._build_exception_ordered(item.name)
+                self._build_exception(item)
             elif isinstance(item, TypeAlias):
                 self._validate_alias(item)
 
         self._check_recursive_types(program)
+        self._finalize_exceptions()
 
     def collect_shells_only(self, program: Program) -> None:
         """Register phase-1 declarations: names, handles, and alias targets.
 
         Public interface for the graph pre-pass (``graph.py``) which needs to
         register every module's declarations before resolving any body.
-        Non-generic records/enums get their FINAL handle registered directly
-        (handles carry no shape, so there is nothing left to "finish"
-        later); generic records/enums get their ``GenericTypeDef`` (name,
-        type params, and a handle template stamped with ``TypeVarType``
-        args) registered instead — likewise final, since the template
-        carries no shape either.  Exceptions still register an empty-fields
-        shell (``ExceptionType`` embeds its fields; the shell is replaced by
-        the fully-built type in phase 2).
+        Non-generic records/enums/exceptions get their FINAL handle
+        registered directly (a handle carries no shape, so there is nothing
+        left to "finish" later); generic records/enums get their
+        ``GenericTypeDef`` (name, type params, and a handle template stamped
+        with ``TypeVarType`` args) registered instead — likewise final, since
+        the template carries no shape either.  Exceptions are never generic.
         """
         for item in program.body.items:
             if isinstance(item, RecordDef):
@@ -161,9 +167,10 @@ class _TypeBuilder:
                 self._enum_defs[item.name] = item
             elif isinstance(item, ExceptionDef):
                 self._register_name(item.name, item.span, is_builtin=item.is_builtin)
+                self._env.unregister_name(item.name)
+                module_id = PRELUDE_ID if item.is_builtin else self._module_id
                 self._env.register_type(
-                    item.name,
-                    ExceptionType(name=item.name, fields={}, abstract=item.base is None),
+                    item.name, ExceptionType(name=item.name, module_id=module_id)
                 )
                 self._exception_defs[item.name] = item
             elif isinstance(item, TypeAlias):
@@ -214,8 +221,8 @@ class _TypeBuilder:
         self._build_enum(self._enum_defs[name])
 
     def build_exception(self, name: str) -> None:
-        """Resolve and register the named exception, building its base first."""
-        self._build_exception_ordered(name)
+        """Resolve and register the named exception's body. See :meth:`build_record`."""
+        self._build_exception(self._exception_defs[name])
 
     def _register_name(self, name: str, span: SourceSpan, *, is_builtin: bool = False) -> None:
         if is_builtin and name not in _BUILTIN_NOMINAL_NAMES:
@@ -234,27 +241,6 @@ class _TypeBuilder:
                 span=span,
             )
         self._declared[name] = span
-
-    def _build_exception_ordered(
-        self, name: str, _in_progress: frozenset[str] = frozenset()
-    ) -> None:
-        """Ensure exception *name*'s base is built before *name* itself.
-
-        ``_build_exception`` copies its base's embedded fields, so the base
-        must already be fully built.  This is the minimal, exception-only
-        ordering step described in the module docstring — NOT a general
-        build-ordering mechanism.  A cyclic ``extends`` chain is left
-        unresolved past the point of re-entry: it is always rejected by
-        :meth:`_check_recursive_types` once all bodies have been resolved;
-        this guard only prevents unbounded recursion before that check runs.
-        """
-        if name in self._exceptions_built or name in _in_progress:
-            return
-        stmt = self._exception_defs[name]
-        if stmt.base is not None and stmt.base in self._exception_defs:
-            self._build_exception_ordered(stmt.base, _in_progress | {name})
-        self._build_exception(stmt)
-        self._exceptions_built.add(name)
 
     def _build_record(self, stmt: RecordDef) -> None:
         if stmt.type_params:
@@ -277,7 +263,7 @@ class _TypeBuilder:
             module_id=module_id,
             fields=tuple(fields.items()),
         )
-        self._validate_builtin_record_or_enum_shape(stmt, typedef)
+        self._validate_builtin_shape(stmt, typedef, BUILTIN_PRELUDE_TYPE_DEFS)
         self._env.type_table.register(typedef)
         # Register field kinds for this record constructor.
         field_kinds = tuple((fd.name, fd.kind) for fd in stmt.fields)
@@ -317,7 +303,7 @@ class _TypeBuilder:
                 (vname, tuple(vfields.items())) for vname, vfields in variants.items()
             ),
         )
-        self._validate_builtin_record_or_enum_shape(stmt, typedef)
+        self._validate_builtin_shape(stmt, typedef, BUILTIN_PRELUDE_TYPE_DEFS)
         self._env.type_table.register(typedef)
         # Register field kinds for each variant constructor.
         for vd in stmt.variants:
@@ -325,7 +311,16 @@ class _TypeBuilder:
             self._env.register_constructor_field_kinds(stmt.name, vd.name, vfield_kinds)
 
     def _build_exception(self, stmt: ExceptionDef) -> None:
-        fields: dict[str, Type] = {}
+        """Resolve and register an exception's own ``TypeDef`` (no ordering).
+
+        Reuses the record-path field resolution and duplicate-own-field
+        check.  ``base`` is resolved to a ``(module_id, name)`` key — no
+        ordering is required to do so, since only the base's *identity* (not
+        its shape) is needed here.  Own-vs-inherited field duplication and
+        constructor-callability are checked later, once every exception's
+        shape is buildable (see :meth:`_finalize_exceptions`).
+        """
+        base_key: tuple[ModuleId, str] | None = None
         if stmt.base is not None:
             base_type = self._env.resolve_named_type(stmt.base)
             if not isinstance(base_type, ExceptionType):
@@ -333,65 +328,76 @@ class _TypeBuilder:
                     f"Exception '{stmt.name}' extends unknown exception '{stmt.base}'.",
                     span=stmt.span,
                 )
-            fields.update(base_type.fields)
+            base_key = (base_type.module_id, base_type.name)
+        fields: dict[str, Type] = {}
         seen_fields: dict[str, SourceSpan] = {}
         for fd in stmt.fields:
-            if fd.name in fields or fd.name in seen_fields:
+            if fd.name in seen_fields:
                 raise AglTypeError(
                     f"Duplicate field '{fd.name}' in exception '{stmt.name}'.",
                     span=fd.span,
                 )
             seen_fields[fd.name] = fd.span
             fields[fd.name] = self._resolve_field_type(fd)
-        typ = ExceptionType(
+        module_id = PRELUDE_ID if stmt.is_builtin else self._module_id
+        # Own field kinds honor each field's declared @pos/@std/@named marker —
+        # exactly like a record's fields — in declaration order, parallel to
+        # ``fields`` above.  Stored as ``ParamKind.value`` strings (see
+        # ``TypeDef.field_kinds``: ``semantics`` may not import ``syntax``).
+        # Inheriting the base's kinds through the extends chain is
+        # ``TypeTable.exception_field_kinds``'s job (walked on demand from
+        # ``TypeDef.base``, no build-ordering step needed).
+        typedef = TypeDef(
+            kind="exception",
             name=stmt.name,
-            fields=fields,
+            module_id=module_id,
+            fields=tuple(fields.items()),
             abstract=stmt.base is None,
+            base=base_key,
+            field_kinds=tuple(fd.kind.value for fd in stmt.fields),
         )
-        self._validate_builtin_exception_shape(stmt, typ)
-        self._env.register_type(stmt.name, typ)
-        # Register field kinds for this exception constructor (user fields only,
-        # trace_id excluded).  Inherit base field kinds first, then add own fields.
-        # Abstract exceptions (base is None) have no constructor, so nothing to register.
-        if stmt.base is not None:
-            base_registered = self._env.get_constructor_field_kinds(stmt.base, None)
-            if base_registered is not None:
-                # Base has registered field kinds (concrete exception): use them directly.
-                base_inherited = base_registered
-            else:
-                # Base is abstract (e.g. the built-in Exception root) and has no
-                # registered field kinds.  Derive NAMED_ONLY kinds from its field
-                # names, excluding trace_id which is auto-filled at runtime.
-                assert isinstance(base_type, ExceptionType)
-                base_inherited = tuple(
-                    (fname, ParamKind.NAMED_ONLY)
-                    for fname in base_type.fields
-                    if fname != "trace_id"
-                )
-            own_field_kinds = tuple((fd.name, fd.kind) for fd in stmt.fields)
-            self._env.register_constructor_field_kinds(
-                stmt.name, None, base_inherited + own_field_kinds
-            )
+        self._validate_builtin_shape(stmt, typedef, BUILTIN_EXCEPTION_TYPE_DEFS)
+        self._env.type_table.register(typedef)
 
-    def _validate_builtin_record_or_enum_shape(
-        self, stmt: RecordDef | EnumDef, typedef: TypeDef
+    def _finalize_exceptions(self) -> None:
+        """Post-pass: reject own-vs-inherited field name collisions.
+
+        Deferred until every exception's own ``TypeDef`` (and therefore its
+        base's, however deep the ``extends`` chain) is registered — there is
+        no build-ordering step in :meth:`_build_exception` (see the module
+        docstring).  A cyclic ``extends`` chain is always rejected by
+        :meth:`_check_recursive_types`, which runs before this post-pass, so
+        :meth:`~agm.agl.semantics.type_table.TypeTable.exception_fields` never
+        hits its internal cycle guard here.
+        """
+        for item in self._exception_defs.values():
+            if item.base is None:
+                continue
+            module_id = PRELUDE_ID if item.is_builtin else self._module_id
+            typedef = self._env.type_table.exception_def(
+                ExceptionType(name=item.name, module_id=module_id)
+            )
+            assert typedef.base is not None
+            base_handle = ExceptionType(name=typedef.base[1], module_id=typedef.base[0])
+            base_fields = self._env.type_table.exception_fields(base_handle)
+            for fd in item.fields:
+                if fd.name in base_fields:
+                    raise AglTypeError(
+                        f"Duplicate field '{fd.name}' in exception '{item.name}'.",
+                        span=fd.span,
+                    )
+
+    def _validate_builtin_shape(
+        self,
+        stmt: RecordDef | EnumDef | ExceptionDef,
+        typedef: TypeDef,
+        expected_defs: Mapping[str, TypeDef],
     ) -> None:
         if not stmt.is_builtin:
             return
-        expected = BUILTIN_PRELUDE_TYPE_DEFS.get(stmt.name)
+        expected = expected_defs.get(stmt.name)
         assert expected is not None
         if typedef != expected:
-            raise AglTypeError(
-                f"Builtin type '{stmt.name}' has an invalid definition.",
-                span=stmt.span,
-            )
-
-    def _validate_builtin_exception_shape(self, stmt: ExceptionDef, typ: ExceptionType) -> None:
-        if not stmt.is_builtin:
-            return
-        expected = BUILTIN_EXCEPTIONS.get(stmt.name)
-        assert expected is not None
-        if typ.fields != expected.fields:
             raise AglTypeError(
                 f"Builtin type '{stmt.name}' has an invalid definition.",
                 span=stmt.span,
@@ -609,8 +615,10 @@ class _TypeBuilder:
             stmt = self._exception_defs[name]
             if stmt.base is not None and stmt.base in self._exception_defs:
                 visit_exception(stmt.base)
-            for fd in stmt.fields:
-                visit_type(self._resolve_field_type(fd))
+            typedef = self._env.type_table.get(self._module_id, name)
+            if typedef is not None:
+                for _fname, ftype in typedef.fields:
+                    visit_type(ftype)
             in_progress.discard(name)
             done.add(name)
 

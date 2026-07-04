@@ -438,7 +438,7 @@ def test_whole_graph_type_pre_pass_with_cycles(tmp_path: Path) -> None:
     assert _binding_value_type(cg, ENTRY_ID, "fb") == TextType()
 
 
-def test_imported_exception_base_is_built_before_child(tmp_path: Path) -> None:
+def test_imported_exception_child_inherits_base_fields(tmp_path: Path) -> None:
     """A child exception inherits fields from an open-imported base exception."""
     modules = {
         "entry": ("import a\nlet value = a::make()\nvalue"),
@@ -455,7 +455,8 @@ def test_imported_exception_base_is_built_before_child(tmp_path: Path) -> None:
     cg = _check_graph(tmp_path, modules)
     child_type = cg.graph_type_table[(ModuleId.from_dotted("a"), "Child")]
     assert isinstance(child_type, ExceptionType)
-    assert "detail" in child_type.fields
+    type_table = cg.modules[ModuleId.from_dotted("a")].type_env.type_table
+    assert "detail" in type_table.exception_fields(child_type)
     assert _binding_value_type(cg, ENTRY_ID, "value") == TextType()
 
 
@@ -1963,6 +1964,33 @@ def test_open_imported_generic_type_in_type_definition(tmp_path: Path) -> None:
 
     wrapped = cg.graph_type_table[(ModuleId.from_dotted("wrapper"), "Wrapped")]
     assert wrapped == RecordType("Wrapped", module_id=ModuleId.from_dotted("wrapper"))
+
+
+def test_earlier_sorting_module_field_references_later_module_generic(tmp_path: Path) -> None:
+    """A module sorting before a generic's owning module resolves it in a field.
+
+    Regression: cross-module generic type definitions must be visible in Step
+    A of the graph type pre-pass (not gated on Step C's fixed body-resolution
+    order), since a field's applied-generic reference (``lib::Box[int]``)
+    needs the ``GenericTypeDef`` regardless of whether module ``a`` (which
+    sorts before ``lib``) or ``lib`` itself is resolved first.
+    """
+    modules = {
+        "lib": "record Box[T]\n  value: T",
+        "a": "import lib qualified\nrecord Holder\n  b: lib::Box[int]",
+        "entry": "import a qualified\n()",
+    }
+
+    cg = _check_graph(tmp_path, modules)
+
+    a_id = ModuleId.from_dotted("a")
+    lib_id = ModuleId.from_dotted("lib")
+    holder = cg.graph_type_table[(a_id, "Holder")]
+    assert isinstance(holder, RecordType) and holder.module_id == a_id
+    type_table = cg.modules[a_id].type_env.type_table
+    assert type_table.record_fields(holder)["b"] == RecordType(
+        "Box", type_args=(IntType(),), module_id=lib_id
+    )
 
 
 def test_ambiguous_open_imported_generic_type_rejected(tmp_path: Path) -> None:

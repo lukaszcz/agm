@@ -271,7 +271,7 @@ class TestIsJsonShaped:
         assert not is_json_shaped(et)
 
     def test_exception_not_json_shaped(self) -> None:
-        assert not is_json_shaped(ExceptionType(name="Ex", fields={}))
+        assert not is_json_shaped(ExceptionType(name="Ex"))
 
     def test_unit_not_json_shaped(self) -> None:
         assert not is_json_shaped(UnitType())
@@ -378,8 +378,11 @@ class TestComparableTypes:
 
     def test_exception_with_function_field_not_comparable(self) -> None:
         ft = FunctionType(params=(), result=IntType())
-        et = ExceptionType(name="E", fields={"handler": ft})
-        assert not comparable_types(et, et, _EMPTY_TABLE)
+        et = ExceptionType(name="E")
+        typedef = TypeDef(
+            kind="exception", name="E", module_id=et.module_id, fields=(("handler", ft),)
+        )
+        assert not comparable_types(et, et, _table_for(typedef))
 
     def test_record_with_only_scalars_comparable(self) -> None:
         rt = RecordType(name="R")
@@ -658,39 +661,6 @@ class TestTypeEnvironment:
         env = TypeEnvironment()  # no graph_generic_table
         result = env.get_generic_type_from_module(ModuleId.from_dotted("lib"), "Box")
         assert result is None
-
-    def test_get_open_imported_type_no_graph_context(self) -> None:
-        env = TypeEnvironment()
-        assert env.get_open_imported_type("Point") is None
-
-    def test_get_open_imported_type_ignores_missing_graph_entries(self) -> None:
-        from agm.agl.modules.ids import ModuleId
-        from agm.agl.scope.imports import ImportEnv
-
-        mod = ModuleId.from_dotted("lib")
-        import_env = ImportEnv(
-            unqualified={"Point": frozenset({(mod, "Point")})},
-            qualified={},
-        )
-        env = TypeEnvironment(graph_type_table={}, import_env=import_env)
-        assert env.get_open_imported_type("Point") is None
-
-    def test_get_open_imported_type_ambiguous_returns_none(self) -> None:
-        from agm.agl.modules.ids import ModuleId
-        from agm.agl.scope.imports import ImportEnv
-
-        mod_a = ModuleId.from_dotted("a")
-        mod_b = ModuleId.from_dotted("b")
-        graph_table = {
-            (mod_a, "Point"): RecordType(name="Point"),
-            (mod_b, "Point"): RecordType(name="Point"),
-        }
-        import_env = ImportEnv(
-            unqualified={"Point": frozenset({(mod_a, "Point"), (mod_b, "Point")})},
-            qualified={},
-        )
-        env = TypeEnvironment(graph_type_table=graph_table, import_env=import_env)
-        assert env.get_open_imported_type("Point") is None
 
     def test_get_ctor_sig_from_module_no_graph_table(self) -> None:
         # Coverage: env.py get_ctor_sig_from_module — single-program mode returns None.
@@ -2105,6 +2075,12 @@ class TestConstructors:
         err = reject_type('Exception(message = "e")')
         assert "abstract" in str(err).lower() or "constructible" in str(err).lower()
 
+    def test_exception_cannot_duplicate_own_field(self) -> None:
+        err = reject_type(
+            "exception Bad extends Exception\n  code: int\n  code: text\n()\n"
+        )
+        assert "duplicate" in str(err).lower()
+
     def test_unknown_constructor_raises(self) -> None:
         # Unknown names are now caught at scope-resolution time (AglScopeError).
         err = reject_any("Unknown(x = 1)")
@@ -2122,6 +2098,55 @@ class TestConstructors:
     def test_qualified_constructor_not_enum_raises(self) -> None:
         err = reject_type("record R\n  x: int\nR.Something()")
         assert "enum" in str(err).lower()
+
+
+# ---------------------------------------------------------------------------
+# Exception field kinds: an exception's OWN fields honor their declared
+# @pos/@std/@named marker (parity with records), inherited through the
+# extends chain base-kinds-first.
+# ---------------------------------------------------------------------------
+
+
+class TestExceptionFieldKindParity:
+    def test_std_and_pos_marked_exception_fields_accept_positional_args(self) -> None:
+        # @pos and @std own fields both accept positional args, same as a
+        # record's fields would — an exception's own fields are not forced
+        # to NAMED_ONLY.
+        r = accept_type(
+            "exception Boom extends Exception\n"
+            "  @pos\n"
+            "  code: int\n"
+            "  @std\n"
+            "  count: int\n"
+            'Boom(5, 6, message = "m")'
+        )
+        assert r.resolved.program is not None
+
+    def test_pos_marked_exception_field_rejected_by_name(self) -> None:
+        # A @pos-only exception field cannot be passed by name, mirroring the
+        # record rule.
+        err = reject_type(
+            "exception Boom extends Exception\n"
+            "  @pos\n"
+            "  code: int\n"
+            'Boom(code = 5, message = "m")'
+        )
+        assert "positional-only" in str(err).lower() or "positional" in str(err).lower()
+
+    def test_exception_field_kind_inherited_through_extends_chain(self) -> None:
+        # A grandchild exception's constructor field kinds inherit the
+        # parent's declared @std marker (not just the built-in root's
+        # implicit NAMED_ONLY), so positional construction still reaches a
+        # field marked two levels up the extends chain.
+        r = accept_type(
+            "exception Base extends Exception\n"
+            "  @std\n"
+            "  code: int\n"
+            "exception Boom extends Base\n"
+            "  detail: text\n"
+            'Boom(5, detail = "x", message = "m")'
+        )
+        assert r.resolved.program is not None
 
 
 # ---------------------------------------------------------------------------
@@ -2682,7 +2707,13 @@ class TestTypeReprAndKind:
         assert repr(EnumType(name="Color")) == "Color"
 
     def test_exception_repr(self) -> None:
-        assert repr(ExceptionType(name="Abort", fields={})) == "Abort"
+        assert repr(ExceptionType(name="Abort")) == "Abort"
+
+    def test_exception_repr_qualified_for_non_entry_module(self) -> None:
+        from agm.agl.modules.ids import ModuleId
+
+        lib_id = ModuleId.from_dotted("lib")
+        assert repr(ExceptionType(name="Boom", module_id=lib_id)) == "lib::Boom"
 
     def test_function_repr(self) -> None:
         ft = FunctionType(params=(IntType(), TextType()), result=BoolType())
@@ -2729,7 +2760,15 @@ class TestTypeReprAndKind:
         assert EnumType(name="E").kind == "enum"
 
     def test_exception_kind(self) -> None:
-        assert ExceptionType(name="Ex", fields={}).kind == "exception"
+        assert ExceptionType(name="Ex").kind == "exception"
+
+    def test_exception_equality_is_by_name_and_module_id_only(self) -> None:
+        from agm.agl.modules.ids import ModuleId
+
+        lib_id = ModuleId.from_dotted("lib")
+        assert ExceptionType(name="Boom") == ExceptionType(name="Boom")
+        assert ExceptionType(name="Boom") != ExceptionType(name="Boom", module_id=lib_id)
+        assert ExceptionType(name="Boom") != ExceptionType(name="Bang")
 
     def test_function_kind(self) -> None:
         assert FunctionType(params=(), result=IntType()).kind == "function"
@@ -2785,7 +2824,9 @@ class TestMisc:
         assert all(isinstance(i, int) for i in ids)
 
     def test_exception_base_is_abstract(self) -> None:
-        assert EXCEPTION_BASE.abstract is True
+        from agm.agl.semantics.type_table import create_seeded_type_table
+
+        assert create_seeded_type_table().exception_def(EXCEPTION_BASE).abstract is True
         assert EXCEPTION_BASE.name == "Exception"
 
     def test_builtin_exceptions_in_names(self) -> None:
@@ -5991,13 +6032,13 @@ class TestCastClassificationTable:
     def test_exception_to_json_is_total_json(self) -> None:
         from agm.agl.semantics.types import CastKind, cast_classification
 
-        source = ExceptionType(name="Abort", fields={"message": TextType(), "trace_id": TextType()})
+        source = ExceptionType(name="Abort")
         assert cast_classification(source, JsonType()) == CastKind.TOTAL_JSON
 
     def test_exception_to_text_is_total_render(self) -> None:
         from agm.agl.semantics.types import CastKind, cast_classification
 
-        source = ExceptionType(name="Abort", fields={"message": TextType(), "trace_id": TextType()})
+        source = ExceptionType(name="Abort")
         assert cast_classification(source, TextType()) == CastKind.TOTAL_RENDER
 
 

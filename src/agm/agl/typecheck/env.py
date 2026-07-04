@@ -16,7 +16,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from agm.agl.diagnostics import AglError, Diagnostic
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.scope.imports import ImportEnv, QName
 from agm.agl.scope.symbols import BindingRef, ResolvedProgram
 from agm.agl.semantics.type_table import (
@@ -431,15 +431,13 @@ class TypeEnvironment:
                 self._constructor_field_kinds[(prelude_name, variant)] = tuple(
                     (fname, ParamKind.NAMED_ONLY) for fname, _ in vfields
                 )
-        # Pre-register builtin exception field kinds (all non-trace_id fields, NAMED_ONLY).
-        for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
-            if not exc_type.abstract:
-                _kinds: tuple[tuple[str, ParamKind], ...] = tuple(
-                    (fname, ParamKind.NAMED_ONLY)
-                    for fname in exc_type.fields
-                    if fname != "trace_id"
-                )
-                self._constructor_field_kinds[(exc_name, None)] = _kinds
+        # Exception constructor field kinds are NOT pre-registered here: each
+        # exception's own fields honor their declared @pos/@std/@named marker
+        # (stored on its TypeDef as ``field_kinds``, alongside ``fields``),
+        # same as a record's fields.  ``get_constructor_field_kinds_for_type``
+        # derives the full flattened (base-chain-inherited + own) kinds
+        # directly from ``type_table.exception_field_kinds`` on demand instead
+        # of a pre-registration step, since that requires no build ordering.
 
     @property
     def type_table(self) -> TypeTable:
@@ -1111,21 +1109,6 @@ class TypeEnvironment:
             return matches[0]
         return None
 
-    def get_open_imported_type(self, exposed_name: str) -> tuple[ModuleId, str, Type] | None:
-        """Return the unique concrete type exposed by an open-imported name."""
-        if self._import_env is None or self._graph_type_table is None:
-            return None
-        matches = []
-        for module_id, source_name in self._import_env.unqualified.get(
-            exposed_name, frozenset()
-        ):
-            typ = self._graph_type_table.get((module_id, source_name))
-            if typ is not None:
-                matches.append((module_id, source_name, typ))
-        if len(matches) == 1:
-            return matches[0]
-        return None
-
     def get_ctor_sig_from_module(
         self, module_id: ModuleId, owner_name: str, variant: str | None
     ) -> ConstructorSignature | None:
@@ -1173,40 +1156,34 @@ class TypeEnvironment:
         typ: Type | None,
         owner_name: str,
         variant: str | None,
-        *,
-        module_id: ModuleId | None = None,
     ) -> tuple[tuple[str, ParamKind], ...] | None:
         """Return field-kinds for a constructor identified by its resolved owner *typ*.
 
-        Encapsulates the registry-key convention in one place. ``RecordType`` and
-        ``EnumType`` carry their own ``module_id``. ``ExceptionType`` does not, so
-        callers that resolved a cross-module exception must provide its defining
-        ``module_id``; built-in and same-module exceptions still resolve through
-        the local registry before any graph lookup. Enum variants are keyed by
-        *variant*; records and exceptions are keyed under ``variant=None``.
+        ``RecordType``, ``EnumType``, and ``ExceptionType`` all carry their own
+        ``module_id``, so the owning module is read directly off the handle —
+        no caller-supplied module id is needed.  Exception field kinds are
+        derived directly from ``type_table.exception_field_kinds``, which
+        flattens the ``extends`` base chain (base kinds first, then own kinds,
+        each honoring its declaration's ``@pos``/``@std``/``@named`` marker —
+        exactly like a record's fields) and excludes ``trace_id`` (auto-filled
+        at construction time, never supplied by the caller), rather than
+        through the registered-kinds table records/enums use, since an
+        exception's kinds are never pre-registered (see ``TypeEnvironment.
+        __init__``).  ``exception_field_kinds`` returns ``ParamKind.value``
+        strings rather than the enum (``semantics`` may not import
+        ``syntax.nodes``), so each is converted back with ``ParamKind(...)``
+        here, in the ``typecheck`` layer.  Enum variants are keyed by
+        *variant*; records are keyed under ``variant=None``.
         """
+        if isinstance(typ, ExceptionType):
+            return tuple(
+                (fname, ParamKind(kind_value))
+                for fname, kind_value in self._type_table.exception_field_kinds(typ)
+            )
         if isinstance(typ, EnumType):
-            lookup_module_id: ModuleId = typ.module_id
-            lookup_variant = variant
-        elif isinstance(typ, RecordType):
-            lookup_module_id = typ.module_id
-            lookup_variant = None
-        elif isinstance(typ, ExceptionType) and module_id is not None:
-            lookup_module_id = module_id
-            lookup_variant = None
-        else:
-            # ExceptionType without a caller-provided module_id (same-module or
-            # built-in exception) or an unexpected typ value.  Both same-module
-            # exceptions and built-in prelude exceptions are pre-registered in the
-            # LOCAL registry, so get_constructor_field_kinds() returns at the first
-            # check and never reaches the graph-table lookup.  PRELUDE_ID is used
-            # here only to satisfy the type; the graph lookup is always a no-op for
-            # this branch.
-            lookup_module_id = PRELUDE_ID
-            lookup_variant = None
-        return self.get_constructor_field_kinds(
-            owner_name, lookup_variant, module_id=lookup_module_id
-        )
+            return self.get_constructor_field_kinds(owner_name, variant, module_id=typ.module_id)
+        assert isinstance(typ, RecordType), f"unexpected constructor owner type {typ!r}"
+        return self.get_constructor_field_kinds(owner_name, None, module_id=typ.module_id)
 
     def all_constructor_field_kinds(
         self,

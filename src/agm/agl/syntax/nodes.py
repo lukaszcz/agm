@@ -355,6 +355,7 @@ class FuncDef:
     type_params: tuple[str, ...] = ()
     is_private: bool = False
     is_builtin: bool = False
+    is_extern: bool = False
 
 
 @dataclass(frozen=True, slots=True)

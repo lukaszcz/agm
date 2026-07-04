@@ -1,0 +1,1 @@
+extern def f(x: int) -> int = x

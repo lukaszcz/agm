@@ -60,6 +60,8 @@ from agm.agl.semantics.types import (
 )
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from agm.agl.scope.imports import ImportEnv
     from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.nodes import (
@@ -177,6 +179,7 @@ class _Resolver:
         private_info: dict[tuple[ModuleId, str], bool] | None = None,
         is_entry: bool = True,
         repl_session_scope: ScopeNode | None = None,
+        origin_path: Path | None = None,
     ) -> None:
         # Graph-mode parameters (None = single-program mode).
         self._module_id: ModuleId = module_id
@@ -196,6 +199,10 @@ class _Resolver:
         # in the entry's own root scope, allowing ``::name`` to resolve to a
         # prior session binding.
         self._repl_session_scope: ScopeNode | None = repl_session_scope
+        # This module's canonical source file, or None for a module with no
+        # backing file (inline `-c` sources, direct REPL entries). Drives the
+        # `extern def` placement check — externs require a file-backed module.
+        self._origin_path: Path | None = origin_path
 
         self._resolution: dict[int, BindingRef] = {}
         self._builtin_calls: dict[int, BuiltinKind] = {}
@@ -363,6 +370,12 @@ class _Resolver:
             raise AglScopeError(
                 f"'{decl.name}' is a built-in name and cannot be used as a "
                 f"function name.",
+                span=decl.span,
+            )
+        if decl.is_extern and self._origin_path is None:
+            raise AglScopeError(
+                f"'extern def {decl.name}' requires a file-backed module; "
+                f"externs are not allowed in inline sources or REPL entries.",
                 span=decl.span,
             )
         if decl.name in self._declared_functions:
@@ -1652,6 +1665,7 @@ def resolve(
     ambient_agents: frozenset[str] = frozenset(),
     ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
     ambient_type_names: frozenset[str] = frozenset(),
+    origin_path: Path | None = None,
 ) -> ResolvedProgram:
     """Run the full static name-resolution pass over *program*.
 
@@ -1678,6 +1692,10 @@ def resolve(
     ambient_type_names:
         Type names from prior REPL entries, used for qualified constructor
         access (``Owner.variant``).  Default empty.
+    origin_path:
+        *program*'s canonical source file, or ``None`` when it has no backing
+        file (inline ``-c`` sources, direct REPL entries).  ``extern def`` is
+        rejected unless a real path is given.  Default ``None``.
 
     Returns
     -------
@@ -1689,7 +1707,7 @@ def resolve(
     AglScopeError
         On the first static scope violation (first-error abort).
     """
-    return _Resolver().run(
+    return _Resolver(origin_path=origin_path).run(
         program,
         parent_scope=parent_scope,
         ambient_agents=ambient_agents,

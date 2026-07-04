@@ -463,6 +463,7 @@ def resolve_graph(
             private_info=private_info,
             is_entry=is_entry,
             repl_session_scope=entry_repl_session_scope if is_entry else None,
+            origin_path=loaded.path,
         )
         resolved = resolver.run(
             loaded.program,

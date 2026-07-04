@@ -673,16 +673,23 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
-    def builtin_func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
-        """builtin_func_def: "builtin" "def" name type_params? (...) -> type_expr"""
+    def _bodyless_func_def(
+        self, meta: Meta, args: _Args, *, is_builtin: bool = False, is_extern: bool = False
+    ) -> syntax.FuncDef:
+        """Shared construction for body-less function signatures.
+
+        Both ``builtin_func_def`` and ``extern_func_def`` share the shape
+        "def" name type_params? (params) -> type_expr with no body; only the
+        leading modifier and the resulting flag differ.
+        """
         name_tok = _find_name_token(args)
         type_params_val: tuple[str, ...] = ()
         for a in args:
             if _is_str_tuple(a):
                 type_params_val = cast(tuple[str, ...], a)
         params, return_type, body = self._split_params_type_body(args)
-        assert return_type is not None, "builtin_func_def: no return type"
-        assert body is None, "builtin_func_def: unexpected body"
+        assert return_type is not None, "bodyless func def: no return type"
+        assert body is None, "bodyless func def: unexpected body"
         return syntax.FuncDef(
             name=str(name_tok),
             params=params,
@@ -691,8 +698,17 @@ class AstBuilder(Transformer):
             type_params=type_params_val,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
-            is_builtin=True,
+            is_builtin=is_builtin,
+            is_extern=is_extern,
         )
+
+    def builtin_func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
+        """builtin_func_def: "builtin" "def" name type_params? (...) -> type_expr"""
+        return self._bodyless_func_def(meta, args, is_builtin=True)
+
+    def extern_func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
+        """extern_func_def: "extern" "def" name type_params? (...) -> type_expr"""
+        return self._bodyless_func_def(meta, args, is_extern=True)
 
     def param_list(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
         """param_list: param_entry (COMMA param_entry)* COMMA?
@@ -2227,9 +2243,13 @@ class AstBuilder(Transformer):
             is_private=True,
         )
 
-    def private_func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
-        """private_func_def: PRIVATE func_def"""
-        f = next(a for a in args if isinstance(a, syntax.FuncDef))
+    def _private_wrap_func_def(self, meta: Meta, f: syntax.FuncDef) -> syntax.FuncDef:
+        """Shared construction for ``private`` wrapping of a ``FuncDef``.
+
+        Shared by ``private_func_def`` and ``private_extern_func_def`` — both
+        re-emit a copy of the wrapped ``FuncDef`` with ``is_private=True``,
+        preserving ``is_builtin``/``is_extern``.
+        """
         return syntax.FuncDef(
             name=f.name,
             params=f.params,
@@ -2240,7 +2260,18 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
             is_private=True,
             is_builtin=f.is_builtin,
+            is_extern=f.is_extern,
         )
+
+    def private_func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
+        """private_func_def: PRIVATE func_def"""
+        f = next(a for a in args if isinstance(a, syntax.FuncDef))
+        return self._private_wrap_func_def(meta, f)
+
+    def private_extern_func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
+        """private_extern_func_def: PRIVATE extern_func_def"""
+        f = next(a for a in args if isinstance(a, syntax.FuncDef))
+        return self._private_wrap_func_def(meta, f)
 
     def builtin_record_def(self, meta: Meta, args: _Args) -> syntax.RecordDef:
         """builtin_record_def: BUILTIN record_def"""

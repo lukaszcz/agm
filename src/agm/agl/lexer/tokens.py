@@ -66,6 +66,7 @@ KW_ENUM = "enum"
 KW_EXCEPTION = "exception"
 KW_TYPE = "type"
 KW_BUILTIN = "builtin"
+KW_EXTERN = "extern"
 KW_EXTENDS = "extends"
 KW_PARAM = "param"
 KW_PROGRAM = "program"
@@ -116,6 +117,7 @@ KEYWORDS: frozenset[str] = frozenset(
         KW_EXCEPTION,
         KW_TYPE,
         KW_BUILTIN,
+        KW_EXTERN,
         KW_EXTENDS,
         KW_PARAM,
         KW_PROGRAM,

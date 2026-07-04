@@ -138,6 +138,7 @@ _sep: _NEWLINE | SEMICOLON
             | builtin_enum_def
             | builtin_exception_def
             | builtin_func_def
+            | extern_func_def
             | import_decl
             | export_decl
             | private_record_def
@@ -145,6 +146,7 @@ _sep: _NEWLINE | SEMICOLON
             | private_exception_def
             | private_type_alias
             | private_func_def
+            | private_extern_func_def
 
 // ---------------------------------------------------------------------------
 // Type declarations
@@ -256,6 +258,11 @@ func_def: "def" name type_params? LPAR param_list? RPAR (THIN_ARROW type_expr)? 
 // after it insignificant, so the modifier may sit on its own line above the
 // declaration (`builtin\nenum …`) or on the same line (`builtin enum …`).
 builtin_func_def: "builtin" _NEWLINE? "def" name type_params? LPAR param_list? RPAR THIN_ARROW type_expr
+
+// Python-implemented extern function declaration. Same body-less shape as
+// `builtin_func_def`: no body, mandatory return type. The `_NEWLINE?` lets
+// the modifier sit on its own line above the declaration.
+extern_func_def: "extern" _NEWLINE? "def" name type_params? LPAR param_list? RPAR THIN_ARROW type_expr
 
 builtin_record_def: "builtin" _NEWLINE? record_def
 builtin_enum_def: "builtin" _NEWLINE? enum_def
@@ -726,6 +733,7 @@ private_enum_def    : PRIVATE _NEWLINE? enum_def
 private_exception_def : PRIVATE _NEWLINE? exception_def
 private_type_alias  : PRIVATE _NEWLINE? type_alias
 private_func_def    : PRIVATE _NEWLINE? func_def
+private_extern_func_def : PRIVATE _NEWLINE? extern_func_def
 
 // ---------------------------------------------------------------------------
 // Qualified references in expressions, types, and patterns

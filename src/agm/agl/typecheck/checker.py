@@ -421,13 +421,15 @@ class _Checker:
             if isinstance(item, FuncDef):
                 self._preregister_funcdef(item)
 
-        self._check_block(program.body, expected=None)
+        self._check_block(program.body, expected=None, stop_on_bottom=False)
 
     # ------------------------------------------------------------------
     # Block and item dispatch
     # ------------------------------------------------------------------
 
-    def _check_block(self, block: Block, *, expected: Type | None) -> Type:
+    def _check_block(
+        self, block: Block, *, expected: Type | None, stop_on_bottom: bool = True
+    ) -> Type:
         """Type-check a block and return its reachable result type."""
         if not block.items:
             return UnitType()
@@ -442,7 +444,7 @@ class _Checker:
                 )
             item_type = self._check_item(item, expected=expected if item is last else None)
             result_type = item_type
-            if isinstance(item_type, BottomType):
+            if stop_on_bottom and isinstance(item_type, BottomType):
                 return BottomType()
         return result_type
 

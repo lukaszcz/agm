@@ -697,6 +697,10 @@ class TestBlockTyping:
         r = accept_type("def f() -> int = 1")
         assert r.resolved.program is not None
 
+    def test_top_level_after_divergent_expression_is_still_checked(self) -> None:
+        err = reject_type('raise Abort(message = "x")\ndef bad() -> int = "oops"')
+        assert "int" in str(err).lower()
+
     def test_unit_literal_valid(self) -> None:
         r = accept_type("()")
         assert r.resolved.program is not None

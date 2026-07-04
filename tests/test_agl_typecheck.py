@@ -1350,6 +1350,10 @@ class TestFuncDef:
         assert isinstance(f_ref, VarRef)
         assert r.node_types[f_ref.node_id] == FunctionType(params=(), result=IntType())
 
+    def test_funcdef_unreachable_tail_after_return_is_type_checked(self) -> None:
+        err = reject_type('def f() -> int =\n  return 1\n  let x: int = "bad"\n  0')
+        assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
+
     def test_funcdef_return_mismatch_rejected(self) -> None:
         err = reject_type('def f() -> int =\n  return "bad"\n  0')
         assert "mismatch" in str(err).lower() or "expected" in str(err).lower()

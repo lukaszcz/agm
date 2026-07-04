@@ -435,6 +435,7 @@ class _Checker:
             return UnitType()
 
         result_type: Type = UnitType()
+        unreachable = False
         last = block.items[-1]
         for item in block.items:
             if item is last and isinstance(item, (LetDecl, VarDecl)):
@@ -442,10 +443,13 @@ class _Checker:
                     "a 'let'/'var' declaration must be followed by an expression in a block.",
                     span=item.span,
                 )
-            item_type = self._check_item(item, expected=expected if item is last else None)
+            item_expected = expected if item is last and not unreachable else None
+            item_type = self._check_item(item, expected=item_expected)
+            if unreachable:
+                continue
             result_type = item_type
             if stop_on_bottom and isinstance(item_type, BottomType):
-                return BottomType()
+                unreachable = True
         return result_type
 
     def _check_item(self, item: Item, *, expected: Type | None) -> Type:

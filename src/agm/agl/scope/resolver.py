@@ -842,6 +842,13 @@ class _Resolver:
                 # A config declaration is not a non-config item.
                 continue
             if isinstance(item, (ImportDecl, ExportDecl)):
+                if not self._at_root:
+                    kind = "import" if isinstance(item, ImportDecl) else "export"
+                    raise AglScopeError(
+                        f"'{kind}' declarations are only allowed at the program root, "
+                        "not inside a nested block.",
+                        span=item.span,
+                    )
                 if is_non_entry_root and self._seen_non_import_item:
                     raise AglScopeError(
                         "Import and export declarations must appear before any other "

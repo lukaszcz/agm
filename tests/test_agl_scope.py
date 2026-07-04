@@ -1899,6 +1899,20 @@ class TestDirectASTConstruction:
         assert "infix" in msg.lower()
         assert "root" in msg.lower()
 
+    def test_import_inside_if_rejected(self) -> None:
+        err = reject_scope("if true =>\n  import foo\n  ()\n()\n")
+        line, msg = diag(err)
+        assert line == 2
+        assert "import" in msg.lower()
+        assert "root" in msg.lower()
+
+    def test_export_inside_if_rejected(self) -> None:
+        err = reject_scope("if true =>\n  export foo\n  ()\n()\n")
+        line, msg = diag(err)
+        assert line == 2
+        assert "export" in msg.lower()
+        assert "root" in msg.lower()
+
     def test_duplicate_program_rejected(self) -> None:
         err = reject_scope("program first\nprogram second\n1\n")
         line, msg = diag(err)

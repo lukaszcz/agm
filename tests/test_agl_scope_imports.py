@@ -1,6 +1,6 @@
 """Tests for the pure import-resolution model: ``build_import_env``.
 
-Exhaustively covers every D3 form (from the AgL module system plan) and every
+Exhaustively covers every  form (from the AgL module system) and every
 static error case.  All tests operate purely on data — no parser, no resolver.
 """
 

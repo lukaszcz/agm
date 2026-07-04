@@ -256,8 +256,8 @@ def _merge_modqual(tokens: list[Token]) -> list[Token]:
     The `next != LSQB` guard preserves the existing typed-call atom
     `callee::[T](args)` (NAME DCOLON LSQB must stay intact).
 
-    A leading '::name' (empty qualifier, D9 self-reference) has no preceding
-    name, so no merge fires; the bare DCOLON is handled by the grammar.
+    A leading '::name' (empty qualifier self-reference) has no preceding name,
+    so no merge fires; the bare DCOLON is handled by the grammar.
     """
     result: list[Token] = []
     i = 0
@@ -359,9 +359,9 @@ class AglLexer(Lexer):
     because we generate all tokens ourselves).
 
     ``__future_interface__ = 1`` tells Lark to call ``lex(lexer_state,
-    parser_state)`` directly (interface v1), which matches the method
-    signature.  Without this, Lark wraps the lexer as interface=0 and calls
-    ``lex(text)`` — the wrong arity.
+    parser_state)`` directly, which matches the method signature.  Without
+    this, Lark wraps the lexer with the older interface and calls ``lex(text)``
+    — the wrong arity.
     """
 
     __future_interface__ = 1

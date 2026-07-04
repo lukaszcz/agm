@@ -235,7 +235,7 @@ let ne = c1 != c2
 
 
 def test_enum_inequality_different_nominals() -> None:
-    """Two enum values from different nominals produce different NominalIds (D2 property).
+    """Two enum values from different nominals produce different NominalIds ( property).
 
     We cannot compare them with != in AgL (the checker requires same type for ==).
     Instead we verify that evaluation produces EnumValues with different nominals.
@@ -279,7 +279,7 @@ let s = Size.Big(amount = 7)
 
 
 # ---------------------------------------------------------------------------
-# IR evaluation tests — NominalId hashing (D2)
+# IR evaluation tests — NominalId hashing
 # ---------------------------------------------------------------------------
 
 
@@ -291,7 +291,7 @@ def test_nominal_id_hashing_record_as_set_member() -> None:
       1. Construct two *equal* records (p1, p2) and one *different* record (p3)
          via AgL and assert on the evaluated values.
       2. Use the returned RecordValue objects as Python set members / dict keys
-         to verify that __hash__ and __eq__ (both NominalId-based per D2) are
+         to verify that __hash__ and __eq__ (both NominalId-based per ) are
          consistent: equal records land in the same slot, the different record
          in its own slot.
     This exercises the full pipeline — lowering → evaluation → NominalId equality

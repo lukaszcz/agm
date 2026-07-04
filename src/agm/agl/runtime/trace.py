@@ -5,7 +5,7 @@ Records every agent-call attempt, parse result, retry, mutation, ``print``,
 ``trace_id`` + source span.  Persisted under ``.agent-files/`` via
 ``core/log`` helpers.  Honors ``--no-log``/``--log-file``.
 
-Design §12.6 record format followed:
+Design :
 - Every record carries: ``run_id``, ``kind``, ``trace_id``, ``line``,
   ``col`` (from the source span when available).
 - ``agent_call_attempt``: agent name, attempt index, prompt text.
@@ -59,7 +59,7 @@ class TraceStore:
         self._path = path
         self._run_id: str = new_trace_id()
         # Set once a trace write fails: logging is disabled for the rest of the
-        # run and a single warning is emitted (F2b).  Program semantics are
+        # run and a single warning is emitted.  Program semantics are
         # unaffected — a failed trace write must never abort the run.
         self._disabled: bool = False
 
@@ -91,7 +91,7 @@ class TraceStore:
         A trace write must never corrupt program semantics: if the file becomes
         unwritable mid-run (e.g. permissions change), the ``OSError`` is caught,
         a single ``warning: trace logging disabled: <reason>`` line is emitted to
-        stderr, and the store is disabled for the rest of the run (F2b).
+        stderr, and the store is disabled for the rest of the run.
         """
         if self._disabled:
             return
@@ -222,7 +222,7 @@ class TraceStore:
         Returns a fresh id even when logging is disabled (no record written) so
         callers can always thread a valid ``trace_id`` through — mirroring
         ``agent_call_attempt`` so a typed-exec ``AgentParseError`` can link to
-        the ``exec_command`` record (F3).
+        the ``exec_command`` record.
         """
         trace_id = new_trace_id()
         if self._path is None:

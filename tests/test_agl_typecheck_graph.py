@@ -478,7 +478,7 @@ def test_private_type_not_importable(tmp_path: Path) -> None:
 
 
 def test_whole_graph_type_pre_pass_with_cycles(tmp_path: Path) -> None:
-    """Mutual imports of types between A and B both typecheck (cycles allowed D8)."""
+    """Mutual imports of types between A and B both typecheck (cycles allowed )."""
     modules = {
         "entry": (
             "import modA\n"
@@ -2660,36 +2660,36 @@ def test_generic_arity_mismatch_has_span(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# BUG 4 regression: D5 generic-def-as-value uses name-keyed lookup (cross-module)
+# BUG 4 regression:  generic-def-as-value uses name-keyed lookup (cross-module)
 # A cross-module generic def used as a value must typecheck correctly.
 # ---------------------------------------------------------------------------
 
 
 def test_d5_generic_def_as_value_single_module(tmp_path: Path) -> None:
-    """Regression for BUG 4: D5 generic-def-as-value path uses correct signature lookup.
+    """Regression for BUG 4:  generic-def-as-value path uses correct signature lookup.
 
     The fix changes _check_varref to consult get_function_signature_by_node_id
     (globally unique, correct for cross-module) BEFORE falling back to
     get_function_signature (name-keyed).
 
-    This e2e test verifies D5 works in single-module mode: a generic function
+    This e2e test verifies  works in single-module mode: a generic function
     used as a value must typecheck when an expected FunctionType annotation is given.
     The fix's node-id lookup is used in single-module mode too (seeded by
     _preregister_funcdef), so this verifies the new lookup path doesn't break anything.
 
-    Note: cross-module D5 testing requires graph.py to handle generic function type
+    Note: cross-module testing requires graph.py to handle generic function type
     params in _build_graph_func_sig_table (out of scope for this fix set).
     """
-    # D5: generic def used as a value with expected type annotation
+    # generic def used as a value with expected type annotation
     src = "def id[T](x: T) -> T = x\nlet f: (int) -> int = id\nf(1)"
     cp = _check(src)
     assert cp is not None
 
-    # D5: no expected type → error
+    # no expected type → error
     with pytest.raises(AglTypeError, match="Cannot infer type arguments"):
         _check("def id[T](x: T) -> T = x\nlet f = id\nf")
 
-    # The cross-module D5 case (lib::id as a value in entry) is tested at the
+    # The cross-module  case (lib::id as a value in entry) is tested at the
     # env level: verify that get_function_signature_by_node_id takes priority.
     # This is the path the fixed checker takes; before the fix it only called
     # get_function_signature(ref.name) which returns wrong/None cross-module.
@@ -2792,7 +2792,7 @@ def test_cross_module_generic_func_call_explicit_type_args(tmp_path: Path) -> No
 
 
 def test_cross_module_generic_func_as_value_d5(tmp_path: Path) -> None:
-    """D5: Cross-module generic def used as a value with monomorphic annotation typechecks.
+    """Cross-module generic def used as a value with monomorphic annotation typechecks.
 
     lib exports 'def id[T](x: T) -> T = x'.
     Entry open-imports lib and binds: 'let f: (int) -> int = id'.
@@ -2804,7 +2804,7 @@ def test_cross_module_generic_func_as_value_d5(tmp_path: Path) -> None:
     After the fix: type_params=("T",) is set, _check_varref finds a generic sig,
     matches (int)->int against (T)->T and correctly instantiates to (int)->int.
 
-    We use open import so 'id' (unqualified) is in scope — the D5 varref path
+    We use open import so 'id' (unqualified) is in scope — the  varref path
     triggers on unqualified as well as qualified names.
     """
     modules = {

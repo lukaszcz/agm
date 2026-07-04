@@ -19,7 +19,7 @@ Runner-backed agent
 ``runner_backed_agent_factory`` builds an ``AgentFn`` that dispatches agent
 calls to an external runner process via ``agm.agent.runner``.  It composes the
 message text sent to the process (rendered prompt + format instructions +
-§7.8 corrective retry feedback) and maps subprocess failures to
+) and maps subprocess failures to
 ``AgentCallHostError``.
 
 AgentCallError surfacing seam
@@ -30,12 +30,11 @@ failed.  The ``AgentRegistry.dispatch`` method catches it and re-raises as
 ``AglRaise(ExceptionValue("AgentCallError", ...))`` so the AgL interpreter can
 handle it as a catchable in-language exception.
 
-This design was chosen because:
-1. The registry IS owned by this implementation phase.
-2. The interpreter (``eval/``) is off-limits for this agent.
-3. Converting at the dispatch boundary is the right abstraction: the registry
-   is the single chokepoint through which every agent call flows, so the
-   conversion happens once for all call sites and agents, without duplicating
+This design keeps conversion at the dispatch boundary:
+1. The registry is the single chokepoint through which every agent call flows.
+2. The interpreter receives already-normalized results.
+3. The conversion logic remains independent of individual agent implementations,
+   so conversion happens once for all call sites and agents, without duplicating
    conversion logic.
 4. Circular-import concern is sidestepped via local imports inside the method
    (the same function-local-import pattern used elsewhere in the runtime layer).
@@ -239,7 +238,7 @@ def runner_backed_agent_factory(
         runner_cmd = per_agent_cmds.get(request.agent, default_runner_cmd)
 
         # 2. Compose the message text: rendered prompt + format_instructions
-        #    + corrective feedback on retry (§9.5, §7.8).
+        #    + corrective feedback on retry.
         message_parts: list[str] = [request.prompt]
 
         contract = request.output_contract
@@ -247,7 +246,7 @@ def runner_backed_agent_factory(
             message_parts.append(contract.format_instructions)
 
         if request.attempt >= 1:
-            # §7.8 corrective feedback
+            # 
             validation_lines: list[str] = []
             for ve in request.validation_errors:
                 validation_lines.append(f"- {ve.message}")
@@ -263,7 +262,7 @@ def runner_backed_agent_factory(
 
         full_message = "\n\n".join(message_parts)
 
-        # 3. Write to temp file (verbatim — no env-var expansion, §9.5).
+        # 3. Write to temp file verbatim, with no environment-variable expansion.
         temp_files: list[Path] = []
         try:
             prepared = prepare_rendered_prompt_run(

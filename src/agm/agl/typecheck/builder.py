@@ -1,4 +1,4 @@
-"""Standalone per-module type-table builder for the AgL v2 type-checking pass.
+"""Standalone per-module type-table builder for the AgL type-checking pass.
 
 ``_TypeBuilder`` collects ``record``/``enum``/``exception``/alias shells and
 bodies, and registers generic templates, into a ``TypeEnvironment``.  It was
@@ -95,7 +95,7 @@ class _TypeBuilder:
     - Duplicate type names (user vs user, or user shadowing a built-in).
     - Duplicate record fields or enum variants/fields.
     - Unknown type references inside field/variant definitions.
-    - Recursive records or enums (v1: rejected).
+    - Recursive records or enums.
     - Alias cycles.
 
     Implementation uses a two-phase approach so that type declarations are
@@ -232,7 +232,7 @@ class _TypeBuilder:
         if name in self._building:
             raise AglTypeError(
                 f"Record type '{name}' is directly or indirectly recursive. "
-                "Recursive types are not supported in v1.",
+                "Recursive types are not supported in AgL.",
                 span=self._declared[name],
             )
         self._building.add(name)
@@ -248,7 +248,7 @@ class _TypeBuilder:
         if name in self._building:
             raise AglTypeError(
                 f"Enum type '{name}' is directly or indirectly recursive. "
-                "Recursive types are not supported in v1.",
+                "Recursive types are not supported in AgL.",
                 span=self._declared[name],
             )
         self._building.add(name)

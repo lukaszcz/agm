@@ -1,4 +1,4 @@
-# `as?` convertibility test (D7/D8): yields bool without raising.  Used here
+# `as?` convertibility test: yields bool without raising.  Used here
 # to drive if/else branching — the same pattern a caller would use before
 # committing to a potentially-failing cast.
 param user_input
@@ -19,6 +19,6 @@ if d as? int =>
 else =>
   print "decimal has fraction: ${d as text}"
 
-# as? on a total cast is always true (D8)
+# as? on a total cast is always true
 let always_true = 42 as? text
 print always_true

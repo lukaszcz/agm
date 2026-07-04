@@ -57,7 +57,7 @@ class ParseResult:
                           could be extracted, ambiguous multi-value output).
     ``normalized_raw``  — The canonical JSON text that was actually parsed (after
                           fence stripping / repair), or ``None`` on failure.
-                          Design §2.8: "the normalized (recovered) value is traced
+                          Design : "the normalized (recovered) value is traced
                           alongside the raw output."
     """
 
@@ -233,12 +233,12 @@ def _try_direct_parse(text: str) -> tuple[bool, str]:
 
 
 # Sentinel returned by extraction when the candidate yields an *ambiguous*
-# multi-value result.  See F3 ruling.
+# multi-value result.  See  ruling.
 _AMBIGUOUS_MULTI_VALUE = object()
 
 
 def _count_top_level_values(candidate: str) -> int:
-    """Count complete top-level JSON values in *candidate* (F4).
+    """Count complete top-level JSON values in *candidate*.
 
     Scans the stripped candidate with :meth:`json.JSONDecoder.raw_decode` in a
     whitespace-skipping loop.  ``{"a": 1} {"b": 2}`` and ``{"a": [1]} {"b": 2}``
@@ -246,7 +246,7 @@ def _count_top_level_values(candidate: str) -> int:
     fenced or bracketed one) yields ``1``.  Returns the count, capped once two
     values are seen (the caller only distinguishes 0 / 1 / 2+).
 
-    Design §2.8 requires exactly one JSON value; 2+ top-level values are
+    Design ; 2+ top-level values are
     ambiguous.  If the candidate is not parseable as a run of JSON values
     (e.g. trailing prose ``json-repair`` already cleaned up), the count
     reflects only the leading values it could decode.
@@ -273,7 +273,7 @@ def _count_top_level_values(candidate: str) -> int:
 
 
 def _candidate_is_ambiguous_multi_value(candidate: str) -> bool:
-    """Return True if *candidate* contains 2+ complete top-level JSON values (F4)."""
+    """Return True if *candidate* contains 2+ complete top-level JSON values."""
     return _count_top_level_values(candidate.strip()) >= 2
 
 
@@ -305,7 +305,7 @@ def _scan_bare_scalar(text: str) -> str | None | object:
 def _extract_json_text(raw: str) -> str | None | object:
     """Extract a single JSON text from potentially chatty agent output.
 
-    Strategy (lenient mode — design §2.8):
+    Strategy (lenient mode — design ):
     0. Try direct stdlib ``json.loads`` on the stripped input — if it succeeds
        (bare valid JSON, possibly with surrounding whitespace), return the
        stripped text verbatim.  This preserves full decimal precision since
@@ -317,8 +317,7 @@ def _extract_json_text(raw: str) -> str | None | object:
        prose-wrapped JSON such as "Here you go:\\n{...}").
     3. Return ``None`` if no JSON value could be extracted, or the
        ``_AMBIGUOUS_MULTI_VALUE`` sentinel if json-repair fused several
-       top-level values into an array (F3 — design §2.8 "exactly one JSON
-       value").
+       top-level values into an array.
 
     When ``json-repair`` is needed, it returns the repaired JSON *text*
     (without ``return_objects=True``), which is then re-parsed with
@@ -337,7 +336,7 @@ def _extract_json_text(raw: str) -> str | None | object:
     fence_match = _FENCE_RE.search(stripped)
     if fence_match:
         candidate: str = fence_match.group(1).strip()
-        # Ambiguity (F4): the fenced candidate holds 2+ top-level JSON values.
+        # Ambiguity: the fenced candidate holds 2+ top-level JSON values.
         if _candidate_is_ambiguous_multi_value(candidate):
             return _AMBIGUOUS_MULTI_VALUE
         # Try direct parse on fenced content first.
@@ -350,7 +349,7 @@ def _extract_json_text(raw: str) -> str | None | object:
             return repaired
 
     # Step 2: repair_json on the whole string (handles prose-wrapped).
-    # Ambiguity (F4): the whole response holds 2+ top-level JSON values
+    # Ambiguity: the whole response holds 2+ top-level JSON values
     # (e.g. ``{"a":1} {"b":2}`` or ``{"a":[1]} {"b":2}``).
     if _candidate_is_ambiguous_multi_value(stripped):
         return _AMBIGUOUS_MULTI_VALUE
@@ -614,7 +613,7 @@ class JsonCodec:
       via stdlib ``json.loads`` (surrounding whitespace permitted; nothing
       else).  No fence stripping or repair.
 
-    Schema validation is always strict in both modes (rules 3–6 of §2.8 are
+    Schema validation is always strict in both modes (rules 3–6 of 
     never relaxed).
 
     CARRY-IN 2: The ``parse`` method accepts an optional precomputed *schema*
@@ -672,7 +671,7 @@ class JsonCodec:
     ) -> ParseResult:
         """Parse *raw* agent output into the typed ``Value`` for *target_type*.
 
-        Lenient mode (``strict_json=False``, the default per design §2.8):
+        Lenient mode (``strict_json=False``, the default per design ):
           1. Attempt to extract/repair exactly one JSON text from *raw*.
           2. Re-parse the repaired text with ``json.loads(parse_float=Decimal)``.
           3. Validate against the derived JSON Schema.

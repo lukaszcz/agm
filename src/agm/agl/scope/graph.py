@@ -13,8 +13,7 @@ Design
 - **ImportEnv per module**: built from each module's import declarations against
   the already-loaded graph (no re-reading files).
 - **Whole-graph pre-pass tables**: ``all_public_funcs`` and ``all_public_types``
-  collected BEFORE resolving any body, enabling cross-module mutual recursion
-  (D8).
+  collected BEFORE resolving any body, enabling cross-module mutual recursion.
 - **Declaration-only enforcement**: non-entry modules may only contain
   declarations (``def``, ``record``, ``enum``, ``type``, ``infixl``/``infixr``,
   ``import``).

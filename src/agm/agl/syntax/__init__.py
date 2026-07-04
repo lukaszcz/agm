@@ -1,4 +1,4 @@
-"""Public API for the AgL v2 AST package (agm.agl.syntax).
+"""Public API for the AgL AST package (agm.agl.syntax).
 
 This package is the *firewall* between the Lark-aware front-end (lexer +
 parser) and all downstream passes (scope, typecheck, eval).  Nothing in this

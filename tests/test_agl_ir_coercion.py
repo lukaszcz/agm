@@ -465,7 +465,7 @@ def test_coercion_evaluates_operand_once() -> None:
     All current AgL expressions are pure (no side effects), so the strong version
     of this property (observable side effects fired exactly once) cannot be
     violated.  The IR pipeline produces the correct coercion result.  The stronger
-    test (with counters/exec side-effects) is deferred to a future implementation phase.
+    test (with counters/exec side-effects) is deferred to a future coverage.
 
     We exercise this with a multi-step program where each binding's RHS is a
     constant; the IR pipeline must produce the correct value for each binding.

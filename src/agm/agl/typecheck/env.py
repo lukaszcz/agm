@@ -75,7 +75,7 @@ class FunctionSignature:
     """Full declared signature of a top-level ``def``.
 
     Carries named/default/kind information needed for declared-name call sites.
-    The value type (FunctionType) erases names/defaults/kinds (plan R7).
+    The value type (FunctionType) erases names/defaults/kinds.
 
     ``params``      — ordered list of ``ParamSpec`` (name, type, kind, has_default).
     ``result``      — the declared return type.
@@ -201,7 +201,7 @@ class OutputContractSpec:
     ``codec_name``
         The codec selected for this call (e.g. ``"text"`` or ``"json"``).
         When ``structured_exec`` is ``True`` this field holds the placeholder
-        value ``"text"`` and is **unused** — S5 will branch on
+        value ``"text"`` and is **unused** —  will branch on
         ``structured_exec`` to skip codec lookup and return the raw ``ExecResult``
         handle instead.
     ``strict_json``
@@ -211,7 +211,7 @@ class OutputContractSpec:
     ``structured_exec``
         ``True`` for the structured ``exec`` form (target is ``ExecResult``):
         returns the raw result record, does not parse stdout, does not raise
-        on nonzero exit.  ``False`` (the default) for all other calls.  S5
+        on nonzero exit.  ``False`` (the default) for all other calls.  
         must branch on this flag to skip the codec/parse pipeline entirely.
     """
 
@@ -273,7 +273,7 @@ class CheckedProgram:
         output contract.
     ``call_sites``
         Tuple of ``CallSiteRecord`` — one per agent-call/exec site, in source
-        order — captured by the checker.  The ``--dry-run`` inventory (§10.1) is
+        order — captured by the checker.  The ``--dry-run`` inventory is
         built from this plus ``contract_specs``; it is never re-derived by
         re-walking the AST.
     ``warnings``
@@ -402,7 +402,7 @@ class TypeEnvironment:
         # Built-in exception types are always available.
         for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
             self._types[exc_name] = exc_type
-        # Built-in prelude types (AgL v2: ExecResult, ParsePolicy) are always available.
+        # Built-in prelude types (AgL: ExecResult, ParsePolicy) are always available.
         for prelude_name, prelude_type in BUILTIN_PRELUDE_TYPES.items():
             self._types[prelude_name] = prelude_type
             if isinstance(prelude_type, RecordType):

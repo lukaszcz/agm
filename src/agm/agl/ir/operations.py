@@ -3,7 +3,7 @@
 Enums are derived directly from the operator sets supported by AgL:
 - ``ArithOp``: binary arithmetic operators (``+``, ``-``, ``*``, ``/``).
   Derived from ``BinOp.ADD/SUB/MUL/DIV`` in ``agm.agl.syntax.nodes``.
-  Note: there is no modulo operator in AgL v2 (the ``BinOp`` enum has no MOD).
+  Note: there is no modulo operator in AgL (the ``BinOp`` enum has no MOD).
 - ``CmpOp``: comparison operators (``==``, ``!=``, ``<``, ``<=``, ``>``, ``>=``).
   Derived from ``BinOp.EQ/NEQ/LT/LE/GT/GE`` in ``agm.agl.syntax.nodes``.
   The ``in`` operator is lowered to ``IrContains`` (not a CmpOp).
@@ -40,7 +40,7 @@ __all__ = [
 
 
 # ---------------------------------------------------------------------------
-# Operation enums (D3)
+# Operation enums
 # ---------------------------------------------------------------------------
 
 
@@ -49,7 +49,7 @@ class ArithOp(enum.Enum):
 
     Derived from the arithmetic branch of ``BinOp`` in
     ``agm.agl.syntax.nodes``: ADD(+), SUB(-), MUL(*), DIV(/).
-    AgL v2 has no modulo operator.
+    AgL has no modulo operator.
     """
 
     ADD = "+"
@@ -129,7 +129,7 @@ class IterKind(enum.Enum):
 
 
 # ---------------------------------------------------------------------------
-# Coercion closed union (D3)
+# Coercion closed union
 # ---------------------------------------------------------------------------
 
 

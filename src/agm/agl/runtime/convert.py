@@ -12,7 +12,7 @@ host parameter decoding:
   Also rejects any trailing/leading non-whitespace.  Returns the raw parsed
   Python object.
 - :func:`normalize_integral_decimals` — walk a JSON-shaped tree and replace
-  integral ``Decimal`` values with ``int`` (D4 / F2 rule).
+  integral ``Decimal`` values with ``int``.
 - :func:`_clean_validation_message` — strip Python ``Decimal(...)`` reprs from
   jsonschema error messages before surfacing them to users.
 - :func:`decode_value` / :func:`_decode_scalar` — the typeless
@@ -96,7 +96,7 @@ def validator_for_schema(json_schema: str) -> Draft202012Validator:
 
 
 # ---------------------------------------------------------------------------
-# normalize_integral_decimals (D4 / F2) — canonical home in convert.py
+# normalize_integral_decimals — canonical home in convert.py
 # ---------------------------------------------------------------------------
 
 

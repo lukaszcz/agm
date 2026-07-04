@@ -269,7 +269,7 @@ class TestFallbackAgent:
 
 
 class TestInputValidationRuntime:
-    """Param validation before execution (§11.3, §9.5)."""
+    """Param validation before execution."""
 
     def test_missing_param_fails_not_ok(self) -> None:
         rt = PipelineDriver()
@@ -319,7 +319,7 @@ class TestInputValidationRuntime:
         assert result.error is None
 
     def test_missing_param_reports_declaration_line(self) -> None:
-        """F3: the missing-param diagnostic carries the declaration's line."""
+        """the missing-param diagnostic carries the declaration's line."""
         rt = PipelineDriver()
         # ``param spec`` is on line 3; the diagnostic must report line 3, not 1.
         src = "let a = 1\nlet b = 2\nparam spec\nprint spec"
@@ -330,7 +330,7 @@ class TestInputValidationRuntime:
         assert missing[0].line == 3
 
     def test_invalid_typed_param_reports_declaration_line(self) -> None:
-        """F3 parity: the type-invalid diagnostic already reports the line."""
+        """ parity: the type-invalid diagnostic already reports the line."""
         rt = PipelineDriver()
         src = "let a = 1\nlet b = 2\nparam n: int\nprint n"
         result = rt.run(src, param_values={"n": "five"})
@@ -391,7 +391,7 @@ class TestAgentRequest:
 
 
 class TestUncaughtAgentCallErrorSpan:
-    """F2: an uncaught AgentCallError carries the agent-call site's location.
+    """an uncaught AgentCallError carries the agent-call site's location.
 
     ``AgentRegistry.dispatch`` raises ``AglRaise`` without a span; the
     interpreter must attach the agent-call node's span so the exit-2 error
@@ -734,7 +734,7 @@ class TestPipelineDriverProperties:
 
 
 class TestNoDefaultAgent:
-    """F1a/F1b: an ``ask`` call needs a default (or fallback) agent."""
+    """an ``ask`` call needs a default (or fallback) agent."""
 
     def test_ask_without_default_agent_is_static_error(self) -> None:
         rt = PipelineDriver()  # no default agent configured
@@ -754,7 +754,7 @@ class TestNoDefaultAgent:
 
 
 class TestDryRunCheckOnly:
-    """F2: ``check_only=True`` runs the static pipeline but executes nothing."""
+    """``check_only=True`` runs the static pipeline but executes nothing."""
 
     def test_check_only_printing_program_produces_no_output(
         self, capsys: pytest.CaptureFixture[str]
@@ -803,7 +803,7 @@ class TestDryRunCheckOnly:
 
 
 class TestDecimalSerialization:
-    """F3/F9: decimals print/round-trip exactly; never via binary float."""
+    """decimals print/round-trip exactly; never via binary float."""
 
     def test_json_param_with_decimal_prints_exactly(
         self, capsys: pytest.CaptureFixture[str]
@@ -847,7 +847,7 @@ class TestDecimalSerialization:
 
 
 class TestWarningsThreadedOnFailurePaths:
-    """F14: typecheck warnings survive param-validation failure paths."""
+    """typecheck warnings survive param-validation failure paths."""
 
     def test_warning_and_missing_param_both_visible(
         self, monkeypatch: pytest.MonkeyPatch
@@ -892,7 +892,7 @@ class TestWarningsThreadedOnFailurePaths:
 
 
 class TestAgentRegistryDispatch:
-    """F17: dispatch resolves named agents, ask, and the default fallback."""
+    """dispatch resolves named agents, ask, and the default fallback."""
 
     def test_dispatch_named_agent(self) -> None:
         from agm.agl.runtime import AgentRequest
@@ -1878,7 +1878,7 @@ class TestRuntimeErrorPaths:
     def test_internal_interpreter_error_propagates(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """F1c: an unexpected (non-AglRaise) interpreter error must propagate.
+        """an unexpected (non-AglRaise) interpreter error must propagate.
 
         A Python-level bug must crash loudly rather than masquerade as a
         user-facing pre-execution diagnostic.
@@ -1948,7 +1948,7 @@ class TestRuntimeErrorPaths:
         assert isinstance(error, RunError)
         assert error.type_name == "AgentParseError"
         assert error.fields["message"] == "failed"
-        # F3/F9: Decimal is preserved exactly (not converted to float).
+        # Decimal is preserved exactly (not converted to float).
         assert error.fields["decimal_val"] == decimal.Decimal("1.5")
         assert isinstance(error.fields["decimal_val"], decimal.Decimal)
         assert error.fields["bool_val"] is True
@@ -2147,7 +2147,7 @@ class TestUniformRenderingInPrompts:
 
 
 class TestMaxIterationsExceededSchema:
-    """F2: ``MaxIterationsExceeded`` carries the full §8.1 field schema.
+    """``MaxIterationsExceeded`` carries the full .
 
     The interpreter populates ``condition`` (the until-expression's exact source
     text, recovered via span offsets into the threaded source), the final
@@ -2219,7 +2219,7 @@ class TestMaxIterationsExceededSchema:
 
 
 class TestExhaustivenessWarningSurfaces:
-    """F1: a non-exhaustive enum ``case`` warns without failing the run.
+    """a non-exhaustive enum ``case`` warns without failing the run.
 
     The exhaustiveness diagnostic is a warning, so ``ok`` stays ``True`` and the
     warning is visible on ``result.warnings`` (never in ``result.diagnostics``)
@@ -2272,7 +2272,7 @@ _skip_if_root = pytest.mark.skipif(
 
 
 class TestTraceWriteFailureIsBestEffort:
-    """F2b: a mid-run trace write failure must not corrupt program semantics."""
+    """a mid-run trace write failure must not corrupt program semantics."""
 
     def test_emit_failure_warns_once_and_disables_store(
         self,
@@ -2734,12 +2734,12 @@ class TestBuildFormatInstructions:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: serialize.py — v2 opaque value TypeError branches
+# Coverage: serialize.py — opaque value TypeError branches
 # ---------------------------------------------------------------------------
 
 
 class TestSerializeV2OpaqueValues:
-    """Unit, agent, and IR closure values have no JSON representation (D9)."""
+    """Unit, agent, and IR closure values have no JSON representation."""
 
     def test_unit_value_raises(self) -> None:
         from agm.agl.runtime.serialize import value_to_json_obj
@@ -2767,7 +2767,7 @@ class TestSerializeV2OpaqueValues:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: pipeline.py — uncovered branches and new v2 properties
+# Coverage: pipeline.py — uncovered branches and current properties
 # ---------------------------------------------------------------------------
 
 
@@ -2954,12 +2954,12 @@ class TestConvertInputUnsupportedType:
 
 
 # ---------------------------------------------------------------------------
-# New v2 feature tests: user-defined functions, ExecResult, ask with AgentValue
+# New Feature tests: user-defined functions, ExecResult, ask with AgentValue
 # ---------------------------------------------------------------------------
 
 
 class TestV2UserDefinedFunctions:
-    """v2 def expressions: first-class functions, recursion, call depth limit."""
+    """Def expressions: first-class functions, recursion, call depth limit."""
 
     def test_def_call_basic(self) -> None:
         rt = PipelineDriver()
@@ -2982,7 +2982,7 @@ class TestV2UserDefinedFunctions:
         assert result.ok is True
 
     def test_def_call_depth_limit_enforced(self) -> None:
-        """Exceeding max_call_depth raises a RecursionError (D8)."""
+        """Exceeding max_call_depth raises a RecursionError."""
         rt = PipelineDriver(default_call_depth_limit=10)
         result = rt.run(
             "def inf(n: int) -> int =\n"
@@ -2993,7 +2993,7 @@ class TestV2UserDefinedFunctions:
 
 
 class TestV2ExecStructuredForm:
-    """v2 exec structured form: let x: T = exec ... raises on nonzero."""
+    """Structured exec form: let x: T = exec ... raises on nonzero."""
 
     def test_exec_text_form_captures_stdout(self, capsys: pytest.CaptureFixture[str]) -> None:
         rt = PipelineDriver()

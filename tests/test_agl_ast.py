@@ -1,11 +1,11 @@
-"""Tests for the AgL v2 AST package (agm.agl.syntax).
+"""Tests for the AgL AST package (agm.agl.syntax).
 
 Covers:
 - SourceSpan construction and import from diagnostics
 - TypeExpr hierarchy (all 11 types including UnitT, AgentT, FuncT)
 - All AST node types: Program/Block, declarations (FuncDef), binders, expressions,
   patterns
-- New v2 nodes: UnitLit, Call, Param, FuncDef, Lambda, Block, If/IfBranch,
+- Current nodes: UnitLit, Call, Param, FuncDef, Lambda, Block, If/IfBranch,
   Case/CaseBranch, Loop, Try/CatchClause
 - Removed nodes are truly absent (AgentCall, PassStmt, PrintStmt, ExprStmt,
   DoUntil, IfStmt, CaseStmt, CaseExpr, IfExpr, TryCatch, CallOptions,
@@ -167,7 +167,7 @@ class TestSourceSpan:
     def test_diagnostics_import_same_class(self) -> None:
         # The lexer imports SourceSpan from diagnostics; it must be the same class.
         # Import lazily to avoid triggering the full agm.agl pipeline (which is
-        # temporarily broken while downstream stages are being ported to v2).
+        # temporarily broken while downstream stages are being updated).
         from agm.agl.syntax.spans import SourceSpan as SpansSourceSpan
         assert SourceSpan is SpansSourceSpan
 
@@ -483,7 +483,7 @@ class TestExpressions:
 
 
 # ---------------------------------------------------------------------------
-# New v2 expression nodes
+# Current expression nodes
 # ---------------------------------------------------------------------------
 
 class TestCallNode:
@@ -751,7 +751,7 @@ class TestIfNode:
         assert branch.cond is cond
 
     def test_if_branch_body_is_single_expr(self) -> None:
-        # In v2, branch body is a single Expr (not a tuple).
+        # In AgL, branch body is a single Expr (not a tuple).
         cond = BoolLit(value=True, span=self._s(), node_id=2)
         body = UnitLit(span=self._s(), node_id=3)
         branch = IfBranch(cond=cond, body=body, span=self._s(), node_id=1)
@@ -957,7 +957,7 @@ class TestTryNode:
         assert clause.binding == "e"
 
     def test_catch_clause_body_is_expr(self) -> None:
-        # In v2, body is a single Expr, not a tuple of stmts.
+        # In AgL, body is a single Expr, not a tuple of stmts.
         body = UnitLit(span=self._s(), node_id=2)
         clause = CatchClause(exc_type=None, binding=None, body=body, span=self._s(), node_id=1)
         assert not isinstance(clause.body, tuple)
@@ -1072,9 +1072,9 @@ class TestDeclarations:
         assert v.name == "Some"
 
     def test_enum_def(self) -> None:
-        v1 = VariantDef(name="A", fields=(), span=self._s(), node_id=2)
-        v2 = VariantDef(name="B", fields=(), span=self._s(), node_id=3)
-        node = EnumDef(name="Color", variants=(v1, v2), span=self._s(), node_id=1)
+        variant_a = VariantDef(name="A", fields=(), span=self._s(), node_id=2)
+        variant_b = VariantDef(name="B", fields=(), span=self._s(), node_id=3)
+        node = EnumDef(name="Color", variants=(variant_a, variant_b), span=self._s(), node_id=1)
         assert isinstance(node.variants, tuple)
         assert len(node.variants) == 2
 
@@ -1290,7 +1290,7 @@ class TestVisitorWalk:
         """Build a Program whose Block exercises every node kind.
 
         Every type, expression, binder, declaration, and pattern node that
-        exists in the v2 AST must appear somewhere in the returned tree so that
+        exists in the AST must appear somewhere in the returned tree so that
         the walk-coverage tests can confirm they are all reachable.
         """
         s = self._s()
@@ -2332,7 +2332,7 @@ class TestUnionAliases:
 # ---------------------------------------------------------------------------
 
 class TestRemovedNodes:
-    """Verify that v1-only nodes are no longer part of the public API."""
+    """Verify that legacy nodes are no longer part of the public API."""
 
     @pytest.mark.parametrize(
         "name",

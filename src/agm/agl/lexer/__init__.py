@@ -1,4 +1,4 @@
-"""AgL custom lexer package (Component 1).
+"""AgL custom lexer package.
 
 Public API
 ----------

@@ -228,7 +228,7 @@ def test_record_value_eq_and_hash() -> None:
     """RecordValue equality and hash consider nominal identity and fields.
 
     Two records with same nominal+fields but different display_name are equal;
-    same declared_name in different modules are NOT equal (D2).
+    same declared_name in different modules are NOT equal.
     """
     from agm.agl.modules.ids import ModuleId
     from agm.agl.semantics.values import IntValue, NominalId, RecordValue
@@ -262,7 +262,7 @@ def test_record_value_eq_and_hash() -> None:
 
 
 def test_constructor_value_eq_and_hash() -> None:
-    """ConstructorValue equality considers nominal+variant; display_name excluded (D2)."""
+    """ConstructorValue equality considers nominal+variant; display_name excluded."""
     from agm.agl.modules.ids import ModuleId
     from agm.agl.semantics.values import ConstructorValue, NominalId
 
@@ -308,7 +308,7 @@ def test_record_value_hash_with_json_payload() -> None:
 def test_enum_value_eq_and_hash() -> None:
     """EnumValue equality and hash consider nominal identity, variant, and fields.
 
-    display_name is excluded from eq/hash (D2).
+    display_name is excluded from eq/hash.
     """
     from agm.agl.modules.ids import ModuleId
     from agm.agl.semantics.values import EnumValue, NominalId
@@ -347,7 +347,7 @@ def test_enum_value_eq_and_hash() -> None:
 def test_exception_value_eq() -> None:
     """ExceptionValue equality considers nominal identity and fields.
 
-    display_name is excluded from eq/hash (D2). Built-in exceptions use PRELUDE_ID.
+    display_name is excluded from eq/hash. Built-in exceptions use PRELUDE_ID.
     """
     from agm.agl.modules.ids import PRELUDE_ID, ModuleId
     from agm.agl.semantics.values import ExceptionValue, NominalId, TextValue
@@ -500,11 +500,11 @@ def test_ir_closure_value_identity_equality() -> None:
     # Same object is equal to itself
     assert v == v
     # Different object (even with same content) is not equal
-    v2 = IrClosureValue(function_id=FunctionId(0), captures=())
-    assert v != v2
+    other = IrClosureValue(function_id=FunctionId(0), captures=())
+    assert v != other
     # Not equal to non-IrClosureValue objects
     assert v.__eq__(42) is not True  # returns bool (NotImplemented would be False)
-    assert not (v == v2)
+    assert not (v == other)
 
 
 def test_ir_closure_value_identity_hash() -> None:

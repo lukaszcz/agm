@@ -743,7 +743,7 @@ def run_console(
     )
     # A shared, mutable agent-mode holder: ``:agent`` mutates it here, and the wrapper
     # will pass this SAME instance to the confirming agent wrapper so the wrapper
-    # observes the mutation.  Defaults to confirm-each-call per plan decision 2.
+    # observes the mutation.  Defaults to confirm-each-call.
     ctx = meta_mod.MetaContext(
         session=session,
         echo=echo,

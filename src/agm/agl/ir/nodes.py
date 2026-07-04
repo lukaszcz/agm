@@ -5,7 +5,7 @@ Child collections are ``tuple`` (never ``list``).
 
 ``IrExpr`` is the closed union of all expression node types defined here.
 The evaluator and lowerer dispatch over it with a structural ``match`` whose
-final arm is ``assert_never(node)`` (D4), so mypy exhaustiveness makes a
+final arm is ``assert_never(node)``, so mypy exhaustiveness makes a
 missing case a compile-time error.
 
 ``IrIndexStep`` is a helper child record used by ``IrAssign``; it is NOT a
@@ -206,7 +206,7 @@ class IrLoad:
     """IR load: read the current value of a symbol.
 
     For ``let`` symbols this is the stored value directly.
-    For ``var`` symbols this reads through the cell (D5).
+    For ``var`` symbols this reads through the cell.
     """
 
     location: Location
@@ -266,8 +266,7 @@ class IrCoerce:
     """IR coercion: apply a resolved ``Coercion`` to ``value``.
 
     The ``operation`` field is a closed ``Coercion`` union member resolved at
-    lowering time; the evaluator switches on it without runtime type sniffing
-    (D3).
+    lowering time; the evaluator switches on it without runtime type sniffing.
 
     The ``operation`` field is always a concrete ``Coercion`` — it never holds
     ``None``.  An identity (no-op) coercion is represented by the lowerer
@@ -555,7 +554,7 @@ class IrVariantIs:
     ``BoolValue((value.variant == variant) != negated)``.  The boolean depends
     only on the variant string and ``negated`` — matching the legacy
     interpreter, which does not compare the nominal (the checker guarantees the
-    operand's enum type).  ``nominal`` records the tested enum (D2) for
+    operand's enum type).  ``nominal`` records the tested enum for
     completeness and validation.
     """
 
@@ -657,7 +656,7 @@ class IrTry:
 # Match plan nodes — closed tagged-data union for case patterns
 # ---------------------------------------------------------------------------
 # These are NOT members of IrExpr; they appear only as IrCaseArm.plan.
-# Dispatch over IrMatchPlan uses a closed match/assert_never (D4).
+# Dispatch over IrMatchPlan uses a closed match/assert_never.
 
 
 @dataclass(frozen=True, slots=True)
@@ -695,7 +694,7 @@ class IrConstructorPlan:
 
 
 #: Closed union of all match-plan node types.
-#: Dispatch with a structural ``match`` / ``assert_never`` (D4).
+#: Dispatch with a structural ``match`` / ``assert_never``.
 IrMatchPlan = IrWildcardPlan | IrBindPlan | IrLiteralPlan | IrVariantPlan | IrConstructorPlan
 
 
@@ -727,7 +726,7 @@ class IrCase:
 
     Semantics mirror legacy ``_eval_case`` first-match ordering exactly.
     Pattern binders (``IrBindPlan``) write their bindings into the current
-    frame (D5) before the arm body is evaluated.
+    frame before the arm body is evaluated.
     """
 
     location: Location
@@ -744,8 +743,8 @@ class IrLoop:
     All richer loop features (``for``/``while``/``until``/``[n]`` bound) are
     **desugared into** ``body`` by the lowerer.
 
-    Per D5 there are NO per-iteration frames: body bindings reuse the same
-    single frame slots across iterations.
+    There are NO per-iteration frames: body bindings reuse the same single
+    frame slots across iterations.
 
     ``guarded`` marks loops that carry their own termination bound — a ``[n]``
     bound (which raises ``MaxIterationsExceeded`` itself) or a ``for`` clause
@@ -1026,7 +1025,7 @@ class IrConfigBind:
 #: Closed union of all expression node types.
 #:
 #: Dispatch with a structural ``match`` whose final arm is
-#: ``assert_never(node)`` (D4) so mypy exhaustiveness makes a missing case a
+#: ``assert_never(node)`` so mypy exhaustiveness makes a missing case a
 #: compile-time error at ``just check``.
 IrExpr = (
     IrConstInt

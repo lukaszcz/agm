@@ -1,4 +1,4 @@
-"""AgL scope/name-resolution pass (Component 4).
+"""AgL scope/name-resolution pass.
 
 Public API
 ----------

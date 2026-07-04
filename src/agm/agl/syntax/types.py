@@ -108,7 +108,7 @@ class ListT:
 
 @dataclass(frozen=True, slots=True)
 class DictT:
-    """A ``dict[text, V]`` type.  Dict keys are always ``text`` in AgL v1."""
+    """A ``dict[text, V]`` type.  Dict keys are always ``text`` in AgL."""
 
     value: TypeExpr
     span: SourceSpan = field(compare=False)

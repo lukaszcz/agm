@@ -11,8 +11,8 @@ phase of the AgL module system:
    parsing each file with a monotonically growing ``start_id`` seed so that
    **node ids are disjoint across all modules in the graph**.
 4. Terminate traversal when a module id is already loaded — this makes cycles
-   finite and safe (D8).
-5. Reject any import whose canonical file identity equals the entry file (D9).
+   finite and safe.
+5. Reject any import whose canonical file identity equals the entry file.
 6. Compute Strongly-Connected Components (SCCs) via Tarjan's algorithm for
    diagnostics.
 
@@ -107,7 +107,7 @@ def _extract_imports(program: syntax.Program) -> tuple[ImportDecl, ...]:
     """Return the top-level ImportDecl nodes from *program*.
 
     Only nodes at the top level of ``program.body.items`` are included;
-    imports inside nested blocks are not valid (D4) and are ignored here
+    imports inside nested blocks are not valid and are ignored here
     (the scope pass enforces the restriction).
     """
     return tuple(
@@ -273,7 +273,7 @@ def _load_into_graph(
 
         canon_path = resolve_module(mid, roots, span=decl.span)
 
-        # D9: reject any import that resolves to the entry file.
+        # Reject any import that resolves to the entry file.
         if canonical_entry_path is not None and canon_path == canonical_entry_path:
             raise ImportEntryError(mid, canonical_entry_path, span=decl.span)
 
@@ -328,7 +328,7 @@ def load_graph(
     entry_path:
         Canonical file path of the entry program, or ``None`` for an inline
         ``-c`` invocation.  When supplied, its canonical form is used to
-        detect and reject any import that resolves to the same file (D9).
+        detect and reject any import that resolves to the same file.
     roots:
         The assembled :class:`~agm.agl.modules.roots.RootSet` to search.
 
@@ -347,11 +347,11 @@ def load_graph(
     ModulePrefixNotFound
         When a wildcard import prefix matches no module.
     ImportEntryError
-        When an import resolves to the entry file's canonical identity (D9).
+        When an import resolves to the entry file's canonical identity.
     agm.agl.parser.errors.AglSyntaxError
         When any module's source text fails to parse.
     """
-    # Canonical entry path (for rejection checks in D9).
+    # Canonical entry path for rejection checks.
     canonical_entry_path: Path | None = (
         entry_path.resolve() if entry_path is not None else None
     )

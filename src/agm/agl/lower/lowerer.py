@@ -23,7 +23,7 @@ Any AST node outside this set raises ``NotImplementedError`` with a clear
 message.  A missing checker side-table entry is a compiler bug and raises
 ``AssertionError``.
 
-Dispatch uses structural ``match`` with a final ``assert_never`` arm (D4).
+Dispatch uses structural ``match`` with a final ``assert_never`` arm.
 """
 
 from __future__ import annotations
@@ -400,7 +400,7 @@ class _Lowerer:
         self._link.fn_node_to_id[funcdef.node_id] = fn_id
 
     # Binder kinds whose values live in evaluation frames and can therefore be
-    # captured by a closure (D5).  function_binding is resolved through the function
+    # captured by a closure.  function_binding is resolved through the function
     # table (via the base frame, which always contains all module-level bindings);
     # agent_binding/constructor_binding are not frame values in the IR
     # (host prep / constructors are handled elsewhere) so they are not captures here.
@@ -415,7 +415,7 @@ class _Lowerer:
     })
 
     def _pattern_binding_ids(self, pattern: Pattern, out: set[int]) -> None:
-        """Collect node_ids of the variable binders a pattern introduces (D4 closed match)."""
+        """Collect node_ids of the variable binders a pattern introduces."""
         match pattern:
             case VarPattern():
                 if pattern.node_id not in self._checked.resolved.bare_variant_patterns:
@@ -1708,7 +1708,7 @@ class _Lowerer:
         call_node: "Call",
         span: "SourceSpan",
     ) -> IrExpr:
-        """Lower a builtin call node by dispatching on ``BuiltinKind`` (D4).
+        """Lower a builtin call node by dispatching on ``BuiltinKind``.
 
         Host builtins (``PRINT``, ``PARSE_JSON``, ``ASK``, ``ASK_REQUEST``,
         and ``EXEC``) are lowered here.
@@ -2099,7 +2099,7 @@ class _Lowerer:
         """Compile a ``Pattern`` to a closed ``IrMatchPlan``.
 
         Closed ``match``/``assert_never`` dispatch over the ``Pattern`` union
-        (D4) — mypy exhaustiveness makes a missing case a compile-time error.
+        makes a missing case a mypy exhaustiveness error.
         """
         match pattern:
             case WildcardPattern():

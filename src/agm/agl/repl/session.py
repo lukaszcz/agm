@@ -117,13 +117,13 @@ class ReplSession:
         self._default_strict_json = default_strict_json
         self._default_loop_limit = default_loop_limit
         self._shell_exec_timeout = shell_exec_timeout
-        # Capture initial D6 defaults for :reset to restore.
+        # Capture initial engine defaults for :reset to restore.
         self._initial_loop_limit = default_loop_limit
         self._initial_strict_json = default_strict_json
         self._initial_shell_exec_timeout = shell_exec_timeout
         # The [exec] engine base for all six engine keys, provided by the host
         # command (commands/repl.py).  Used in _build_config_base to supply the
-        # runner/log/log-file base values (the three non-D6 static keys).
+        # runner/log/log-file base values (the three static keys).
         self._engine_base: dict[str, Value] = dict(engine_base) if engine_base is not None else {}
         # Trace destination: when set, each evaluated entry opens a fresh
         # ``TraceStore`` (its own ``run_id``) appending JSONL records to this one
@@ -332,7 +332,7 @@ class ReplSession:
                 return self._fail([exc.to_diagnostic()], list(tab_sink))
         tab_warnings: list[Diagnostic] = list(tab_sink)
 
-        # [1b] REPL trailing-binder synthesis: in v2, a block ending in a
+        # [1b] REPL trailing-binder synthesis: in AgL, a block ending in a
         # ``let``/``var`` is a static error (the binder needs a continuation
         # expression).  In the REPL, the continuation is the NEXT entry — so a
         # standalone ``let x = 1`` entry is semantically valid.  Synthesize a
@@ -367,7 +367,7 @@ class ReplSession:
     ) -> "tuple[Program, int]":
         """Append a synthetic ``UnitLit`` when the entry ends with a trailing binder.
 
-        In v2, the type checker rejects a block whose last item is a ``let`` or
+        In AgL, the type checker rejects a block whose last item is a ``let`` or
         ``var`` declaration (the binder needs a continuation expression).  In the
         REPL, the continuation is the NEXT entry — so standalone ``let x = 1``
         entries must be valid.
@@ -438,7 +438,7 @@ class ReplSession:
         2. The session's ``_engine_base`` (exec-config values for the six keys
            provided by the host command at construction; supplies runner/log/log-file
            and the raw-string timeout, e.g. ``"30s"``).
-        3. The session's current persisted D6 settings for ``strict-json`` and
+        3. The session's current persisted live settings for ``strict-json`` and
            ``max-iters``, which may have been advanced by prior config declarations.
            NOTE: ``timeout`` is intentionally excluded from step 3 — its base stays
            as-is from ``engine_base``, preserving the raw written value (e.g. "30s"
@@ -459,7 +459,7 @@ class ReplSession:
         config_base: dict[str, Value] = build_engine_config_base({})
         config_base.update(self._engine_base)
 
-        # Step 3: override the two session-tracked D6 keys so prior
+        # Step 3: override the two session-tracked live keys so prior
         # ``config strict-json = true`` or ``config max-iters = N`` entries chain
         # their effect-at-binding into subsequent entries.
         config_base["strict-json"] = BoolValue(self._default_strict_json)
@@ -485,7 +485,7 @@ class ReplSession:
         loop_limit: int | None,
         shell_exec_timeout: float | None,
     ) -> None:
-        """Persist the three D6 engine settings after a successful entry.
+        """Persist the three live engine settings after a successful entry.
 
         Updates the session's persisted defaults AND the internal
         ``PipelineDriver`` so that subsequent entries start with these values.
@@ -955,7 +955,7 @@ class ReplSession:
     def reset(self) -> None:
         """Clear ALL session state (symbols, types, values, params, source, ids).
 
-        Restores the three D6 engine settings (strict-json/max-iters/timeout)
+        Restores the three live engine settings (strict-json/max-iters/timeout)
         to their values at session construction, undoing any effect-at-binding
         from ``config`` declarations entered during the session.
         """
@@ -977,7 +977,7 @@ class ReplSession:
         self._declared_agents = set()
         self._ambient_constructor_candidates = {}
         self._ambient_type_names = frozenset()
-        # Restore D6 engine settings to the session's initial defaults so that
+        # Restore live engine settings to the session's initial defaults so that
         # promoted ``config`` effects from prior entries do not bleed past :reset.
         self._update_engine_settings(
             strict_json=self._initial_strict_json,

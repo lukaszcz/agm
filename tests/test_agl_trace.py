@@ -436,14 +436,14 @@ class TestExceptionRecord:
 
 
 # ---------------------------------------------------------------------------
-# 4b. Built-in runtime exceptions also carry a linked, non-empty trace_id (F1)
+# 4b. Built-in runtime exceptions also carry a linked, non-empty trace_id
 # ---------------------------------------------------------------------------
 
 
 class TestBuiltinExceptionTraceId:
     """Built-in runtime exceptions (ArithmeticError, MatchError,
     MaxIterationsExceeded, ExecError) must carry a non-empty ``trace_id`` that
-    matches their ``exception`` trace record — mirroring AgentParseError (F1)."""
+    matches their ``exception`` trace record — mirroring AgentParseError."""
 
     def test_arithmetic_error_trace_id_non_empty_with_logging(
         self, tmp_path: Path
@@ -469,8 +469,7 @@ class TestBuiltinExceptionTraceId:
 
     def test_arithmetic_error_trace_id_non_empty_without_logging(self) -> None:
         rt = PipelineDriver()
-        # With logging OFF the trace_id still exists (references nothing; §8.1
-        # only requires the field be present).
+        # With logging OFF the trace_id still exists; only the field must be present.
         result = rt.run("let x = 1 / 0\nx", log_file=None)
         assert not result.ok
         assert result.error is not None
@@ -587,7 +586,7 @@ class TestNoLog:
 
     def test_no_log_with_decimal_mutation_still_works(self, tmp_path: Path) -> None:
         """A no-log run that mutates a decimal binding still succeeds and writes
-        nothing (F3 early-out before any serialization/UUID work)."""
+        nothing ( early-out before any serialization/UUID work)."""
         rt = PipelineDriver()
         result = rt.run(
             "var x: decimal = 0.1\nx := x + 0.2",
@@ -600,7 +599,7 @@ class TestNoLog:
     def test_noop_store_mutation_early_outs_before_serialize(self) -> None:
         """``mutation()`` on a no-op store (path=None) returns without invoking
         the serializer.  Observable via a value the serializer would choke on:
-        the early-out means no serialization (and no file) happens (F3)."""
+        the early-out means no serialization (and no file) happens."""
         from agm.agl.runtime.trace import TraceStore
         from agm.agl.semantics.values import DecimalValue
 
@@ -761,8 +760,8 @@ class TestAppendJsonl:
         """``append_jsonl`` has no numeric convention: a raw ``Decimal`` raises.
 
         The single numeric convention lives in the DSL serializer
-        (``dumps_exact``); callers MUST pre-serialize ``Decimal``-bearing values
-        (F2).  Encoding it here would quote it as a JSON string and diverge.
+        (``dumps_exact``); callers MUST pre-serialize ``Decimal``-bearing values.
+        Encoding it here would quote it as a JSON string and diverge.
         """
         from agm.core.log import append_jsonl
 
@@ -805,7 +804,7 @@ class TestTraceStoreProperties:
         assert isinstance(ts.run_id, str) and ts.run_id
 
     def test_new_event_id_fresh_each_call(self) -> None:
-        """``new_event_id`` returns a fresh non-empty id even when disabled (F1)."""
+        """``new_event_id`` returns a fresh non-empty id even when disabled."""
         from agm.agl.runtime.trace import TraceStore
 
         ts = TraceStore(path=None)
@@ -816,7 +815,7 @@ class TestTraceStoreProperties:
 
     def test_module_level_new_trace_id_public(self) -> None:
         """A public module-level ``new_trace_id`` exists so callers never import
-        a private symbol across modules (F4)."""
+        a private symbol across modules."""
         from agm.agl.runtime.trace import new_trace_id
 
         a = new_trace_id()
@@ -879,12 +878,12 @@ class TestTraceStoreProperties:
 
 
 # ---------------------------------------------------------------------------
-# F4: Unparseable output synthesizes a validation error for retry feedback
+# Unparseable output synthesizes a validation error for retry feedback
 # ---------------------------------------------------------------------------
 
 
 class TestUnparseableFeedback:
-    """F4: when agent output is totally unparseable (no JSON at all), the next
+    """when agent output is totally unparseable (no JSON at all), the next
     retry attempt must carry the failure reason as a ValidationError, and the
     parse_result trace record must have a non-empty error_summary."""
 

@@ -101,7 +101,7 @@ class EnumDecode:
 
 
 #: Closed union of decode-schema nodes.  Dispatch with a structural ``match``
-#: whose final arm is ``assert_never`` (D4).
+#: whose final arm is ``assert_never``.
 DecodeSchema = ScalarDecode | ListDecode | DictDecode | RecordDecode | EnumDecode
 
 

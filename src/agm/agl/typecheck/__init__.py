@@ -1,4 +1,4 @@
-"""AgL type-checking pass (Component 5).
+"""AgL type-checking pass.
 
 Public API
 ----------

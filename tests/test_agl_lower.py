@@ -2349,7 +2349,7 @@ class TestIrMakeExceptionLowering:
 
 
 # ---------------------------------------------------------------------------
-# Golden lowering: loop desugar (§6.3)
+# Golden lowering: loop desugar
 # ---------------------------------------------------------------------------
 
 
@@ -2366,7 +2366,7 @@ def _get_loop_ir(source: str) -> "IrLoop | IrSequence":
 
 
 class TestLoopDesugar:
-    """Golden lowering tests for loop desugaring (§6.3)."""
+    """Golden lowering tests for loop desugaring."""
 
     def test_unbounded_do_until_no_preloop(self) -> None:
         """``do … until E`` lowers to a bare IrLoop with body + until guard.

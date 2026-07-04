@@ -471,7 +471,7 @@ _skip_if_root = pytest.mark.skipif(
 
 
 class TestExecLogFileValidatedUpFront:
-    """F2a: a non-writable --log-file fails up front with a clean Error + exit 1."""
+    """a non-writable --log-file fails up front with a clean Error + exit 1."""
 
     @_skip_if_root
     def test_unwritable_log_dir_exits_1_with_clean_error_before_running(
@@ -535,7 +535,7 @@ class TestExecCommandEdgePaths:
     def test_non_exhaustive_case_warns_but_exits_0(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """F1: a non-exhaustive enum ``case`` is a warning, not an error.
+        """a non-exhaustive enum ``case`` is a warning, not an error.
 
         The program still runs to completion: exit 0 (``run`` returns ``None``),
         with the exhaustiveness warning printed to stderr and program output on
@@ -556,14 +556,14 @@ class TestExecCommandEdgePaths:
         # The matched branch ran (no MatchError, since the value is Pass).
         assert captured.out == "passed\n"
         # The exhaustiveness warning names the missing variant on stderr, with a
-        # ``warning:`` prefix to disambiguate from errors (F8).
+        # ``warning:`` prefix to disambiguate from errors.
         assert "warning:" in captured.err
         assert "Non-exhaustive" in captured.err
         assert "Fail" in captured.err
 
 
 class TestExecExitCodeMapping:
-    """F13a: the exit-2 (uncaught AgL exception) seam.
+    """the exit-2 (uncaught AgL exception) seam.
 
     Exit 2 is unreachable through current real source. These mocked tests pin the
     CLI's RunResult-to-exit mapping for uncaught AgL exceptions.
@@ -975,7 +975,7 @@ class TestExecCommandM1:
         capsys: pytest.CaptureFixture[str],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """F2: ``agm exec --dry-run`` runs the static pipeline only — no output."""
+        """``agm exec --dry-run`` runs the static pipeline only — no output."""
         from agm.cli_support.args import ExecArgs
         from agm.core import dry_run
 
@@ -1000,7 +1000,7 @@ class TestExecCommandM1:
     def test_dry_run_static_error_exits_1(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """F2: a static-error program under --dry-run still exits 1."""
+        """a static-error program under --dry-run still exits 1."""
         from agm.cli_support.args import ExecArgs
         from agm.core import dry_run
 
@@ -1077,7 +1077,7 @@ def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
 
 
 class TestExecConfigWiring:
-    """F12: [exec] config (strict-json/max-iters) flows into the runtime."""
+    """[exec] config (strict-json/max-iters) flows into the runtime."""
 
     def _config_home(self, tmp_path: Path) -> Path:
         home = tmp_path / "home"
@@ -1259,7 +1259,7 @@ def _exec_args_with_fallback_runtime(
 
 
 class TestDryRunInventory:
-    """--dry-run prints the §10.1 static call-site inventory."""
+    """--dry-run prints the ."""
 
     def test_dry_run_inventory_ask_call(
         self,
@@ -1283,7 +1283,7 @@ class TestDryRunInventory:
         assert "ask" in captured.out
         assert "text" in captured.out
         # The entry surfaces both the source line and column as "line N:C:"
-        # (F7: the captured call-site column is not dead).  `ask` starts at
+        # (the captured call-site column is not dead).  `ask` starts at
         # column 9 of `let x = ask("Hello")`.
         assert "line 1:9:" in captured.out
 
@@ -1304,8 +1304,8 @@ class TestDryRunInventory:
         args = _exec_args_with_fallback_runtime(agl_file, monkeypatch)
         assert exec_command.run(args) is None
         captured = capsys.readouterr()
-        # In v2, named-agent calls use ask(..., agent: name); the inventory
-        # shows "ask" as the callee (the agent: arg is a routing hint, not the callee).
+        # Named-agent calls use ask(..., agent: name); the inventory shows "ask"
+        # as the callee (the agent: arg is a routing hint, not the callee).
         assert "ask" in captured.out
 
     def test_dry_run_inventory_abort_policy(
@@ -1537,14 +1537,14 @@ class TestJsonParamsCLI:
 
 
 # ---------------------------------------------------------------------------
-# F7: uncaught-exception output includes source line/col and trace_id
+# uncaught-exception output includes source line/col and trace_id
 # ---------------------------------------------------------------------------
 
 
 class TestUncaughtExceptionOutputFormat:
-    """F7: exec.py's exit-2 stderr must include source location and trace_id.
+    """exec.py's exit-2 stderr must include source location and trace_id.
 
-    Design §12.6: every runtime error should include source location and
+    Design : every runtime error should include source location and
     trace id.  The exec command's error-printing region should include the
     line (and col if available) of the raise site, and the trace_id field
     from the exception when present.
@@ -2548,7 +2548,7 @@ class TestExecSourceConfigPrecedence:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """``config strict-json = true`` in source does NOT pre-fold into the
-        PipelineDriver constructor; it is applied via D6 at runtime instead.
+        PipelineDriver constructor; it is applied when the binding executes.
         The constructor receives the config-file value (False by default)."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text("config strict-json = true\nlet x = 1\nx\n")
@@ -2556,7 +2556,7 @@ class TestExecSourceConfigPrecedence:
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
         assert result is None
-        # D6: constructor gets the config-file default; the source declaration
+        # constructor gets the config-file default; the source declaration
         # applies the live change at the point of the IrConfigBind execution.
         assert captured["default_strict_json"] is False
 
@@ -2576,8 +2576,8 @@ class TestExecSourceConfigPrecedence:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Source ``config strict-json = false`` overrides ``[exec] strict-json = true``
-        at runtime via D6.  The PipelineDriver constructor still receives the
-        config-file value (True); the source declaration takes effect at binding time."""
+        when the binding executes. The PipelineDriver constructor still receives
+        the config-file value (True)."""
         from agm.config.general import ExecConfig
 
         strict_config = ExecConfig(
@@ -2597,7 +2597,7 @@ class TestExecSourceConfigPrecedence:
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
         assert result is None
-        # D6: constructor gets config-file value (True); the source declaration (False)
+        # constructor gets config-file value (True); the source declaration (False)
         # overrides it at runtime via IrConfigBind → _apply_config_effect.
         assert captured["default_strict_json"] is True
 
@@ -2609,7 +2609,7 @@ class TestExecSourceConfigPrecedence:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """``config timeout = "30s"`` in source does NOT pre-fold into the
-        PipelineDriver constructor; it is applied via D6 at runtime.
+        PipelineDriver constructor; it is applied when the binding executes.
         The constructor receives the config-file value (None by default)."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text('config timeout = "30s"\nlet x = 1\nx\n')
@@ -2617,7 +2617,7 @@ class TestExecSourceConfigPrecedence:
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
         assert result is None
-        # D6: constructor gets the config-file default (None); the source
+        # constructor gets the config-file default (None); the source
         # declaration updates shell_exec_timeout at binding time.
         assert captured["shell_exec_timeout"] is None
 
@@ -2636,8 +2636,8 @@ class TestExecSourceConfigPrecedence:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Source ``config timeout = "30s"`` overrides ``[exec] timeout = 999``
-        at runtime via D6.  The PipelineDriver constructor still receives the
-        config-file value (999.0); the source declaration takes effect at binding time."""
+        when the binding executes. The PipelineDriver constructor still receives
+        the config-file value (999.0)."""
         from agm.config.general import ExecConfig
 
         config_with_timeout = ExecConfig(
@@ -2659,7 +2659,7 @@ class TestExecSourceConfigPrecedence:
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
         assert result is None
-        # D6: constructor gets config-file value (999.0); the source declaration (30s)
+        # constructor gets config-file value (999.0); the source declaration (30s)
         # overrides it at runtime via IrConfigBind → _apply_config_effect.
         assert captured["shell_exec_timeout"] == pytest.approx(999.0)
 
@@ -2670,8 +2670,8 @@ class TestExecSourceConfigPrecedence:
         a clean AgL-level ValueError at the config decl point (exit 2).
 
         ``config timeout = "forever"`` is a valid ``Option[text]`` value so it
-        passes scope and typecheck; the D6 handler converts the parse_timeout
-        ValueError to an AglRaise (uncaught AgL exception → exit 2).
+        passes scope and typecheck; the config binding handler converts the
+        parse_timeout ValueError to an AglRaise (uncaught AgL exception → exit 2).
         """
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text('config timeout = "forever"\nlet x = 1\nx\n')
@@ -3329,12 +3329,12 @@ class TestExecCliModulePaths:
 
 
 # ---------------------------------------------------------------------------
-# F1: config_base carries [exec] timeout / log-file floor (not hardcoded none)
+# config_base carries [exec] timeout / log-file floor (not hardcoded none)
 # ---------------------------------------------------------------------------
 
 
 class TestConfigBaseOptionKeys:
-    """F1: bare ``config timeout`` / ``config log-file`` respect [exec] config."""
+    """bare ``config timeout`` / ``config log-file`` respect [exec] config."""
 
     def _spy_config_base(
         self, monkeypatch: pytest.MonkeyPatch
@@ -3442,7 +3442,7 @@ class TestConfigBaseOptionKeys:
 
 
 class TestReservedFileStem:
-    """§15: a file stem matching a reserved AGM section name must exit 1."""
+    """: a file stem matching a reserved AGM section name must exit 1."""
 
     def test_reserved_stem_no_program_decl_exits_1(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -3614,7 +3614,7 @@ class TestRawStringRoundTrip:
 
 
 class TestF1StemVsProgramNameBug:
-    """F1 regression: file stem != program NAME decl must not split engine/param key."""
+    """ regression: file stem != program NAME decl must not split engine/param key."""
 
     def test_program_name_decl_used_for_both_engine_config_and_config_base(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -3694,7 +3694,7 @@ class TestF1StemVsProgramNameBug:
 
 
 class TestProgramLogFilePathResolution:
-    """F2: [<program>].log-file relative path is anchored to the config directory."""
+    """[<program>].log-file relative path is anchored to the config directory."""
 
     def test_program_log_file_relative_resolved_to_config_dir(
         self, tmp_path: Path

@@ -3,7 +3,7 @@
 ``HostCapabilities`` is a frozen, data-only dataclass that describes which
 agents and codecs the host has registered.  It is constructed by
 ``PipelineDriver.run()`` before the static passes execute and is consumed by
-the type checker (Component 5) — the checker never imports agent/codec
+the type checker — the checker never imports agent/codec
 *implementations*, only their capability descriptors.
 
 Design

@@ -12,13 +12,13 @@ Type hierarchy
 - ``IntType`` — the ``int`` primitive (arbitrary-precision integer).
 - ``DecimalType`` — the ``decimal`` primitive (exact fixed-point).
 - ``ListType(elem)`` — ``list[T]``.
-- ``DictType(value)`` — ``dict[text, V]`` (keys are always ``text`` in v1).
+- ``DictType(value)`` — ``dict[text, V]`` (keys are always ``text`` in AgL).
 - ``RecordType(name, fields)`` — a ``record`` nominal type.
 - ``EnumType(name, variants)`` — an ``enum`` nominal type.
 - ``ExceptionType(name, fields)`` — a built-in exception type.
-- ``UnitType`` — the ``unit`` type (AgL v2; single value ``()``).
-- ``AgentType`` — the opaque ``agent`` type (AgL v2).
-- ``FunctionType(params, result)`` — a first-class function type (AgL v2),
+- ``UnitType`` — the ``unit`` type (AgL; single value ``()``).
+- ``AgentType`` — the opaque ``agent`` type (AgL).
+- ``FunctionType(params, result)`` — a first-class function type (AgL),
   positional only; named/optional arguments are erased from the value type.
 - ``TypeVarType(name)`` — a rigid type variable bound by an enclosing generic
   declaration.
@@ -238,13 +238,13 @@ class ExceptionType:
 
 
 # ---------------------------------------------------------------------------
-# AgL v2 value types (plan R6, R7, R9)
+# AgL value types
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
 class UnitType:
-    """The ``unit`` type — has a single value written ``()`` (AgL v2, R9).
+    """The ``unit`` type — has a single value written ``()``.
 
     Side-effecting expressions (``print``, ``:=``, ``if`` with no ``else``,
     loops) yield ``unit``.
@@ -260,10 +260,10 @@ class UnitType:
 
 @dataclass(frozen=True, slots=True)
 class AgentType:
-    """The opaque ``agent`` type (AgL v2, R6, D7).
+    """The opaque ``agent`` type.
 
     Agent values are first-class capability handles.  They are not
-    JSON-shaped, not renderable, and have no equality in v1 (D7).
+    JSON-shaped, not renderable, and have no equality operator.
     """
 
     @property
@@ -276,10 +276,10 @@ class AgentType:
 
 @dataclass(frozen=True, slots=True)
 class FunctionType:
-    """A first-class function value type (AgL v2, R7).
+    """A first-class function value type.
 
     Positional only — named and optional argument information is erased from
-    the value type per plan R7.  Structural equality is derived from the
+    the value type. Structural equality is derived from the
     frozen ``params`` tuple and ``result`` field.
 
     ``params``  — positional parameter types, in declaration order.
@@ -374,7 +374,7 @@ def is_json_shaped(value_type: Type) -> bool:
     Records, enums, and exceptions are **not** JSON-shaped — to embed one in a
     ``json`` value they must first be rendered to text (e.g. via a ``let`` binding).
 
-    AgL v2: ``UnitType``, ``AgentType``, and ``FunctionType`` are also NOT
+    AgL: ``UnitType``, ``AgentType``, and ``FunctionType`` are also NOT
     JSON-shaped; function and agent values render only as opaque handles.
     """
     if isinstance(value_type, (TextType, JsonType, BoolType, IntType, DecimalType)):
@@ -392,10 +392,10 @@ def _has_no_value_equality(t: Type) -> bool:
     """True if ``t`` is, or transitively contains, a type with no value equality.
 
     Function, agent, and unit values are opaque / identity-only and AgL gives
-    them no ``=``/``!=`` operator (design D7 agents, D9 functions; ``unit`` has a
-    single value but no equality operator).  A list, dict, record, enum, or
-    exception that transitively holds such a type is therefore itself not
-    comparable.  (v1 forbids recursive types, so this recursion terminates.)
+    them no ``=``/``!=`` operator; ``unit`` has a single value but no equality
+    operator.  A list, dict, record, enum, or exception that transitively holds
+    such a type is therefore itself not comparable.  Recursive types are
+    rejected, so this recursion terminates.
     """
     match t:
         case FunctionType() | AgentType() | UnitType():
@@ -431,9 +431,9 @@ def comparable_types(left: Type, right: Type) -> bool:
     error (rule 4 as written).  Records/enums/exceptions compare only with their
     own exact type.
 
-    AgL v2: ``AgentType``, ``FunctionType``, and ``UnitType`` operands are
-    NON-comparable — using ``=``/``!=``/``<`` on them is a static error (plan
-    D7: agents have no equality in v1; plan D9: function values are opaque).
+    AgL: ``AgentType``, ``FunctionType``, and ``UnitType`` operands are
+    NON-comparable — using ``=``/``!=``/``<`` on them is a static error. Agents
+    have no equality in AgL; function values are opaque.
     This rule is **transitive**: a ``list``, ``dict``, ``record``, ``enum``, or
     ``exception`` that (at any depth) contains a function, agent, or ``unit``
     value likewise has no equality and cannot be compared with ``=``/``!=``.
@@ -465,13 +465,13 @@ def is_assignable(value_type: Type, target_type: Type) -> bool:
 
     All other assignments require exact structural equality.
 
-    AgL v2: ``UnitType``, ``AgentType``, and ``FunctionType`` assignability is
-    exact-only — no widening and no variance (plan R7, D7, D9).  The
+    AgL: ``UnitType``, ``AgentType``, and ``FunctionType`` assignability is
+    exact-only — no widening and no variance.  The
     ``value_type == target_type`` check below handles them: ``UnitType`` and
     ``AgentType`` are parameter-free singletons so equality is trivial;
     ``FunctionType`` uses structural tuple equality on ``params`` + ``result``.
 
-    AgL v2: ``BottomType`` (the type of ``raise``) is assignable to any target.
+    AgL: ``BottomType`` (the type of ``raise``) is assignable to any target.
     """
     # Bottom type is assignable to any target (raise can appear anywhere).
     if isinstance(value_type, BottomType):
@@ -596,22 +596,20 @@ EXCEPTION_BASE = ExceptionType(
     abstract=True,
 )
 
-# Concrete built-in exceptions — exact §8.1 table.
+# Concrete built-in exceptions — exact .
 # Every exception includes the base fields (message, trace_id) plus the
 # additional fields listed in the design's "Additional fields" section.
 #
-# Changes from prior draft vs §8.1:
-#   - AgentCallError: added agent: text and metadata: json (§8.1 §0 resolution 11)
-#   - UndefinedVariableError: added with name: text (§8.1)
-#   - ImmutableBindingError: added with name: text, operation: text (§8.1)
-#   - ValidationError: REMOVED — §8.1 does not list it as a catchable exception;
+# Changes from prior draft vs :
+#   - AgentCallError: added agent: text and metadata: json
+#   - UndefinedVariableError: added with name: text
+#   - ImmutableBindingError: added with name: text, operation: text
+#   - ValidationError: REMOVED — ;
 #     agm.agl.runtime.request.ValidationError is a Python-level record shape
 #     embedded in AgentParseError.validation_errors, not an AgL type.
 BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
     "Exception": EXCEPTION_BASE,
-    # §8.1 AgentCallError: agent/cause/metadata (§0 resolution 11: cause is
-    # enumerated "spawn_failure"|"nonzero_exit"|"timeout"; metadata carries
-    # exit code, stderr tail, elapsed — all stored in the json field).
+    # : agent/cause/metadata.
     "AgentCallError": ExceptionType(
         name="AgentCallError",
         fields={
@@ -701,8 +699,8 @@ BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
             "operation": TextType(),
         },
     ),
-    # §8.1: statically prevented in v1 (scope/typecheck reject assignment to immutable
-    # bindings and undeclared names), but still listed as catchable runtime
+    # Statically prevented by scope/typecheck (assignment to immutable bindings
+    # and undeclared names), but still listed as catchable runtime
     # exceptions for any runtime paths that bypass the static passes.
     "UndefinedVariableError": ExceptionType(
         name="UndefinedVariableError",
@@ -728,7 +726,7 @@ BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
             "trace_id": TextType(),
         },
     ),
-    # AgL v2: RecursionError raised when the call-depth limit is exceeded (plan D8).
+    # AgL: RecursionError raised when the call-depth limit is exceeded.
     "RecursionError": ExceptionType(
         name="RecursionError",
         fields={
@@ -769,15 +767,15 @@ BUILTIN_EXCEPTION_NAMES: frozenset[str] = frozenset(BUILTIN_EXCEPTIONS)
 
 
 # ---------------------------------------------------------------------------
-# Built-in prelude types (AgL v2; plan D10, D11)
+# Built-in prelude types
 #
 # These are registered into every fresh TypeEnvironment alongside the built-in
 # exceptions and are non-shadowable.  Their runtime semantics are implemented
-# in the eval/runtime stages (S4/S5).
+# in the eval/runtime stages.
 # ---------------------------------------------------------------------------
 
 # ``ExecResult`` — the structured result of an ``exec`` call when the target
-# type is ``ExecResult`` (plan D10).  Mirrors the field shape of ``ExecError``.
+# type is ``ExecResult``.  Mirrors the field shape of ``ExecError``.
 _EXEC_RESULT_TYPE = RecordType(
     name="ExecResult",
     fields={
@@ -789,7 +787,7 @@ _EXEC_RESULT_TYPE = RecordType(
     module_id=PRELUDE_ID,
 )
 
-# ``ParsePolicy`` — controls ``ask``/``exec`` error handling (plan D11).
+# ``ParsePolicy`` — controls ``ask``/``exec`` error handling.
 # ``Abort`` — abort on parse error (no fields).
 # ``Retry(n: int)`` — retry up to ``n`` times.
 _PARSE_POLICY_TYPE = EnumType(

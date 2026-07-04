@@ -1520,7 +1520,7 @@ class TestM4aFunctionEvaluation:
     def test_direct_call_param_bound_by_value(self) -> None:
         """IrDirectCall binds parameters by value regardless of the symbol's mutable flag.
 
-        Params are always bound by value (D5); a mutable SymbolDescriptor for a param
+        Params are always bound by value; a mutable SymbolDescriptor for a param
         is unusual IR but the evaluator must still bind by value and return the arg.
         """
         mutable_param_sym = SymbolId(150)

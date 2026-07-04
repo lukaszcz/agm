@@ -4,12 +4,12 @@
       "name": "accepted_first_round",
       "params": {"spec": "a widget"},
       "agents": {
-        "impl": ["v1"],
+        "impl": ["draft"],
         "reviewer": ["{\"$case\": \"Pass\"}"],
         "planner": []
       },
       "expect": {
-        "stdout": "accepted\nv1\n",
+        "stdout": "accepted\ndraft\n",
         "calls": {"impl": 1, "reviewer": 1, "planner": 0}
       }
     },
@@ -17,7 +17,7 @@
       "name": "two_retry_rounds_then_accepted",
       "params": {"spec": "a widget"},
       "agents": {
-        "impl": ["v1", "v2", "v3"],
+        "impl": ["draft", "revised", "final"],
         "reviewer": [
           "{\"$case\": \"Fail\", \"issues\": [\"i1\"]}",
           "{\"$case\": \"Fail\", \"issues\": [\"i2\"]}",
@@ -26,11 +26,11 @@
         "planner": ["{\"$case\": \"Retry\"}", "{\"$case\": \"Retry\"}"]
       },
       "expect": {
-        "stdout": "accepted\nv3\n",
+        "stdout": "accepted\nfinal\n",
         "calls": {"impl": 3, "reviewer": 3, "planner": 2},
         "prompts": [
           {"agent": "planner", "call": 1, "contains": ["i2"]},
-          {"agent": "impl", "call": 2, "contains": ["v2"]}
+          {"agent": "impl", "call": 2, "contains": ["revised"]}
         ]
       }
     },
@@ -38,12 +38,12 @@
       "name": "hopeless_giveup",
       "params": {"spec": "a widget"},
       "agents": {
-        "impl": ["v1"],
+        "impl": ["draft"],
         "reviewer": ["{\"$case\": \"Fail\", \"issues\": [\"broken\"]}"],
         "planner": ["{\"$case\": \"GiveUp\", \"why\": \"hopeless\"}"]
       },
       "expect": {
-        "stdout": "abandoned\nv1\n",
+        "stdout": "abandoned\ndraft\n",
         "calls": {"impl": 1, "reviewer": 1, "planner": 1}
       }
     },
@@ -51,12 +51,12 @@
       "name": "deferred_giveup",
       "params": {"spec": "a widget"},
       "agents": {
-        "impl": ["v1"],
+        "impl": ["draft"],
         "reviewer": ["{\"$case\": \"Fail\", \"issues\": [\"broken\"]}"],
         "planner": ["{\"$case\": \"GiveUp\", \"why\": \"needs design input\"}"]
       },
       "expect": {
-        "stdout": "deferred: needs design input\nv1\n",
+        "stdout": "deferred: needs design input\ndraft\n",
         "calls": {"impl": 1, "reviewer": 1, "planner": 1}
       }
     },
@@ -64,7 +64,7 @@
       "name": "endless_retries_exhaust_loop",
       "params": {"spec": "a widget"},
       "agents": {
-        "impl": {"responses": ["v1", "fix"], "repeat_last": true},
+        "impl": {"responses": ["draft", "fix"], "repeat_last": true},
         "reviewer": {
           "responses": ["{\"$case\": \"Fail\", \"issues\": [\"i\"]}"],
           "repeat_last": true

@@ -3,13 +3,13 @@
     {
       "name": "two_step_refinement",
       "params": {"start": "a sketch"},
-      "agents": {"impl": ["v1", "v2"], "ask": ["noted"]},
+      "agents": {"impl": ["draft", "revised"], "ask": ["noted"]},
       "expect": {
-        "stdout": "v1\nv2\n6\ndone\n",
+        "stdout": "draft\nrevised\n6\ndone\n",
         "calls": {"impl": 2, "ask": 1},
         "prompts": [
           {"agent": "impl", "call": 0, "contains": ["Start from", "a sketch"]},
-          {"agent": "impl", "call": 1, "contains": ["Refine:", "v1"]},
+          {"agent": "impl", "call": 1, "contains": ["Refine:", "draft"]},
           {"agent": "ask", "call": 0, "contains": ["hello", "1.5", "true"]}
         ]
       }

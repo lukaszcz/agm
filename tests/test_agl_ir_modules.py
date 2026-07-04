@@ -106,15 +106,15 @@ import mod_a
 import mod_b
 let p1 = mod_a::Pair(a = 1, b = 2)
 let p2 = mod_b::Pair(x = "hello", y = "world")
-let v1 = mod_a::get_first(p1)
-let v2 = mod_b::get_first(p2)
+let first_value = mod_a::get_first(p1)
+let second_value = mod_b::get_first(p2)
 ()
 """
     r = evaluate_ir_graph(
         entry_source, {"mod_a": mod_a_source, "mod_b": mod_b_source}, tmp_path
     )
-    assert r["v1"] == IntValue(1)
-    assert r["v2"] == TextValue("hello")
+    assert r["first_value"] == IntValue(1)
+    assert r["second_value"] == TextValue("hello")
 
 
 def test_runtime_failure_inside_library_function(tmp_path: Path) -> None:

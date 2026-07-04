@@ -554,7 +554,7 @@ class _Scanner:
             if self._peek() in (" ", "\t"):
                 self._advance()
                 continue
-            # Newlines are not permitted inside an interpolation in v1.
+            # Newlines are not permitted inside an interpolation in AgL.
             if self._peek() == "\n":
                 span = SourceSpan(
                     self._line, self._col, self._line, self._col, self._pos, self._pos
@@ -594,7 +594,7 @@ class _Scanner:
     def _scan_triple_template(self, quote: str = '"') -> Iterator[Token]:
         """Scan the body of a triple-quoted template, yielding tokens.
 
-        Triple-quoted dedent rule (§10.1):
+        Triple-quoted dedent rule:
         1. Collect the raw content until the closing triple-quote, tracking
            interpolation holes as opaque segments.
         2. Apply the dedent rule to the combined literal skeleton (replacing

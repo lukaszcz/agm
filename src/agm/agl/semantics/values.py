@@ -388,7 +388,7 @@ Value: TypeAlias = (
 )
 
 # ---------------------------------------------------------------------------
-# Frame and cell model (D5)
+# Frame and cell model
 # ---------------------------------------------------------------------------
 
 
@@ -401,7 +401,7 @@ class Cell:
     update the contained value in place.
 
     Closures capture a ``var`` by capturing the ``Cell`` reference; the cell
-    is allocated fresh each time ``IrBind`` executes for a ``var`` symbol (D5).
+    is allocated fresh each time ``IrBind`` executes for a ``var`` symbol.
     """
 
     value: Value

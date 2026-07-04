@@ -1,4 +1,4 @@
-"""Full AgL v2 AST node set.
+"""Full AgL AST node set.
 
 Every node is:
   - ``@dataclass(frozen=True, slots=True)`` — immutable and memory-efficient.
@@ -15,7 +15,7 @@ Union aliases
 are closed typed unions over their respective node families.  They are defined at
 the bottom of this module after all constituent classes.
 
-v2 design notes
+Design notes
 ---------------
 - The statement category is removed: every former statement is an expression.
 - ``Block`` is the sequencing expression; its value is the last item.
@@ -362,7 +362,7 @@ class Lambda:
     """``fn(params) (-> R)? => body`` — an anonymous function expression.
 
     ``return_type`` is ``None`` when omitted (inferred from the body).
-    Lambda parameter types are always required in v1.
+    Lambda parameter types are always required in AgL.
     """
 
     params: tuple[Param, ...]
@@ -691,7 +691,7 @@ class DictLit:
 
 # Closed union of all expression nodes.
 # NOTE: Raise is an Expr (bottom type — assignable to any expected type).
-# Block, If, Case, Loop, Try are expressions (value-producing in v2).
+# Block, If, Case, Loop, Try are expressions (value-producing in AgL).
 # Let/Var/Set are NOT Expr — they are binders (Item only, not directly usable
 # in expression position; they scope over the rest of a Block).
 Expr = (
@@ -966,7 +966,7 @@ class AgentDecl:
 
     ``runner`` is the optional static runner-command hint (a literal string
     with NO interpolation); ``None`` for a bare declaration.
-    In v2, agent names are ordinary value bindings of type ``agent``.
+    In AgL, agent names are ordinary value bindings of type ``agent``.
     """
 
     name: str

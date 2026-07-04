@@ -4,27 +4,27 @@
       "name": "pass_first_try",
       "params": {"spec": "a thing"},
       "agents": {
-        "impl": ["v1"],
+        "impl": ["draft"],
         "reviewer": ["{\"$case\": \"Pass\"}"]
       },
-      "expect": {"stdout": "v1\n", "calls": {"impl": 1, "reviewer": 1}}
+      "expect": {"stdout": "draft\n", "calls": {"impl": 1, "reviewer": 1}}
     },
     {
       "name": "one_fix_round",
       "params": {"spec": "a thing"},
       "agents": {
-        "impl": ["v1", "v2"],
+        "impl": ["draft", "revised"],
         "reviewer": [
           "{\"$case\": \"Fail\", \"issues\": [\"too slow\"]}",
           "{\"$case\": \"Pass\"}"
         ]
       },
       "expect": {
-        "stdout": "v2\n",
+        "stdout": "revised\n",
         "calls": {"impl": 2, "reviewer": 2},
         "prompts": [
-          {"agent": "impl", "call": 1, "contains": ["too slow", "v1"]},
-          {"agent": "reviewer", "call": 1, "contains": ["v2"]}
+          {"agent": "impl", "call": 1, "contains": ["too slow", "draft"]},
+          {"agent": "reviewer", "call": 1, "contains": ["revised"]}
         ]
       }
     },
@@ -32,16 +32,16 @@
       "name": "retry_inside_one_liner",
       "params": {"spec": "a thing"},
       "agents": {
-        "impl": ["v1"],
+        "impl": ["draft"],
         "reviewer": ["mumble", "{\"$case\": \"Pass\"}"]
       },
-      "expect": {"stdout": "v1\n", "calls": {"impl": 1, "reviewer": 2}}
+      "expect": {"stdout": "draft\n", "calls": {"impl": 1, "reviewer": 2}}
     },
     {
       "name": "loop_exhaustion",
       "params": {"spec": "a thing"},
       "agents": {
-        "impl": {"responses": ["v1", "fix"], "repeat_last": true},
+        "impl": {"responses": ["draft", "fix"], "repeat_last": true},
         "reviewer": {
           "responses": ["{\"$case\": \"Fail\", \"issues\": [\"x\"]}"],
           "repeat_last": true

@@ -4,7 +4,7 @@ These are the objects passed to host-registered agent callables.
 ``AgentRequest.prompt`` is the already-rendered prompt template (the rendered
 text that the agent should receive as its user message).
 
-Design §7.5 / §7.6 shape: ``AgentRequest`` carries the rendered prompt,
+Design  / : ``AgentRequest`` carries the rendered prompt,
 attempt counter, retry context, and an ``OutputContract`` so agents can
 inspect format instructions and the JSON schema for native structured output.
 """

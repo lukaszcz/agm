@@ -1,6 +1,6 @@
 """Structural IR validator for the AgL typeless execution IR.
 
-Two tiers (D6 — validate_ir runs ONLY when explicitly called):
+Two tiers (validate_ir runs ONLY when explicitly called):
 
 - **cheap** — node-local structural invariants that require no program tables:
     * Location fields: ``start_offset >= 0``, ``start_line >= 1``,
@@ -24,7 +24,7 @@ Two tiers (D6 — validate_ir runs ONLY when explicitly called):
        ``0 <= start_offset <= end_offset <= len(normalized_text)``.
 
 The expression dispatcher uses a closed structural ``match`` with a final
-``assert_never(node)`` arm (D4) so that adding an ``IrExpr`` variant in a
+``assert_never(node)`` arm so that adding an ``IrExpr`` variant in a
 future change without a validator arm produces a mypy exhaustiveness error.
 
 ``validate_ir`` raises ``InvalidIrError`` on the *first* violation found.
@@ -304,14 +304,14 @@ def _validate_catch_handler(handler: IrCatchHandler, ctx: _Context) -> None:
 
 
 # ---------------------------------------------------------------------------
-# IrMatchPlan validator (closed union, D4)
+# IrMatchPlan validator (closed union)
 # ---------------------------------------------------------------------------
 
 
 def _validate_match_plan(plan: IrMatchPlan, ctx: _Context) -> None:
     """Validate a closed ``IrMatchPlan`` node recursively.
 
-    The final ``assert_never`` arm (D4) ensures mypy reports a type error when
+    The final ``assert_never`` arm ensures mypy reports a type error when
     a new ``IrMatchPlan`` variant is added without a corresponding arm here.
     """
     match plan:
@@ -341,7 +341,7 @@ def _validate_match_plan(plan: IrMatchPlan, ctx: _Context) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Closed-union expression dispatcher (D4)
+# Closed-union expression dispatcher
 # ---------------------------------------------------------------------------
 
 

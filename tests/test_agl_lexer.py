@@ -1,4 +1,4 @@
-"""Tests for the AgL custom lexer (Component 1).
+"""Tests for the AgL custom lexer.
 
 Tests assert on ``(token_type, value)`` streams from real AgL snippets via the
 public ``tokenize`` helper.  No scanner/layout internals are tested.
@@ -937,7 +937,7 @@ class TestPipeContinuation:
 
     def test_catch_suppresses_newline(self) -> None:
         # ``catch`` at the start of a line suppresses the preceding _NEWLINE
-        # (§3.4 continuation rule) so the ``try`` body and catch
+        # so the ``try`` body and catch
         # clause are lexically joined without an interior _NEWLINE.
         source = "try\n  pass\ncatch _ =>\n  pass"
         result = tok(source)
@@ -968,7 +968,7 @@ class TestPipeContinuation:
 
     def test_until_suppresses_newline(self) -> None:
         # ``until`` at the start of a line suppresses the preceding _NEWLINE
-        # (§3.4 continuation rule) so the do body and condition
+        # so the do body and condition
         # are lexically joined without an interior _NEWLINE.
         source = "do[2]\n  pass\nuntil true"
         result = tok(source)
@@ -1308,7 +1308,7 @@ case review of
         assert "_DEDENT" in types
 
     def test_print_statement(self) -> None:
-        # In v2, `print` is an ordinary function name (VAR_NAME), not a reserved keyword.
+        # In AgL, `print` is an ordinary function name (VAR_NAME), not a reserved keyword.
         result = tok('print "hello"')
         types = [t for t, _ in result]
         assert types[0] == "NAME"
@@ -1337,7 +1337,7 @@ case review of
 
 
 # ---------------------------------------------------------------------------
-# F3 — CRLF / universal-newline normalization
+# CRLF / universal-newline normalization
 # ---------------------------------------------------------------------------
 
 
@@ -1365,7 +1365,7 @@ class TestNewlineNormalization:
         assert tok(cr) == tok(lf)
 
     def test_shared_normalize_newlines_helper(self) -> None:
-        """F10: the shared universal-newline helper converts CRLF and lone CR to
+        """the shared universal-newline helper converts CRLF and lone CR to
         LF (the single source of truth shared by the scanner and the evaluator)."""
         from agm.util.text import normalize_newlines
 
@@ -1376,7 +1376,7 @@ class TestNewlineNormalization:
 
 
 # ---------------------------------------------------------------------------
-# F4 — leading _NEWLINE suppression
+# leading _NEWLINE suppression
 # ---------------------------------------------------------------------------
 
 
@@ -1410,7 +1410,7 @@ class TestLeadingNewlineSuppression:
 
 
 # ---------------------------------------------------------------------------
-# F5 — targeted newline-inside-interpolation diagnostic
+# targeted newline-inside-interpolation diagnostic
 # ---------------------------------------------------------------------------
 
 
@@ -1432,7 +1432,7 @@ class TestNewlineInsideInterpolation:
 
 
 # ---------------------------------------------------------------------------
-# F2 / F6 / F8 — token position threading
+# token position threading
 # ---------------------------------------------------------------------------
 
 
@@ -1504,7 +1504,7 @@ class TestTripleTemplatePositions:
 
 
 # ---------------------------------------------------------------------------
-# Bug regression: triple-quoted dedent placeholder collision (Task 1)
+# Bug regression: triple-quoted dedent placeholder collision
 # ---------------------------------------------------------------------------
 
 
@@ -1554,7 +1554,7 @@ class TestTripleDedentPlaceholderCollision:
 
 
 # ---------------------------------------------------------------------------
-# Identifiers: Unicode and symbol characters (Task 2)
+# Identifiers: Unicode and symbol characters
 # ---------------------------------------------------------------------------
 
 
@@ -1678,7 +1678,7 @@ class TestIdentifierUnicodeAndSymbols:
 
 # ---------------------------------------------------------------------------
 # Bug regression: triple-quoted dedent over-strips when interpolation hole
-# is on the minimum-indented line (Task 3)
+# is on the minimum-indented line
 # ---------------------------------------------------------------------------
 
 
@@ -1690,7 +1690,7 @@ class TestTripleDedentHoleAwareMinIndent:
     blank line and excluded.  This caused the wrong (larger) indent to be
     stripped, over-removing indentation from other content lines.
 
-    Design rule (§10.1): a line with a hole IS non-blank; the indent of that
+    Design rule: a line with a hole IS non-blank; the indent of that
     line counts toward the minimum.  Hole values are never dedented.
     """
 
@@ -1858,12 +1858,12 @@ class TestTabWarnings:
 
 
 # ---------------------------------------------------------------------------
-# AgL v2 token changes (S1b)
+# AgL token changes
 # ---------------------------------------------------------------------------
 
 
 class TestV2Keywords:
-    """Tests for new and changed keyword reservation in AgL v2."""
+    """Tests for new and changed keyword reservation in AgL."""
 
     # --- def is a new reserved keyword ---
 
@@ -1913,7 +1913,7 @@ class TestV2Keywords:
         assert len(result) == 1
         assert result[0].type == "FN"
 
-    # --- pass is no longer a reserved keyword (v2: role taken by ()) ---
+    # --- pass is no longer a reserved keyword ( role taken by ()) ---
 
     def test_pass_lexes_as_var_name(self) -> None:
         result = tok("pass")
@@ -1924,7 +1924,7 @@ class TestV2Keywords:
         assert "pass" not in types
         assert "NAME" in types
 
-    # --- print is no longer a reserved keyword (v2: ordinary function name) ---
+    # --- print is no longer a reserved keyword ( ordinary function name) ---
 
     def test_print_lexes_as_var_name(self) -> None:
         result = tok("print")
@@ -1973,7 +1973,7 @@ class TestV2Keywords:
             result = tok(word)
             assert result == [("NAME", word)], f"{word!r} should be NAME"
 
-    # --- mixed v2 keywords in a snippet ---
+    # --- mixed current keywords in a snippet ---
 
     def test_def_and_fn_reserved_together(self) -> None:
         result = tok("def fn")

@@ -1,4 +1,4 @@
-"""Tests for AgL config declarations as runtime-resolved readable bindings (Task 3a).
+"""Tests for AgL config declarations as runtime-resolved readable bindings.
 
 ``config KEY = expr`` now creates an executable, runtime-resolved readable
 binding (like ``param``).  The resolution precedence per binding is:

@@ -2362,6 +2362,199 @@ class TestBareTypeEntry:
         assert isinstance(r.value_type, ListType)
         assert isinstance(r.value_type.elem, IntType)
 
+    def test_bare_generic_enum_name_echoes_definition(self) -> None:
+        from agm.agl.repl.render import render_entry_result
+
+        s = ReplSession()
+        s.eval_entry("enum Option[T]\n  | none\n  | some(value: T)")
+        r = s.eval_entry("Option")
+        assert r.ok
+        assert r.kind == "type"
+        assert r.value is None
+        assert (
+            render_entry_result(r, echo=True)
+            == "<type:\nenum Option[T]\n  | none\n  | some(value: T)\n>"
+        )
+
+    def test_bare_generic_record_name_echoes_definition(self) -> None:
+        from agm.agl.repl.render import render_entry_result
+
+        s = ReplSession()
+        s.eval_entry("record Box[T]\n  value: T")
+        r = s.eval_entry("Box")
+        assert r.ok
+        assert r.kind == "type"
+        assert r.value is None
+        assert render_entry_result(r, echo=True) == "<type:\nrecord Box[T]\n  value: T\n>"
+
+    def test_bare_generic_type_entry_in_check_only_mode(self) -> None:
+        from agm.agl.repl.render import render_entry_result
+
+        s = ReplSession()
+        s.eval_entry("enum Option[T]\n  | none\n  | some(value: T)")
+        r = s.eval_entry("Option", check_only=True)
+        assert r.ok
+        assert r.kind == "type"
+        assert (
+            render_entry_result(r, echo=True, check_only=True)
+            == "<type:\nenum Option[T]\n  | none\n  | some(value: T)\n>"
+        )
+
+    def test_opened_stdlib_bare_generic_type_echoes_definition(self) -> None:
+        from agm.agl.repl.render import render_entry_result
+
+        s = ReplSession(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
+        r = s.eval_entry("Option")
+        assert r.ok
+        assert r.kind == "type"
+        assert r.value is None
+        assert (
+            render_entry_result(r, echo=True)
+            == "<type:\nenum Option[T]\n  | None\n  | Some(value: T)\n>"
+        )
+
+    def test_opened_stdlib_qualified_bare_generic_type_echoes_definition(self) -> None:
+        from agm.agl.repl.render import render_entry_result
+
+        s = ReplSession(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
+        r = s.eval_entry("std.core::Option")
+        assert r.ok
+        assert r.kind == "type"
+        assert (
+            render_entry_result(r, echo=True)
+            == "<type:\nenum std.core::Option[T]\n  | None\n  | Some(value: T)\n>"
+        )
+
+    def test_builtin_type_entry_works_when_graph_env_is_unavailable(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.repl.render import render_entry_result
+
+        s = ReplSession(stdlib_root=tmp_path / "missing-stdlib")
+        r = s.eval_entry("int")
+        assert r.ok
+        assert r.kind == "type"
+        assert render_entry_result(r, echo=True) == "<type: int>"
+
+    def test_ambiguous_imported_generic_entry_keeps_original_failure(self) -> None:
+        from agm.agl.modules.ids import ModuleId
+        from agm.agl.parser import parse_type_expr
+        from agm.agl.scope.imports import ImportEnv
+        from agm.agl.semantics.types import RecordType, TypeVarType
+        from agm.agl.typecheck.env import GenericTypeDef, TypeEnvironment
+
+        left = ModuleId(("left",))
+        right = ModuleId(("right",))
+        left_def = GenericTypeDef(
+            kind="record",
+            type_params=("T",),
+            template=RecordType(
+                name="Box",
+                fields={"value": TypeVarType("T")},
+                module_id=left,
+            ),
+        )
+        right_def = GenericTypeDef(
+            kind="record",
+            type_params=("T",),
+            template=RecordType(
+                name="Box",
+                fields={"value": TypeVarType("T")},
+                module_id=right,
+            ),
+        )
+        env = TypeEnvironment(
+            graph_generic_table={(left, "Box"): left_def, (right, "Box"): right_def},
+            import_env=ImportEnv(
+                unqualified={"Box": frozenset({(left, "Box"), (right, "Box")})},
+                qualified={},
+            ),
+        )
+        s = ReplSession()
+        assert s._try_generic_type_entry(parse_type_expr("Box"), env) is None
+
+    def test_qualified_unapplied_generic_resolution_edges(self) -> None:
+        from agm.agl.modules.ids import ENTRY_ID, ModuleId
+        from agm.agl.parser import parse_type_expr
+        from agm.agl.scope.imports import ImportEnv
+        from agm.agl.semantics.types import RecordType, TypeVarType
+        from agm.agl.syntax.types import NameT
+        from agm.agl.typecheck.env import GenericTypeDef, TypeEnvironment
+
+        local_def = GenericTypeDef(
+            kind="record",
+            type_params=("T",),
+            template=RecordType(name="Box", fields={"value": TypeVarType("T")}),
+        )
+        local_expr = parse_type_expr("::Box")
+        assert isinstance(local_expr, NameT)
+        assert local_expr.module_qualifier is not None
+
+        local_env = TypeEnvironment()
+        local_env.register_generic_type("Box", local_def)
+        assert local_env.resolve_qualified_unapplied_generic_type(
+            local_expr.module_qualifier,
+            "Box",
+        ) == ("Box", local_def)
+
+        empty_env = TypeEnvironment()
+        assert (
+            empty_env.resolve_qualified_unapplied_generic_type(
+                local_expr.module_qualifier,
+                "Box",
+            )
+            is None
+        )
+
+        graph_env = TypeEnvironment(graph_generic_table={(ENTRY_ID, "Box"): local_def})
+        assert graph_env.resolve_qualified_unapplied_generic_type(
+            local_expr.module_qualifier,
+            "Box",
+        ) == ("Box", local_def)
+
+        lib = ModuleId(("lib",))
+        qualified_expr = parse_type_expr("missing::Box")
+        assert isinstance(qualified_expr, NameT)
+        assert qualified_expr.module_qualifier is not None
+        no_handle_env = TypeEnvironment(
+            graph_generic_table={},
+            import_env=ImportEnv(unqualified={}, qualified={}),
+        )
+        assert (
+            no_handle_env.resolve_qualified_unapplied_generic_type(
+                qualified_expr.module_qualifier,
+                "Box",
+            )
+            is None
+        )
+
+        no_name_env = TypeEnvironment(
+            graph_generic_table={},
+            import_env=ImportEnv(unqualified={}, qualified={("missing",): {}}),
+        )
+        assert (
+            no_name_env.resolve_qualified_unapplied_generic_type(
+                qualified_expr.module_qualifier,
+                "Box",
+            )
+            is None
+        )
+
+        no_generic_env = TypeEnvironment(
+            graph_generic_table={},
+            import_env=ImportEnv(
+                unqualified={},
+                qualified={("missing",): {"Box": (lib, "Box")}},
+            ),
+        )
+        assert (
+            no_generic_env.resolve_qualified_unapplied_generic_type(
+                qualified_expr.module_qualifier,
+                "Box",
+            )
+            is None
+        )
+
     def test_record_name_still_evaluates_as_constructor(self) -> None:
         # A record name doubles as a constructor value, so it must keep
         # evaluating normally (the type fallback only triggers on failure).

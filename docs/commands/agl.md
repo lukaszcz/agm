@@ -230,6 +230,8 @@ would use.
 
 Like `agm exec`, the REPL automatically opens `std.core`, so standard-library names
 such as `Option`, `Some`, and `None` are available unqualified from a fresh prompt.
+Entering a bare type name displays the type; an unapplied generic type name such as
+`Option` displays its generic definition instead of being evaluated as a value.
 
 ### Entry editing
 

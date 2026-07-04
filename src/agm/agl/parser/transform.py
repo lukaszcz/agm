@@ -655,7 +655,7 @@ class AstBuilder(Transformer):
 
     def func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
         """func_def: "def" name type_params? LPAR param_list? RPAR
-        (THIN_ARROW type_expr)? EQ func_body
+        (THIN_ARROW type_expr)? (EQ func_body | suite_expr)
         """
         name_tok = _find_name_token(args)
         type_params_val: tuple[str, ...] = ()

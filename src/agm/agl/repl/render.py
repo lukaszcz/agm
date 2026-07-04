@@ -105,9 +105,15 @@ def _render_check_only(result: "EntryResult") -> str | None:
     type to show and echo nothing.  A REPL bare-type entry (``kind == "type"``)
     echoes ``<type: T>`` just as in the live echo.
     """
-    from agm.agl.repl.type_display import format_type_echo_for_repl, format_type_for_repl
+    from agm.agl.repl.type_display import (
+        format_type_echo_for_repl,
+        format_type_for_repl,
+        format_type_text_echo_for_repl,
+    )
 
     if result.kind == "type":
+        if result.type_display is not None:
+            return format_type_text_echo_for_repl(result.type_display)
         assert result.value_type is not None
         return format_type_echo_for_repl(result.value_type)
     if result.kind == "expression":
@@ -133,8 +139,13 @@ def _render_echo(result: "EntryResult") -> str | None:
         # A bare type expression entered at the prompt is not a value; echo it
         # in the same ``<…>`` surface form used for other non-value echoes
         # (functions, agents, constructors) and tag it as a type.
-        from agm.agl.repl.type_display import format_type_echo_for_repl
+        from agm.agl.repl.type_display import (
+            format_type_echo_for_repl,
+            format_type_text_echo_for_repl,
+        )
 
+        if result.type_display is not None:
+            return format_type_text_echo_for_repl(result.type_display)
         assert result.value_type is not None
         return format_type_echo_for_repl(result.value_type)
     if result.kind == "expression":

@@ -170,13 +170,15 @@ concrete type arguments (`Box[int]`, `Outcome[int, text]`). The built-in
 ## Function declarations
 
 ```ebnf
-func_def     ::= "def" name type_params? "(" param_list? ")" ("->" type_expr)? "=" expr
+func_def     ::= "def" name type_params? "(" param_list? ")" ("->" type_expr)? func_body
+func_body    ::= "=" expr | "="? suite
 param_list   ::= param_entry ("," param_entry)* ","?
 param_entry  ::= param | param_marker
 param        ::= name ":" type_expr ("=" expr)?
 ```
 
-The `def` body is a single expression (which may be a `block`). The return type
+The `def` body is either an inline expression after `=` or an indented suite;
+for suite bodies, the `=` before the newline is optional. The return type
 annotation is optional for ordinary `def` declarations and required for
 `builtin def`. Zone markers (`/`, `*`, `@pos`, `@std`, `@named`) may appear as
 `param_entry` items between parameters; see [Functions](functions.md) for full

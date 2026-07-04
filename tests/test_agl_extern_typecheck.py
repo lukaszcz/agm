@@ -38,7 +38,7 @@ from agm.agl.typecheck import (
     check,
     check_graph,
 )
-from tests.agl.ir_harness import make_graph_from_files
+from tests.agl.ir_harness import make_graph_from_files, write_companion_file
 
 _PATH = Path("/virtual/extern_typecheck.agl")
 
@@ -355,6 +355,7 @@ class TestExternCallSiteRecording:
         assert all(s.callee != "f" for s in cp.call_sites)
 
     def test_graph_mode_imported_extern_call_recorded(self, tmp_path: Path) -> None:
+        write_companion_file(tmp_path / "root", "lib.mod", "def f(x):\n    return x\n")
         checked = check_extern_graph(
             tmp_path,
             {
@@ -369,6 +370,7 @@ class TestExternCallSiteRecording:
         assert sites[0].target_type == IntType()
 
     def test_graph_mode_own_module_extern_call_recorded(self, tmp_path: Path) -> None:
+        write_companion_file(tmp_path / "root", "lib.mod", "def f(x):\n    return x\n")
         checked = check_extern_graph(
             tmp_path,
             {

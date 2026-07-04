@@ -87,6 +87,31 @@ class ModulePrefixNotFound(AglError):
         self.prefix = prefix
 
 
+class MissingExternCompanion(AglError):
+    """A module declaring at least one ``extern def`` has no companion ``.py`` file.
+
+    ``module_id`` is the module missing its companion.  ``companion_path`` is
+    the derived (and missing) companion file path — the module's own file
+    with its suffix replaced by ``.py``.  ``span`` is the span of the first
+    ``extern def`` declaration in the module, when available.
+    """
+
+    def __init__(
+        self,
+        module_id: ModuleId,
+        companion_path: Path,
+        *,
+        span: SourceSpan | None = None,
+    ) -> None:
+        msg = (
+            f"module '{module_id.dotted()}' declares an extern function but its "
+            f"companion file '{companion_path}' does not exist"
+        )
+        super().__init__(msg, span=span)
+        self.module_id = module_id
+        self.companion_path = companion_path
+
+
 class ImportEntryError(AglError):
     """An import declaration resolves to the entry file's canonical identity.
 

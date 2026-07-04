@@ -647,6 +647,20 @@ BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
             "timed_out": BoolType(),
         },
     ),
+    # Raised for every runtime failure crossing an extern (Python FFI) call:
+    # the Python callable raising, a return-contract violation (including a
+    # seal violation), or an argument-conversion failure.  ``python_type`` is
+    # the raising Python exception's class name, or empty for a contract
+    # violation (no Python exception was involved).
+    "ExternError": ExceptionType(
+        name="ExternError",
+        fields={
+            "message": TextType(),
+            "trace_id": TextType(),
+            "function": TextType(),
+            "python_type": TextType(),
+        },
+    ),
     "MaxIterationsExceeded": ExceptionType(
         name="MaxIterationsExceeded",
         fields={

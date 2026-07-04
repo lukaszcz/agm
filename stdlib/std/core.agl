@@ -56,6 +56,11 @@ exception ExecError extends Exception
   timed_out: bool
 
 builtin
+exception ExternError extends Exception
+  function: text
+  python_type: text
+
+builtin
 exception MaxIterationsExceeded extends Exception
   limit: int
   condition: text

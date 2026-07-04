@@ -26,7 +26,7 @@ from agm.agl.parser import AglSyntaxError, parse_program, parse_program_seeded
 from agm.agl.scope import AglScopeError, resolve
 from agm.agl.scope.graph import resolve_graph
 from agm.agl.syntax.nodes import FuncDef
-from tests.agl.ir_harness import make_graph_from_files
+from tests.agl.ir_harness import make_graph_from_files, write_companion_file
 
 _STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 
@@ -174,6 +174,7 @@ class TestScope:
         assert "root" in str(err).lower()
 
     def test_extern_exported_from_module_graph(self, tmp_path: Path) -> None:
+        write_companion_file(tmp_path / "root", "lib.mod", "def f(x):\n    return x\n")
         graph = make_graph_from_files(
             tmp_path,
             {
@@ -185,6 +186,8 @@ class TestScope:
         assert any(name == "f" for (_mid, name) in resolved.all_public_funcs)
 
     def test_private_extern_not_exported(self, tmp_path: Path) -> None:
+        # ``lib.mod`` is never imported by the entry, so it is never reached by
+        # the loader's BFS and needs no companion file on disk.
         graph = make_graph_from_files(
             tmp_path,
             {
@@ -212,10 +215,14 @@ class TestPlacement:
         )
         assert "f" in resolved.declared_functions
 
-    def test_graph_resolution_of_file_backed_entry_accepts_extern(self) -> None:
+    def test_graph_resolution_of_file_backed_entry_accepts_extern(
+        self, tmp_path: Path
+    ) -> None:
+        entry_path = tmp_path / "entry.agl"
+        (tmp_path / "entry.py").write_text("def f(x):\n    return x\n")
         graph = load_graph(
             "extern def f(x: int) -> int\n()",
-            entry_path=Path("/virtual/entry.agl"),
+            entry_path=entry_path,
             roots=RootSet(roots=frozenset()),
             default_stdlib=False,
         )
@@ -248,6 +255,7 @@ class TestPlacement:
 
     def test_extern_in_library_module_accepts(self, tmp_path: Path) -> None:
         # A library module loaded from disk always carries a real path.
+        write_companion_file(tmp_path / "root", "lib.mod", "def f(x):\n    return x\n")
         graph = make_graph_from_files(
             tmp_path,
             {

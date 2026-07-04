@@ -51,6 +51,11 @@ class HostCapabilities:
         ``False``, any ``exec`` call site is a static error.  ``PipelineDriver``
         sets this to ``True``; test harnesses that do not want shell execution
         may set it to ``False``.
+    supports_extern:
+        When ``True``, the host can back ``extern def`` (Python FFI) calls.
+        When ``False``, a program containing any extern declaration is
+        rejected at load, before evaluation.  ``PipelineDriver`` sets this to
+        ``True``; an embedding may disable it.
     codec_kinds:
         Mapping from codec name to the frozenset of semantic type-kind strings
         the codec can handle.  Type-kind strings are the lower-cased class name
@@ -60,4 +65,5 @@ class HostCapabilities:
     agent_names: frozenset[str] = field(default_factory=frozenset)
     has_default_agent: bool = False
     supports_shell_exec: bool = False
+    supports_extern: bool = False
     codec_kinds: dict[str, frozenset[str]] = field(default_factory=dict)

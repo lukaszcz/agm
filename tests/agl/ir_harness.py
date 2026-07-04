@@ -104,6 +104,19 @@ def write_module_file(root: Path, dotted: str, source: str) -> Path:
     return path
 
 
+def write_companion_file(root: Path, dotted: str, source: str = "") -> Path:
+    """Write *dotted*'s Python companion file (the ``.agl`` sibling's ``.py`` twin).
+
+    Used by extern-def fixtures: any module declaring an extern needs a real
+    companion file on disk before it can be loaded.
+    """
+    agl_path = root / ModuleId.from_dotted(dotted).relpath().replace("/", os.sep)
+    py_path = agl_path.with_suffix(".py")
+    py_path.parent.mkdir(parents=True, exist_ok=True)
+    py_path.write_text(source)
+    return py_path
+
+
 def make_graph_from_files(tmp_path: Path, modules: dict[str, str]) -> ModuleGraph:
     """Build a ModuleGraph via ``load_graph`` from a ``{name: source}`` dict.
 

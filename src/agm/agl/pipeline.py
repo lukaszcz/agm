@@ -38,9 +38,11 @@ if TYPE_CHECKING:
 
     from agm.agl.capabilities import HostCapabilities
     from agm.agl.ir.program import ExecutableProgram
+    from agm.agl.modules.ids import ModuleId
     from agm.agl.modules.roots import RootSet
     from agm.agl.runtime.agents import AgentRegistry
     from agm.agl.runtime.codec import OutputCodec
+    from agm.agl.runtime.externs import ExternRegistry
     from agm.agl.scope.graph import ResolvedModuleGraph
     from agm.agl.scope.symbols import ResolvedProgram
     from agm.agl.semantics.values import ExceptionValue, Value
@@ -137,6 +139,11 @@ class PreparedGraph:
         Error-severity load/scope diagnostics; empty on success.
     ``warnings``
         Non-fatal lex (TAB) and scope warnings; present even on failure.
+    ``companion_paths``
+        Each loaded module's Python companion path (``None`` when the module
+        declares no extern), keyed by module id.  Empty when loading failed.
+        Consumed by ``run_prepared_graph`` to import and resolve every
+        declared extern before evaluation.
     """
 
     source: str
@@ -145,6 +152,7 @@ class PreparedGraph:
     resolved_graph: "ResolvedModuleGraph | None"
     diagnostics: tuple[Diagnostic, ...]
     warnings: tuple[Diagnostic, ...]
+    companion_paths: "dict[ModuleId, Path | None]" = field(default_factory=dict)
 
     @property
     def declared_agents(self) -> tuple[AgentDeclInfo, ...]:
@@ -822,6 +830,7 @@ class PipelineDriver:
         from agm.agl.modules.errors import (
             AmbiguousModule,
             ImportEntryError,
+            MissingExternCompanion,
             ModuleNotFound,
             ModulePrefixNotFound,
         )
@@ -852,6 +861,7 @@ class PipelineDriver:
                 AmbiguousModule,
                 ModulePrefixNotFound,
                 ImportEntryError,
+                MissingExternCompanion,
             ) as exc:
                 return PreparedGraph(
                     entry_source,
@@ -890,8 +900,9 @@ class PipelineDriver:
 
         # Collect scope warnings from the resolved graph.
         all_warnings = (*warnings, *resolved_graph.warnings)
+        companion_paths = {mid: lm.companion_path for mid, lm in graph.modules.items()}
         return PreparedGraph(
-            entry_source, entry_path, roots, resolved_graph, (), all_warnings
+            entry_source, entry_path, roots, resolved_graph, (), all_warnings, companion_paths
         )
 
     def discover_params_graph(self, prepared: PreparedGraph) -> ParamDiscovery:
@@ -1158,6 +1169,24 @@ class PipelineDriver:
 
         warnings.extend(checked_graph.warnings)
 
+        # Extern (Python FFI) companions: import and resolve every declared
+        # extern up front, gated by capability — fail-fast, before evaluation,
+        # and after every static pass (so a static error elsewhere is reported
+        # instead, with no companion import side effect).
+        extern_diagnostics = _wire_extern_registry(
+            checked_graph=checked_graph,
+            capabilities=capabilities,
+            registry=host_env.extern_registry,
+            companion_paths=prepared.companion_paths,
+        )
+        if extern_diagnostics:
+            return RunResult(
+                ok=False,
+                diagnostics=extern_diagnostics,
+                error=None,
+                warnings=warnings,
+            )
+
         from agm.agl.lower import lower_graph
 
         executable = lower_graph(checked_graph, validate=True)
@@ -1305,6 +1334,92 @@ def _run_typecheck(
         return None, (Diagnostic(message=f"Type error: {exc}", line=1),)
 
 
+def _extern_declaration_sort_key(pair: "tuple[ModuleId, str]") -> "tuple[tuple[str, ...], str]":
+    """Sort key for deterministic ``(module_id, name)`` diagnostic ordering."""
+    return (pair[0].segments, pair[1])
+
+
+def _extern_declarations(
+    checked_graph: "CheckedModuleGraph",
+) -> list[tuple["ModuleId", str]]:
+    """Return ``(module_id, name)`` for every ``extern def`` in *checked_graph*.
+
+    Sorted for deterministic diagnostic ordering; the checked AST (not the
+    IR) is the source of truth here since the IR has no extern table yet.
+    """
+    declarations: list[tuple[ModuleId, str]] = [
+        (mid, name)
+        for mid, mod in checked_graph.modules.items()
+        for name, funcdef in mod.resolved.declared_functions.items()
+        if funcdef.is_extern
+    ]
+    declarations.sort(key=_extern_declaration_sort_key)
+    return declarations
+
+
+def _wire_extern_registry(
+    *,
+    checked_graph: "CheckedModuleGraph",
+    capabilities: "HostCapabilities",
+    registry: "ExternRegistry",
+    companion_paths: "Mapping[ModuleId, Path | None]",
+) -> list[Diagnostic]:
+    """Import every companion and resolve every declared extern, up front.
+
+    Returns diagnostics — a single capability-gate diagnostic when the host
+    disables ``supports_extern`` and the program declares any extern, or one
+    diagnostic per companion that fails to import or resolve — collected
+    before any evaluation.  Returns ``[]`` immediately when the program
+    declares no extern, regardless of the capability (non-extern programs are
+    never affected).  Mutates *registry* in place, so a ``PipelineDriver``
+    that reuses the same ``HostEnvironment`` across multiple runs (e.g. the
+    REPL) imports each companion only once.
+    """
+    from agm.agl.runtime.externs import ExternImportError, ExternResolutionError
+
+    declarations = _extern_declarations(checked_graph)
+    if not declarations:
+        return []
+    if not capabilities.supports_extern:
+        return [
+            Diagnostic(
+                message=(
+                    "program declares one or more extern definitions, but this "
+                    "host does not support the Python FFI (supports_extern is "
+                    "disabled)"
+                ),
+                line=1,
+            )
+        ]
+
+    diagnostics: list[Diagnostic] = []
+    loaded_modules: set["ModuleId"] = set()
+    failed_modules: set["ModuleId"] = set()
+    for mid, name in declarations:
+        if mid in failed_modules:
+            # This module's companion already failed to import; every extern
+            # it declares was already reported by that one diagnostic.
+            continue
+        if mid not in loaded_modules:
+            companion_path = companion_paths.get(mid)
+            assert companion_path is not None, (
+                f"module {mid.dotted()!r} declares extern {name!r} but has no "
+                "companion path recorded by the loader"
+            )
+            try:
+                registry.load_companion(mid, companion_path)
+            except ExternImportError as exc:
+                diagnostics.append(exc.to_diagnostic())
+                failed_modules.add(mid)
+                continue
+            loaded_modules.add(mid)
+        try:
+            registry.resolve(mid, name)
+        except ExternResolutionError as exc:
+            diagnostics.append(exc.to_diagnostic())
+    return diagnostics
+
+
 def _reconcile_agents(
     registry: "AgentRegistry",
     declared_agents: "Mapping[str, AgentDeclNode]",
@@ -1377,6 +1492,7 @@ def assemble_host_environment(
     from agm.agl.capabilities import HostCapabilities
     from agm.agl.runtime.agents import AgentRegistry
     from agm.agl.runtime.codec import JsonCodec, TextCodec
+    from agm.agl.runtime.externs import ExternRegistry
 
     text_codec = TextCodec()
     json_codec = JsonCodec()
@@ -1396,12 +1512,14 @@ def assemble_host_environment(
         agent_names=registry.agent_names,
         has_default_agent=registry.has_default_agent,
         supports_shell_exec=True,
+        supports_extern=True,
         codec_kinds={name: codec.supported_kinds for name, codec in all_codecs.items()},
     )
     return HostEnvironment(
         registry=registry,
         capabilities=capabilities,
         codecs=all_codecs,
+        extern_registry=ExternRegistry(),
     )
 
 

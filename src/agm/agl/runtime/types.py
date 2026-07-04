@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from agm.agl.capabilities import HostCapabilities
     from agm.agl.runtime.agents import AgentRegistry
     from agm.agl.runtime.codec import OutputCodec
+    from agm.agl.runtime.externs import ExternRegistry
     from agm.agl.semantics.types import Type as AglType
 
 __all__ = [
@@ -40,11 +41,16 @@ class HostEnvironment:
     ``codecs``
         The merged ``name → OutputCodec`` table (built-ins + host extras),
         used for contract materialization.
+    ``extern_registry``
+        The ``ExternRegistry`` used to import extern-def companion modules
+        and resolve their callables.  Built empty; the pipeline populates it
+        from a program's loaded modules before evaluation.
     """
 
     registry: "AgentRegistry"
     capabilities: "HostCapabilities"
     codecs: dict[str, "OutputCodec"]
+    extern_registry: "ExternRegistry"
 
 
 @dataclass(frozen=True, slots=True)

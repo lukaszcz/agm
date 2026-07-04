@@ -421,21 +421,18 @@ class _Checker:
             if isinstance(item, FuncDef):
                 self._preregister_funcdef(item)
 
-        self._check_block(program.body, expected=None, stop_on_bottom=False)
+        self._check_block(program.body, expected=None)
 
     # ------------------------------------------------------------------
     # Block and item dispatch
     # ------------------------------------------------------------------
 
-    def _check_block(
-        self, block: Block, *, expected: Type | None, stop_on_bottom: bool = True
-    ) -> Type:
-        """Type-check a block and return its reachable result type."""
+    def _check_block(self, block: Block, *, expected: Type | None) -> Type:
+        """Type-check every block item and return the last item's type."""
         if not block.items:
             return UnitType()
 
         result_type: Type = UnitType()
-        unreachable = False
         last = block.items[-1]
         for item in block.items:
             if item is last and isinstance(item, (LetDecl, VarDecl)):
@@ -443,13 +440,8 @@ class _Checker:
                     "a 'let'/'var' declaration must be followed by an expression in a block.",
                     span=item.span,
                 )
-            item_expected = expected if item is last and not unreachable else None
-            item_type = self._check_item(item, expected=item_expected)
-            if unreachable:
-                continue
+            item_type = self._check_item(item, expected=expected if item is last else None)
             result_type = item_type
-            if stop_on_bottom and isinstance(item_type, BottomType):
-                unreachable = True
         return result_type
 
     def _check_item(self, item: Item, *, expected: Type | None) -> Type:
@@ -1353,28 +1345,17 @@ class _Checker:
         has_else = any(isinstance(b.cond, ElseSentinel) for b in node.branches)
         branch_types: list[Type] = []
         body_expected = expected if has_else else UnitType()
-        condition_always_exits = False
         for branch in node.branches:
-            branch_reachable = not condition_always_exits
             if not isinstance(branch.cond, ElseSentinel):
                 cond_type = self._check_expr(branch.cond, expected=None)
                 self._require_bool_condition(cond_type, branch.cond.span, "if")
-                if isinstance(cond_type, BottomType):
-                    branch_reachable = False
-                    condition_always_exits = True
-            bt = self._check_expr(
-                branch.body, expected=body_expected if branch_reachable else None
-            )
-            if not branch_reachable:
-                continue
+            bt = self._check_expr(branch.body, expected=body_expected)
             if not has_else:
                 self._assert_assignable(bt, UnitType(), branch.body.span)
             branch_types.append(bt)
 
         if not has_else:
-            return UnitType() if branch_types else BottomType()
-        if not branch_types:
-            return BottomType()
+            return UnitType()
 
         return self._unify_branch_types(branch_types, node.span, "If expression")
 
@@ -1394,12 +1375,9 @@ class _Checker:
     # --- loop ---
 
     def _check_loop(self, node: Loop) -> Type:
-        exits_before_value = False
         if node.bound is not None:
             bound_type = self._check_expr(node.bound, expected=None)
-            if isinstance(bound_type, BottomType):
-                exits_before_value = True
-            elif not isinstance(bound_type, IntType):
+            if not isinstance(bound_type, (IntType, BottomType)):
                 raise AglTypeError(
                     f"do-loop bound must be int; got '{bound_type!r}'.",
                     span=node.bound.span,
@@ -1408,26 +1386,20 @@ class _Checker:
             # Integer-range for: for VAR in a to/downto b [by k]
             assert node.for_iter is not None
             start_type = self._check_expr(node.for_iter, expected=None)
-            if isinstance(start_type, BottomType):
-                exits_before_value = True
-            elif not isinstance(start_type, IntType):
+            if not isinstance(start_type, (IntType, BottomType)):
                 raise AglTypeError(
                     f"'for' range start must be int; got '{start_type!r}'.",
                     span=node.for_iter.span,
                 )
             to_type = self._check_expr(node.for_range_to, expected=None)
-            if isinstance(to_type, BottomType):
-                exits_before_value = True
-            elif not isinstance(to_type, IntType):
+            if not isinstance(to_type, (IntType, BottomType)):
                 raise AglTypeError(
                     f"'for' range bound must be int; got '{to_type!r}'.",
                     span=node.for_range_to.span,
                 )
             if node.for_range_by is not None:
                 by_type = self._check_expr(node.for_range_by, expected=None)
-                if isinstance(by_type, BottomType):
-                    exits_before_value = True
-                elif not isinstance(by_type, IntType):
+                if not isinstance(by_type, (IntType, BottomType)):
                     raise AglTypeError(
                         f"'for' range step must be int; got '{by_type!r}'.",
                         span=node.for_range_by.span,
@@ -1450,11 +1422,8 @@ class _Checker:
         elif node.for_iter is not None:
             # Collection for: for VAR in COLLECTION
             iter_type = self._check_expr(node.for_iter, expected=None)
-            if isinstance(iter_type, BottomType):
-                exits_before_value = True
-                elem_type: Type = BottomType()
-            elif isinstance(iter_type, ListType):
-                elem_type = iter_type.elem
+            if isinstance(iter_type, ListType):
+                elem_type: Type = iter_type.elem
             elif isinstance(iter_type, DictType):
                 elem_type = TextType()
             elif isinstance(iter_type, TextType):
@@ -1469,15 +1438,11 @@ class _Checker:
         if node.while_cond is not None:
             while_type = self._check_expr(node.while_cond, expected=None)
             self._require_bool_condition(while_type, node.while_cond.span, "while")
-            if isinstance(while_type, BottomType):
-                exits_before_value = True
         self._check_expr(node.body, expected=None)
         if node.until_cond is not None:
             cond_type = self._check_expr(node.until_cond, expected=None)
             self._require_bool_condition(cond_type, node.until_cond.span, "until")
-            if isinstance(cond_type, BottomType):
-                exits_before_value = True
-        return BottomType() if exits_before_value else UnitType()
+        return UnitType()
 
     # --- try ---
 
@@ -1602,14 +1567,12 @@ class _Checker:
 
     def _check_binary_op(self, node: BinaryOp) -> Type:
         left_type = self._check_expr(node.left, expected=None)
-        if isinstance(left_type, BottomType):
-            return BottomType()
         right_type = self._check_expr(node.right, expected=None)
         op = node.op
 
         if op in (BinOp.AND, BinOp.OR):
             op_name = "and" if op is BinOp.AND else "or"
-            if not isinstance(left_type, BoolType):
+            if not isinstance(left_type, (BoolType, BottomType)):
                 raise AglTypeError(
                     f"'{op_name}' requires bool operands; left operand has type "
                     f"'{left_type!r}'.",
@@ -1622,9 +1585,6 @@ class _Checker:
                     span=node.right.span,
                 )
             return BoolType()
-
-        if isinstance(right_type, BottomType):
-            return BottomType()
 
         if op in (BinOp.EQ, BinOp.NEQ):
             # reject operations on bare type variables.
@@ -1640,7 +1600,11 @@ class _Checker:
                     f"variable '{right_type.name}'.",
                     span=node.span,
                 )
-            if not comparable_types(left_type, right_type):
+            if not (
+                isinstance(left_type, BottomType)
+                or isinstance(right_type, BottomType)
+                or comparable_types(left_type, right_type)
+            ):
                 raise AglTypeError(
                     f"Equality operands must have the same type; "
                     f"got '{left_type!r}' and '{right_type!r}'.",
@@ -1662,10 +1626,12 @@ class _Checker:
                     f"variable '{right_type.name}'.",
                     span=node.span,
                 )
-            numeric_pair = isinstance(left_type, (IntType, DecimalType)) and isinstance(
-                right_type, (IntType, DecimalType)
+            numeric_pair = isinstance(left_type, (IntType, DecimalType, BottomType)) and isinstance(
+                right_type, (IntType, DecimalType, BottomType)
             )
-            text_pair = isinstance(left_type, TextType) and isinstance(right_type, TextType)
+            text_pair = isinstance(left_type, (TextType, BottomType)) and isinstance(
+                right_type, (TextType, BottomType)
+            )
             if not (numeric_pair or text_pair):
                 raise AglTypeError(
                     f"Ordering operators require both operands to be numeric "
@@ -1702,8 +1668,8 @@ class _Checker:
                     span=node.span,
                 )
             if not (
-                isinstance(left_type, (IntType, DecimalType))
-                and isinstance(right_type, (IntType, DecimalType))
+                isinstance(left_type, (IntType, DecimalType, BottomType))
+                and isinstance(right_type, (IntType, DecimalType, BottomType))
             ):
                 raise AglTypeError(
                     f"'/' requires numeric operands; "
@@ -1731,14 +1697,17 @@ class _Checker:
                 f"'{right_type.name}'.",
                 span=span,
             )
-        if isinstance(left_type, TextType) and isinstance(right_type, TextType):
-            return TextType()
-        if isinstance(left_type, (IntType, DecimalType)) and isinstance(
-            right_type, (IntType, DecimalType)
+        if isinstance(left_type, (TextType, BottomType)) and isinstance(
+            right_type, (TextType, BottomType)
         ):
-            if isinstance(left_type, IntType) and isinstance(right_type, IntType):
-                return IntType()
-            return DecimalType()
+            if isinstance(left_type, TextType) or isinstance(right_type, TextType):
+                return TextType()
+        if isinstance(left_type, (IntType, DecimalType, BottomType)) and isinstance(
+            right_type, (IntType, DecimalType, BottomType)
+        ):
+            if isinstance(left_type, DecimalType) or isinstance(right_type, DecimalType):
+                return DecimalType()
+            return IntType()
         raise AglTypeError(
             f"'+' requires both operands to be text or both to be numeric; "
             f"got '{left_type!r}' and '{right_type!r}'.",
@@ -1762,17 +1731,17 @@ class _Checker:
                 span=span,
             )
         if not (
-            isinstance(left_type, (IntType, DecimalType))
-            and isinstance(right_type, (IntType, DecimalType))
+            isinstance(left_type, (IntType, DecimalType, BottomType))
+            and isinstance(right_type, (IntType, DecimalType, BottomType))
         ):
             raise AglTypeError(
                 f"'{op_str}' requires numeric operands; "
                 f"got '{left_type!r}' and '{right_type!r}'.",
                 span=span,
             )
-        if isinstance(left_type, IntType) and isinstance(right_type, IntType):
-            return IntType()
-        return DecimalType()
+        if isinstance(left_type, DecimalType) or isinstance(right_type, DecimalType):
+            return DecimalType()
+        return IntType()
 
     def _check_in_op(self, left_type: Type, right_type: Type, span: SourceSpan) -> Type:
         # reject operations on bare type variables.
@@ -1788,7 +1757,9 @@ class _Checker:
                 f"'{right_type.name}'.",
                 span=span,
             )
-        if isinstance(left_type, TextType) and isinstance(right_type, TextType):
+        if isinstance(left_type, (TextType, BottomType)) and isinstance(
+            right_type, (TextType, BottomType)
+        ):
             return BoolType()
         if isinstance(right_type, ListType):
             if not is_assignable(left_type, right_type.elem):
@@ -1797,7 +1768,9 @@ class _Checker:
                     span=span,
                 )
             return BoolType()
-        if isinstance(right_type, DictType) and isinstance(left_type, TextType):
+        if isinstance(right_type, DictType) and isinstance(left_type, (TextType, BottomType)):
+            return BoolType()
+        if isinstance(right_type, BottomType):
             return BoolType()
         raise AglTypeError(
             f"'in' requires (text in text), (T in list[T]), or (text in dict); "

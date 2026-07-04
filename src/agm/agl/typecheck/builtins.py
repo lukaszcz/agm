@@ -14,7 +14,6 @@ from agm.agl.diagnostics import Diagnostic
 from agm.agl.semantics.types import (
     AgentType,
     BoolType,
-    BottomType,
     FunctionType,
     JsonType,
     TextType,
@@ -94,8 +93,8 @@ class BuiltinCallChecker:
                 "print() requires exactly one positional argument.",
                 span=node.span,
             )
-        arg_type = self._ctx._check_expr(node.args[0], expected=None)
-        return BottomType() if isinstance(arg_type, BottomType) else UnitType()
+        self._ctx._check_expr(node.args[0], expected=None)
+        return UnitType()
 
     # --- render ---
 
@@ -106,7 +105,6 @@ class BuiltinCallChecker:
                 span=node.span,
             )
         allowed = {"pretty", "quote_strings"}
-        exits_before_value = False
         for named in node.named_args:
             if named.name not in allowed:
                 raise AglTypeError(
@@ -115,12 +113,8 @@ class BuiltinCallChecker:
                 )
             option_type = self._ctx._check_expr(named.value, expected=BoolType())
             self._ctx._assert_assignable(option_type, BoolType(), named.value.span)
-            if isinstance(option_type, BottomType):
-                exits_before_value = True
-        arg_type = self._ctx._check_expr(node.args[0], expected=None)
-        if isinstance(arg_type, BottomType):
-            exits_before_value = True
-        return BottomType() if exits_before_value else TextType()
+        self._ctx._check_expr(node.args[0], expected=None)
+        return TextType()
 
     # --- parse_json ---
 
@@ -132,7 +126,7 @@ class BuiltinCallChecker:
             )
         arg_type = self._ctx._check_expr(node.args[0], expected=TextType())
         self._ctx._assert_assignable(arg_type, TextType(), node.args[0].span)
-        return BottomType() if isinstance(arg_type, BottomType) else JsonType()
+        return JsonType()
 
     # --- ask ---
 
@@ -151,10 +145,8 @@ class BuiltinCallChecker:
                 span=node.span,
             )
 
-        exits_before_value = self._finish_ask_like(
-            node, target_type, callee="ask", require_default_agent=True
-        )
-        return BottomType() if exits_before_value else target_type
+        self._finish_ask_like(node, target_type, callee="ask", require_default_agent=True)
+        return target_type
 
     # --- ask-request ---
 
@@ -163,7 +155,7 @@ class BuiltinCallChecker:
 
         Like ``ask`` it builds an output contract from a target type and the
         parse-shaping named args (``format`` / ``strict_json`` /
-        ``on_parse_error``), and accepts an ``agent:`` named arg.  But it never
+        ``on_parse_error``), and accepts an ``agent:`` named arg. But it never
         dispatches to the agent: it yields the ``AgentRequest`` record that the
         corresponding ``ask`` call would pass to ``AgentRegistry.dispatch`` on
         its first attempt.
@@ -192,22 +184,21 @@ class BuiltinCallChecker:
         # Build the same output contract spec an ``ask`` call would, so the
         # materialized contract (and thus the returned request) matches exactly.
         # ``ask-request`` never dispatches, so a missing ``agent:`` is allowed.
-        exits_before_value = self._finish_ask_like(
+        self._finish_ask_like(
             node, target_type, callee="ask-request", require_default_agent=False
         )
-        return BottomType() if exits_before_value else agent_request_type
+        return agent_request_type
 
     def _finish_ask_like(
         self, node: Call, target_type: Type, *, callee: str, require_default_agent: bool
-    ) -> bool:
+    ) -> None:
         """Shared tail for ``ask`` / ``ask-request``: validate args, record the contract.
 
         Both builtins accept the same named args, a single prompt positional, and
         an optional ``agent:`` value, and build an identical output-contract spec +
         call-site record.  They differ only in ``callee`` (woven into diagnostics)
         and whether a missing ``agent:`` requires a configured default agent
-        (``ask`` dispatches; ``ask-request`` does not). Returns whether evaluating
-        a runtime argument exits with ``BottomType`` before the call can produce a value.
+        (``ask`` dispatches; ``ask-request`` does not).
         """
         named = {na.name: na for na in node.named_args}
 
@@ -227,19 +218,14 @@ class BuiltinCallChecker:
                 f"{callee}: too many positional arguments (expected 1).",
                 span=node.span,
             )
-        exits_before_value = False
         prompt_type = self._ctx._check_expr(node.args[0], expected=TextType())
         self._ctx._assert_assignable(prompt_type, TextType(), node.args[0].span)
-        if isinstance(prompt_type, BottomType):
-            exits_before_value = True
 
         # agent: named arg.
         if "agent" in named:
             agent_na = named["agent"]
             agent_type = self._ctx._check_expr(agent_na.value, expected=AgentType())
             self._ctx._assert_assignable(agent_type, AgentType(), agent_na.value.span)
-            if isinstance(agent_type, BottomType):
-                exits_before_value = True
         elif require_default_agent and not self._ctx._caps.has_default_agent:
             raise AglTypeError(
                 "No default agent is configured; the built-in 'ask' call "
@@ -273,7 +259,6 @@ class BuiltinCallChecker:
                 col=node.span.start_col,
             )
         )
-        return exits_before_value
 
     # --- exec ---
 
@@ -323,7 +308,6 @@ class BuiltinCallChecker:
             )
         cmd_type = self._ctx._check_expr(node.args[0], expected=TextType())
         self._ctx._assert_assignable(cmd_type, TextType(), node.args[0].span)
-        exits_before_value = isinstance(cmd_type, BottomType)
 
         # Determine codec.
         is_exec_result = exec_result_type is not None and target_type == exec_result_type
@@ -366,7 +350,7 @@ class BuiltinCallChecker:
                 col=node.span.start_col,
             )
         )
-        return BottomType() if exits_before_value else target_type
+        return target_type
 
     # --- shared explicit-target resolver for --
 

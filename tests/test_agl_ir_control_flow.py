@@ -53,6 +53,7 @@ from agm.agl.semantics.values import (
     TextValue,
     UnitValue,
 )
+from agm.agl.typecheck import AglTypeError
 from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises
 
 # ---------------------------------------------------------------------------
@@ -237,35 +238,57 @@ r
     assert ir["r"] == IntValue(7)
 
 
-def test_return_in_binding_rhs_makes_following_items_unreachable() -> None:
+def test_return_in_binding_rhs_does_not_hide_following_type_mismatch() -> None:
     source = """\
 def f() -> int =
   let unused: int = return 1
-  "unreachable"
+  "tail"
 let r = f()
 r
 """
-    ir = evaluate_ir(source)
-    assert ir["r"] == IntValue(1)
+    with pytest.raises(AglTypeError):
+        evaluate_ir(source)
 
 
-def test_return_in_enclosing_expression_makes_expression_bottom() -> None:
+def test_return_in_enclosing_expression_does_not_hide_following_type_mismatch() -> None:
     source = """\
 def f() -> int =
   print(return 1)
-  "unreachable"
+  "tail"
 let r = f()
 r
 """
-    ir = evaluate_ir(source)
-    assert ir["r"] == IntValue(1)
+    with pytest.raises(AglTypeError):
+        evaluate_ir(source)
 
 
-def test_return_in_binary_operand_makes_expression_bottom() -> None:
+def test_return_in_binary_operand_does_not_hide_following_type_mismatch() -> None:
     source = """\
 def f() -> int =
   (return 1) and false
-  "unreachable"
+  "tail"
+let r = f()
+r
+"""
+    with pytest.raises(AglTypeError):
+        evaluate_ir(source)
+
+
+def test_return_in_non_short_circuit_right_operand_does_not_hide_type_mismatch() -> None:
+    source = """\
+def f() -> text =
+  1 + (return 2)
+let r = f()
+r
+"""
+    with pytest.raises(AglTypeError):
+        evaluate_ir(source)
+
+
+def test_return_in_left_binary_operand_still_returns_at_runtime() -> None:
+    source = """\
+def f() -> int =
+  (return 1) + 2
 let r = f()
 r
 """
@@ -273,11 +296,10 @@ r
     assert ir["r"] == IntValue(1)
 
 
-def test_return_in_non_short_circuit_right_operand_makes_expression_bottom() -> None:
+def test_return_in_right_binary_operand_still_returns_at_runtime() -> None:
     source = """\
 def f() -> int =
   1 + (return 2)
-  "unreachable"
 let r = f()
 r
 """

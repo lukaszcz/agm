@@ -1338,21 +1338,38 @@ class TestFuncDef:
         assert isinstance(f_ref, VarRef)
         assert r.node_types[f_ref.node_id] == FunctionType(params=(), result=DecimalType())
 
-    def test_funcdef_unreachable_tail_after_return_ignored_for_annotation(self) -> None:
-        r = accept_type('def f() -> int =\n  return 1\n  "unreachable"\nf')
-        f_ref = r.resolved.program.body.items[1]
-        assert isinstance(f_ref, VarRef)
-        assert r.node_types[f_ref.node_id] == FunctionType(params=(), result=IntType())
+    def test_funcdef_tail_after_return_checked_against_annotation(self) -> None:
+        err = reject_type('def f() -> int =\n  return 1\n  "tail"\nf')
+        assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
 
-    def test_funcdef_unreachable_tail_after_return_ignored_for_inference(self) -> None:
-        r = accept_type('def f() =\n  return 1\n  "unreachable"\nf')
-        f_ref = r.resolved.program.body.items[1]
-        assert isinstance(f_ref, VarRef)
-        assert r.node_types[f_ref.node_id] == FunctionType(params=(), result=IntType())
+    def test_funcdef_tail_after_bottom_binding_checked_against_annotation(self) -> None:
+        err = reject_type('def f() -> int = let x: int = return 1; "A"')
+        assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
 
-    def test_funcdef_unreachable_tail_after_return_is_type_checked(self) -> None:
+    def test_funcdef_tail_after_return_participates_in_inference(self) -> None:
+        err = reject_type('def f() =\n  return 1\n  "tail"\nf')
+        assert "infer" in str(err).lower()
+        assert "annotation" in str(err).lower()
+
+    def test_funcdef_tail_after_return_is_type_checked(self) -> None:
         err = reject_type('def f() -> int =\n  return 1\n  let x: int = "bad"\n  0')
         assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
+
+    def test_bottom_left_binary_operand_does_not_skip_right_operand_type(self) -> None:
+        err = reject_type('def f() -> int = (return 1) + "x"\nf')
+        assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
+
+    def test_bottom_binary_operand_does_not_make_comparison_bottom(self) -> None:
+        err = reject_type('def f() -> int = (return 1) == "x"\nf')
+        assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
+
+    def test_bottom_plus_bottom_is_still_type_checked(self) -> None:
+        r = accept_type("def f() -> int = (return 1) + (return 2)\nf")
+        assert r.resolved.program is not None
+
+    def test_bottom_right_in_operand_is_still_type_checked(self) -> None:
+        r = accept_type("def f() -> bool = 1 in (return true)\nf")
+        assert r.resolved.program is not None
 
     def test_funcdef_return_mismatch_rejected(self) -> None:
         err = reject_type('def f() -> int =\n  return "bad"\n  0')
@@ -1430,23 +1447,17 @@ class TestFuncDef:
         t = r.node_types[f_ref.node_id]
         assert isinstance(t, FunctionType)
 
-    def test_return_in_if_condition_is_bottom(self) -> None:
-        r = accept_type('def f() -> int =\n  if (return 1) => "a" | else => "b"\nf')
-        f_ref = r.resolved.program.body.items[1]
-        assert isinstance(f_ref, VarRef)
-        assert r.node_types[f_ref.node_id] == FunctionType(params=(), result=IntType())
+    def test_return_in_if_condition_does_not_hide_branch_type_mismatch(self) -> None:
+        err = reject_type('def f() -> int =\n  if (return 1) => "a" | else => "b"\nf')
+        assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
 
-    def test_return_in_loop_bound_is_bottom(self) -> None:
-        r = accept_type("def f() -> int =\n  do[(return 1)]\n    ()\nf")
-        f_ref = r.resolved.program.body.items[1]
-        assert isinstance(f_ref, VarRef)
-        assert r.node_types[f_ref.node_id] == FunctionType(params=(), result=IntType())
+    def test_return_in_loop_bound_does_not_make_loop_bottom(self) -> None:
+        err = reject_type("def f() -> int =\n  do[(return 1)]\n    ()\nf")
+        assert "bottom" in str(err).lower() or "mismatch" in str(err).lower()
 
-    def test_return_in_exec_command_is_bottom(self) -> None:
-        r = accept_type("def f() = exec(return 1)\nf")
-        f_ref = r.resolved.program.body.items[1]
-        assert isinstance(f_ref, VarRef)
-        assert r.node_types[f_ref.node_id] == FunctionType(params=(), result=IntType())
+    def test_return_in_exec_command_does_not_make_call_bottom(self) -> None:
+        err = reject_type("def f() = exec(return 1)\nf")
+        assert "infer" in str(err).lower() or "annotation" in str(err).lower()
 
     @pytest.mark.parametrize(
         "source",
@@ -1457,11 +1468,11 @@ class TestFuncDef:
             'agent a\ndef f() = ask("x", agent = (return 1))\nf',
         ],
     )
-    def test_return_in_builtin_runtime_argument_is_bottom(self, source: str) -> None:
-        r = accept_type(source)
-        f_ref = r.resolved.program.body.items[-1]
-        assert isinstance(f_ref, VarRef)
-        assert r.node_types[f_ref.node_id] == FunctionType(params=(), result=IntType())
+    def test_return_in_builtin_runtime_argument_does_not_make_call_bottom(
+        self, source: str
+    ) -> None:
+        err = reject_type(source)
+        assert "infer" in str(err).lower() or "mismatch" in str(err).lower()
 
     @pytest.mark.parametrize(
         "source",
@@ -1474,11 +1485,11 @@ class TestFuncDef:
             "def f() -> int =\n  do\n    ()\n  until (return 1)\nf",
         ],
     )
-    def test_return_in_loop_header_or_guard_is_bottom(self, source: str) -> None:
-        r = accept_type(source)
-        f_ref = r.resolved.program.body.items[-1]
-        assert isinstance(f_ref, VarRef)
-        assert r.node_types[f_ref.node_id] == FunctionType(params=(), result=IntType())
+    def test_return_in_loop_header_or_guard_does_not_make_loop_bottom(
+        self, source: str
+    ) -> None:
+        err = reject_type(source)
+        assert "bottom" in str(err).lower() or "mismatch" in str(err).lower()
 
 
 # ---------------------------------------------------------------------------

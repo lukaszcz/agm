@@ -104,6 +104,19 @@ class GenericTypeDef:
 
 
 @dataclass(frozen=True, slots=True)
+class GenericAliasDef:
+    """Resolved template for a parameterized type alias.
+
+    ``type_params`` — ordered tuple of type-parameter names.
+    ``template``    — alias body resolved in the alias-defining module with its
+                      parameters represented as ``TypeVarType`` nodes.
+    """
+
+    type_params: tuple[str, ...]
+    template: Type
+
+
+@dataclass(frozen=True, slots=True)
 class ConstructorSignature:
     """Signature for a record constructor or enum variant constructor.
 
@@ -309,6 +322,8 @@ class TypeEnvironment:
     - ``graph_type_table`` maps ``(ModuleId, name)`` to the fully-built
       ``Type`` objects stamped with their owning ``module_id``.  Built once by
       the graph pre-pass; shared (read-only) across all per-module envs.
+    - ``graph_generic_table`` and ``graph_alias_table`` carry cross-module
+      templates for applied nominal types and parameterized aliases.
     - ``import_env`` is the per-module :class:`~agm.agl.scope.imports.ImportEnv`
       produced by graph scope resolution. Used to resolve qualified and open-imported type names.
     - ``module_id`` is the owning module of the current env.  ``::Name``
@@ -325,6 +340,7 @@ class TypeEnvironment:
         *,
         graph_type_table: Mapping[tuple[ModuleId, str], Type] | None = None,
         graph_generic_table: Mapping[tuple[ModuleId, str], GenericTypeDef] | None = None,
+        graph_alias_table: Mapping[tuple[ModuleId, str], GenericAliasDef] | None = None,
         graph_ctor_sig_table: Mapping[
             tuple[ModuleId, str, str | None], ConstructorSignature
         ] | None = None,
@@ -373,6 +389,10 @@ class TypeEnvironment:
         self._graph_generic_table: Mapping[
             tuple[ModuleId, str], GenericTypeDef
         ] | None = graph_generic_table
+        # Cross-module parameterized type aliases: (ModuleId, name) → GenericAliasDef.
+        self._graph_alias_table: Mapping[tuple[ModuleId, str], GenericAliasDef] = (
+            graph_alias_table if graph_alias_table is not None else {}
+        )
         # Cross-module constructor signatures: (ModuleId, owner_name, variant) → sig.
         self._graph_ctor_sig_table: Mapping[
             tuple[ModuleId, str, str | None], ConstructorSignature
@@ -524,6 +544,24 @@ class TypeEnvironment:
         return EnumType(
             name=name, variants=new_variants, type_args=args, module_id=template.module_id
         )
+
+    def instantiate_alias(
+        self,
+        name: str,
+        alias_def: GenericAliasDef,
+        args: tuple[Type, ...],
+        span: SourceSpan | None = None,
+    ) -> Type:
+        """Instantiate a resolved parameterized type alias template."""
+        from agm.agl.semantics.types import substitute as _subst
+
+        if len(args) != len(alias_def.type_params):
+            raise AglTypeError(
+                f"Alias '{name}' requires {len(alias_def.type_params)} type argument(s), "
+                f"got {len(args)}.",
+                span=span,
+            )
+        return _subst(alias_def.template, dict(zip(alias_def.type_params, args)))
 
     # --- Constructor signature registry ---
 
@@ -710,8 +748,6 @@ class TypeEnvironment:
                 type_vars=type_vars,
             )
         if isinstance(type_expr, AppliedT):
-            from agm.agl.semantics.types import substitute as _subst
-
             name = type_expr.name
             eff_span = span if span is not None else type_expr.span
             resolved_args = tuple(
@@ -748,7 +784,12 @@ class TypeEnvironment:
                     _resolving=_resolving | {name},
                     type_vars=type_vars | frozenset(alias_params),
                 )
-                return _subst(body_type, dict(zip(alias_params, resolved_args)))
+                return self.instantiate_alias(
+                    name,
+                    GenericAliasDef(type_params=alias_params, template=body_type),
+                    resolved_args,
+                    span=eff_span,
+                )
             if name in self._types:
                 raise AglTypeError(
                     f"Type '{name}' does not take type arguments.",
@@ -784,6 +825,7 @@ class TypeEnvironment:
             qname
             for qname in candidates
             if (qname[0], qname[1]) in self._graph_generic_table
+            or (qname[0], qname[1]) in self._graph_alias_table
             or (
                 self._graph_type_table is not None
                 and (qname[0], qname[1]) in self._graph_type_table
@@ -800,12 +842,15 @@ class TypeEnvironment:
             return None
         module_id, source_name = type_candidates[0]
         gdef = self._graph_generic_table.get((module_id, source_name))
-        if gdef is None:
-            raise AglTypeError(
-                f"Type '{name}' does not take type arguments.",
-                span=span,
-            )
-        return self.instantiate_from_gdef(source_name, gdef, args, span=span)
+        if gdef is not None:
+            return self.instantiate_from_gdef(source_name, gdef, args, span=span)
+        alias_def = self._graph_alias_table.get((module_id, source_name))
+        if alias_def is not None:
+            return self.instantiate_alias(source_name, alias_def, args, span=span)
+        raise AglTypeError(
+            f"Type '{name}' does not take type arguments.",
+            span=span,
+        )
 
     def _resolve_qualified_applied_type(
         self,
@@ -842,6 +887,9 @@ class TypeEnvironment:
         gdef = self._graph_generic_table.get((qname[0], qname[1]))
         if gdef is not None:
             return self.instantiate_from_gdef(qname[1], gdef, args, span=span)
+        alias_def = self._graph_alias_table.get((qname[0], qname[1]))
+        if alias_def is not None:
+            return self.instantiate_alias(qname[1], alias_def, args, span=span)
         if self._graph_type_table is not None and (qname[0], qname[1]) in self._graph_type_table:
             raise AglTypeError(
                 f"Type '{'.'.join(qualifier.segments)}::{name}' does not take type arguments.",

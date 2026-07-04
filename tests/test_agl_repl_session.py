@@ -291,6 +291,23 @@ class TestTypeOf:
         s.eval_entry("let x = 1")
         assert s.type_of("x + 1") == repr(IntType())
 
+    def test_type_of_displays_record_fields(self) -> None:
+        s = ReplSession()
+        s.eval_entry("record Point\n  x: int\n  y: text")
+        s.eval_entry('let p = Point(x = 1, y = "north")')
+
+        assert s.type_of("p") == "record Point\n  x: int\n  y: text"
+
+    def test_type_of_displays_enum_constructors(self) -> None:
+        s = ReplSession()
+        s.eval_entry("enum Result\n  | Ok(value: int)\n  | Err(message: text)\n  | Unknown")
+        s.eval_entry("let r = Ok(value = 1)")
+
+        assert (
+            s.type_of("r")
+            == "enum Result\n  | Ok(value: int)\n  | Err(message: text)\n  | Unknown"
+        )
+
     def test_type_of_does_not_promote_or_advance(self) -> None:
         s = ReplSession()
         s.eval_entry("let x = 1")
@@ -2308,7 +2325,10 @@ class TestBareTypeEntry:
         assert r.ok
         assert r.kind == "type"
         assert isinstance(r.value_type, EnumType)
-        assert render_entry_result(r, echo=True) == "<type: Color>"
+        assert (
+            render_entry_result(r, echo=True)
+            == "<type:\nenum Color\n  | Red\n  | Green\n  | Blue\n>"
+        )
 
     def test_generic_type_application_echoes_as_type(self) -> None:
         from agm.agl.semantics.types import ListType

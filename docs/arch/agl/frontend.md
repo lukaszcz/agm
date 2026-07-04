@@ -30,7 +30,7 @@ The semantic type model lives in the `semantics` foundation package and is consu
 
 The pass selects concrete behavior that the evaluator later relies on:
 
-- **Partial call typing** turns declared-function calls with placeholder arguments into concrete function types, inferring generic holes from supplied arguments and expected function types. It records placeholder-to-parameter routing in a checked-program side table for lowering.
+- **Partial call typing** turns calls with placeholder arguments into concrete function types for declared functions, constructors, and function values, inferring generic holes from supplied arguments and expected function types. It records placeholder-to-parameter routing in a checked-program side table for lowering.
 - **Built-in typing rules** are dispatched from the resolver's built-in classification — for example `print` accepts anything and yields unit; `exec` chooses between returning a structured result and parsing stdout into a target type; `ask` takes its result type from context.
 - **Casts** are validated against a table of permitted source/target pairs, each classified as total or fallible; `as?` always types as a boolean.
 - **Generics** use rank-1 parametric polymorphism. A generic definition is checked with its type parameters as rigid, opaque variables (enforcing parametricity), and a small one-sided matching solver infers type arguments for both explicit and inferred calls. Type arguments exist only during checking — they are erased before execution.

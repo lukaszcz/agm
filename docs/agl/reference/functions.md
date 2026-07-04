@@ -269,9 +269,12 @@ All calls use the same uniform parenthesized syntax:
 ```ebnf
 call_expr ::= postfix_expr type_args? "(" arg_list? ")"
 type_args ::= "::" "[" type_expr ("," type_expr)* "]"
-arg_list  ::= arg ("," arg)* ","?
-arg       ::= expr                   (* positional *)
-            | NAME "=" expr          (* named *)
+arg_list        ::= arg ("," arg)* ","?
+arg             ::= expr                         (* positional *)
+                  | placeholder_arg              (* positional hole *)
+                  | NAME "=" expr                (* named *)
+                  | NAME "=" placeholder_arg     (* named hole *)
+placeholder_arg ::= "?" | "?<digits>"
 ```
 
 **Single-argument sugar.** When there is exactly one positional argument
@@ -356,6 +359,160 @@ of function type:
 let g: (int) -> text = classify
 let label = g(7)               # positional call of a function value
 ```
+
+## Partial application
+
+A parenthesized call that contains one or more placeholder arguments evaluates
+to a new function value instead of immediately calling the callee. A placeholder
+must be the whole value of a positional argument (`?`, `?1`, `?2`, …) or the
+whole value of a named argument (`name = ?`). Placeholders work with declared
+functions, constructors, and function values.
+
+```agl
+def add(a: int, b: int) -> int = a + b
+
+def digits(a: int, b: int, c: int) -> int = a * 100 + b * 10 + c
+
+let inc: (int) -> int = add(?, 1)
+print(inc(4))                  # 5
+
+let plus: (int, int) -> int = add
+let plus_two: (int) -> int = plus(?, 2)
+print(plus_two(5))              # 7
+
+let fill_edges: (int, int) -> int = digits(?, 9, ?)
+print(fill_edges(1, 2))         # 192
+```
+
+The resulting function type has one parameter for each placeholder. Each
+parameter has the type of the callee parameter or constructor field that the
+placeholder binds to, and the result type is the result type of the underlying
+call.
+
+With bare `?` placeholders, the resulting function's parameter order is the
+placeholders' order of appearance in the written argument list, including named
+arguments. With numbered placeholders, the number gives the resulting
+function's parameter position explicitly:
+
+```agl
+let reordered: (int, int) -> int = digits(?2, 9, ?1)
+print(reordered(1, 2))          # 291
+```
+
+Within one call, placeholders must be either all bare or all numbered. Numbered
+placeholders must form exactly one use of each index from `?1` through `?n`:
+there may be no `?0`, gaps, repeats, or mixing such as `f(?, ?1)`.
+
+Named-argument holes bind to the named parameter, including named-only
+parameters:
+
+```agl
+def shaped(x: int, *, y: int, z: int = 0) -> int = x * 100 + y * 10 + z
+
+let fill_y: (int) -> int = shaped(3, y = ?, z = 9)
+let fill_x: (int) -> int = shaped(x = ?, y = 4)
+print(fill_y(5))                # 359
+print(fill_x(2))                # 240
+```
+
+For constructors, the same argument binding rules apply:
+
+```agl
+record Box[T]
+  value: T
+
+let make_box: (int) -> Box[int] = Box(value = ?)
+print(make_box(8).value)        # 8
+```
+
+Non-placeholder arguments, and the callee expression for a function-value call,
+are evaluated once from left to right when the partial-application expression
+itself is evaluated. The created closure captures those values. Defaults for
+omitted parameters are not captured; they are evaluated each time the closure
+is invoked.
+
+```agl
+var ticks = 0
+var saved = 4
+
+def next_tick() -> int =
+  ticks := ticks + 1
+  ticks
+
+def add_saved(a: int, b: int) -> int = a + b
+
+def stamped(x: int, suffix: int = next_tick()) -> int = x * 10 + suffix
+
+let use_saved = add_saved(?, saved)
+saved := 100
+print(use_saved(6))             # 10; captured saved = 4
+
+let stamp: (int) -> int = stamped(?)
+print(stamp(2))                 # 21
+print(stamp(2))                 # 22; default ran again
+```
+
+An exception raised while evaluating a captured callee or non-placeholder
+argument is raised when the closure is created. An exception from the
+underlying call is raised when the closure is invoked:
+
+```agl
+def add(a: int, b: int) -> int = a + b
+
+def fail_created() -> int = raise Abort(message = "created")
+def fail_called(x: int) -> int = raise Abort(message = "called ${x}")
+
+try
+  let f = add(?, fail_created())
+  print(f(1))
+catch Abort as e =>
+  print(e.message)              # created
+
+try
+  let g = fail_called(?)
+  print(g(9))
+catch Abort as e =>
+  print(e.message)              # called 9
+```
+
+Generic callees infer type arguments from non-placeholder arguments and from an
+expected function type when one is available. If a type argument is still not
+known, give it explicitly with the `::[…]` form.
+
+```agl
+def id[T](x: T) -> T = x
+
+def singleton[T](x: T) -> list[T] = [x]
+
+def map_one[A, B](f: (A) -> B, xs: list[A]) -> list[B] = [f(xs[0])]
+
+let keep_ints: (list[int]) -> list[int] = map_one(id, ?)
+print(keep_ints([5])[0])        # 5
+
+let make_single: (int) -> list[int] = singleton(?)
+print(make_single(7)[0])        # 7
+
+let make_text = singleton::[text](?)
+print(make_text("hi")[0])       # hi
+```
+
+Error conditions are reported statically:
+
+- A placeholder is a partial-application marker only in a parenthesized call;
+  forms such as a standalone `?`, `f(? + 1)`, and the single-argument sugar
+  `f ?` do not parse.
+- Partial application is not supported by the special built-in calls `print`,
+  `render`, `exec`, `ask`, `ask-request`, and `parse_json`; for example,
+  `print(?)` is rejected.
+- Numbered placeholders must be a permutation from `?1` through `?n`; examples
+  such as `f(?0)`, `f(?2)`, `f(?1, ?1)`, and `f(?, ?1)` are rejected.
+- Existing argument-binding errors still apply: arity mismatches such as too
+  many holes, unknown or duplicate named arguments such as `f(missing = ?)`,
+  missing required arguments, positional arguments for named-only parameters,
+  and named arguments when calling a function value such as `g(x = ?)`.
+- A generic partial application whose type arguments remain unknown, such as
+  `let make = singleton(?)`, needs explicit type arguments or an expected
+  function type.
 
 ## Function types
 

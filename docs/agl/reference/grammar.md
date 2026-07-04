@@ -372,10 +372,20 @@ the body. Parameter types are always required.
 ## Calls
 
 ```ebnf
-arg_list  ::= arg ("," arg)* ","?
-arg       ::= expr                  (* positional *)
-            | name "=" expr         (* named *)
+arg_list        ::= arg ("," arg)* ","?
+arg             ::= expr                         (* positional *)
+                  | placeholder_arg              (* positional hole *)
+                  | name "=" expr                (* named *)
+                  | name "=" placeholder_arg     (* named hole *)
+placeholder_arg ::= "?" | "?<digits>"
 ```
+
+A placeholder is legal only as a whole parenthesized call argument: either a
+positional argument (`f(?, x)`) or the value of a named argument (`f(x = ?)`).
+It is not an expression, so forms such as `f(? + 1)`, a standalone `?`, or a
+placeholder in single-argument sugar do not parse. The numbered form has no
+whitespace between `?` and its digits; `? 1` is a bare placeholder followed by
+an integer argument, not `?1`.
 
 Named arguments are available at declared-name call sites (`def`s and
 built-ins). A function value is called with positional arguments only.

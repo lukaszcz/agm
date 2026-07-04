@@ -52,7 +52,7 @@ A function may also exit early with `return`; see [Early return](#early-return).
 ### Early return
 
 ```ebnf
-return_expr ::= "return" expr?
+return_expr ::= "return" or_expr?
 ```
 
 `return expr` exits the nearest enclosing `def` or `fn` body immediately and

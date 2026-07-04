@@ -1,0 +1,2 @@
+extern def do-it!(x: int) -> int
+do-it!(1)

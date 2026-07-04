@@ -371,6 +371,13 @@ class TypeEnvironment:
         # bare name (which would pick the wrong signature when two modules define
         # functions with the same name but different signatures).
         self._function_signatures_by_node_id: dict[int, FunctionSignature] = {}
+        # Declaration node_ids of ``extern def``s, keyed by the same globally-unique
+        # decl_node_id as ``_function_signatures_by_node_id``.  Populated by
+        # ``_preregister_funcdef`` (single-program mode) and by the graph
+        # function-signature pre-pass seeding (graph mode, including imported
+        # externs).  Consulted by ``_check_declared_name_call`` to decide whether a
+        # declared-name call site is an extern call site to record.
+        self._extern_node_ids: set[int] = set()
         # Constructor field-kinds registry — (owner_name, variant | None) → ordered
         # (field_name, ParamKind) pairs.  Populated by _TypeBuilder for every
         # record/enum/exception; consumed by the checker and lowerer to build
@@ -642,6 +649,19 @@ class TypeEnvironment:
         because the function body check raised before registration).
         """
         return self._function_signatures_by_node_id.get(node_id)
+
+    def register_extern_node_id(self, node_id: int) -> None:
+        """Mark a function declaration ``node_id`` as an ``extern def``.
+
+        Consulted by ``_check_declared_name_call`` so that direct calls to an
+        extern (own-module or imported) are recorded as dry-run call sites the
+        same way ``ask``/``exec`` calls are.
+        """
+        self._extern_node_ids.add(node_id)
+
+    def is_extern_node_id(self, node_id: int) -> bool:
+        """Return ``True`` if *node_id* names a declared ``extern def``."""
+        return node_id in self._extern_node_ids
 
     # --- Binding type table ---
 
@@ -1232,3 +1252,4 @@ class TypeEnvironment:
         self._constructor_field_kinds.update(other._constructor_field_kinds)
         self._alias_type_params.update(other._alias_type_params)
         self._function_signatures_by_node_id.update(other._function_signatures_by_node_id)
+        self._extern_node_ids.update(other._extern_node_ids)

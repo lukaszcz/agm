@@ -1,0 +1,2 @@
+extern def apply(cb: (int) -> int) -> int
+0

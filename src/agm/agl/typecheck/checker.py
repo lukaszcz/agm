@@ -39,8 +39,9 @@ The checker raises ``AglTypeError`` on the first error (first-error abort).
 
 from __future__ import annotations
 
+import keyword
 from collections.abc import Callable, Mapping, Sequence
-from typing import TypeGuard
+from typing import TypeGuard, assert_never
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
@@ -256,6 +257,61 @@ def _is_index_like(node: object) -> TypeGuard[_IndexLike]:
     return isinstance(node, (IndexAccess, IndexTarget))
 
 
+def _validate_extern_name(name: str, span: SourceSpan) -> None:
+    """Reject an extern name that is not a valid, non-reserved Python identifier.
+
+    The companion Python module must define a function with exactly this name,
+    so the name must be usable as a Python ``def`` name: a valid identifier
+    and not a hard Python keyword.  Python *soft* keywords
+    (``match``, ``type``, …) remain acceptable since they are valid ``def``
+    names in Python itself.
+    """
+    if not name.isidentifier() or keyword.iskeyword(name):
+        raise AglTypeError(
+            f"extern function name '{name}' must be a valid Python identifier "
+            "and not a Python keyword, because the companion module must "
+            "define a Python function with exactly this name.",
+            span=span,
+        )
+
+
+def _contains_banned_extern_type(t: Type) -> bool:
+    """Return ``True`` if *t* contains a function or agent type anywhere.
+
+    The FFI is a pure data boundary: function and agent values can never cross
+    it, so they are static errors anywhere in an extern's parameter or return
+    types, including nested inside ``list``/``dict``/record/enum
+    instantiations.  Type variables are permitted at any depth — dynamic
+    sealing keeps values at those positions opaque.
+    """
+    match t:
+        case FunctionType() | AgentType():
+            return True
+        case ListType():
+            return _contains_banned_extern_type(t.elem)
+        case DictType():
+            return _contains_banned_extern_type(t.value)
+        case RecordType():
+            return any(_contains_banned_extern_type(ta) for ta in t.type_args) or any(
+                _contains_banned_extern_type(ft) for ft in t.fields.values()
+            )
+        case EnumType():
+            return any(_contains_banned_extern_type(ta) for ta in t.type_args) or any(
+                _contains_banned_extern_type(ft)
+                for vfields in t.variants.values()
+                for ft in vfields.values()
+            )
+        case ExceptionType():
+            return any(_contains_banned_extern_type(ft) for ft in t.fields.values())
+        case (
+            TextType() | JsonType() | BoolType() | IntType() | DecimalType()
+            | UnitType() | BottomType() | TypeVarType()
+        ):
+            return False
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
+
+
 # ---------------------------------------------------------------------------
 # Main checker
 # ---------------------------------------------------------------------------
@@ -334,6 +390,9 @@ class _Checker:
             return
 
         sig, func_type = self._build_funcdef_signature(node, result_type=node.return_type)
+        if node.is_extern:
+            self._validate_extern_signature(node, sig)
+            self._env.register_extern_node_id(node.node_id)
         self._register_funcdef_signature(node, sig, func_type)
 
     def _validate_funcdef_header(self, node: FuncDef) -> None:
@@ -358,8 +417,31 @@ class _Checker:
                 f"Builtin function '{node.name}' must declare a return type.",
                 span=node.span,
             )
+        if node.is_extern:
+            _validate_extern_name(node.name, node.span)
+            if node.return_type is None:
+                raise AglTypeError(
+                    f"Extern function '{node.name}' must declare a return type.",
+                    span=node.span,
+                )
         # no required positional-fillable param may follow a defaulted one.
         self._check_required_after_defaulted(node.params)
+
+    def _validate_extern_signature(self, node: FuncDef, sig: FunctionSignature) -> None:
+        """Reject a function or agent type anywhere in an extern's signature."""
+        for p, spec in zip(node.params, sig.params):
+            if _contains_banned_extern_type(spec.type):
+                raise AglTypeError(
+                    f"extern function '{node.name}' parameter '{p.name}' has a "
+                    "function or agent type, which cannot cross the Python boundary.",
+                    span=p.span,
+                )
+        if _contains_banned_extern_type(sig.result):
+            raise AglTypeError(
+                f"extern function '{node.name}' has a return type containing a "
+                "function or agent type, which cannot cross the Python boundary.",
+                span=node.span,
+            )
 
     def _build_funcdef_signature(
         self, node: FuncDef, *, result_type: TypeExpr | Type
@@ -477,14 +559,24 @@ class _Checker:
     # ------------------------------------------------------------------
 
     def _check_funcdef_body(self, node: FuncDef) -> None:
-        """Check the body of a ``def`` against its registered signature."""
+        """Check the body of a ``def`` against its registered signature.
+
+        An ``extern def`` has no body but DOES declare real AgL default
+        expressions (evaluated on the AgL side before crossing the Python
+        boundary), so it still binds its params and checks its defaults —
+        only the body check itself is skipped.  A ``builtin def`` skips both:
+        its defaults are pinned by the hardcoded builtin signature table, not
+        evaluated as ordinary AgL expressions.
+        """
         sig = self._env.get_function_signature(node.name)
         if sig is None:
             self._infer_funcdef_signature(node)
             return
         if node.is_builtin:
             return
-        assert node.body is not None, f"FuncDef '{node.name}' has no body"
+        assert node.is_extern or node.body is not None, (
+            f"FuncDef '{node.name}' has no body"
+        )
         # Save and update current type vars for this def's scope. A non-generic
         # def resets the set to empty (defs never nest, but this stays correct
         # regardless): the body's annotations see exactly this def's type vars.
@@ -499,7 +591,10 @@ class _Checker:
                 if p.default is not None:
                     def_type = self._check_expr(p.default, expected=spec.type)
                     self._assert_assignable(def_type, spec.type, p.span)
+            if node.is_extern:
+                return
             # Check body against declared return type.
+            assert node.body is not None
             body_type = self._check_expr(node.body, expected=sig.result)
             if not isinstance(body_type, BottomType):
                 self._assert_assignable(body_type, sig.result, node.span)
@@ -1217,20 +1312,38 @@ class _Checker:
 
         # Dispatch to the generic path when the function has type parameters.
         if sig.type_params:
-            return self._check_generic_declared_call(
+            result_type = self._check_generic_declared_call(
                 node, func_name, sig, expected=expected
             )
+        else:
+            # Non-generic path: reject unexpected explicit type args.
+            if node.type_args:
+                raise AglTypeError(
+                    f"'{func_name}' is not a generic function and does not accept "
+                    f"type arguments.",
+                    span=node.span,
+                )
+            self._check_call_args(sig.params, node, func_name)
+            result_type = sig.result
 
-        # Non-generic path: reject unexpected explicit type args.
-        if node.type_args:
-            raise AglTypeError(
-                f"'{func_name}' is not a generic function and does not accept "
-                f"type arguments.",
-                span=node.span,
+        # Direct calls to a known extern are recorded like ask/exec call sites,
+        # for own-module AND imported (graph-mode) externs alike — the checker's
+        # env carries extern-ness by the callee's globally-unique decl_node_id
+        # regardless of which module declared it.
+        if self._env.is_extern_node_id(callee_node_id):
+            self._call_sites.append(
+                CallSiteRecord(
+                    node_id=node.node_id,
+                    callee=func_name,
+                    target_type=result_type,
+                    codec_name="extern",
+                    parse_policy="default",
+                    line=node.span.start_line,
+                    col=node.span.start_col,
+                )
             )
 
-        self._check_call_args(sig.params, node, func_name)
-        return sig.result
+        return result_type
 
     # --- value call (lambda / higher-order) ---
 

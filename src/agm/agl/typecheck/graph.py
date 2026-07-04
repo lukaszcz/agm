@@ -672,13 +672,15 @@ def _build_graph_func_sig_table(
     graph_type_table: dict[tuple[ModuleId, str], Type],
     graph_generic_table: dict[tuple[ModuleId, str], GenericTypeDef],
     graph_alias_table: dict[tuple[ModuleId, str], GenericAliasDef],
-) -> dict[int, tuple[str, FunctionSignature, FunctionType]]:
+) -> dict[int, tuple[str, FunctionSignature, FunctionType, bool]]:
     """Phase 2: compute function signatures for ALL top-level FuncDefs across all modules.
 
     Returns a table mapping each ``FuncDef.node_id``
-    to ``(name, FunctionSignature, FunctionType)`` — the declared function name,
-    the full declared signature (names, types, has-default flags), and the erased
-    value type.
+    to ``(name, FunctionSignature, FunctionType, is_extern)`` — the declared
+    function name, the full declared signature (names, types, has-default
+    flags), the erased value type, and whether the declaration is an
+    ``extern def`` (so calls to an imported extern are recorded the same way
+    as calls to an extern declared in the calling module).
 
     This pre-pass builds per-module ``TypeEnvironment``s seeded with the
     graph-wide type table and the module's ``ImportEnv`` so that parameter/return
@@ -703,7 +705,7 @@ def _build_graph_func_sig_table(
     """
     from agm.agl.typecheck.checker import _BUILTIN_FUNC_NAMES, _BUILTIN_TYPE_NAMES
 
-    result: dict[int, tuple[str, FunctionSignature, FunctionType]] = {}
+    result: dict[int, tuple[str, FunctionSignature, FunctionType, bool]] = {}
 
     for mid, rmod in resolved_graph.modules.items():
         program = rmod.resolved.program
@@ -760,7 +762,7 @@ def _build_graph_func_sig_table(
                 params=tuple(p.type for p in params),
                 result=result_type,
             )
-            result[item.node_id] = (item.name, sig, func_type)
+            result[item.node_id] = (item.name, sig, func_type, item.is_extern)
 
     return result
 
@@ -777,7 +779,7 @@ def _check_module(
     capabilities: HostCapabilities,
     graph_type_table: dict[tuple[ModuleId, str], Type],
     import_env_map: Mapping[ModuleId, object],
-    graph_func_sig_table: dict[int, tuple[str, FunctionSignature, FunctionType]],
+    graph_func_sig_table: dict[int, tuple[str, FunctionSignature, FunctionType, bool]],
     graph_generic_table: dict[tuple[ModuleId, str], GenericTypeDef],
     graph_alias_table: dict[tuple[ModuleId, str], GenericAliasDef],
     graph_ctor_sig_table: dict[tuple[ModuleId, str, str | None], ConstructorSignature],
@@ -846,10 +848,12 @@ def _check_module(
     #   here; the current module's own signatures always win because
     #   builder.collect() → _preregister_funcdef re-registers them AFTER this
     #   seeding step, overwriting any cross-module collision for bare-name calls.
-    for node_id, (name, sig, func_type) in graph_func_sig_table.items():
+    for node_id, (name, sig, func_type, is_extern) in graph_func_sig_table.items():
         env.set_binding_type(node_id, func_type)
         env.register_function_signature_by_node_id(node_id, sig)
         env.register_function_signature(name, sig)
+        if is_extern:
+            env.register_extern_node_id(node_id)
 
     # Run the full _TypeBuilder + _Checker pipeline on this module's program.
     # builder.collect() → _preregister_funcdef re-registers this module's own

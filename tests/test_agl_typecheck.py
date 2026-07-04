@@ -1610,6 +1610,20 @@ class TestPartialConstructorAndValueCalls:
             params=(TextType(),), result=checked.type_env.instantiate_nominal("Box", (TextType(),))
         )
 
+    def test_generic_constructor_expected_type_with_non_hole_fields(self) -> None:
+        checked = accept_type(
+            "record Pair[A, B]\n"
+            "  left: A\n"
+            "  right: B\n"
+            "let make: (text) -> Pair[int, text] = Pair(left = 1, right = ?)\n"
+            "make"
+        )
+        call = self._let_call(checked, "make")
+        assert checked.node_types[call.node_id] == FunctionType(
+            params=(TextType(),),
+            result=checked.type_env.instantiate_nominal("Pair", (IntType(), TextType())),
+        )
+
     def test_qualified_generic_constructor_partial(self) -> None:
         checked = accept_type(
             "enum Option[T]\n"
@@ -1653,6 +1667,10 @@ class TestPartialConstructorAndValueCalls:
             "record Box[T]\n  value: T\nlet make = Box::[int, text](value = ?)\nmake"
         )
         assert "type argument" in str(arity_err).lower()
+        qualified_err = reject_type(
+            "enum E\n  | v(x: int)\nlet make = E.v::[int](x = ?)\nmake"
+        )
+        assert "type argument" in str(qualified_err).lower()
         abstract_err = reject_type("let make = Exception(message = ?)\nmake")
         assert "abstract" in str(abstract_err).lower()
 
@@ -1670,7 +1688,8 @@ class TestPartialConstructorAndValueCalls:
                 "let make: (int) -> mylib::Point = mylib::Point(x = ?)\n"
                 "let make_open: (int) -> Point = Point(x = ?)\n"
                 "let make_box: (text) -> mylib::Box[text] = mylib::Box(value = ?)\n"
-                "make_box"
+                "let make_box_open: (text) -> Box[text] = Box(value = ?)\n"
+                "make_box_open"
             ),
             "mylib": "record Point\n  x: int\nrecord Box[T]\n  value: T",
         }
@@ -1691,18 +1710,43 @@ class TestPartialConstructorAndValueCalls:
         assert entry.node_types[calls["make_open"].node_id] == FunctionType(
             params=(IntType(),), result=point_type
         )
+        box_text_type = RecordType(
+            "Box",
+            {"value": TextType()},
+            type_args=(TextType(),),
+            module_id=ModuleId.from_dotted("mylib"),
+        )
         assert entry.node_types[calls["make_box"].node_id] == FunctionType(
             params=(TextType(),),
-            result=RecordType(
-                "Box",
-                {"value": TextType()},
-                type_args=(TextType(),),
-                module_id=ModuleId.from_dotted("mylib"),
-            ),
+            result=box_text_type,
+        )
+        assert entry.node_types[calls["make_box_open"].node_id] == FunctionType(
+            params=(TextType(),),
+            result=box_text_type,
         )
         assert entry.partial_calls[calls["make"].node_id].callee_kind == "constructor"
         assert entry.partial_calls[calls["make_open"].node_id].callee_kind == "constructor"
         assert entry.partial_calls[calls["make_box"].node_id].callee_kind == "constructor"
+        assert entry.partial_calls[calls["make_box_open"].node_id].callee_kind == "constructor"
+
+    def test_cross_module_non_generic_constructor_partial_rejects_type_args(
+        self, tmp_path: object
+    ) -> None:
+        from pathlib import Path
+
+        from agm.agl.scope.graph import resolve_graph
+        from agm.agl.typecheck.graph import check_graph
+        from tests.agl.ir_harness import make_graph_from_files
+
+        modules = {
+            "entry": "import mylib\nlet make = mylib::Point::[int](x = ?)\nmake",
+            "mylib": "record Point\n  x: int",
+        }
+        with pytest.raises(AglTypeError, match="type argument"):
+            check_graph(
+                resolve_graph(make_graph_from_files(Path(tmp_path), modules)),
+                default_capabilities(),
+            )
 
     def test_value_calls_from_bindings_lambdas_and_partial_results(self) -> None:
         checked = accept_type(

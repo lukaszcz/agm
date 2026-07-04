@@ -48,6 +48,7 @@ from agm.agl.ir.nodes import (
     IrMakeDict,
     IrMakeException,
     IrMakeList,
+    IrMakeRecord,
     IrRaise,
     IrRenderTemplate,
     IrSequence,
@@ -56,6 +57,7 @@ from agm.agl.ir.nodes import (
     IrTry,
     IrUnary,
     IrVariantPlan,
+    UseDefault,
 )
 from agm.agl.ir.operations import (
     ArithKind,
@@ -83,14 +85,17 @@ from agm.agl.semantics.types import (
     DecimalType,
     DictType,
     EnumType,
+    FunctionType,
     IntType,
     JsonType,
     ListType,
     RecordType,
     TextType,
+    Type,
     TypeVarType,
     UnitType,
 )
+from agm.agl.syntax.nodes import Placeholder
 from agm.agl.typecheck import check
 from agm.agl.typecheck.env import CheckedProgram
 
@@ -1431,6 +1436,147 @@ class TestM4bIndirectCallLowering:
         prog = _lower(source)
         validate_ir(prog, deep=True)  # no exception
 
+
+class TestPartialCallLowering:
+    """Golden tests for lowering placeholder calls to closure IR."""
+
+    def test_declared_partial_call_captures_non_holes_and_preserves_defaults(self) -> None:
+        source = (
+            "def f(x: int, y: int, z: int = 9) -> int = x + y + z\n"
+            "let h = f(?, 2)\n"
+            "()"
+        )
+        prog = _lower(source)
+        h_bind = prog.modules[prog.entry_module].initializers[1]
+        assert isinstance(h_bind, IrBind)
+        assert isinstance(h_bind.value, IrBlock)
+        block_items = h_bind.value.items
+        assert len(block_items) == 2
+        captured_bind = block_items[0]
+        assert isinstance(captured_bind, IrBind)
+        assert isinstance(captured_bind.value, IrConstInt)
+        assert captured_bind.value.value == 2
+        make_closure = block_items[1]
+        assert isinstance(make_closure, IrMakeClosure)
+        assert make_closure.captures == (IrCapture(captured_bind.symbol, by_cell=False),)
+
+        desc = prog.functions[make_closure.function_id]
+        assert len(desc.params) == 1
+        assert isinstance(desc.body, IrDirectCall)
+        args = desc.body.arguments
+        assert len(args) == 3
+        assert isinstance(args[0], IrLoad)
+        assert args[0].symbol == desc.params[0].symbol
+        assert isinstance(args[1], IrLoad)
+        assert args[1].symbol == captured_bind.symbol
+        assert args[2] == UseDefault(param_index=2)
+
+    def test_value_partial_call_captures_callee_before_arguments(self) -> None:
+        source = (
+            "let f = fn(x: int, y: int) -> int => x + y\n"
+            "let h = f(?, 2)\n"
+            "()"
+        )
+        prog = _lower(source)
+        h_bind = prog.modules[prog.entry_module].initializers[1]
+        assert isinstance(h_bind, IrBind)
+        assert isinstance(h_bind.value, IrBlock)
+        callee_bind, arg_bind, make_closure = h_bind.value.items
+        assert isinstance(callee_bind, IrBind)
+        assert isinstance(callee_bind.value, IrLoad)
+        assert isinstance(arg_bind, IrBind)
+        assert isinstance(arg_bind.value, IrConstInt)
+        assert isinstance(make_closure, IrMakeClosure)
+        assert make_closure.captures == (
+            IrCapture(callee_bind.symbol, by_cell=False),
+            IrCapture(arg_bind.symbol, by_cell=False),
+        )
+
+        desc = prog.functions[make_closure.function_id]
+        assert isinstance(desc.body, IrIndirectCall)
+        assert isinstance(desc.body.callee, IrLoad)
+        assert desc.body.callee.symbol == callee_bind.symbol
+        assert isinstance(desc.body.arguments[0], IrLoad)
+        assert desc.body.arguments[0].symbol == desc.params[0].symbol
+        assert isinstance(desc.body.arguments[1], IrLoad)
+        assert desc.body.arguments[1].symbol == arg_bind.symbol
+
+    def test_constructor_partial_call_body_constructs_from_load_slots(self) -> None:
+        source = "record Point\n  x: int\n  y: int\nlet make = Point(x = ?, y = 2)\n()"
+        prog = _lower(source)
+        make_bind = prog.modules[prog.entry_module].initializers[0]
+        assert isinstance(make_bind, IrBind)
+        assert isinstance(make_bind.value, IrBlock)
+        captured_bind, make_closure = make_bind.value.items
+        assert isinstance(captured_bind, IrBind)
+        assert isinstance(make_closure, IrMakeClosure)
+
+        desc = prog.functions[make_closure.function_id]
+        assert isinstance(desc.body, IrMakeRecord)
+        assert len(desc.body.fields) == 2
+        x_value = desc.body.fields[0][1]
+        y_value = desc.body.fields[1][1]
+        assert isinstance(x_value, IrLoad)
+        assert x_value.symbol == desc.params[0].symbol
+        assert isinstance(y_value, IrLoad)
+        assert y_value.symbol == captured_bind.symbol
+
+    def test_partial_call_captured_argument_coercion_is_inside_synthesized_body(self) -> None:
+        source = (
+            "def f(x: decimal, y: decimal) -> decimal = x + y\n"
+            "let h = f(?, 1)\n"
+            "()"
+        )
+        prog = _lower(source)
+        h_bind = prog.modules[prog.entry_module].initializers[1]
+        assert isinstance(h_bind, IrBind)
+        assert isinstance(h_bind.value, IrBlock)
+        captured_bind, make_closure = h_bind.value.items
+        assert isinstance(captured_bind, IrBind)
+        assert isinstance(make_closure, IrMakeClosure)
+
+        desc = prog.functions[make_closure.function_id]
+        assert isinstance(desc.body, IrDirectCall)
+        captured_arg = desc.body.arguments[1]
+        assert isinstance(captured_arg, IrCoerce)
+        assert isinstance(captured_arg.operation, IntToDecimal)
+        assert isinstance(captured_arg.value, IrLoad)
+        assert captured_arg.value.symbol == captured_bind.symbol
+
+    def test_lower_expr_placeholder_guard(self) -> None:
+        import pytest
+
+        from agm.agl.syntax.spans import SourceSpan
+
+        checked = _check("()")
+        lowerer = _make_lowerer(checked, "()")
+        span = SourceSpan(
+            start_line=1,
+            start_col=0,
+            end_line=1,
+            end_col=1,
+            start_offset=0,
+            end_offset=1,
+        )
+        with pytest.raises(AssertionError, match="placeholder"):
+            lowerer.lower_expr(Placeholder(index=None, span=span, node_id=999_001))
+
+    def test_typevar_matching_covers_dict_and_function_shape_mismatch(self) -> None:
+        checked = _check("()")
+        lowerer = _make_lowerer(checked, "()")
+        subst: dict[str, Type] = {}
+        lowerer._match_typevars(
+            DictType(TypeVarType("T")),
+            DictType(IntType()),
+            subst,
+        )
+        assert subst == {"T": IntType()}
+        lowerer._match_typevars(
+            FunctionType(params=(TypeVarType("A"),), result=TypeVarType("A")),
+            FunctionType(params=(), result=IntType()),
+            subst,
+        )
+        assert subst == {"T": IntType()}
 
 
 # ---------------------------------------------------------------------------

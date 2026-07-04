@@ -9,7 +9,7 @@ and delegates the constructor dispatch branches in ``_check_varref``,
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from typing import Literal, Protocol
+from typing import Literal, Protocol, cast
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.symbols import BindingRef, ConstructorRef, ResolvedProgram
@@ -546,9 +546,8 @@ class ConstructorChecker:
             bound_expr = bound_exprs[fname]
             if isinstance(bound_expr, Placeholder):
                 hole_templates[hole_indices[bound_expr.node_id]] = templates_by_name[fname]
-        for template, concrete in zip(hole_templates, expected.params):
-            if template is not None:
-                self._ctx._match(template, concrete, hint, span=span, challenge=False)
+        for template, concrete in zip(cast(list[Type], hole_templates), expected.params):
+            self._ctx._match(template, concrete, hint, span=span, challenge=False)
         self._ctx._match(sig.result_template, expected.result, hint, span=span, challenge=False)
         return hint
 
@@ -570,9 +569,8 @@ class ConstructorChecker:
             bound_expr = bound_exprs[fname]
             if isinstance(bound_expr, Placeholder):
                 hole_templates[hole_indices[bound_expr.node_id]] = templates_by_name[fname]
-        for template, concrete in zip(hole_templates, expected.params):
-            if template is not None:
-                self._ctx._match(template, concrete, subst, span=span, challenge=False)
+        for template, concrete in zip(cast(list[Type], hole_templates), expected.params):
+            self._ctx._match(template, concrete, subst, span=span, challenge=False)
         self._ctx._match(sig.result_template, expected.result, subst, span=span, challenge=False)
 
     def _check_partial_concrete_constructor_call(

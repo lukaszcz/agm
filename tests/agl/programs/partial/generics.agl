@@ -12,7 +12,7 @@ def apply[A, B](x: A, f: (A) -> B) -> B = f(x)
 
 if
   | mode == "map" =>
-      let map_id = map_one(id, ?)
+      let map_id: (list[int]) -> list[int] = map_one(id, ?)
       let mapped = map_id([n])
       print(mapped[0])
       let map_render = map_one(fn(x: int) -> text => "v=${x}", ?)

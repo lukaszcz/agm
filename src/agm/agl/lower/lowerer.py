@@ -146,7 +146,9 @@ from agm.agl.semantics.types import (
     RecordType,
     TextType,
     Type,
+    TypeVarType,
     UnitType,
+    substitute,
 )
 from agm.agl.syntax.nodes import (
     AgentDecl,
@@ -220,7 +222,7 @@ from agm.agl.type_schema import (
     build_param_decoder,
     derive_schema,
 )
-from agm.agl.typecheck.env import CheckedProgram
+from agm.agl.typecheck.env import CheckedProgram, FunctionSignature, PartialCallSpec
 from agm.agl.typecheck.graph import CheckedModule
 from agm.util.text import normalize_newlines
 
@@ -347,7 +349,12 @@ class _Lowerer:
         )
         return sym
 
-    def _alloc_synthetic_sym(self, *, mutable: bool) -> SymbolId:
+    def _alloc_synthetic_sym(
+        self,
+        *,
+        mutable: bool,
+        owner: "ModuleId | FunctionId | None" = None,
+    ) -> SymbolId:
         """Allocate a fresh ``SymbolId`` for a lowering-internal synthetic binding.
 
         Unlike ``_alloc_sym``, this does NOT register an entry in ``decl_to_sym``
@@ -361,7 +368,7 @@ class _Lowerer:
             symbol_id=sym,
             mutable=mutable,
             public_name=None,
-            owner=self._module_id,
+            owner=owner if owner is not None else self._module_id,
         )
         return sym
 
@@ -788,9 +795,46 @@ class _Lowerer:
         )
         return t
 
+    def _match_typevars(self, template: Type, concrete: Type, subst: dict[str, Type]) -> None:
+        """Best-effort one-sided match used to recover erased generic call types."""
+        if isinstance(template, TypeVarType):
+            subst.setdefault(template.name, concrete)
+            return
+        if isinstance(template, ListType) and isinstance(concrete, ListType):
+            self._match_typevars(template.elem, concrete.elem, subst)
+        elif isinstance(template, DictType) and isinstance(concrete, DictType):
+            self._match_typevars(template.value, concrete.value, subst)
+        elif isinstance(template, FunctionType) and isinstance(concrete, FunctionType):
+            if len(template.params) == len(concrete.params):
+                for template_param, concrete_param in zip(template.params, concrete.params):
+                    self._match_typevars(template_param, concrete_param, subst)
+                self._match_typevars(template.result, concrete.result, subst)
+        elif (
+            isinstance(template, (RecordType, EnumType))
+            and isinstance(concrete, (RecordType, EnumType))
+            and type(template) is type(concrete)
+            and template.name == concrete.name
+            and len(template.type_args) == len(concrete.type_args)
+        ):
+            for template_arg, concrete_arg in zip(template.type_args, concrete.type_args):
+                self._match_typevars(template_arg, concrete_arg, subst)
+
     # ------------------------------------------------------------------
     # Core lowering with optional coercion wrapping
     # ------------------------------------------------------------------
+
+    def _coerce_ir(
+        self,
+        ir: IrExpr,
+        source: Type,
+        expected: Type,
+        location: Location,
+    ) -> IrExpr:
+        """Wrap pre-lowered IR in ``IrCoerce`` when ``source`` needs ``expected``."""
+        op = compile_coercion(source, expected)
+        if op is None:
+            return ir
+        return IrCoerce(location=location, value=ir, operation=op)
 
     def lower_coerced(self, node: Expr, expected: Type) -> IrExpr:
         """Lower *node* as an expression, then wrap in ``IrCoerce`` if needed.
@@ -801,10 +845,7 @@ class _Lowerer:
         """
         ir = self.lower_expr(node)
         own_type = self._node_type(node.node_id)
-        op = compile_coercion(own_type, expected)
-        if op is None:
-            return ir
-        return IrCoerce(location=self._loc(node.span), value=ir, operation=op)
+        return self._coerce_ir(ir, own_type, expected, self._loc(node.span))
 
     def lower_expr(self, node: Expr) -> IrExpr:
         """Lower an AST expression node to its own-typed IR (no outer coercion)."""
@@ -1771,6 +1812,10 @@ class _Lowerer:
         """
         callee = call_node.callee
 
+        partial_spec = self._checked.partial_calls.get(nid)
+        if partial_spec is not None:
+            return self._lower_partial_call(call_node, partial_spec, span)
+
         # Check for builtin calls first
         builtin_kind = self._checked.resolved.builtin_calls.get(nid)
         if builtin_kind is not None:
@@ -1821,6 +1866,46 @@ class _Lowerer:
         # value-call sites, so only positional args exist here.
         return self._lower_indirect_call(call_node, nid, span)
 
+    def _direct_call_param_types(
+        self,
+        call_node: Call,
+        sig: FunctionSignature,
+        binding: tuple[Expr | None, ...],
+    ) -> tuple[Type, ...]:
+        subst: dict[str, Type] = {}
+        if call_node.type_args:
+            for param_name, type_arg in zip(sig.type_params, call_node.type_args):
+                subst[param_name] = self._checked.type_env.resolve_type_expr(type_arg)
+        else:
+            call_type = self._node_type(call_node.node_id)
+            if isinstance(call_type, FunctionType):
+                partial_spec = self._checked.partial_calls.get(call_node.node_id)
+                if partial_spec is not None:
+                    for spec, bound_expr, hole_index in zip(
+                        sig.params, binding, partial_spec.argument_holes
+                    ):
+                        if isinstance(bound_expr, Placeholder):
+                            assert hole_index is not None
+                            self._match_typevars(spec.type, call_type.params[hole_index], subst)
+                    self._match_typevars(sig.result, call_type.result, subst)
+            for spec, bound_expr in zip(sig.params, binding):
+                if bound_expr is not None and not isinstance(bound_expr, Placeholder):
+                    self._match_typevars(spec.type, self._node_type(bound_expr.node_id), subst)
+        return tuple(substitute(spec.type, subst) for spec in sig.params)
+
+    def _lower_direct_call_with_args(
+        self,
+        *,
+        function_id: FunctionId,
+        span: SourceSpan,
+        arguments: tuple[IrExpr | UseDefault, ...],
+    ) -> IrDirectCall:
+        return IrDirectCall(
+            location=self._loc(span),
+            function_id=function_id,
+            arguments=arguments,
+        )
+
     def _lower_direct_call(
         self,
         call_node: "Call",
@@ -1841,18 +1926,32 @@ class _Lowerer:
 
         # The checker already bound the call; reuse its result (never re-bind).
         binding = self._checked.argument_bindings.function_calls[result_node_id]
+        param_types = self._direct_call_param_types(call_node, sig, binding)
 
         ir_args: list[IrExpr | UseDefault] = []
-        for i, (spec, bound_expr) in enumerate(zip(sig.params, binding)):
+        for i, (param_type, bound_expr) in enumerate(zip(param_types, binding)):
             if bound_expr is None:
                 ir_args.append(UseDefault(param_index=i))
             else:
-                ir_args.append(self.lower_coerced(bound_expr, spec.type))
+                ir_args.append(self.lower_coerced(bound_expr, param_type))
 
-        return IrDirectCall(
-            location=self._loc(span),
+        return self._lower_direct_call_with_args(
             function_id=fn_id,
+            span=span,
             arguments=tuple(ir_args),
+        )
+
+    def _lower_indirect_call_with_args(
+        self,
+        *,
+        callee: IrExpr,
+        span: SourceSpan,
+        arguments: tuple[IrExpr, ...],
+    ) -> IrIndirectCall:
+        return IrIndirectCall(
+            location=self._loc(span),
+            callee=callee,
+            arguments=arguments,
         )
 
     def _lower_indirect_call(
@@ -1889,9 +1988,9 @@ class _Lowerer:
             self.lower_coerced(arg, callee_fn_type.params[i])
             for i, arg in enumerate(call_node.args)
         ]
-        return IrIndirectCall(
-            location=self._loc(span),
+        return self._lower_indirect_call_with_args(
             callee=callee_ir,
+            span=span,
             arguments=tuple(arg_irs),
         )
 
@@ -1920,29 +2019,64 @@ class _Lowerer:
         span: "SourceSpan",
     ) -> IrExpr:
         """Build the IrMake* node for a constructor given its resolved checker type."""
+        if typ is None:
+            owner_typ = self._checked.type_env.get_type(owner_name)  # pragma: no cover
+            if owner_typ is not None:  # pragma: no cover
+                return self._lower_constructor_from_type(  # pragma: no cover
+                    owner_typ, owner_name, variant, arg_exprs, span
+                )
+        arg_slots = {
+            fname: self.lower_coerced(expr, field_type)
+            for fname, field_type in self._constructor_field_types(typ, variant).items()
+            if (expr := arg_exprs.get(fname)) is not None
+        }
+        return self._lower_constructor_from_slots(typ, owner_name, variant, arg_slots, span)
+
+    def _constructor_field_types(
+        self,
+        typ: Type | None,
+        variant: str | None,
+    ) -> dict[str, Type]:
+        if isinstance(typ, RecordType):
+            return dict(typ.fields)
+        if isinstance(typ, ExceptionType):
+            return dict(typ.fields)
+        if isinstance(typ, EnumType):
+            assert variant is not None, "compiler bug: enum constructor must have variant"
+            return dict(typ.variants[variant])
+        raise AssertionError(  # pragma: no cover
+            "compiler bug: constructor field types require a constructor type"
+        )
+
+    def _lower_constructor_from_slots(
+        self,
+        typ: "Type | None",
+        owner_name: str,
+        variant: str | None,
+        arg_slots: "dict[str, IrExpr]",
+        span: "SourceSpan",
+    ) -> IrExpr:
+        """Build the IrMake* node for a constructor from already-lowered slots."""
         loc = self._loc(span)
 
         if isinstance(typ, RecordType):
             nominal = NominalId(typ.module_id, typ.name)
-            # Build fields in declaration order from typ.fields.
-            ir_fields: list[tuple[str, IrExpr]] = []
-            for fname, ftype in typ.fields.items():
-                ir_fields.append((fname, self.lower_coerced(arg_exprs[fname], ftype)))
+            ir_fields = tuple((fname, arg_slots[fname]) for fname in typ.fields)
             return IrMakeRecord(
                 location=loc,
                 nominal=nominal,
                 display_name=typ.name,
-                fields=tuple(ir_fields),
+                fields=ir_fields,
             )
 
         if isinstance(typ, ExceptionType):
             nominal = NominalId(PRELUDE_ID, typ.name)
             # ONE trace id allocation sentinel per construction (auto-fill any
-            # declared field not present in arg_exprs).
+            # declared field not present in arg_slots).
             exc_fields: list[tuple[str, IrExpr | AutoTraceField]] = []
-            for fname, ftype in typ.fields.items():
-                if fname in arg_exprs:
-                    exc_fields.append((fname, self.lower_coerced(arg_exprs[fname], ftype)))
+            for fname in typ.fields:
+                if fname in arg_slots:
+                    exc_fields.append((fname, arg_slots[fname]))
                 else:
                     exc_fields.append((fname, AutoTraceField()))
             return IrMakeException(
@@ -1956,28 +2090,246 @@ class _Lowerer:
             assert variant is not None, "compiler bug: enum constructor must have variant"
             nominal = NominalId(typ.module_id, typ.name)
             variant_fields = typ.variants.get(variant, {})
-            enum_fields: list[tuple[str, IrExpr]] = []
-            for fname, ftype in variant_fields.items():
-                # The checker enforces all variant fields are present in arg_exprs.
-                enum_fields.append((fname, self.lower_coerced(arg_exprs[fname], ftype)))
+            enum_fields = tuple((fname, arg_slots[fname]) for fname in variant_fields)
             return IrMakeEnum(
                 location=loc,
                 nominal=nominal,
                 display_name=typ.name,
                 variant=variant,
-                fields=tuple(enum_fields),
+                fields=enum_fields,
             )
 
-        # Nullary constructor whose result type was not yet resolved (e.g. called
-        # via a TypeVar-erased path) — look up owner type directly.  # pragma: no cover
-        owner_typ = self._checked.type_env.get_type(owner_name)  # pragma: no cover
-        if owner_typ is not None:  # pragma: no cover
-            return self._lower_constructor_from_type(  # pragma: no cover
-                owner_typ, owner_name, variant, arg_exprs, span
-            )
         raise AssertionError(  # pragma: no cover
             f"compiler bug: cannot determine constructor type for {owner_name!r}"
         )
+
+    # ------------------------------------------------------------------
+    # Partial call lowering
+    # ------------------------------------------------------------------
+
+    def _partial_written_non_holes(self, call_node: Call) -> tuple[Expr, ...]:
+        positional = tuple(arg for arg in call_node.args if not isinstance(arg, Placeholder))
+        named = tuple(
+            named_arg.value
+            for named_arg in call_node.named_args
+            if not isinstance(named_arg.value, Placeholder)
+        )
+        return (*positional, *named)
+
+    def _partial_slot_loads(
+        self,
+        *,
+        binding: tuple[Expr | None, ...],
+        argument_holes: tuple[int | None, ...],
+        target_types: tuple[Type, ...],
+        capture_symbols: dict[int, SymbolId],
+        param_symbols: tuple[SymbolId, ...],
+        span: SourceSpan,
+    ) -> tuple[IrExpr | UseDefault, ...]:
+        loc = self._loc(span)
+        slots: list[IrExpr | UseDefault] = []
+        for index, (bound_expr, hole_index, target_type) in enumerate(
+            zip(binding, argument_holes, target_types)
+        ):
+            if bound_expr is None:
+                slots.append(UseDefault(param_index=index))
+                continue
+            if isinstance(bound_expr, Placeholder):
+                assert hole_index is not None, "compiler bug: placeholder slot lacks hole index"
+                slots.append(IrLoad(location=loc, symbol=param_symbols[hole_index]))
+                continue
+            sym = capture_symbols[bound_expr.node_id]
+            load = IrLoad(location=loc, symbol=sym)
+            slots.append(
+                self._coerce_ir(load, self._node_type(bound_expr.node_id), target_type, loc)
+            )
+        return tuple(slots)
+
+    def _partial_declared_body(
+        self,
+        call_node: Call,
+        span: SourceSpan,
+        spec: PartialCallSpec,
+        capture_symbols: dict[int, SymbolId],
+        param_symbols: tuple[SymbolId, ...],
+    ) -> IrExpr:
+        assert isinstance(call_node.callee, VarRef)
+        callee_ref = self._checked.resolved.resolution.get(call_node.callee.node_id)
+        assert callee_ref is not None and callee_ref.kind is BinderKind.function_binding
+        fn_id = self._link.fn_node_to_id.get(callee_ref.decl_node_id)
+        assert fn_id is not None, (
+            f"compiler bug: no FunctionId for function decl_node_id={callee_ref.decl_node_id!r}"
+        )
+        sig = self._checked.type_env.get_function_signature_by_node_id(callee_ref.decl_node_id)
+        assert sig is not None, f"compiler bug: no signature for function {callee_ref.name!r}"
+        binding = self._checked.argument_bindings.function_calls[call_node.node_id]
+        target_types = self._direct_call_param_types(call_node, sig, binding)
+        arguments = self._partial_slot_loads(
+            binding=binding,
+            argument_holes=spec.argument_holes,
+            target_types=target_types,
+            capture_symbols=capture_symbols,
+            param_symbols=param_symbols,
+            span=span,
+        )
+        return self._lower_direct_call_with_args(
+            function_id=fn_id,
+            span=span,
+            arguments=arguments,
+        )
+
+    def _partial_value_body(
+        self,
+        call_node: Call,
+        span: SourceSpan,
+        spec: PartialCallSpec,
+        callee_symbol: SymbolId,
+        capture_symbols: dict[int, SymbolId],
+        param_symbols: tuple[SymbolId, ...],
+    ) -> IrExpr:
+        callee_type = self._node_type(call_node.callee.node_id)
+        assert isinstance(callee_type, FunctionType)
+        binding: tuple[Expr | None, ...] = call_node.args
+        value_slots = self._partial_slot_loads(
+            binding=binding,
+            argument_holes=spec.argument_holes,
+            target_types=callee_type.params,
+            capture_symbols=capture_symbols,
+            param_symbols=param_symbols,
+            span=span,
+        )
+        arguments = tuple(cast(IrExpr, slot) for slot in value_slots)
+        return self._lower_indirect_call_with_args(
+            callee=IrLoad(location=self._loc(span), symbol=callee_symbol),
+            span=span,
+            arguments=arguments,
+        )
+
+    def _partial_constructor_body(
+        self,
+        call_node: Call,
+        span: SourceSpan,
+        spec: PartialCallSpec,
+        capture_symbols: dict[int, SymbolId],
+        param_symbols: tuple[SymbolId, ...],
+    ) -> IrExpr:
+        owner_name, variant = self._partial_constructor_owner(call_node)
+        partial_type = self._node_type(call_node.node_id)
+        assert isinstance(partial_type, FunctionType)
+        result_type = partial_type.result
+        field_types = self._constructor_field_types(result_type, variant)
+        binding_by_name = self._checked.argument_bindings.constructor_calls[call_node.node_id]
+        field_order = tuple(binding_by_name)
+        binding = tuple(binding_by_name[field_name] for field_name in field_order)
+        target_types = tuple(field_types[field_name] for field_name in field_order)
+        slots = self._partial_slot_loads(
+            binding=binding,
+            argument_holes=spec.argument_holes,
+            target_types=target_types,
+            capture_symbols=capture_symbols,
+            param_symbols=param_symbols,
+            span=span,
+        )
+        arg_slots = {
+            field_name: cast(IrExpr, slot)
+            for field_name, slot in zip(field_order, slots)
+        }
+        return self._lower_constructor_from_slots(
+            result_type,
+            owner_name,
+            variant,
+            arg_slots,
+            span,
+        )
+
+    def _partial_constructor_owner(self, call_node: Call) -> tuple[str, str | None]:
+        callee = call_node.callee
+        if isinstance(callee, VarRef):
+            cref = self._checked.resolved.constructor_refs.get(callee.node_id)
+            if cref is not None:
+                return cref.owner_name, cref.variant
+            callee_ref = self._checked.resolved.resolution.get(callee.node_id)
+            assert callee_ref is not None
+            return callee_ref.name, None
+        assert isinstance(callee, FieldAccess)
+        owner_name, variant, _owner_module = self._checked.resolved.qualified_constructor_refs[
+            callee.node_id
+        ]
+        return owner_name, variant
+
+    def _lower_partial_call(
+        self,
+        call_node: Call,
+        spec: PartialCallSpec,
+        span: SourceSpan,
+    ) -> IrExpr:
+        partial_type = self._node_type(call_node.node_id)
+        assert isinstance(partial_type, FunctionType)
+        loc = self._loc(span)
+        items: list[IrExpr] = []
+        captures: list[IrCapture] = []
+        capture_symbols: dict[int, SymbolId] = {}
+        callee_symbol: SymbolId | None = None
+
+        if spec.callee_kind == "value":
+            callee_symbol = self._alloc_synthetic_sym(mutable=False)
+            items.append(
+                IrBind(
+                    location=loc,
+                    symbol=callee_symbol,
+                    value=self.lower_expr(call_node.callee),
+                )
+            )
+            captures.append(IrCapture(symbol=callee_symbol, by_cell=False))
+
+        for arg in self._partial_written_non_holes(call_node):
+            sym = self._alloc_synthetic_sym(mutable=False)
+            capture_symbols[arg.node_id] = sym
+            items.append(IrBind(location=loc, symbol=sym, value=self.lower_expr(arg)))
+            captures.append(IrCapture(symbol=sym, by_cell=False))
+
+        fn_id = self._alloc_fn()
+        fn_sym = self._alloc_synthetic_sym(mutable=False, owner=fn_id)
+        params = tuple(
+            IrFunctionParam(
+                symbol=self._alloc_synthetic_sym(mutable=False, owner=fn_id),
+                default=None,
+            )
+            for _param_type in partial_type.params
+        )
+        param_symbols = tuple(param.symbol for param in params)
+
+        if spec.callee_kind == "declared":
+            body = self._partial_declared_body(
+                call_node, span, spec, capture_symbols, param_symbols
+            )
+        elif spec.callee_kind == "value":
+            assert callee_symbol is not None
+            body = self._partial_value_body(
+                call_node, span, spec, callee_symbol, capture_symbols, param_symbols
+            )
+        else:
+            body = self._partial_constructor_body(
+                call_node, span, spec, capture_symbols, param_symbols
+            )
+
+        self._link.functions[fn_id] = FunctionDescriptor(
+            function_id=fn_id,
+            function_symbol=fn_sym,
+            module_id=self._module_id,
+            params=params,
+            body=body,
+            param_labels=tuple(repr(param_type) for param_type in partial_type.params),
+            result_label=repr(partial_type.result),
+        )
+        items.append(
+            IrMakeClosure(
+                location=loc,
+                function_id=fn_id,
+                captures=tuple(captures),
+            )
+        )
+        return IrBlock(location=loc, items=tuple(items))
 
     # ------------------------------------------------------------------
     # Block helper

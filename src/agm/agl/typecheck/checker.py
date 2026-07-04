@@ -40,7 +40,7 @@ The checker raises ``AglTypeError`` on the first error (first-error abort).
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from typing import Literal, TypeGuard
+from typing import Literal, TypeGuard, cast
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
@@ -1255,9 +1255,8 @@ class _Checker:
         for spec, bound_expr in zip(sig.params, binding):
             if isinstance(bound_expr, Placeholder):
                 hole_templates[hole_indices[bound_expr.node_id]] = spec.type
-        for template, concrete in zip(hole_templates, expected.params):
-            if template is not None:
-                self._match(template, concrete, hint, span=span, challenge=False)
+        for template, concrete in zip(cast(list[Type], hole_templates), expected.params):
+            self._match(template, concrete, hint, span=span, challenge=False)
         self._match(sig.result, expected.result, hint, span=span, challenge=False)
         return hint
 
@@ -1277,9 +1276,8 @@ class _Checker:
         for spec, bound_expr in zip(sig.params, binding):
             if isinstance(bound_expr, Placeholder):
                 hole_templates[hole_indices[bound_expr.node_id]] = spec.type
-        for template, concrete in zip(hole_templates, expected.params):
-            if template is not None:
-                self._match(template, concrete, subst, span=span, challenge=False)
+        for template, concrete in zip(cast(list[Type], hole_templates), expected.params):
+            self._match(template, concrete, subst, span=span, challenge=False)
         self._match(sig.result, expected.result, subst, span=span, challenge=False)
 
     def _check_partial_generic_declared_call(

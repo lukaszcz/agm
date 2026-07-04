@@ -377,6 +377,19 @@ class TestFailureEffects:
         assert use.ok
         assert use.value is not None and _int(use.value) == 30
 
+    def test_runtime_raise_does_not_install_failing_binding_from_prior_function(self) -> None:
+        s = ReplSession()
+        declare = s.eval_entry('def f[T]() -> T = raise Abort(message = "A")')
+        assert declare.ok
+
+        result = s.eval_entry("let x: int = f()")
+
+        assert not result.ok
+        assert result.error is not None
+        assert result.installed == ()
+        assert [name for name, _typ, _value in s.bindings()] == ["f"]
+        assert not s.eval_entry("x").ok
+
     def test_runtime_raise_preserves_completed_param(self) -> None:
         s = ReplSession()
         result = s.eval_entry("param p: int = 7\nlet z: decimal = 1 / 0")

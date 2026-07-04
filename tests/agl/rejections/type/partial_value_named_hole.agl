@@ -2,3 +2,4 @@ def add(a: int, b: int) -> int = a + b
 
 let f: (int, int) -> int = add
 let bad = f(a = ?)
+bad

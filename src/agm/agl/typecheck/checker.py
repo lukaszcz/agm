@@ -976,7 +976,8 @@ class _Checker:
             kind = self._resolved.builtin_calls[node.node_id]
             builtin_name = next(name for name, value in BUILTIN_CALL_NAMES.items() if value is kind)
             raise AglTypeError(
-                f"Cannot partially apply special builtin '{builtin_name}'.",
+                f"Cannot use placeholder arguments with special builtin '{builtin_name}'; "
+                "partial application is not supported.",
                 span=node.span,
             )
 
@@ -1296,7 +1297,8 @@ class _Checker:
                 span=node.span,
                 message_for=lambda p: (
                     f"Cannot infer type argument '{p}' for call to '{func_name}'; "
-                    f"supply it explicitly via '{func_name}::[…]'."
+                    f"supply it explicitly via '{func_name}::[…]'. "
+                    f"ASCII fallback: '{func_name}::[...]'."
                 ),
             )
 
@@ -1466,7 +1468,8 @@ class _Checker:
     def _check_value_call(self, node: Call, *, expected: Type | None) -> Type:
         if node.named_args:
             raise AglTypeError(
-                "Named arguments are only allowed at declared-function call sites.",
+                "Named arguments are not allowed when calling a function value; "
+                "they are only allowed at declared-function call sites.",
                 span=node.span,
             )
         callee_type = self._check_expr(node.callee, expected=None)

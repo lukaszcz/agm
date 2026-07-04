@@ -1,1 +1,2 @@
 let parsed = parse_json(?)
+parsed

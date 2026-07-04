@@ -39,7 +39,8 @@ The checker raises ``AglTypeError`` on the first error (first-error abort).
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from typing import TypeGuard
 
 from agm.agl.capabilities import HostCapabilities
@@ -432,16 +433,18 @@ class _Checker:
         if not block.items:
             return UnitType()
 
-        result_type: Type = UnitType()
         last = block.items[-1]
+        if isinstance(last, (LetDecl, VarDecl)):
+            raise AglTypeError(
+                "a 'let'/'var' declaration must be followed by an expression in a block.",
+                span=last.span,
+            )
+
+        result_type: Type = UnitType()
         for item in block.items:
-            if item is last and isinstance(item, (LetDecl, VarDecl)):
-                raise AglTypeError(
-                    "a 'let'/'var' declaration must be followed by an expression in a block.",
-                    span=item.span,
-                )
             item_type = self._check_item(item, expected=expected if item is last else None)
-            result_type = item_type
+            if item is last:
+                result_type = item_type
         return result_type
 
     def _check_item(self, item: Item, *, expected: Type | None) -> Type:
@@ -478,6 +481,23 @@ class _Checker:
     # Declaration checkers
     # ------------------------------------------------------------------
 
+    @contextmanager
+    def _return_context(self, expected: Type | None) -> Iterator[list[Type]]:
+        """Push a return-target frame for the enclosing function body.
+
+        ``expected`` is the annotated result type, or ``None`` in inference mode.
+        The yielded list collects the operand types of ``return`` statements when
+        inferring the result type.
+        """
+        collected: list[Type] = []
+        self._return_expected_stack.append(expected)
+        self._return_collected_stack.append(collected)
+        try:
+            yield collected
+        finally:
+            self._return_collected_stack.pop()
+            self._return_expected_stack.pop()
+
     def _check_funcdef_body(self, node: FuncDef) -> None:
         """Check the body of a ``def`` against its registered signature."""
         sig = self._env.get_function_signature(node.name)
@@ -502,13 +522,8 @@ class _Checker:
                     def_type = self._check_expr(p.default, expected=spec.type)
                     self._assert_assignable(def_type, spec.type, p.span)
             # Check body against declared return type.
-            self._return_expected_stack.append(sig.result)
-            self._return_collected_stack.append([])
-            try:
+            with self._return_context(sig.result):
                 body_type = self._check_expr(node.body, expected=sig.result)
-            finally:
-                self._return_collected_stack.pop()
-                self._return_expected_stack.pop()
             if not isinstance(body_type, BottomType):
                 self._assert_assignable(body_type, sig.result, node.span)
         finally:
@@ -529,14 +544,8 @@ class _Checker:
                 if p.default is not None:
                     def_type = self._check_expr(p.default, expected=spec.type)
                     self._assert_assignable(def_type, spec.type, p.span)
-            self._return_expected_stack.append(None)
-            collected: list[Type] = []
-            self._return_collected_stack.append(collected)
-            try:
+            with self._return_context(None) as collected:
                 body_type = self._check_expr(node.body, expected=None)
-            finally:
-                self._return_collected_stack.pop()
-                self._return_expected_stack.pop()
             if isinstance(body_type, BottomType) and not collected:
                 raise AglTypeError(
                     f"Cannot infer return type of function '{node.name}': body always raises. "
@@ -617,6 +626,11 @@ class _Checker:
                 self._assert_assignable(val_type, declared_type, stmt.span)
         self._env.set_binding_type(stmt.node_id, declared_type)
 
+    @staticmethod
+    def _binder_result(value_type: Type) -> Type:
+        """A binder/assignment item propagates bottom when its value always exits."""
+        return BottomType() if isinstance(value_type, BottomType) else UnitType()
+
     def _check_binding(self, stmt: LetDecl | VarDecl) -> Type:
         ann_type = self._resolve_annotation(stmt.type_ann, stmt.span)
         val_type = self._check_expr(stmt.value, expected=ann_type)
@@ -631,7 +645,7 @@ class _Checker:
                 )
             declared_type = val_type
         self._env.set_binding_type(stmt.node_id, declared_type)
-        return BottomType() if isinstance(val_type, BottomType) else UnitType()
+        return self._binder_result(val_type)
 
     def _check_assign_stmt(self, stmt: AssignStmt) -> Type:
         if isinstance(stmt.target, NameTarget):
@@ -639,7 +653,7 @@ class _Checker:
             target_type = self._require_binding_type(ref)
             val_type = self._check_expr(stmt.value, expected=target_type)
             self._assert_assignable(val_type, target_type, stmt.span)
-            return BottomType() if isinstance(val_type, BottomType) else UnitType()
+            return self._binder_result(val_type)
 
         if isinstance(stmt.target, IndexTarget):
             return self._check_indexed_assign_stmt(stmt, stmt.target)
@@ -661,7 +675,7 @@ class _Checker:
         elem_type = self._check_index_target_type(target, root_type)
         value_type = self._check_expr(stmt.value, expected=elem_type)
         self._assert_assignable(value_type, elem_type, stmt.span)
-        return BottomType() if isinstance(value_type, BottomType) else UnitType()
+        return self._binder_result(value_type)
 
     def _check_index_target_type(self, target: IndexTarget, root_type: Type) -> Type:
         container_type = self._check_index_target_container_type(target.obj, root_type)
@@ -1313,24 +1327,13 @@ class _Checker:
             result_type = self._env.resolve_type_expr(
                 node.return_type, span=node.span, type_vars=type_vars
             )
-            self._return_expected_stack.append(result_type)
-            self._return_collected_stack.append([])
-            try:
+            with self._return_context(result_type):
                 body_type = self._check_expr(node.body, expected=result_type)
-            finally:
-                self._return_collected_stack.pop()
-                self._return_expected_stack.pop()
             if not isinstance(body_type, BottomType):
                 self._assert_assignable(body_type, result_type, node.span)
         else:
-            self._return_expected_stack.append(None)
-            collected: list[Type] = []
-            self._return_collected_stack.append(collected)
-            try:
+            with self._return_context(None) as collected:
                 body_type = self._check_expr(node.body, expected=None)
-            finally:
-                self._return_collected_stack.pop()
-                self._return_expected_stack.pop()
             if isinstance(body_type, BottomType) and not collected:
                 raise AglTypeError(
                     "Cannot infer return type of lambda: body always raises.",
@@ -1387,7 +1390,7 @@ class _Checker:
     def _check_loop(self, node: Loop) -> Type:
         if node.bound is not None:
             bound_type = self._check_expr(node.bound, expected=None)
-            if not isinstance(bound_type, (IntType, BottomType)):
+            if not self._is_type_or_bottom(bound_type, IntType):
                 raise AglTypeError(
                     f"do-loop bound must be int; got '{bound_type!r}'.",
                     span=node.bound.span,
@@ -1396,20 +1399,20 @@ class _Checker:
             # Integer-range for: for VAR in a to/downto b [by k]
             assert node.for_iter is not None
             start_type = self._check_expr(node.for_iter, expected=None)
-            if not isinstance(start_type, (IntType, BottomType)):
+            if not self._is_type_or_bottom(start_type, IntType):
                 raise AglTypeError(
                     f"'for' range start must be int; got '{start_type!r}'.",
                     span=node.for_iter.span,
                 )
             to_type = self._check_expr(node.for_range_to, expected=None)
-            if not isinstance(to_type, (IntType, BottomType)):
+            if not self._is_type_or_bottom(to_type, IntType):
                 raise AglTypeError(
                     f"'for' range bound must be int; got '{to_type!r}'.",
                     span=node.for_range_to.span,
                 )
             if node.for_range_by is not None:
                 by_type = self._check_expr(node.for_range_by, expected=None)
-                if not isinstance(by_type, (IntType, BottomType)):
+                if not self._is_type_or_bottom(by_type, IntType):
                     raise AglTypeError(
                         f"'for' range step must be int; got '{by_type!r}'.",
                         span=node.for_range_by.span,
@@ -1500,21 +1503,15 @@ class _Checker:
         if not self._return_expected_stack:
             raise AglTypeError("'return' used outside a function.", span=node.span)
         expected = self._return_expected_stack[-1]
-        if expected is None:
-            value_type = (
-                UnitType()
-                if node.value is None
-                else self._check_expr(node.value, expected=None)
-            )
-            self._return_collected_stack[-1].append(value_type)
-            return BottomType()
-
         value_type = (
             UnitType()
             if node.value is None
             else self._check_expr(node.value, expected=expected)
         )
-        self._assert_assignable(value_type, expected, node.span)
+        if expected is None:
+            self._return_collected_stack[-1].append(value_type)
+        else:
+            self._assert_assignable(value_type, expected, node.span)
         return BottomType()
 
     # --- template ---
@@ -1575,6 +1572,15 @@ class _Checker:
 
     # --- binary ops ---
 
+    @staticmethod
+    def _is_type_or_bottom(t: Type, *allowed: type[Type]) -> bool:
+        """Whether ``t`` is one of ``allowed`` or the bottom type.
+
+        A bottom-typed operand (from ``return``/``raise``) is accepted wherever a
+        concrete operand type is required, since bottom is assignable to any type.
+        """
+        return isinstance(t, allowed) or isinstance(t, BottomType)
+
     def _check_binary_op(self, node: BinaryOp) -> Type:
         left_type = self._check_expr(node.left, expected=None)
         right_type = self._check_expr(node.right, expected=None)
@@ -1582,13 +1588,13 @@ class _Checker:
 
         if op in (BinOp.AND, BinOp.OR):
             op_name = "and" if op is BinOp.AND else "or"
-            if not isinstance(left_type, (BoolType, BottomType)):
+            if not self._is_type_or_bottom(left_type, BoolType):
                 raise AglTypeError(
                     f"'{op_name}' requires bool operands; left operand has type "
                     f"'{left_type!r}'.",
                     span=node.left.span,
                 )
-            if not isinstance(right_type, (BoolType, BottomType)):
+            if not self._is_type_or_bottom(right_type, BoolType):
                 raise AglTypeError(
                     f"'{op_name}' requires bool operands; right operand has type "
                     f"'{right_type!r}'.",
@@ -1636,11 +1642,11 @@ class _Checker:
                     f"variable '{right_type.name}'.",
                     span=node.span,
                 )
-            numeric_pair = isinstance(left_type, (IntType, DecimalType, BottomType)) and isinstance(
-                right_type, (IntType, DecimalType, BottomType)
-            )
-            text_pair = isinstance(left_type, (TextType, BottomType)) and isinstance(
-                right_type, (TextType, BottomType)
+            numeric_pair = self._is_type_or_bottom(
+                left_type, IntType, DecimalType
+            ) and self._is_type_or_bottom(right_type, IntType, DecimalType)
+            text_pair = self._is_type_or_bottom(left_type, TextType) and self._is_type_or_bottom(
+                right_type, TextType
             )
             if not (numeric_pair or text_pair):
                 raise AglTypeError(
@@ -1678,8 +1684,8 @@ class _Checker:
                     span=node.span,
                 )
             if not (
-                isinstance(left_type, (IntType, DecimalType, BottomType))
-                and isinstance(right_type, (IntType, DecimalType, BottomType))
+                self._is_type_or_bottom(left_type, IntType, DecimalType)
+                and self._is_type_or_bottom(right_type, IntType, DecimalType)
             ):
                 raise AglTypeError(
                     f"'/' requires numeric operands; "
@@ -1707,13 +1713,13 @@ class _Checker:
                 f"'{right_type.name}'.",
                 span=span,
             )
-        if isinstance(left_type, (TextType, BottomType)) and isinstance(
-            right_type, (TextType, BottomType)
+        if self._is_type_or_bottom(left_type, TextType) and self._is_type_or_bottom(
+            right_type, TextType
         ):
             if isinstance(left_type, TextType) or isinstance(right_type, TextType):
                 return TextType()
-        if isinstance(left_type, (IntType, DecimalType, BottomType)) and isinstance(
-            right_type, (IntType, DecimalType, BottomType)
+        if self._is_type_or_bottom(left_type, IntType, DecimalType) and self._is_type_or_bottom(
+            right_type, IntType, DecimalType
         ):
             if isinstance(left_type, DecimalType) or isinstance(right_type, DecimalType):
                 return DecimalType()
@@ -1741,8 +1747,8 @@ class _Checker:
                 span=span,
             )
         if not (
-            isinstance(left_type, (IntType, DecimalType, BottomType))
-            and isinstance(right_type, (IntType, DecimalType, BottomType))
+            self._is_type_or_bottom(left_type, IntType, DecimalType)
+            and self._is_type_or_bottom(right_type, IntType, DecimalType)
         ):
             raise AglTypeError(
                 f"'{op_str}' requires numeric operands; "
@@ -1767,8 +1773,8 @@ class _Checker:
                 f"'{right_type.name}'.",
                 span=span,
             )
-        if isinstance(left_type, (TextType, BottomType)) and isinstance(
-            right_type, (TextType, BottomType)
+        if self._is_type_or_bottom(left_type, TextType) and self._is_type_or_bottom(
+            right_type, TextType
         ):
             return BoolType()
         if isinstance(right_type, ListType):
@@ -1778,7 +1784,7 @@ class _Checker:
                     span=span,
                 )
             return BoolType()
-        if isinstance(right_type, DictType) and isinstance(left_type, (TextType, BottomType)):
+        if isinstance(right_type, DictType) and self._is_type_or_bottom(left_type, TextType):
             return BoolType()
         if isinstance(right_type, BottomType):
             return BoolType()
@@ -2268,7 +2274,7 @@ class _Checker:
     # ------------------------------------------------------------------
 
     def _require_bool_condition(self, cond_type: Type, span: SourceSpan, kw: str) -> None:
-        if not isinstance(cond_type, (BoolType, BottomType)):
+        if not self._is_type_or_bottom(cond_type, BoolType):
             raise AglTypeError(
                 f"'{kw}' condition must be bool; got '{cond_type!r}'.",
                 span=span,

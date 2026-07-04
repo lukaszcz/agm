@@ -29,6 +29,8 @@ Dispatch uses structural ``match`` with a final ``assert_never`` arm.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import assert_never, cast
 
@@ -318,6 +320,15 @@ class _Lowerer:
         self._source_text = normalize_newlines(source_text)
         self._params: list[IrParam] = []
         self._return_expected_stack: list[Type] = []
+
+    @contextmanager
+    def _return_context(self, expected: Type) -> Iterator[None]:
+        """Track the coercion target for ``return`` inside a function body."""
+        self._return_expected_stack.append(expected)
+        try:
+            yield
+        finally:
+            self._return_expected_stack.pop()
 
     # ------------------------------------------------------------------
     # SymbolId allocation
@@ -645,11 +656,8 @@ class _Lowerer:
         assert sig is not None, (
             f"compiler bug: no function signature for {funcdef.name!r}"
         )
-        self._return_expected_stack.append(sig.result)
-        try:
+        with self._return_context(sig.result):
             body_ir = self.lower_coerced(funcdef.body, sig.result)
-        finally:
-            self._return_expected_stack.pop()
 
         desc = FunctionDescriptor(
             function_id=fn_id,
@@ -739,11 +747,8 @@ class _Lowerer:
             ir_params.append(IrFunctionParam(symbol=psym, default=default_ir))
 
         # Lower the body coerced to the declared return type (bakes result coercion in).
-        self._return_expected_stack.append(fn_type.result)
-        try:
+        with self._return_context(fn_type.result):
             body_ir = self.lower_coerced(body_expr, fn_type.result)
-        finally:
-            self._return_expected_stack.pop()
 
         desc = FunctionDescriptor(
             function_id=fn_id,

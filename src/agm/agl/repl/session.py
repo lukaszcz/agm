@@ -667,7 +667,10 @@ class ReplSession:
                 failure_span is None
                 or ref.decl_span.start_offset <= failure_span.start_offset
             )
-            if not partial or installed_before_failure or declared_before_failure:
+            promoted_before_failure = installed_before_failure or (
+                symbol is None and declared_before_failure
+            )
+            if not partial or promoted_before_failure:
                 self._session_scope.bindings[name] = ref
                 if partial and name in entry_names:
                     installed.append(name)

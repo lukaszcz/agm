@@ -1154,6 +1154,29 @@ class TestFuncDef:
         assert isinstance(fd.body, Block)
         assert len(fd.body.items) == 2
 
+    def test_def_suite_body_without_equals(self) -> None:
+        src = "def summarize(doc: text) -> text\n  let head = ask\n  head"
+        fd = first(parse(src))
+        assert isinstance(fd, FuncDef)
+        assert isinstance(fd.body, Block)
+        assert len(fd.body.items) == 2
+
+    def test_def_multiline_signature_suite_body_without_equals(self) -> None:
+        src = "def summarize(\n  doc: text,\n  limit: int = 3,\n) -> text\n  doc"
+        fd = first(parse(src))
+        assert isinstance(fd, FuncDef)
+        assert len(fd.params) == 2
+        assert isinstance(fd.return_type, TextT)
+        assert isinstance(fd.body, Block)
+
+    def test_def_multiline_signature_suite_body_with_equals(self) -> None:
+        src = "def summarize(\n  doc: text,\n  limit: int = 3,\n) -> text =\n  doc"
+        fd = first(parse(src))
+        assert isinstance(fd, FuncDef)
+        assert len(fd.params) == 2
+        assert isinstance(fd.return_type, TextT)
+        assert isinstance(fd.body, Block)
+
     def test_def_if_body(self) -> None:
         src = "def classify(n: int) -> text = if n > 0 => pos | else => neg"
         fd = first(parse(src))

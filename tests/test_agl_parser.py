@@ -1356,18 +1356,18 @@ class TestCalls:
         assert inner.callee.name == "classify"
 
     def test_juxt_call_with_qualified_constructor_call_argument(self) -> None:
-        """f Opt.Some(x = 1) desugars to f(Opt.Some(x = 1))."""
-        call = first(parse("f Opt.Some(x = 1)"))
+        'f Opt::Some(x = 1) desugars to f(Opt::Some(x = 1)).'
+        call = first(parse('f Opt::Some(x = 1)'))
         assert isinstance(call, Call)
         assert isinstance(call.callee, VarRef)
         assert call.callee.name == "f"
 
         arg = call.args[0]
         assert isinstance(arg, Call)
-        assert isinstance(arg.callee, FieldAccess)
-        assert arg.callee.field == "Some"
-        assert isinstance(arg.callee.obj, VarRef)
-        assert arg.callee.obj.name == "Opt"
+        assert isinstance(arg.callee, VarRef)
+        assert arg.callee.name == "Some"
+        assert arg.callee.module_qualifier is not None
+        assert arg.callee.module_qualifier.segments == ("Opt",)
         assert arg.args == ()
         assert len(arg.named_args) == 1
         assert arg.named_args[0].name == "x"
@@ -1500,7 +1500,7 @@ class TestTypedCalls:
         assert len(call.type_args) == 1
 
     def test_typed_call_allowed_as_juxt_argument(self) -> None:
-        prog = parse("f Opt.None::[int]()")
+        prog = parse('f Opt[int]::None()')
         call = first(prog)
         assert isinstance(call, Call)
         assert isinstance(call.callee, VarRef)
@@ -1508,9 +1508,10 @@ class TestTypedCalls:
 
         arg = call.args[0]
         assert isinstance(arg, Call)
-        assert isinstance(arg.callee, FieldAccess)
-        assert len(arg.type_args) == 1
-        assert isinstance(arg.type_args[0], IntT)
+        assert isinstance(arg.callee, VarRef)
+        assert arg.callee.type_qualifier is not None
+        assert len(arg.callee.type_qualifier.type_args or ()) == 1
+        assert isinstance((arg.callee.type_qualifier.type_args or ())[0], IntT)
         assert arg.args == ()
 
     def test_typed_call_with_args_allowed_as_juxt_argument(self) -> None:
@@ -1575,11 +1576,11 @@ class TestFieldAccessAndConstructors:
             parse("Issue{title: x, severity: 1}")
 
     def test_qualified_constructor(self) -> None:
-        c = first(parse("Review.Pass"))
-        assert isinstance(c, FieldAccess)
-        assert isinstance(c.obj, VarRef)
-        assert c.obj.name == "Review"
-        assert c.field == "Pass"
+        c = first(parse('Review::Pass'))
+        assert isinstance(c, VarRef)
+        assert c.name == "Pass"
+        assert c.module_qualifier is not None
+        assert c.module_qualifier.segments == ("Review",)
 
 
 class TestIndexAccess:
@@ -1752,9 +1753,10 @@ class TestBinaryOperators:
         assert e.negated
 
     def test_is_qualified(self) -> None:
-        e = first(parse("x is Review.Pass"))
+        e = first(parse('x is Review::Pass'))
         assert isinstance(e, IsTest)
-        assert e.qualifier == "Review"
+        assert e.module_qualifier is not None
+        assert e.module_qualifier.segments == ("Review",)
         assert e.variant == "Pass"
 
     def test_in(self) -> None:
@@ -2064,10 +2066,13 @@ class TestPatterns:
         assert pat.positional[0].name == "title"
 
     def test_qualified_constructor_pattern(self) -> None:
-        src = "case r of | Review.Pass => ok | Review.Fail => err"
+        src = 'case r of | Review::Pass => ok | Review::Fail => err'
         e = first(parse(src))
         assert isinstance(e, Case)
-        assert e.branches[0].pattern.qualifier == "Review"
+        pat = e.branches[0].pattern
+        assert isinstance(pat, ConstructorPattern)
+        assert pat.module_qualifier is not None
+        assert pat.module_qualifier.segments == ("Review",)
 
 
 # ---------------------------------------------------------------------------
@@ -2365,10 +2370,11 @@ class TestBinaryOperatorsCoverage:
         assert e.op == BinOp.DIV
 
     def test_is_not_qualified(self) -> None:
-        """x is not Review.Pass produces a negated, qualified IsTest."""
-        e = first(parse("x is not Review.Pass"))
+        'x is not Review::Pass produces a negated, qualified IsTest.'
+        e = first(parse('x is not Review::Pass'))
         assert isinstance(e, IsTest)
-        assert e.qualifier == "Review"
+        assert e.module_qualifier is not None
+        assert e.module_qualifier.segments == ("Review",)
         assert e.variant == "Pass"
         assert e.negated
 
@@ -2845,22 +2851,22 @@ class TestCaseNeutralNamesParser:
         assert isinstance(c.callee, VarRef)
         assert c.callee.name == "Some"
 
-    def test_qualified_access_becomes_field_access(self) -> None:
-        # Option.some -> FieldAccess(VarRef("Option"), "some")
-        prog = parse("Option.some")
-        fa = first(prog)
-        assert isinstance(fa, FieldAccess)
-        assert isinstance(fa.obj, VarRef)
-        assert fa.obj.name == "Option"
-        assert fa.field == "some"
+    def test_qualified_access_becomes_var_ref(self) -> None:
+        prog = parse('Option::some')
+        ref = first(prog)
+        assert isinstance(ref, VarRef)
+        assert ref.name == "some"
+        assert ref.module_qualifier is not None
+        assert ref.module_qualifier.segments == ("Option",)
 
-    def test_qualified_call_becomes_call_with_field_access(self) -> None:
-        # Option.some(value = 1) -> Call(callee=FieldAccess(VarRef("Option"), "some"), ...)
-        prog = parse("Option.some(value = 1)")
+    def test_qualified_call_becomes_call_with_var_ref(self) -> None:
+        prog = parse('Option::some(value = 1)')
         c = first(prog)
         assert isinstance(c, Call)
-        assert isinstance(c.callee, FieldAccess)
-        assert c.callee.field == "some"
+        assert isinstance(c.callee, VarRef)
+        assert c.callee.name == "some"
+        assert c.callee.module_qualifier is not None
+        assert c.callee.module_qualifier.segments == ("Option",)
 
 
 class TestCaseNeutralPatterns:
@@ -2910,12 +2916,13 @@ class TestCaseNeutralPatterns:
         assert pat.name == "None"
 
     def test_qualified_constructor_pattern(self) -> None:
-        prog = parse("case x of | Option.none => 1")
+        prog = parse('case x of | Option::none => 1')
         case = first(prog)
         assert isinstance(case, Case)
         pat = case.branches[0].pattern
         assert isinstance(pat, ConstructorPattern)
-        assert pat.qualifier == "Option"
+        assert pat.module_qualifier is not None
+        assert pat.module_qualifier.segments == ("Option",)
         assert pat.name == "none"
 
     def test_constructor_pattern_with_fields(self) -> None:
@@ -3428,14 +3435,14 @@ class TestQualifiedRefs:
         assert callee.module_qualifier is not None
 
     def test_qual_enum_variant_access(self) -> None:
-        # m::Color.Red → FieldAccess(VarRef("Color", mq=...), "Red")
-        prog = parse("m::Color.Red")
+        prog = parse('m::Color::Red')
         (expr,) = items(prog)
-        assert isinstance(expr, syntax.FieldAccess)
-        assert isinstance(expr.obj, syntax.VarRef)
-        assert expr.obj.name == "Color"
-        assert expr.obj.module_qualifier is not None
-        assert expr.field == "Red"
+        assert isinstance(expr, syntax.VarRef)
+        assert expr.name == "Red"
+        assert expr.module_qualifier is not None
+        assert expr.module_qualifier.segments == ("m",)
+        assert expr.type_qualifier is not None
+        assert expr.type_qualifier.name == "Color"
 
     def test_typed_call_not_confused_with_qual(self) -> None:
         # foo::[int](...) is typed call, not a MODQUAL
@@ -3446,6 +3453,10 @@ class TestQualifiedRefs:
         callee = call.callee
         assert isinstance(callee, syntax.VarRef)
         assert callee.module_qualifier is None
+
+    def test_type_qualifier_after_module_must_be_single_type_name(self) -> None:
+        with pytest.raises(AglSyntaxError, match="single type name"):
+            parse("m::foo.bar::Baz")
 
 
 # ---------------------------------------------------------------------------
@@ -3475,12 +3486,13 @@ class TestQualifiedTypeRefs:
         assert decl.type_ann.module_qualifier.segments == ("m",)
 
     def test_qualified_enum_constructor_with_type_args(self) -> None:
-        prog = parse("Option.some::[int](value = 1)")
+        prog = parse('Option[int]::some(value = 1)')
         (call,) = items(prog)
         assert isinstance(call, syntax.Call)
-        assert isinstance(call.callee, syntax.FieldAccess)
-        assert call.callee.field == "some"
-        assert len(call.type_args) == 1
+        assert isinstance(call.callee, syntax.VarRef)
+        assert call.callee.name == "some"
+        assert call.callee.type_qualifier is not None
+        assert len(call.callee.type_qualifier.type_args or ()) == 1
 
     def test_qual_prim_type_in_annotation(self) -> None:
         prog = parse("let x: m::text = null")
@@ -3525,8 +3537,8 @@ class TestQualifiedTypeRefs:
         assert pat.module_qualifier.segments == ()
 
     def test_qual_pattern_enum_variant(self) -> None:
-        # Qualified enum variant: m::Color.Red (two TYPE_NAME tokens after qual_prefix)
-        prog = parse("case x of | m::Color.Red => 1")
+        # Qualified enum variant: m::Color::Red (type qualifier after qual_prefix)
+        prog = parse('case x of | m::Color::Red => 1')
         (expr,) = items(prog)
         assert isinstance(expr, Case)
         pat = expr.branches[0].pattern

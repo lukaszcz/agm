@@ -1060,7 +1060,7 @@ class TypeEnvironment:
         """Directly look up a type by owning module and name in the graph type table.
 
         Used for cross-module constructor references when the owning module is
-        already known from scope resolution (e.g. ``mylib::Color.Red``).
+        already known from scope resolution (e.g. ``mylib::Color::Red``).
 
         Returns ``None`` in single-program mode or if not found.
         """

@@ -17,7 +17,7 @@ agent picker
 let shape: Shape = ask("Pick a shape.", agent = picker)
 
 case shape of
-  | Shape.Dot() => print "dot"
+  | Shape::Dot() => print "dot"
   | Line(len) => print "line ${len}"
   | Box(w, h, label) => print "box ${w}x${h} ${label}"
 

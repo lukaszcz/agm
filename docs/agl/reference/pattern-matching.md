@@ -88,12 +88,12 @@ payload. A pattern is a constructor pattern when it is one of:
 - a **bare name that denotes an in-scope constructor** — matches that variant
   (nullary variants only; see below),
 - a **call form** `name(…)`, where the parentheses may be empty, or
-- a **qualified** `Enum.variant`.
+- a **qualified** `Enum::variant`.
 
 ```agl
 Pass                       # nullary variant — bare name that names a constructor
 Pass()                     # nullary variant, explicit call form
-Review.Pass                # nullary variant, qualified (aliases resolve transparently)
+Review::Pass                # nullary variant, qualified (aliases resolve transparently)
 Fail(issues)               # shorthand: binds field 'issues' to name 'issues'
 Fail(issues = xs)          # binds field 'issues' to name 'xs'
 Fail(issues = ["stuck"])   # nested literal pattern on a field
@@ -114,8 +114,8 @@ with a module qualifier:
 import mylib
 
 case value of
-  | mylib::Color.Red  => print "red"
-  | mylib::Color.Blue => print "blue"
+  | mylib::Color::Red  => print "red"
+  | mylib::Color::Blue => print "blue"
 ```
 
 The `qual_prefix` form (a module qualifier `module::`) or the self-reference
@@ -182,11 +182,11 @@ enum Option[T]
 
 def describe_option(o: Option[int]) -> text =
   case o of
-    | Option.none => "missing"
-    | Option.some(value) => "found ${value}"   # value: int, so it can be interpolated
+    | Option::none => "missing"
+    | Option::some(value) => "found ${value}"   # value: int, so it can be interpolated
 ```
 
-The qualifier (`Option.`) names the owning enum; it is otherwise optional and
+The qualifier (`Option::`) names the owning enum; it is otherwise optional and
 serves to disambiguate when two enums share a variant name (see
 [Expressions](expressions.md)).
 
@@ -233,6 +233,6 @@ same way as in a pattern:
 
 ```agl
 let probe: Option[int] = some(value = 99)
-if probe is Option.some => print "probe is some"
-if probe is not Option.none => print "probe is not none"
+if probe is Option::some => print "probe is some"
+if probe is not Option::none => print "probe is not none"
 ```

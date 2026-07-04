@@ -106,6 +106,7 @@ from agm.agl.syntax.types import (
     Qualifier,
     TextT,
     TypeExpr,
+    TypeQualifier,
     UnitT,
 )
 from agm.agl.syntax.visitor import Visitor, walk
@@ -130,6 +131,7 @@ __all__ = [
     # module system
     "ImportMode",
     "Qualifier",
+    "TypeQualifier",
     "ImportItem",
     "ImportDecl",
     "ExportItem",

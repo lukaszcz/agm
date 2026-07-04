@@ -837,21 +837,21 @@ class TestNominalRenderingEcho:
 
         s = ReplSession()
         s.eval_entry("enum Outcome\n  | Partial(left: int)\n  | Done")
-        r = s.eval_entry("let o = Outcome.Partial(left = 7)")
+        r = s.eval_entry('let o = Outcome::Partial(left = 7)')
         assert r.ok
         rendered = render_entry_result(r, echo=True)
-        assert rendered == "o : Outcome = Outcome.Partial(\n  left = 7\n)"
+        assert rendered == 'o : Outcome = Outcome::Partial(\n  left = 7\n)'
 
     def test_enum_nullary_variant_echo(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
         s = ReplSession()
         s.eval_entry("enum Outcome\n  | Partial(left: int)\n  | Done")
-        r = s.eval_entry("let d = Outcome.Done")
+        r = s.eval_entry('let d = Outcome::Done')
         assert r.ok
         rendered = render_entry_result(r, echo=True)
         assert rendered is not None
-        assert "Outcome.Done" in rendered
+        assert 'Outcome::Done' in rendered
 
     def test_top_level_text_stays_quoted(self) -> None:
         from agm.agl.repl.render import render_entry_result

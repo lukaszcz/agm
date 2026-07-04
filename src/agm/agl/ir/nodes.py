@@ -476,7 +476,7 @@ class IrMakeRecord:
 
 @dataclass(frozen=True, slots=True)
 class IrMakeEnum:
-    """IR enum-variant construction: ``EnumName.Variant(field: expr, ...)``.
+    """IR enum-variant construction: ``EnumName::Variant(field = expr, ...)``.
 
     ``nominal`` — the ``NominalId`` of the owning enum type.
     ``display_name`` — user-facing enum type name.

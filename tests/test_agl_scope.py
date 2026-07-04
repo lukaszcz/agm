@@ -1434,17 +1434,16 @@ class TestParentScopeSeam:
         ambient_type_names = prior.declared_type_names
         session_scope = prior.root_scope
         entry = resolve(
-            parse_program("Review.Pass()"),
+            parse_program('Review::Pass()'),
             parent_scope=session_scope,
             ambient_constructor_candidates=ambient_candidates,
             ambient_type_names=ambient_type_names,
         )
-        # The FieldAccess for Review.Pass must be in qualified_constructor_refs.
         from agm.agl.syntax.nodes import Call as _Call
-        from agm.agl.syntax.nodes import FieldAccess as _FA
+        from agm.agl.syntax.nodes import VarRef as _VarRef
         call_node = entry.program.body.items[0]
         assert isinstance(call_node, _Call)
-        assert isinstance(call_node.callee, _FA)
+        assert isinstance(call_node.callee, _VarRef)
         assert call_node.callee.node_id in entry.qualified_constructor_refs
 
 
@@ -2352,7 +2351,7 @@ class TestConstructorBindings:
             "some\n"
         )
         msg = err.to_diagnostic().message
-        # Should suggest qualification like 'Option.some'
+        # Should suggest qualification like 'Option::some'
         assert "." in msg or "qualify" in msg.lower()
 
     # ---  regression: payload / type-args / context do NOT disambiguate ---
@@ -2424,8 +2423,8 @@ class TestConstructorBindings:
     def test_qualified_payload_variant_resolves_without_error(self) -> None:
         """Qualification is the only valid disambiguation for shared variant names.
 
-         requires that ``Option.some(value = 1)`` resolves without error even
-        when ``Other`` also declares a ``some`` variant.
+        ``Option::some(value = 1)`` resolves without error even when ``Other``
+        also declares a ``some`` variant.
         """
         r = parse_and_resolve(
             "enum Option[T]\n"
@@ -2434,11 +2433,11 @@ class TestConstructorBindings:
             "enum Other[T]\n"
             "  | nope\n"
             "  | some(value: T)\n"
-            "Option.some(value = 1)\n"
+            'Option::some(value = 1)\n'
         )
         call_node = r.program.body.items[2]
         assert isinstance(call_node, Call)
-        assert isinstance(call_node.callee, FieldAccess)
+        assert isinstance(call_node.callee, VarRef)
         assert call_node.callee.node_id in r.qualified_constructor_refs
         owner, member, _ = r.qualified_constructor_refs[call_node.callee.node_id]
         assert owner == "Option"
@@ -2446,66 +2445,69 @@ class TestConstructorBindings:
 
     # --- Qualified constructor access ---
 
+    def test_type_args_qualified_constructor_unknown_type_errors(self) -> None:
+        err = reject_scope("Missing[int]::Ctor")
+        assert "known type" in err.to_diagnostic().message
+
+    def test_module_qualified_constructor_in_single_file_errors(self) -> None:
+        err = reject_scope("m::Missing::Ctor")
+        assert "No module imported" in err.to_diagnostic().message
+
     def test_qualified_constructor_recorded(self) -> None:
-        """Qualified access Owner.member is recorded in qualified_constructor_refs."""
+        """Qualified access Owner::member is recorded in qualified_constructor_refs."""
         r = parse_and_resolve(
             "enum Option\n"
             "  | none\n"
             "  | some\n"
-            "let x = Option.some\n"
+            'let x = Option::some\n'
             "x\n"
         )
         let_decl = r.program.body.items[1]
         assert isinstance(let_decl, LetDecl)
         fa = let_decl.value
-        assert isinstance(fa, FieldAccess)
+        assert isinstance(fa, VarRef)
         assert fa.node_id in r.qualified_constructor_refs
         owner, member, _mid = r.qualified_constructor_refs[fa.node_id]
         assert owner == "Option"
         assert member == "some"
 
     def test_qualified_access_does_not_raise_undefined_for_owner(self) -> None:
-        """Option.some does NOT raise 'Option is not defined'."""
+        "Option::some does NOT raise 'Option is not defined'."
         r = parse_and_resolve(
             "enum Option\n"
             "  | none\n"
             "  | some\n"
-            "Option.some\n"
+            'Option::some\n'
         )
         last = r.program.body.items[1]
-        assert isinstance(last, FieldAccess)
+        assert isinstance(last, VarRef)
         assert last.node_id in r.qualified_constructor_refs
         owner, member, _ = r.qualified_constructor_refs[last.node_id]
         assert owner == "Option" and member == "some"
 
     def test_qualified_access_none_variant(self) -> None:
-        """Option.none is recorded in qualified_constructor_refs."""
+        'Option::none is recorded in qualified_constructor_refs.'
         r = parse_and_resolve(
             "enum Option\n"
             "  | none\n"
             "  | some\n"
-            "Option.none\n"
+            'Option::none\n'
         )
         last = r.program.body.items[1]
-        assert isinstance(last, FieldAccess)
+        assert isinstance(last, VarRef)
         assert last.node_id in r.qualified_constructor_refs
         type_name, variant_name, _mod = r.qualified_constructor_refs[last.node_id]
         assert type_name == "Option"
         assert variant_name == "none"
 
-    def test_qualified_access_with_record_type(self) -> None:
-        """Box.value is NOT a constructor qualified access (Box is a record, value is a field)."""
-        # This is a legitimate field access, not a constructor access.
-        # 'Box' is in declared_type_names as a RecordDef; Box.value is a type-qualified
-        # access, recorded in qualified_constructor_refs. The checker validates validity.
-        r = parse_and_resolve(
+    def test_dot_access_with_type_name_is_rejected(self) -> None:
+        err = reject_scope(
             "record Box\n"
             "  value: int\n"
             "Box.value\n"
         )
-        last = r.program.body.items[1]
-        assert isinstance(last, FieldAccess)
-        assert last.node_id in r.qualified_constructor_refs
+        assert "type name" in str(err).lower()
+        assert "::" in str(err)
 
     # --- Collision rules (non-constructor vs constructor) ---
 
@@ -2605,18 +2607,18 @@ class TestConstructorBindings:
     # --- Case-neutral: lowercase and uppercase behave identically ---
 
     def test_lowercase_constructor_resolves_same_as_uppercase(self) -> None:
-        """Lowercase 'option.none' and uppercase 'Option.None' behave identically."""
+        "Lowercase 'option::none' and uppercase 'Option::None' behave identically."
         r_lower = parse_and_resolve(
             "enum option\n"
             "  | none\n"
             "  | some\n"
-            "option.none\n"
+            'option::none\n'
         )
         r_upper = parse_and_resolve(
             "enum Option\n"
             "  | None\n"
             "  | Some\n"
-            "Option.None\n"
+            'Option::None\n'
         )
         # Both should have a single qualified_constructor_ref
         assert len(r_lower.qualified_constructor_refs) == 1
@@ -2782,17 +2784,12 @@ class TestConstructorBindings:
         assert len(r.constructor_candidates["val"]) == 2
 
     def test_qualified_constructor_via_ast(self) -> None:
-        """FieldAccess on a type name is recorded as a qualified_constructor_ref."""
-        enum = _make_enum("Color", ("red", "blue"))
-        fa = FieldAccess(
-            obj=_make_varref("Color"),
-            field="red",
-            span=_sp(),
-            node_id=_nid(),
-        )
-        r = resolve_program(enum, fa)
-        assert fa.node_id in r.qualified_constructor_refs
-        type_name2, variant_name2, _mod2 = r.qualified_constructor_refs[fa.node_id]
+        """VarRef with a type qualifier is recorded as a qualified_constructor_ref."""
+        r = parse_and_resolve("enum Color\n  | red\n  | blue\nColor::red")
+        ref = r.program.body.items[1]
+        assert isinstance(ref, VarRef)
+        assert ref.node_id in r.qualified_constructor_refs
+        type_name2, variant_name2, _mod2 = r.qualified_constructor_refs[ref.node_id]
         assert type_name2 == "Color"
         assert variant_name2 == "red"
 

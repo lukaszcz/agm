@@ -99,8 +99,8 @@ static errors.
 Qualified or unqualified:
 
 ```agl
-Review.Pass
-Review.Fail(issues = ["missing tests"])
+Review::Pass
+Review::Fail(issues = ["missing tests"])
 
 let review: Review = Pass           # resolved by expected type
 ```
@@ -137,7 +137,7 @@ enum Holder[T]
 enum Other
   | tagged(name: text)
 
-let h: Holder[int] = Holder.tagged(by = 7)   # qualified; unqualified 'tagged' is an error
+let h: Holder[int] = Holder::tagged(by = 7)   # qualified; unqualified 'tagged' is an error
 ```
 
 A nearer binding (a `let`/`var`/parameter of the same name) **shadows** a
@@ -175,7 +175,7 @@ enum Option[T]
 
 let e: Option[int] = none          # T = int, fixed by the annotation
 let s = some::[int](value = 1)      # T pinned explicitly
-let q = Option.some::[int](value = 2) # qualification disambiguates the owner
+let q = Option[int]::some(value = 2) # qualification disambiguates the owner
 ```
 
 ### Constructors as values
@@ -283,7 +283,7 @@ print review          # equivalent to print(review)
 ask "Hello?"          # equivalent to ask("Hello?")
 print res.stdout      # field-access path is valid sugar argument
 print classify(x)     # equivalent to print(classify(x))
-f Opt.Some(x = 1)      # equivalent to f(Opt.Some(x = 1))
+f Opt::Some(x = 1)      # equivalent to f(Opt::Some(x = 1))
 ```
 
 Application binds **tighter than all operators**:
@@ -478,7 +478,7 @@ For scalar types (`bool`, `int`, `decimal`) it produces the plain scalar text.
 
 ```agl
 review is Pass
-status is Status.Blocked     # qualified; aliases resolve transparently
+status is Status::Blocked     # qualified; aliases resolve transparently
 ```
 
 The left operand must have enum type; the variant must belong to that enum.

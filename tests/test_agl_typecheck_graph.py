@@ -290,16 +290,16 @@ def test_qualified_type_ref_in_annotation(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 9. Qualified type ref in constructor: foo::Color.Red
+# 9. Qualified type ref in constructor: foo::Color::Red
 # ---------------------------------------------------------------------------
 
 
 def test_qualified_type_ref_in_constructor(tmp_path: Path) -> None:
-    """'foo::Color.Red' constructor resolves through ImportEnv correctly."""
+    "'foo::Color::Red' constructor resolves through ImportEnv correctly."
     modules = {
         "entry": (
             "import mylib qualified\n"
-            "let c: mylib::Color = mylib::Color.Red\n"
+            'let c: mylib::Color = mylib::Color::Red\n'
             "c"
         ),
         "mylib": (
@@ -339,18 +339,18 @@ def test_qualified_type_ref_in_cast(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 11. Qualified type ref in constructor pattern: foo::Color.Red in case
+# 11. Qualified type ref in constructor pattern: foo::Color::Red in case
 # ---------------------------------------------------------------------------
 
 
 def test_qualified_type_ref_in_constructor_pattern(tmp_path: Path) -> None:
-    """'mylib::Color.Red' in a case pattern resolves through ImportEnv."""
+    "'mylib::Color::Red' in a case pattern resolves through ImportEnv."
     modules = {
         "entry": (
             "import mylib qualified\n"
             "def describe(c: mylib::Color) -> text =\n"
-            "  case c of | mylib::Color.Red => \"red\" | mylib::Color.Blue => \"blue\"\n"
-            "let c = mylib::Color.Red\n"
+            '  case c of | mylib::Color::Red => "red" | mylib::Color::Blue => "blue"\n'
+            'let c = mylib::Color::Red\n'
             "describe(c)"
         ),
         "mylib": (
@@ -403,7 +403,7 @@ def test_unqualified_type_clash_on_use(tmp_path: Path) -> None:
             "import libA\n"
             "import libB\n"
             # 'Color' is ambiguous — could be libA::Color or libB::Color
-            "let c: Color = libA::Color.Red\n"
+            'let c: Color = libA::Color::Red\n'
             "c"
         ),
         "libA": (
@@ -483,7 +483,7 @@ def test_whole_graph_type_pre_pass_with_cycles(tmp_path: Path) -> None:
         "entry": (
             "import modA\n"
             "import modB\n"
-            "let fa = modA::wrapB(modB::Color.Red)\n"
+            'let fa = modA::wrapB(modB::Color::Red)\n'
             "let fb = modB::wrapA(modA::Foo(x = 1))\n"
             "()"
         ),
@@ -554,16 +554,16 @@ def test_imported_exception_base_ignores_non_type_export(tmp_path: Path) -> None
 
 
 # ---------------------------------------------------------------------------
-# 17. Enum variant qualification: foo::Color.Red
+# 17. Enum variant qualification: foo::Color::Red
 # ---------------------------------------------------------------------------
 
 
 def test_enum_variant_qualification(tmp_path: Path) -> None:
-    """'mylib::Color.Red' where Color is an enum in module mylib resolves correctly."""
+    "'mylib::Color::Red' where Color is an enum in module mylib resolves correctly."
     modules = {
         "entry": (
             "import mylib qualified\n"
-            "let c: mylib::Color = mylib::Color.Red\n"
+            'let c: mylib::Color = mylib::Color::Red\n'
             "c"
         ),
         "mylib": (
@@ -652,12 +652,12 @@ def test_agent_typed_arg_in_imported_function(tmp_path: Path) -> None:
 
 
 def test_unqualified_constructor_from_open_import(tmp_path: Path) -> None:
-    """When Color is open-imported from foo, 'Color.Red' (bare variant) resolves to foo::Color."""
+    "When Color is open-imported from foo, 'Color::Red' (bare variant) resolves to foo::Color."
     modules = {
         "entry": (
             "import mylib\n"
-            # Color is open-imported, so 'Color.Red' (unqualified) should resolve
-            "let c: Color = Color.Red\n"
+            # Color is open-imported, so 'Color::Red' should resolve
+            'let c: Color = Color::Red\n'
             "c"
         ),
         "mylib": (
@@ -822,11 +822,11 @@ def test_unknown_module_qualifier_error(tmp_path: Path) -> None:
 
 
 def test_module_qualified_constructor_not_enum_error(tmp_path: Path) -> None:
-    """'mylib::Point.Red' where Point is a record, not an enum → type error."""
+    "'mylib::Point::Red' where Point is a record, not an enum → type error."
     modules = {
         "entry": (
             "import mylib qualified\n"
-            "let p = mylib::Point.Red\n"
+            'let p = mylib::Point::Red\n'
             "p"
         ),
         "mylib": (
@@ -844,11 +844,11 @@ def test_module_qualified_constructor_not_enum_error(tmp_path: Path) -> None:
 
 
 def test_module_qualified_constructor_missing_variant_error(tmp_path: Path) -> None:
-    """'mylib::Color.Purple' where Purple doesn't exist → type error."""
+    "'mylib::Color::Purple' where Purple doesn't exist → type error."
     modules = {
         "entry": (
             "import mylib qualified\n"
-            "let c = mylib::Color.Purple\n"
+            'let c = mylib::Color::Purple\n'
             "c"
         ),
         "mylib": (
@@ -916,14 +916,14 @@ def test_self_ref_type_graph_mode(tmp_path: Path) -> None:
 
 
 def test_module_qualified_variant_qualifier_mismatch(tmp_path: Path) -> None:
-    """'libA::Color.Red' as qualifier when value has type libB::Color → error."""
+    "'libA::Color::Red' as qualifier when value has type libB::Color → error."
     modules = {
         "entry": (
             "import libA\n"
             "import libB\n"
             "def check(c: libB::Color) -> text =\n"
-            "  case c of | libA::Color.Red => \"red\" | _ => \"other\"\n"
-            "let c = libB::Color.Red\n"
+            '  case c of | libA::Color::Red => "red" | _ => "other"\n'
+            'let c = libB::Color::Red\n'
             "check(c)"
         ),
         "libA": (
@@ -938,6 +938,48 @@ def test_module_qualified_variant_qualifier_mismatch(tmp_path: Path) -> None:
         ),
     }
     with pytest.raises(AglTypeError, match="resolves to enum"):
+        _check_graph(tmp_path, modules)
+
+
+def test_module_prefix_variant_is_test_uses_lhs_enum_name(tmp_path: Path) -> None:
+    modules = {
+        "entry": (
+            "import mylib\n"
+            "let c = mylib::Color::Red\n"
+            "let ok = c is mylib::Red\n"
+            "ok"
+        ),
+        "mylib": "enum Color\n  | Red\n  | Blue",
+    }
+    cg = _check_graph(tmp_path, modules)
+    assert _binding_value_type(cg, ENTRY_ID, "ok") == BoolType()
+
+
+def test_dotted_module_prefix_variant_is_test_uses_lhs_enum_name(tmp_path: Path) -> None:
+    modules = {
+        "entry": (
+            "import pkg.lib\n"
+            "let c = pkg.lib::Color::Red\n"
+            "let ok = c is pkg.lib::Red\n"
+            "ok"
+        ),
+        "pkg.lib": "enum Color\n  | Red\n  | Blue",
+    }
+    cg = _check_graph(tmp_path, modules)
+    assert _binding_value_type(cg, ENTRY_ID, "ok") == BoolType()
+
+
+def test_is_test_type_name_import_handle_ambiguity_errors(tmp_path: Path) -> None:
+    modules = {
+        "entry": (
+            "import lib qualified as Color\n"
+            "enum Color | Red\n"
+            "let c = Red\n"
+            "c is Color::Red"
+        ),
+        "lib": "enum Other | Red",
+    }
+    with pytest.raises(AglTypeError, match="both a type name and an import handle"):
         _check_graph(tmp_path, modules)
 
 
@@ -972,13 +1014,13 @@ def test_name_not_in_s_qualified_lookup(tmp_path: Path) -> None:
 
 
 def test_module_qualified_variant_qualifier_is_not_enum(tmp_path: Path) -> None:
-    """In a case pattern, 'mylib::Point.Red' where Point is a record → type error."""
+    "In a case pattern, 'mylib::Point::Red' where Point is a record → type error."
     modules = {
         "entry": (
             "import mylib\n"
             "def check(c: mylib::Color) -> text =\n"
-            "  case c of | mylib::Point.Red => \"red\" | _ => \"other\"\n"
-            "let c = mylib::Color.Red\n"
+            '  case c of | mylib::Point::Red => "red" | _ => "other"\n'
+            'let c = mylib::Color::Red\n'
             "check(c)"
         ),
         "mylib": (
@@ -999,13 +1041,13 @@ def test_module_qualified_variant_qualifier_is_not_enum(tmp_path: Path) -> None:
 
 
 def test_module_qualified_variant_unknown_enum_in_pattern(tmp_path: Path) -> None:
-    """In a case pattern, 'mylib::Unknown.Red' where Unknown doesn't exist → type error."""
+    "In a case pattern, 'mylib::Unknown::Red' where Unknown doesn't exist → type error."
     modules = {
         "entry": (
             "import mylib\n"
             "def check(c: mylib::Color) -> text =\n"
-            "  case c of | mylib::Unknown.Red => \"red\" | _ => \"other\"\n"
-            "let c = mylib::Color.Red\n"
+            '  case c of | mylib::Unknown::Red => "red" | _ => "other"\n'
+            'let c = mylib::Color::Red\n'
             "check(c)"
         ),
         "mylib": (
@@ -1148,7 +1190,7 @@ def test_ambiguous_open_import_type_error(tmp_path: Path) -> None:
         "entry": (
             "import libA\n"
             "import libB\n"
-            "let c: Color = libA::Color.Red\n"
+            'let c: Color = libA::Color::Red\n'
             "c"
         ),
         "libA": (
@@ -1307,7 +1349,7 @@ def test_cross_module_field_type_mutual_import_cycle(tmp_path: Path) -> None:
             "import modB\n"
             "record Foo\n"
             "  c: modB::Color\n"
-            "def makeFoo() -> Foo = Foo(c = modB::Color.Red)"
+            'def makeFoo() -> Foo = Foo(c = modB::Color::Red)'
         ),
         "modB": (
             "import modA\n"
@@ -1363,7 +1405,7 @@ def test_cross_module_enum_variant_field_type(tmp_path: Path) -> None:
             "enum Envelope\n"
             "  | None\n"
             "  | Some(value: payload::Data)\n"
-            "def wrap(d: payload::Data) -> Envelope = Envelope.Some(value = d)"
+            'def wrap(d: payload::Data) -> Envelope = Envelope::Some(value = d)'
         ),
         "payload": (
             "record Data\n"
@@ -2394,7 +2436,7 @@ def test_cross_module_qualified_generic_enum_explicit_type_args(tmp_path: Path) 
     lib_id = ModuleId.from_dotted("lib")
     modules = {
         "lib": "enum Option[T]\n  | none\n  | some(value: T)",
-        "entry": "import lib qualified\nlet r = lib::Option.some::[int](value = 1)\nr",
+        "entry": 'import lib qualified\nlet r = lib::Option[int]::some(value = 1)\nr',
     }
     cg = _check_graph(tmp_path, modules)
     assert _binding_value_type(cg, ENTRY_ID, "r") == EnumType(

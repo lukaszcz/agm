@@ -486,8 +486,8 @@ def test_capture_through_nested_positions_and_pattern_locals() -> None:
         "  case s of\n"
         "    | Circle(radius = r) => r * multiplier\n"
         "    | Square(side = sd) => sd * multiplier\n"
-        "let c = describe(Shape.Circle(radius = 4))\n"
-        "let sq = describe(Shape.Square(side = 5))\n()"
+        'let c = describe(Shape::Circle(radius = 4))\n'
+        'let sq = describe(Shape::Square(side = 5))\n()'
     )
     ir = evaluate_ir(source)
     assert ir["c"] == IntValue(12)
@@ -542,7 +542,7 @@ def test_bare_variant_pattern_in_function_body() -> None:
     """
     source = (
         "enum Flag | On | Off\n"
-        "let flag = Flag.On()\n"
+        'let flag = Flag::On()\n'
         "def check(f: Flag) -> int =\n"
         "  case f of\n"
         "    | On => 1\n"

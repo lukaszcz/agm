@@ -272,17 +272,19 @@ pattern        ::= "_"
                  | constructor_pattern
                  | qual_constructor_pattern
 
-constructor_pattern      ::= name ("." name)? ("(" pattern_fields? ")")?
-qual_constructor_pattern ::= qual_prefix name ("." name)? ("(" pattern_fields? ")")?
+constructor_pattern      ::= name ("(" pattern_fields? ")")?
+qualified_type           ::= name ("[" type_expr ("," type_expr)* "]")?
+qual_constructor_pattern ::= qual_prefix? qualified_type "::" name
+                             ("(" pattern_fields? ")")?
 pattern_fields ::= pattern_field ("," pattern_field)* ","?
 pattern_field  ::= pattern              (* positional sub-pattern *)
                  | name "=" pattern     (* named sub-pattern: field = subpattern *)
 ```
 
-A `constructor_pattern` with the `name "." name` form is a **qualified**
-variant pattern (`Option.some(value)`), naming the owning enum and the variant;
-it is required when an unqualified variant name is ambiguous across enums
-([Generics](generics.md), [Pattern matching](pattern-matching.md)).
+A `qual_constructor_pattern` is a **qualified** variant pattern
+(`Option::some(value)` or `module::Option::some(value)`), naming the owning enum
+and the variant; it is required when an unqualified variant name is ambiguous
+across enums ([Generics](generics.md), [Pattern matching](pattern-matching.md)).
 
 In a constructor pattern, **positional sub-patterns** (`pattern` without a
 `name "="` prefix) fill positional-capable (pos-only/standard) constructor fields
@@ -318,7 +320,7 @@ juxt_suffix    ::= "." name
                | "(" arg_list? ")"
                | "::" "[" type_expr ("," type_expr)* "]" "(" arg_list? ")"
 
-postfix        ::= postfix "." name                (* field access OR variant qualification *)
+postfix        ::= postfix "." name                (* runtime field access *)
                | postfix "(" arg_list? ")"         (* call with parentheses *)
                | postfix "[" expr "]"              (* adjacent bracket only *)
                | postfix "::" "[" type_expr ("," type_expr)* "]" "(" arg_list? ")"
@@ -333,6 +335,8 @@ atom           ::= INT | DECIMAL | "true" | "false" | "null"
                | dict_literal
                | name                              (* variable / constructor reference *)
                | qual_prefix name                  (* module-qualified ref *)
+               | qual_prefix? qualified_type "::" name
+                                                    (* type-qualified constructor ref *)
                | template
                | "(" expr ")"                      (* parenthesized expr *)
                | lambda_expr
@@ -345,7 +349,8 @@ atom_no_call   ::= (* same as atom but excludes "(" — prevents sugar conflict 
                | list_literal | dict_literal | name
                | template
 
-qualified_constructor ::= name ("." name)?
+qualified_constructor ::= qual_prefix? qualified_type "::" name
+                        | name
 
 raise_expr ::= "raise" expr
 ```
@@ -353,12 +358,12 @@ raise_expr ::= "raise" expr
 A bare name atom is resolved by scope and position: it may name a variable,
 an agent, a record constructor, an enum variant, or a generic `def`/constructor
 used as a first-class value. The typed postfix form carries explicit type
-arguments to a generic `def` or constructor (`id::[int](5)`,
-`some::[int](value = 1)`, `Option.some::[int](value = 1)`,
-`apply::[int, int](…)`), or instantiate a generic function value
-(`id::[int]`); see [Generics](generics.md).
-A `postfix "." name` is either a field access or a variant qualification,
-disambiguated by the resolved type of the left operand.
+arguments to a generic `def` or bare constructor (`id::[int](5)`,
+`some::[int](value = 1)`, `apply::[int, int](…)`), or instantiate a generic
+function value (`id::[int]`). Qualified generic constructors put type arguments
+on the type side (`Option[int]::some(value = 1)`). A `postfix "." name` is
+always runtime field access; constructor qualification uses `::`. See
+[Generics](generics.md).
 
 ## Lambda expressions
 

@@ -253,7 +253,7 @@ class ResolvedProgram:
     ``declared_type_names``
         Names of all root-level ``RecordDef`` / ``EnumDef`` / ``TypeAlias``
         declarations.  Used by the scope pass to classify qualified
-        ``Owner.member`` field accesses.
+        ``Owner::member`` constructor references.
     ``constructor_candidates``
         Maps each constructor name to an ordered tuple of all
         :class:`ConstructorRef` candidates (one per record/enum that declares
@@ -265,11 +265,12 @@ class ResolvedProgram:
         resolved to (only present when the candidate set has exactly one entry
         and no nearer non-constructor binding shadows it).
     ``qualified_constructor_refs``
-        Maps a ``FieldAccess.node_id`` to ``(owner_name, member, owner_module_id)``
-        when the field access is a type-qualified constructor reference
-        (``Option.some`` or ``mylib::Color.Red``).  ``owner_module_id`` is
-        ``None`` for locally-declared types and the owning ``ModuleId`` for
-        cross-module references.  The checker validates enum-ness and variant.
+        Maps a ``VarRef.node_id`` to ``(owner_name, member, owner_module_id)``
+        when the reference is a type-qualified constructor reference
+        (``Option::some`` or ``mylib::Color::Red``).  ``owner_module_id`` is
+        ``None`` for locally-declared/open-imported types and the owning
+        ``ModuleId`` for cross-module references.  The checker validates
+        enum-ness and variant.
     ``bare_variant_patterns``
         ``node_id`` of every ``VarPattern`` whose bare name denotes an in-scope
         constructor binding and is therefore a (nullary) constructor pattern

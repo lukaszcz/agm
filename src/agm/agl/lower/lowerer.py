@@ -842,6 +842,20 @@ class _Lowerer:
             # Variable reference — constructor ref or IrLoad
             # ----------------------------------------------------------
             case VarRef(node_id=nid, span=span):
+                qcr = self._checked.resolved.qualified_constructor_refs.get(nid)
+                if qcr is not None:
+                    owner_name, variant_name, qcr_mid = qcr
+                    node_typ = self._node_type(nid)
+                    if isinstance(node_typ, FunctionType):
+                        nominal, display = self._nominal_for_cref_owner(owner_name, qcr_mid)
+                        return IrMakeConstructor(
+                            location=self._loc(span),
+                            nominal=nominal,
+                            display_name=display,
+                            variant=variant_name,
+                        )
+                    return self._lower_nullary_constructor(nid, owner_name, variant_name, span)
+
                 # Check for constructor reference FIRST (mirrors legacy _eval_var_ref).
                 cref = self._checked.resolved.constructor_refs.get(nid)
                 if cref is not None:
@@ -904,25 +918,9 @@ class _Lowerer:
                 )
 
             # ----------------------------------------------------------
-            # Field access — qualified constructor ref or IrField
+            # Field access → IrField
             # ----------------------------------------------------------
-            case FieldAccess(obj=obj_expr, field=field_name, span=span, node_id=nid):
-                qcr = self._checked.resolved.qualified_constructor_refs.get(nid)
-                if qcr is not None:
-                    # qcr is (owner_name, member, owner_module_id | None)
-                    owner_name, variant_name, qcr_mid = qcr
-                    node_typ = self._node_type(nid)
-                    if isinstance(node_typ, FunctionType):
-                        # With-fields variant used as value → IrMakeConstructor.
-                        nominal, display = self._nominal_for_cref_owner(owner_name, qcr_mid)
-                        return IrMakeConstructor(
-                            location=self._loc(span),
-                            nominal=nominal,
-                            display_name=display,
-                            variant=variant_name,
-                        )
-                    # Nullary variant used as value → construct immediately.
-                    return self._lower_nullary_constructor(nid, owner_name, variant_name, span)
+            case FieldAccess(obj=obj_expr, field=field_name, span=span):
                 return IrField(
                     location=self._loc(span),
                     value=self.lower_expr(obj_expr),
@@ -1759,8 +1757,8 @@ class _Lowerer:
     def _lower_call(self, call_node: "Call", nid: int, span: "SourceSpan") -> IrExpr:
         """Lower a Call node.
 
-        Constructor calls (VarRef or FieldAccess callee resolving to a constructor)
-        are lowered to IrMakeRecord/IrMakeEnum/IrMakeException.  Direct user function
+        Constructor calls (VarRef callee resolving to a constructor) are lowered
+        to IrMakeRecord/IrMakeEnum/IrMakeException.  Direct user function
         calls are lowered to IrDirectCall.  Lambda calls are lowered to IrMakeClosure,
         indirect calls to IrIndirectCall, and host builtins to
         IrPrint/IrRenderValue/IrParseJson/IrAsk/IrAskRequest/IrExec.
@@ -1774,6 +1772,15 @@ class _Lowerer:
 
         # (a) VarRef callee in constructor_refs
         if isinstance(callee, VarRef):
+            qcr = self._checked.resolved.qualified_constructor_refs.get(callee.node_id)
+            if qcr is not None:
+                owner_name, variant_name, _qcr_mid = qcr
+                return self._lower_named_constructor_call(
+                    nid,
+                    owner_name,
+                    variant_name,
+                    span,
+                )
             cref = self._checked.resolved.constructor_refs.get(callee.node_id)
             if cref is not None:
                 return self._lower_named_constructor_call(
@@ -1800,17 +1807,6 @@ class _Lowerer:
                 and callee_ref.kind is BinderKind.function_binding
             ):
                 return self._lower_direct_call(call_node, callee_ref, nid, span)
-
-        elif isinstance(callee, FieldAccess):
-            qcr = self._checked.resolved.qualified_constructor_refs.get(callee.node_id)
-            if qcr is not None:
-                owner_name, variant_name, _qcr_mid = qcr
-                return self._lower_named_constructor_call(
-                    nid,
-                    owner_name,
-                    variant_name,
-                    span,
-                )
 
         # Indirect/value call: callee is an arbitrary expression (lambda, let-bound
         # closure, function-value param, etc.).  Named args are rejected by the checker at
@@ -2448,7 +2444,7 @@ class _Lowerer:
 
         When the engine-key type is ``Option[T]`` and the source value's type is
         not itself an enum (i.e. it is the inner ``T``), wrap the lowered inner
-        value in an ``Option.Some`` construction.  Otherwise lower with ordinary
+        value in an ``Option::Some`` construction.  Otherwise lower with ordinary
         coercion to the declared type.
         """
         if isinstance(declared_type, EnumType) and declared_type.type_args:

@@ -191,6 +191,7 @@ LPAR = "LPAR"  # (
 RPAR = "RPAR"  # )
 LSQB = "LSQB"  # [
 INDEX_LSQB = "INDEX_LSQB"  # [ immediately adjacent to an expression-ending token
+TYPEARG_LSQB = "TYPEARG_LSQB"  # [ opening Type[T]::Ctor type arguments
 RSQB = "RSQB"  # ]
 LBRACE = "LBRACE"  # {
 CALL_LBRACE = "CALL_LBRACE"  # { immediately adjacent to an expression-ending token

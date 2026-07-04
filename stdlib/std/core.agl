@@ -120,7 +120,7 @@ builtin def ask[T](
   agent: agent = null,
   format: text = "",
   strict_json: bool = false,
-  on_parse_error: ParsePolicy = ParsePolicy.Abort,
+  on_parse_error: ParsePolicy = ParsePolicy::Abort,
 ) -> T
 builtin def ask-request(prompt: text) -> AgentRequest
 builtin def exec(command: text) -> ExecResult

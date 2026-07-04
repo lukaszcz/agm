@@ -125,7 +125,7 @@ and type position:
 foo.bar::thing       # module foo.bar, name thing
 ::name               # current module, name name (self-reference)
 A.baz::y             # alias-rooted qualifier, name y
-foo.bar::Color.Red   # module foo.bar, enum Color, variant Red
+foo.bar::Color::Red   # module foo.bar, enum Color, variant Red
 ```
 
 A qualifier is a dotted module path followed by `::` immediately before the

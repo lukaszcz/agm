@@ -1,6 +1,6 @@
 # AgL end-to-end test corpus
 
-Data files for `tests/test_agl_e2e.py`, the specification suite for the AgL v2
+Data files for `tests/test_agl_e2e.py`, the specification suite for the AgL
 implementation (expression-oriented core, uniform call syntax, user-defined
 functions).
 

@@ -1,4 +1,4 @@
-"""Static name-resolution pass (Component 4) for the AgL v2 pipeline.
+"""Static name-resolution pass for the AgL pipeline.
 
 ``resolve(program)`` performs a full single-pass walk over the AST,
 building the lexical scope chain and populating side tables:
@@ -30,7 +30,7 @@ In **call position** (a ``Call`` whose callee is a bare ``VarRef`` with one
 of these names), the resolver records ``Call.node_id → BuiltinKind`` in the
 ``builtin_calls`` side table and does NOT attempt to resolve the callee as a
 normal binding.  A bare ``VarRef("print")`` (not in call position) raises
-``AglScopeError`` — they are not first-class values in v1 (D6).
+``AglScopeError`` — they are not first-class values in AgL.
 """
 
 from __future__ import annotations
@@ -202,7 +202,7 @@ class _Resolver:
         # Scope stack — top is the current scope.
         self._scope: ScopeNode | None = None
         # The module's root ScopeNode (set in run()); used by _lookup_own_root
-        # to bypass lexical shadows introduced by nested scopes (D9 / ::name).
+        # to bypass lexical shadows introduced by nested scopes for ::name.
         self._root_scope: ScopeNode | None = None
         # Whether we are at the program root (for root-only checks).
         self._at_root: bool = False
@@ -1158,7 +1158,7 @@ class _Resolver:
 
         When a VarRef resolves to a constructor_binding, look up the candidate set:
         - Exactly 1 candidate → record in constructor_refs.
-        - ≥ 2 candidates → ambiguity error (D7).
+        - ≥ 2 candidates → ambiguity error.
 
         In graph mode (when ``_import_env`` is set):
         - ``node.module_qualifier is None`` → lexical scope first, then open imports.
@@ -1262,7 +1262,7 @@ class _Resolver:
             qualifier_str = ".".join(handle)
             # Determine the owning module for this handle: take any entry from the
             # qual_map (all entries for this handle belong to at most one source module
-            # per D3; wildcard handles may cover multiple modules but each name maps
+            # Wildcard handles may cover multiple modules, but each name maps
             # to exactly one QName).  A non-None qual_map always has at least one entry
             # because handles are only registered when names are added to them.
             owning_module: ModuleId = next(iter(qual_map.values()))[0]
@@ -1281,7 +1281,7 @@ class _Resolver:
         self._resolution[node.node_id] = ref
 
     def _lookup_own_root(self, name: str) -> BindingRef | None:
-        """Look up *name* in the module's own root scope bindings only (D9 / ::name).
+        """Look up *name* in the module's own root scope bindings only.
 
         ``::name`` must resolve to the current module's OWN top-level declaration,
         bypassing any lexical shadows introduced by nested scopes (params, let, etc.).

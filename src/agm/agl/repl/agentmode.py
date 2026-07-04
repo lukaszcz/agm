@@ -2,8 +2,7 @@
 
 The REPL can dispatch live agent (and ``exec`` shell) calls in one of two modes:
 
-- ``"confirm"`` — confirm before every live call (the eventual default per the
-  REPL plan, decision 2);
+- ``"confirm"`` — confirm before every live call;
 - ``"auto"``    — fire calls immediately, like ``agm exec``.
 
 This tiny module exists on its own so BOTH the meta-command layer
@@ -30,8 +29,8 @@ AgentModeName = Literal["confirm", "auto"]
 class AgentMode:
     """Mutable holder for the current agent-call confirmation mode.
 
-    ``mode`` defaults to ``"confirm"`` per plan decision 2. The meta layer
-    mutates this field; the confirming wrapper reads it before each call.
+    ``mode`` defaults to ``"confirm"``. The meta layer mutates this field; the
+    confirming wrapper reads it before each call.
     """
 
     mode: AgentModeName = "confirm"

@@ -78,7 +78,7 @@ def _fail(returncode: int, stdout: str = "", stderr: str = "") -> ProcessCapture
 
 
 # ---------------------------------------------------------------------------
-# T1: Simple text exec
+# Simple text exec
 # ---------------------------------------------------------------------------
 
 
@@ -93,7 +93,7 @@ def test_t1_text_exec() -> None:
 
 
 # ---------------------------------------------------------------------------
-# T2: Typed/JSON exec (decode to int)
+# Typed/JSON exec (decode to int)
 # ---------------------------------------------------------------------------
 
 
@@ -108,7 +108,7 @@ def test_t2_typed_exec_json() -> None:
 
 
 # ---------------------------------------------------------------------------
-# T3: Structured exec (ExecResult record — non-zero exit doesn't raise)
+# Structured exec (ExecResult record — non-zero exit doesn't raise)
 # ---------------------------------------------------------------------------
 
 
@@ -125,7 +125,7 @@ def test_t3_structured_exec() -> None:
 
 
 # ---------------------------------------------------------------------------
-# T4: Non-zero exit with text contract raises ExecError
+# Non-zero exit with text contract raises ExecError
 # ---------------------------------------------------------------------------
 
 
@@ -138,7 +138,7 @@ def test_t4_nonzero_exit_text() -> None:
 
 
 # ---------------------------------------------------------------------------
-# T5: Timeout raises ExecError with timed_out=True
+# Timeout raises ExecError with timed_out=True
 # ---------------------------------------------------------------------------
 
 
@@ -154,7 +154,7 @@ def test_t5_timeout() -> None:
 
 
 # ---------------------------------------------------------------------------
-# T6: Spawn error raises ExecError with timed_out=False
+# Spawn error raises ExecError with timed_out=False
 # ---------------------------------------------------------------------------
 
 
@@ -170,7 +170,7 @@ def test_t6_spawn_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# T7: Retry policy — fail first attempt, succeed on retry
+# Retry policy — fail first attempt, succeed on retry
 # ---------------------------------------------------------------------------
 
 
@@ -203,7 +203,7 @@ def test_t7_retry_success() -> None:
 
 
 # ---------------------------------------------------------------------------
-# T8: Retry exhaustion — all retries fail → AgentParseError
+# Retry exhaustion — all retries fail → AgentParseError
 # ---------------------------------------------------------------------------
 
 
@@ -220,7 +220,7 @@ def test_t8_retry_exhaustion() -> None:
 
 
 # ---------------------------------------------------------------------------
-# T9: exec inside a user function
+# exec inside a user function
 # ---------------------------------------------------------------------------
 
 
@@ -239,7 +239,7 @@ def test_t9_exec_inside_function() -> None:
 
 
 # ---------------------------------------------------------------------------
-# T10: Golden lowering — IrExec node + dry_run_inventory
+# Golden lowering — IrExec node + dry_run_inventory
 # ---------------------------------------------------------------------------
 
 
@@ -282,7 +282,7 @@ def test_t10_golden_lowering() -> None:
 
 
 # ---------------------------------------------------------------------------
-# T11: Defensive fallback — parse_agent_output returns empty failure
+# Defensive fallback — parse_agent_output returns empty failure
 # ---------------------------------------------------------------------------
 
 
@@ -365,7 +365,7 @@ def test_t11_exec_empty_parse_failure_raises_agent_parse_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# T12: Retry-then-error — first attempt parse-fails, retry exits non-zero
+# Retry-then-error — first attempt parse-fails, retry exits non-zero
 # ---------------------------------------------------------------------------
 
 

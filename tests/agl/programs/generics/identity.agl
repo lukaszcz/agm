@@ -1,7 +1,7 @@
 # Generics: a polymorphic identity `def` applied at several instantiations
 # (int, text, list, record), an explicit `id::[…]` type-argument override, and
 # the generic `def` bound as a first-class value through an expected function
-# type (D5) and then applied. Also exercises a `let` annotation inside a generic
+# type and then applied. Also exercises a `let` annotation inside a generic
 # def body that references the def's type variable to build a `list[T]`
 # (`singleton`), instantiated at int and text. Also exercises a parameterized
 # type alias (`Seq[A]`) instantiated at a concrete element type. A host param

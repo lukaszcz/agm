@@ -135,7 +135,7 @@ def _variant_schema_for_case(schema: dict[str, object], case: str) -> dict[str, 
 def _ensure_expr_tail(body: tuple[Item, ...]) -> tuple[Item, ...]:
     """Append a unit literal when the last item is a binder.
 
-    In v2, a block must end with an expression (binders need a continuation).
+    In AgL, a block must end with an expression (binders need a continuation).
     Tests that end with ``let x = ...`` are migrated by appending ``()`` so
     the block type is ``unit`` and all bound names are still in scope.
     """
@@ -227,7 +227,7 @@ def _ask_call(
     *,
     strict_json: bool | None = None,
 ) -> ast.Call:
-    """Build a v2 ``ask(text)`` call expression using the default agent.
+    """Build an ``ask(text)`` call expression using the default agent.
 
     ``strict_json=True`` adds ``strict_json = true`` as a named argument.
     The caller supplies the agent function as ``default_agent`` when running.
@@ -879,7 +879,7 @@ class TestSchemaValidationErrors:
 
 
 # ---------------------------------------------------------------------------
-# 7b. Structured ValidationError records (F1 — design §7.5 / §7.7)
+# 7b. Structured ValidationError records
 # ---------------------------------------------------------------------------
 
 
@@ -976,7 +976,7 @@ class TestStructuredValidationErrors:
 
 
 class TestValidationErrorsThroughRuntime:
-    """F1: real ValidationErrors thread into AgentParseError.validation_errors."""
+    """real ValidationErrors thread into AgentParseError.validation_errors."""
 
     def test_validation_errors_in_agent_parse_error(self) -> None:
         record_def = _record_def(
@@ -1041,7 +1041,7 @@ class TestValidationErrorsThroughRuntime:
             _field_def("title", _text_ty()),
             _field_def("severity", _int_ty()),
         )
-        # v2: on_parse_error: Retry(n: 1) as a named arg to ask().
+        #  on_parse_error: Retry(n: 1) as a named arg to ask().
         # Constructors are now Call nodes (no separate Constructor AST node).
         retry_ctor = ast.Call(
             callee=ast.VarRef(name="Retry", span=_sp(), node_id=_nid()),
@@ -1081,7 +1081,7 @@ class TestValidationErrorsThroughRuntime:
 
 
 # ---------------------------------------------------------------------------
-# 7c. Multi-value ambiguity rejection (F3 — design §2.8 "exactly one value")
+# 7c. Multi-value ambiguity rejection
 # ---------------------------------------------------------------------------
 
 
@@ -1134,21 +1134,21 @@ class TestMultiValueAmbiguity:
         assert "multiple JSON values" in result.error_msg
 
     def test_two_objects_with_inner_array_rejected(self) -> None:
-        """F4: ``{"a": [1]} {"b": 2}`` is ambiguous despite the inner ``[``."""
+        """``{"a": [1]} {"b": 2}`` is ambiguous despite the inner ``[``."""
         codec = JsonCodec()
         result = codec.parse('{"a": [1]} {"b": 2}', JsonType(), strict_json=False)
         assert result.ok is False
         assert "multiple JSON values" in result.error_msg
 
     def test_two_values_with_escaped_bracket_string_rejected(self) -> None:
-        """F4: a bracket inside an escaped string does not hide the second value."""
+        """a bracket inside an escaped string does not hide the second value."""
         codec = JsonCodec()
         result = codec.parse('{"a": "[x]"} {"b": 2}', JsonType(), strict_json=False)
         assert result.ok is False
         assert "multiple JSON values" in result.error_msg
 
     def test_single_object_with_inner_array_recovers(self) -> None:
-        """F4: a single object containing an array is one value (not ambiguous)."""
+        """a single object containing an array is one value (not ambiguous)."""
         codec = JsonCodec()
         result = codec.parse('{"a": [1, 2]}', JsonType(), strict_json=False)
         assert result.ok is True
@@ -1418,7 +1418,7 @@ class TestPipelineDriverWireUp:
             )
         exc = exc_info.value.exc
         assert exc.display_name == "AgentParseError"
-        # In v2 the agent field reflects the built-in "ask" call site (default agent path).
+        # In AgL the agent field reflects the built-in "ask" call site (default agent path).
         assert exc.fields.get("agent") == TextValue("ask")
 
     def test_agent_parse_error_has_target_type_field(self) -> None:
@@ -1524,7 +1524,7 @@ class TestNormalizedRaw:
         assert result.normalized_raw is not None
 
     def test_schema_failure_carries_normalized_raw(self) -> None:
-        """F5: a fenced-but-schema-invalid response still exposes the recovered text."""
+        """a fenced-but-schema-invalid response still exposes the recovered text."""
         codec = JsonCodec()
         # Fenced JSON that is valid JSON but the wrong shape for an int target.
         result = codec.parse('```json\n"oops"\n```', IntType(), strict_json=False)
@@ -1534,7 +1534,7 @@ class TestNormalizedRaw:
         assert result.normalized_raw == '"oops"'
 
     def test_conversion_failure_carries_normalized_raw(self) -> None:
-        """F5: a value-conversion failure also threads the recovered text."""
+        """a value-conversion failure also threads the recovered text."""
         codec = JsonCodec()
         # 1.5 passes a decimal schema check but cannot convert to an int Value;
         # exercises the conversion-failure branch.  Use a shape jsonschema lets
@@ -1620,7 +1620,7 @@ issue
             convert_param_value("e", "val", ExceptionType(name="Boom"))
 
     def test_structured_param_is_strict_no_repair(self) -> None:
-        """F7: host --param values are parsed strictly; typos are NOT repaired.
+        """host --param values are parsed strictly; typos are NOT repaired.
 
         A trailing comma (which json-repair would silently fix for chatty agent
         output) must be rejected for a user-supplied structured param, with an
@@ -1636,7 +1636,7 @@ issue
             )
 
     def test_structured_param_rejects_fenced_json(self) -> None:
-        """F7: a Markdown-fenced --param value is not stripped (strict parsing)."""
+        """a Markdown-fenced --param value is not stripped (strict parsing)."""
         from agm.agl.runtime.params import convert_param_value
 
         with pytest.raises(ValueError, match="JSON parse error"):
@@ -1815,7 +1815,7 @@ class TestDecodeValueErrorBranches:
             decode_value(schema, {"$case": "B"})
 
     def test_integral_decimal_to_int_through_parse(self) -> None:
-        """F2: wire ``1.0`` validates and converts to IntValue(1) for an int target.
+        """wire ``1.0`` validates and converts to IntValue(1) for an int target.
 
         Exercised through ``parse()`` (the public path): post-parse normalization
         rewrites integral Decimals to int *before* schema validation, so
@@ -1827,14 +1827,14 @@ class TestDecodeValueErrorBranches:
         assert result.value == IntValue(1)
 
     def test_integral_decimal_to_int_strict(self) -> None:
-        """F2: integral-Decimal normalization also applies on the strict path."""
+        """integral-Decimal normalization also applies on the strict path."""
         codec = JsonCodec()
         result = codec.parse("1.0", IntType(), strict_json=True)
         assert result.ok is True
         assert result.value == IntValue(1)
 
     def test_non_integral_decimal_rejected_for_int(self) -> None:
-        """F2: ``1.5`` still fails an int target (not integral)."""
+        """``1.5`` still fails an int target (not integral)."""
         codec = JsonCodec()
         result = codec.parse("1.5", IntType(), strict_json=False)
         assert result.ok is False
@@ -1842,7 +1842,7 @@ class TestDecodeValueErrorBranches:
         assert any(e.category == "wrong_type" for e in result.errors)
 
     def test_integral_decimal_for_decimal_target(self) -> None:
-        """F2: ``1.0`` for a decimal target yields a value-exact DecimalValue.
+        """``1.0`` for a decimal target yields a value-exact DecimalValue.
 
         Normalization routes the integral Decimal through int, and the
         int→decimal widening in ``decode_value`` re-widens it: the resulting
@@ -1951,12 +1951,12 @@ class TestFencedRepairFallback:
 
 
 # ---------------------------------------------------------------------------
-# 16. Coverage: validation-error mapping internals (F1) and extraction edges
+# 16. Coverage: validation-error mapping internals and extraction edges
 # ---------------------------------------------------------------------------
 
 
 class TestValidationMappingCoverage:
-    """Cover structural / defensive branches of the F1 error mapping."""
+    """Cover structural / defensive branches of the  error mapping."""
 
     def test_trailing_comma_array_recovers_not_ambiguous(self) -> None:
         """A repaired array whose candidate already starts with '[' is not ambiguous."""
@@ -2155,7 +2155,7 @@ class TestSchemaPrecomputedInParse:
         assert result.errors
 
     def test_parse_with_precomputed_schema_matches_derived(self) -> None:
-        """F5: parse(schema=precomputed) is observably equivalent to parse().
+        """parse(schema=precomputed) is observably equivalent to parse().
 
         Passing the materialized schema is an optimization, never a behavior
         change: the parse outcome (ok/value/errors) must be identical to letting
@@ -2179,7 +2179,7 @@ class TestSchemaPrecomputedInParse:
             ]
 
     def test_contract_json_schema_reused_across_parses(self) -> None:
-        """F5: the contract's json_schema object is the one threaded into parse.
+        """the contract's json_schema object is the one threaded into parse.
 
         Observable identity reuse: the schema object the codec materializes on
         the contract is the same object accepted by ``parse(schema=...)`` — so
@@ -2339,7 +2339,7 @@ class TestRegisterCodec:
             rt.register_codec(JsonCodec())
 
     def test_custom_codec_make_contract_and_parse_exercised_in_pipeline(self) -> None:
-        """F3: a custom codec selected via ``format:`` is genuinely used.
+        """a custom codec selected via ``format:`` is genuinely used.
 
         The codec is chosen with ``ask("Q", format: "tagcodec")`` on a ``text``
         target.  Both its ``make_contract`` (observable via the format
@@ -2392,7 +2392,7 @@ class TestRegisterCodec:
 
         rt = PipelineDriver(default_agent=agent)
         rt.register_codec(TagCodec())
-        # v2: format: arg takes the codec name as a string; let needs a continuation.
+        #  format: arg takes the codec name as a string; let needs a continuation.
         result = rt.run('let y: text = ask("Q", format = "tagcodec")\ny')
         assert result.ok is True
         # parse() ran: the binding carries the codec's distinctive prefix.
@@ -2420,7 +2420,7 @@ class TestRuntimeBuildsCodecKinds:
             def supported_kinds(self) -> frozenset[str]:
                 return frozenset({"text"})
 
-        # v2: format: arg takes the codec name as a string; let needs a continuation.
+        #  format: arg takes the codec name as a string; let needs a continuation.
         src = 'let x: text = ask("Q", format = "altcodec")\nx'
 
         rt_unreg = PipelineDriver(default_agent=lambda req: "ok")

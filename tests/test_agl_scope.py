@@ -1,7 +1,7 @@
-"""Tests for the AgL v2 scope/name-resolution pass (Component 4).
+"""Tests for the AgL scope/name-resolution pass.
 
 All tests drive real AgL source through ``parse_program`` + ``resolve``,
-or construct v2 AST nodes directly for cases that are clearer to express
+or construct AST nodes directly for cases that are clearer to express
 at the AST level.
 
 Tests assert on user-visible behavior: ``AglScopeError`` diagnostics and
@@ -2114,7 +2114,7 @@ class TestLambdaDuplicateParam:
 
 
 # ---------------------------------------------------------------------------
-# Constructor value bindings (generics: D7 / scope pass)
+# Constructor value bindings (generics:  / scope pass)
 # ---------------------------------------------------------------------------
 
 # Helper: build a RecordDef with optional type_params
@@ -2161,7 +2161,7 @@ def _make_enum(
 
 
 class TestConstructorBindings:
-    """Tests for constructor value bindings (D7: case-neutral constructor names)."""
+    """Tests for constructor value bindings (case-neutral constructor names)."""
 
     # --- Record constructor resolves as value binding ---
 
@@ -2355,12 +2355,12 @@ class TestConstructorBindings:
         # Should suggest qualification like 'Option.some'
         assert "." in msg or "qualify" in msg.lower()
 
-    # --- D7 regression: payload / type-args / context do NOT disambiguate ---
+    # ---  regression: payload / type-args / context do NOT disambiguate ---
 
     def test_ambiguous_payload_variant_still_raises(self) -> None:
         """A payload does NOT disambiguate two enums sharing the same variant name.
 
-        D7 guarantees ambiguity is raised by the scope pass regardless of whether
+         guarantees ambiguity is raised by the scope pass regardless of whether
         a matching payload is supplied.  Both candidate enums must be named in the
         error message.
         """
@@ -2381,7 +2381,7 @@ class TestConstructorBindings:
     def test_ambiguous_explicit_type_args_still_raises(self) -> None:
         """Explicit type arguments do NOT disambiguate two enums sharing a variant name.
 
-        D7 guarantees that ``some::[int](value = 1)`` is still ambiguous when both
+         guarantees that ``some::[int](value = 1)`` is still ambiguous when both
         ``Option`` and ``Other`` declare a ``some`` variant.  Both candidate enums
         must be named in the error message.
         """
@@ -2402,7 +2402,7 @@ class TestConstructorBindings:
     def test_ambiguous_contextual_type_still_raises(self) -> None:
         """A contextual expected type does NOT disambiguate an ambiguous variant.
 
-        D7 guarantees that ``let x: Option[int] = some(value = 1)`` is still
+         guarantees that ``let x: Option[int] = some(value = 1)`` is still
         ambiguous when both ``Option`` and ``Other`` declare a ``some`` variant.
         Both candidate enums must be named in the error message.
         """
@@ -2424,7 +2424,7 @@ class TestConstructorBindings:
     def test_qualified_payload_variant_resolves_without_error(self) -> None:
         """Qualification is the only valid disambiguation for shared variant names.
 
-        D7 requires that ``Option.some(value = 1)`` resolves without error even
+         requires that ``Option.some(value = 1)`` resolves without error even
         when ``Other`` also declares a ``some`` variant.
         """
         r = parse_and_resolve(
@@ -2859,7 +2859,7 @@ class TestImportDeclScope:
 
 
 # ---------------------------------------------------------------------------
-# Reserved program names (Task 2)
+# Reserved program names
 # ---------------------------------------------------------------------------
 
 

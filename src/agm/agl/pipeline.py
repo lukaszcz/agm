@@ -186,7 +186,7 @@ class RunError:
     ``type_name`` is the exception's declared type name (e.g. ``"AgentParseError"``).
     ``fields`` is a mapping from field names to JSON-shaped Python values.
     ``line`` is the 1-based source line of the raise site when known (design
-    §12.6: source location is part of runtime error reporting); ``None`` when
+    : source location is part of runtime error reporting); ``None`` when
     the span was not threaded through (e.g. arithmetic errors inside expressions).
     ``col`` is the 1-based source column of the raise site; ``None`` when unknown.
     """
@@ -202,7 +202,7 @@ class RunError:
         Format: ``AgL exception: <Type>[: <message>][: at line L[, col C]]``,
         with a trailing ``: trace_id=<id>`` when *include_trace_id* is set and a
         trace id is present.  Shared by ``agm exec`` (with the trace id, design
-        §12.6) and the REPL failure echo so the two never diverge.
+        ) and the REPL failure echo so the two never diverge.
         """
         parts: list[str] = [f"AgL exception: {self.type_name}"]
         message = self.fields.get("message")
@@ -300,10 +300,9 @@ class PipelineDriver:
         no default agent is configured (only explicitly registered agents will
         be available).
     shell_exec_timeout : float or None
-        Idle timeout (in seconds) applied to every ``exec`` shell call (design
-        §4.12, §11.13).  ``None`` means no timeout (the shell command may run
-        indefinitely).  This is the ``[exec] timeout`` config value, threaded
-        in from the CLI.
+        Idle timeout (in seconds) applied to every ``exec`` shell call. ``None``
+        means no timeout (the shell command may run indefinitely). This is the
+        ``[exec] timeout`` config value, threaded in from the CLI.
     default_call_depth_limit : int or None
         Maximum call depth for recursive functions.  Exceeding
         this limit raises a ``RecursionError`` in the AgL program.  ``None``
@@ -558,7 +557,7 @@ class PipelineDriver:
         materialization, then STOPS before executing any statement: a clean
         program returns ``ok=True`` with no bindings and produces no program
         output; static/param errors still return ``ok=False``.  On a clean
-        ``check_only`` run the §10.1 static call-site inventory is populated on
+        ``check_only`` run the 
         ``RunResult.call_sites`` (printed by ``agm exec --dry-run``).
 
         ``log_file`` is the path of the JSONL trace file to write.  When
@@ -717,7 +716,7 @@ class PipelineDriver:
         # [check_only] --dry-run stop: the full static pipeline, param
         # validation, and contract materialization have all succeeded.  Stop
         # before executing any statement (no program output, no side effects).
-        # Build the §10.1 static call-site inventory before returning.
+        # Build the .
         # Dry-run is side-effect-free: no trace is written.
         # ----------------------------------------------------------------
         if check_only:
@@ -1201,7 +1200,7 @@ class PipelineDriver:
         loop_limit: int | None,
         shell_exec_timeout: float | None,
     ) -> None:
-        """Update the three D6 engine defaults in place without losing registrations.
+        """Update the live engine defaults in place without losing registrations.
 
         Called by ``ReplSession`` after a successful entry that contains a
         ``config`` binding, to persist the effect-at-binding for subsequent
@@ -1414,7 +1413,7 @@ def exception_value_to_run_error(
     """Convert an ``ExceptionValue`` to a ``RunError`` for ``RunResult``.
 
     Field values are converted via the shared serializer, which preserves
-    ``Decimal`` exactness (never routed through binary ``float``; design §5.1).
+    ``Decimal`` exactness (never routed through binary ``float``; design ).
 
     *span* is the optional raise-site source span threaded from ``AglRaise``;
     when present, ``RunError.line`` and ``RunError.col`` are populated from it

@@ -1,11 +1,11 @@
-"""Tests for the AgL v2 type-checking pass (Component 5).
+"""Tests for the AgL type-checking pass.
 
 All tests drive real AgL source through ``parse_program`` + ``resolve`` +
 ``check``, asserting on user-visible behavior: raised ``AglTypeError``
 diagnostics and type-table / contract-spec observables via the public
 ``CheckedProgram`` API.
 
-Grammar notes (shape constraints from the v2 grammar):
+Grammar notes (shape constraints from the grammar):
 - ``record`` uses indented field syntax: ``record Foo\\n  x: int``
 - ``enum`` uses pipe variants: ``enum E\\n  | A(x: int)\\n  | B``
 - ``raise`` can only appear at ``expr`` level (top-level block item, let/var
@@ -4007,7 +4007,7 @@ class TestExecUnknownArgs:
         assert "bogus" in str(err)
 
     def test_exec_agent_named_arg_rejected(self) -> None:
-        # exec has no 'agent:' argument (D10).
+        # exec has no 'agent:' argument.
         err = reject_type('agent a\nexec("ls", agent = a)')
         assert "exec" in str(err).lower() or "unknown" in str(err).lower()
 
@@ -4497,8 +4497,8 @@ class TestTypeVarTypeSchema:
 
 
 class TestGenerics:
-    """Tests for generic def type-checking, inference, D2 parametricity,
-    D3 target guard, and D5 generic-def-as-value instantiation."""
+    """Tests for generic def type-checking, inference,  parametricity,
+     target guard, and  generic-def-as-value instantiation."""
 
     # ------------------------------------------------------------------
     # Generic def: body checking
@@ -4600,7 +4600,7 @@ class TestGenerics:
         )
 
     # ------------------------------------------------------------------
-    # D2: Strict parametricity — reject operations on bare TypeVarType
+    # Strict parametricity — reject operations on bare TypeVarType
     # ------------------------------------------------------------------
 
     def test_d2_equality_on_T_rejected(self) -> None:
@@ -4679,7 +4679,7 @@ class TestGenerics:
         accept_type("def first[T](xs: list[T]) -> T = xs[0]\nfirst([1])")
 
     # ------------------------------------------------------------------
-    # D5: Generic def used as a value
+    # Generic def used as a value
     # ------------------------------------------------------------------
 
     def test_d5_generic_def_as_value_with_expected(self) -> None:
@@ -4698,7 +4698,7 @@ class TestGenerics:
         accept_type("def id[T](x: T) -> T = x\nid(42)")
 
     # ------------------------------------------------------------------
-    # D3: Agent/exec target may not contain a type variable
+    # Agent/exec target may not contain a type variable
     # ------------------------------------------------------------------
 
     def test_d3_ask_with_type_var_target_rejected(self) -> None:
@@ -4736,7 +4736,7 @@ class TestGenerics:
 
     def test_d3_ask_contextual_type_var_target_rejected(self) -> None:
         # Regression: a bare type-var target inferred from the generic def's
-        # return type (no explicit ::[…]) must give the clean D3 error, not a
+        # return type (no explicit ::[…]) must give the clean  error, not a
         # codec-selection error.
         err = reject_type('def fetch[T](p: text) -> T = ask(p)')
         assert "type variable" in str(err).lower()
@@ -4765,7 +4765,7 @@ class TestGenerics:
         accept_type('let x: text = exec("ls")\nx')
 
     # ------------------------------------------------------------------
-    # D2: right-operand TypeVarType branches (separate from left)
+    # right-operand TypeVarType branches (separate from left)
     # ------------------------------------------------------------------
 
     def test_d2_right_eq_T_rejected(self) -> None:
@@ -4799,7 +4799,7 @@ class TestGenerics:
         assert "type variable" in str(err).lower() or "abstract" in str(err).lower()
 
     # ------------------------------------------------------------------
-    # D5: cannot infer type arg for generic-as-value from context
+    # cannot infer type arg for generic-as-value from context
     # ------------------------------------------------------------------
 
     def test_d5_uninferable_from_wrong_arity_context(self) -> None:
@@ -5242,7 +5242,7 @@ class TestGenericConstructorErrors:
 
 
 class TestGenericInvariance:
-    """Tests for invariant type argument checking (D6)."""
+    """Tests for invariant type argument checking."""
 
     def test_box_int_not_assignable_to_box_text(self) -> None:
         err = reject_type(
@@ -5924,7 +5924,7 @@ class TestCast:
         assert "cannot cast" in str(err).lower() or "agent" in str(err).lower()
 
     def test_record_as_json_accepted(self) -> None:
-        """record as json is now TOTAL_JSON (D10 — explicit nominal→json cast)."""
+        """record as json is now TOTAL_JSON (explicit nominal→json cast)."""
         from agm.agl.semantics.types import CastKind
         r = accept_type("record R\n  x: int\nlet r = R(x = 1)\nr as json")
         assert r
@@ -5942,7 +5942,7 @@ class TestCast:
         assert "cannot cast" in str(err).lower()
 
     def test_json_to_text_render(self) -> None:
-        """json as text yields text (TOTAL_RENDER — D1 completeness)."""
+        """json as text yields text (TOTAL_RENDER —  completeness)."""
         r = accept_type('let j: json = 42\nlet s: text = j as text\ns')
         decl = r.resolved.program.body.items[1]
         assert isinstance(decl, LetDecl)
@@ -5957,7 +5957,7 @@ class TestCast:
         assert r.node_types[decl.value.node_id] == TextType()
 
     def test_chained_cast_int_to_json_to_text(self) -> None:
-        """Chained x as json as text resolves to text (D5 example)."""
+        """Chained x as json as text resolves to text ( example)."""
         r = accept_type("let x: int = 1\nlet s: text = x as json as text\ns")
         decl = r.resolved.program.body.items[1]
         assert isinstance(decl, LetDecl)
@@ -6293,12 +6293,12 @@ class TestGenericNamedOnlyShorthandInference:
 
 
 # ---------------------------------------------------------------------------
-# Finding 2 regression: lambda D6b required-after-defaulted check
+# Finding 2 regression: lambda  required-after-defaulted check
 # ---------------------------------------------------------------------------
 
 
 class TestLambdaRequiredAfterDefaulted:
-    """Regression tests for Finding 2: the D6b required-after-defaulted check
+    """Regression tests for Finding 2: the  required-after-defaulted check
     must apply to lambdas, not just def declarations.
     """
 

@@ -22,7 +22,7 @@ print n_json
 print b_json
 print d_json
 
-# text → json embeds the text as a JSON string (D9: total, no parse)
+# text → json embeds the text as a JSON string (total, no parse)
 let embedded = "42" as json
 print embedded
 

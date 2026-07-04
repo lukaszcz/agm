@@ -1,4 +1,4 @@
-"""Tests for the AgL v2 type model.
+"""Tests for the AgL type model.
 
 Covers ``agm.agl.semantics.types`` and ``agm.agl.typecheck.env`` —
 both import cleanly without depending on the rest of the checker.

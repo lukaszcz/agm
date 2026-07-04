@@ -4,7 +4,7 @@ All AgL evaluation through ``IrInterpreter`` MUST perform
 arithmetic under this context so that results are independent of the host's
 ambient ``decimal`` context.
 
-Design (F7): a host that lowers ``getcontext().prec`` would otherwise change
+Design: a host that lowers ``getcontext().prec`` would otherwise change
 results such as ``1 / 3``.  The context is pinned to 28 significant digits with
 ROUND_HALF_EVEN, matching the AgL language specification.
 """

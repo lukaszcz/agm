@@ -138,7 +138,7 @@ class BuiltinCallChecker:
         )
         self._reject_type_var_target(target_type, node.span)
 
-        # D9: reject function/agent targets.
+        # reject function/agent targets.
         if isinstance(target_type, (FunctionType, AgentType)):
             raise AglTypeError(
                 "cannot parse agent output into a function/agent value.",
@@ -174,7 +174,7 @@ class BuiltinCallChecker:
         target_type = explicit if explicit is not None else TextType()
         self._reject_type_var_target(target_type, node.span)
 
-        # D9: reject function/agent targets.
+        # reject function/agent targets.
         if isinstance(target_type, (FunctionType, AgentType)):
             raise AglTypeError(
                 "cannot build an output contract for a function/agent target.",
@@ -285,7 +285,7 @@ class BuiltinCallChecker:
             target_type = exec_result_type
         self._reject_type_var_target(target_type, node.span)
 
-        # D9: reject function/agent targets.
+        # reject function/agent targets.
         if isinstance(target_type, (FunctionType, AgentType)):
             raise AglTypeError(
                 "cannot parse exec output into a function/agent value.",
@@ -356,7 +356,7 @@ class BuiltinCallChecker:
         )
         return target_type
 
-    # --- shared explicit-target resolver for D3 ---
+    # --- shared explicit-target resolver for --
 
     def _resolve_explicit_target(self, node: Call, builtin_name: str) -> Type | None:
         """Resolve the explicit type argument of an ask/ask-request/exec call.
@@ -366,7 +366,7 @@ class BuiltinCallChecker:
         its contextual/default target logic).
 
         Raises ``AglTypeError`` when more than one type argument is provided
-        (arity error). The D3 type-variable guard is applied by the caller to
+        (arity error). The  type-variable guard is applied by the caller to
         the *final* target type (see :meth:`_reject_type_var_target`), so it
         covers both the explicit and the contextual/inferred target paths.
         """
@@ -383,7 +383,7 @@ class BuiltinCallChecker:
         )
 
     def _reject_type_var_target(self, target_type: Type, span: SourceSpan) -> None:
-        """D3: an ask/exec/ask-request target type may not contain a type variable.
+        """an ask/exec/ask-request target type may not contain a type variable.
 
         Applied to the final resolved target — whether it came from an explicit
         ``::[…]`` argument or was inferred from the contextual expected type

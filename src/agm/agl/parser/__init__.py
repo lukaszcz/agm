@@ -1,4 +1,4 @@
-"""AgL parser package (Component 2).
+"""AgL parser package.
 
 Public API
 ----------

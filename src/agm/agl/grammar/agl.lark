@@ -1,4 +1,4 @@
-// AgL v2 grammar — expression-oriented with uniform function-call syntax.
+// AgL grammar — expression-oriented with uniform function-call syntax.
 //
 // Terminals are %declare'd or generated from string literals; the custom
 // AglLexer supplies all token values (remapping lowercase keyword types to
@@ -23,7 +23,7 @@
 // NAME tokens; AstBuilder type handlers map the string value to the
 // appropriate TypeExpr node.
 //
-// v2 design notes:
+// Design notes:
 // (A) Single-arg juxtaposition vs operators vs paren-calls:
 //   - postfix level: paren-calls `f(args)` and field access `f.field` (left-assoc).
 //   - `juxt`: concrete (non-transparent) non-terminal — `postfix juxt_arg` or `postfix`.
@@ -42,7 +42,7 @@
 //
 // (C) Bar-stratification — dropped to ZERO:
 //   - The production grammar had a 3-tier system (closed_stmt/open_stmt/bar_closed_stmt).
-//   - For v2, all expressions are uniform. Branch bodies use `or_expr` directly.
+//   - For AgL, all expressions are uniform. Branch bodies use `or_expr` directly.
 //   - We do NOT introduce a `bar_expr` or `closed_expr` alias non-terminal:
 //     `closed_expr: or_expr` creates a FOLLOW-set cycle where OR appears in
 //     FOLLOW(closed_expr) causing S/R conflicts in every operator-chain rule.

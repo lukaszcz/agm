@@ -1,4 +1,4 @@
-"""Pure import-resolution model for the AgL module system (D3).
+"""Pure import-resolution model for the AgL module system.
 
 This module exposes a single pure function :func:`build_import_env` that
 computes a module's :class:`ImportEnv` from its :class:`~agm.agl.syntax.nodes.ImportDecl`
@@ -6,16 +6,16 @@ declarations and pre-built per-module export sets.  It has **no dependency** on
 the resolver or scope-tree; it depends only on AST node types, :class:`ModuleId`,
 and :class:`AglScopeError`.
 
-This isolation lets D3's combinatorial import-merge logic be tested exhaustively in
-unit tests without instantiating a full resolver.
+This isolation lets the combinatorial import-merge logic be tested exhaustively
+in unit tests without instantiating a full resolver.
 
 Design decisions implemented
 -----------------------------
-- **D3** — all import forms: bare/``as``/``qualified``/``qualified as``/
+- All import forms: bare/``as``/``qualified``/``qualified as``/
   ``using``/``using…as``/``hiding``/wildcard (``.*``)/wildcard ``as`` re-rooting.
-- **D5** — ``private`` names are absent from ``exports``; ``build_import_env``
-  never re-admits them (it operates exclusively on the supplied ``exports`` map).
-- **D10** — unified namespace: any top-level non-private ``FuncDef``, ``RecordDef``,
+- ``private`` names are absent from ``exports``; ``build_import_env`` never
+  re-admits them (it operates exclusively on the supplied ``exports`` map).
+- Unified namespace: any top-level non-private ``FuncDef``, ``RecordDef``,
   ``EnumDef``, or ``TypeAlias`` name may appear in ``using``/``hiding``.
 
 The :class:`ImportEnv` produced here is consumed by graph resolution and
@@ -205,7 +205,7 @@ def _build_rename_map(decl: ImportDecl) -> dict[str, str]:
 def _qualifier_handle(decl: ImportDecl, module: ModuleId) -> tuple[str, ...]:
     """Compute the qualifier handle for a (decl, module) pair.
 
-    Rules (D3):
+    Rules:
     - single, no alias → ``module.segments``
     - single, alias → ``(alias,)``
     - wildcard, no alias → ``module.segments``
@@ -233,7 +233,7 @@ def _check_alias_root_collision(
     decls: tuple[ImportDecl, ...],
     targets: Mapping[int, ImportTarget],
 ) -> None:
-    """Detect alias-root vs non-alias module-path root collision (D3 static error).
+    """Detect alias-root vs non-alias module-path root collision.
 
     A collision occurs ONLY when at least one entry is an alias.  Specifically,
     a pair (entry_A, entry_B) is a collision when:

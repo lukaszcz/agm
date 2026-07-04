@@ -1,13 +1,13 @@
-"""End-to-end behavior tests for AgL v2 (the `agm exec` workflow DSL).
+"""End-to-end behavior tests for AgL (the `agm exec` workflow DSL).
 
 This suite is the TDD specification for the AgL implementation. Every
-tests/agl/programs/**/*.agl file is a complete AgL v2 program executed under
+tests/agl/programs/**/*.agl file is a complete AgL program executed under
 each scenario in its sidecar `<name>.scenarios.json`; every
 tests/agl/rejections/**/*.agl file is an invalid program that the static
 pipeline must reject before executing anything. The data format is documented
 in tests/agl/README.md.
 
-Public contract exercised here (AgL implementation requirements §9, the AgL DSL design §7.6):
+Public contract exercised here (AgL implementation requirements , the AgL DSL design ):
 
     from agm.agl import PipelineDriver
 

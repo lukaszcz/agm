@@ -53,7 +53,7 @@ class AglRaise(Exception):
 
     ``exc`` is the ``ExceptionValue`` being propagated.
     ``span`` is the source span of the statement that raised this exception
-    (when known — design §12.6: source location is part of runtime error
+    (when known — design : source location is part of runtime error
     reporting).  ``None`` when the raise site does not have span information
     available (e.g. binary-op arithmetic errors).
     """

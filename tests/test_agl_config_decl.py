@@ -183,7 +183,7 @@ class TestParserConfigDecl:
         prog = parse_program("config log = true\nprint 1")
         assert len(prog.body.items) == 2
         assert isinstance(prog.body.items[0], ConfigDecl)
-        # In v2, ``print 1`` is a Call expression (not a PrintStmt).
+        # In AgL, ``print 1`` is a Call expression (not a PrintStmt).
         assert isinstance(prog.body.items[1], Call)
 
     def test_config_decl_spans_recorded(self) -> None:

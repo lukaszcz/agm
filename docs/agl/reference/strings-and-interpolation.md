@@ -29,10 +29,10 @@ argument, an `exec` command, or any other position.
 | `int`, `decimal`, `bool` | plain scalar text |
 | `json` | compact JSON by default; use `render(value, pretty = true)` for indented display |
 | `list[E]` | `[e1, e2, …]` — AgL list syntax |
-| `dict[text, V]` | `{"k1": v1, "k2": v2}` — AgL dict syntax; keys always quoted |
-| record | `TypeName(f1 = v1, f2 = v2)` — AgL constructor form; fields in declaration order |
-| enum | `TypeName.Variant(f1 = v1, …)` — qualified; nullary variant as `TypeName.Variant` (no parens) |
-| exception | `TypeName(f1 = v1, …)` — record-style with all fields including `trace_id`, in declaration order |
+| `dict[text, V]` | `{"k1": value1, "k2": value2}` — AgL dict syntax; keys always quoted |
+| record | `TypeName(f1 = value1, f2 = value2)` — AgL constructor form; fields in declaration order |
+| enum | `TypeName.Variant(f1 = value1, …)` — qualified; nullary variant as `TypeName.Variant` (no parens) |
+| exception | `TypeName(f1 = value1, …)` — record-style with all fields including `trace_id`, in declaration order |
 
 AgL structured values (`list`, `dict`, record, enum, exception) always render on
 a **single line** — no injected newlines. A `json` value that appears *nested*

@@ -1,8 +1,8 @@
-"""Tests for AgL config/engine-setting effect-at-binding (D6, Task 3b).
+"""Tests for AgL config/engine-setting effect-at-binding.
 
 When the interpreter reaches a ``config KEY = VALUE`` declaration for one of
-the three D6 keys (``strict-json``, ``max-iters``, ``timeout``), the engine's
-live setting updates from that point forward.  The precedence remains:
+the live keys (``strict-json``, ``max-iters``, ``timeout``), the engine's live
+setting updates from that point forward.  The precedence remains:
 CLI > source value > config_base.
 """
 
@@ -81,7 +81,7 @@ class _ShellSpy:
 
 
 # ---------------------------------------------------------------------------
-# max-iters: D6 updates _loop_limit at the point of the config binding
+# max-iters:  updates _loop_limit at the point of the config binding
 # ---------------------------------------------------------------------------
 
 
@@ -136,13 +136,13 @@ class TestMaxIters:
             "  i := i + 1\n"
             "until i >= 2\n"
         )
-        # CLI says 5; source says 1. CLI must win (applied via D6 at bind time).
+        # CLI says 5; source says 1. CLI must win (applied via  at bind time).
         result = _run(source, config_cli={"max-iters": IntValue(5)}, initial_loop_limit=5)
         assert result.ok, f"CLI override should win but got: {result.error!r}"
 
 
 # ---------------------------------------------------------------------------
-# strict-json: D6 updates _strict_json at the point of the config binding
+# strict-json:  updates _strict_json at the point of the config binding
 # ---------------------------------------------------------------------------
 
 
@@ -184,7 +184,7 @@ class TestStrictJson:
             'let r: int = ask("prompt", agent = spy)\n'
             "print r\n"
         )
-        # CLI says False → overrides source True via D6 at bind time → lenient → accepted.
+        # CLI says False → overrides source True via  at bind time → lenient → accepted.
         result = _run(
             source,
             config_cli={"strict-json": BoolValue(False)},
@@ -195,7 +195,7 @@ class TestStrictJson:
 
 
 # ---------------------------------------------------------------------------
-# timeout: D6 updates _shell_exec_timeout at the point of the config binding
+# timeout:  updates _shell_exec_timeout at the point of the config binding
 # ---------------------------------------------------------------------------
 
 
@@ -273,7 +273,7 @@ class TestTimeout:
         """config timeout = "forever" raises a clean AgL-level ValueError at the decl point.
 
         The value "forever" is a valid Option[text] (it passes typecheck as
-        some("forever")), but parse_timeout raises ValueError at runtime; D6
+        some("forever")), but parse_timeout raises ValueError at runtime; 
         converts this to an AglRaise so the program exits with an uncaught
         exception rather than a raw Python traceback.
         """

@@ -1,4 +1,4 @@
-"""Symbol and scope-tree data types for the AgL v2 resolution pass.
+"""Symbol and scope-tree data types for the AgL resolution pass.
 
 Data model
 ----------
@@ -81,7 +81,7 @@ class BinderKind(enum.Enum):
     """How an immutable (or mutable) binding was introduced.
 
     Used to phrase a precise ``:=`` rejection message that names the ACTUAL
-    binder kind, rather than always blaming ``let`` (F8).
+    binder kind, rather than always blaming ``let``.
 
     ``let_binding``
         A ``let`` declaration (immutable).
@@ -163,7 +163,7 @@ class BindingRef:
     ``kind``
         How the binding was introduced.  Drives the precise ``:=`` rejection
         message so a mutation of a catch binder is not mislabelled as a
-        ``let`` (F8).
+        ``let``.
     ``module_id``
         The :class:`~agm.agl.modules.ids.ModuleId` of the module that owns
         this binding.  For single-program resolution (``resolve()``) and all

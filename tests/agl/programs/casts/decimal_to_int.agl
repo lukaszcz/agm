@@ -1,4 +1,4 @@
-# `decimal as int` (D4): succeeds only when the decimal has no fractional part;
+# `decimal as int`: succeeds only when the decimal has no fractional part;
 # raises CastError otherwise.  The CastError carries source_type="decimal",
 # target_type="int", and raw=the original decimal value.
 param d: decimal

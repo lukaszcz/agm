@@ -224,7 +224,7 @@ def run(args: ExecArgs) -> None:
     else:
         program_key = None
 
-    # Reserved file-stem check (§15): when no ``program NAME`` decl is present,
+    # Reserved file-stem check: when no ``program NAME`` decl is present,
     # a file stem that matches an AGM config section name would silently shadow
     # the global ``[exec]`` config.  Require an explicit ``program NAME`` decl
     # with a non-reserved name instead.  Inline ``-c`` (no file stem) is unaffected.
@@ -305,8 +305,8 @@ def run(args: ExecArgs) -> None:
         engine_base_raw["max-iters"] = config.default_loop_limit
     config_base = build_engine_config_base(engine_base_raw)
 
-    # Resolve strict_json: CLI > config.  Source config strict-json = VALUE
-    # is applied at runtime by the D6 effect (IrConfigBind → _apply_config_effect).
+    # Resolve strict_json: CLI > config. Source config strict-json = VALUE is
+    # applied at runtime when IrConfigBind updates the live interpreter setting.
     strict_json = _first(args.strict_json, config.strict_json)
     # config.strict_json is always a bool, so _first always returns a bool here.
     assert strict_json is not None
@@ -319,14 +319,14 @@ def run(args: ExecArgs) -> None:
         config.max_call_depth,
     )
 
-    # Resolve loop limit (max-iters valve): CLI > config.  ``None`` (nothing
-    # set at any layer) means the valve is OFF — unguarded loops run until they
-    # self-terminate.  Source ``config max-iters = VALUE`` is applied at runtime
-    # by the D6 effect (effect-at-binding), overriding this initial value.
+    # Resolve loop limit (max-iters valve): CLI > config. ``None`` (nothing set
+    # at any layer) means the valve is OFF — unguarded loops run until they
+    # self-terminate. Source ``config max-iters = VALUE`` is applied at runtime
+    # when the config binding executes, overriding this initial value.
     resolved_loop_limit: int | None = _first(args.max_iters, config.default_loop_limit)
 
-    # Resolve timeout: CLI > [exec] config.  Source config timeout = VALUE is
-    # applied at runtime by the D6 effect (effect-at-binding).
+    # Resolve timeout: CLI > [exec] config. Source config timeout = VALUE is
+    # applied at runtime when the config binding executes.
     # ``--timeout VALUE`` overrides the config; ``--no-timeout`` clears it (None).
     if args.timeout is not None:
         try:
@@ -366,7 +366,7 @@ def run(args: ExecArgs) -> None:
             raise SystemExit(2)
         startup_values = startup_result.values if startup_result.ok else {}
 
-    # Resolve + validate the trace log file up front (F2a/F6).  --dry-run is
+    # Resolve + validate the trace log file up front.  --dry-run is
     # side-effect-free: no trace is written regardless of --log-file.
     # Source config log/log-file values are wired here.
     if dry_run.enabled():
@@ -385,7 +385,7 @@ def run(args: ExecArgs) -> None:
 
     # ----------------------------------------------------------------
     # Resolve the runner command: CLI flag > source constant > [exec] config >
-    # shared loop default (the same default used by agm loop/review, per §9.5).
+    # shared loop default (the same default used by agm loop/review).
     # ----------------------------------------------------------------
     runner_cmd = (
         args.runner
@@ -406,8 +406,8 @@ def run(args: ExecArgs) -> None:
     #
     # The source program OWNS the agent name set: every named agent must be
     # declared.  We register each DECLARED agent against a single runner-backed
-    # factory whose per-agent command map merges, in precedence order
-    # (high → low; decision §4):
+    # factory whose per-agent command map merges in precedence order
+    # (high → low):
     #
     #     [exec.agents.<name>]   (config, per-agent)
     #     source `agent` runner hint
@@ -443,10 +443,9 @@ def run(args: ExecArgs) -> None:
     # The agent idle-timeout is start-resolved from CLI > [exec] config > engine
     # default and fixed for the lifetime of this factory.  A source
     # ``config timeout = e`` declaration updates ONLY the live shell-exec timeout
-    # (via effect-at-binding, D6) from its declaration point onward; it does NOT
-    # retroactively reconfigure the already-constructed agent factory, because the
-    # factory is established before evaluation begins and cannot be reopened
-    # mid-run.  This is the §15-sanctioned compromise for the ``timeout`` key.
+    # from its declaration point onward; it does NOT retroactively reconfigure
+    # the already-constructed agent factory, because the factory is established
+    # before evaluation begins and cannot be reopened mid-run.
     factory = runner_backed_agent_factory(
         default_runner_cmd=runner_cmd,
         per_agent_cmds=per_agent_cmds,
@@ -520,7 +519,7 @@ def run(args: ExecArgs) -> None:
     # Warnings live on their own channel and never affect the exit code;
     # ``result.diagnostics`` holds only error-severity pre-execution failures.
     # Warnings carry a ``warning:`` prefix to disambiguate them from error
-    # diagnostics on the shared stderr channel (F8).
+    # diagnostics on the shared stderr channel.
     printed_warnings = {
         (
             diag.line,

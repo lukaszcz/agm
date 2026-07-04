@@ -561,7 +561,7 @@ class TestSelfReference:
     def test_self_ref_bypasses_param_shadow(self, tmp_path: Path) -> None:
         """'::foo' inside g(foo: int) resolves to the top-level def foo, not the param.
 
-        D9/§7: '::name' means the CURRENT MODULE'S OWN TOP-LEVEL declaration,
+        : '::name' means the CURRENT MODULE'S OWN TOP-LEVEL declaration,
         bypassing any lexical shadow introduced by params or let bindings.
         """
         graph = _make_graph_from_files(tmp_path, {

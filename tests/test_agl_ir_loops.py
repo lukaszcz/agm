@@ -267,7 +267,7 @@ def test_ir_semantic_unbounded_loop_runs_to_completion() -> None:
 
 
 def test_literal_zero_bound_runs_zero_iterations() -> None:
-    """A literal do[0] runs the body zero times and completes normally (D2).
+    """A literal do[0] runs the body zero times and completes normally.
 
     Regression: the parser used to reject literal do[0] as a syntax error;
     it must parse and behave identically to a computed bound of 0.

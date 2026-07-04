@@ -856,7 +856,7 @@ class AstBuilder(Transformer):
                 key_type = type_args[0]
                 if not isinstance(key_type, TextT):
                     raise AglSyntaxError(
-                        f"dict keys are always text in v1, got {_type_expr_spelling(key_type)!r}.",
+                        f"dict keys are always text in AgL, got {_type_expr_spelling(key_type)!r}.",
                         span=key_type.span,
                     )
                 return DictT(value=type_args[1], span=span, node_id=nid)
@@ -1721,7 +1721,7 @@ class AstBuilder(Transformer):
             cast("syntax.Expr | None", children[1]) if len(children) == 4 else None
         )
         # A non-positive bound (e.g. do[0] or do[-1]) is NOT rejected here: per
-        # the loop design (D2) a bound n <= 0 runs the body zero times and
+        # the loop design a bound n <= 0 runs the body zero times and
         # completes normally.  The lowerer's runtime bound check handles it.
 
         return syntax.Loop(

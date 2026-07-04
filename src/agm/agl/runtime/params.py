@@ -190,7 +190,7 @@ def convert_param_value(name: str, raw: object, type_obj: "AglType") -> "Value":
 
     ``text`` params are taken verbatim; every other value crosses the canonical
     JSON boundary — either a JSON string or a JSON-compatible Python value, both
-    parsed strictly (F7: no json-repair of user typos).  Types with no wire
+    parsed strictly (no json-repair of user typos).  Types with no wire
     schema (unit/agent/exception/…) are rejected up front.
     """
     from agm.agl.runtime.convert import StrictJsonParseError

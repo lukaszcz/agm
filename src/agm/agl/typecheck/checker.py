@@ -1,4 +1,4 @@
-"""Type-checking pass (Component 5) for AgL v2.
+"""Type-checking pass for AgL.
 
 ``check(resolved, capabilities)`` performs a bidirectional type pass over the
 ``ResolvedProgram``, using the ``HostCapabilities`` to validate codec and
@@ -31,8 +31,8 @@ Rules implemented
 17. ``raise`` — yields ``BottomType`` (bottom, assignable to any target).
 18. Assignability: ``int`` widens to ``decimal``; ``json``
     accepts any JSON-shaped value.  Bottom type is assignable to any target.
-19. Duplicate constructor argument names, duplicate dict keys, and all the
-    constructor checks carried over from v1.
+19. Duplicate constructor argument names, duplicate dict keys, and constructor
+    well-formedness checks.
 
 The checker raises ``AglTypeError`` on the first error (first-error abort).
 """
@@ -262,7 +262,7 @@ def _is_index_like(node: object) -> TypeGuard[_IndexLike]:
 
 
 class _Checker:
-    """Stateful type-checking visitor for AgL v2.
+    """Stateful type-checking visitor for AgL.
 
     Walks the program's items in order, maintaining a binding-type lookup
     table (``node_id → Type``) populated for declarations and inline inference.
@@ -297,12 +297,12 @@ class _Checker:
         self._constructors = ConstructorChecker(self)
 
     # ------------------------------------------------------------------
-    # D6b: required-after-defaulted check (shared by def and lambda)
+    # required-after-defaulted check (shared by def and lambda)
     # ------------------------------------------------------------------
 
     @staticmethod
     def _check_required_after_defaulted(params: Sequence[Param]) -> None:
-        """D6b: no required positional-fillable param may follow a defaulted one.
+        """no required positional-fillable param may follow a defaulted one.
 
         Named-only params are order-free — their defaults may appear in any order.
         Raises ``AglTypeError`` if any POSITIONAL_ONLY or STANDARD param without a
@@ -358,7 +358,7 @@ class _Checker:
                 f"Builtin function '{node.name}' must declare a return type.",
                 span=node.span,
             )
-        # D6b: no required positional-fillable param may follow a defaulted one.
+        # no required positional-fillable param may follow a defaulted one.
         self._check_required_after_defaulted(node.params)
 
     def _build_funcdef_signature(
@@ -753,7 +753,7 @@ class _Checker:
                 span=node.span,
             )
         typ = self._require_binding_type(ref)
-        # D5: generic def used as a value — must be instantiated from context.
+        # generic def used as a value — must be instantiated from context.
         # Use the node-id-keyed lookup (populated by the graph function-signature
         # pre-pass and by _preregister_funcdef) to get the correct signature even
         # when two modules define functions with the same name but different signatures.
@@ -1260,7 +1260,7 @@ class _Checker:
     # --- Lambda ---
 
     def _check_lambda(self, node: Lambda, *, expected: Type | None) -> Type:
-        # D6b: no required positional-fillable param may follow a defaulted one.
+        # no required positional-fillable param may follow a defaulted one.
         self._check_required_after_defaulted(node.params)
         # Lambda annotations may reference the rigid type variables of an
         # enclosing generic ``def`` body (the body is checked with them in scope).
@@ -1514,7 +1514,7 @@ class _Checker:
             return BoolType()
 
         if op in (BinOp.EQ, BinOp.NEQ):
-            # D2: reject operations on bare type variables.
+            # reject operations on bare type variables.
             if isinstance(left_type, TypeVarType):
                 raise AglTypeError(
                     f"operation '=' is not permitted on a value of abstract type "
@@ -1536,7 +1536,7 @@ class _Checker:
             return BoolType()
 
         if op in (BinOp.LT, BinOp.LE, BinOp.GT, BinOp.GE):
-            # D2: reject operations on bare type variables.
+            # reject operations on bare type variables.
             if isinstance(left_type, TypeVarType):
                 raise AglTypeError(
                     f"ordering operator is not permitted on a value of abstract type "
@@ -1575,7 +1575,7 @@ class _Checker:
             return self._check_numeric_binop(left_type, right_type, node.span, "*")
 
         if op == BinOp.DIV:
-            # D2: reject operations on bare type variables.
+            # reject operations on bare type variables.
             if isinstance(left_type, TypeVarType):
                 raise AglTypeError(
                     f"operation '/' is not permitted on a value of abstract type variable "
@@ -1605,7 +1605,7 @@ class _Checker:
         )
 
     def _check_add(self, left_type: Type, right_type: Type, span: SourceSpan) -> Type:
-        # D2: reject operations on bare type variables.
+        # reject operations on bare type variables.
         if isinstance(left_type, TypeVarType):
             raise AglTypeError(
                 f"operation '+' is not permitted on a value of abstract type variable "
@@ -1635,7 +1635,7 @@ class _Checker:
     def _check_numeric_binop(
         self, left_type: Type, right_type: Type, span: SourceSpan, op_str: str
     ) -> Type:
-        # D2: reject operations on bare type variables.
+        # reject operations on bare type variables.
         if isinstance(left_type, TypeVarType):
             raise AglTypeError(
                 f"operation '{op_str}' is not permitted on a value of abstract type variable "
@@ -1662,7 +1662,7 @@ class _Checker:
         return DecimalType()
 
     def _check_in_op(self, left_type: Type, right_type: Type, span: SourceSpan) -> Type:
-        # D2: reject operations on bare type variables.
+        # reject operations on bare type variables.
         if isinstance(left_type, TypeVarType):
             raise AglTypeError(
                 f"operation 'in' is not permitted on a value of abstract type variable "
@@ -1696,7 +1696,7 @@ class _Checker:
 
     def _check_unary_neg(self, node: UnaryNeg) -> Type:
         t = self._check_expr(node.operand, expected=None)
-        # D2: reject operations on bare type variables.
+        # reject operations on bare type variables.
         if isinstance(t, TypeVarType):
             raise AglTypeError(
                 f"unary '-' is not permitted on a value of abstract type variable '{t.name}'.",
@@ -1713,7 +1713,7 @@ class _Checker:
 
     def _check_is_test(self, node: IsTest) -> BoolType:
         expr_type = self._check_expr(node.expr, expected=None)
-        # D2: reject operations on bare type variables.
+        # reject operations on bare type variables.
         if isinstance(expr_type, TypeVarType):
             raise AglTypeError(
                 f"an abstract type variable '{expr_type.name}' cannot be tested with 'is'.",
@@ -1816,7 +1816,7 @@ class _Checker:
                 span=node.span, expected=expected,
             )
         obj_type = self._check_expr(node.obj, expected=None)
-        # D2: reject operations on bare type variables.
+        # reject operations on bare type variables.
         if isinstance(obj_type, TypeVarType):
             raise AglTypeError(
                 f"a value of type variable '{obj_type.name}' has no fields.",
@@ -1854,7 +1854,7 @@ class _Checker:
         *,
         span: SourceSpan,
     ) -> Type:
-        # D2: reject operations on bare type variables.
+        # reject operations on bare type variables.
         if isinstance(obj_type, TypeVarType):
             raise AglTypeError(
                 f"a value of type variable '{obj_type.name}' is not indexable.",

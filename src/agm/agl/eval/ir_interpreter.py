@@ -1,6 +1,6 @@
 """IR evaluator for the AgL typeless execution IR.
 
-``IrInterpreter`` executes an ``ExecutableProgram`` using the D5 per-invocation
+``IrInterpreter`` executes an ``ExecutableProgram`` using the per-invocation
 frame / let-by-value / var-by-cell model.
 
 Allowed imports:
@@ -185,7 +185,7 @@ class _ContinueSignal(Exception):
 def _apply_coercion(value: Value, coercion: Coercion) -> Value:
     """Apply a resolved ``Coercion`` to *value* and return the result.
 
-    Switches on the closed ``Coercion`` union (D3/D4) — no runtime type
+    Switches on the closed ``Coercion`` union — no runtime type
     sniffing of *value*; the coercion op is pre-resolved by the lowerer.
 
     Raises ``InvalidIrError`` when the value tag does not match the coercion
@@ -263,7 +263,7 @@ def _apply_coercion(value: Value, coercion: Coercion) -> Value:
 
 
 class IrInterpreter:
-    """Evaluates an ``ExecutableProgram`` using the D5 frame/cell model.
+    """Evaluates an ``ExecutableProgram`` using the frame/cell model.
 
     The entry module starts with a root frame; function calls, closures, and loop
     iterations allocate additional frames as needed.
@@ -714,7 +714,7 @@ class IrInterpreter:
         return self._eval(node)
 
     # ------------------------------------------------------------------
-    # Expression evaluator (closed IrExpr dispatch, D4)
+    # Expression evaluator (closed IrExpr dispatch)
     # ------------------------------------------------------------------
 
     def _eval(self, node: IrExpr) -> Value:
@@ -722,7 +722,7 @@ class IrInterpreter:
 
         Dispatches over the closed ``IrExpr`` union with a structural ``match``
         whose final arm is ``assert_never`` so mypy exhaustiveness makes a
-        missing case a compile-time error (D4).
+        missing case a compile-time error.
         """
         match node:
             case IrConstInt(value=v):
@@ -1313,14 +1313,15 @@ class IrInterpreter:
                 assert_never(unreachable)
 
     # ------------------------------------------------------------------
-    # D6 engine-setting effect
+    # Engine-setting effect
     # ------------------------------------------------------------------
 
     def _apply_config_effect(self, public_name: str, config_value: Value) -> None:
-        """Apply the live engine-setting effect for a D6 config binding.
+        """Apply the live engine-setting effect for a config binding.
 
-        Called after every ``IrConfigBind`` resolves its value.  Only the three
-        D6 keys update live interpreter state; all other keys are inert here.
+        Called after every ``IrConfigBind`` resolves its value. Only
+        ``strict-json``, ``max-iters``, and ``timeout`` update live interpreter
+        state; all other keys are inert here.
         """
         if public_name == "strict-json":
             if isinstance(config_value, BoolValue):
@@ -1365,7 +1366,7 @@ class IrInterpreter:
 
         Returns a dict of ``{SymbolId: Value}`` bindings on success, or
         ``None`` on mismatch.  Mirrors ``_match_pattern`` from the legacy
-        interpreter — closed ``match``/``assert_never`` dispatch (D4).
+        interpreter — closed ``match``/``assert_never`` dispatch.
 
         Defensive: ``IrVariantPlan`` and ``IrConstructorPlan`` raise
         ``InvalidIrError`` when applied to a non-``EnumValue`` (cannot occur

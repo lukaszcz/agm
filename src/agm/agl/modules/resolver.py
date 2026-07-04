@@ -7,7 +7,7 @@ This module provides two public functions:
 - :func:`expand_wildcard` — expand a wildcard prefix (``foo.*``) into every
   matching :class:`~agm.agl.modules.ids.ModuleId` and its canonical path.
 
-Both enforce **global-uniqueness** (D1): an id that resolves to ≥2 distinct
+Both enforce **global-uniqueness**: an id that resolves to ≥2 distinct
 canonical files is an :class:`~agm.agl.modules.errors.AmbiguousModule` error;
 there is no first-root-wins shadowing.  Results are deterministic regardless of
 the iteration order of the unordered :class:`~agm.agl.modules.roots.RootSet`.

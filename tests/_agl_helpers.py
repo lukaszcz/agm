@@ -32,5 +32,5 @@ def all_node_ids(obj: object, seen: set[int] | None = None) -> set[int]:
 
 
 def ambient_agents_for(program: Program) -> frozenset[str]:
-    """Return an empty frozenset — agent names must be declared via 'agent' in v2."""
+    """Return an empty frozenset — agent names must be declared via 'agent' in AgL."""
     return frozenset()

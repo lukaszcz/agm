@@ -250,7 +250,7 @@ class TestEchoData:
         assert r.value is None
 
     def test_assign_stmt_echo_kind(self) -> None:
-        # In v2, ``:=`` is the only binder-kind that maps to "statement"
+        # In AgL, ``:=`` is the only binder-kind that maps to "statement"
         # (it mutates an existing binding, has no new name, yields unit).
         s = ReplSession()
         s.eval_entry("var v = 0")
@@ -510,7 +510,7 @@ class TestExactlyOnce:
         assert agent.calls == 3
 
     def test_named_agent_dispatch(self) -> None:
-        # In v2, named-agent calls use ask(prompt, agent: name) syntax.
+        # In AgL, named-agent calls use ask(prompt, agent: name) syntax.
         named = CountingAgent("named-reply")
         s = ReplSession()
         s.register_agent("reviewer", named)
@@ -1273,7 +1273,7 @@ class TestIfExpr:
         assert _int(r.value) == 10
 
     def test_bare_if_expr_classified_as_expression(self) -> None:
-        # In v2, ``if`` is a value-producing expression.  A bare ``if`` entry
+        # In AgL, ``if`` is a value-producing expression.  A bare ``if`` entry
         # at the prompt is classified as "expression" (it yields a value).
         # The value is void when the branches are statement-like (e.g. ``:=``).
         s = ReplSession()
@@ -1939,8 +1939,8 @@ class TestReplConfigDecl:
     """``config`` declarations are first-class in a REPL session.
 
     Each ``config KEY`` or ``config KEY = e`` entry is accepted, creates a
-    readable binding, and (for the three D6 keys) takes effect at the binding
-    point and persists into subsequent entries.  ``param`` behaviour is
+    readable binding, and (for the live keys) takes effect at the binding point
+    and persists into subsequent entries.  ``param`` behaviour is
     unchanged.
     """
 
@@ -1995,7 +1995,7 @@ class TestReplConfigDecl:
         assert "y" in vals
 
     # -----------------------------------------------------------------------
-    # Effect-at-binding: D6 settings persist across subsequent entries
+    # Effect-at-binding: settings persist across subsequent entries
     # -----------------------------------------------------------------------
 
     def test_strict_json_effect_persists_across_entries(self) -> None:
@@ -2060,7 +2060,7 @@ class TestReplConfigDecl:
         """A config binding that fires before a runtime error must NOT appear in scope.
 
         The engine setting and the readable binding must both be absent after a
-        partial-failure entry, so they never diverge (F4).
+        partial-failure entry, so they never diverge.
         """
         s = ReplSession(default_strict_json=False)
         # config fires FIRST, then the runtime error follows.
@@ -2073,7 +2073,7 @@ class TestReplConfigDecl:
         assert not r2.ok, "strict-json binding must not be in scope after partial failure"
 
     # -----------------------------------------------------------------------
-    # timeout raw-string round-trip (F1)
+    # timeout raw-string round-trip
     # -----------------------------------------------------------------------
 
     def test_config_timeout_base_preserves_raw_string(self) -> None:

@@ -90,7 +90,7 @@ class ModulePrefixNotFound(AglError):
 class ImportEntryError(AglError):
     """An import declaration resolves to the entry file's canonical identity.
 
-    Importing the entry program is rejected (D9): the entry is a non-importable
+    Importing the entry program is rejected: the entry is a non-importable
     program root.  ``module_id`` is the module id the user attempted to import.
     ``entry_path`` is the canonical path of the entry file.  ``span`` is the
     originating import declaration span, when available.

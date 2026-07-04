@@ -36,8 +36,8 @@ Algorithm
    to ``(FunctionSignature, FunctionType)``. No function body is checked in this
    phase. The result is used in Phase 3 to
    seed EVERY module's env with ALL function binding types before any body is
-   checked, enabling cross-file mutual recursion (D8/§8.2): a call to a not-yet-
-   checked module's function resolves its callee type from the pre-pass table.
+   checked, enabling cross-file mutual recursion: a call to a not-yet-checked
+   module's function resolves its callee type from the pre-pass table.
 
 3. **Per-module type-check** — for each module, build a module-aware
    :class:`~agm.agl.typecheck.env.TypeEnvironment` seeded with the module's own
@@ -539,7 +539,7 @@ def _build_graph_type_table(
     consistent with how single-module structural recursion is handled by the
     existing ``_TypeBuilder``.
 
-    Import-graph cycles (D8) are allowed and do NOT imply structural type cycles
+    Import-graph cycles are allowed and do NOT imply structural type cycles
     — the structural dependency graph may be acyclic even when the import graph
     has cycles (e.g. modA imports modB for a Color enum used in modA.Foo fields,
     and modB imports modA for modA.Foo used in modB.Bar fields: the structural
@@ -634,7 +634,7 @@ def _build_graph_type_table(
         raise AglTypeError(
             f"Type '{name}' in module '{mid.dotted()}' is part of a structural "
             "type cycle (a type that directly or indirectly contains itself by "
-            "value). Recursive types are not supported in v1.",
+            "value). Recursive types are not supported in AgL.",
             span=None,
         ) from exc
 
@@ -742,7 +742,7 @@ def _build_graph_func_sig_table(
 
             type_vars: frozenset[str] = frozenset(item.type_params)
             params: list[ParamSpec] = []
-            # D6b: required-after-defaulted check (positional-fillable zone only).
+            # required-after-defaulted check (positional-fillable zone only).
             _Checker._check_required_after_defaulted(item.params)
             for p in item.params:
                 pt = env.resolve_type_expr(p.type_expr, span=p.span, type_vars=type_vars)
@@ -793,9 +793,9 @@ def _check_module(
     - The graph table + import env for cross-module lookups.
     - Binding types (function signatures) from the whole-graph function-signature
       pre-pass (``graph_func_sig_table``), seeded BEFORE any body is checked so
-      that cross-module function calls — including those in import cycles (D8,
-      §8.2 cross-file mutual recursion) — can look up callee types regardless of
-      per-module checking order.  The pre-pass computed ``(name, FunctionSignature,
+      that cross-module function calls — including those in import cycles — can
+      look up callee types regardless of per-module checking order.  The pre-pass
+      computed ``(name, FunctionSignature,
       FunctionType)`` for ALL top-level ``FuncDef``s across ALL modules;
       ``node_id``s are globally unique, so seeding the whole table into
       every module's env is safe and collision-free.
@@ -829,7 +829,7 @@ def _check_module(
 
     # Seed binding types from the whole-graph function-signature pre-pass.
     # This makes EVERY module's function signatures available in EVERY module's
-    # env before any body is checked, enabling cross-file mutual recursion (D8/§8.2).
+    # env before any body is checked, enabling cross-file mutual recursion (the current rules).
     #
     # Three tables are seeded:
     # - _binding_types (node_id-keyed, globally unique): used by _check_varref to
@@ -942,7 +942,7 @@ def check_graph(
     # determinism and for any future ordering-sensitive checks), but function
     # signature availability no longer depends on this order — the whole-graph
     # pre-pass in Phase 2 seeds all binding types before any body is checked,
-    # so cross-file mutual recursion (D8/§8.2) is handled correctly.
+    # so cross-file mutual recursion is handled correctly.
     checked_modules: dict[ModuleId, CheckedModule] = {}
     all_warnings: list[Diagnostic] = []
 

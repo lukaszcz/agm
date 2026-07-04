@@ -1,8 +1,8 @@
-"""Tests for the AgL v2 parser (agm.agl.parser) — Component 2.
+"""Tests for the AgL parser (agm.agl.parser) — parser.
 
 Covers:
 - LALR(1) conflict-guard: zero shift/reduce and reduce/reduce conflicts.
-- Parsing v2 constructs to the expected AST shape.
+- Parsing current constructs to the expected AST shape.
 - Records, enums, type aliases, constructors, field access, lists, dicts.
 - Templates: plain text, interpolations.
 - Uniform calls: paren-call with positional+named args; single-arg sugar.
@@ -1952,7 +1952,7 @@ class TestDoExpr:
         assert e.limit == 10
 
     def test_do_zero_bound_parses(self) -> None:
-        # A non-positive bound is not a parse error (D2: n <= 0 runs the body
+        # A non-positive bound is not a parse error (n <= 0 runs the body
         # zero times and completes normally).  The lowerer's runtime bound
         # check handles it.
         e = first(parse("do[0] x until true"))
@@ -2219,7 +2219,7 @@ class TestNegativeCases:
         assert isinstance(expr, TypeApply)
 
     def test_double_eq_is_equality(self) -> None:
-        """In v2, n == 2 is a BinaryOp(EQ) expression (not a mutation).
+        """In AgL, n == 2 is a BinaryOp(EQ) expression (not a mutation).
         Mutation uses `n := 2`. The parser accepts n == 2 as an expression.
         The scope pass would verify mutation intent.
         """
@@ -2937,7 +2937,7 @@ class TestCaseNeutralPatterns:
 class TestCastParsing:
     """Tests for `as` (cast) and `as?` (convertibility test) operator parsing.
 
-    Precedence (D5): unary(-) > [cast] > * / > + -
+    Precedence: unary(-) > [cast] > * / > + -
     So:
       -1 as text     = (-1) as text       (unary binds tighter)
       2 * 3 as text  = 2 * (3 as text)    (cast binds tighter than *)

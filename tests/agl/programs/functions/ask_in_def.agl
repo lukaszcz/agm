@@ -16,12 +16,12 @@ def review_with_retry(doc: text) -> Verdict =
   ask("Review this document: " + doc, agent = reviewer, on_parse_error = Retry(n = 2))
 
 # Direct call via function — result printed.
-let v1: Verdict = review_once(topic)
-print(v1 is Pass)
+let first_verdict: Verdict = review_once(topic)
+print(first_verdict is Pass)
 
 # Retry-enabled call.
-let v2: Verdict = review_with_retry(topic)
-print(v2 is Pass)
+let second_verdict: Verdict = review_with_retry(topic)
+print(second_verdict is Pass)
 
 # RecursionError caught inside try/catch.
 def infinite(n: int) -> int = infinite(n + 1)

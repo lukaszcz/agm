@@ -1413,6 +1413,49 @@ class TestDryRunInventory:
         assert agent_calls == []
 
 
+class TestExecFFI:
+    """``agm exec`` running a file-backed program that declares ``extern def``."""
+
+    def test_exec_runs_an_extern_program_end_to_end(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("extern def add_one(x: int) -> int\nprint(add_one(41))\n")
+        (tmp_path / "prog.py").write_text("def add_one(x):\n    return x + 1\n")
+
+        assert exec_command.run(_exec_args(agl_file)) is None
+        captured = capsys.readouterr()
+        assert captured.out == "42\n"
+
+    def test_dry_run_lists_the_extern_call_site_without_running_it(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """--dry-run's inventory lists the extern call site; the callable never runs."""
+        from agm.core import dry_run
+
+        monkeypatch.setattr(dry_run, "_ENABLED", True)
+
+        marker = tmp_path / "marker.txt"
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("extern def add_one(x: int) -> int\nadd_one(41)\n")
+        (tmp_path / "prog.py").write_text(
+            f"def add_one(x):\n    open({str(marker)!r}, 'a').write('called')\n"
+            "    return x + 1\n"
+        )
+
+        assert exec_command.run(_exec_args(agl_file)) is None
+        captured = capsys.readouterr()
+        assert "call-sites" in captured.out
+        assert "add_one" in captured.out
+        # The companion module still imports (fail-fast even under --dry-run),
+        # but the call itself — a side effect inside the extern's body — never
+        # runs during a dry run.
+        assert not marker.exists()
+
+
 class TestJsonParamsCLI:
     """--param with structured (record/list/decimal) types via JsonCodec."""
 

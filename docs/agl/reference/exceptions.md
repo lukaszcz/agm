@@ -168,6 +168,18 @@ stderr: text
 timed_out: bool
 ```
 
+### `ExternError`
+
+An `extern def` call failed: the companion Python callable raised, or its
+return value did not conform to the extern's declared return type
+([Python FFI](ffi.md)).
+
+```text
+function: text       # the extern's declared name
+python_type: text    # the raising Python exception's class name; empty for
+                      # a return-value contract violation
+```
+
 ### `MaxIterationsExceeded`
 
 A **bounded** loop (`[n]`, with `n ≥ 1`) exhausted its bound before an exit
@@ -305,6 +317,7 @@ The general-purpose user abort; carries only the base fields.
 | Invalid structured output after all attempts | `AgentParseError` |
 | Failing/timed-out shell command (parsed form) | `ExecError` |
 | Spawn failure (either exec form) | `ExecError` |
+| Extern (Python FFI) companion raised, or its return value violated the contract | `ExternError` |
 | Loop bound exhausted | `MaxIterationsExceeded` |
 | Non-positive range `for` step (`by k` with `k ≤ 0`) | `RangeError` |
 | Call-depth limit exceeded | `RecursionError` |

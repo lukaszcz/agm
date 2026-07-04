@@ -29,6 +29,7 @@ item       ::= import_decl                  (* header position only *)
              | agent_decl                   (* root only *)
              | infix_decl                   (* root only *)
              | modifier? func_def           (* root only *)
+             | ("private" NEWLINE?)? extern_func_def  (* root only; file-backed modules only *)
              | let_decl | var_decl
              | expr
 
@@ -42,7 +43,8 @@ item (with no continuation) is a static error.
 decorators: a modifier may sit on the same line as the declaration it adorns
 (`builtin enum …`) or on the line directly above it (`builtin` then `enum …`)
 — the newline after the modifier is insignificant. `"builtin"` is not allowed
-on a `type_alias`.
+on a `type_alias` or on `extern_func_def`; `"private"` composes with
+`extern_func_def` the same way it composes with `func_def`.
 
 ## Import declarations
 
@@ -170,20 +172,25 @@ concrete type arguments (`Box[int]`, `Outcome[int, text]`). The built-in
 ## Function declarations
 
 ```ebnf
-func_def     ::= "def" name type_params? "(" param_list? ")" ("->" type_expr)? "=" expr
-param_list   ::= param_entry ("," param_entry)* ","?
-param_entry  ::= param | param_marker
-param        ::= name ":" type_expr ("=" expr)?
+func_def        ::= "def" name type_params? "(" param_list? ")" ("->" type_expr)? "=" expr
+extern_func_def ::= "extern" "def" name type_params? "(" param_list? ")" "->" type_expr
+param_list      ::= param_entry ("," param_entry)* ","?
+param_entry     ::= param | param_marker
+param           ::= name ":" type_expr ("=" expr)?
 ```
 
 The `def` body is a single expression (which may be a `block`). The return type
 annotation is optional for ordinary `def` declarations and required for
-`builtin def`. Zone markers (`/`, `*`, `@pos`, `@std`, `@named`) may appear as
-`param_entry` items between parameters; see [Functions](functions.md) for full
-zone semantics. No required positional-fillable (pos-only/standard) parameter
-may follow a defaulted one in the same zone. An optional `type_params` list
-after the function name makes the `def` generic (e.g. `def id[T](x: T) -> T`);
-see [Generics](generics.md).
+`builtin def` and `extern def` — neither has a body. Zone markers (`/`, `*`,
+`@pos`, `@std`, `@named`) may appear as `param_entry` items between parameters;
+see [Functions](functions.md) for full zone semantics. No required
+positional-fillable (pos-only/standard) parameter may follow a defaulted one
+in the same zone. An optional `type_params` list after the function name makes
+the `def` generic (e.g. `def id[T](x: T) -> T`); see [Generics](generics.md).
+
+`extern_func_def` shares this signature surface with `func_def` but is never
+followed by a body; it declares a function implemented by a companion Python
+file (see [Python FFI](ffi.md)) rather than an AgL expression.
 
 ## Infix declarations
 

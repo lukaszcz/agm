@@ -17,7 +17,7 @@ source (.agl)
   → typecheck    (full static pass; selects concrete operations)
   → lower + link (closed, typeless executable program)
   → IR eval      (interpreter over the linked program)
-        ↘ host runtime: agents, shell execution, codecs, rendering, trace store
+        ↘ host runtime: agents, shell execution, the Python FFI registry, codecs, rendering, trace store
 ```
 
 The linked IR is the only execution format; checked frontend objects are never fed to the evaluator.

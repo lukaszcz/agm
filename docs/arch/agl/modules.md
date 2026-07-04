@@ -10,6 +10,10 @@ A module is identified by a dotted path mapping to a relative file path; a senti
 
 The loader parses the entry source, then does a breadth-first traversal of transitive imports, parsing each module so that node ids are globally unique (disjoint) across all modules — a prerequisite for the shared side-table convention. Traversal terminates when a module is already loaded, which makes import cycles finite and safe; cycles are allowed. An import that resolves back to the entry file is rejected. The result is a module graph carrying each loaded module's AST, canonical path, source id, and imports, plus strongly-connected-component information for diagnostics. All traversal is deterministic regardless of filesystem or root ordering.
 
+## Extern Companion Resolution
+
+A module declaring at least one `extern def` (Python FFI, see [execution.md](execution.md)) needs a companion Python file at its own path with a `.py` suffix in place of `.agl`. The companion path is derived, not searched — the module's canonical path already resolves uniquely, so module-root ambiguity rules never apply to it. The loader records the companion path on the loaded module and verifies the file exists during graph loading (the early half of the fail-fast contract; the registry import that runs it lives in the execution layer).
+
 ## Graph-Aware Passes
 
 The graph passes generalize the single-module passes to whole-graph operation while preserving cross-module forward references and mutual recursion:

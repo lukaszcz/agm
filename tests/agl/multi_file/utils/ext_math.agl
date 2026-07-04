@@ -1,0 +1,3 @@
+extern def double(x: int) -> int
+private extern def secret(x: int) -> int
+def use_secret(x: int) -> int = secret(x) + 1

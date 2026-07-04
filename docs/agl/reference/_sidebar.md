@@ -11,6 +11,7 @@
 - [Strings and interpolation](strings-and-interpolation.md)
 - [Agent calls](agent-calls.md)
 - [Shell execution](shell-execution.md)
+- [Python FFI](ffi.md)
 - [Exceptions](exceptions.md)
 - [Host environment](host-environment.md)
 - [Grammar](grammar.md)

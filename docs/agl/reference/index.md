@@ -83,6 +83,7 @@ until final is Pass
 | [Strings and interpolation](strings-and-interpolation.md) | Templates, escapes, `${…}` interpolation, uniform rendering rules |
 | [Agent calls](agent-calls.md) | `ask`, agents as values, call options, output contracts, the JSON wire format, parse policies and retries |
 | [Shell execution](shell-execution.md) | `exec`, the `ExecResult` structured form vs the parsed form, `ExecError` |
+| [Python FFI](ffi.md) | `extern def`, the companion Python file, the type mapping across the boundary, sealed handles, `ExternError` |
 | [Exceptions](exceptions.md) | The exception model, `try`/`catch`/`raise`, the built-in exception catalog |
 | [Host environment](host-environment.md) | Agents, params, host defaults, capability checking, tracing |
 | [Grammar](grammar.md) | The collected grammar |

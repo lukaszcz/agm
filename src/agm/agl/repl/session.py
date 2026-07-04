@@ -989,6 +989,10 @@ class ReplSession:
         self._loaded_lib_modules = {}
         self._accumulated_imports = []
         self._accumulated_infix = {}
+        # Discard the session's extern (Python FFI) registry like every other
+        # session-scoped binding: a companion resolves and imports again on
+        # its next use, as though the session were new.
+        self._runtime.reset_extern_registry()
 
     def load_file(self, path: "Path") -> list[EntryResult]:
         """Evaluate the contents of *path* INCREMENTALLY, one item per entry.

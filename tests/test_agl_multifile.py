@@ -467,3 +467,82 @@ class TestWildcardImportUsingHiding:
         captured = capsys.readouterr()
         assert "5" in captured.out
         assert "Hello, World" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# extern def (Python FFI): a library module's extern reachable across
+# qualified/open imports, private-extern invisibility, and re-export.
+#
+# Companion loading, boundary crossing, and the full conversion matrix are
+# covered end to end elsewhere (test_agl_extern_runtime.py); this class only
+# covers the multi-file import/export surface, using the repo fixture library
+# at tests/agl/multi_file/utils/ext_math.agl (+ .py companion) and its
+# re-export facade tests/agl/multi_file/utils/ext_facade.agl.
+# ---------------------------------------------------------------------------
+
+
+class TestExternMultiFile:
+    """A library module's ``extern def`` through qualified/open imports and re-export."""
+
+    def test_qualified_import_calls_the_extern(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        source = "import utils.ext_math qualified\nlet r = utils.ext_math::double(21)\nprint r\n"
+        result = _run_graph(source, roots_dirs=[MULTI_FILE_DIR])
+        assert result.ok is True
+        assert "42" in capsys.readouterr().out
+
+    def test_open_import_calls_the_extern_unqualified(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        source = "import utils.ext_math\nlet r = double(21)\nprint r\n"
+        result = _run_graph(source, roots_dirs=[MULTI_FILE_DIR])
+        assert result.ok is True
+        assert "42" in capsys.readouterr().out
+
+    def test_private_extern_invisible_via_open_import(self) -> None:
+        source = "import utils.ext_math\nlet r = secret(21)\nprint r\n"
+        result = _run_graph(source, roots_dirs=[MULTI_FILE_DIR])
+        assert result.ok is False
+
+    def test_private_extern_invisible_via_qualified_access(self) -> None:
+        source = (
+            "import utils.ext_math qualified\n"
+            "let r = utils.ext_math::secret(21)\n"
+            "print r\n"
+        )
+        result = _run_graph(source, roots_dirs=[MULTI_FILE_DIR])
+        assert result.ok is False
+
+    def test_private_extern_usable_from_a_public_function_in_its_own_module(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # `use_secret` (public) calls the private extern `secret` internally —
+        # the private extern is only invisible to IMPORTERS, not to code in
+        # its own declaring module.
+        source = "import utils.ext_math\nlet r = use_secret(21)\nprint r\n"
+        result = _run_graph(source, roots_dirs=[MULTI_FILE_DIR])
+        assert result.ok is True
+        assert "122" in capsys.readouterr().out
+
+    def test_reexported_extern_callable_unqualified_through_the_facade(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # utils.ext_facade re-exports utils.ext_math via `export utils.ext_math`
+        # (no extern def of its own, so it needs no companion file).
+        source = "import utils.ext_facade\nlet r = double(21)\nprint r\n"
+        result = _run_graph(source, roots_dirs=[MULTI_FILE_DIR])
+        assert result.ok is True
+        assert "42" in capsys.readouterr().out
+
+    def test_reexported_extern_callable_through_the_facade_qualifier(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        source = (
+            "import utils.ext_facade qualified\n"
+            "let r = utils.ext_facade::double(21)\n"
+            "print r\n"
+        )
+        result = _run_graph(source, roots_dirs=[MULTI_FILE_DIR])
+        assert result.ok is True
+        assert "42" in capsys.readouterr().out

@@ -39,6 +39,14 @@ required.
 A module name that resolves to exactly one file across all roots succeeds; zero files,
 or two or more distinct files, are static errors (exit 1 with a diagnostic).
 
+A module (or a file-backed `FILE` entry program) that declares `extern def`
+(see [Python FFI](../agl/reference/ffi.md)) requires a companion Python file
+at the same path with a `.py` suffix; unlike a module import, this path is
+derived rather than searched, so module-root ambiguity never applies to it. A
+missing companion, or a companion missing the extern's declared name as a
+callable attribute, is a diagnostic reported before the program runs, exactly
+like any other static error.
+
 ### Options
 
 - `-c COMMAND`, `--command COMMAND`: Execute the AgL program given as `COMMAND`
@@ -82,8 +90,13 @@ or two or more distinct files, are static errors (exit 1 with a diagnostic).
   `[exec] log = true` setting. The three are mutually exclusive (at most one may be given).
 - `--dry-run`: Run the full static pipeline, param validation, and contract
   materialization, then stop before evaluating any expression (static errors exit 1; a
-  clean check exits 0 with no program output). When the check succeeds and one or more
-  agent-call or `exec` sites exist, the static call-site inventory is printed to stdout:
+  clean check exits 0 with no program output). A program declaring `extern def`
+  (see [Python FFI](../agl/reference/ffi.md)) still imports its companion Python
+  file(s) under `--dry-run`: companion loading is eager and fail-fast at program
+  setup, before this stop point, so a broken companion still exits 1. Only
+  actually *calling* an extern is skipped, like every other statement. When the
+  check succeeds and one or more agent-call, `exec`, or extern-call sites exist,
+  the static call-site inventory is printed to stdout:
 
   ```
   call-sites:
@@ -91,10 +104,11 @@ or two or more distinct files, are static errors (exit 1 with a diagnostic).
   ```
 
   Each entry shows the 1-based source line and column (`N:C`), the callee name (`ask`,
-  `exec`, or a registered agent name), the target type, the selected codec (`text` or
-  `json`), and optionally whether a JSON Schema is attached (`schema: yes`) and the
-  effective parse-failure policy (`abort` or `retry[N]`). When no agent calls are
-  present, no inventory is printed.
+  `exec`, a registered agent name, or an extern's declared name), the target type, the
+  selected codec (`text`, `json`, or `extern`), and optionally whether a JSON Schema is
+  attached (`schema: yes`) and the effective parse-failure policy (`abort` or
+  `retry[N]`; not applicable to extern calls). When no such call sites are present, no
+  inventory is printed.
 
 ### Agents and runner precedence
 
@@ -230,6 +244,14 @@ would use.
 
 Like `agm exec`, the REPL automatically opens `std.core`, so standard-library names
 such as `Option`, `Some`, and `None` are available unqualified from a fresh prompt.
+
+Importing a library module that declares `extern def` (see
+[Python FFI](../agl/reference/ffi.md)) works normally in the REPL; its companion
+Python file imports once for the session, not once per entry. A direct entry
+typed at the prompt (with no backing file of its own) may not declare
+`extern def` itself. `:reset` clears this session-held companion state along
+with everything else — a subsequent import resolves and imports the companion
+again as though the session were new.
 
 ### Entry editing
 

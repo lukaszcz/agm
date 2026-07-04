@@ -61,6 +61,15 @@ import instead of redeclaring them.
 on the line directly above it (the newline after the modifier is
 insignificant).
 
+### Externally implemented functions
+
+`extern def` declares a function implemented by a companion Python file
+instead of an AgL body or the host — like `builtin def`, it has no body and a
+mandatory return type, but its implementation lives in ordinary program
+source (a co-located `.py` file) rather than the host. See
+[Python FFI](ffi.md) for the declaration syntax, the type mapping across the
+boundary, and the error model.
+
 ### Parameters
 
 Parameters are listed with explicit types. Each parameter belongs to one of

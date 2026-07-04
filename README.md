@@ -176,12 +176,12 @@ agm sync pull
 
 Execute an AgL (Agent Language) workflow program. AgL is a statically-typed, expression-oriented
 DSL for composable agent workflows: it supports typed params and outputs, user-defined functions
-(`def`/`fn`), structured JSON targets, do-loops with retry/abort policies, control flow
-(if/case/try), shell execution (`exec`), and named agents declared in the source (`agent NAME`,
-optionally `= "runner"`). All calls — including `ask`, `print`, and `exec` — use the uniform
-`f(arg, name = val)` syntax. The runner command for each declared agent is resolved from
-`[exec.agents]` (per-agent), the source runner hint, `--runner`, `[exec] runner`,
-`[loop] runner`, or `claude -p` (built-in default).
+(`def`/`fn`), functions implemented by a co-located Python file (`extern def`), structured JSON
+targets, do-loops with retry/abort policies, control flow (if/case/try), shell execution (`exec`),
+and named agents declared in the source (`agent NAME`, optionally `= "runner"`). All calls —
+including `ask`, `print`, and `exec` — use the uniform `f(arg, name = val)` syntax. The runner
+command for each declared agent is resolved from `[exec.agents]` (per-agent), the source runner
+hint, `--runner`, `[exec] runner`, `[loop] runner`, or `claude -p` (built-in default).
 
 Programs can span multiple `.agl` files via the module system (`import utils.math`). `agm exec`
 searches the entry file's directory, the installed stdlib root (`~/.agm/stdlib`),

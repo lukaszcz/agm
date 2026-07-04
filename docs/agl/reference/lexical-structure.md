@@ -64,7 +64,7 @@ variable, agent, or function names:
 
 ```text
 record enum type param program agent config def fn let var for while do until done
-if else case of try catch raise break continue exception extends builtin as as?
+if else case of try catch raise break continue exception extends builtin extern as as?
 and or not is in to downto by true false null
 ```
 
@@ -95,6 +95,8 @@ binders — but they remain legal as field names.
 contextually in type positions. `fn` is reserved (it introduces a lambda).
 `def` is reserved (it introduces a function declaration). `builtin` is
 reserved for standard-library declarations that are implemented by the host.
+`extern` is reserved for declarations implemented by a companion Python file
+(see [Python FFI](ffi.md)).
 
 **Module system soft keywords** — `import`, `private`, `qualified`, `using`,
 and `hiding` are **not reserved**. They remain valid identifiers in all

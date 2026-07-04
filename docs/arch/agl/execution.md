@@ -55,6 +55,14 @@ Host-backed operations are dispatched by contract identity:
 - **Shell.** `exec` either returns a structured result built from the subprocess output (a nonzero exit does not raise) or parses stdout into a target type (raising on nonzero exit or parse failure), as selected during checking.
 - **Conversions.** Casts and `parse_json` are pre-resolved into typeless conversion recipes carrying a decode schema, executed against strict leaf parsers. Casts and `parse_json` always parse strictly; agent- and `exec`-output parsing uses the configurable strict/lenient codec pipeline.
 
+## Extern (Python FFI) Dispatch
+
+`ExecutableProgram` carries externs in their own table, separate from ordinary `FunctionDescriptor`s but sharing one `FunctionId` space with them — a given id lives in exactly one of the two tables. An extern descriptor carries no body; instead it carries a compiled **boundary contract** (an encode recipe per parameter and a strict decode walk for the return type), built from the checked signature during lowering while checker types are still available, with type-variable leaves compiled to seal/unseal markers. The direct- and indirect-call evaluator paths resolve a `function_id` exactly as for ordinary functions; when the id lands in the extern table instead, evaluation delegates to the effects layer rather than interpreting a body.
+
+The effects layer evaluates any unfilled AgL-side defaults, then hands the call to a registry service that mints a fresh seal per type parameter for that call, encodes the arguments per the contract, invokes the resolved Python callable positionally, and strictly decodes its result — unsealing with the same call's tokens. Every failure crossing this boundary (the callable raising, a return-contract violation, an argument-conversion failure) becomes the catchable `ExternError`, following the same host-error-to-`AglRaise` pattern as `exec`.
+
+The registry also owns companion loading: resolving a module's companion path to its imported Python module (cached so a module's companion runs its top-level code at most once) and resolving each declared extern to a callable on it. This happens during host-environment assembly in the pipeline, after every static pass succeeds and before evaluation starts, so a broken companion is a load-time diagnostic rather than a mid-run surprise. A capability flag gates the Python FFI the same way `supports_shell_exec` gates `exec`.
+
 ## Value Rendering
 
 All value display — string interpolation, `print`, `render`, `as text`, and REPL echo — goes through one recursive renderer that produces AgL-native syntax for every value kind, taking `pretty` and `quote_strings` options. Nominal fields are normalized into declaration order once, at construction, so the renderer needs no type information and every consumer (native rendering, `as json`, equality) agrees on field order. Unit values carry a small display flag: explicit `()` renders as `()`, while statement-like effects return `void`, which compares equal to `()` but lets the REPL suppress echo. The renderer depends only on the value model — no semantic types, no parser types.
@@ -70,6 +78,6 @@ Programs are parameterized by executable `param` declarations resolved in order 
 - `src/agm/agl/lower/` — expected-type-directed lowering and module linking.
 - `src/agm/agl/ir/` — the IR data model: identities, nodes, program container, contracts, and the validation gate.
 - `src/agm/agl/eval/` — the interpreter, frame model, host dispatch, and conversion execution.
-- `src/agm/agl/runtime/` — agents, codecs, parameter conversion, host-environment types, and the value renderer.
+- `src/agm/agl/runtime/` — agents, codecs, parameter conversion, host-environment types, the value renderer, and the extern (Python FFI) registry (`runtime/externs.py`).
 - `src/agm/agl/pipeline.py` — the top-of-stack orchestrator; `src/agm/agl/type_schema.py` — compile-time schema/format generation.
-- Tests: `tests/test_agl_lower.py`, `tests/test_agl_ir_*.py`, `tests/test_agl_eval*.py` (and the IR semantics suite), `tests/test_agl_runtime.py`, `tests/test_agl_codec.py`, `tests/test_agl_convert.py`.
+- Tests: `tests/test_agl_lower.py`, `tests/test_agl_ir_*.py`, `tests/test_agl_eval*.py` (and the IR semantics suite), `tests/test_agl_runtime.py`, `tests/test_agl_codec.py`, `tests/test_agl_convert.py`, `tests/test_agl_extern_*.py`.

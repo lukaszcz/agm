@@ -733,6 +733,37 @@ class TestPipelineDriverProperties:
         assert rt.default_strict_json is False
 
 
+class TestResetExternRegistry:
+    """``PipelineDriver.reset_extern_registry`` — the ``ReplSession.reset()`` seam."""
+
+    def test_noop_before_the_host_environment_is_ever_assembled(self) -> None:
+        # Nothing cached yet: resetting must not crash, and a later
+        # ``host_environment()`` call still works normally afterward.
+        rt = PipelineDriver()
+        rt.reset_extern_registry()
+        assert rt.host_environment().extern_registry is not None
+
+    def test_replaces_the_cached_registry_with_a_fresh_one(self) -> None:
+        rt = PipelineDriver()
+        before = rt.host_environment().extern_registry
+        rt.reset_extern_registry()
+        after = rt.host_environment().extern_registry
+        assert after is not before
+
+    def test_preserves_the_rest_of_the_assembled_environment(self) -> None:
+        def agent(request: object) -> str:
+            return "answer"
+
+        rt = PipelineDriver()
+        rt.register_agent("helper", agent)
+        env_before = rt.host_environment()
+        rt.reset_extern_registry()
+        env_after = rt.host_environment()
+        assert env_after.registry is env_before.registry
+        assert env_after.capabilities is env_before.capabilities
+        assert env_after.codecs is env_before.codecs
+
+
 class TestNoDefaultAgent:
     """an ``ask`` call needs a default (or fallback) agent."""
 

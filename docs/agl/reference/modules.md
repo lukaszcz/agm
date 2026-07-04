@@ -289,7 +289,8 @@ access to a private name is a static error with a clear message.
 A module that is imported (not the entry) is a **library module**. Library
 modules may only contain declarations:
 
-- `def` — function definitions
+- `def` (including `extern def`; see [Python FFI](ffi.md)) — function
+  definitions
 - `record`, `enum`, `type` — type declarations
 - `import` — import declarations (header only, before all other items)
 

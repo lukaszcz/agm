@@ -37,6 +37,8 @@ The pass selects concrete behavior that the evaluator later relies on:
 
 Output contracts (the schema and format metadata that agent/`exec` calls need) are computed here while types are available, then compiled into the typeless execution layer described in [execution.md](execution.md).
 
+An `extern def` (Python FFI) shares the `builtin def` signature path end to end — body-less construction, header validation, signature registration — plus extern-only checks: the declared name must be a valid, non-keyword Python identifier, and no function or agent type may occur anywhere in its parameter or return types (a type variable is fine; sealing enforces parametricity for it at runtime — see [execution.md](execution.md)). Calls to an extern typecheck exactly like calls to an ordinary function and are additionally recorded in the dry-run call-site inventory. The placement rule — externs are only allowed in a file-backed module — is a scope-pass check keyed on whether the module's loader-recorded origin path is present.
+
 ## Code Entry Points
 
 - `src/agm/agl/lexer/` — the indentation-aware lexer.

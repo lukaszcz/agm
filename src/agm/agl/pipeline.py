@@ -723,9 +723,12 @@ class PipelineDriver:
         # ----------------------------------------------------------------
         # [check_only] --dry-run stop: the full static pipeline, param
         # validation, and contract materialization have all succeeded.  Stop
-        # before executing any statement (no program output, no side effects).
-        # Build the .
-        # Dry-run is side-effect-free: no trace is written.
+        # before executing any statement — no program output, no evaluation
+        # side effects, and no trace is written.  Extern companion modules are
+        # NOT covered by this stop: they already imported during loading
+        # (eager, fail-fast, before this point is ever reached), so a broken
+        # companion still fails a dry run.  Only invoking an extern's Python
+        # callable is skipped, like every other statement.
         # ----------------------------------------------------------------
         if check_only:
             inventory = _build_call_inventory_from_ir(executable.dry_run_inventory)
@@ -1246,6 +1249,26 @@ class PipelineDriver:
         self._default_strict_json = strict_json
         self._default_loop_limit = loop_limit
         self._shell_exec_timeout = shell_exec_timeout
+
+    def reset_extern_registry(self) -> None:
+        """Replace the cached extern registry with a fresh, empty one.
+
+        Called by ``ReplSession.reset()`` so a session's extern state is
+        discarded like every other session-scoped binding: after a reset, a
+        library module's companion resolves and imports again as though the
+        session were new. Agent/codec registrations and the rest of the
+        assembled host environment are left untouched — only the extern
+        registry is replaced. A no-op before the environment has ever been
+        assembled (nothing cached yet to replace).
+        """
+        if self._host_env_cache is not None:
+            from dataclasses import replace
+
+            from agm.agl.runtime.externs import ExternRegistry
+
+            self._host_env_cache = replace(
+                self._host_env_cache, extern_registry=ExternRegistry()
+            )
 
 
 # ---------------------------------------------------------------------------

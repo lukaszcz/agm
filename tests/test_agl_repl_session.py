@@ -1890,6 +1890,186 @@ class TestImports:
 
 
 # ---------------------------------------------------------------------------
+# extern def (Python FFI) in the REPL
+# ---------------------------------------------------------------------------
+
+
+class TestExternRepl:
+    """REPL-specific ``extern def`` (Python FFI) session semantics.
+
+    Companion loading, boundary crossing, and the full conversion matrix are
+    covered end to end elsewhere (``test_agl_extern_loading.py``,
+    ``test_agl_extern_runtime.py``); this class covers what is specific to
+    the incremental REPL session: direct-entry placement rejection, a
+    companion importing exactly once across entries via the session-held
+    registry, ``:reset`` discarding that registry, and extern failures
+    surfacing as catchable ``ExternError`` without derailing the session.
+    """
+
+    def _make_session_with_root(self, root: Path) -> ReplSession:
+        from agm.agl.modules.roots import assemble_roots
+
+        roots = assemble_roots(
+            invocation_root=root,
+            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+            lib_root=None,
+            configured=[],
+            cli=[],
+            cwd=root,
+        )
+        s = ReplSession()
+        s._roots = roots
+        return s
+
+    def _write_extern_lib(self, root: Path, name: str, agl: str, py: str) -> None:
+        (root / f"{name}.agl").write_text(agl)
+        (root / f"{name}.py").write_text(py)
+
+    # -- Placement: a direct REPL entry has no backing file -----------------
+
+    def test_direct_entry_extern_def_rejected(self) -> None:
+        s = ReplSession()
+        r = s.eval_entry("extern def f(x: int) -> int")
+        assert not r.ok
+        assert r.diagnostics
+
+    def test_session_usable_after_rejected_extern_entry(self) -> None:
+        s = ReplSession()
+        s.eval_entry("extern def f(x: int) -> int")
+        r = s.eval_entry("let x = 1 + 1")
+        assert r.ok
+        assert _int(r.value) == 2
+
+    # -- Importing an extern-bearing library module --------------------------
+
+    def test_import_makes_extern_callable_in_a_later_entry(self, tmp_path: Path) -> None:
+        self._write_extern_lib(
+            tmp_path,
+            "extlib",
+            "extern def add_one(x: int) -> int\n",
+            "def add_one(x):\n    return x + 1\n",
+        )
+        s = self._make_session_with_root(tmp_path)
+        r1 = s.eval_entry("import extlib")
+        assert r1.ok, r1.diagnostics
+        r2 = s.eval_entry("add_one(41)")
+        assert r2.ok, r2.diagnostics
+        assert _int(r2.value) == 42
+
+    def test_extern_is_first_class_across_entries(self, tmp_path: Path) -> None:
+        self._write_extern_lib(
+            tmp_path,
+            "extlib",
+            "extern def add_one(x: int) -> int\n",
+            "def add_one(x):\n    return x + 1\n",
+        )
+        s = self._make_session_with_root(tmp_path)
+        s.eval_entry("import extlib")
+        r1 = s.eval_entry("let g = add_one")
+        assert r1.ok, r1.diagnostics
+        r2 = s.eval_entry("g(9)")
+        assert r2.ok, r2.diagnostics
+        assert _int(r2.value) == 10
+
+    # -- One extern registry per session: a companion imports exactly once --
+
+    def test_companion_imports_exactly_once_across_entries_and_imports(
+        self, tmp_path: Path
+    ) -> None:
+        marker = tmp_path / "marker.txt"
+        self._write_extern_lib(
+            tmp_path,
+            "counting",
+            "extern def touch() -> int\n",
+            f"open({str(marker)!r}, 'a').write('x')\ndef touch():\n    return 1\n",
+        )
+        s = self._make_session_with_root(tmp_path)
+        r1 = s.eval_entry("import counting\ntouch()")
+        assert r1.ok, r1.diagnostics
+        r2 = s.eval_entry("touch()")
+        assert r2.ok, r2.diagnostics
+        # Re-importing the same module in a later entry is a no-op import.
+        r3 = s.eval_entry("import counting\ntouch()")
+        assert r3.ok, r3.diagnostics
+        assert marker.read_text() == "x"
+
+    # -- :reset discards the session's extern registry -----------------------
+
+    def test_reset_gives_the_session_a_fresh_extern_registry(self) -> None:
+        # The settled semantics: ``:reset`` discards extern state like every
+        # other session-scoped binding.  What matters is that the session's
+        # registry itself is a new object afterward — NOT whether the
+        # underlying Python module object happens to still exist somewhere in
+        # the process (an implementation detail this test does not pin down).
+        s = ReplSession()
+        registry_before = s._runtime.host_environment().extern_registry
+        s.reset()
+        registry_after = s._runtime.host_environment().extern_registry
+        assert registry_before is not registry_after
+
+    def test_import_and_call_still_work_after_reset(self, tmp_path: Path) -> None:
+        self._write_extern_lib(
+            tmp_path,
+            "extlib",
+            "extern def add_one(x: int) -> int\n",
+            "def add_one(x):\n    return x + 1\n",
+        )
+        s = self._make_session_with_root(tmp_path)
+        roots = s._roots
+        r1 = s.eval_entry("import extlib\nadd_one(1)")
+        assert r1.ok, r1.diagnostics
+        s.reset()
+        s._roots = roots  # :reset clears roots too; a real host re-supplies them
+        r2 = s.eval_entry("import extlib\nadd_one(1)")
+        assert r2.ok, r2.diagnostics
+        assert _int(r2.value) == 2
+
+    # -- Extern failures surface as ExternError; the session stays usable ----
+
+    def test_uncaught_extern_error_fails_the_entry_and_session_continues(
+        self, tmp_path: Path
+    ) -> None:
+        self._write_extern_lib(
+            tmp_path,
+            "extlib",
+            "extern def boom() -> int\n",
+            "def boom():\n    raise ValueError('kaboom')\n",
+        )
+        s = self._make_session_with_root(tmp_path)
+        s.eval_entry("import extlib")
+        r = s.eval_entry("boom()")
+        assert not r.ok
+        assert r.error is not None
+        assert r.error.type_name == "ExternError"
+        # The session is still usable after an uncaught extern failure.
+        r2 = s.eval_entry("let x = 1 + 1")
+        assert r2.ok
+        assert _int(r2.value) == 2
+
+    def test_extern_error_is_catchable_and_renders_in_the_repl(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._write_extern_lib(
+            tmp_path,
+            "extlib",
+            "extern def boom() -> int\n",
+            "def boom():\n    raise ValueError('kaboom')\n",
+        )
+        s = self._make_session_with_root(tmp_path)
+        s.eval_entry("import extlib")
+        r = s.eval_entry(
+            "let r = try\n"
+            "  boom()\n"
+            "catch ExternError as e =>\n"
+            "  print(e.function)\n"
+            "  -1\n"
+        )
+        assert r.ok, r.diagnostics
+        assert _int(r.value) == -1
+        assert capsys.readouterr().out.strip() == "boom"
+
+
+# ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
 

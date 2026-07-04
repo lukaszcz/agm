@@ -28,6 +28,8 @@ Agents must be declared in source; the scope pass binds each declared agent as a
 
 The semantic type model lives in the `semantics` foundation package and is consumed by the typecheck pass. Alongside the ordinary scalar, container, record, and enum types it carries the types the expression-oriented design needs: a unit type for side-effecting expressions, a positional function type, an opaque agent type, a bottom type for `raise`, and rigid type variables for generics. Records and enums have nominal identity by name (and, in graph mode, owning module), not by structure.
 
+`semantics/type_table.py` holds a `TypeTable`: a registry of `TypeDef`s (a declaration's type parameters and field/variant type templates) keyed by `(module_id, name)`. The type builder populates it alongside the embedded `RecordType`/`EnumType` representation above for every user-declared record and enum, and a module graph's per-module environments share one instance. This is the seed of an ongoing migration toward nominal types as lightweight handles whose shapes are looked up in the table rather than carried by value; today it is populated but not yet consulted by any consumer.
+
 The pass selects concrete behavior that the evaluator later relies on:
 
 - **Built-in typing rules** are dispatched from the resolver's built-in classification — for example `print` accepts anything and yields unit; `exec` chooses between returning a structured result and parsing stdout into a target type; `ask` takes its result type from context.

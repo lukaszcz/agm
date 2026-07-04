@@ -20,6 +20,7 @@ from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
 from agm.agl.scope.imports import ImportEnv, QName
 from agm.agl.scope.symbols import BindingRef, ResolvedProgram
+from agm.agl.semantics.type_table import TypeTable, create_seeded_type_table
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPE_NAMES,
@@ -349,7 +350,14 @@ class TypeEnvironment:
         ] | None = None,
         import_env: ImportEnv | None = None,
         module_id: ModuleId = ENTRY_ID,
+        type_table: TypeTable | None = None,
     ) -> None:
+        # Shared nominal type-declaration table (dual-write target alongside
+        # ``_types``): defaults to a fresh table seeded with built-in prelude
+        # defs; graph mode passes one shared instance across per-module envs.
+        self._type_table: TypeTable = (
+            type_table if type_table is not None else create_seeded_type_table()
+        )
         # user-declared types (records, enums) — name → Type
         self._types: dict[str, Type] = {}
         # alias targets — name → resolved Type (cycle detection uses seen set)
@@ -425,6 +433,11 @@ class TypeEnvironment:
                 )
                 self._constructor_field_kinds[(exc_name, None)] = _kinds
 
+    @property
+    def type_table(self) -> TypeTable:
+        """The shared ``TypeTable`` populated alongside ``_types`` (dual-write)."""
+        return self._type_table
+
     # --- Type namespace queries ---
 
     def has_type(self, name: str) -> bool:
@@ -437,16 +450,19 @@ class TypeEnvironment:
         self._types[name] = typ
 
     def unregister_name(self, name: str) -> None:
-        """Remove a user *name* from BOTH the type and alias namespace tables.
+        """Remove a user *name* from the type, alias, and type-table namespaces.
 
         Used by the type-builder when an incremental-session entry redeclares a
-        *seeded* name with a different kind (e.g. a seeded ``record R`` redefined
-        as ``type R = int``).  ``_types`` (records/enums/exceptions) and
-        ``_alias_targets`` (aliases) are separate tables, so a cross-kind
+        *seeded* name — either with a different kind (e.g. a seeded ``record R``
+        redefined as ``type R = int``) or a different shape (e.g. ``record R``
+        redefined with different fields).  ``_types`` (records/enums/exceptions)
+        and ``_alias_targets`` (aliases) are separate tables, so a cross-kind
         redefinition would otherwise leave a stale entry in the other table and
         make ``get_type`` disagree with annotation/constructor resolution.
-        Dropping the name from both tables before the new kind is registered
-        keeps the two namespaces mutually exclusive for user names.
+        Dropping the name from all namespaces before the new declaration is
+        registered keeps them mutually consistent, and lets the type table's
+        dual-write ``register`` calls treat every registration as a fresh one
+        rather than a conflicting re-registration of the same key.
 
         Built-in exception names and built-in prelude type names are never
         removed: they are non-shadowable (rejected earlier by
@@ -457,6 +473,7 @@ class TypeEnvironment:
             return
         self._types.pop(name, None)
         self._alias_targets.pop(name, None)
+        self._type_table.unregister(self._module_id, name)
 
     def register_alias(
         self, name: str, target_expr: object, *, type_params: tuple[str, ...] = ()
@@ -1219,7 +1236,13 @@ class TypeEnvironment:
         built-in prelude types are already present in every fresh environment
         and are not copied from the source.  Binding types are keyed by
         globally-unique ``decl_node_id`` so they never collide across entries.
+
+        Also merges *other*'s ``type_table`` entries in: *other* is treated as
+        authoritative, so an entry under a key already present in this
+        environment's table is overwritten (last-write-wins), mirroring how
+        ``_types`` itself is seeded below. See :meth:`TypeTable.merge_from`.
         """
+        self._type_table.merge_from(other._type_table)
         builtin = frozenset(BUILTIN_EXCEPTIONS) | BUILTIN_PRELUDE_TYPE_NAMES
         for name, typ in other._types.items():
             if name not in builtin:

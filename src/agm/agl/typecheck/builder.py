@@ -19,6 +19,7 @@ Module-level helpers
 from __future__ import annotations
 
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
+from agm.agl.semantics.type_table import TypeDef
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTION_NAMES,
     BUILTIN_EXCEPTIONS,
@@ -293,6 +294,14 @@ class _TypeBuilder:
         )
         self._validate_builtin_type_shape(stmt, typ)
         self._env.register_type(stmt.name, typ)
+        self._env.type_table.register(
+            TypeDef(
+                kind="record",
+                name=stmt.name,
+                module_id=typ.module_id,
+                fields=tuple(fields.items()),
+            )
+        )
         # Register field kinds for this record constructor.
         field_kinds = tuple((fd.name, fd.kind) for fd in stmt.fields)
         self._env.register_constructor_field_kinds(stmt.name, None, field_kinds)
@@ -329,6 +338,16 @@ class _TypeBuilder:
         )
         self._validate_builtin_type_shape(stmt, typ)
         self._env.register_type(stmt.name, typ)
+        self._env.type_table.register(
+            TypeDef(
+                kind="enum",
+                name=stmt.name,
+                module_id=typ.module_id,
+                variants=tuple(
+                    (vname, tuple(vfields.items())) for vname, vfields in variants.items()
+                ),
+            )
+        )
         # Register field kinds for each variant constructor.
         for vd in stmt.variants:
             vfield_kinds = tuple((fd.name, fd.kind) for fd in vd.fields)
@@ -466,6 +485,15 @@ class _TypeBuilder:
         gdef = GenericTypeDef(kind="record", type_params=stmt.type_params, template=template)
         self._env.register_generic_type(stmt.name, gdef)
         self._env.unregister_name(stmt.name)
+        self._env.type_table.register(
+            TypeDef(
+                kind="record",
+                name=stmt.name,
+                module_id=self._module_id,
+                type_params=stmt.type_params,
+                fields=tuple(fields.items()),
+            )
+        )
         field_names = tuple(fields.keys())
         field_templates = tuple(fields.values())
         sig = ConstructorSignature(
@@ -515,6 +543,17 @@ class _TypeBuilder:
         gdef = GenericTypeDef(kind="enum", type_params=stmt.type_params, template=template)
         self._env.register_generic_type(stmt.name, gdef)
         self._env.unregister_name(stmt.name)
+        self._env.type_table.register(
+            TypeDef(
+                kind="enum",
+                name=stmt.name,
+                module_id=self._module_id,
+                type_params=stmt.type_params,
+                variants=tuple(
+                    (vname, tuple(vfields.items())) for vname, vfields in variants.items()
+                ),
+            )
+        )
         # Register one ConstructorSignature and field kinds per variant.
         for vd in stmt.variants:
             vfields = variants[vd.name]

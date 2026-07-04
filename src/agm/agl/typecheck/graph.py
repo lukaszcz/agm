@@ -64,6 +64,7 @@ from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.graph import ResolvedModuleGraph
 from agm.agl.scope.imports import ImportEnv
 from agm.agl.scope.symbols import ResolvedProgram
+from agm.agl.semantics.type_table import TypeTable, create_seeded_type_table
 from agm.agl.semantics.types import (
     CastSpec,
     FunctionType,
@@ -502,6 +503,8 @@ class _CycleInTypeDeps(Exception):
 
 def _build_graph_type_table(
     resolved_graph: ResolvedModuleGraph,
+    *,
+    type_table: TypeTable | None = None,
 ) -> tuple[
     dict[tuple[ModuleId, str], Type],
     dict[tuple[ModuleId, str], GenericTypeDef],
@@ -546,6 +549,12 @@ def _build_graph_type_table(
     order is Color → Foo → Bar, which is acyclic).
     """
     from agm.agl.typecheck.env import AglTypeError
+
+    # Shared TypeTable: one instance dual-written by every cross-module env
+    # below, so declarations from all modules land in the same table.  Step A's
+    # per-module envs are transient shell-only scaffolding and never dual-write,
+    # so they keep their own private (default) tables.
+    shared_type_table = type_table if type_table is not None else create_seeded_type_table()
 
     # Step A: register all type shells for all modules.
     # For records/enums: register empty shells in both the per-module env AND
@@ -597,6 +606,7 @@ def _build_graph_type_table(
             graph_ctor_field_kinds_table=graph_ctor_field_kinds_table,
             import_env=import_env,
             module_id=mid,
+            type_table=shared_type_table,
         )
         # Seed with own type shells so bare-name local refs resolve.
         for name, t in per_module_envs[mid].non_builtin_type_items():
@@ -784,6 +794,7 @@ def _check_module(
     graph_ctor_field_kinds_table: dict[
         tuple[ModuleId, str, str | None], tuple[tuple[str, ParamKind], ...]
     ],
+    type_table: TypeTable,
     entry_seed_env: TypeEnvironment | None = None,
 ) -> CheckedModule:
     """Type-check one module with a module-aware ``TypeEnvironment``.
@@ -799,6 +810,9 @@ def _check_module(
       FunctionType)`` for ALL top-level ``FuncDef``s across ALL modules;
       ``node_id``s are globally unique, so seeding the whole table into
       every module's env is safe and collision-free.
+    - ``type_table``: the single ``TypeTable`` instance shared by every module
+      in this graph (the same one built and dual-written in the type pre-pass),
+      so this module's own re-check dual-writes into the same table.
     - ``entry_seed_env``: when given and ``mid`` is the entry module, the session
       type env is seeded first so that prior REPL bindings are available.
     """
@@ -813,6 +827,7 @@ def _check_module(
         graph_ctor_field_kinds_table=graph_ctor_field_kinds_table,
         import_env=import_env,
         module_id=mid,
+        type_table=type_table,
     )
 
     # Seed from the REPL session type env first (for the entry module in REPL
@@ -911,6 +926,12 @@ def check_graph(
     AglTypeError
         On the first static type violation in any module (first-error abort).
     """
+    # One TypeTable shared by every module in this graph: the type pre-pass
+    # dual-writes into it below, and Phase 3 re-checks each module's own
+    # declarations against the SAME instance, so the whole graph's declarations
+    # land in one table regardless of per-module checking order.
+    shared_type_table = create_seeded_type_table()
+
     # Phase 1: build the graph-wide type table with all module types stamped
     # with their owning module_id.  Also collects cross-module generic type defs,
     # parameterized aliases, constructor signatures, and constructor field kinds
@@ -921,7 +942,7 @@ def check_graph(
         graph_alias_table,
         graph_ctor_sig_table,
         graph_ctor_field_kinds_table,
-    ) = _build_graph_type_table(resolved_graph)
+    ) = _build_graph_type_table(resolved_graph, type_table=shared_type_table)
 
     # Phase 2: build the graph-wide function-signature table.
     # Resolves parameter/return TypeExprs for every top-level FuncDef in every
@@ -965,6 +986,7 @@ def check_graph(
             graph_alias_table,
             graph_ctor_sig_table,
             graph_ctor_field_kinds_table,
+            shared_type_table,
             entry_seed_env=entry_seed_env if mid.is_entry else None,
         )
         checked_modules[mid] = cm

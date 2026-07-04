@@ -8,6 +8,8 @@ The REPL is a UI-free incremental driver that runs the full parse → resolve �
 
 Runtime failure is deliberately non-transactional: initializers completed before a failure remain installed (including mutations and new bindings), and the static environment advances only for the symbols that actually reached the runtime frame, keeping later name resolution aligned with the partially advanced image.
 
+Type-focused REPL surfaces (`:type`, check-only echoes, and bare type entries) use a REPL-specific type formatter rather than raw semantic `repr`: most types stay compact, while records and enums expand to declaration-like field and constructor listings. Ordinary binding/value echoes keep compact type names to remain readable.
+
 The REPL uses the graph pipeline ([modules.md](modules.md)) for entries by default so it can apply the same automatic `std.core` open import as `agm exec`. The graph resolver merges those imported stdlib names with the session's accumulated bindings, constructor candidates, and type names, preserving incremental REPL behavior while keeping stdlib types and constructors available from a fresh prompt. Library modules are cached and incrementally linked into the persistent image; open-imported names are made to persist across entries by accumulating import declarations and replaying them into later entries. User `infixl`/`infixr` fixity likewise persists: resolved priorities are accumulated across entries and fed back to the parser as ambient fixity so an operator declared in one entry is usable in the next.
 
 ## Program Parameters
@@ -34,7 +36,7 @@ The REPL console adds interactivity around the session. Live agent calls are gat
 
 ## Code Entry Points
 
-- `src/agm/agl/repl/` — the incremental session, the console, agent confirmation, and themes.
+- `src/agm/agl/repl/` — the incremental session, type-focused display helpers, the console, agent confirmation, and themes.
 - `src/agm/agl/pipeline.py` — program preparation, parameter discovery, agent reconciliation, and host-environment assembly shared by `exec` and the REPL.
 - `src/agm/commands/exec.py` and `src/agm/commands/repl.py` — the hosting commands.
 - `src/agm/cli_support/exec_params.py` — parameter discovery and option wiring for `agm exec`.

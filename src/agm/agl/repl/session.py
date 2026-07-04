@@ -667,7 +667,10 @@ class ReplSession:
                 failure_span is None
                 or ref.decl_span.start_offset <= failure_span.start_offset
             )
-            if not partial or installed_before_failure or declared_before_failure:
+            promoted_before_failure = installed_before_failure or (
+                symbol is None and declared_before_failure
+            )
+            if not partial or promoted_before_failure:
                 self._session_scope.bindings[name] = ref
                 if partial and name in entry_names:
                     installed.append(name)
@@ -876,7 +879,9 @@ class ReplSession:
         checked = check(resolved, host_env.capabilities, seed_env=self._type_env)
         typ = checked.node_types.get(expr_item.node_id)
         assert typ is not None
-        return repr(typ)
+        from agm.agl.repl.type_display import format_type_for_repl
+
+        return format_type_for_repl(typ)
 
     # ------------------------------------------------------------------
     # Introspection

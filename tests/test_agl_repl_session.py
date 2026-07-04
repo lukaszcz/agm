@@ -310,6 +310,23 @@ class TestTypeOf:
         s.eval_entry("let x = 1")
         assert s.type_of("x + 1") == repr(IntType())
 
+    def test_type_of_displays_record_fields(self) -> None:
+        s = ReplSession()
+        s.eval_entry("record Point\n  x: int\n  y: text")
+        s.eval_entry('let p = Point(x = 1, y = "north")')
+
+        assert s.type_of("p") == "record Point\n  x: int\n  y: text"
+
+    def test_type_of_displays_enum_constructors(self) -> None:
+        s = ReplSession()
+        s.eval_entry("enum Result\n  | Ok(value: int)\n  | Err(message: text)\n  | Unknown")
+        s.eval_entry("let r = Ok(value = 1)")
+
+        assert (
+            s.type_of("r")
+            == "enum Result\n  | Ok(value: int)\n  | Err(message: text)\n  | Unknown"
+        )
+
     def test_type_of_does_not_promote_or_advance(self) -> None:
         s = ReplSession()
         s.eval_entry("let x = 1")
@@ -371,6 +388,19 @@ class TestFailureEffects:
         use = s.eval_entry("before + a")
         assert use.ok
         assert use.value is not None and _int(use.value) == 30
+
+    def test_runtime_raise_does_not_install_failing_binding_from_prior_function(self) -> None:
+        s = ReplSession()
+        declare = s.eval_entry('def f[T]() -> T = raise Abort(message = "A")')
+        assert declare.ok
+
+        result = s.eval_entry("let x: int = f()")
+
+        assert not result.ok
+        assert result.error is not None
+        assert result.installed == ()
+        assert [name for name, _typ, _value in s.bindings()] == ["f"]
+        assert not s.eval_entry("x").ok
 
     def test_runtime_raise_preserves_completed_param(self) -> None:
         s = ReplSession()
@@ -2327,7 +2357,10 @@ class TestBareTypeEntry:
         assert r.ok
         assert r.kind == "type"
         assert isinstance(r.value_type, EnumType)
-        assert render_entry_result(r, echo=True) == "<type: Color>"
+        assert (
+            render_entry_result(r, echo=True)
+            == "<type:\nenum Color\n  | Red\n  | Green\n  | Blue\n>"
+        )
 
     def test_generic_type_application_echoes_as_type(self) -> None:
         from agm.agl.semantics.types import ListType

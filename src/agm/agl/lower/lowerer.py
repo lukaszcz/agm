@@ -93,6 +93,7 @@ from agm.agl.ir.nodes import (
     IrRaise,
     IrRenderTemplate,
     IrRenderValue,
+    IrReturn,
     IrSequence,
     IrTemplateText,
     IrTemplateValue,
@@ -198,6 +199,7 @@ from agm.agl.syntax.nodes import (
     ProgramDecl,
     Raise,
     RecordDef,
+    Return,
     StringLit,
     Template,
     TextSegment,
@@ -537,6 +539,9 @@ class _Lowerer:
                         self._scan_captures(seg.expr, local_ids, captured)
             case Raise():
                 self._scan_captures(node.exc, local_ids, captured)
+            case Return():
+                if node.value is not None:
+                    self._scan_captures(node.value, local_ids, captured)
             case Break() | Continue():
                 pass  # leaf — no captures
             case UnitLit() | IntLit() | DecimalLit() | BoolLit() | NullLit() | StringLit():
@@ -1020,6 +1025,14 @@ class _Lowerer:
                 return IrRaise(
                     location=self._loc(span),
                     exc=self.lower_expr(exc_expr),
+                )
+
+            case Return(value=value_expr, span=span):
+                return IrReturn(
+                    location=self._loc(span),
+                    value=IrConstUnit(location=self._loc(span))
+                    if value_expr is None
+                    else self.lower_expr(value_expr),
                 )
 
             case Try(body=body_expr, handlers=handlers, span=span):

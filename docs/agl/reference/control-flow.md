@@ -189,8 +189,9 @@ scope (it sees the body's bindings); if true the loop exits. `E` must be
 `do[n] … done` loop runs the body `n` times and then **raises**
 `MaxIterationsExceeded` (the bound is the only real exit).
 
-The only exception-free loop exits are: `for` exhaustion, a false `while`,
-a true `until`, and `break`.
+The loop's own exception-free exits are: `for` exhaustion, a false `while`,
+a true `until`, and `break`. A `return` inside the loop exits the enclosing
+function instead of producing a loop value.
 
 ### Iteration order and scope
 
@@ -228,6 +229,10 @@ same function/lambda**: one outside any loop, or one that would cross a
 `fn`/`def`/lambda boundary into an outer loop, is a static error. `break`
 inside a `try` body exits the loop (it is not caught by `catch`, which
 handles only AgL exceptions).
+
+A `return` inside a loop unwinds past the loop and returns from the nearest
+enclosing `def` or `fn`. It is not a `break`: the loop does not produce its
+usual `unit` result, and enclosing loops are abandoned as well.
 
 ### The host `max-iters` safety valve
 

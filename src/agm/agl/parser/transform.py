@@ -1825,6 +1825,10 @@ class AstBuilder(Transformer):
         exc = _find_expr(args)
         return syntax.Raise(exc=exc, span=self._span_from_meta(meta), node_id=self._next_id())
 
+    def return_expr(self, meta: Meta, args: _Args) -> syntax.Return:
+        value = next((cast(syntax.Expr, a) for a in args if _is_expr_node(a)), None)
+        return syntax.Return(value=value, span=self._span_from_meta(meta), node_id=self._next_id())
+
     # ------------------------------------------------------------------
     # suite_expr / branch_body
     # ------------------------------------------------------------------
@@ -2902,6 +2906,11 @@ def _rewrite_expr(
         )
     if isinstance(expr, syntax.Raise):
         return replace(expr, exc=_rewrite_expr(expr.exc, table, builder))
+    if isinstance(expr, syntax.Return):
+        return replace(
+            expr,
+            value=None if expr.value is None else _rewrite_expr(expr.value, table, builder),
+        )
     if isinstance(expr, syntax.ListLit):
         return replace(
             expr,

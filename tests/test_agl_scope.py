@@ -971,6 +971,15 @@ class TestFuncDefMutualRecursion:
         )
         assert _ref(r, "base").kind == BinderKind.let_binding
 
+    def test_return_allowed_in_def_body(self) -> None:
+        parse_and_resolve("def f(x: int) -> int =\n  return x\nf(1)")
+
+    def test_return_rejected_in_def_parameter_default(self) -> None:
+        err = reject_scope("def f(x: int = (return 1)) -> int = x\nf()")
+        _, msg = diag(err)
+        assert "return" in msg
+        assert "function" in msg
+
     def test_def_param_duplicate_rejected(self) -> None:
         err = reject_scope("def f(x: int, x: int) -> int = x\nf(1, 2)")
         _, msg = diag(err)
@@ -1022,6 +1031,15 @@ class TestLambdaScoping:
         """Default expressions in a lambda are resolved in the enclosing scope."""
         r = parse_and_resolve("let base = 5\nlet f = fn(x: int = base) => x\nf()")
         assert _ref(r, "base").kind == BinderKind.let_binding
+
+    def test_return_allowed_in_lambda_body(self) -> None:
+        parse_and_resolve("let f = fn(x: int) => return x\nf(1)")
+
+    def test_return_rejected_at_top_level(self) -> None:
+        err = reject_scope("return 1")
+        _, msg = diag(err)
+        assert "return" in msg
+        assert "function" in msg
 
 
 # ---------------------------------------------------------------------------

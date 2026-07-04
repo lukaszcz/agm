@@ -75,6 +75,18 @@ def _constructor_args(fields: dict[str, Type]) -> str:
 
 
 class TestPersistence:
+    def test_top_level_return_rejected_and_session_continues(self) -> None:
+        s = ReplSession()
+        bad = s.eval_entry("return 1")
+        assert not bad.ok
+        assert bad.diagnostics
+        assert "return" in bad.diagnostics[0].message.lower()
+        good = s.eval_entry("let x = 1")
+        assert good.ok, good.diagnostics
+        later = s.eval_entry("x")
+        assert later.ok, later.diagnostics
+        assert later.value == IntValue(1)
+
     def test_binding_persists_into_next_entry(self) -> None:
         s = ReplSession()
         r1 = s.eval_entry("let x = 1 + 2")

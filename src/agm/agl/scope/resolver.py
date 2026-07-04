@@ -105,6 +105,7 @@ from agm.agl.syntax.nodes import (
     ProgramDecl,
     Raise,
     RecordDef,
+    Return,
     StringLit,
     Template,
     Try,
@@ -235,6 +236,9 @@ class _Resolver:
         # body, or until_cond). Reset to False across fn/def boundaries so that
         # `break`/`continue` cannot cross a function boundary into an outer loop.
         self._in_loop: bool = False
+        # Function-body flag: True only while resolving a def/fn body (not parameter
+        # defaults). Used to reject `return` outside the nearest function boundary.
+        self._in_function: bool = False
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -744,17 +748,30 @@ class _Resolver:
 
     @contextmanager
     def _fn_boundary_ctx(self) -> Iterator[None]:
-        """Context manager that resets ``_in_loop`` to ``False`` for the duration.
+        """Reset enclosing loop/function flags while crossing a function boundary.
 
-        Used when resolving a ``fn``/``def`` body and parameter defaults so that
-        ``break``/``continue`` cannot cross a function boundary into an outer loop.
+        Parameter defaults resolve in the enclosing lexical scope but outside the
+        new function body, so neither loop exits nor returns cross this boundary.
         """
-        prev = self._in_loop
+        prev_loop = self._in_loop
+        prev_function = self._in_function
         self._in_loop = False
+        self._in_function = False
         try:
             yield
         finally:
-            self._in_loop = prev
+            self._in_loop = prev_loop
+            self._in_function = prev_function
+
+    @contextmanager
+    def _function_body_ctx(self) -> Iterator[None]:
+        """Mark resolution as occurring inside the current function body."""
+        prev = self._in_function
+        self._in_function = True
+        try:
+            yield
+        finally:
+            self._in_function = prev
 
     def _define(self, name: str, ref: BindingRef) -> None:
         """Define *name* in the current scope; error on redeclaration.
@@ -1108,6 +1125,14 @@ class _Resolver:
             self._resolve_lambda(expr)
         elif isinstance(expr, Raise):
             self._resolve_expr(expr.exc)
+        elif isinstance(expr, Return):
+            if not self._in_function:
+                raise AglScopeError(
+                    "'return' used outside a function.",
+                    span=expr.span,
+                )
+            if expr.value is not None:
+                self._resolve_expr(expr.value)
         elif isinstance(expr, Break):
             if not self._in_loop:
                 raise AglScopeError(
@@ -1578,7 +1603,8 @@ class _Resolver:
                         )
                     param_scope.define(param.name, ref)
                 if node.body is not None:
-                    self._resolve_expr_or_block(node.body)
+                    with self._function_body_ctx():
+                        self._resolve_expr_or_block(node.body)
 
     # ------------------------------------------------------------------
     # Pattern variable binding

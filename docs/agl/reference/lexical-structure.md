@@ -64,7 +64,7 @@ variable, agent, or function names:
 
 ```text
 record enum type param program agent config def fn let var for while do until done
-if else case of try catch raise break continue exception extends builtin as as?
+if else case of try catch raise return break continue exception extends builtin as as?
 and or not is in to downto by true false null
 ```
 

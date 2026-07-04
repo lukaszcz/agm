@@ -100,6 +100,7 @@ __all__ = [
     "IrParseJson",
     "IrPrint",
     "IrRaise",
+    "IrReturn",
     "IrRenderValue",
     "IrRenderTemplate",
     "IrSequence",
@@ -610,6 +611,19 @@ class IrRaise:
 
 
 @dataclass(frozen=True, slots=True)
+class IrReturn:
+    """IR return: evaluate ``value`` and exit the current function call.
+
+    Implemented by raising an internal ``_ReturnSignal`` Python exception in the
+    evaluator; the signal propagates through loops and ``IrTry`` bodies to the
+    function-call boundary, where its payload becomes the call result.
+    """
+
+    location: Location
+    value: "IrExpr"
+
+
+@dataclass(frozen=True, slots=True)
 class IrCatchHandler:
     """A single catch handler in an ``IrTry`` node.
 
@@ -1059,6 +1073,7 @@ IrExpr = (
     | IrConvert
     | IrIf
     | IrRaise
+    | IrReturn
     | IrTry
     | IrCase
     | IrLoop

@@ -63,6 +63,7 @@ from agm.agl.syntax.nodes import (
     ParamKind,
     Program,
     Raise,
+    Return,
     StringLit,
     Try,
     TypeApply,
@@ -1321,6 +1322,33 @@ class TestFuncDef:
         r = accept_type('def f(x: int) -> text = raise Abort(message = "err")\nf(1)')
         assert r.resolved.program is not None
 
+    def test_funcdef_return_value_checked_against_annotation(self) -> None:
+        r = accept_type("def f(x: int) -> int =\n  return x\n  0\nf(1)")
+        return_node = r.resolved.program.body.items[0].body.items[0]
+        assert isinstance(return_node, Return)
+        assert isinstance(r.node_types[return_node.node_id], BottomType)
+
+    def test_funcdef_return_mismatch_rejected(self) -> None:
+        err = reject_type('def f() -> int =\n  return "bad"\n  0')
+        assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
+
+    def test_funcdef_bare_return_requires_unit(self) -> None:
+        err = reject_type("def f() -> int =\n  return\n  1")
+        assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
+
+    def test_funcdef_infers_return_and_tail_unification_with_widening(self) -> None:
+        r = accept_type("def f(flag: bool) =\n  if flag =>\n    return 1\n  1.5\nf")
+        f_ref = r.resolved.program.body.items[1]
+        assert isinstance(f_ref, VarRef)
+        assert r.node_types[f_ref.node_id] == FunctionType(
+            params=(BoolType(),), result=DecimalType()
+        )
+
+    def test_funcdef_inference_conflicting_returns_rejected(self) -> None:
+        err = reject_type('def f(flag: bool) =\n  if flag =>\n    return 1\n  "tail"')
+        assert "infer" in str(err).lower()
+        assert "annotation" in str(err).lower()
+
     def test_funcdef_called_with_named_args(self) -> None:
         r = accept_type("def f(x: int, y: int = 0) -> int = x + y\nf(1, y = 2)")
         assert r.resolved.program is not None
@@ -1408,6 +1436,26 @@ class TestLambda:
     def test_lambda_with_raise_and_annotation(self) -> None:
         r = accept_type('fn() -> int => raise Abort(message = "x")')
         assert r.resolved.program is not None
+
+    def test_lambda_return_targets_inner_function(self) -> None:
+        r = accept_type(
+            "def outer() -> int =\n"
+            "  let f = fn() -> text => return \"inner\"\n"
+            "  1\n"
+            "outer()"
+        )
+        assert r.resolved.program is not None
+
+    def test_lambda_infers_return_type(self) -> None:
+        r = accept_type("fn(flag: bool) => if flag => (return 1) | else => 2")
+        lam = r.resolved.program.body.items[0]
+        assert isinstance(lam, Lambda)
+        assert r.node_types[lam.node_id] == FunctionType(params=(BoolType(),), result=IntType())
+
+    def test_lambda_inference_conflicting_return_rejected(self) -> None:
+        err = reject_type('fn(flag: bool) => if flag => (return 1) | else => "tail"')
+        assert "infer" in str(err).lower()
+        assert "annotation" in str(err).lower()
 
     def test_lambda_value_call(self) -> None:
         r = accept_type("let f = fn(x: int) -> int => x\nf(42)")
@@ -1623,6 +1671,17 @@ class TestRaise:
     def test_raise_in_funcdef_body(self) -> None:
         r = accept_type('def f() -> text = raise Abort(message = "err")\nf()')
         assert r.resolved.program is not None
+
+    def test_return_outside_function_rejected_defensively_by_checker(self) -> None:
+        prog = parse_program("return 1")
+        resolved = _ResolvedProgram(
+            program=prog,
+            resolution={},
+            builtin_calls={},
+            root_scope=ScopeNode(node_id=prog.node_id),
+        )
+        with pytest.raises(AglTypeError, match="return"):
+            check(resolved, default_capabilities())
 
 
 # ---------------------------------------------------------------------------

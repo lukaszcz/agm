@@ -1,0 +1,5 @@
+def f(flag: bool) =
+  if flag =>
+    return 1
+  "tail"
+f(true)

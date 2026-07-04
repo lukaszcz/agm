@@ -28,7 +28,7 @@ Rules implemented
 14. ``case`` — exhaustiveness warning on enum scrutinees.
 15. ``loop`` — yields ``unit``; until/while conditions must be bool; bound must be int.
 16. ``try/catch`` — body and handler types must unify.
-17. ``raise`` — yields ``BottomType`` (bottom, assignable to any target).
+17. ``raise``/``return`` — yield ``BottomType`` (bottom, assignable to any target).
 18. Assignability: ``int`` widens to ``decimal``; ``json``
     accepts any JSON-shaped value.  Bottom type is assignable to any target.
 19. Duplicate constructor argument names, duplicate dict keys, and constructor
@@ -124,6 +124,7 @@ from agm.agl.syntax.nodes import (
     ProgramDecl,
     Raise,
     RecordDef,
+    Return,
     StringLit,
     Template,
     Try,
@@ -295,6 +296,11 @@ class _Checker:
         self._constructor_pattern_bindings: dict[int, tuple[tuple[str, Pattern], ...]] = {}
         self._builtins = BuiltinCallChecker(self)
         self._constructors = ConstructorChecker(self)
+        # Function return contexts. The top entry is either an annotated expected
+        # result type or None for inference; the matching collector records return
+        # operand types in inference mode.
+        self._return_expected_stack: list[Type | None] = []
+        self._return_collected_stack: list[list[Type]] = []
 
     # ------------------------------------------------------------------
     # required-after-defaulted check (shared by def and lambda)
@@ -500,7 +506,13 @@ class _Checker:
                     def_type = self._check_expr(p.default, expected=spec.type)
                     self._assert_assignable(def_type, spec.type, p.span)
             # Check body against declared return type.
-            body_type = self._check_expr(node.body, expected=sig.result)
+            self._return_expected_stack.append(sig.result)
+            self._return_collected_stack.append([])
+            try:
+                body_type = self._check_expr(node.body, expected=sig.result)
+            finally:
+                self._return_collected_stack.pop()
+                self._return_expected_stack.pop()
             if not isinstance(body_type, BottomType):
                 self._assert_assignable(body_type, sig.result, node.span)
         finally:
@@ -521,18 +533,35 @@ class _Checker:
                 if p.default is not None:
                     def_type = self._check_expr(p.default, expected=spec.type)
                     self._assert_assignable(def_type, spec.type, p.span)
-            body_type = self._check_expr(node.body, expected=None)
-            if isinstance(body_type, BottomType):
+            self._return_expected_stack.append(None)
+            collected: list[Type] = []
+            self._return_collected_stack.append(collected)
+            try:
+                body_type = self._check_expr(node.body, expected=None)
+            finally:
+                self._return_collected_stack.pop()
+                self._return_expected_stack.pop()
+            if isinstance(body_type, BottomType) and not collected:
                 raise AglTypeError(
                     f"Cannot infer return type of function '{node.name}': body always raises. "
                     "Add a return type annotation.",
                     span=node.span,
                 )
+            try:
+                result_type = self._unify_branch_types(
+                    [*collected, body_type], node.span, "Function return"
+                )
+            except AglTypeError as exc:
+                raise AglTypeError(
+                    f"Cannot infer return type of function '{node.name}': return values have "
+                    "incompatible types. Add a return type annotation.",
+                    span=node.span,
+                ) from exc
             inferred_sig = FunctionSignature(
-                params=sig.params, result=body_type, type_params=sig.type_params
+                params=sig.params, result=result_type, type_params=sig.type_params
             )
             inferred_type = FunctionType(
-                params=tuple(p.type for p in sig.params), result=body_type
+                params=tuple(p.type for p in sig.params), result=result_type
             )
             self._register_funcdef_signature(node, inferred_sig, inferred_type)
         finally:
@@ -700,6 +729,8 @@ class _Checker:
             return self._check_try(expr, expected=expected)
         if isinstance(expr, Raise):
             return self._infer_raise(expr)
+        if isinstance(expr, Return):
+            return self._check_return(expr)
         if isinstance(expr, Break | Continue):
             return BottomType()
         if isinstance(expr, BinaryOp):
@@ -1275,17 +1306,39 @@ class _Checker:
             result_type = self._env.resolve_type_expr(
                 node.return_type, span=node.span, type_vars=type_vars
             )
-            body_type = self._check_expr(node.body, expected=result_type)
+            self._return_expected_stack.append(result_type)
+            self._return_collected_stack.append([])
+            try:
+                body_type = self._check_expr(node.body, expected=result_type)
+            finally:
+                self._return_collected_stack.pop()
+                self._return_expected_stack.pop()
             if not isinstance(body_type, BottomType):
                 self._assert_assignable(body_type, result_type, node.span)
         else:
-            body_type = self._check_expr(node.body, expected=None)
-            if isinstance(body_type, BottomType):
+            self._return_expected_stack.append(None)
+            collected: list[Type] = []
+            self._return_collected_stack.append(collected)
+            try:
+                body_type = self._check_expr(node.body, expected=None)
+            finally:
+                self._return_collected_stack.pop()
+                self._return_expected_stack.pop()
+            if isinstance(body_type, BottomType) and not collected:
                 raise AglTypeError(
                     "Cannot infer return type of lambda: body always raises.",
                     span=node.span,
                 )
-            result_type = body_type
+            try:
+                result_type = self._unify_branch_types(
+                    [*collected, body_type], node.span, "Lambda return"
+                )
+            except AglTypeError as exc:
+                raise AglTypeError(
+                    "Cannot infer return type of lambda: return values have incompatible "
+                    "types. Add a return type annotation.",
+                    span=node.span,
+                ) from exc
 
         return FunctionType(params=tuple(param_types), result=result_type)
 
@@ -1432,6 +1485,29 @@ class _Checker:
                 f"'raise' requires an exception value; got '{exc_type!r}'.",
                 span=node.exc.span,
             )
+        return BottomType()
+
+    # --- return ---
+
+    def _check_return(self, node: Return) -> BottomType:
+        if not self._return_expected_stack:
+            raise AglTypeError("'return' used outside a function.", span=node.span)
+        expected = self._return_expected_stack[-1]
+        if expected is None:
+            value_type = (
+                UnitType()
+                if node.value is None
+                else self._check_expr(node.value, expected=None)
+            )
+            self._return_collected_stack[-1].append(value_type)
+            return BottomType()
+
+        value_type = (
+            UnitType()
+            if node.value is None
+            else self._check_expr(node.value, expected=expected)
+        )
+        self._assert_assignable(value_type, expected, node.span)
         return BottomType()
 
     # --- template ---

@@ -87,6 +87,7 @@ from agm.agl.syntax import (
     ProgramDecl,
     Raise,
     RecordDef,
+    Return,
     StringLit,
     Template,
     TextSegment,
@@ -2031,6 +2032,30 @@ class TestRaiseExpr:
         e = first(parse("raise Error(msg = m)"))
         assert isinstance(e, Raise)
         assert isinstance(e.exc, Call)
+
+
+# ---------------------------------------------------------------------------
+# return_expr
+# ---------------------------------------------------------------------------
+
+
+class TestReturnExpr:
+    def test_return_with_value(self) -> None:
+        e = first(parse("return x + 1"))
+        assert isinstance(e, Return)
+        assert isinstance(e.value, BinaryOp)
+
+    def test_bare_return(self) -> None:
+        e = first(parse("return"))
+        assert isinstance(e, Return)
+        assert e.value is None
+
+    def test_return_in_expression_position(self) -> None:
+        e = first(parse("let x = if ok => (return 1) | else => 2"))
+        assert isinstance(e, LetDecl)
+        assert isinstance(e.value, If)
+        arm = e.value.branches[0].body
+        assert isinstance(arm, Return)
 
 
 # ---------------------------------------------------------------------------

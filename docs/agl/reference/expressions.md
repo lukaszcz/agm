@@ -537,6 +537,7 @@ effect, not their value:
 | `x := e` | `unit` | mutates `x` and returns `void` |
 | `if c => body` (no `else`) | `unit` | branch body must be `unit`; returns `void` |
 | loop expressions | `unit` | loops run for effect and return `void` |
+| `return` | bottom expression returning `()` | valid only in a `unit` function |
 | `()` | `unit` | the printable unit literal |
 
 An `if` without `else` always has type `unit`, and each branch body must also
@@ -569,21 +570,25 @@ def broken() -> int =
   let x = 1        # static error: 'let' must be followed by an expression
 ```
 
-## `raise` as an expression
+## Divergent expressions
 
-`raise expr` diverges — it never yields a value. Its type is the **bottom
-type** (assignable to any expected type), so `raise` may appear in any
-expression position, including as the initializer of a `let`/`var` or as the
-body of a branch suite:
+`raise expr` and `return expr` diverge — they never yield a value at their
+expression site. Their type is the **bottom type** (assignable to any expected
+type), so they may appear in expression positions such as a branch suite or the
+initializer of a `let`/`var`:
 
 ```agl
 let x: int = raise Abort(message = "Cannot continue.")
+let y: int = if done => (return 0) | else => 1
 
 case status of
   | Ok => ()
   | Error(reason) =>
       raise Abort(message = reason)
 ```
+
+`raise` is described in [Exceptions](exceptions.md); `return` is described in
+[Functions](functions.md).
 
 ## `break` and `continue` as expressions
 

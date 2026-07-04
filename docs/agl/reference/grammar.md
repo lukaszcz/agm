@@ -231,7 +231,8 @@ inline_body ::= item (";" item)*
 At most one `for` and one `while` clause, in that order. `done` and an
 omitted (suite-form) terminator are equivalent to `until false`. `break` and
 `continue` are nullary expressions of the bottom type, valid only lexically
-inside a loop body within the same function/lambda. See
+inside a loop body within the same function/lambda. `return` may also appear
+inside a loop; it exits the nearest enclosing function. See
 [Control flow](control-flow.md) for the full clause, scope, and bound
 semantics.
 
@@ -339,6 +340,7 @@ atom           ::= INT | DECIMAL | "true" | "false" | "null"
                | assign_expr
                | do_until
                | raise_expr
+               | return_expr
 
 atom_no_call   ::= (* same as atom but excludes "(" — prevents sugar conflict *)
                INT | DECIMAL | "true" | "false" | "null"
@@ -347,7 +349,8 @@ atom_no_call   ::= (* same as atom but excludes "(" — prevents sugar conflict 
 
 qualified_constructor ::= name ("." name)?
 
-raise_expr ::= "raise" expr
+raise_expr  ::= "raise" expr
+return_expr ::= "return" or_expr?
 ```
 
 A bare name atom is resolved by scope and position: it may name a variable,
@@ -432,5 +435,8 @@ default) and must have the engine-key's declared type; see
   not cascade shift/reduce conflicts into every operator rule.
 - `()` is both the unit literal and the empty argument list of a zero-arg
   call — the two are syntactically unified.
-- Branch bodies and `until` conditions reference `or_expr` directly; a
-  `case` or `if` expression in those positions must be parenthesized.
+- Branch bodies, loop inline bodies, and `until` conditions reference `or_expr`
+  directly; a `case`, `if`, `raise`, or `return` expression in those positions
+  must use a suite form or be parenthesized.
+- A `return` followed by a newline is a bare `return`; its operand does not
+  continue onto the next line.

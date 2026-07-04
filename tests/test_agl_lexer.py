@@ -37,7 +37,7 @@ def lark_tok(source: str) -> list[tuple[str, str]]:
 class TestKeywordsAndIdentifiers:
     def test_reserved_keywords_emitted_as_literal_tokens(self) -> None:
         # pass, print, and the former set keyword lex as VAR_NAME.
-        result = tok("let var set do until if else case of try catch raise as")
+        result = tok("let var set do until if else case of try catch raise return as")
         types = [t for t, _ in result]
         assert "let" in types
         assert "var" in types
@@ -51,6 +51,7 @@ class TestKeywordsAndIdentifiers:
         assert "try" in types
         assert "catch" in types
         assert "raise" in types
+        assert "return" in types
         assert "as" in types
 
     def test_agent_is_reserved_keyword(self) -> None:

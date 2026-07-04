@@ -278,10 +278,15 @@ param_marker: SLASH    -> marker_slash
 // named arguments such as ask(..., agent: worker).
 param_def: field_name COLON type_expr (EQ or_expr)?
 
-// func_body: indented suite OR inline expr (full expr, including if/case/do/try/lambda).
-// The suite_expr alternative starts with _INDENT; expr never starts with _INDENT,
-// so this is unambiguous (the production lexer emits _INDENT without a preceding _NEWLINE).
-func_body: suite_expr | expr
+// func_body: indented suite, an inline binder sequence, OR inline expr (full expr,
+// including if/case/do/try/lambda). The suite_expr alternative starts with _INDENT;
+// expr never starts with _INDENT, so this is unambiguous (the production lexer emits
+// _INDENT without a preceding _NEWLINE). The inline binder sequence admits compact
+// one-line block bodies such as `def f() = let x = 1; x` without making semicolons
+// after ordinary expression bodies ambiguous with top-level item separators.
+func_body: suite_expr | func_inline_seq | expr
+
+func_inline_seq: binder (SEMICOLON binder)* SEMICOLON expr
 
 // ---------------------------------------------------------------------------
 // Binders (transparent)

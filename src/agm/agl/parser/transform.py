@@ -730,10 +730,23 @@ class AstBuilder(Transformer):
         )
 
     def func_body(self, meta: Meta, args: _Args) -> syntax.Expr:
-        """func_body: suite_expr | expr — pass through the inner expr."""
-        # args[0] is a Block (from suite_expr) or any Expr (from expr).
+        """func_body: suite_expr | func_inline_seq | expr — pass through the inner expr."""
+        # args[0] is a Block (from suite_expr/func_inline_seq) or any Expr (from expr).
         expr = _find_non_token(args)
         return cast(syntax.Expr, expr)
+
+    def func_inline_seq(self, meta: Meta, args: _Args) -> syntax.Block:
+        """func_inline_seq: binder (SEMICOLON binder)* SEMICOLON expr."""
+        items = tuple(
+            cast(syntax.Item, a)
+            for a in args
+            if a is not None and not isinstance(a, Token)
+        )
+        return syntax.Block(
+            items=items,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+        )
 
     # ------------------------------------------------------------------
     # let_decl / var_decl / assign_stmt

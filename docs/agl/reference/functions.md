@@ -11,13 +11,14 @@ from other functions. The type of a function value is written
 ## `def` — named function declarations
 
 ```ebnf
-func_def   ::= "def" NAME type_params? "(" param_list? ")" ("->" type_expr)? "=" expr
-             | "builtin" "def" NAME type_params? "(" param_list? ")" "->" type_expr
-type_params  ::= "[" NAME ("," NAME)* "]"
-param_list   ::= param_entry ("," param_entry)* ","?
-param_entry  ::= param | param_marker
-param        ::= NAME ":" type_expr ("=" expr)?
-param_marker ::= "/" | "*" | "@" NAME    (* @pos, @std, @named *)
+func_def      ::= "def" NAME type_params? "(" param_list? ")" ("->" type_expr)? "=" func_body
+                | "builtin" "def" NAME type_params? "(" param_list? ")" "->" type_expr
+func_body     ::= expr | suite | inline_binder_block
+type_params   ::= "[" NAME ("," NAME)* "]"
+param_list    ::= param_entry ("," param_entry)* ","?
+param_entry   ::= param | param_marker
+param         ::= NAME ":" type_expr ("=" expr)?
+param_marker  ::= "/" | "*" | "@" NAME    (* @pos, @std, @named *)
 ```
 
 A `def` is a top-level declaration. The body is a single expression — which
@@ -36,7 +37,14 @@ def summarize(doc: text, limit: int = 3) -> text =
   tagged
 
 def double(n: int) = n * 2
+
+# Compact one-line block body.
+def incremented() -> int = let x = 0; x + 1
 ```
+
+A compact one-line block body must start with one or more `let`, `var`, or
+assignment items separated by semicolons, followed by the expression that
+provides the function's result.
 
 ### Return type
 

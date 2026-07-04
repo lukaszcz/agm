@@ -1155,6 +1155,14 @@ class TestFuncDef:
         assert isinstance(fd.body, Block)
         assert len(fd.body.items) == 2
 
+    def test_def_inline_block_body_with_let(self) -> None:
+        fd = first(parse("def g() -> int = let x = 0; 0"))
+        assert isinstance(fd, FuncDef)
+        assert isinstance(fd.body, Block)
+        assert len(fd.body.items) == 2
+        assert isinstance(fd.body.items[0], LetDecl)
+        assert isinstance(fd.body.items[1], IntLit)
+
     def test_def_if_body(self) -> None:
         src = "def classify(n: int) -> text = if n > 0 => pos | else => neg"
         fd = first(parse(src))

@@ -136,6 +136,7 @@ from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPES,
     BoolType,
+    BottomType,
     CastKind,
     DecimalType,
     DictType,
@@ -316,6 +317,7 @@ class _Lowerer:
         self._source_id = source_id
         self._source_text = normalize_newlines(source_text)
         self._params: list[IrParam] = []
+        self._return_expected_stack: list[Type] = []
 
     # ------------------------------------------------------------------
     # SymbolId allocation
@@ -643,7 +645,11 @@ class _Lowerer:
         assert sig is not None, (
             f"compiler bug: no function signature for {funcdef.name!r}"
         )
-        body_ir = self.lower_coerced(funcdef.body, sig.result)
+        self._return_expected_stack.append(sig.result)
+        try:
+            body_ir = self.lower_coerced(funcdef.body, sig.result)
+        finally:
+            self._return_expected_stack.pop()
 
         desc = FunctionDescriptor(
             function_id=fn_id,
@@ -733,7 +739,11 @@ class _Lowerer:
             ir_params.append(IrFunctionParam(symbol=psym, default=default_ir))
 
         # Lower the body coerced to the declared return type (bakes result coercion in).
-        body_ir = self.lower_coerced(body_expr, fn_type.result)
+        self._return_expected_stack.append(fn_type.result)
+        try:
+            body_ir = self.lower_coerced(body_expr, fn_type.result)
+        finally:
+            self._return_expected_stack.pop()
 
         desc = FunctionDescriptor(
             function_id=fn_id,
@@ -1028,11 +1038,15 @@ class _Lowerer:
                 )
 
             case Return(value=value_expr, span=span):
+                assert self._return_expected_stack, (
+                    "compiler bug: return lowered outside a function"
+                )
+                expected = self._return_expected_stack[-1]
                 return IrReturn(
                     location=self._loc(span),
                     value=IrConstUnit(location=self._loc(span))
                     if value_expr is None
-                    else self.lower_expr(value_expr),
+                    else self.lower_coerced(value_expr, expected),
                 )
 
             case Try(body=body_expr, handlers=handlers, span=span):
@@ -1992,6 +2006,31 @@ class _Lowerer:
     # Block helper
     # ------------------------------------------------------------------
 
+    def _item_is_bottom(self, item: Item) -> bool:
+        """Return whether a checked block item unconditionally exits."""
+        if isinstance(
+            item,
+            (
+                LetDecl,
+                VarDecl,
+                AssignStmt,
+                FuncDef,
+                RecordDef,
+                EnumDef,
+                ExceptionDef,
+                TypeAlias,
+                ProgramDecl,
+                ParamDecl,
+                AgentDecl,
+                ConfigDecl,
+                ImportDecl,
+                ExportDecl,
+                InfixDecl,
+            ),
+        ):
+            return False
+        return isinstance(self._node_type(item.node_id), BottomType)
+
     def _lower_block(
         self,
         items: tuple[Item, ...],
@@ -2002,11 +2041,17 @@ class _Lowerer:
         All items inside a block body are lowered as **nested** (``top_level=False``),
         so any ``let``/``var`` binders they declare are allocated with
         ``public=False`` and do not appear in ``_collect_results``.  Only the
-        top-level module-initializer driver passes ``top_level=True``.
+        top-level module-initializer driver passes ``top_level=True``.  Scope
+        rejects root-only declarations in nested blocks, so every reachable item
+        must lower to a runtime expression.
         """
-        ir_items = tuple(self.lower_item(it, top_level=False) for it in items)
-        # Filter out None (items with no runtime action); validate non-empty.
-        real: list[IrExpr] = [x for x in ir_items if x is not None]
+        real: list[IrExpr] = []
+        for item in items:
+            ir = self.lower_item(item, top_level=False)
+            assert ir is not None, "compiler bug: non-runtime item in nested block"
+            real.append(ir)
+            if self._item_is_bottom(item):
+                break
         assert real, "compiler bug: lowered block has no runtime items"
         return IrBlock(location=self._loc(span), items=tuple(real))
 
@@ -2314,7 +2359,8 @@ class _Lowerer:
         purely compile-time declarations (type definitions, function defs, etc.)
         that have no IR representation.
 
-        The IrBlock construction must then filter out the ``None`` values.
+        Module-initializer construction filters out the ``None`` values;
+        nested blocks reject root-only declarations before lowering.
 
         Parameters
         ----------

@@ -68,6 +68,13 @@ def test_return_coercion() -> None:
     assert ir["result"] == DecimalValue(decimal.Decimal("3"))
 
 
+def test_explicit_return_coercion() -> None:
+    """Explicit return operands are coerced to the declared result type."""
+    source = "def to_dec(x: int) -> decimal =\n  return x\nlet result = to_dec(3)\n()"
+    ir = evaluate_ir(source)
+    assert ir["result"] == DecimalValue(decimal.Decimal("3"))
+
+
 def test_arg_coercion() -> None:
     """int argument passed to decimal parameter — coercion at call site."""
     source = "def halve(x: decimal) -> decimal = x / 2.0\nlet result = halve(10)\n()"

@@ -428,22 +428,22 @@ class _Checker:
     # ------------------------------------------------------------------
 
     def _check_block(self, block: Block, *, expected: Type | None) -> Type:
-        """Type-check a block and return the type of its last item."""
+        """Type-check a block and return its reachable result type."""
         if not block.items:
             return UnitType()
 
-        last = block.items[-1]
-        if isinstance(last, (LetDecl, VarDecl)):
-            raise AglTypeError(
-                "a 'let'/'var' declaration must be followed by an expression in a block.",
-                span=last.span,
-            )
-
         result_type: Type = UnitType()
+        last = block.items[-1]
         for item in block.items:
+            if item is last and isinstance(item, (LetDecl, VarDecl)):
+                raise AglTypeError(
+                    "a 'let'/'var' declaration must be followed by an expression in a block.",
+                    span=item.span,
+                )
             item_type = self._check_item(item, expected=expected if item is last else None)
-            if item is last:
-                result_type = item_type
+            result_type = item_type
+            if isinstance(item_type, BottomType):
+                return BottomType()
         return result_type
 
     def _check_item(self, item: Item, *, expected: Type | None) -> Type:

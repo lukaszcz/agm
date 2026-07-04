@@ -1328,6 +1328,24 @@ class TestFuncDef:
         assert isinstance(return_node, Return)
         assert isinstance(r.node_types[return_node.node_id], BottomType)
 
+    def test_funcdef_return_widening_checked_against_annotation(self) -> None:
+        r = accept_type("def f() -> decimal =\n  return 1\nf")
+        f_ref = r.resolved.program.body.items[1]
+        assert isinstance(f_ref, VarRef)
+        assert r.node_types[f_ref.node_id] == FunctionType(params=(), result=DecimalType())
+
+    def test_funcdef_unreachable_tail_after_return_ignored_for_annotation(self) -> None:
+        r = accept_type('def f() -> int =\n  return 1\n  "unreachable"\nf')
+        f_ref = r.resolved.program.body.items[1]
+        assert isinstance(f_ref, VarRef)
+        assert r.node_types[f_ref.node_id] == FunctionType(params=(), result=IntType())
+
+    def test_funcdef_unreachable_tail_after_return_ignored_for_inference(self) -> None:
+        r = accept_type('def f() =\n  return 1\n  "unreachable"\nf')
+        f_ref = r.resolved.program.body.items[1]
+        assert isinstance(f_ref, VarRef)
+        assert r.node_types[f_ref.node_id] == FunctionType(params=(), result=IntType())
+
     def test_funcdef_return_mismatch_rejected(self) -> None:
         err = reject_type('def f() -> int =\n  return "bad"\n  0')
         assert "mismatch" in str(err).lower() or "expected" in str(err).lower()

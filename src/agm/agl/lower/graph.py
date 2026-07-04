@@ -7,6 +7,9 @@ symbol/function/nominal table and per-module initializer sequences.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from pathlib import Path
+
 from agm.agl.ir.ids import NominalId, SourceId
 from agm.agl.ir.nodes import IrExpr
 from agm.agl.ir.program import (
@@ -33,6 +36,7 @@ def lower_graph(
     checked_graph: CheckedModuleGraph,
     *,
     validate: bool = False,
+    companion_paths: "Mapping[ModuleId, Path | None] | None" = None,
     _link: _LinkState | None = None,
     _already_linked: frozenset[ModuleId] = frozenset(),
     _entry_source_text: str | None = None,
@@ -42,8 +46,13 @@ def lower_graph(
 
     :param checked_graph: the type-checked module graph to lower.
     :param validate: when ``True``, run ``validate_ir(deep=True)`` before returning.
+    :param companion_paths: each module's canonical Python companion path, when
+        known (``{}`` when the caller has not threaded loader metadata through —
+        every extern then lowers with ``companion_path=None``).  Embedded in
+        every lowered ``ExternFunctionDescriptor`` for its declaring module.
     :returns: the linked ``ExecutableProgram`` ready for evaluation.
     """
+    resolved_companion_paths: "Mapping[ModuleId, Path | None]" = companion_paths or {}
     link = _link if _link is not None else _LinkState()
 
     # Step 1: Register a SourceFile for every module.
@@ -148,6 +157,7 @@ def lower_graph(
             _entry_source_text
             if mid.is_entry and _entry_source_text is not None
             else cm.source_text,
+            companion_path=resolved_companion_paths.get(mid),
         )
         module_lowerers[mid] = lowerer
         body = cm.resolved.program.body
@@ -215,6 +225,7 @@ def lower_graph(
         nominals=dict(link.nominals),
         sources=dict(link.sources),
         functions=dict(link.functions),
+        externs=dict(link.externs),
         params=tuple(entry_lowerer._params),
         contracts=dict(link.contracts),
         dry_run_inventory=dry_run_inventory,

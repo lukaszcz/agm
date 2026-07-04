@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import assert_never, cast
 
 from agm.agl.ir.contracts import ContractRequest, ConversionFailureMode
@@ -118,6 +119,7 @@ from agm.agl.ir.program import (
     DryRunEntry,
     ExecutableModule,
     ExecutableProgram,
+    ExternFunctionDescriptor,
     FunctionDescriptor,
     IrParam,
     NominalDescriptor,
@@ -215,11 +217,12 @@ from agm.agl.syntax.nodes import (
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import (
     build_decode_schema,
+    build_extern_contract,
     build_format_instructions,
     build_param_decoder,
     derive_schema,
 )
-from agm.agl.typecheck.env import CheckedProgram
+from agm.agl.typecheck.env import CheckedProgram, FunctionSignature
 from agm.agl.typecheck.graph import CheckedModule
 from agm.util.text import normalize_newlines
 
@@ -278,6 +281,7 @@ class _LinkState:
     fn_node_to_id: dict[int, FunctionId] = field(default_factory=dict)
     symbols: dict[SymbolId, SymbolDescriptor] = field(default_factory=dict)
     functions: dict[FunctionId, FunctionDescriptor] = field(default_factory=dict)
+    externs: dict[FunctionId, ExternFunctionDescriptor] = field(default_factory=dict)
     nominals: dict[NominalId, NominalDescriptor] = field(default_factory=dict)
     sources: dict[SourceId, SourceFile] = field(default_factory=dict)
     contracts: dict[ContractId, ContractRequest] = field(default_factory=dict)
@@ -307,6 +311,8 @@ class _Lowerer:
         module_id: ModuleId,
         source_id: SourceId,
         source_text: str,
+        *,
+        companion_path: Path | None = None,
     ) -> None:
         self._checked = checked
         self._link = link
@@ -314,6 +320,10 @@ class _Lowerer:
         self._source_id = source_id
         self._source_text = normalize_newlines(source_text)
         self._params: list[IrParam] = []
+        # The canonical Python companion path for this module, when this
+        # lowering entry point was given one; embedded verbatim in every
+        # ExternFunctionDescriptor lowered from this module's `extern def`s.
+        self._companion_path = companion_path
 
     # ------------------------------------------------------------------
     # SymbolId allocation
@@ -593,21 +603,22 @@ class _Lowerer:
             funcdef.body, funcdef.params, funcdef.node_id, param_decl_ids
         )
 
-    def _lower_funcdef(self, funcdef: "FuncDef") -> IrExpr:
-        """Lower a FuncDef to IrBind(sym, IrMakeClosure(fn_id, captures)).
+    def _lower_declared_params(
+        self, funcdef: "FuncDef", fn_id: FunctionId
+    ) -> "tuple[tuple[IrFunctionParam, ...], FunctionSignature, set[int], tuple[str, ...], str]":
+        """Allocate parameter symbols and lower them for a top-level FuncDef.
 
-        All top-level FuncDefs are pre-allocated before any body is lowered (phase 1),
-        so the symbol + function-id are always present; nested ``def`` is rejected by
-        the scope checker.
+        Shared by ordinary and extern FuncDef lowering: allocates one SymbolId per
+        parameter (owned by *fn_id*), lowers each parameter's default expression
+        (coerced to the parameter's checked type), and fetches the checker's
+        FunctionSignature for *funcdef*.
+
+        Returns ``(ir_params, sig, param_decl_ids, param_labels, result_label)``,
+        where ``param_decl_ids`` is the set of parameter declaration node ids
+        (used by ordinary defs to bound capture scanning) and ``param_labels`` /
+        ``result_label`` are the descriptor's display-label fields derived from
+        *sig*.
         """
-        assert not funcdef.is_builtin, "builtin functions are host-lowered at call sites"
-        assert funcdef.body is not None, "builtin functions have no body"
-        assert funcdef.node_id in self._link.fn_node_to_id, (
-            f"compiler bug: FuncDef {funcdef.name!r} was not pre-allocated"
-        )
-        fn_id = self._link.fn_node_to_id[funcdef.node_id]
-        fn_sym = self._link.fn_node_to_sym[funcdef.node_id]
-
         param_decl_ids: set[int] = set()
         param_syms: list[SymbolId] = []
         for param in funcdef.params:
@@ -620,8 +631,6 @@ class _Lowerer:
                 owner=fn_id,
             )
             param_syms.append(psym)
-
-        captures = self._compute_captures(funcdef, param_decl_ids)
 
         ir_params: list[IrFunctionParam] = []
         for param, psym in zip(funcdef.params, param_syms):
@@ -638,21 +647,83 @@ class _Lowerer:
         assert sig is not None, (
             f"compiler bug: no function signature for {funcdef.name!r}"
         )
+        param_labels = tuple(repr(p.type) for p in sig.params)
+        result_label = repr(sig.result)
+
+        return tuple(ir_params), sig, param_decl_ids, param_labels, result_label
+
+    def _lower_funcdef(self, funcdef: "FuncDef") -> IrExpr:
+        """Lower a FuncDef to IrBind(sym, IrMakeClosure(fn_id, captures)).
+
+        All top-level FuncDefs are pre-allocated before any body is lowered (phase 1),
+        so the symbol + function-id are always present; nested ``def`` is rejected by
+        the scope checker.
+        """
+        assert not funcdef.is_builtin, "builtin functions are host-lowered at call sites"
+        assert not funcdef.is_extern, "extern defs are lowered by _lower_extern_funcdef"
+        assert funcdef.body is not None, "only builtin/extern functions have no body"
+        assert funcdef.node_id in self._link.fn_node_to_id, (
+            f"compiler bug: FuncDef {funcdef.name!r} was not pre-allocated"
+        )
+        fn_id = self._link.fn_node_to_id[funcdef.node_id]
+        fn_sym = self._link.fn_node_to_sym[funcdef.node_id]
+
+        ir_params, sig, param_decl_ids, param_labels, result_label = (
+            self._lower_declared_params(funcdef, fn_id)
+        )
+        captures = self._compute_captures(funcdef, param_decl_ids)
         body_ir = self.lower_coerced(funcdef.body, sig.result)
 
         desc = FunctionDescriptor(
             function_id=fn_id,
             function_symbol=fn_sym,
             module_id=self._module_id,
-            params=tuple(ir_params),
+            params=ir_params,
             body=body_ir,
-            param_labels=tuple(repr(p.type) for p in sig.params),
-            result_label=repr(sig.result),
+            param_labels=param_labels,
+            result_label=result_label,
         )
         self._link.functions[fn_id] = desc
 
         loc = self._loc(funcdef.span)
         closure_ir = IrMakeClosure(location=loc, function_id=fn_id, captures=captures)
+        return IrBind(location=loc, symbol=fn_sym, value=closure_ir)
+
+    def _lower_extern_funcdef(self, funcdef: "FuncDef") -> IrExpr:
+        """Lower an ``extern def`` to an ``ExternFunctionDescriptor`` + closure binding.
+
+        An extern has no body and no captures (there is nothing to capture: the
+        boundary crossing reads only its own arguments).  Its top-level binding
+        is initialized exactly like an ordinary function's — a closure value
+        referencing its ``function_id`` — so forward references, exports, and
+        first-class use are unchanged.
+        """
+        assert funcdef.is_extern, "compiler bug: _lower_extern_funcdef called on non-extern def"
+        assert funcdef.node_id in self._link.fn_node_to_id, (
+            f"compiler bug: FuncDef {funcdef.name!r} was not pre-allocated"
+        )
+        fn_id = self._link.fn_node_to_id[funcdef.node_id]
+        fn_sym = self._link.fn_node_to_sym[funcdef.node_id]
+
+        ir_params, sig, _param_decl_ids, param_labels, result_label = (
+            self._lower_declared_params(funcdef, fn_id)
+        )
+
+        desc = ExternFunctionDescriptor(
+            function_id=fn_id,
+            function_symbol=fn_sym,
+            module_id=self._module_id,
+            name=funcdef.name,
+            params=ir_params,
+            contract=build_extern_contract(sig),
+            param_labels=param_labels,
+            result_label=result_label,
+            companion_path=self._companion_path,
+        )
+        self._link.externs[fn_id] = desc
+
+        loc = self._loc(funcdef.span)
+        closure_ir = IrMakeClosure(location=loc, function_id=fn_id, captures=())
         return IrBind(location=loc, symbol=fn_sym, value=closure_ir)
 
     def _lower_lambda(
@@ -2340,6 +2411,8 @@ class _Lowerer:
             case FuncDef() as funcdef:
                 if funcdef.is_builtin:
                     return None
+                if funcdef.is_extern:
+                    return self._lower_extern_funcdef(funcdef)
                 return self._lower_funcdef(funcdef)
 
             case ParamDecl() as param_decl:
@@ -2696,6 +2769,7 @@ class _Lowerer:
             nominals=dict(self._link.nominals),
             sources=dict(self._link.sources),
             functions=dict(self._link.functions),
+            externs=dict(self._link.externs),
             params=tuple(self._params),
             contracts=dict(self._link.contracts),
             dry_run_inventory=dry_run_inventory,
@@ -2713,6 +2787,7 @@ def lower_program(
     source_text: str,
     source_label: str,
     validate: bool = False,
+    companion_path: Path | None = None,
 ) -> ExecutableProgram:
     """Lower a single-module ``CheckedProgram`` to an ``ExecutableProgram``.
 
@@ -2720,6 +2795,10 @@ def lower_program(
     :param source_text: the normalised source text (used in the sources table).
     :param source_label: human-readable label for the source (display_name).
     :param validate: when ``True``, run ``validate_ir`` before returning.
+    :param companion_path: the canonical Python companion path for the module,
+        when known.  Only meaningful when *checked* was resolved with an
+        origin path (the only way a single-module program can declare an
+        ``extern def``); embedded in every lowered ``ExternFunctionDescriptor``.
     :returns: the linked ``ExecutableProgram`` ready for evaluation.
     :raises NotImplementedError: for unsupported AST nodes.
     :raises AssertionError: for missing checker side-table entries (compiler bugs).
@@ -2729,7 +2808,9 @@ def lower_program(
     link.next_source += 1
     normalized = normalize_newlines(source_text)
     link.sources[source_id] = SourceFile(display_name=source_label, normalized_text=normalized)
-    lowerer = _Lowerer(checked, link, ENTRY_ID, source_id, source_text)
+    lowerer = _Lowerer(
+        checked, link, ENTRY_ID, source_id, source_text, companion_path=companion_path
+    )
     program = lowerer.lower()
     if validate:
         validate_ir(program)

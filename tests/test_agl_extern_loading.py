@@ -9,11 +9,10 @@ Covers everything upstream of the boundary walkers (``test_agl_extern_boundary.p
   extern declarations before evaluation, with fail-fast diagnostics and
   static errors always surfacing before any companion import side effect.
 
-Lowering an extern declaration is not implemented until a later stage of this
-effort (there is no IR extern table yet), so a fully-resolving extern program
-still fails once ``run_prepared_graph`` reaches ``lower_graph``; the relevant
-test below only proves that registry wiring completes — and its companion
-imports run — before that unrelated, expected failure.
+Interpreter dispatch of an extern call is a later stage of this effort, so
+tests below that exercise the full pipeline stop at ``check_only`` (static
+passes, lowering, and dry-run inventory only) rather than evaluating a
+program that calls an extern.
 """
 
 from __future__ import annotations
@@ -458,15 +457,16 @@ class TestRegistryPopulatedViaPipeline:
         )
         assert fn(1) == 2
 
-    def test_run_prepared_graph_wires_the_registry_before_attempting_to_lower(
+    def test_run_prepared_graph_wires_the_registry_before_lowering_and_lowers_cleanly(
         self, tmp_path: Path
     ) -> None:
         """``run_prepared_graph`` itself performs the wiring, not just the helper.
 
-        Lowering an extern declaration is added in a later stage of this
-        effort; a fully-resolving extern program therefore still fails once
-        ``run_prepared_graph`` reaches ``lower_graph``.  This only proves the
-        registry is already fully populated by that point.
+        Interpreter dispatch of an extern call is a later stage of this effort,
+        so this only drives the pipeline through ``check_only`` (static passes,
+        lowering, and dry-run inventory — no evaluation) to prove the registry
+        is fully populated and lowering succeeds, without depending on
+        evaluating the extern call itself.
         """
         write_module_file(tmp_path / "root", "lib.mod", "extern def f(x: int) -> int")
         write_companion_file(tmp_path / "root", "lib.mod", "def f(x):\n    return x + 1\n")
@@ -477,8 +477,9 @@ class TestRegistryPopulatedViaPipeline:
             roots=_roots(tmp_path / "root"),
             default_stdlib=False,
         )
-        with pytest.raises(AssertionError):
-            driver.run_prepared_graph(prepared)
+        result = driver.run_prepared_graph(prepared, check_only=True)
+        assert result.ok is True
+        assert [cs.callee for cs in result.call_sites] == ["f"]
         fn = driver.host_environment().extern_registry.resolve(
             ModuleId.from_dotted("lib.mod"), "f"
         )

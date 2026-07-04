@@ -1070,7 +1070,9 @@ class PipelineDriver:
         from agm.agl.lower import lower_graph
         from agm.agl.semantics.exceptions import AglRaise
 
-        executable = lower_graph(checked_graph, validate=True)
+        executable = lower_graph(
+            checked_graph, validate=True, companion_paths=prepared.companion_paths
+        )
         interp = IrInterpreter(
             executable,
             loop_limit=self._default_loop_limit,
@@ -1189,7 +1191,9 @@ class PipelineDriver:
 
         from agm.agl.lower import lower_graph
 
-        executable = lower_graph(checked_graph, validate=True)
+        executable = lower_graph(
+            checked_graph, validate=True, companion_paths=prepared.companion_paths
+        )
 
         return self._execute_ir(
             executable,

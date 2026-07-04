@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass, field
+from pathlib import Path
 
-from agm.agl.ir.contracts import ContractRequest, ParamDecoder
+from agm.agl.ir.contracts import ContractRequest, ExternContract, ParamDecoder
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import IrExpr, IrFunctionParam
 from agm.agl.modules.ids import ModuleId
@@ -30,6 +31,7 @@ __all__ = [
     "DryRunEntry",
     "ExecutableModule",
     "ExecutableProgram",
+    "ExternFunctionDescriptor",
     "FunctionDescriptor",
     "IrParam",
     "NominalDescriptor",
@@ -144,6 +146,39 @@ class FunctionDescriptor:
     result_label: str = "?"
 
 
+@dataclass(frozen=True, slots=True)
+class ExternFunctionDescriptor:
+    """Descriptor for an ``extern def`` — a Python FFI boundary function.
+
+    Unlike :class:`FunctionDescriptor`, an extern has no ``body``: invoking it
+    crosses into the companion Python module instead of evaluating an
+    ``IrExpr``.  ``function_id`` and ``function_symbol`` share the same id
+    spaces as ordinary functions — a given ``FunctionId``/``SymbolId`` lives
+    in exactly one of the two function tables.
+
+    ``name``           — the extern's declared name (identical in AgL and
+                          Python; ``runtime.externs.ExternRegistry`` resolves
+                          it positionally on the companion module).
+    ``contract``       — the compiled boundary contract (argument encode
+                          recipes + strict return decode), built from the
+                          checked signature at lowering.
+    ``companion_path``  — canonical path of the Python file backing this
+                          extern's declaring module; ``None`` when the
+                          lowering entry point was not given one (the
+                          companion is then resolved by the caller instead).
+    """
+
+    function_id: FunctionId
+    function_symbol: SymbolId
+    module_id: ModuleId
+    name: str
+    params: "tuple[IrFunctionParam, ...]"
+    contract: ExternContract
+    param_labels: tuple[str, ...] = ()
+    result_label: str = "?"
+    companion_path: Path | None = None
+
+
 # ---------------------------------------------------------------------------
 # Module descriptor
 # ---------------------------------------------------------------------------
@@ -242,6 +277,10 @@ class ExecutableProgram:
       ``symbols``      — map from ``SymbolId`` to ``SymbolDescriptor``.
       ``nominals``     — map from ``NominalId`` to ``NominalDescriptor``.
       ``sources``      — map from ``SourceId`` to ``SourceFile``.
+      ``functions``    — ordinary user-defined functions, keyed by ``FunctionId``.
+      ``externs``      — ``extern def`` boundary functions, keyed by
+                         ``FunctionId``.  Shares one id space with ``functions``:
+                         a given id lives in exactly one of the two tables.
 
     """
 
@@ -251,6 +290,7 @@ class ExecutableProgram:
     nominals: dict[NominalId, NominalDescriptor]
     sources: dict[SourceId, SourceFile]
     functions: dict[FunctionId, FunctionDescriptor] = field(default_factory=dict)
+    externs: dict[FunctionId, ExternFunctionDescriptor] = field(default_factory=dict)
     params: tuple[IrParam, ...] = ()
     contracts: dict["ContractId", "ContractRequest"] = field(default_factory=dict)
     dry_run_inventory: "tuple[DryRunEntry, ...]" = ()

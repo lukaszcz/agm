@@ -1,0 +1,29 @@
+# Bare-hole partial applications over declared functions.
+param mode: text
+param base: int
+
+def add(a: int, b: int) -> int = a + b
+
+def digits(a: int, b: int, c: int) -> int = a * 100 + b * 10 + c
+
+let inc = add(?, 1)
+let add_to_base = add(base, ?)
+let first_position = digits(?, base, 9)
+let middle_position = digits(base, ?, 9)
+let last_position = digits(1, base, ?)
+let two_holes = digits(?, base, ?)
+let all_holes = digits(?, ?, ?)
+let immediate = add(?, base)(2)
+
+if
+  | mode == "single" =>
+      print(inc(base))
+      print(add_to_base(6))
+      print(immediate)
+  | mode == "positions" =>
+      print(first_position(2))
+      print(middle_position(3))
+      print(last_position(7))
+  | else =>
+      print(two_holes(3, 4))
+      print(all_holes(1, 2, 3))

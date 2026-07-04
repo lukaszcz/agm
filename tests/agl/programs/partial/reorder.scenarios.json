@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "swap_and_identity",
+      "params": {"mode": "swap", "pivot": 5},
+      "expect": {"stdout": "257\n752\n"}
+    },
+    {
+      "name": "full_reverse",
+      "params": {"mode": "reverse", "pivot": 0},
+      "expect": {"stdout": "4321\n"}
+    },
+    {
+      "name": "captured_middle",
+      "params": {"mode": "capture", "pivot": 4},
+      "expect": {"stdout": "1489\n"}
+    }
+  ]
+}

@@ -31,6 +31,7 @@ Layout:
 | `generics/` | Generic types/functions: inference, explicit `::[…]` overrides, erasure, HOFs, imported generics |
 | `inline/` | Single-expression programs |
 | `modules/` | Multi-file module programs (via `module_roots`): imports combined with generics, casts, records/enums, pattern matching, and cross-module mutual recursion |
+| `partial/` | Partial application placeholders for calls, constructors, generics, eager capture, and higher-order use |
 | `rendering/` | Console/value rendering: nesting, escaping, exception rendering |
 | `templates/` | Template interpolation |
 | `types/` | Records, enums, `json`, `list`, `dict` |

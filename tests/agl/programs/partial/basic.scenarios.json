@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "single_and_immediate",
+      "params": {"mode": "single", "base": 4},
+      "expect": {"stdout": "5\n10\n6\n"}
+    },
+    {
+      "name": "hole_positions",
+      "params": {"mode": "positions", "base": 5},
+      "expect": {"stdout": "259\n539\n157\n"}
+    },
+    {
+      "name": "several_and_all_holes",
+      "params": {"mode": "multi", "base": 8},
+      "expect": {"stdout": "384\n123\n"}
+    }
+  ]
+}

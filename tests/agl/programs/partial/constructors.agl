@@ -1,0 +1,50 @@
+# Partial application of record, enum-variant, exception, and generic constructors.
+param mode: text
+param base: int
+
+record Point
+  @std
+  x: int
+  y: int
+
+record Box[T]
+  value: T
+
+enum Option[T]
+  | none
+  | some(value: T)
+
+enum Status
+  | ok(value: int)
+  | failed(reason: text)
+
+exception Boom extends Exception
+  code: int
+
+if
+  | mode == "record" =>
+      let make_point = Point(?, base)
+      let point = make_point(3)
+      let make_box: (text) -> Box[text] = Box(value = ?)
+      let boxed = make_box("hi")
+      print(point.x)
+      print(point.y)
+      print(boxed.value)
+  | mode == "enum" =>
+      let make_some: (int) -> Option[int] = Option.some(?)
+      let value = make_some(base)
+      case value of
+        | Option.none => print("none")
+        | Option.some(n) => print(n)
+      let make_failed = Status.failed(reason = ?)
+      let status = make_failed("bad")
+      case status of
+        | ok(n) => print(n)
+        | failed(reason) => print(reason)
+  | else =>
+      let make_boom = Boom(message = ?, code = base)
+      try
+        raise make_boom("kapow")
+      catch Boom as e =>
+        print(e.message)
+        print(e.code)

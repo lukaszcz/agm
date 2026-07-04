@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "named_standard_and_named_only",
+      "params": {"mode": "named", "base": 5},
+      "expect": {"stdout": "549\n358\n"}
+    },
+    {
+      "name": "default_per_invocation",
+      "params": {"mode": "defaults", "base": 4},
+      "expect": {"stdout": "241\n242\n2\n"}
+    },
+    {
+      "name": "all_named_only",
+      "params": {"mode": "other", "base": 3},
+      "expect": {"stdout": "61\n37\n1\n"}
+    }
+  ]
+}

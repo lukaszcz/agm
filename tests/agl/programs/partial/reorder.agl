@@ -1,0 +1,21 @@
+# Numbered holes route call arguments by the placeholder index.
+param mode: text
+param pivot: int
+
+def digits3(a: int, b: int, c: int) -> int = a * 100 + b * 10 + c
+
+def digits4(a: int, b: int, c: int, d: int) -> int = a * 1000 + b * 100 + c * 10 + d
+
+let swapped = digits3(?2, pivot, ?1)
+let identity = digits3(?1, pivot, ?2)
+let reverse4 = digits4(?4, ?3, ?2, ?1)
+let mixed_with_capture = digits4(?3, pivot, ?1, ?2)
+
+if
+  | mode == "swap" =>
+      print(swapped(7, 2))
+      print(identity(7, 2))
+  | mode == "reverse" =>
+      print(reverse4(1, 2, 3, 4))
+  | else =>
+      print(mixed_with_capture(8, 9, 1))

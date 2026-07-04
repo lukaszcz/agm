@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "map_id_style",
+      "params": {"mode": "map", "n": 9},
+      "expect": {"stdout": "9\nv=3\n"}
+    },
+    {
+      "name": "expected_type_supplies_holes",
+      "params": {"mode": "expected", "n": 4},
+      "expect": {"stdout": "4\n5\n"}
+    },
+    {
+      "name": "typed_call_composes",
+      "params": {"mode": "typed", "n": 10},
+      "expect": {"stdout": "kept\n12\n"}
+    }
+  ]
+}

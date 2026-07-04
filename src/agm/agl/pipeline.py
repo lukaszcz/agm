@@ -766,6 +766,7 @@ class PipelineDriver:
             host_contracts=host_contracts,
             config_cli=config_cli,
             config_base=config_base,
+            extern_registry=host_env.extern_registry,
         )
 
         try:
@@ -1049,7 +1050,8 @@ class PipelineDriver:
                 checked_graph=checked_graph,
             )
 
-        capabilities = self.host_environment().capabilities
+        host_env = self.host_environment()
+        capabilities = host_env.capabilities
         if checked_graph is None:
             checked_graph, tc_diagnostics = _run_typecheck_graph(
                 prepared.resolved_graph, capabilities
@@ -1081,6 +1083,7 @@ class PipelineDriver:
             max_call_depth=self._default_call_depth_limit,
             config_cli=config_cli,
             config_base=config_base,
+            extern_registry=host_env.extern_registry,
         )
         try:
             values = interp.collect_entry_config_values(names)

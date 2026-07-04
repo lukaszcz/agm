@@ -23,11 +23,11 @@ from __future__ import annotations
 import copy
 import importlib.util
 import sys
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from decimal import Decimal
 from pathlib import Path
 from types import ModuleType
-from typing import assert_never, cast
+from typing import Protocol, assert_never, cast
 
 from agm.agl.diagnostics import AglError
 from agm.agl.ir.contracts import (
@@ -433,6 +433,21 @@ def _is_json_shaped(obj: object) -> bool:
 # ---------------------------------------------------------------------------
 
 
+class ExternCallable(Protocol):
+    """A resolved companion callable: positional arguments in, one value out.
+
+    A structural protocol rather than ``Callable[..., object]``: the latter's
+    ellipsis argument spec is an implicit ``Any`` under strict typing, so a
+    resolved callable threaded through :meth:`ExternRegistry.invoke` would
+    trip Any-detection at every call site that merely holds or passes it
+    (not just where it is invoked).  A plain ``*args`` signature is exactly
+    the shape ``invoke`` needs — positional encoded arguments, one result —
+    without that pitfall.
+    """
+
+    def __call__(self, *args: object) -> object: ...
+
+
 class ExternRegistry:
     """Imports extern companions, resolves their callables, and invokes them.
 
@@ -440,15 +455,17 @@ class ExternRegistry:
     module: :meth:`load_companion` imports a module's companion exactly once
     (cached per canonical path, so re-importing the same file — even for a
     different module id sharing it — is a no-op); :meth:`resolve` then looks
-    up one already-loaded companion's callable by name.  :meth:`invoke` is
-    the single chokepoint that turns every runtime failure crossing the
-    boundary into a catchable ``ExternError``, mirroring
-    ``AgentRegistry.dispatch``.
+    up one already-loaded companion's callable by name, caching each
+    successful lookup by ``(module_id, name)`` so repeated invocations of the
+    same extern skip the attribute lookup.  :meth:`invoke` is the single
+    chokepoint that turns every runtime failure crossing the boundary into a
+    catchable ``ExternError``, mirroring ``AgentRegistry.dispatch``.
     """
 
     def __init__(self) -> None:
         self._by_path: dict[Path, ModuleType] = {}
         self._by_module: dict[ModuleId, ModuleType] = {}
+        self._resolved: dict[tuple[ModuleId, str], ExternCallable] = {}
 
     def load_companion(self, module_id: ModuleId, companion_path: Path) -> ModuleType:
         """Import *companion_path* for *module_id*, executing it at most once.
@@ -491,13 +508,24 @@ class ExternRegistry:
         self._by_module[module_id] = module
         return module
 
-    def resolve(self, module_id: ModuleId, name: str) -> Callable[..., object]:
+    def resolve(self, module_id: ModuleId, name: str) -> ExternCallable:
         """Return *module_id*'s companion callable named *name*.
 
         :meth:`load_companion` must have been called for *module_id* first.
+        Resolution happens once per ``(module_id, name)`` pair — the effects
+        layer calls this on every extern invocation, so a successful lookup
+        is cached and returned on subsequent calls without re-consulting the
+        companion module.  Failures are load-time (surfaced once, before any
+        invocation reaches ``resolve`` again) and are never cached.
+
         :raises ExternResolutionError: when the companion has no attribute
             named *name*, or that attribute is not callable.
         """
+        cache_key = (module_id, name)
+        cached = self._resolved.get(cache_key)
+        if cached is not None:
+            return cached
+
         module = self._by_module.get(module_id)
         assert module is not None, (
             f"module {module_id.dotted()!r} has no loaded companion; "
@@ -508,13 +536,14 @@ class ExternRegistry:
         value: object = cast(object, getattr(module, name))
         if not callable(value):
             raise ExternResolutionError(module_id, name)
+        self._resolved[cache_key] = value
         return value
 
     def invoke(
         self,
         function_name: str,
         contract: ExternContract,
-        fn: Callable[..., object],
+        fn: ExternCallable,
         args: Sequence[Value],
         trace_id: str,
     ) -> Value:

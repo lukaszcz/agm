@@ -20,6 +20,7 @@ from agm.agl.modules.loader import ModuleGraph, load_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import parse_program
 from agm.agl.runtime.agents import AgentFn, AgentRegistry
+from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.scope import resolve
 from agm.agl.scope.graph import resolve_graph
@@ -45,6 +46,11 @@ def m2_caps() -> HostCapabilities:
             ),
         }
     )
+
+
+def extern_caps() -> HostCapabilities:
+    base = m2_caps()
+    return HostCapabilities(supports_extern=True, codec_kinds=base.codec_kinds)
 
 
 def _build_ir_param_values(
@@ -115,6 +121,81 @@ def write_companion_file(root: Path, dotted: str, source: str = "") -> Path:
     py_path.parent.mkdir(parents=True, exist_ok=True)
     py_path.write_text(source)
     return py_path
+
+
+def _prepare_extern_program(
+    source: str,
+    companion_source: str,
+    tmp_path: Path,
+    *,
+    caps: HostCapabilities | None = None,
+) -> tuple[ExecutableProgram, ExternRegistry]:
+    """Resolve + check + lower a single-module extern-declaring *source*.
+
+    Writes *source* and *companion_source* as real sibling files on disk (an
+    extern def needs a resolvable origin path, and the registry needs a real
+    file to import), then builds an ``ExternRegistry`` populated the same way
+    the pipeline wires one before evaluation — one ``load_companion`` per
+    declaring module, mirroring ``pipeline._wire_extern_registry``.
+    """
+    entry_path = tmp_path / "entry.agl"
+    entry_path.write_text(source)
+    companion_path = tmp_path / "entry.py"
+    companion_path.write_text(companion_source)
+
+    resolved = resolve(parse_program(source), origin_path=entry_path)
+    checked = check(resolved, caps or extern_caps())
+    executable = lower_program(
+        checked,
+        source_text=source,
+        source_label="<extern-ir-test>",
+        validate=True,
+        companion_path=companion_path,
+    )
+    registry = ExternRegistry()
+    loaded: set[ModuleId] = set()
+    for desc in executable.externs.values():
+        if desc.module_id not in loaded:
+            registry.load_companion(desc.module_id, companion_path)
+            loaded.add(desc.module_id)
+    return executable, registry
+
+
+def evaluate_ir_with_externs(
+    source: str,
+    companion_source: str,
+    tmp_path: Path,
+    *,
+    param_values: dict[str, Value] | None = None,
+    caps: HostCapabilities | None = None,
+) -> tuple[dict[str, Value], str]:
+    """Run a single-module program declaring ``extern def`` end to end.
+
+    Returns ``(bindings, captured_stdout)``, mirroring ``_run_ir``.
+    """
+    executable, registry = _prepare_extern_program(source, companion_source, tmp_path, caps=caps)
+    params = _build_ir_param_values(executable, param_values) if param_values else None
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        result = IrInterpreter(
+            executable, param_values=params, extern_registry=registry
+        ).run()
+    return result, output.getvalue()
+
+
+def evaluate_ir_raises_with_externs(
+    source: str,
+    companion_source: str,
+    tmp_path: Path,
+    *,
+    caps: HostCapabilities | None = None,
+) -> ExceptionValue:
+    executable, registry = _prepare_extern_program(source, companion_source, tmp_path, caps=caps)
+    try:
+        IrInterpreter(executable, extern_registry=registry).run()
+    except AglRaise as exc:
+        return exc.exc
+    raise AssertionError("IR extern program did not raise AglRaise")
 
 
 def make_graph_from_files(tmp_path: Path, modules: dict[str, str]) -> ModuleGraph:

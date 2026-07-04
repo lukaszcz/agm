@@ -9,16 +9,17 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import NoReturn, Protocol, cast
 
 from agm.agl.ir.ids import ContractId, Location, NominalId
 from agm.agl.ir.nodes import IrAsk, IrAskRequest, IrExec, IrExpr
-from agm.agl.ir.program import ExecutableProgram
+from agm.agl.ir.program import ExecutableProgram, ExternFunctionDescriptor
 from agm.agl.modules.ids import PRELUDE_ID
 from agm.agl.runtime.agents import AgentRegistry
 from agm.agl.runtime.codec import ParseResult
 from agm.agl.runtime.contract import OutputContract
+from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.runtime.option import none_value, some_value
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.request import AgentRequest, AgentResponse
@@ -51,6 +52,7 @@ class EffectCtx(Protocol):
     _strict_json: bool
     _shell_exec_timeout: float | None
     _host_contracts: Mapping[ContractId, OutputContract]
+    _extern_registry: ExternRegistry
 
     def _eval(self, expr: IrExpr) -> Value: ...
 
@@ -74,6 +76,26 @@ class EffectHandlers:
 
     def __init__(self, ctx: EffectCtx) -> None:
         self._ctx = ctx
+
+    # ------------------------------------------------------------------
+    # Extern (Python FFI) call helper
+    # ------------------------------------------------------------------
+
+    def eval_extern_call(
+        self, desc: ExternFunctionDescriptor, args: Sequence[Value]
+    ) -> Value:
+        """Handle a call to an ``extern def``: resolve, mint a trace id, invoke.
+
+        The companion callable was already imported at program load
+        (``pipeline._wire_extern_registry``); this only looks it up by name.
+        ``ExternRegistry.invoke`` is the single chokepoint that turns every
+        runtime failure crossing the boundary — a raising callable, an
+        argument-conversion failure, or a return-contract violation — into
+        ``AglRaise(ExternError)``, mirroring the ``exec`` model.
+        """
+        fn = self._ctx._extern_registry.resolve(desc.module_id, desc.name)
+        trace_id = self._ctx._trace.new_event_id()
+        return self._ctx._extern_registry.invoke(desc.name, desc.contract, fn, args, trace_id)
 
     # ------------------------------------------------------------------
     # Agent call helpers

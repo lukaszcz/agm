@@ -310,15 +310,37 @@ class GraphSession:
         """Lower and execute one graph-mode entry in the persistent IR image."""
         from agm.agl.eval.ir_interpreter import IrInterpreter
         from agm.agl.lower import lower_repl_graph
-        from agm.agl.pipeline import exception_value_to_run_error
+        from agm.agl.pipeline import _wire_extern_registry, exception_value_to_run_error
         from agm.agl.runtime.params import _materialize_ir_contracts
         from agm.agl.runtime.request import AgentCancelled
         from agm.agl.runtime.trace import TraceStore
         from agm.agl.semantics.exceptions import AglRaise
         from agm.agl.syntax.nodes import ImportDecl
 
+        # Companion paths for every module the checked graph can reach: prior
+        # entries' cached library modules plus this entry's newly linked ones.
+        # ``_wire_extern_registry`` imports/resolves only what is not already
+        # cached on ``host_env.extern_registry`` (mutated in place), so a
+        # companion imports exactly once per session even across entries.
+        companion_paths: dict[ModuleId, Path | None] = {
+            mid: lm.companion_path for mid, lm in self._ctx._loaded_lib_modules.items()
+        }
+        companion_paths.update({mid: lm.companion_path for mid, lm in new_modules.items()})
+        extern_diagnostics = _wire_extern_registry(
+            checked_graph=cgraph,
+            capabilities=host_env.capabilities,
+            registry=host_env.extern_registry,
+            companion_paths=companion_paths,
+        )
+        if extern_diagnostics:
+            return self._ctx._fail(extern_diagnostics, warnings)
+
         lowered = lower_repl_graph(
-            cgraph, image=self._ctx._link_image, source_text=text, validate=True
+            cgraph,
+            image=self._ctx._link_image,
+            source_text=text,
+            validate=True,
+            companion_paths=companion_paths,
         )
         ir_params = {
             param.symbol: param_values[param.public_name]
@@ -341,6 +363,7 @@ class GraphSession:
             base_frame=self._ctx._ir_base_frame,
             config_cli={},
             config_base=config_base,
+            extern_registry=host_env.extern_registry,
         )
         try:
             interp.run()

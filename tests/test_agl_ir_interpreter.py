@@ -50,6 +50,7 @@ from agm.agl.ir import (
     IrExpr,
     IrField,
     IrFunctionParam,
+    IrIndex,
     IrIndexStep,
     IrIndirectCall,
     IrLoad,
@@ -1466,6 +1467,62 @@ class TestM4aFunctionEvaluation:
             IrInterpreter(prog).run()
 
         assert exc_info.value.span == raise_loc
+
+    def test_uncaught_internal_error_reports_innermost_call_site(self) -> None:
+        """A spanless internal error surfaces at its innermost enclosing call site.
+
+        ``f`` calls ``g``; ``g``'s body triggers an out-of-range ``IndexError``,
+        which ``_index_failure`` raises with no span of its own.  The
+        ``IrDirectCall`` dispatch arm for the ``g(...)`` call inside ``f``
+        backfills that span first, so it wins over the outer top-level
+        ``f()`` call site — an uncaught internal error reports where it was
+        invoked from, not where the top-level call happened.
+        """
+        from agm.agl.semantics.exceptions import AglRaise
+
+        g_sid = SymbolId(710)
+        g_id = FunctionId(1)
+        g_body = IrIndex(
+            _loc_at_line(20),
+            IndexKind.LIST,
+            IrMakeList(_LOC, (IrConstInt(_LOC, 1),)),
+            IrConstInt(_LOC, 5),
+        )
+        g_desc = FunctionDescriptor(
+            function_id=g_id,
+            function_symbol=g_sid,
+            module_id=ENTRY_ID,
+            params=(),
+            body=g_body,
+        )
+
+        g_call_loc = _loc_at_line(5)  # the g(...) call site inside f
+        f_desc = _make_fn_descriptor(IrDirectCall(g_call_loc, g_id, ()))
+
+        top_call_loc = _loc_at_line(1)
+        result_sym = SymbolId(711)
+        prog = _make_program(
+            initializers=(
+                IrBind(_LOC, g_sid, IrMakeClosure(_LOC, g_id, ())),
+                IrBind(_LOC, _FN_SID, IrMakeClosure(_LOC, _FN_ID, ())),
+                IrBind(top_call_loc, result_sym, IrDirectCall(top_call_loc, _FN_ID, ())),
+            ),
+            symbols={
+                g_sid: SymbolDescriptor(
+                    symbol_id=g_sid, mutable=False, public_name="g", owner=ENTRY_ID
+                ),
+                _FN_SID: _fn_sym_desc(),
+                result_sym: SymbolDescriptor(
+                    symbol_id=result_sym, mutable=False, public_name="result", owner=ENTRY_ID
+                ),
+            },
+            functions={_FN_ID: f_desc, g_id: g_desc},
+        )
+
+        with pytest.raises(AglRaise) as exc_info:
+            IrInterpreter(prog).run()
+
+        assert exc_info.value.span == g_call_loc
 
     def test_direct_call_with_param(self) -> None:
         """IrDirectCall with an argument evaluates correctly."""

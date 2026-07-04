@@ -68,6 +68,7 @@ from agm.agl.ir.nodes import (
     IrExec,
     IrExpr,
     IrField,
+    IrFunctionParam,
     IrIf,
     IrIndex,
     IrIndirectCall,
@@ -114,12 +115,13 @@ from agm.agl.ir.operations import (
     ToJson,
     UnaryOp,
 )
-from agm.agl.ir.program import ExecutableProgram, FunctionDescriptor
+from agm.agl.ir.program import ExecutableProgram, ExternFunctionDescriptor, FunctionDescriptor
 from agm.agl.ir.validate import InvalidIrError
 from agm.agl.modules.ids import ModuleId
 from agm.agl.runtime.agents import AgentRegistry
 from agm.agl.runtime.codec import ParseResult, _parse_contract_output
 from agm.agl.runtime.convert import StrictJsonParseError, parse_json_strict
+from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.serialize import value_to_json_obj
 from agm.agl.runtime.trace import TraceStore, noop_trace
@@ -290,6 +292,7 @@ class IrInterpreter:
         base_frame: Frame | None = None,
         config_cli: Mapping[str, Value] | None = None,
         config_base: Mapping[str, Value] | None = None,
+        extern_registry: ExternRegistry | None = None,
     ) -> None:
         self._program = program
         self._frames: list[Frame] = [base_frame if base_frame is not None else {}]
@@ -316,6 +319,9 @@ class IrInterpreter:
         self._shell_exec_timeout: float | None = shell_exec_timeout
         self._host_contracts: Mapping[ContractId, OutputContract] = (
             host_contracts if host_contracts is not None else {}
+        )
+        self._extern_registry: ExternRegistry = (
+            extern_registry if extern_registry is not None else ExternRegistry()
         )
         self._effects = EffectHandlers(self)
 
@@ -485,7 +491,11 @@ class IrInterpreter:
                     symbol=sym,
                     value=IrMakeClosure(function_id=fn_id, captures=()) as closure_node,
                 ):
-                    desc = self._program.functions.get(fn_id)
+                    desc: "FunctionDescriptor | ExternFunctionDescriptor | None" = (
+                        self._program.functions.get(fn_id)
+                    )
+                    if desc is None:
+                        desc = self._program.externs.get(fn_id)
                     if desc is None or desc.function_symbol != sym:
                         continue
                     value = self._eval(closure_node)
@@ -504,17 +514,49 @@ class IrInterpreter:
                 )
             )
 
+    def _eval_extern_default(self, param: "IrFunctionParam") -> Value:
+        """Evaluate an omitted extern argument's default expression.
+
+        Extern closures never capture anything, so the default is evaluated
+        in a fresh empty frame — reads fall through to module (base-frame)
+        scope, mirroring how an ordinary closure's captures frame chains to
+        module scope for its own defaults.
+        """
+        assert param.default is not None, (
+            "extern arg omitted but param has no default (lowerer bug)"
+        )
+        self._frames.append({})
+        try:
+            return self._eval(param.default)
+        finally:
+            self._frames.pop()
+
     def _execute_direct_call(
         self,
         fn_id: FunctionId,
         arguments: "tuple[IrExpr | UseDefault, ...]",
         location: Location,
     ) -> Value:
-        """Execute a direct call to a named user function.
+        """Execute a direct call to a named user function or an extern.
 
-        Depth check → evaluate arguments (UseDefault uses a captures frame) →
-        ``_bind_and_invoke``.
+        An extern ``function_id`` skips the AgL body entirely and crosses
+        into the companion Python module via the effects layer, mirroring
+        the host-op dispatch pattern (no call-depth accounting — there is no
+        AgL frame to recurse into).  Otherwise: depth check → evaluate
+        arguments (``UseDefault`` uses a captures frame) → ``_bind_and_invoke``.
         """
+        extern_desc = self._program.externs.get(fn_id)
+        if extern_desc is not None:
+            extern_bound_values: list[Value] = []
+            for param, arg in zip(extern_desc.params, arguments, strict=True):
+                val = (
+                    self._eval_extern_default(param)
+                    if isinstance(arg, UseDefault)
+                    else self._eval(arg)
+                )
+                extern_bound_values.append(val)
+            return self._effects.eval_extern_call(extern_desc, extern_bound_values)
+
         self._check_call_depth()
         desc = self._program.functions[fn_id]
         closure_val = self._get_closure_for(fn_id)
@@ -585,6 +627,23 @@ class IrInterpreter:
                 f"IrIndirectCall: callee evaluated to {type(callee_val).__name__},"
                 " expected IrClosureValue"
             )
+
+        extern_desc = self._program.externs.get(callee_val.function_id)
+        if extern_desc is not None:
+            extern_bound_values: list[Value] = []
+            for i, param in enumerate(extern_desc.params):
+                if i < len(arguments):
+                    val = self._eval(arguments[i])
+                elif param.default is not None:
+                    val = self._eval_extern_default(param)
+                else:
+                    raise InvalidIrError(
+                        f"IrIndirectCall: missing argument for parameter {i!r}"
+                        " and no default available (lowerer bug)"
+                    )
+                extern_bound_values.append(val)
+            return self._effects.eval_extern_call(extern_desc, extern_bound_values)
+
         desc = self._program.functions[callee_val.function_id]
 
         self._check_call_depth()
@@ -704,7 +763,11 @@ class IrInterpreter:
     def _eval_initializer(self, node: IrExpr) -> Value:
         match node:
             case IrBind(symbol=sym, value=IrMakeClosure(function_id=fn_id)):
-                desc = self._program.functions.get(fn_id)
+                desc: "FunctionDescriptor | ExternFunctionDescriptor | None" = (
+                    self._program.functions.get(fn_id)
+                )
+                if desc is None:
+                    desc = self._program.externs.get(fn_id)
                 if desc is not None and desc.function_symbol == sym:
                     slot = self._frames[0].get(sym)
                     if slot is not None:
@@ -1189,7 +1252,11 @@ class IrInterpreter:
                     else:
                         val = slot.value if isinstance(slot, Cell) else slot
                         cap_slots.append((cap.symbol, val))
-                function_desc = self._program.functions[fn_id]
+                function_desc: "FunctionDescriptor | ExternFunctionDescriptor | None" = (
+                    self._program.functions.get(fn_id)
+                )
+                if function_desc is None:
+                    function_desc = self._program.externs[fn_id]
                 return IrClosureValue(
                     function_id=fn_id,
                     captures=tuple(cap_slots),
@@ -1199,10 +1266,20 @@ class IrInterpreter:
                 )
 
             case IrDirectCall(function_id=fn_id, arguments=arguments):
-                return self._execute_direct_call(fn_id, arguments, node.location)
+                try:
+                    return self._execute_direct_call(fn_id, arguments, node.location)
+                except AglRaise as exc:
+                    if exc.span is None:
+                        exc.span = node.location
+                    raise
 
             case IrIndirectCall(callee=callee_expr, arguments=arguments):
-                return self._execute_indirect_call(callee_expr, arguments, node.location)
+                try:
+                    return self._execute_indirect_call(callee_expr, arguments, node.location)
+                except AglRaise as exc:
+                    if exc.span is None:
+                        exc.span = node.location
+                    raise
 
             case IrPrint(value=val_expr):
                 val = self._eval(val_expr)

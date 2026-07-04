@@ -245,6 +245,30 @@ class TestExternRegistryLoadAndResolve:
         with pytest.raises(AssertionError):
             registry.resolve(ModuleId.from_dotted("lib.mod"), "f")
 
+    def test_resolve_caches_the_callable_across_repeated_calls(self, tmp_path: Path) -> None:
+        """A second ``resolve`` for the same name returns the first lookup's object.
+
+        Swapping the companion module's attribute after the first ``resolve``
+        must not change what a later ``resolve`` returns: the cache — not a
+        fresh ``getattr`` — is consulted, which also means an extern's
+        per-call cost never repeats companion attribute lookup.
+        """
+        py_path = tmp_path / "mod.py"
+        py_path.write_text("def f(x):\n    return x + 1\n")
+        mid = ModuleId.from_dotted("lib.mod")
+        registry = ExternRegistry()
+        module = registry.load_companion(mid, py_path)
+
+        def _replacement(x: int) -> int:
+            return x + 999
+
+        first = registry.resolve(mid, "f")
+        setattr(module, "f", _replacement)
+        second = registry.resolve(mid, "f")
+
+        assert second is first
+        assert second(1) == 2
+
 
 # ---------------------------------------------------------------------------
 # Pipeline wiring: capability gate, fail-fast diagnostics, ordering

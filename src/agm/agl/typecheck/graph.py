@@ -85,6 +85,7 @@ from agm.agl.typecheck.env import (
     CallSiteRecord,
     ConstructorSignature,
     FunctionSignature,
+    GenericAliasDef,
     GenericTypeDef,
     OutputContractSpec,
     ParamSpec,
@@ -181,11 +182,35 @@ def _collect_shells_only(builder: _TypeBuilder, program: object) -> None:
     builder.collect_shells_only(program)
 
 
+def _sync_graph_env_extensions(
+    mid: ModuleId,
+    env: TypeEnvironment,
+    graph_generic_table: dict[tuple[ModuleId, str], GenericTypeDef],
+    graph_ctor_sig_table: dict[tuple[ModuleId, str, str | None], ConstructorSignature],
+    graph_ctor_field_kinds_table: dict[
+        tuple[ModuleId, str, str | None], tuple[tuple[str, ParamKind], ...]
+    ],
+) -> None:
+    """Copy generic type and constructor metadata built for one module into graph tables."""
+    for generic_name, gdef in env.all_generic_types().items():
+        graph_generic_table[(mid, generic_name)] = gdef
+    for (owner_name, variant), sig in env.all_constructor_sigs():
+        graph_ctor_sig_table[(mid, owner_name, variant)] = sig
+    for (owner_name, variant), kinds in env.all_constructor_field_kinds():
+        graph_ctor_field_kinds_table[(mid, owner_name, variant)] = kinds
+
+
 def _resolve_body_for_one(
     mid: ModuleId,
     name: str,
     per_module_builders: dict[ModuleId, _TypeBuilder],
     graph_type_table: dict[tuple[ModuleId, str], Type],
+    graph_generic_table: dict[tuple[ModuleId, str], GenericTypeDef],
+    graph_alias_table: dict[tuple[ModuleId, str], GenericAliasDef],
+    graph_ctor_sig_table: dict[tuple[ModuleId, str, str | None], ConstructorSignature],
+    graph_ctor_field_kinds_table: dict[
+        tuple[ModuleId, str, str | None], tuple[tuple[str, ParamKind], ...]
+    ],
     resolved_graph: ResolvedModuleGraph,
     cross_envs: dict[ModuleId, TypeEnvironment],
 ) -> None:
@@ -210,29 +235,47 @@ def _resolve_body_for_one(
             # Generic record: body registered in _generic_types (no _types entry);
             # graph_type_table retains the shell from Step A.  Cross-module generic
             # constructor calls use _graph_generic_table / _graph_ctor_sig_table instead.
-            return
+            break
         if isinstance(item, EnumDef) and item.name == name:
             builder.ensure_built_enum(item.name)
             t = cross_env.get_type(item.name)
             if t is not None:
                 graph_type_table[(mid, item.name)] = t
-            return
+            break
         if isinstance(item, ExceptionDef) and item.name == name:
             builder.ensure_built_exception(name)
-            typ = cross_envs[mid].get_type(name)
+            typ = cross_env.get_type(name)
             assert typ is not None, f"Exception type {name!r} not registered"
             graph_type_table[(mid, name)] = typ
-            return
+            break
         if isinstance(item, TypeAlias) and item.name == name:
             if item.type_params:
                 builder.validate_alias(item)
-                return
-            resolved = cross_env.resolve_type_expr(item.type_expr, span=item.span)
-            graph_type_table[(mid, item.name)] = resolved
-            return
-    # Unreachable: called only for keys produced by _collect_all_type_keys,
-    # which iterates the same program.body.items.
-    raise AssertionError(f"type '{name}' not found in module '{mid}'")  # pragma: no cover
+                template = cross_env.resolve_type_expr(
+                    item.type_expr,
+                    span=item.span,
+                    type_vars=frozenset(item.type_params),
+                )
+                graph_alias_table[(mid, item.name)] = GenericAliasDef(
+                    type_params=item.type_params,
+                    template=template,
+                )
+            else:
+                resolved = cross_env.resolve_type_expr(item.type_expr, span=item.span)
+                graph_type_table[(mid, item.name)] = resolved
+            break
+    else:
+        # Unreachable: called only for keys produced by _collect_all_type_keys,
+        # which iterates the same program.body.items.
+        raise AssertionError(f"type '{name}' not found in module '{mid}'")  # pragma: no cover
+
+    _sync_graph_env_extensions(
+        mid,
+        cross_env,
+        graph_generic_table,
+        graph_ctor_sig_table,
+        graph_ctor_field_kinds_table,
+    )
 
 
 def _collect_all_type_keys(
@@ -462,6 +505,7 @@ def _build_graph_type_table(
 ) -> tuple[
     dict[tuple[ModuleId, str], Type],
     dict[tuple[ModuleId, str], GenericTypeDef],
+    dict[tuple[ModuleId, str], GenericAliasDef],
     dict[tuple[ModuleId, str, str | None], ConstructorSignature],
     dict[tuple[ModuleId, str, str | None], tuple[tuple[str, ParamKind], ...]],
 ]:
@@ -525,6 +569,18 @@ def _build_graph_type_table(
         for name, t in env.non_builtin_type_items():
             graph_type_table[(mid, name)] = t
 
+    # Cross-module generic type definitions, parameterized aliases, constructor
+    # signatures, and constructor field kinds are filled as each type body is
+    # resolved.  The dicts are passed by reference into per-module environments
+    # so later type definitions can resolve applied types from dependencies
+    # already built by the topological order.
+    graph_generic_table: dict[tuple[ModuleId, str], GenericTypeDef] = {}
+    graph_alias_table: dict[tuple[ModuleId, str], GenericAliasDef] = {}
+    graph_ctor_sig_table: dict[tuple[ModuleId, str, str | None], ConstructorSignature] = {}
+    graph_ctor_field_kinds_table: dict[
+        tuple[ModuleId, str, str | None], tuple[tuple[str, ParamKind], ...]
+    ] = {}
+
     # Build per-module cross-module-aware environments and builders for
     # body resolution.  Each env knows the full graph_type_table and its own
     # module's ImportEnv so qualified and open-imported type refs resolve.
@@ -535,6 +591,10 @@ def _build_graph_type_table(
         import_env = rmod.import_env
         cross_env = TypeEnvironment(
             graph_type_table=graph_type_table,
+            graph_generic_table=graph_generic_table,
+            graph_alias_table=graph_alias_table,
+            graph_ctor_sig_table=graph_ctor_sig_table,
+            graph_ctor_field_kinds_table=graph_ctor_field_kinds_table,
             import_env=import_env,
             module_id=mid,
         )
@@ -585,29 +645,21 @@ def _build_graph_type_table(
             name=name,
             per_module_builders=cross_builders,
             graph_type_table=graph_type_table,
+            graph_generic_table=graph_generic_table,
+            graph_alias_table=graph_alias_table,
+            graph_ctor_sig_table=graph_ctor_sig_table,
+            graph_ctor_field_kinds_table=graph_ctor_field_kinds_table,
             resolved_graph=resolved_graph,
             cross_envs=cross_envs,
         )
 
-    # Collect cross-module generic type definitions, constructor signatures, and
-    # constructor field kinds from the per-module envs (which now have fully resolved
-    # bodies).  These are indexed by (ModuleId, name) so that the per-module checker
-    # can look them up when it encounters a module-qualified generic constructor call
-    # (e.g. lib::Box[int](v:1)).
-    graph_generic_table: dict[tuple[ModuleId, str], GenericTypeDef] = {}
-    graph_ctor_sig_table: dict[tuple[ModuleId, str, str | None], ConstructorSignature] = {}
-    graph_ctor_field_kinds_table: dict[
-        tuple[ModuleId, str, str | None], tuple[tuple[str, ParamKind], ...]
-    ] = {}
-    for mid, cross_env in cross_envs.items():
-        for name, gdef in cross_env.all_generic_types().items():
-            graph_generic_table[(mid, name)] = gdef
-        for (owner_name, variant), sig in cross_env.all_constructor_sigs():
-            graph_ctor_sig_table[(mid, owner_name, variant)] = sig
-        for (owner_name, variant), kinds in cross_env.all_constructor_field_kinds():
-            graph_ctor_field_kinds_table[(mid, owner_name, variant)] = kinds
-
-    return graph_type_table, graph_generic_table, graph_ctor_sig_table, graph_ctor_field_kinds_table
+    return (
+        graph_type_table,
+        graph_generic_table,
+        graph_alias_table,
+        graph_ctor_sig_table,
+        graph_ctor_field_kinds_table,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -619,6 +671,7 @@ def _build_graph_func_sig_table(
     resolved_graph: ResolvedModuleGraph,
     graph_type_table: dict[tuple[ModuleId, str], Type],
     graph_generic_table: dict[tuple[ModuleId, str], GenericTypeDef],
+    graph_alias_table: dict[tuple[ModuleId, str], GenericAliasDef],
 ) -> dict[int, tuple[str, FunctionSignature, FunctionType]]:
     """Phase 2: compute function signatures for ALL top-level FuncDefs across all modules.
 
@@ -662,6 +715,7 @@ def _build_graph_func_sig_table(
         env = TypeEnvironment(
             graph_type_table=graph_type_table,
             graph_generic_table=graph_generic_table,
+            graph_alias_table=graph_alias_table,
             import_env=import_env,
             module_id=mid,
         )
@@ -725,6 +779,7 @@ def _check_module(
     import_env_map: Mapping[ModuleId, object],
     graph_func_sig_table: dict[int, tuple[str, FunctionSignature, FunctionType]],
     graph_generic_table: dict[tuple[ModuleId, str], GenericTypeDef],
+    graph_alias_table: dict[tuple[ModuleId, str], GenericAliasDef],
     graph_ctor_sig_table: dict[tuple[ModuleId, str, str | None], ConstructorSignature],
     graph_ctor_field_kinds_table: dict[
         tuple[ModuleId, str, str | None], tuple[tuple[str, ParamKind], ...]
@@ -753,6 +808,7 @@ def _check_module(
     env = TypeEnvironment(
         graph_type_table=graph_type_table,
         graph_generic_table=graph_generic_table,
+        graph_alias_table=graph_alias_table,
         graph_ctor_sig_table=graph_ctor_sig_table,
         graph_ctor_field_kinds_table=graph_ctor_field_kinds_table,
         import_env=import_env,
@@ -857,11 +913,12 @@ def check_graph(
     """
     # Phase 1: build the graph-wide type table with all module types stamped
     # with their owning module_id.  Also collects cross-module generic type defs,
-    # constructor signatures, and constructor field kinds from the per-module envs
-    # built during body resolution.
+    # parameterized aliases, constructor signatures, and constructor field kinds
+    # from the per-module envs built during body resolution.
     (
         graph_type_table,
         graph_generic_table,
+        graph_alias_table,
         graph_ctor_sig_table,
         graph_ctor_field_kinds_table,
     ) = _build_graph_type_table(resolved_graph)
@@ -872,7 +929,7 @@ def check_graph(
     # resolve), WITHOUT checking any function body.  Keyed by FuncDef.node_id
     #.
     graph_func_sig_table = _build_graph_func_sig_table(
-        resolved_graph, graph_type_table, graph_generic_table
+        resolved_graph, graph_type_table, graph_generic_table, graph_alias_table
     )
 
     # Collect import envs for per-module checking.
@@ -905,6 +962,7 @@ def check_graph(
             import_env_map,
             graph_func_sig_table,
             graph_generic_table,
+            graph_alias_table,
             graph_ctor_sig_table,
             graph_ctor_field_kinds_table,
             entry_seed_env=entry_seed_env if mid.is_entry else None,

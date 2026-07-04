@@ -2291,6 +2291,42 @@ def test_qualified_generic_type_in_annotation(tmp_path: Path) -> None:
     )
 
 
+def test_qualified_imported_generic_type_in_type_definition(tmp_path: Path) -> None:
+    lib_id = ModuleId.from_dotted("lib")
+    modules = {
+        "lib": "record Box[T]\n  value: T",
+        "wrapper": "import lib qualified\nenum Wrapped = item(value: lib::Box[int])",
+        "entry": "import wrapper qualified\n()",
+    }
+
+    cg = _check_graph(tmp_path, modules)
+
+    wrapped = cg.graph_type_table[(ModuleId.from_dotted("wrapper"), "Wrapped")]
+    assert wrapped == EnumType(
+        "Wrapped",
+        {"item": {"value": RecordType("Box", {}, module_id=lib_id, type_args=(IntType(),))}},
+        module_id=ModuleId.from_dotted("wrapper"),
+    )
+
+
+def test_open_imported_generic_type_in_type_definition(tmp_path: Path) -> None:
+    lib_id = ModuleId.from_dotted("lib")
+    modules = {
+        "lib": "record Box[T]\n  value: T",
+        "wrapper": "import lib\nrecord Wrapped\n  value: Box[int]",
+        "entry": "import wrapper qualified\n()",
+    }
+
+    cg = _check_graph(tmp_path, modules)
+
+    wrapped = cg.graph_type_table[(ModuleId.from_dotted("wrapper"), "Wrapped")]
+    assert wrapped == RecordType(
+        "Wrapped",
+        {"value": RecordType("Box", {}, module_id=lib_id, type_args=(IntType(),))},
+        module_id=ModuleId.from_dotted("wrapper"),
+    )
+
+
 def test_ambiguous_open_imported_generic_type_rejected(tmp_path: Path) -> None:
     modules = {
         "a": "record Box[T]\n  value: T",
@@ -2468,7 +2504,7 @@ def test_cross_module_generic_record_template_has_module_id(tmp_path: Path) -> N
     }
     mg = _make_graph_from_files(tmp_path, modules)
     rg = resolve_graph(mg)
-    _gtt, graph_generic_table, _gcts, _gckft = _build_graph_type_table(rg)
+    _gtt, graph_generic_table, _gat, _gcts, _gckft = _build_graph_type_table(rg)
 
     lib_id = ModuleId.from_dotted("lib")
     gdef = graph_generic_table.get((lib_id, "Box"))
@@ -2498,7 +2534,7 @@ def test_cross_module_generic_enum_template_has_module_id(tmp_path: Path) -> Non
     }
     mg = _make_graph_from_files(tmp_path, modules)
     rg = resolve_graph(mg)
-    _gtt, graph_generic_table, _gcts, _gckft = _build_graph_type_table(rg)
+    _gtt, graph_generic_table, _gat, _gcts, _gckft = _build_graph_type_table(rg)
 
     lib_id = ModuleId.from_dotted("lib")
     gdef = graph_generic_table.get((lib_id, "Opt"))
@@ -2547,6 +2583,55 @@ def test_parameterized_alias_in_graph_mode(tmp_path: Path) -> None:
     wrapper = cg.graph_type_table[(lib_id, "Wrapper")]
     assert isinstance(wrapper, RecordType)
     assert wrapper.module_id == lib_id
+
+
+def test_imported_parameterized_alias_in_type_definition(tmp_path: Path) -> None:
+    wrapper_id = ModuleId.from_dotted("wrapper")
+    modules = {
+        "lib": "type Id[A] = A",
+        "wrapper": "import lib qualified\nrecord Wrapped\n  value: lib::Id[int]",
+        "entry": "import wrapper qualified\n()",
+    }
+
+    cg = _check_graph(tmp_path, modules)
+
+    assert cg.graph_type_table[(wrapper_id, "Wrapped")] == RecordType(
+        "Wrapped", {"value": IntType()}, module_id=wrapper_id
+    )
+
+
+def test_imported_parameterized_alias_in_function_signature(tmp_path: Path) -> None:
+    modules = {
+        "lib": "type Id[A] = A",
+        "entry": "import lib qualified\ndef f(x: lib::Id[int]) -> lib::Id[int] = x\nf(1)",
+    }
+
+    _check_graph(tmp_path, modules)
+
+
+def test_open_imported_parameterized_alias_in_type_definition(tmp_path: Path) -> None:
+    wrapper_id = ModuleId.from_dotted("wrapper")
+    modules = {
+        "lib": "type Id[A] = A",
+        "wrapper": "import lib\nrecord Wrapped\n  value: Id[int]",
+        "entry": "import wrapper qualified\n()",
+    }
+
+    cg = _check_graph(tmp_path, modules)
+
+    assert cg.graph_type_table[(wrapper_id, "Wrapped")] == RecordType(
+        "Wrapped", {"value": IntType()}, module_id=wrapper_id
+    )
+
+
+def test_imported_parameterized_alias_arity_mismatch_rejected(tmp_path: Path) -> None:
+    modules = {
+        "lib": "type Id[A] = A",
+        "entry": "import lib qualified\nlet x: lib::Id[int, text] = 1\nx",
+    }
+
+    with pytest.raises(AglTypeError, match="requires 1 type argument"):
+        _check_graph(tmp_path, modules)
 
 
 # ---------------------------------------------------------------------------

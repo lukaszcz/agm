@@ -118,6 +118,13 @@ class TestStdlib:
         assert some_result.ok, some_result.diagnostics
         assert none_result.ok, none_result.diagnostics
 
+    def test_core_stdlib_qualified_generic_type_resolves_in_type_definition(self) -> None:
+        s = ReplSession(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
+
+        result = s.eval_entry("enum E = A(x: std.core::Option[int])")
+
+        assert result.ok, result.diagnostics
+
     def test_prelude_record_name_echoes_as_constructor(self) -> None:
         s = ReplSession()
 

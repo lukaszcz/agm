@@ -142,7 +142,7 @@ def resolve_stdlib_root(*, home: Path) -> Path:
     """
     candidates = agm_path_candidates(home=home, relative_path=Path("stdlib"))
     repo_stdlib = Path(__file__).resolve().parents[3] / "stdlib"
-    for candidate in reversed(candidates[:2]):
+    for candidate in reversed(candidates):
         if candidate.is_dir() and not (
             repo_stdlib.is_dir() and _has_legacy_constructor_syntax(candidate)
         ):

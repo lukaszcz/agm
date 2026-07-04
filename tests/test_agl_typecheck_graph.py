@@ -1066,7 +1066,7 @@ def test_module_qualified_variant_unknown_enum_in_pattern(tmp_path: Path) -> Non
 
 
 def test_module_qualified_enum_as_constructor_error(tmp_path: Path) -> None:
-    """'mylib::Color' used as constructor (without .Variant) → type error."""
+    """'mylib::Color' used as constructor (without ::Variant) → type error."""
     modules = {
         "entry": (
             "import mylib qualified\n"

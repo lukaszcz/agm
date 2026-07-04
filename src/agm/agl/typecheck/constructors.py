@@ -504,7 +504,7 @@ class ConstructorChecker:
         span: SourceSpan,
         expected: Type | None,
     ) -> Type:
-        """Type a qualified constructor (``Owner.variant``) used in value position."""
+        """Type a qualified constructor (``Owner::variant``) used in value position."""
         gdef = self._ctx._env.get_generic_type(owner_name)
         if gdef is not None:
             # owner_decl_node_id is unused on the as-value path (only owner_name,

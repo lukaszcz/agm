@@ -433,6 +433,10 @@ class TypeEnvironment:
     def get_type(self, name: str) -> Type | None:
         return self._types.get(name)
 
+    def has_qualified_import_handle(self, handle: tuple[str, ...]) -> bool:
+        """Return whether *handle* is a qualified import handle in this module."""
+        return self._import_env is not None and handle in self._import_env.qualified
+
     def register_type(self, name: str, typ: Type) -> None:
         self._types[name] = typ
 

@@ -1735,14 +1735,12 @@ class _Checker:
                 f"got '{expr_type!r}'.",
                 span=node.span,
             )
-        if node.qualifier is not None and node.module_qualifier is not None:
-            self._check_module_qualified_variant(
-                node.module_qualifier, node.qualifier, expr_type, node.span
-            )
-        elif node.module_qualifier is not None:
-            self._check_qualified_variant_prefix(
-                node.module_qualifier, expr_type.name, expr_type, node.span
-            )
+        self._check_variant_qualification(
+            qualifier=node.qualifier,
+            module_qualifier=node.module_qualifier,
+            enum_type=expr_type,
+            span=node.span,
+        )
         if node.variant not in expr_type.variants:
             raise AglTypeError(
                 f"Variant '{node.variant}' does not belong to enum '{expr_type.name}'.",
@@ -1756,6 +1754,22 @@ class _Checker:
             "write 'Type[T]::Ctor(...)' instead of applying '::[T]' to the constructor.",
             span=span,
         )
+
+    def _check_variant_qualification(
+        self,
+        *,
+        qualifier: str | None,
+        module_qualifier: Qualifier | None,
+        enum_type: EnumType,
+        span: SourceSpan,
+    ) -> None:
+        """Validate the optional enum-type qualifier on a variant reference."""
+        if qualifier is not None and module_qualifier is not None:
+            self._check_module_qualified_variant(module_qualifier, qualifier, enum_type, span)
+        elif module_qualifier is not None:
+            self._check_qualified_variant_prefix(
+                module_qualifier, enum_type.name, enum_type, span
+            )
 
     def _check_variant_qualifier(
         self, qualifier: str, enum_type: EnumType, span: SourceSpan
@@ -1801,10 +1815,7 @@ class _Checker:
                 self._env.get_generic_type(qualifier) is not None
                 or self._env.resolve_named_type(qualifier) is not None
             )
-            handle_match = (
-                self._env._import_env is not None
-                and self._env._import_env.qualified.get(module_qualifier.segments) is not None
-            )
+            handle_match = self._env.has_qualified_import_handle(module_qualifier.segments)
             if type_known and handle_match:
                 raise AglTypeError(
                     f"Qualifier '{qualifier}' is both a type name and an import handle; "
@@ -2030,14 +2041,12 @@ class _Checker:
                     f"non-enum type '{subj_type!r}'.",
                     span=pattern.span,
                 )
-            if pattern.qualifier is not None and pattern.module_qualifier is not None:
-                self._check_module_qualified_variant(
-                    pattern.module_qualifier, pattern.qualifier, subj_type, pattern.span
-                )
-            elif pattern.module_qualifier is not None:
-                self._check_qualified_variant_prefix(
-                    pattern.module_qualifier, subj_type.name, subj_type, pattern.span
-                )
+            self._check_variant_qualification(
+                qualifier=pattern.qualifier,
+                module_qualifier=pattern.module_qualifier,
+                enum_type=subj_type,
+                span=pattern.span,
+            )
             variant_name = pattern.name
             if variant_name not in subj_type.variants:
                 raise AglTypeError(

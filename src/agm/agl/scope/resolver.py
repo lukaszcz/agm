@@ -266,7 +266,7 @@ class _Resolver:
         earlier entries resolve correctly in subsequent entries.
 
         *ambient_type_names* carries type names from prior entries so that
-        qualified constructor access (``Owner.variant``) resolves for types
+        qualified constructor access (``Owner::variant``) resolves for types
         declared in earlier REPL entries.
         """
         # Seed ambient constructor candidates (from prior REPL entries) before
@@ -1729,7 +1729,7 @@ def resolve(
         entries resolve correctly.  Default ``None`` → no ambient candidates.
     ambient_type_names:
         Type names from prior REPL entries, used for qualified constructor
-        access (``Owner.variant``).  Default empty.
+        access (``Owner::variant``).  Default empty.
 
     Returns
     -------

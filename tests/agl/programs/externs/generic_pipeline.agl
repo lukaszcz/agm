@@ -1,0 +1,22 @@
+# A generic extern (sealed handles at the type-variable position) combined
+# with a `for` loop and a `case` over an ordinary AgL enum built from its
+# result: the companion deduplicates via handle equality without ever
+# inspecting the wrapped values.
+enum Verdict
+  | High
+  | Low
+
+extern def dedup[T](xs: list[T]) -> list[T]
+
+param extra: int
+
+let xs = [1, 2, 2, 3, 1, 4]
+let uniq = dedup(xs)
+var total = extra
+for x in uniq do
+  total := total + x
+done
+let verdict: Verdict = if total >= 10 => High else => Low
+case verdict of
+  | High() => print "high"
+  | Low() => print "low"

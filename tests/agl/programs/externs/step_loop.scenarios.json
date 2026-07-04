@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "runs_three_steps_from_zero",
+      "params": {"start": 0},
+      "expect": {"stdout": "6\n"}
+    },
+    {
+      "name": "runs_one_step_from_two",
+      "params": {"start": 2},
+      "expect": {"stdout": "3\n"}
+    },
+    {
+      "name": "stops_immediately_past_threshold",
+      "params": {"start": 5},
+      "expect": {"stdout": "0\n"}
+    }
+  ]
+}

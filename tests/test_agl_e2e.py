@@ -49,6 +49,7 @@ AGL_DIR = Path(__file__).parent / "agl"
 PROGRAMS_DIR = AGL_DIR / "programs"
 REJECTIONS_DIR = AGL_DIR / "rejections"
 REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
+EXTERNS_PROGRAMS_DIR = PROGRAMS_DIR / "externs"
 
 
 def _load_json(path: Path) -> Any:
@@ -88,7 +89,9 @@ def _agent_from_spec(name: str, spec: Any) -> ScriptedAgent:
     )
 
 
-def _run_program(source: str, scenario: dict[str, Any]) -> tuple[Any, dict[str, ScriptedAgent]]:
+def _run_program(
+    source: str, scenario: dict[str, Any], program: Path
+) -> tuple[Any, dict[str, ScriptedAgent]]:
     from agm.agl import PipelineDriver
 
     agents = {
@@ -119,6 +122,20 @@ def _run_program(source: str, scenario: dict[str, Any]) -> tuple[Any, dict[str, 
             )
         )
         prepared = PipelineDriver.prepare_program(source, entry_path=None, roots=roots)
+        result = runtime.run_prepared_graph(
+            prepared, param_values=scenario.get("params", {})
+        )
+    elif program.is_relative_to(EXTERNS_PROGRAMS_DIR):
+        # Three branches, in order: `module_roots` above builds a graph from
+        # explicit roots (multi-module fixtures); this branch also runs
+        # through the graph, via `entry_path`, because `extern def` requires
+        # a real file-backed origin so companion resolution can find the
+        # sibling `.py`; every other fixture falls through to the plain,
+        # non-graph `runtime.run` path in the `else` branch below.
+        from agm.agl.modules.roots import RootSet
+
+        roots = RootSet(roots=frozenset({program.parent.resolve(), REPO_STDLIB_ROOT}))
+        prepared = PipelineDriver.prepare_program(source, entry_path=program, roots=roots)
         result = runtime.run_prepared_graph(
             prepared, param_values=scenario.get("params", {})
         )
@@ -222,7 +239,7 @@ def _rejection_params() -> list[Any]:
 def test_program_scenario(
     program: Path, scenario: dict[str, Any], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    result, agents = _run_program(program.read_text(encoding="utf-8"), scenario)
+    result, agents = _run_program(program.read_text(encoding="utf-8"), scenario, program)
     out = capsys.readouterr().out
     expect = scenario["expect"]
     if "host_error" in expect:

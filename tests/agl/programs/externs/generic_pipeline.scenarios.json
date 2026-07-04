@@ -1,0 +1,14 @@
+{
+  "scenarios": [
+    {
+      "name": "sum_of_unique_values_meets_threshold",
+      "params": {"extra": 0},
+      "expect": {"stdout": "high\n"}
+    },
+    {
+      "name": "sum_of_unique_values_below_threshold",
+      "params": {"extra": -5},
+      "expect": {"stdout": "low\n"}
+    }
+  ]
+}

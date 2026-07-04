@@ -1,0 +1,22 @@
+# Case/match on an extern-returned enum driving loop termination: the
+# companion decides, per step, whether to continue (and by how much) or stop.
+enum Step
+  | Continue(amount: int)
+  | Stop
+
+extern def next_step(n: int) -> Step
+
+param start: int
+
+var total = 0
+var n = start
+var running = true
+while running do
+  case next_step(n) of
+    | Continue(amount) =>
+        total := total + amount
+        n := n + 1
+    | Stop() =>
+        running := false
+done
+print total

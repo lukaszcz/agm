@@ -14,10 +14,18 @@ body) and the resulting runtime behavior:
 - interleaving with ordinary AgL recursion and loops.
 - end-to-end file runs through the real pipeline (`PipelineDriver`), a
   REPL smoke test, and the dry-run (`check_only`) contract.
+- the full round-trip conversion matrix (decimal exactness, bool/float
+  rejection inside containers, unit, json passthrough, list/dict nesting,
+  records, enums including `Option` as a plain enum, exceptions as values,
+  and deep-copy isolation), driven entirely through real extern calls rather
+  than the boundary walkers directly.
 
 Earlier suites (`test_agl_extern_loading.py`, `test_agl_extern_lowering.py`)
-cover everything upstream of dispatch and stop before evaluation; this suite
-is the first to actually invoke a companion callable.
+cover everything upstream of dispatch and stop before evaluation;
+`test_agl_extern_boundary.py` drives the encode/decode walkers and
+`ExternRegistry.invoke` directly with hand-built contracts. This suite is the
+first to invoke a companion callable through real, checked, lowered AgL
+programs.
 """
 
 from __future__ import annotations
@@ -34,7 +42,9 @@ from agm.agl.semantics.values import (
     UNIT_VALUE,
     BoolValue,
     DecimalValue,
+    DictValue,
     IntValue,
+    ListValue,
     TextValue,
 )
 from tests.agl.ir_harness import (
@@ -213,6 +223,463 @@ class TestRoundTrips:
             tmp_path,
         )
         assert result["r"] == IntValue(5)
+
+
+# ---------------------------------------------------------------------------
+# Decimal exactness
+# ---------------------------------------------------------------------------
+
+
+class TestDecimalExactness:
+    def test_decimal_argument_arrives_as_decimal_never_float(self, tmp_path: Path) -> None:
+        source = "extern def check(x: decimal) -> bool\nlet r = check(0.1)\nr\n"
+        companion = (
+            "from decimal import Decimal\n"
+            "def check(x):\n"
+            "    return isinstance(x, Decimal) and not isinstance(x, float)\n"
+        )
+        result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+        assert result["r"] == BoolValue(True)
+
+    def test_value_that_would_corrupt_through_float_round_trips_exactly(
+        self, tmp_path: Path
+    ) -> None:
+        source = "extern def identity(x: decimal) -> decimal\nlet r = identity(0.1)\nr\n"
+        companion = "def identity(x):\n    return x\n"
+        result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+        assert result["r"] == DecimalValue(decimal.Decimal("0.1"))
+
+    def test_huge_precision_decimal_round_trips_exactly(self, tmp_path: Path) -> None:
+        huge = "1.2345678901234567890123456789012345"
+        source = f"extern def identity(x: decimal) -> decimal\nlet r = identity({huge})\nr\n"
+        companion = "def identity(x):\n    return x\n"
+        result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+        assert result["r"] == DecimalValue(decimal.Decimal(huge))
+
+    def test_int_returned_where_decimal_declared_converts_exactly(self, tmp_path: Path) -> None:
+        source = "extern def to_decimal(x: int) -> decimal\nlet r = to_decimal(7)\nr\n"
+        companion = "def to_decimal(x):\n    return x\n"
+        result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+        assert result["r"] == DecimalValue(decimal.Decimal(7))
+
+
+# ---------------------------------------------------------------------------
+# Bool/float rejection, including inside containers
+# ---------------------------------------------------------------------------
+
+
+class TestStrictReturnValidation:
+    def test_bool_element_in_returned_int_list_rejected(self, tmp_path: Path) -> None:
+        exc = evaluate_ir_raises_with_externs(
+            "extern def f() -> list[int]\nf()\n()\n",
+            "def f():\n    return [1, True, 2]\n",
+            tmp_path,
+        )
+        assert exc.display_name == "ExternError"
+
+    def test_bool_element_in_returned_decimal_list_rejected(self, tmp_path: Path) -> None:
+        exc = evaluate_ir_raises_with_externs(
+            "extern def f() -> list[decimal]\nf()\n()\n",
+            "from decimal import Decimal\ndef f():\n    return [Decimal('1'), True]\n",
+            tmp_path,
+        )
+        assert exc.display_name == "ExternError"
+
+    def test_bool_field_in_returned_record_rejected(self, tmp_path: Path) -> None:
+        source = "record Box\n  value: int\n  label: text\nextern def f() -> Box\nf()\n()\n"
+        exc = evaluate_ir_raises_with_externs(
+            source,
+            "def f():\n    return {'value': True, 'label': 'x'}\n",
+            tmp_path,
+        )
+        assert exc.display_name == "ExternError"
+
+    def test_float_rejected_as_a_plain_int_return(self, tmp_path: Path) -> None:
+        exc = evaluate_ir_raises_with_externs(
+            "extern def f() -> int\nf()\n()\n",
+            "def f():\n    return 1.5\n",
+            tmp_path,
+        )
+        assert exc.display_name == "ExternError"
+
+    def test_float_rejected_inside_returned_json(self, tmp_path: Path) -> None:
+        exc = evaluate_ir_raises_with_externs(
+            "extern def f() -> json\nf()\n()\n",
+            "def f():\n    return {'a': [1, 2.5]}\n",
+            tmp_path,
+        )
+        assert exc.display_name == "ExternError"
+
+
+# ---------------------------------------------------------------------------
+# Unit: Python receives None; a unit return must be exactly None
+# ---------------------------------------------------------------------------
+
+
+class TestUnitBoundary:
+    def test_unit_param_arrives_as_python_none(self, tmp_path: Path) -> None:
+        source = "extern def is_none(x: unit) -> bool\nlet r = is_none(())\nr\n"
+        companion = "def is_none(x):\n    return x is None\n"
+        result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+        assert result["r"] == BoolValue(True)
+
+    def test_unit_return_rejects_non_none(self, tmp_path: Path) -> None:
+        exc = evaluate_ir_raises_with_externs(
+            "extern def f() -> unit\nf()\n()\n",
+            "def f():\n    return 0\n",
+            tmp_path,
+        )
+        assert exc.display_name == "ExternError"
+
+
+# ---------------------------------------------------------------------------
+# json passthrough
+# ---------------------------------------------------------------------------
+
+
+class TestJsonPassthrough:
+    def test_nested_json_round_trips_unchanged_through_a_real_call(self, tmp_path: Path) -> None:
+        source = (
+            "extern def echo(x: json) -> json\n"
+            'let doc: json = {a: [1, 2.5, null, true, "s"], b: {c: 3}}\n'
+            "print(doc)\n"
+            "let r = echo(doc)\n"
+            "print(r)\n"
+            "()\n"
+        )
+        companion = "def echo(x):\n    return x\n"
+        _, output = evaluate_ir_with_externs(source, companion, tmp_path)
+        lines = output.splitlines()
+        assert len(lines) == 2
+        assert lines[0] == lines[1]
+
+    def test_json_return_rejects_an_arbitrary_python_object(self, tmp_path: Path) -> None:
+        exc = evaluate_ir_raises_with_externs(
+            "extern def f() -> json\nf()\n()\n",
+            "class Opaque:\n    pass\n\ndef f():\n    return Opaque()\n",
+            tmp_path,
+        )
+        assert exc.display_name == "ExternError"
+
+    def test_json_return_rejects_a_sealed_handle_leaked_from_another_call(
+        self, tmp_path: Path
+    ) -> None:
+        source = (
+            "extern def identity[T](x: T) -> T\n"
+            "extern def leak_as_json() -> json\n"
+            "identity(1)\n"
+            "leak_as_json()\n"
+            "()\n"
+        )
+        companion = (
+            "_stash = None\n"
+            "def identity(x):\n"
+            "    global _stash\n"
+            "    _stash = x\n"
+            "    return x\n"
+            "def leak_as_json():\n"
+            "    return _stash\n"
+        )
+        exc = evaluate_ir_raises_with_externs(source, companion, tmp_path)
+        assert exc.display_name == "ExternError"
+
+
+# ---------------------------------------------------------------------------
+# list/dict deep nesting
+# ---------------------------------------------------------------------------
+
+
+class TestListDictDeepNesting:
+    def test_list_of_list_round_trip(self, tmp_path: Path) -> None:
+        source = (
+            "extern def flatten_sum(xs: list[list[int]]) -> int\n"
+            "let r = flatten_sum([[1, 2], [3, 4]])\n"
+            "r\n"
+        )
+        companion = "def flatten_sum(xs):\n    return sum(sum(row) for row in xs)\n"
+        result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+        assert result["r"] == IntValue(10)
+
+    def test_dict_of_list_round_trip(self, tmp_path: Path) -> None:
+        source = (
+            "extern def echo(x: dict[text, list[int]]) -> dict[text, list[int]]\n"
+            "let r = echo({a: [1, 2], b: [3]})\n"
+            "r\n"
+        )
+        companion = "def echo(x):\n    return x\n"
+        result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+        assert result["r"] == DictValue(
+            entries={"a": ListValue((IntValue(1), IntValue(2))), "b": ListValue((IntValue(3),))}
+        )
+
+    def test_dict_non_string_key_on_return_rejected(self, tmp_path: Path) -> None:
+        exc = evaluate_ir_raises_with_externs(
+            "extern def f() -> dict[text, int]\nf()\n()\n",
+            "def f():\n    return {1: 2}\n",
+            tmp_path,
+        )
+        assert exc.display_name == "ExternError"
+
+
+# ---------------------------------------------------------------------------
+# Records: declaration order out, exact field match in, nested records
+# ---------------------------------------------------------------------------
+
+
+class TestRecordsRoundTrip:
+    _BOX = "record Box\n  value: int\n  label: text\n"
+
+    def test_record_fields_cross_in_declaration_order(self, tmp_path: Path) -> None:
+        source = (
+            self._BOX + "extern def field_order(b: Box) -> text\n"
+            'let r = field_order(Box(value = 1, label = "x"))\n'
+            "r\n"
+        )
+        companion = "def field_order(b):\n    return ','.join(b.keys())\n"
+        result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+        assert result["r"] == TextValue("value,label")
+
+    def test_record_round_trip(self, tmp_path: Path) -> None:
+        source = (
+            self._BOX + "extern def bump(b: Box) -> Box\n"
+            'let r = bump(Box(value = 1, label = "x"))\n'
+            "let v = r.value\n"
+            "v\n"
+        )
+        companion = "def bump(b):\n    return {'value': b['value'] + 1, 'label': b['label']}\n"
+        result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+        assert result["v"] == IntValue(2)
+
+    def test_record_return_missing_field_rejected(self, tmp_path: Path) -> None:
+        exc = evaluate_ir_raises_with_externs(
+            self._BOX + "extern def f() -> Box\nf()\n()\n",
+            "def f():\n    return {'value': 1}\n",
+            tmp_path,
+        )
+        assert exc.display_name == "ExternError"
+
+    def test_record_return_extra_field_rejected(self, tmp_path: Path) -> None:
+        exc = evaluate_ir_raises_with_externs(
+            self._BOX + "extern def f() -> Box\nf()\n()\n",
+            "def f():\n    return {'value': 1, 'label': 'x', 'extra': 1}\n",
+            tmp_path,
+        )
+        assert exc.display_name == "ExternError"
+
+    def test_record_return_misnamed_field_rejected(self, tmp_path: Path) -> None:
+        exc = evaluate_ir_raises_with_externs(
+            self._BOX + "extern def f() -> Box\nf()\n()\n",
+            "def f():\n    return {'value': 1, 'lbl': 'x'}\n",
+            tmp_path,
+        )
+        assert exc.display_name == "ExternError"
+
+    def test_nested_record_round_trip(self, tmp_path: Path) -> None:
+        source = (
+            "record Author\n  name: text\n"
+            "record Post\n  title: text\n  author: Author\n"
+            "extern def echo(p: Post) -> Post\n"
+            'let r = echo(Post(title = "hi", author = Author(name = "Ada")))\n'
+            "let n = r.author.name\n"
+            "n\n"
+        )
+        companion = "def echo(p):\n    return p\n"
+        result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+        assert result["n"] == TextValue("Ada")
+
+
+# ---------------------------------------------------------------------------
+# Enums: `$case` both ways, unknown case rejected, `Option` as a plain enum
+# ---------------------------------------------------------------------------
+
+
+class TestEnumsRoundTrip:
+    _SHAPE = "enum Shape\n  | Circle\n  | Rect(width: int, height: int)\n"
+
+    def test_enum_variant_with_payload_round_trip(self, tmp_path: Path) -> None:
+        source = (
+            self._SHAPE + "extern def echo(s: Shape) -> Shape\n"
+            "let r = echo(Rect(width = 3, height = 4))\n"
+            "let total = case r of\n"
+            "  | Rect(width, height) => width + height\n"
+            "  | Circle() => 0\n"
+            "total\n"
+        )
+        companion = "def echo(s):\n    return s\n"
+        result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+        assert result["total"] == IntValue(7)
+
+    def test_enum_variant_without_payload_round_trip(self, tmp_path: Path) -> None:
+        source = (
+            self._SHAPE + "extern def echo(s: Shape) -> Shape\n"
+            "let r: Shape = echo(Circle)\n"
+            "let is_circle = r is Circle\n"
+            "is_circle\n"
+        )
+        companion = "def echo(s):\n    return s\n"
+        result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+        assert result["is_circle"] == BoolValue(True)
+
+    def test_enum_unknown_case_on_return_rejected(self, tmp_path: Path) -> None:
+        exc = evaluate_ir_raises_with_externs(
+            self._SHAPE + "extern def f() -> Shape\nf()\n()\n",
+            "def f():\n    return {'$case': 'Triangle'}\n",
+            tmp_path,
+        )
+        assert exc.display_name == "ExternError"
+
+
+class TestOptionAsPlainEnum:
+    """`Option[T]` gets no special treatment at the boundary: it is an
+    ordinary two-variant generic enum, so a locally declared stand-in exercises
+    exactly the same walker code path as the real `std.core` one."""
+
+    _OPTION = "enum Option[T]\n  | None\n  | Some(value: T)\n"
+
+    def test_some_and_none_round_trip_as_tagged_dicts(self, tmp_path: Path) -> None:
+        source = (
+            self._OPTION + "extern def echo(o: Option[int]) -> Option[int]\n"
+            "let some_r: Option[int] = echo(Some(value = 3))\n"
+            "let none_r: Option[int] = echo(None)\n"
+            "let a = case some_r of\n"
+            "  | Some(value) => value\n"
+            "  | None() => -1\n"
+            "let b = case none_r of\n"
+            "  | Some(value) => value\n"
+            "  | None() => -1\n"
+            "a\n"
+        )
+        companion = "def echo(o):\n    return o\n"
+        result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+        assert result["a"] == IntValue(3)
+        assert result["b"] == IntValue(-1)
+
+    def test_option_of_option_disambiguates_nesting_depth(self, tmp_path: Path) -> None:
+        source = (
+            self._OPTION + "extern def check(o: Option[Option[int]]) -> bool\n"
+            "let some_some: Option[Option[int]] = Some(value = Some(value = 5))\n"
+            "let some_none: Option[Option[int]] = Some(value = None)\n"
+            "let r1 = check(some_some)\n"
+            "let r2 = check(some_none)\n"
+            "let r3: bool = check(None)\n"
+            "r1\n"
+        )
+        companion = (
+            "def check(o):\n"
+            "    if o == {'$case': 'Some', 'value': {'$case': 'Some', 'value': 5}}:\n"
+            "        return True\n"
+            "    if o == {'$case': 'Some', 'value': {'$case': 'None'}}:\n"
+            "        return True\n"
+            "    if o == {'$case': 'None'}:\n"
+            "        return True\n"
+            "    return False\n"
+        )
+        result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+        assert result["r1"] == BoolValue(True)
+        assert result["r2"] == BoolValue(True)
+        assert result["r3"] == BoolValue(True)
+
+    def test_option_of_json_disambiguates_none_from_some_of_json_null(
+        self, tmp_path: Path
+    ) -> None:
+        source = (
+            self._OPTION + "extern def check(o: Option[json]) -> bool\n"
+            "let some_null: Option[json] = Some(value = null)\n"
+            "let r1 = check(some_null)\n"
+            "let r2: bool = check(None)\n"
+            "r1\n"
+        )
+        companion = (
+            "def check(o):\n"
+            "    if o == {'$case': 'Some', 'value': None}:\n"
+            "        return True\n"
+            "    if o == {'$case': 'None'}:\n"
+            "        return True\n"
+            "    return False\n"
+        )
+        result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+        assert result["r1"] == BoolValue(True)
+        assert result["r2"] == BoolValue(True)
+
+
+# ---------------------------------------------------------------------------
+# Exceptions as ordinary boundary values (param and return position)
+# ---------------------------------------------------------------------------
+
+
+class TestExceptionsAsValues:
+    _BAD_THING = "exception BadThing extends Exception\n  detail: text\n"
+
+    def test_exception_typed_param_and_return_round_trip(self, tmp_path: Path) -> None:
+        source = (
+            self._BAD_THING + "extern def describe(e: BadThing) -> text\n"
+            "extern def make(detail: text) -> BadThing\n"
+            "let caught = try\n"
+            '  raise BadThing(message = "boom", detail = "oops")\n'
+            "catch BadThing as e =>\n"
+            "  e\n"
+            "let d1 = describe(caught)\n"
+            'let built = make("built")\n'
+            "let d2 = describe(built)\n"
+            "d1\n"
+        )
+        companion = (
+            "def describe(e):\n"
+            "    return e['detail']\n"
+            "def make(detail):\n"
+            "    return {'message': 'constructed', 'trace_id': '', 'detail': detail}\n"
+        )
+        result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+        assert result["d1"] == TextValue("oops")
+        assert result["d2"] == TextValue("built")
+
+
+# ---------------------------------------------------------------------------
+# Deep-copy isolation: a companion mutating what it receives never affects
+# the AgL value used again after the call.
+# ---------------------------------------------------------------------------
+
+
+class TestDeepCopyIsolation:
+    def test_extern_receiving_a_list_can_mutate_and_return_its_own_copy(
+        self, tmp_path: Path
+    ) -> None:
+        """A companion receiving a ``list[int]`` gets an ordinary, mutable
+        Python ``list`` it can ``.append`` to and hand back as the result.
+
+        Unlike the json variant below, there is no AgL-side isolation signal
+        to check here: AgL lists are immutable tuples, so an AgL binding
+        could never reflect a companion's mutation regardless of whether
+        encoding copies the list — asserting on it would be vacuous.
+        """
+        source = (
+            "extern def touch(xs: list[int]) -> list[int]\n"
+            "let xs = [1, 2, 3]\n"
+            "let touched = touch(xs)\n"
+            "touched\n"
+        )
+        companion = "def touch(xs):\n    xs.append(99)\n    return xs\n"
+        result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+        assert result["touched"] == ListValue(
+            (IntValue(1), IntValue(2), IntValue(3), IntValue(99))
+        )
+
+    def test_mutating_a_received_json_object_does_not_affect_the_agl_value_used_after_the_call(
+        self, tmp_path: Path
+    ) -> None:
+        source = (
+            "extern def touch(x: json) -> json\n"
+            "let doc: json = {a: [1, 2]}\n"
+            "let touched = touch(doc)\n"
+            "print(doc)\n"
+            "print(touched)\n"
+            "()\n"
+        )
+        companion = "def touch(x):\n    x['a'].append(99)\n    return x\n"
+        _, output = evaluate_ir_with_externs(source, companion, tmp_path)
+        lines = output.splitlines()
+        assert len(lines) == 2
+        assert lines[0] != lines[1]
 
 
 # ---------------------------------------------------------------------------

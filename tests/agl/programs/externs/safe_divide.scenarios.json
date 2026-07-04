@@ -1,0 +1,14 @@
+{
+  "scenarios": [
+    {
+      "name": "successful_division",
+      "params": {"a": 10, "b": 2},
+      "expect": {"stdout": "5\n"}
+    },
+    {
+      "name": "division_by_zero_raises_extern_error",
+      "params": {"a": 10, "b": 0},
+      "expect": {"stdout": "divide\nZeroDivisionError\n-1\n"}
+    }
+  ]
+}

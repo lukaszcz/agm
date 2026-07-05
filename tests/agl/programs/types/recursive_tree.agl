@@ -1,0 +1,45 @@
+# Recursive enum: Tree is guarded by its Leaf base-case variant (Node always
+# carries two more Trees, but Leaf needs nothing). Builds a small tree from
+# params, sums and measures its depth via recursive functions, pattern-matches
+# it exhaustively, and compares two structurally (in)equal trees with '='.
+enum Tree
+  | Leaf
+  | Node(value: int, left: Tree, right: Tree)
+
+param a: int
+param b: int
+param c: int
+
+def sum_tree(t: Tree) -> int =
+  case t of
+    | Leaf() => 0
+    | Node(value, left, right) => value + sum_tree(left) + sum_tree(right)
+
+def tree_depth(t: Tree) -> int =
+  case t of
+    | Leaf() => 0
+    | Node(value, left, right) =>
+        let l = tree_depth(left)
+        let r = tree_depth(right)
+        1 + (if l >= r => l else => r)
+
+let tree = Node(
+  value = a,
+  left = Node(value = b, left = Leaf(), right = Leaf()),
+  right = Node(value = c, left = Leaf(), right = Leaf()),
+)
+let same_shape = Node(
+  value = a,
+  left = Node(value = b, left = Leaf(), right = Leaf()),
+  right = Node(value = c, left = Leaf(), right = Leaf()),
+)
+let different = Node(value = a, left = Leaf(), right = Leaf())
+
+print sum_tree(tree)
+print tree_depth(tree)
+print (tree == same_shape)
+print (tree == different)
+
+case tree of
+  | Leaf() => print "empty"
+  | Node(value, left, right) => print "root ${value}"

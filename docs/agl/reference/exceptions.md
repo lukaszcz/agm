@@ -36,6 +36,32 @@ the inherited fields first, followed by fields declared on the subtype.
 `builtin exception` is the standard-library form for host-recognized exception
 types; the name, base, and fields must match the recognized shape exactly.
 
+### Recursive exceptions
+
+An exception's fields may reference its own type, and may participate in
+mutual recursion with records, enums, and other exceptions, under the same
+inhabitation rule as records and enums (see
+[Recursive types](types.md#recursive-types)). Because an exception is a
+product type — every declared field is required — a field cannot directly
+self-reference without a base case:
+
+```agl
+exception ValidationError extends Exception
+  field_name: text
+  causes: list[ValidationError]   # legal: guarded by list[...]
+```
+
+```agl
+exception Broken extends Exception
+  child: Broken   # rejected: uninhabitable, no list/dict guard
+```
+
+A `list`/`dict` field is the only guard available for a required field —
+there is no enum-style alternative variant to fall back on. The same
+inhabitation fixpoint also covers the `extends` chain itself: an `extends`
+cycle (two exceptions each extending the other) is rejected as uninhabitable
+for the same reason a field cycle is.
+
 Exception values support field access (`e.raw`), equality, and rendering.
 In interpolation and `print` an exception renders in **AgL record form**,
 including all fields (`message`, `trace_id`, and any type-specific fields)

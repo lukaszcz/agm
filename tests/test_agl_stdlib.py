@@ -264,8 +264,11 @@ def test_exception_in_applied_field_type_is_built_before_rejection() -> None:
         )
 
 
-def test_exception_recursion_is_rejected() -> None:
-    with pytest.raises(AglTypeError, match="structural type cycle"):
+def test_exception_extends_cycle_is_uninhabitable() -> None:
+    # A extends B and B extends A: an `extends` cycle gives neither side
+    # independent evidence to become inhabited, so both stay uninhabited —
+    # the same inhabitation fixpoint that rejects field recursion.
+    with pytest.raises(AglTypeError, match="uninhabitable"):
         _check(
             "exception A extends B\n"
             "  a: int\n"
@@ -275,7 +278,7 @@ def test_exception_recursion_is_rejected() -> None:
         )
 
 
-def test_single_module_exception_recursion_is_rejected() -> None:
+def test_single_module_exception_extends_cycle_is_uninhabitable() -> None:
     source = (
         "exception A extends B\n"
         "  a: int\n"
@@ -283,8 +286,7 @@ def test_single_module_exception_recursion_is_rejected() -> None:
         "  b: int\n"
         "()\n"
     )
-    message = "Exception type 'A' is directly or indirectly recursive"
-    with pytest.raises(AglTypeError, match=message):
+    with pytest.raises(AglTypeError, match="uninhabitable"):
         check(resolve(parse_program(source)), _CAPS)
 
 

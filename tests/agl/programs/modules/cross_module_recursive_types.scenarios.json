@@ -1,0 +1,28 @@
+{
+  "scenarios": [
+    {
+      "name": "single_leaf_child",
+      "module_roots": ["program_modules/modules/cross_module_recursive_types"],
+      "params": {"v": 5, "tag": "root"},
+      "expect": {
+        "stdout": "5\nroot\n"
+      }
+    },
+    {
+      "name": "zero_value",
+      "module_roots": ["program_modules/modules/cross_module_recursive_types"],
+      "params": {"v": 0, "tag": "empty-ish"},
+      "expect": {
+        "stdout": "0\nempty-ish\n"
+      }
+    },
+    {
+      "name": "negative_value",
+      "module_roots": ["program_modules/modules/cross_module_recursive_types"],
+      "params": {"v": -3, "tag": "neg"},
+      "expect": {
+        "stdout": "-3\nneg\n"
+      }
+    }
+  ]
+}

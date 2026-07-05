@@ -224,6 +224,55 @@ class TestRedefinition:
 
 
 # ---------------------------------------------------------------------------
+# Recursive types across entries
+# ---------------------------------------------------------------------------
+
+
+class TestRecursiveTypesAcrossEntries:
+    """A recursive type declared in one entry is usable in later entries.
+
+    The REPL (graph mode) re-validates the accumulated table on every entry;
+    this is idempotent for a declaration that already passed inhabitation in
+    the entry that declared it.
+    """
+
+    def test_recursive_enum_constructed_and_matched_in_later_entries(self) -> None:
+        s = ReplSession()
+        declare = s.eval_entry(
+            "enum Tree\n  | Leaf\n  | Node(value: int, left: Tree, right: Tree)"
+        )
+        assert declare.ok
+
+        build = s.eval_entry(
+            "let t = Node(value = 1, left = Leaf(), right = Node(value = 2, left = Leaf(), "
+            "right = Leaf()))"
+        )
+        assert build.ok
+
+        match = s.eval_entry(
+            "case t of\n"
+            "  | Leaf() => 0\n"
+            "  | Node(value, left, right) => value"
+        )
+        assert match.ok
+        assert match.value is not None
+
+    def test_recursive_record_still_rejects_redefinition_style_reset(self) -> None:
+        # Redefinition semantics are unaffected: a later entry redeclaring
+        # the same name with a different (still recursive) shape shadows it,
+        # exactly like any other record redefinition.
+        s = ReplSession()
+        first = s.eval_entry("record Category\n  name: text\n  subcategories: list[Category]")
+        assert first.ok
+        second = s.eval_entry("record Category\n  label: text\n  kids: list[Category]")
+        assert second.ok
+        use = s.eval_entry('let c = Category(label = "root", kids = [])')
+        assert use.ok
+        stale = s.eval_entry('let bad = Category(name = "root", subcategories = [])')
+        assert not stale.ok
+
+
+# ---------------------------------------------------------------------------
 # Echo data
 # ---------------------------------------------------------------------------
 

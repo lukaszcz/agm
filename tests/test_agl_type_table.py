@@ -1192,3 +1192,132 @@ class TestComparableTypesTableAware:
         )
         handle = RecordType(name="Report", module_id=ENTRY_ID)
         assert comparable_types(handle, handle, table) is False
+
+    def test_record_referencing_already_flagged_record_not_comparable(self) -> None:
+        # X is unconditionally non-comparable (a function field); Y's only
+        # field is a bare reference to X (not through an exception, unlike
+        # the test above) — Y must inherit X's flag via the already-computed
+        # fixpoint fact, not by re-walking X's own fields.
+        table = TypeTable()
+        fn_type = FunctionType(params=(), result=IntType())
+        table.register(
+            TypeDef(kind="record", name="X", module_id=ENTRY_ID, fields=(("fn", fn_type),))
+        )
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Y",
+                module_id=ENTRY_ID,
+                fields=(("x", RecordType(name="X", module_id=ENTRY_ID)),),
+            )
+        )
+        handle = RecordType(name="Y", module_id=ENTRY_ID)
+        assert comparable_types(handle, handle, table) is False
+
+    def test_dangling_field_reference_defaults_to_comparable(self) -> None:
+        # Y's field references a declaration that was never registered (an
+        # internal-invariant violation that should not happen for a
+        # well-formed table); the fixpoint treats an unresolvable reference
+        # as comparable rather than raising, defensively.
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Y",
+                module_id=ENTRY_ID,
+                fields=(("ghost", RecordType(name="Ghost", module_id=ENTRY_ID)),),
+            )
+        )
+        handle = RecordType(name="Y", module_id=ENTRY_ID)
+        assert comparable_types(handle, handle, table) is True
+
+    def test_unregistered_handle_defaults_to_comparable(self) -> None:
+        # Querying comparability of a handle whose own declaration was never
+        # registered at all (as opposed to one merely referenced by a field)
+        # is likewise defensive rather than a crash.
+        table = TypeTable()
+        handle = RecordType(name="Ghost", module_id=ENTRY_ID)
+        assert comparable_types(handle, handle, table) is True
+
+    def test_recursive_tree_is_comparable(self) -> None:
+        # A self-referential enum (list/dict guard not even needed for
+        # equality — only for inhabitation): the equality-capability fixpoint
+        # must terminate on a cycle instead of recursing through the same
+        # declaration's fields forever.
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="enum",
+                name="Tree",
+                module_id=ENTRY_ID,
+                variants=(
+                    ("Leaf", ()),
+                    (
+                        "Node",
+                        (
+                            ("value", IntType()),
+                            ("left", EnumType(name="Tree", module_id=ENTRY_ID)),
+                            ("right", EnumType(name="Tree", module_id=ENTRY_ID)),
+                        ),
+                    ),
+                ),
+            )
+        )
+        handle = EnumType(name="Tree", module_id=ENTRY_ID)
+        assert comparable_types(handle, handle, table) is True
+
+    def test_recursive_type_with_function_field_at_depth_not_comparable(self) -> None:
+        # Same recursive shape as above, but one variant carries a function
+        # field: the whole recursive type is non-comparable, exactly as a
+        # non-recursive type containing a function field would be.
+        table = TypeTable()
+        handler_type = FunctionType(params=(), result=IntType())
+        table.register(
+            TypeDef(
+                kind="enum",
+                name="Tree",
+                module_id=ENTRY_ID,
+                variants=(
+                    ("Leaf", ()),
+                    ("Handler", (("fn", handler_type),)),
+                    (
+                        "Node",
+                        (
+                            ("left", EnumType(name="Tree", module_id=ENTRY_ID)),
+                            ("right", EnumType(name="Tree", module_id=ENTRY_ID)),
+                        ),
+                    ),
+                ),
+            )
+        )
+        handle = EnumType(name="Tree", module_id=ENTRY_ID)
+        assert comparable_types(handle, handle, table) is False
+
+    def test_mutually_recursive_records_are_comparable(self) -> None:
+        # A/B are mutually recursive through a list guard (inhabited) and
+        # contain only scalar fields otherwise: both must be comparable, and
+        # the fixpoint must not infinite-loop walking A -> B -> A -> ...
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="A",
+                module_id=ENTRY_ID,
+                fields=(
+                    ("name", TextType()),
+                    ("bs", ListType(RecordType(name="B", module_id=ENTRY_ID))),
+                ),
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="record",
+                name="B",
+                module_id=ENTRY_ID,
+                fields=(("a", RecordType(name="A", module_id=ENTRY_ID)),),
+            )
+        )
+        a_handle = RecordType(name="A", module_id=ENTRY_ID)
+        b_handle = RecordType(name="B", module_id=ENTRY_ID)
+        assert comparable_types(a_handle, a_handle, table) is True
+        assert comparable_types(b_handle, b_handle, table) is True

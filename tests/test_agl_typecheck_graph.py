@@ -1140,40 +1140,66 @@ def test_cross_module_enum_variant_field_type(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Finding 1 — structural type cycle detection is preserved (cross-module)
-# A type that STRUCTURALLY contains itself (infinite size) must still be an
-# error even after the topological-order fix.
+# An unguarded cross-module type cycle is uninhabitable
 # ---------------------------------------------------------------------------
 
 
-def test_structural_type_cycle_across_modules_is_error(tmp_path: Path) -> None:
-    """A genuine structural type cycle (type that contains itself) is rejected.
+def test_structural_type_cycle_across_modules_is_uninhabitable(tmp_path: Path) -> None:
+    """A cross-module type that structurally contains itself is uninhabitable.
 
-    This tests that the topological-sort-based resolution still surfaces
-    structural cycles as errors (not silently ignores them).
+    This tests that the whole-graph inhabitation pre-pass still surfaces a
+    genuinely uninhabited declaration as an error (not silently ignores it).
     """
     from agm.agl.typecheck.env import AglTypeError as _AglTypeError
 
     modules = {
         "entry": ("import lib\n()"),
         "lib": (
-            # Node is directly structurally recursive (Node.child: Node)
+            # Node is directly self-referential with no guard: uninhabited.
             "record Node\n  child: Node"
         ),
     }
-    with pytest.raises(_AglTypeError):
+    with pytest.raises(_AglTypeError) as exc_info:
         _check_graph(tmp_path, modules)
+    assert "uninhabitable" in str(exc_info.value).lower()
 
 
-def test_cross_module_generic_argument_cycle_is_error(tmp_path: Path) -> None:
-    """A cross-module cycle through a generic type argument is rejected.
+def test_find_type_decl_span_missing_module_returns_none(tmp_path: Path) -> None:
+    """``_find_type_decl_span`` returns ``None`` for a module absent from the graph.
+
+    Defensive: every key the whole-graph inhabitation pre-pass reports comes
+    from a module actually present in the graph, so this path is not reached
+    in practice, but the helper degrades gracefully rather than raising.
+    """
+    from agm.agl.typecheck.graph import _find_type_decl_span
+
+    modules = {"entry": "()"}
+    mg = _make_graph_from_files(tmp_path, modules)
+    rg = resolve_graph(mg)
+    missing_mid = ModuleId.from_dotted("does_not_exist")
+    assert _find_type_decl_span(rg, (missing_mid, "Whatever")) is None
+
+
+def test_find_type_decl_span_missing_name_returns_none(tmp_path: Path) -> None:
+    """``_find_type_decl_span`` returns ``None`` when the module has no matching declaration."""
+    from agm.agl.typecheck.graph import _find_type_decl_span
+
+    modules = {"entry": "record R\n  x: int\n()"}
+    mg = _make_graph_from_files(tmp_path, modules)
+    rg = resolve_graph(mg)
+    assert _find_type_decl_span(rg, (ENTRY_ID, "NoSuchType")) is None
+
+
+def test_cross_module_generic_argument_cycle_is_accepted(tmp_path: Path) -> None:
+    """A cross-module cycle through a generic type argument is accepted.
 
     Neither ``lib1::A`` nor ``lib2::B`` is itself generic, but each applies
-    the generic ``lib1::Box`` to the other, forming a structural cycle
-    through the argument position across module boundaries.
+    the generic ``lib1::Box`` to the other, forming a cycle through the
+    argument position across module boundaries; inhabitation is
+    declaration-level and ignores type arguments, so ``Box``'s own
+    declaration is unconditionally inhabited and both ``A`` and ``B``
+    trivially inherit that.
     """
-    from agm.agl.typecheck.env import AglTypeError as _AglTypeError
-
     modules = {
         "entry": ("import lib1\nimport lib2\n()"),
         "lib1": (
@@ -1183,18 +1209,17 @@ def test_cross_module_generic_argument_cycle_is_error(tmp_path: Path) -> None:
         ),
         "lib2": ("import lib1\nrecord B\n  a: lib1::Box[lib1::A]\n"),
     }
-    with pytest.raises(_AglTypeError) as exc_info:
-        _check_graph(tmp_path, modules)
-    msg = str(exc_info.value).lower()
-    assert "recursive" in msg or "structural type cycle" in msg
+    cg = _check_graph(tmp_path, modules)
+    assert ModuleId.from_dotted("lib1") in cg.modules
+    assert ModuleId.from_dotted("lib2") in cg.modules
 
 
-def test_record_exception_field_cycle_across_check_is_error(tmp_path: Path) -> None:
-    """A record/exception field cycle is rejected in graph mode.
+def test_record_exception_field_cycle_across_check_is_uninhabitable(tmp_path: Path) -> None:
+    """A record/exception field cycle with no guard is uninhabitable in graph mode.
 
-    ``R.e: E`` and ``E.r: R`` reference each other; both the whole-graph
-    structural type-dependency pre-pass and the per-module builder check
-    treat ``E`` and ``R`` symmetrically and reject the cycle.
+    ``R.e: E`` and ``E.r: R`` reference each other with no list/dict guard or
+    base case; both the whole-graph inhabitation pre-pass and the per-module
+    builder re-check treat ``E`` and ``R`` symmetrically and reject the cycle.
     """
     from agm.agl.typecheck.env import AglTypeError as _AglTypeError
 
@@ -1204,8 +1229,7 @@ def test_record_exception_field_cycle_across_check_is_error(tmp_path: Path) -> N
     }
     with pytest.raises(_AglTypeError) as exc_info:
         _check_graph(tmp_path, modules)
-    msg = str(exc_info.value).lower()
-    assert "recursive" in msg or "structural type cycle" in msg
+    assert "uninhabitable" in str(exc_info.value).lower()
 
 
 # ---------------------------------------------------------------------------
@@ -1247,12 +1271,12 @@ def test_cross_module_mismatch_message_qualifies_type(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: graph.py _collect_type_expr_deps — various dep-collection paths
+# Coverage: cross-module field-type reference forms resolve correctly
 # ---------------------------------------------------------------------------
 
 
 def test_type_expr_deps_self_ref_qualifier(tmp_path: Path) -> None:
-    """A field typed '::OwnType' creates a self-dep (::Name qualifier path)."""
+    """A field typed '::OwnType' resolves to the declaring module's own type."""
     modules = {
         "entry": ("import mylib\nlet p: mylib::Wrapper = mylib::mk()\np"),
         "mylib": (
@@ -1270,7 +1294,7 @@ def test_type_expr_deps_self_ref_qualifier(tmp_path: Path) -> None:
 
 
 def test_type_expr_deps_qualified_field(tmp_path: Path) -> None:
-    """A field typed 'other::Type' creates a cross-module dep (qualified path)."""
+    """A field typed 'other::Type' resolves the qualified cross-module type."""
     modules = {
         "entry": ("import mylib qualified\nlet p: mylib::Wrapper = mylib::mk()\np"),
         "mylib": (
@@ -1287,7 +1311,7 @@ def test_type_expr_deps_qualified_field(tmp_path: Path) -> None:
 
 
 def test_type_expr_deps_unqualified_open_import_field(tmp_path: Path) -> None:
-    """A field typed with an open-imported name creates a dep (unqualified path)."""
+    """A field typed with an open-imported name resolves via the unqualified path."""
     modules = {
         "entry": ("import mylib\nlet p: mylib::Wrapper = mylib::mk()\np"),
         "mylib": (
@@ -1363,12 +1387,12 @@ def test_type_expr_deps_alias_to_cross_module(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_cross_module_structural_cycle_raises_error(tmp_path: Path) -> None:
-    """A cross-module structural type cycle is detected and reported.
+def test_cross_module_structural_cycle_is_uninhabitable(tmp_path: Path) -> None:
+    """A cross-module type cycle with no guard is uninhabitable.
 
     modA.Foo has field 'other: modB::Bar' and modB.Bar has field 'other: modA::Foo'.
-    This is a genuine structural cycle (Foo contains Bar contains Foo), which
-    makes both types infinitely sized.  The checker must raise AglTypeError.
+    Neither side has a list/dict guard or independent evidence, so both stay
+    uninhabited and the checker must raise AglTypeError.
     """
     from agm.agl.typecheck.env import AglTypeError as _AglTypeError
 
@@ -1377,8 +1401,9 @@ def test_cross_module_structural_cycle_raises_error(tmp_path: Path) -> None:
         "modA": ("import modB\nrecord Foo\n  other: modB::Bar"),
         "modB": ("import modA\nrecord Bar\n  other: modA::Foo"),
     }
-    with pytest.raises(_AglTypeError):
+    with pytest.raises(_AglTypeError) as exc_info:
         _check_graph(tmp_path, modules)
+    assert "uninhabitable" in str(exc_info.value).lower()
 
 
 # ---------------------------------------------------------------------------
@@ -1418,12 +1443,11 @@ def test_record_type_repr_qualified_with_module(tmp_path: Path) -> None:
 
 
 def test_type_alias_with_cross_module_dep_creates_dep(tmp_path: Path) -> None:
-    """A TypeAlias whose target is a cross-module user type creates a dep entry.
+    """A TypeAlias whose target is a cross-module user type resolves correctly.
 
-    This exercises the 'elif isinstance(item, TypeAlias)' branch in
-    _compute_type_deps with a dep that actually appears in
-    all_type_keys, and also exercises the branch where in_degree is decremented
-    but does not reach 0 (diamond dependency pattern for Kahn's algorithm).
+    ``Wrapper`` references the alias AND the alias's own cross-module target
+    directly (a diamond reference pattern), both resolving to the same
+    canonical ``payload::Data`` type.
     """
     modules = {
         "entry": ("import mylib\nlet w: mylib::Wrapper = mylib::mk()\nw"),
@@ -1432,8 +1456,8 @@ def test_type_alias_with_cross_module_dep_creates_dep(tmp_path: Path) -> None:
             # TypeAlias whose target is a user type in another module
             "type DataAlias = payload::Data\n"
             "record Wrapper\n"
-            "  a: DataAlias\n"  # depends on alias, alias depends on payload::Data
-            "  b: payload::Data\n"  # direct dep on payload::Data (diamond dep!)
+            "  a: DataAlias\n"  # via the alias
+            "  b: payload::Data\n"  # direct reference (diamond pattern)
             "def mk() -> Wrapper = Wrapper(a = payload::Data(n = 1), b = payload::Data(n = 2))"
         ),
         "payload": ("record Data\n  n: int"),
@@ -1444,18 +1468,16 @@ def test_type_alias_with_cross_module_dep_creates_dep(tmp_path: Path) -> None:
 
 
 def test_type_expr_deps_func_field(tmp_path: Path) -> None:
-    """A field typed with a function type recursing into params and result.
+    """A field typed with a function type resolves cross-module types in its params.
 
-    This exercises the FuncT branch in _collect_type_expr_deps.
-    The function type's param type is a cross-module user type, so the FuncT
-    walker must descend into the param to find the dependency.
+    The function type's param type is a cross-module user type, so resolving
+    the field's type must descend into the function type's param list.
     """
     modules = {
         "entry": ("import mylib\nlet p: mylib::Wrapper = mylib::mk()\np"),
         "mylib": (
             "import payload\n"
-            # Field with a function type whose param is a cross-module user type
-            # This exercises the FuncT branch in _collect_type_expr_deps
+            # Field with a function type whose param is a cross-module user type.
             "record Wrapper\n"
             "  transform: (payload::Data) -> text\n"
             'def mk() -> Wrapper = Wrapper(transform = fn(d: payload::Data) -> text => "ok")'
@@ -1468,22 +1490,17 @@ def test_type_expr_deps_func_field(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: defensive guard paths in _collect_type_expr_deps
-# These exercise the "not in all_type_keys" guards which fire when a type
-# expression references a built-in type (which is never in all_type_keys).
+# Coverage: field types referencing built-in names resolve without a
+# cross-module lookup (built-ins are never user-declared type keys).
 # ---------------------------------------------------------------------------
 
 
 def test_type_expr_deps_self_ref_to_builtin(tmp_path: Path) -> None:
-    """A '::BuiltinType' self-ref in a field creates NO dep (key not in all_type_keys).
-
-    This exercises the path in _collect_type_expr_deps where the
-    self-ref target is a built-in type (not in all_type_keys), so no dep is added.
-    """
+    """A '::BuiltinType' self-ref in a field resolves to the built-in type."""
     modules = {
         "entry": ("import mylib\nlet w: mylib::Wrapper = mylib::mk()\nw"),
         "mylib": (
-            # ::ExecResult is a built-in prelude type (not in all_type_keys)
+            # ::ExecResult is a built-in prelude type, not a user declaration.
             'record Wrapper\n  c: ::ExecResult\ndef mk() -> Wrapper = Wrapper(c = exec("echo hi"))'
         ),
     }
@@ -1493,21 +1510,11 @@ def test_type_expr_deps_self_ref_to_builtin(tmp_path: Path) -> None:
 
 
 def test_type_expr_deps_open_import_to_builtin_variant(tmp_path: Path) -> None:
-    """An unqualified name that's a builtin creates NO dep (key not in all_type_keys).
-
-    This exercises the path in _collect_type_expr_deps where the
-    candidate key (from open-import unqualified lookup) is not in all_type_keys.
-    """
-    # When no open-imported name matches a NameT, the loop finds no candidates
-    # and all_type_keys guard is not exercised. Here we use a record field
-    # with an unqualified name that resolves through open import to a user type.
-    # The "key in all_type_keys -> False" path fires when we find a candidate but
-    # it's already a resolved primitive type — hard to trigger with valid programs.
-    # Instead test the 'no candidates' path (dep lookup is empty, deps stay []).
+    """A bare built-in type name in a field resolves without any user-type lookup."""
     modules = {
         "entry": ("import mylib\nlet w: mylib::Wrapper = mylib::mk()\nw"),
         "mylib": (
-            # Field typed 'int' (builtin) via bare name — candidates list is empty
+            # Field typed 'int' (a built-in) via a bare name.
             "record Wrapper\n  n: int\ndef mk() -> Wrapper = Wrapper(n = 42)"
         ),
     }
@@ -1517,26 +1524,22 @@ def test_type_expr_deps_open_import_to_builtin_variant(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: graph.py _collect_type_expr_deps — branches that were masked by
-# `# pragma: no branch` directives, now covered by real tests.
+# Coverage: invalid cross-module field-type references are rejected
 # ---------------------------------------------------------------------------
 
 
 def test_builtin_shadowing_type_raises_type_error(tmp_path: Path) -> None:
     """A module that declares a type with a built-in name raises AglTypeError.
 
-    _collect_shells_only (Step A of _build_graph_type_table) calls
-    _register_name which immediately raises for builtin-shadowing types.
-    This confirms the check fires in phase 1 (pre-pass) before any per-module
-    validation, and that _collect_all_type_keys is never reached with such a type
-    (making the removed `not_builtin` guard genuinely dead).
+    This confirms the check fires in the header-collection pre-pass, before
+    any per-module body validation.
     """
     from agm.agl.typecheck.env import AglTypeError as _AglTypeError
 
     modules = {
         "entry": ("import mylib\n()"),
         "mylib": (
-            # ExecResult shadows BUILTIN_PRELUDE_TYPES — rejected in _collect_shells_only
+            # ExecResult shadows a built-in prelude type name.
             "record ExecResult\n  x: int"
         ),
     }
@@ -1545,19 +1548,13 @@ def test_builtin_shadowing_type_raises_type_error(tmp_path: Path) -> None:
 
 
 def test_field_type_with_unimported_qualifier_is_type_error(tmp_path: Path) -> None:
-    """A record field typed 'other::Data' where 'other' is NOT imported → AglTypeError.
-
-    This exercises the `handle_map is None` FALSE branch in
-    _collect_type_expr_deps: during dep collection (phase 1) the qualifier
-    segment is not found in import_env.qualified, so dep collection skips it
-    silently. Phase 2 then raises the proper type error.
-    """
+    """A record field typed 'other::Data' where 'other' is NOT imported → AglTypeError."""
     from agm.agl.typecheck.env import AglTypeError as _AglTypeError
 
     modules = {
         "entry": ("import mylib\n()"),
         "mylib": (
-            # 'other' is not imported — handle_map will be None in dep-collection
+            # 'other' is not imported, so the qualifier itself is unresolved.
             "record MyRec\n  c: other::Data"
         ),
     }
@@ -1566,20 +1563,14 @@ def test_field_type_with_unimported_qualifier_is_type_error(tmp_path: Path) -> N
 
 
 def test_field_type_with_unknown_qualified_name_is_type_error(tmp_path: Path) -> None:
-    """A record field typed 'payload::Unknown' where 'Unknown' is not exported → AglTypeError.
-
-    This exercises the `qname is None` FALSE branch in _collect_type_expr_deps:
-    during dep collection the qualifier 'payload' resolves (handle_map found) but
-    the name 'Unknown' is absent from the handle's name map, so the dep is skipped.
-    Phase 2 then raises the proper qualified-type error.
-    """
+    """A record field typed 'payload::Unknown' where 'Unknown' is not exported → AglTypeError."""
     from agm.agl.typecheck.env import AglTypeError as _AglTypeError
 
     modules = {
         "entry": ("import mylib\n()"),
         "mylib": (
             "import payload qualified\n"
-            # 'Unknown' does not exist in payload — qname will be None
+            # 'Unknown' does not exist in payload.
             "record MyRec\n"
             "  c: payload::Unknown"
         ),
@@ -1590,21 +1581,14 @@ def test_field_type_with_unknown_qualified_name_is_type_error(tmp_path: Path) ->
 
 
 def test_field_type_with_qualified_function_name_is_type_error(tmp_path: Path) -> None:
-    """A record field typed 'payload::getValue' where getValue is a function → AglTypeError.
-
-    This exercises the `key in all_type_keys` FALSE branch for the QUALIFIED
-    path in _collect_type_expr_deps: handle_map and qname both resolve, but the
-    resulting (ModuleId, name) key is a function, not a user type, so it is absent
-    from all_type_keys and the dep is skipped silently. Phase 2 raises the proper
-    'not a type' error.
-    """
+    """A record field typed 'payload::getValue' where getValue is a function → AglTypeError."""
     from agm.agl.typecheck.env import AglTypeError as _AglTypeError
 
     modules = {
         "entry": ("import mylib\n()"),
         "mylib": (
             "import payload qualified\n"
-            # 'getValue' is a function in payload, not a type — key not in all_type_keys
+            # 'getValue' is a function in payload, not a type.
             "record MyRec\n"
             "  c: payload::getValue"
         ),
@@ -1615,15 +1599,7 @@ def test_field_type_with_qualified_function_name_is_type_error(tmp_path: Path) -
 
 
 def test_field_type_with_open_imported_function_name_is_type_error(tmp_path: Path) -> None:
-    """A record field typed with an open-imported function name → AglTypeError.
-
-    This exercises the `key in all_type_keys` FALSE branch for the UNQUALIFIED
-    candidates path in _collect_type_expr_deps: the name 'getValue' appears in
-    import_env.unqualified (because payload is open-imported and exports getValue),
-    but its (ModuleId, name) key is not in all_type_keys (it's a function, not a
-    user type), so the dep is skipped silently. Phase 2 raises the proper
-    'unknown type' error.
-    """
+    """A record field typed with an open-imported function name → AglTypeError."""
     from agm.agl.typecheck.env import AglTypeError as _AglTypeError
 
     modules = {

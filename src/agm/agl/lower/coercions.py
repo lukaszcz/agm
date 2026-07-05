@@ -7,18 +7,31 @@ switches on the returned ``Coercion`` union and never sniffs value types at
 runtime.
 
 Ordering follows the contract exactly (mirrors legacy eval/interpreter._coerce):
-  1. target is JsonType and source is not JsonType → ToJson
-  2. target is DecimalType and source is IntType → IntToDecimal
-  3. both ListType → recurse on elem; MapList if child is not None
-  4. both DictType → recurse on value; MapDictValues if child is not None
-  5. both RecordType → per shared field; MapRecordFields if any
-  6. both EnumType → per variant/field; MapEnumFields if any
-  7. otherwise → None (identity / opaque / no implicit coercion)
+  1. equal types → None (identity)
+  2. target is JsonType and source is not JsonType → ToJson
+  3. target is DecimalType and source is IntType → IntToDecimal
+  4. both ListType → recurse on elem; MapList if child is not None
+  5. both DictType → recurse on value; MapDictValues if child is not None
+  6. both RecordType → per shared field; MapRecordFields if any
+  7. both EnumType → per variant/field; MapEnumFields if any
+  8. otherwise → None (identity / opaque / no implicit coercion)
 
 TypeVarType sources or targets, equal types, and the json→json identity all
 return None.  Record/enum field and variant shapes are resolved through the
 shared ``TypeTable`` (``table.record_fields``/``table.enum_variants``) rather
 than the handle's own embedded maps.
+
+The equal-types check runs FIRST, before the record/enum field walk, so that
+a recursive declaration's self-reference — a field typed exactly as its own
+enclosing record/enum (or the same generic instantiation) — short-circuits
+instead of re-expanding the same fields forever: two ``RecordType``/
+``EnumType`` handles are equal iff their ``(module_id, name, type_args)``
+identity matches, which is exactly the condition under which the shared
+``TypeTable`` substitutes their templates identically, so no coercion is ever
+needed between them. For a finite (non-recursive) type this reordering is
+unobservable — record/enum handles under the same identity always yield the
+same fields — but for a recursive type it is the difference between
+terminating and an unbounded ``compile_coercion`` recursion.
 """
 
 from __future__ import annotations
@@ -56,25 +69,30 @@ def compile_coercion(source: Type, target: Type, type_table: TypeTable) -> Coerc
     *type_table* resolves record/enum field and variant shapes.
 
     Ordering (mirrors legacy eval/interpreter._coerce):
-      1. target is JsonType and source is not JsonType → ToJson
-      2. target is DecimalType and source is IntType → IntToDecimal
-      3. both ListType → recurse on elem; MapList if child is not None
-      4. both DictType → recurse on value; MapDictValues if child is not None
-      5. both RecordType → per shared field; MapRecordFields if any
-      6. both EnumType → per variant/field; MapEnumFields if any
-      7. otherwise → None
+      1. equal types → None
+      2. target is json and source is not json → ToJson
+      3. target is decimal and source is int → IntToDecimal
+      4. both list → recurse on elem; MapList if child is not None
+      5. both dict → recurse on value; MapDictValues if child is not None
+      6. both record → per shared field; MapRecordFields if any
+      7. both enum → per variant/field; MapEnumFields if any
+      8. otherwise → None
 
-    Note: RecordType and EnumType equality is nominal (name + module_id +
-    type_args; fields/variants are excluded from __eq__).  Therefore we handle
-    records and enums BEFORE the ``source == target`` short-circuit, so that
-    two nominally-equal types with different field types (possible for generic
-    instantiations) still get their field coercions compiled correctly.
+    See the module docstring for why the equality check runs before the
+    record/enum field walk (recursive-type termination).
     """
     # Opaque: type variables can carry any value — no compile-time coercion.
     if isinstance(source, TypeVarType) or isinstance(target, TypeVarType):
         return None
 
-    # 5. Both record → per shared field (before equality check; see note above).
+    # 1. Equal types: identity, no coercion. Checked before the record/enum
+    # field walk below so a recursive type's self-reference (a field typed
+    # exactly as the enclosing declaration) terminates immediately instead of
+    # re-expanding the same fields forever.
+    if source == target:
+        return None
+
+    # 6. Both record → per shared field.
     if isinstance(target, RecordType) and isinstance(source, RecordType):
         src_fields = type_table.record_fields(source)
         tgt_fields = type_table.record_fields(target)
@@ -88,7 +106,7 @@ def compile_coercion(source: Type, target: Type, type_table: TypeTable) -> Coerc
                 field_ops.append((field_name, child))
         return MapRecordFields(tuple(field_ops)) if field_ops else None
 
-    # 6. Both enum → per variant, per field (before equality check).
+    # 7. Both enum → per variant, per field.
     if isinstance(target, EnumType) and isinstance(source, EnumType):
         src_variants = type_table.enum_variants(source)
         tgt_variants = type_table.enum_variants(target)
@@ -107,29 +125,24 @@ def compile_coercion(source: Type, target: Type, type_table: TypeTable) -> Coerc
                 variant_ops.append((variant_name, tuple(field_ops_v)))
         return MapEnumFields(tuple(variant_ops)) if variant_ops else None
 
-    # Equal types: identity, no coercion.  This subsumes json→json and all
-    # other same-primitive-type pairs.
-    if source == target:
-        return None
-
-    # 1. Target is json and source is not json → wrap in ToJson.
+    # 2. Target is json and source is not json → wrap in ToJson.
     if isinstance(target, JsonType):
         # source != target so source is not JsonType (equal check above)
         return ToJson()
 
-    # 2. Target is decimal and source is int → widen.
+    # 3. Target is decimal and source is int → widen.
     if isinstance(target, DecimalType) and isinstance(source, IntType):
         return IntToDecimal()
 
-    # 3. Both list → recurse on element type.
+    # 4. Both list → recurse on element type.
     if isinstance(target, ListType) and isinstance(source, ListType):
         child = compile_coercion(source.elem, target.elem, type_table)
         return MapList(child) if child is not None else None
 
-    # 4. Both dict → recurse on value type.
+    # 5. Both dict → recurse on value type.
     if isinstance(target, DictType) and isinstance(source, DictType):
         child = compile_coercion(source.value, target.value, type_table)
         return MapDictValues(child) if child is not None else None
 
-    # 7. Otherwise: no implicit coercion.
+    # 8. Otherwise: no implicit coercion.
     return None

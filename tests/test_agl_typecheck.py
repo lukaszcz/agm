@@ -2506,13 +2506,17 @@ class TestTypeDeclarations:
             _TypeBuilder(TypeEnvironment()).collect(program)
         assert "already declared" in str(exc_info.value).lower()
 
-    def test_record_recursive_raises(self) -> None:
+    def test_record_bare_self_field_is_uninhabitable(self) -> None:
+        # A record whose only field is itself, with no list/dict guard or
+        # enum base case, has no finite value.
         err = reject_type("record Node\n  child: Node\nNode(child = Node(child = ()))")
-        assert "recursive" in str(err).lower()
+        assert "uninhabitable" in str(err).lower()
 
-    def test_enum_recursive_raises(self) -> None:
-        err = reject_type("enum List\n  | Cons(value: int, rest: List)\n  | Nil\nNil()")
-        assert "recursive" in str(err).lower()
+    def test_enum_recursion_with_base_case_is_accepted(self) -> None:
+        # Nil is a base-case variant, so List is inhabited despite Cons
+        # referencing List itself.
+        r = accept_type("enum List\n  | Cons(value: int, rest: List)\n  | Nil\nNil()")
+        assert r.resolved.program is not None
 
     def test_record_duplicate_field_raises(self) -> None:
         err = reject_type("record R\n  x: int\n  x: text\nR(x = 1)")
@@ -2622,6 +2626,31 @@ class TestSeedEnv:
         prog2 = parse_program("f(2)")
         r2 = check(
             resolve(prog2, parent_scope=r1.resolved.root_scope),
+            default_capabilities(),
+            seed_env=r1.type_env,
+        )
+        assert r2.resolved.program is not None
+
+    def test_seed_env_recursive_type_declared_earlier_is_usable_later(self) -> None:
+        # Single-module "REPL" pattern (two check() calls chained via
+        # seed_env): a recursive type declared in the first entry is
+        # constructed and pattern-matched in a later one, re-validating the
+        # accumulated table cheaply (idempotently) each time.
+        r1 = accept_type(
+            "enum Tree\n  | Leaf\n  | Node(value: int, left: Tree, right: Tree)\n"
+            "Node(value = 1, left = Leaf(), right = Leaf())"
+        )
+        prog2 = parse_program(
+            "case Node(value = 2, left = Leaf(), right = Leaf()) of\n"
+            "  | Leaf() => 0\n"
+            "  | Node(value, left, right) => value"
+        )
+        r2 = check(
+            resolve(
+                prog2,
+                parent_scope=r1.resolved.root_scope,
+                ambient_constructor_candidates=r1.resolved.constructor_candidates,
+            ),
             default_capabilities(),
             seed_env=r1.type_env,
         )
@@ -5676,15 +5705,16 @@ class TestNestedGenericInference:
 
 
 # ---------------------------------------------------------------------------
-# Fix 2: generic-recursion rejection tests
+# Generic recursive types: inhabitation accept/reject
 # ---------------------------------------------------------------------------
 
 
-class TestGenericRecursionRejection:
-    """Tests asserting the 'directly or indirectly recursive' error for generic types."""
+class TestGenericRecursiveTypes:
+    """Inhabitation of recursive generic record/enum declarations."""
 
-    def test_generic_record_direct_recursion_rejected(self) -> None:
-        # record Tree[T] with a field of type Tree[T] is directly recursive.
+    def test_generic_record_direct_recursion_is_uninhabitable(self) -> None:
+        # record Tree[T] with a bare field of type Tree[T] and no base case
+        # or list/dict guard has no finite value.
         err = reject_type(
             "enum Option[T]\n"
             "  | none\n"
@@ -5694,107 +5724,109 @@ class TestGenericRecursionRejection:
             "  child: Tree[T]\n"
             "Tree(value = 1, child = Tree(value = 2, child = ()))"
         )
-        assert "recursive" in str(err).lower()
+        assert "uninhabitable" in str(err).lower()
 
-    def test_generic_record_indirect_via_list_rejected(self) -> None:
-        # children: list[Tree[T]] is indirect recursion via list.
-        err = reject_type(
+    def test_generic_record_indirect_via_list_is_accepted(self) -> None:
+        # children: list[Tree[T]] is guarded: the empty list is always a
+        # value regardless of the element type.
+        r = accept_type(
             "record Tree[T]\n  value: T\n  children: list[Tree[T]]\nTree(value = 1, children = [])"
         )
-        assert "recursive" in str(err).lower()
+        assert r.resolved.program is not None
 
-    def test_generic_record_indirect_via_dict_rejected(self) -> None:
-        # dict[text, Tree[T]] is indirect recursion via dict.
-        err = reject_type(
+    def test_generic_record_indirect_via_dict_is_accepted(self) -> None:
+        # dict[text, Tree[T]] is guarded the same way as list.
+        r = accept_type(
             "record Tree[T]\n"
             "  value: T\n"
             "  children: dict[text, Tree[T]]\n"
             "Tree(value = 1, children = {})"
         )
-        assert "recursive" in str(err).lower()
+        assert r.resolved.program is not None
 
-    def test_generic_enum_direct_recursion_rejected(self) -> None:
-        # enum L[T] | nil | cons(tail: L[T]) is directly recursive.
-        err = reject_type("enum L[T]\n  | nil\n  | cons(head: T, tail: L[T])\nnil()")
-        assert "recursive" in str(err).lower()
+    def test_generic_enum_direct_recursion_with_base_case_is_accepted(self) -> None:
+        # enum L[T] | nil | cons(tail: L[T]): nil is a base-case variant.
+        r = accept_type(
+            "enum L[T]\n  | nil\n  | cons(head: T, tail: L[T])\nlet xs: L[int] = nil()\nxs"
+        )
+        assert r.resolved.program is not None
 
-    def test_generic_mutual_recursion_rejected(self) -> None:
-        # record A[T] with field b: B[T] and record B[T] with field a: A[T].
+    def test_generic_mutual_recursion_is_uninhabitable(self) -> None:
+        # record A[T] with field b: B[T] and record B[T] with field a: A[T]:
+        # neither side has independent evidence, so both stay uninhabited.
         err = reject_type("record A[T]\n  b: B[T]\nrecord B[T]\n  a: A[T]\nA(b = B(a = ()))")
-        assert "recursive" in str(err).lower()
+        assert "uninhabitable" in str(err).lower()
 
-    def test_generic_argument_self_recursion_rejected(self) -> None:
-        # A[T] (a generic record) is not itself recursive, but a non-generic
-        # record whose field applies it to itself (Box[A]) is: the argument
-        # position, not the generic template body, is where the cycle lives.
-        err = reject_type(
-            "record Box[T]\n  v: T\nrecord A\n  x: Box[A]\nA(x = ())"
-        )
-        assert "recursive" in str(err).lower()
+    def test_generic_argument_self_reference_is_accepted(self) -> None:
+        # A[T] (a generic record) is not itself recursive; a non-generic
+        # record applying it to itself (Box[A]) is still accepted:
+        # inhabitation is declaration-level and ignores type arguments, so
+        # Box's declaration is unconditionally inhabited regardless of what
+        # A[T] is instantiated with.
+        r = accept_type("record Box[T]\n  v: T\nrecord A\n  x: Box[A]\n()")
+        assert r.resolved.program is not None
 
-    def test_generic_argument_self_recursion_rejected_for_enum(self) -> None:
+    def test_generic_argument_self_reference_is_accepted_for_enum(self) -> None:
         # enum variant field applying a generic type to the enclosing enum.
-        err = reject_type(
-            "record Box[T]\n  v: T\nenum E\n  | C(b: Box[E])\nC(b = ())"
-        )
-        assert "recursive" in str(err).lower()
+        r = accept_type("record Box[T]\n  v: T\nenum E\n  | C(b: Box[E])\n()")
+        assert r.resolved.program is not None
 
-    def test_generic_argument_mutual_recursion_rejected(self) -> None:
+    def test_generic_argument_mutual_reference_is_accepted(self) -> None:
         # record A (b: Box[B]) + record B (a: Box[A]): neither A nor B is
-        # generic, but each applies a generic Box to the other, forming a
-        # mutual cycle through the type argument position.
-        err = reject_type(
+        # generic, but each applies a generic Box to the other through the
+        # type argument position — accepted for the same reason as above.
+        r = accept_type(
             "record Box[T]\n  v: T\n"
             "record A\n  b: Box[B]\n"
             "record B\n  a: Box[A]\n"
-            "A(b = ())"
+            "()"
         )
-        assert "recursive" in str(err).lower()
+        assert r.resolved.program is not None
 
-    def test_generic_argument_recursion_via_parameterized_alias_rejected(self) -> None:
+    def test_generic_argument_reference_via_parameterized_alias_is_accepted(self) -> None:
         # type AL[X] = Box[X] is a parameterized alias; applying it to A
-        # (AL[A]) inlines to Box[A], the same self-referencing argument cycle
-        # as the direct-application case above.
-        err = reject_type(
+        # (AL[A]) inlines to Box[A], the same accepted self-referencing
+        # argument case as the direct-application case above.
+        r = accept_type(
             "record Box[T]\n  v: T\n"
             "type AL[X] = Box[X]\n"
             "record A\n  x: AL[A]\n"
-            "A(x = ())"
+            "()"
         )
-        assert "recursive" in str(err).lower()
+        assert r.resolved.program is not None
 
 
 # ---------------------------------------------------------------------------
-# Exception-involving recursive-type rejection tests
+# Exception-involving recursive types: inhabitation accept/reject
 # ---------------------------------------------------------------------------
 
 
-class TestExceptionRecursionRejection:
-    """Tests asserting rejection of records/exceptions recursive via exceptions."""
+class TestExceptionRecursiveTypes:
+    """Inhabitation of recursive exception declarations."""
 
-    def test_record_exception_field_cycle_rejected(self) -> None:
+    def test_record_exception_field_cycle_is_uninhabitable(self) -> None:
         # record R (e: E) + exception E extends Exception (r: R): a record
-        # and an exception whose fields reference each other.
+        # and an exception whose fields reference each other, with no guard.
         err = reject_type(
             "record R\n  e: E\nexception E extends Exception\n  r: R\nR(e = ())"
         )
-        assert "recursive" in str(err).lower()
+        assert "uninhabitable" in str(err).lower()
 
-    def test_exception_self_field_recursion_rejected(self) -> None:
-        # exception E extends Exception (child: E): an exception directly
-        # recursive through its own field.
+    def test_exception_bare_self_field_is_uninhabitable(self) -> None:
+        # exception E extends Exception (child: E): directly recursive
+        # through its own required field.
         err = reject_type(
             "exception E extends Exception\n  child: E\nE(child = ())"
         )
-        assert "recursive" in str(err).lower()
+        assert "uninhabitable" in str(err).lower()
 
-    def test_exception_self_field_via_list_recursion_rejected(self) -> None:
-        # exception E extends Exception (kids: list[E]): indirect recursion
-        # via list through its own field.
-        err = reject_type(
-            "exception E extends Exception\n  kids: list[E]\nE(kids = [])"
+    def test_exception_self_field_via_list_is_accepted(self) -> None:
+        # exception E extends Exception (kids: list[E]): list-guarded
+        # recursion through its own field.
+        r = accept_type(
+            'exception E extends Exception\n  kids: list[E]\nE(message = "m", kids = [])'
         )
-        assert "recursive" in str(err).lower()
+        assert r.resolved.program is not None
 
     def test_record_field_of_builtin_exception_type_is_accepted(self) -> None:
         # A field whose type is a built-in exception (not a user ExceptionDef)
@@ -5804,6 +5836,68 @@ class TestExceptionRecursionRejection:
             "record R\n  e: CastError\n"
             'R(e = CastError(message = "m", '
             'source_type = "text", target_type = "int", raw = "x"))'
+        )
+        assert r.resolved.program is not None
+
+
+# ---------------------------------------------------------------------------
+# Inhabitation accept/reject matrix
+# ---------------------------------------------------------------------------
+
+
+class TestInhabitationMatrix:
+    """One test per named scenario in the inhabitation accept/reject matrix."""
+
+    def test_bare_record_self_field_is_rejected(self) -> None:
+        err = reject_type("record R\n  next: R\nR(next = ())")
+        assert "uninhabitable" in str(err).lower()
+
+    def test_uninhabited_declaration_after_unrelated_binding_is_rejected(self) -> None:
+        # A non-type declaration preceding the uninhabited one is skipped
+        # (not mistaken for a record/enum/exception) while scanning for the
+        # first uninhabited declaration in source order.
+        err = reject_type("let unrelated = 1\nrecord R\n  next: R\nR(next = ())")
+        assert "uninhabitable" in str(err).lower()
+
+    def test_list_guarded_record_is_accepted(self) -> None:
+        r = accept_type("record R\n  children: list[R]\nR(children = [])")
+        assert r.resolved.program is not None
+
+    def test_dict_guarded_record_is_accepted(self) -> None:
+        r = accept_type("record R\n  children: dict[text, R]\nR(children = {})")
+        assert r.resolved.program is not None
+
+    def test_bare_mutual_record_pair_is_rejected(self) -> None:
+        err = reject_type("record A\n  b: B\nrecord B\n  a: A\nA(b = B(a = ()))")
+        assert "uninhabitable" in str(err).lower()
+
+    def test_mutual_pair_with_one_enum_base_case_is_accepted(self) -> None:
+        # A's only field is Choice (an enum); Choice's Skip variant is a base
+        # case that does not need a B, so A is inhabited via Skip even though
+        # its other variant carries a genuine B round-trip.
+        r = accept_type(
+            "record A\n  choice: Choice\n"
+            "enum Choice\n  | Skip\n  | Take(b: B)\n"
+            "record B\n  a: A\n"
+            "A(choice = Choice.Skip())"
+        )
+        assert r.resolved.program is not None
+
+    def test_enum_whose_only_variant_carries_itself_is_rejected(self) -> None:
+        # A single variant that requires another instance of the same enum,
+        # with no base-case variant to bottom out on.
+        err = reject_type("enum E\n  | Only(e: E)\nOnly(e = Only(e = ()))")
+        assert "uninhabitable" in str(err).lower()
+
+    def test_generic_recursive_enum_with_base_case_is_accepted(self) -> None:
+        # enum Expr[T] | Lit(value: T) | Add(lhs: Expr[T], rhs: Expr[T]):
+        # Lit is the base case (its only field is the type parameter itself).
+        r = accept_type(
+            "enum Expr[T]\n"
+            "  | Lit(value: T)\n"
+            "  | Add(lhs: Expr[T], rhs: Expr[T])\n"
+            "let e: Expr[int] = Lit(value = 1)\n"
+            "e"
         )
         assert r.resolved.program is not None
 

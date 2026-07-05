@@ -25,15 +25,14 @@ Algorithm
    b. **Bodies, order-free** — each declaration's body (field/variant type
       expressions) is resolved in a fixed deterministic order (sorted by
       ``(ModuleId.segments, name)``), with no dependency-ordering
-      constraint.  Before resolving any body, the structural
-      type-definition dependency graph (a record/enum/alias depends on
-      every module-qualified or unqualified type named in its
-      field/variant/alias-target type expressions, across modules) is
-      checked for cycles: a genuine structural type cycle (a type that
-      contains itself infinitely) is rejected as a static error — a
-      temporary restriction, consistent with the existing single-module
-      behaviour, pending an inhabitation-based analysis that will allow
-      well-founded recursion.
+      constraint — a cycle (same-module, mutual, or spanning any number of
+      modules) is legal, since every reference resolves to a handle
+      regardless of build order.
+   c. **Inhabitation** — once every body is resolved, the whole-graph
+      inhabitation fixpoint
+      (:func:`~agm.agl.semantics.analyses.compute_uninhabited`) rejects the
+      first declaration (across the whole graph) that has no finite value,
+      consistent with the single-module ``_TypeBuilder`` check.
 
 2. **Graph function-signature pre-pass** — resolve the parameter and return type
    annotations for EVERY top-level ``FuncDef`` in EVERY module (using the
@@ -70,6 +69,7 @@ from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.graph import ResolvedModuleGraph
 from agm.agl.scope.imports import ImportEnv
 from agm.agl.scope.symbols import ResolvedProgram
+from agm.agl.semantics.analyses import compute_uninhabited, uninhabitable_message
 from agm.agl.semantics.type_table import TypeTable, create_seeded_type_table
 from agm.agl.semantics.types import (
     CastSpec,
@@ -85,9 +85,11 @@ from agm.agl.syntax.nodes import (
     RecordDef,
     TypeAlias,
 )
+from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.builder import _TypeBuilder
 from agm.agl.typecheck.checker import _Checker
 from agm.agl.typecheck.env import (
+    AglTypeError,
     ArgumentBindings,
     CallSiteRecord,
     ConstructorSignature,
@@ -98,7 +100,6 @@ from agm.agl.typecheck.env import (
     ParamSpec,
     TypeEnvironment,
 )
-from agm.util.graph import GraphCycleError, toposort
 
 # ---------------------------------------------------------------------------
 # Output types
@@ -296,11 +297,12 @@ def _collect_all_type_keys(
     is a primitive (e.g. ``type Number = int``).  Builtin-shadowing types are
     never present here because ``_collect_shells_only`` rejects them earlier.
 
-    This set is used as the universe for the structural type-definition dependency
-    graph.  It is LARGER than ``graph_type_table`` during the shell-collection
-    step because aliases are not yet resolved to shells there — the graph table is
-    only populated with record/enum shells and is updated with alias resolutions
-    during topological body resolution.
+    This set is the fixed order in which Step C below resolves every
+    declaration's body (sorted by :func:`_type_key_sort_key`). It is LARGER
+    than ``graph_type_table`` during the shell-collection step because
+    aliases are not yet resolved to shells there — the graph table is only
+    populated with record/enum shells and is updated with alias resolutions
+    as each body is resolved.
     """
     all_keys: set[tuple[ModuleId, str]] = set()
     for mid, rmod in resolved_graph.modules.items():
@@ -315,202 +317,45 @@ def _collect_all_type_keys(
     return all_keys
 
 
-def _collect_type_expr_deps(
-    type_expr: object,
-    owning_mid: ModuleId,
-    import_env: ImportEnv,
-    all_type_keys: set[tuple[ModuleId, str]],
-) -> list[tuple[ModuleId, str]]:
-    """Return the list of ``(ModuleId, name)`` keys that *type_expr* depends on.
-
-    This is used to build the structural type-definition dependency graph used
-    by the topological sort in ``_build_graph_type_table``.
-
-    A type expression ``A`` depends on ``(mid_B, B)`` if A's field/variant/alias
-    body names B (either qualified or unqualified via open import), AND B is a
-    user-declared type (present in ``all_type_keys`` — records, enums, and
-    aliases; but NOT built-ins/prelude types which are always available).
-
-    Only ``NameT`` (named type references) create dependencies.  Container types
-    (``ListT``, ``DictT``, ``FuncT``) recurse structurally.
-    """
-    from agm.agl.syntax.types import AppliedT, DictT, FuncT, ListT, NameT
-
-    deps: list[tuple[ModuleId, str]] = []
-
-    def _walk(te: object) -> None:
-        if isinstance(te, (NameT, AppliedT)):
-            if te.module_qualifier is not None:
-                # Qualified: resolve through import env.
-                qualifier = te.module_qualifier
-                if not qualifier.segments:
-                    # Self-reference ::Name
-                    key = (owning_mid, te.name)
-                    if key in all_type_keys:
-                        deps.append(key)
-                else:
-                    handle = qualifier.segments
-                    handle_map = import_env.qualified.get(handle)
-                    if handle_map is not None:
-                        qname = handle_map.get(te.name)
-                        if qname is not None:
-                            key = (qname[0], qname[1])
-                            if key in all_type_keys:
-                                deps.append(key)
-            else:
-                # Unqualified: could be own module or open-imported.
-                own_key = (owning_mid, te.name)
-                if own_key in all_type_keys:
-                    deps.append(own_key)
-                else:
-                    candidates = import_env.unqualified.get(te.name, frozenset())
-                    for qn in candidates:
-                        key = (qn[0], qn[1])
-                        if key in all_type_keys:
-                            deps.append(key)
-            if isinstance(te, AppliedT):
-                for arg in te.args:
-                    _walk(arg)
-        elif isinstance(te, (ListT, DictT)):
-            inner = te.elem if isinstance(te, ListT) else te.value
-            _walk(inner)
-        elif isinstance(te, FuncT):
-            for p in te.params:
-                _walk(p)
-            _walk(te.result)
-
-    _walk(type_expr)
-    return deps
-
-
-def _collect_unqualified_type_name_deps(
-    name: str,
-    owning_mid: ModuleId,
-    import_env: ImportEnv,
-    all_type_keys: set[tuple[ModuleId, str]],
-) -> list[tuple[ModuleId, str]]:
-    """Return graph dependencies for an unqualified type name."""
-    own_key = (owning_mid, name)
-    if own_key in all_type_keys:
-        return [own_key]
-
-    deps: list[tuple[ModuleId, str]] = []
-    candidates = import_env.unqualified.get(name, frozenset())
-    for qn in candidates:
-        key = (qn[0], qn[1])
-        if key in all_type_keys:
-            deps.append(key)
-    return deps
-
-
-def _compute_type_deps(
-    resolved_graph: ResolvedModuleGraph,
-    all_type_keys: set[tuple[ModuleId, str]],
-) -> dict[tuple[ModuleId, str], list[tuple[ModuleId, str]]]:
-    """Compute the structural type-definition dependency graph.
-
-    Returns a dict mapping each ``(ModuleId, name)`` in ``all_type_keys`` to the
-    list of ``(ModuleId, name)`` keys it structurally depends on (i.e. whose
-    fully-built type it needs before its own body can be resolved by-value).
-
-    Dependencies on built-ins/prelude types are omitted (they are always
-    available and do not need to be in the topo sort).
-    """
-    deps: dict[tuple[ModuleId, str], list[tuple[ModuleId, str]]] = {}
-
-    for mid, rmod in resolved_graph.modules.items():
-        program = rmod.resolved.program
-        import_env = rmod.import_env
-        assert isinstance(program, Program)
-
-        for item in program.body.items:
-            if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
-                key = (mid, item.name)
-                # key is guaranteed to be in all_type_keys: _collect_all_type_keys
-                # adds every RecordDef/EnumDef/TypeAlias under the same conditions
-                # used here.  Builtin shadowing is rejected in _collect_shells_only
-                # before either function is called, so no shadowing key ever appears.
-                item_deps: list[tuple[ModuleId, str]] = []
-                if isinstance(item, RecordDef):
-                    for fd in item.fields:
-                        item_deps.extend(
-                            _collect_type_expr_deps(
-                                fd.type_expr, mid, import_env, all_type_keys
-                            )
-                        )
-                elif isinstance(item, EnumDef):
-                    for vd in item.variants:
-                        for fd in vd.fields:
-                            item_deps.extend(
-                                _collect_type_expr_deps(
-                                    fd.type_expr, mid, import_env, all_type_keys
-                                )
-                            )
-                elif isinstance(item, ExceptionDef):
-                    for fd in item.fields:
-                        item_deps.extend(
-                            _collect_type_expr_deps(
-                                fd.type_expr, mid, import_env, all_type_keys
-                            )
-                        )
-                    if item.base is not None:
-                        item_deps.extend(
-                            _collect_unqualified_type_name_deps(
-                                item.base, mid, import_env, all_type_keys
-                            )
-                        )
-                else:
-                    # Must be TypeAlias (outer isinstance guarantees one of the three).
-                    item_deps.extend(
-                        _collect_type_expr_deps(
-                            item.type_expr, mid, import_env, all_type_keys
-                        )
-                    )
-                # Remove self-deps (would cause a false cycle — handled by
-                # _TypeBuilder's within-module structural recursion detection).
-                deps[key] = [d for d in item_deps if d != key]
-
-    return deps
-
-
 def _type_key_sort_key(k: tuple[ModuleId, str]) -> tuple[tuple[str, ...], str]:
     return (k[0].segments, k[1])
 
 
-def _check_no_structural_cycle(
-    all_type_keys: set[tuple[ModuleId, str]],
-    deps: dict[tuple[ModuleId, str], list[tuple[ModuleId, str]]],
-) -> None:
-    """Raise ``AglTypeError`` if the structural type-definition dependency graph
-    has a cycle (a type that directly or indirectly contains itself by value).
+def _find_type_decl_span(
+    resolved_graph: ResolvedModuleGraph, key: tuple[ModuleId, str]
+) -> SourceSpan | None:
+    """Return the declaration span for *key*, or ``None`` if it cannot be found.
 
-    This is a temporary restriction — recursive types are not yet supported —
-    consistent with the per-module structural recursion ban applied to a
-    single module's own declarations (which also catches direct
-    self-reference, excluded from *deps*).  Import-graph cycles are allowed
-    (see the module docstring); this only rejects genuine structural cycles.
-
-    Uses Kahn's algorithm purely for cycle *detection*: the topological order
-    it produces is discarded — body resolution runs in a fixed
-    ``(ModuleId.segments, name)`` order with no dependency-ordering
-    constraint, since every type reference resolves to a handle regardless of
-    build order.
+    Used to attach a real source span to the whole-graph inhabitation error
+    (see :func:`_build_graph_type_table`): the resolved module ASTs are
+    already in hand, so the span is a plain lookup rather than anything
+    carried through the type table itself (a ``TypeDef`` has no span — it is
+    a pure semantic description, shared with non-graph single-module
+    building).
     """
-    from agm.agl.typecheck.env import AglTypeError
+    mid, name = key
+    rmod = resolved_graph.modules.get(mid)
+    if rmod is None:
+        return None
+    program = rmod.resolved.program
+    assert isinstance(program, Program)
+    for item in program.body.items:
+        if isinstance(item, (RecordDef, EnumDef, ExceptionDef)) and item.name == name:
+            return item.span
+    return None
 
-    try:
-        toposort(all_type_keys, deps, key=_type_key_sort_key)
-    except GraphCycleError as exc:
-        # Reconstruct the typed set from all_type_keys (exc.cycle is set[object]).
-        remaining = {k for k in all_type_keys if k in exc.cycle}
-        sorted_keys = sorted(remaining, key=_type_key_sort_key)
-        mid, name = sorted_keys[0]
-        raise AglTypeError(
-            f"Type '{name}' in module '{mid.dotted()}' is part of a structural "
-            "type cycle (a type that directly or indirectly contains itself by "
-            "value). Recursive types are not supported in AgL.",
-            span=None,
-        ) from exc
+
+def _raise_first_uninhabited(
+    uninhabited: frozenset[tuple[ModuleId, str]],
+    type_table: TypeTable,
+    resolved_graph: ResolvedModuleGraph,
+) -> None:
+    """Raise ``AglTypeError`` for the first uninhabited key, sorted deterministically."""
+    mid, name = sorted(uninhabited, key=_type_key_sort_key)[0]
+    typedef = type_table.get(mid, name)
+    assert typedef is not None
+    span = _find_type_decl_span(resolved_graph, (mid, name))
+    raise AglTypeError(uninhabitable_message(typedef.kind, name), span=span)
 
 
 def _build_graph_type_table(
@@ -541,27 +386,22 @@ def _build_graph_type_table(
             type is not known until the alias body is resolved, so they have
             no entry in the table yet).
 
-    Step B: Compute the structural type-definition dependency graph across all
-            modules using the complete set of declared type keys (records, enums,
-            and aliases).  A type definition depends on every type named in its
-            field/variant/alias-target type expressions, cross-module included.
-            Check it for cycles (a temporary restriction — recursive types are
-            not yet supported); a genuine structural type cycle (a type that
-            structurally contains itself, making it infinitely sized) is
-            reported as an ``AglTypeError``, consistent with how single-module
-            structural recursion is handled by the per-module ``_TypeBuilder``.
-
-    Step C: Resolve every type body in a fixed deterministic order (sorted by
+    Step B: Resolve every type body in a fixed deterministic order (sorted by
             ``(ModuleId.segments, name)``), with no dependency-ordering
             constraint — every field/variant/element type reference is a
             handle, valid regardless of whether the referenced declaration's
             own body has been resolved yet.
 
-    Import-graph cycles are allowed and do NOT imply structural type cycles
-    — the structural dependency graph may be acyclic even when the import graph
-    has cycles (e.g. modA imports modB for a Color enum used in modA.Foo fields,
-    and modB imports modA for modA.Foo used in modB.Bar fields: the structural
-    dependency graph Color → Foo, Foo → Bar is acyclic).
+    Step C: Once every body is resolved, run the inhabitation fixpoint
+            (:func:`~agm.agl.semantics.analyses.compute_uninhabited`) over the
+            whole shared table and reject the first uninhabited declaration
+            (sorted by :func:`_type_key_sort_key`), at its declaration span.
+
+    Cross-module type cycles are allowed (a cycle may span any modules, the
+    same as same-module mutual recursion) as long as the declarations
+    involved are inhabited — e.g. modA imports modB for a Color enum used in
+    modA.Foo fields, and modB imports modA for modA.Foo used in modB.Bar
+    fields via a ``list``/``dict`` field or an enum base-case variant.
     """
     # Shared TypeTable: one instance dual-written by every cross-module env
     # below, so declarations from all modules land in the same table.  Step A's
@@ -640,17 +480,10 @@ def _build_graph_type_table(
         _collect_shells_only(builder, rmod.resolved.program)
         cross_builders[mid] = builder
 
-    # Step B: compute the structural type-definition dependency graph.
     # Use the COMPLETE set of declared type keys (including aliases), NOT just
-    # the record/enum handles in graph_type_table.  Aliases depend on their
-    # target types just like record fields do.  A cycle here is a genuine
-    # structural type cycle (rejected below); same-module direct
-    # self-reference is excluded from the deps graph and is instead caught by
-    # each module's own per-module structural recursion check (Step C, via
-    # the full per-module ``_TypeBuilder.collect`` re-check in Phase 3).
+    # the record/enum handles in graph_type_table, as the fixed resolution
+    # order for Step B below.
     all_type_keys = _collect_all_type_keys(resolved_graph)
-    deps = _compute_type_deps(resolved_graph, all_type_keys)
-    _check_no_structural_cycle(all_type_keys, deps)
 
     def _resolve_one(key: tuple[ModuleId, str]) -> None:
         mid, name = key
@@ -667,7 +500,7 @@ def _build_graph_type_table(
             cross_envs=cross_envs,
         )
 
-    # Step C: resolve every type body in a fixed deterministic order — no
+    # Step B: resolve every type body in a fixed deterministic order — no
     # dependency-ordering constraint of any kind, since every reference
     # (including an exception's ``extends`` base) is a handle, valid whether
     # or not the referenced declaration's own body has been resolved yet.
@@ -675,6 +508,16 @@ def _build_graph_type_table(
 
     for key in body_order:
         _resolve_one(key)
+
+    # Step C: every body is now resolved, so the inhabitation fixpoint can
+    # run over the whole shared table (this graph's declarations plus the
+    # builtin/prelude defs, all trivially inhabited). The per-module builder
+    # re-check in Phase 3 (``_check_module``) skips its own inhabitation pass
+    # (``check_inhabitation=False``) precisely because this whole-graph check
+    # has already run.
+    uninhabited = compute_uninhabited(shared_type_table)
+    if uninhabited:
+        _raise_first_uninhabited(uninhabited, shared_type_table, resolved_graph)
 
     return (
         graph_type_table,
@@ -883,8 +726,11 @@ def _check_module(
     # builder.collect() → _preregister_funcdef re-registers this module's own
     # function signatures (both _binding_types and _function_signatures), so
     # any same-named collision seeded above is corrected for the current module.
+    # check_inhabitation=False: the whole-graph pre-pass (_build_graph_type_table)
+    # already ran the inhabitation fixpoint over every module's declarations
+    # before Phase 3 started; re-running it per module would be redundant.
     builder = _TypeBuilder(env, module_id=mid)
-    builder.collect(resolved.program)
+    builder.collect(resolved.program, check_inhabitation=False)
 
     checker = _Checker(env=env, resolved=resolved, capabilities=capabilities)
     checker.check_program(resolved.program)

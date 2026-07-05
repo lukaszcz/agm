@@ -26,12 +26,16 @@ Phase 2 (the loop in ``collect``)
     ``TypeTable.exception_fields`` to read the (by-then fully buildable)
     flattened base chain.
 
-Recursive nominal types are not yet supported.  Because handles make forward
-references trivially resolve, nothing in phase 2 itself detects a
-declaration that structurally contains itself; a dedicated pass
-(``_check_recursive_types``) runs after all bodies are resolved and rejects
-one, replicating today's diagnostics exactly.  This is a temporary
-restriction pending an inhabitation-based analysis.
+Recursive nominal types (records, enums, exceptions, including mutual and
+generic recursion) are legal. Because handles make forward references
+trivially resolve, nothing in phase 2 itself needs to reject a declaration
+that structurally contains itself; instead, once every body is resolved, an
+inhabitation check (:func:`~agm.agl.semantics.analyses.compute_uninhabited`)
+runs over the whole table and rejects any declaration that has no finite
+value (e.g. a record whose only field is itself, with no ``list``/``dict``
+or enum base-case escape). Recursive type ALIASES remain banned — an alias
+is transparent and has no nominal identity to anchor a cycle — by the
+existing alias-cycle check in ``typecheck/env.py``.
 """
 
 from __future__ import annotations
@@ -39,6 +43,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
+from agm.agl.semantics.analyses import compute_uninhabited, uninhabitable_message
 from agm.agl.semantics.type_table import (
     BUILTIN_EXCEPTION_TYPE_DEFS,
     BUILTIN_PRELUDE_TYPE_DEFS,
@@ -47,10 +52,8 @@ from agm.agl.semantics.type_table import (
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTION_NAMES,
     BUILTIN_PRELUDE_TYPE_NAMES,
-    DictType,
     EnumType,
     ExceptionType,
-    ListType,
     RecordType,
     Type,
     TypeVarType,
@@ -97,7 +100,8 @@ class _TypeBuilder:
     - Duplicate type names (user vs user, or user shadowing a built-in).
     - Duplicate record fields or enum variants/fields.
     - Unknown type references inside field/variant definitions.
-    - Recursive records, enums, or exceptions (temporary ban).
+    - An uninhabited record, enum, or exception declaration (see
+      :meth:`_check_inhabitation`).
     - Alias cycles.
 
     See the module docstring for the two-phase, order-free build strategy.
@@ -109,23 +113,30 @@ class _TypeBuilder:
         # Track user-declared names → declaration span (excludes built-ins).
         self._declared: dict[str, SourceSpan] = {}
         # Index of record/enum/exception definitions, for phase-2 body
-        # resolution and the post-pass recursion check.
+        # resolution and the post-pass inhabitation check.
         self._record_defs: dict[str, RecordDef] = {}
         self._enum_defs: dict[str, EnumDef] = {}
         self._exception_defs: dict[str, ExceptionDef] = {}
 
-    def collect(self, program: Program) -> None:
+    def collect(self, program: Program, *, check_inhabitation: bool = True) -> None:
         """Scan *program* and populate ``self._env``.
 
         Phase 1 registers every declaration's name and handle
         (:meth:`collect_shells_only`); phase 2 resolves each declaration's
         body, in source order, with no dependency ordering (see the module
-        docstring); a pass rejects any declaration that structurally contains
-        itself (the temporary recursion ban); a final post-pass
+        docstring); an inhabitation pass (:meth:`_check_inhabitation`) then
+        rejects the first uninhabited declaration, in source order, unless
+        *check_inhabitation* is ``False``; a final post-pass
         (:meth:`_finalize_exceptions`) validates own-vs-inherited exception
         field duplication now that every exception's flattened field set is
-        buildable (the recursion-ban pass has already rejected any ``extends``
-        cycle).
+        buildable (an uninhabited ``extends`` cycle is always caught by the
+        inhabitation pass first).
+
+        *check_inhabitation* is ``False`` only for the graph-mode per-module
+        re-check (``typecheck/graph.py``), whose whole-graph pre-pass has
+        already run inhabitation over every module's declarations before any
+        module's body is individually re-checked; re-running it per module
+        would be redundant.
         """
         self.collect_shells_only(program)
 
@@ -139,7 +150,8 @@ class _TypeBuilder:
             elif isinstance(item, TypeAlias):
                 self._validate_alias(item)
 
-        self._check_recursive_types(program)
+        if check_inhabitation:
+            self._check_inhabitation(program)
         self._finalize_exceptions()
 
     def collect_shells_only(self, program: Program) -> None:
@@ -365,8 +377,11 @@ class _TypeBuilder:
         Deferred until every exception's own ``TypeDef`` (and therefore its
         base's, however deep the ``extends`` chain) is registered — there is
         no build-ordering step in :meth:`_build_exception` (see the module
-        docstring).  A cyclic ``extends`` chain is always rejected by
-        :meth:`_check_recursive_types`, which runs before this post-pass, so
+        docstring).  A cyclic ``extends`` chain has no independent evidence to
+        ever become inhabited (see :meth:`_check_inhabitation`), so it is
+        always rejected before this post-pass runs — either here (single-
+        module) or by the graph pre-pass (``typecheck/graph.py``) before
+        Phase 3 re-checks this module at all — and
         :meth:`~agm.agl.semantics.type_table.TypeTable.exception_fields` never
         hits its internal cycle guard here.
         """
@@ -528,104 +543,37 @@ class _TypeBuilder:
         )
 
     # ------------------------------------------------------------------
-    # Temporary recursion ban
+    # Inhabitation check
     # ------------------------------------------------------------------
-    #
-    # Recursive nominal types are not yet supported in AgL — a later step
-    # replaces this blanket rejection with an inhabitation-based analysis
-    # that allows well-founded recursion.  Since every reference now resolves
-    # to a handle regardless of build order, nothing above detects a
-    # declaration that structurally contains itself; this dedicated pass
-    # runs after all bodies are resolved and replicates today's exact
-    # diagnostics.
 
-    def _check_recursive_types(self, program: Program) -> None:
-        in_progress: set[str] = set()
-        done: set[str] = set()
+    def _check_inhabitation(self, program: Program) -> None:
+        """Reject the first uninhabited record/enum/exception, in source order.
 
-        def visit_type(t: Type) -> None:
-            if isinstance(t, RecordType):
-                # Type arguments are visited unconditionally (even for a
-                # cross-module or not-yet-declared handle): a generic
-                # argument such as ``Box[A]`` is where the cycle actually
-                # lives, not in Box's own (non-recursive) template body.
-                for ta in t.type_args:
-                    visit_type(ta)
-                if t.module_id == self._module_id and t.name in self._record_defs:
-                    visit_record(t.name)
-            elif isinstance(t, EnumType):
-                for ta in t.type_args:
-                    visit_type(ta)
-                if t.module_id == self._module_id and t.name in self._enum_defs:
-                    visit_enum(t.name)
-            elif isinstance(t, ExceptionType):
-                if t.name in self._exception_defs:
-                    visit_exception(t.name)
-            elif isinstance(t, ListType):
-                visit_type(t.elem)
-            elif isinstance(t, DictType):
-                visit_type(t.value)
-            # primitives, function/agent/unit/typevar/bottom types never
-            # embed a user declaration.
-
-        def visit_record(name: str) -> None:
-            if name in done:
-                return
-            if name in in_progress:
-                raise AglTypeError(
-                    f"Record type '{name}' is directly or indirectly recursive. "
-                    "Recursive types are not supported in AgL.",
-                    span=self._declared[name],
-                )
-            in_progress.add(name)
-            typedef = self._env.type_table.get(self._module_id, name)
-            if typedef is not None:
-                for _fname, ftype in typedef.fields:
-                    visit_type(ftype)
-            in_progress.discard(name)
-            done.add(name)
-
-        def visit_enum(name: str) -> None:
-            if name in done:
-                return
-            if name in in_progress:
-                raise AglTypeError(
-                    f"Enum type '{name}' is directly or indirectly recursive. "
-                    "Recursive types are not supported in AgL.",
-                    span=self._declared[name],
-                )
-            in_progress.add(name)
-            typedef = self._env.type_table.get(self._module_id, name)
-            if typedef is not None:
-                for _vname, vfields in typedef.variants:
-                    for _fname, ftype in vfields:
-                        visit_type(ftype)
-            in_progress.discard(name)
-            done.add(name)
-
-        def visit_exception(name: str) -> None:
-            if name in done:
-                return
-            if name in in_progress:
-                raise AglTypeError(
-                    f"Exception type '{name}' is directly or indirectly recursive.",
-                    span=self._declared[name],
-                )
-            in_progress.add(name)
-            stmt = self._exception_defs[name]
-            if stmt.base is not None and stmt.base in self._exception_defs:
-                visit_exception(stmt.base)
-            typedef = self._env.type_table.get(self._module_id, name)
-            if typedef is not None:
-                for _fname, ftype in typedef.fields:
-                    visit_type(ftype)
-            in_progress.discard(name)
-            done.add(name)
-
+        Runs :func:`~agm.agl.semantics.analyses.compute_uninhabited` over the
+        WHOLE shared table (this module's declarations plus anything already
+        seeded from a prior REPL entry or the builtin/prelude defs — all
+        trivially inhabited), then walks *program*'s own declarations in
+        source order reporting the first one whose key came back
+        uninhabited, at its declaration span. Reporting only THIS program's
+        own declarations (rather than any uninhabited key at all) keeps
+        error attribution local: a key from another module's table entry has
+        no span available here anyway.
+        """
+        uninhabited = compute_uninhabited(self._env.type_table)
+        if not uninhabited:
+            return
         for item in program.body.items:
-            if isinstance(item, RecordDef):
-                visit_record(item.name)
-            elif isinstance(item, EnumDef):
-                visit_enum(item.name)
-            elif isinstance(item, ExceptionDef):
-                visit_exception(item.name)
+            if not isinstance(item, (RecordDef, EnumDef, ExceptionDef)):
+                continue
+            module_id = PRELUDE_ID if item.is_builtin else self._module_id
+            key = (module_id, item.name)
+            if key not in uninhabited:
+                continue
+            typedef = self._env.type_table.get(module_id, item.name)
+            assert typedef is not None
+            raise AglTypeError(uninhabitable_message(typedef.kind, item.name), span=item.span)
+        raise AssertionError(  # pragma: no cover
+            "compute_uninhabited reported a key not owned by this program's own "
+            "declarations — every uninhabited key in a single-module table is "
+            "expected to trace back to a declaration in the program being checked"
+        )

@@ -18,16 +18,20 @@ representation shared by records, enums, and exceptions.
 flattens the ``extends`` base chain into one field mapping.
 
 ``comparable_types``/``_has_no_value_equality`` live here rather than in
-``semantics.types`` because their record/enum/exception arms recurse through
-the table instead of through embedded fields; ``semantics.types`` cannot
-import this module without a circular import.
+``semantics.types`` because their record/enum/exception arms consult the
+table's declaration-level equality-capability flags instead of walking
+embedded fields; ``semantics.types`` cannot import this module without a
+circular import. The flags themselves are a fixpoint over the whole table
+(``semantics.analyses.compute_equality_capabilities``, cycle-safe by
+construction), cached on :class:`TypeTable` and invalidated whenever the
+table's declarations change.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal, assert_never
+from typing import TYPE_CHECKING, Literal, assert_never
 
 from agm.agl.modules.ids import PRELUDE_ID, STD_CORE_ID, ModuleId
 from agm.agl.semantics.types import (
@@ -49,6 +53,9 @@ from agm.agl.semantics.types import (
     UnitType,
     substitute,
 )
+
+if TYPE_CHECKING:
+    from agm.agl.semantics.analyses import EqualityCapabilities
 
 TypeDefKind = Literal["record", "enum", "exception"]
 
@@ -146,6 +153,11 @@ class TypeTable:
         self._exception_field_kinds_cache: dict[
             tuple[ModuleId, str], tuple[tuple[str, str], ...]
         ] = {}
+        # Whole-table equality-capability fixpoint (see
+        # :meth:`has_no_value_equality`), computed lazily on first use and
+        # invalidated (set back to ``None``) whenever a declaration is added,
+        # removed, or overwritten.
+        self._equality_caps: EqualityCapabilities | None = None
 
     def register(self, typedef: TypeDef) -> None:
         """Register *typedef*, idempotent under identical re-registration.
@@ -163,6 +175,7 @@ class TypeTable:
         existing = self._defs.get(key)
         if existing is None:
             self._defs[key] = typedef
+            self._equality_caps = None
             return
         if existing != typedef:
             raise AssertionError(
@@ -194,6 +207,10 @@ class TypeTable:
         self._enum_variants_cache.pop(key, None)
         self._exception_fields_cache.pop(key, None)
         self._exception_field_kinds_cache.pop(key, None)
+        # The equality-capability fixpoint is whole-table (any declaration's
+        # flag can in principle depend on any other's), so a single changed
+        # key invalidates the whole cached result rather than just this key.
+        self._equality_caps = None
 
     def record_fields(self, handle: RecordType) -> Mapping[str, Type]:
         """Return *handle*'s field types with its ``type_args`` substituted in.
@@ -274,9 +291,10 @@ class TypeTable:
         Raises ``KeyError`` if no ``TypeDef`` is registered for the handle's
         ``(module_id, name)``. Raises ``AssertionError`` if the registered
         def's ``kind`` is not ``"exception"``, or if the base chain contains
-        a cycle — an internal-invariant violation, since the builder's
-        temporary cycle check rejects ``extends`` cycles before this can fire
-        in production; this guard is for internal robustness, not a user
+        a cycle — an internal-invariant violation, since the inhabitation
+        check (single-module builder post-pass or graph pre-pass) rejects
+        ``extends`` cycles as uninhabitable before this can fire in
+        production; this guard is for internal robustness, not a user
         diagnostic.
         """
         key = (handle.module_id, handle.name)
@@ -371,6 +389,42 @@ class TypeTable:
         """Return all registered ``TypeDef``s (used for REPL and graph table sharing)."""
         return tuple(self._defs.values())
 
+    def has_no_value_equality(self, handle: RecordType | EnumType | ExceptionType) -> bool:
+        """Return ``True`` if *handle* has no value equality (cycle-safe).
+
+        Declaration-level: *handle*'s declaration is unconditionally
+        non-comparable (``EqualityCapabilities.no_equality``), or one of its
+        concrete ``type_args`` at an equality-relevant parameter position is
+        itself non-comparable — see
+        :func:`~agm.agl.semantics.analyses.compute_equality_capabilities` for
+        why this reproduces the substitute-then-walk answer without ever
+        expanding *handle*'s own fields (so it never re-enters a cycle).
+        Exceptions carry no ``type_args``, so only the declaration flag
+        applies to them.
+        """
+        caps = self._equality_capabilities()
+        key = (handle.module_id, handle.name)
+        if key in caps.no_equality:
+            return True
+        if isinstance(handle, ExceptionType):
+            return False
+        typedef = self._defs.get(key)
+        if typedef is None:
+            return False
+        relevant = caps.relevant_params.get(key, frozenset())
+        return any(
+            _has_no_value_equality(arg, self)
+            for pname, arg in zip(typedef.type_params, handle.type_args)
+            if pname in relevant
+        )
+
+    def _equality_capabilities(self) -> "EqualityCapabilities":
+        if self._equality_caps is None:
+            from agm.agl.semantics.analyses import compute_equality_capabilities
+
+            self._equality_caps = compute_equality_capabilities(self)
+        return self._equality_caps
+
     def merge_from(self, other: "TypeTable") -> None:
         """Copy every entry from *other* into this table.
 
@@ -401,11 +455,13 @@ def _has_no_value_equality(t: Type, table: TypeTable) -> bool:
     Function, agent, and unit values are opaque / identity-only and AgL gives
     them no ``=``/``!=`` operator; ``unit`` has a single value but no equality
     operator.  A list, dict, record, enum, or exception that transitively holds
-    such a type is therefore itself not comparable.  Record, enum, and
-    exception handles are walked through *table*
-    (``record_fields``/``enum_variants``/``exception_fields``).
-    Recursive types are rejected, so this recursion terminates — the walk
-    relies on the declaration graph being acyclic.
+    such a type is therefore itself not comparable.  ``t`` is always a finite
+    tree (list/dict wrapping is structural, not nominal), so recursing through
+    ``ListType``/``DictType`` always terminates; a record/enum/exception
+    handle instead defers to :meth:`TypeTable.has_no_value_equality`, which
+    consults a precomputed declaration-level fixpoint rather than re-walking
+    the handle's own fields — the type declarations themselves may be
+    recursive, but this function never re-enters them.
     """
     match t:
         case FunctionType() | AgentType() | UnitType():
@@ -414,20 +470,8 @@ def _has_no_value_equality(t: Type, table: TypeTable) -> bool:
             return _has_no_value_equality(t.elem, table)
         case DictType():
             return _has_no_value_equality(t.value, table)
-        case RecordType():
-            return any(
-                _has_no_value_equality(ft, table) for ft in table.record_fields(t).values()
-            )
-        case EnumType():
-            return any(
-                _has_no_value_equality(ft, table)
-                for variant in table.enum_variants(t).values()
-                for ft in variant.values()
-            )
-        case ExceptionType():
-            return any(
-                _has_no_value_equality(ft, table) for ft in table.exception_fields(t).values()
-            )
+        case RecordType() | EnumType() | ExceptionType():
+            return table.has_no_value_equality(t)
         case (TextType() | JsonType() | BoolType() | IntType() | DecimalType()
               | BottomType() | TypeVarType()):
             return False

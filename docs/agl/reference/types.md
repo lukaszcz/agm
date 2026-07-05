@@ -360,6 +360,68 @@ declaration: a modifier may sit on the same line as the `record`/`enum` keyword
 or on the line directly above it (the newline after the modifier is
 insignificant).
 
+## Recursive types
+
+A record or enum may reference its own type, directly or through another
+declaration, in its own field or variant definitions:
+
+```agl
+enum Tree
+  | Leaf
+  | Node(value: int, left: Tree, right: Tree)
+
+record Category
+  name: text
+  subcategories: list[Category]
+```
+
+Mutual recursion — a record referencing an enum, an enum referencing a
+record, two records referencing each other, and so on — is allowed, and a
+recursive type may span any number of imported modules: a cycle through a
+cross-module reference is exactly as legal as one within a single module.
+
+### Inhabitation
+
+Recursion is legal only when it is possible to build a finite value — the
+type must be **inhabited**. Recursion is well-founded when at least one of
+the following breaks the chain:
+
+- an enum variant that does not need another value of the same (or a
+  mutually recursive) type — a **base case**, such as `Leaf` above;
+- a `list[T]`/`dict[text, T]` field whose element type is the recursive
+  type — the empty list or dict is always a value, regardless of `T`, as
+  with `Category.subcategories` above.
+
+A record or exception whose every required field, or an enum whose every
+variant, needs another value of the same or a mutually recursive
+declaration with no such escape has no finite value and is rejected:
+
+```agl
+record Node
+  next: Node
+# Record type 'Node' is uninhabitable: every value of 'Node' would be
+# infinite. Recursion must be guarded by an enum base-case variant or a
+# list/dict field.
+```
+
+The same rule rejects an enum whose only variant carries itself, and a
+mutually recursive pair with no base case or guard anywhere in the cycle
+(for example `record A { b: B }` / `record B { a: A }`, with no list/dict
+field and no enum alternative on either side). The error is reported at the
+declaration and names its kind (`Record type`/`Enum type`/`Exception type`).
+
+Generic recursive types — a declaration referencing itself at a different
+type argument, such as `Expr[T]` referencing `Expr[T]` in its own body — are
+constructible under the same rule; see [Generics](generics.md) for the
+generics-specific recursion rules.
+
+### Recursive aliases are not allowed
+
+Unlike records and enums, a `type` alias may not be recursive, directly or
+through another alias — see [Type aliases](#type-aliases). An alias has no
+nominal identity of its own to anchor a cycle; recursion must always pass
+through a named `record`, `enum`, or `exception`.
+
 ## Module-qualified type identity
 
 Record types and enum types are identified by **both their name and their
@@ -496,8 +558,8 @@ Before any value checking, the following are rejected as static errors:
 3. References to unknown types in records, enums, aliases, or `param`
    declarations.
 4. Cyclic aliases.
-5. Directly or indirectly **recursive records or enums**. Recursive nominal
-   types are not part of AgL.
+5. An **uninhabited** record, enum, or exception — see
+   [Recursive types](#recursive-types).
 
 Type declarations are valid only at the program root.
 

@@ -10,7 +10,7 @@ The point of lowering is to make the evaluator simple: every decision that neede
 
 ## Execution IR
 
-The IR is a runtime-neutral data model: program-local identities and source locations, a closed family of expression nodes (constants and construction, binding/load/assignment, arithmetic and comparison, control flow and matching, closures and calls, conversions, and host operations), and the program container holding modules, symbols, functions, sources, nominals, contracts, and the dry-run inventory. Host operations carry typeless contract requests — codec selection, format instructions, JSON schema, and a decode walk — compiled from checker types during lowering. A structural validation gate exists for the IR but runs only when explicitly requested, not in production evaluation.
+The IR is a runtime-neutral data model: program-local identities and source locations, a closed family of expression nodes (constants and construction, binding/load/assignment, arithmetic and comparison, control flow and matching, closures and calls, conversions, and host operations), and the program container holding modules, symbols, functions, sources, nominals, contracts, and the dry-run inventory. Host operations carry typeless contract requests — codec selection, format instructions, JSON schema, and a decode walk — compiled from checker types during lowering. For a recursive target type, the decode walk mirrors the JSON Schema's own `$defs`/`$ref` shape: a `RefDecode` node plus a `defs` table of one entry per recursive instantiation, keyed identically to the schema's `$defs` keys and built from the same instantiation-graph plan (`type_schema.py`), so the decode walk terminates on a finite value exactly where the schema closes. A structural validation gate exists for the IR but runs only when explicitly requested, not in production evaluation.
 
 ### Single-Loop Primitive and Desugar
 
@@ -53,7 +53,7 @@ Host-backed operations are dispatched by contract identity:
 
 - **Agents.** An `ask` call extracts the target agent value (or the default agent) and issues the call through the host agent runtime, receiving output shaped by the contract's schema and format metadata.
 - **Shell.** `exec` either returns a structured result built from the subprocess output (a nonzero exit does not raise) or parses stdout into a target type (raising on nonzero exit or parse failure), as selected during checking.
-- **Conversions.** Casts and `parse_json` are pre-resolved into typeless conversion recipes carrying a decode schema, executed against strict leaf parsers. Casts and `parse_json` always parse strictly; agent- and `exec`-output parsing uses the configurable strict/lenient codec pipeline.
+- **Conversions.** Casts and `parse_json` are pre-resolved into typeless conversion recipes carrying a decode schema (and its `defs` table, for a recursive target), executed against strict leaf parsers. Casts and `parse_json` always parse strictly; agent- and `exec`-output parsing uses the configurable strict/lenient codec pipeline.
 
 ## Value Rendering
 

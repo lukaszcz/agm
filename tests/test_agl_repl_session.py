@@ -271,6 +271,31 @@ class TestRecursiveTypesAcrossEntries:
         stale = s.eval_entry('let bad = Category(name = "root", subcategories = [])')
         assert not stale.ok
 
+    def test_ask_with_recursive_output_type_does_not_crash(self) -> None:
+        """The REPL's contract-preview path (make_contract) handles a recursive ask target.
+
+        Regression coverage for the graph-session contract-preview call
+        (``materialize_contract`` → ``JsonCodec.make_contract`` →
+        ``derive_schema``/``build_decode_schema``) with a recursive type: before
+        the decode side supported ``$defs``/``RefDecode``, ``build_decode_schema``
+        recursed forever on a finite recursive type and crashed lowering.
+        """
+        agent = CountingAgent('{"$case": "Node", "value": 1, "left": {"$case": "Leaf"}, '
+                               '"right": {"$case": "Leaf"}}')
+        s = ReplSession(default_agent=agent)
+        declare = s.eval_entry(
+            "enum Tree\n  | Leaf\n  | Node(value: int, left: Tree, right: Tree)"
+        )
+        assert declare.ok
+        asked = s.eval_entry('let t: Tree = ask """build a tree"""')
+        assert asked.ok
+        assert agent.calls == 1
+        match = s.eval_entry(
+            "case t of\n  | Leaf() => 0\n  | Node(value, left, right) => value"
+        )
+        assert match.ok
+        assert match.value == IntValue(1)
+
 
 # ---------------------------------------------------------------------------
 # Echo data

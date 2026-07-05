@@ -1,0 +1,20 @@
+# List-guarded recursive record at the agent boundary: `Category`'s own
+# `subcategories: list[Category]` field closes the recursive instantiation
+# graph exactly like a self-referencing enum variant does — the empty list is
+# the base case for inhabitation, and the SAME self-loop makes `Category`
+# recursive for the `$defs`/`$ref` schema and `RefDecode` decode derivation.
+record Category
+  name: text
+  subcategories: list[Category]
+
+agent tree_source
+
+def count_categories(c: Category) -> int =
+  var total: int = 1
+  for sub in c.subcategories do
+    total := total + count_categories(sub)
+  total
+
+let c: Category = ask("Fetch the category tree.", agent = tree_source)
+print c.name
+print count_categories(c)

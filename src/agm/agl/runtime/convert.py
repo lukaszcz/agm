@@ -18,14 +18,19 @@ host parameter decoding:
 - :func:`decode_value` / :func:`_decode_scalar` — the typeless
   ``DecodeSchema``-driven decode walk.  The single decode path shared by
   casts, the agent/exec codec, and host param decoding.  Raises ``ValueError``
-  on any type mismatch; callers convert this into domain errors.
+  on any type mismatch; callers convert this into domain errors.  A
+  ``RefDecode`` node is resolved through a *defs* mapping threaded alongside
+  the walk (see :func:`decode_value`'s *defs* parameter) — the runtime mirror
+  of a JSON Schema ``$ref``/``$defs`` pair for a recursive type.
 """
 
 from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from decimal import Decimal
+from types import MappingProxyType
 from typing import assert_never
 
 from jsonschema import Draft202012Validator
@@ -37,6 +42,7 @@ from agm.agl.ir.contracts import (
     EnumDecode,
     ListDecode,
     RecordDecode,
+    RefDecode,
     ScalarDecode,
     ScalarKind,
 )
@@ -203,22 +209,44 @@ def _clean_validation_message(error: JsonschemaValidationError) -> str:
 # decode_value / _decode_scalar — the typeless DecodeSchema-driven decode walk
 # ---------------------------------------------------------------------------
 
+#: Shared empty *defs* mapping — the default for a non-recursive decode walk
+#: (no ``RefDecode`` node can occur, so no ``$defs`` table is needed).
+_EMPTY_DEFS: Mapping[str, DecodeSchema] = MappingProxyType({})
 
-def decode_value(schema: DecodeSchema, obj: object) -> Value:
+
+def decode_value(
+    schema: DecodeSchema, obj: object, defs: Mapping[str, DecodeSchema] = _EMPTY_DEFS
+) -> Value:
     """Construct a typed ``Value`` from JSON-shaped *obj* per *schema*.
 
     The typeless ``DecodeSchema``-driven decode walk shared by the cast path
     (``as`` / ``as?``), the agent/exec output codec, and host param decoding.
     Raises ``ValueError`` on any type mismatch; callers convert this into the
     appropriate domain error (``AglCastConversion``, ``ValidationError``, etc.).
+
+    *defs* resolves ``RefDecode`` nodes for a recursive target type — the
+    ``$defs`` table built alongside *schema* by ``type_schema.build_decode_schema``
+    (see ``DecodePlan``); empty for a non-recursive *schema*, which then never
+    contains a ``RefDecode`` node. It is threaded unchanged through every
+    recursive call: *obj* is a finite JSON-shaped value, so resolving a
+    ``RefDecode`` by looking it up and recursing into the resolved schema
+    always terminates, however many recursive fields the walk passes through.
+    An unknown key indicates an inconsistent decode plan (a lowering bug, not
+    a user-facing condition) since a well-formed plan's keys always match its
+    own ``RefDecode`` occurrences one-to-one.
     """
     match schema:
+        case RefDecode(key=key):
+            resolved = defs.get(key)
+            if resolved is None:  # pragma: no cover — invariant: plan keys always resolve
+                raise AssertionError(f"decode_value: unknown $defs key {key!r}")
+            return decode_value(resolved, obj, defs)
         case ScalarDecode(kind=kind):
             return _decode_scalar(kind, obj)
         case ListDecode(elem=elem):
             if not isinstance(obj, list):
                 raise ValueError(f"Expected array, got {type(obj).__name__}")
-            return ListValue(tuple(decode_value(elem, e) for e in obj))
+            return ListValue(tuple(decode_value(elem, e, defs) for e in obj))
         case DictDecode(value=value_schema):
             if not isinstance(obj, dict):
                 raise ValueError(f"Expected object, got {type(obj).__name__}")
@@ -226,7 +254,7 @@ def decode_value(schema: DecodeSchema, obj: object) -> Value:
             for k, v in obj.items():
                 if not isinstance(k, str):
                     raise ValueError(f"Dict key must be string, got {type(k).__name__}")
-                entries[k] = decode_value(value_schema, v)
+                entries[k] = decode_value(value_schema, v, defs)
             return DictValue(entries=entries)
         case RecordDecode(nominal=nominal, display_name=display_name, fields=fields):
             if not isinstance(obj, dict):
@@ -235,7 +263,7 @@ def decode_value(schema: DecodeSchema, obj: object) -> Value:
             for fname, fschema in fields:
                 if fname not in obj:
                     raise ValueError(f"Missing field {fname!r}")
-                record_fields[fname] = decode_value(fschema, obj[fname])
+                record_fields[fname] = decode_value(fschema, obj[fname], defs)
             return RecordValue(
                 nominal=nominal, display_name=display_name, fields=record_fields
             )
@@ -257,7 +285,7 @@ def decode_value(schema: DecodeSchema, obj: object) -> Value:
                     raise ValueError(
                         f"Enum variant {case_val!r} is missing field {fname!r}"
                     )
-                payload[fname] = decode_value(fschema, obj[fname])
+                payload[fname] = decode_value(fschema, obj[fname], defs)
             return EnumValue(
                 nominal=nominal,
                 display_name=display_name,

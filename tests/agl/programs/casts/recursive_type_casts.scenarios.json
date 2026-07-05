@@ -1,0 +1,34 @@
+{
+  "scenarios": [
+    {
+      "name": "valid_tree_and_forest",
+      "params": {
+        "tree_text": "{\"$case\": \"Node\", \"value\": 1, \"left\": {\"$case\": \"Leaf\"}, \"right\": {\"$case\": \"Leaf\"}}",
+        "forest_text": "[{\"$case\": \"Leaf\"}, {\"$case\": \"Node\", \"value\": 5, \"left\": {\"$case\": \"Leaf\"}, \"right\": {\"$case\": \"Leaf\"}}]"
+      },
+      "expect": {
+        "stdout": "sum: 1\nforest total: 5\n"
+      }
+    },
+    {
+      "name": "invalid_tree_caught_as_cast_error",
+      "params": {
+        "tree_text": "{\"$case\": \"Node\", \"value\": 1, \"left\": {\"$case\": \"Node\", \"left\": {\"$case\": \"Leaf\"}, \"right\": {\"$case\": \"Leaf\"}}, \"right\": {\"$case\": \"Leaf\"}}",
+        "forest_text": "[{\"$case\": \"Leaf\"}, {\"$case\": \"Node\", \"value\": 5, \"left\": {\"$case\": \"Leaf\"}, \"right\": {\"$case\": \"Leaf\"}}]"
+      },
+      "expect": {
+        "stdout": "cast failed: text -> Tree\nforest total: 5\n"
+      }
+    },
+    {
+      "name": "invalid_forest_as_test_false",
+      "params": {
+        "tree_text": "{\"$case\": \"Leaf\"}",
+        "forest_text": "[{\"$case\": \"Leaf\"}, {\"$case\": \"Bogus\"}]"
+      },
+      "expect": {
+        "stdout": "sum: 0\nforest invalid\n"
+      }
+    }
+  ]
+}

@@ -57,7 +57,8 @@ Layout:
         "prompts": [
           {"agent": "reviewer", "call": 0,
            "equals": "exact rendered prompt",
-           "contains": ["fragment"], "not_contains": ["fragment"]}
+           "contains": ["fragment"], "not_contains": ["fragment"],
+           "schema_contains": ["fragment"]}
         ],
         "raises": {"type": "MaxIterationsExceeded",
                    "fields": {"limit": 3},
@@ -84,7 +85,11 @@ Field notes:
   program runs through the multi-file module graph with these library roots.
 - `expect.calls` — exact number of calls per listed agent (retries count as calls).
 - `expect.prompts` — assertions on the rendered user prompt (`request.prompt`) an
-  agent received on a given 0-based call index.
+  agent received on a given 0-based call index. `schema_contains` instead checks
+  that call's output contract `format_instructions` (the format-instructions/JSON
+  Schema channel a real runner-backed agent appends to the message; see
+  `runtime/agents.py`) — the mechanism to assert a JSON target's derived schema,
+  including `$defs`/`$ref` for a recursive type, reached the agent.
 - `expect.raises` — the uncaught AgL exception ending the run: its type name, an
   exact-match subset of its fields, and substrings of its `message` field.
 - `expect.host_error` — the run must fail pre-execution (param validation): no agent

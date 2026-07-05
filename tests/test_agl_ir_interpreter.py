@@ -1989,7 +1989,7 @@ class TestM6cIrExec:
         from agm.agl.type_schema import build_decode_schema
 
         cid = ContractId(value=0)
-        decode_schema = build_decode_schema(IntType(), create_seeded_type_table())
+        decode_schema = build_decode_schema(IntType(), create_seeded_type_table()).root
         contract = ContractRequest(
             codec_name="json",
             strict_json=False,
@@ -2124,7 +2124,7 @@ class TestM6cIrExec:
             )
 
         cid = ContractId(value=0)
-        decode_schema = build_decode_schema(IntType(), create_seeded_type_table())
+        decode_schema = build_decode_schema(IntType(), create_seeded_type_table()).root
         contract = ContractRequest(
             codec_name="json",
             strict_json=False,
@@ -2202,7 +2202,7 @@ class TestM6cIrExec:
             )
 
         cid = ContractId(value=0)
-        decode_schema = build_decode_schema(IntType(), create_seeded_type_table())
+        decode_schema = build_decode_schema(IntType(), create_seeded_type_table()).root
         contract = ContractRequest(
             codec_name="json",
             strict_json=False,
@@ -2266,7 +2266,7 @@ class TestM6cIrExec:
             )
 
         cid = ContractId(value=0)
-        decode_schema = build_decode_schema(IntType(), create_seeded_type_table())
+        decode_schema = build_decode_schema(IntType(), create_seeded_type_table()).root
         contract = ContractRequest(
             codec_name="json",
             strict_json=True,

@@ -24,12 +24,14 @@ __all__ = [
     "ConversionFailureMode",
     "ConversionRecipe",
     "ConversionStrategy",
+    "DecodePlan",
     "DecodeSchema",
     "DictDecode",
     "EnumDecode",
     "ListDecode",
     "ParamDecoder",
     "RecordDecode",
+    "RefDecode",
     "ScalarDecode",
     "ScalarKind",
     "VariantDecode",
@@ -100,9 +102,50 @@ class EnumDecode:
     variants: tuple[VariantDecode, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class RefDecode:
+    """Reference to a recursive instantiation's entry in an enclosing ``defs`` table.
+
+    Mirrors a ``{"$ref": "#/$defs/<key>"}`` node in the JSON Schema derived by
+    ``derive_schema`` (``type_schema.py``): both are emitted from the SAME
+    recursion plan, so ``key`` matches the JSON Schema's own ``$defs`` key for
+    the same instantiation one-to-one.  Resolved against the ``defs`` table
+    carried alongside the decode schema (see ``DecodePlan``) wherever the walk
+    encounters one — the root itself, if the whole type is recursive, or any
+    field/variant/element position reachable from it.
+    """
+
+    key: str
+
+
 #: Closed union of decode-schema nodes.  Dispatch with a structural ``match``
 #: whose final arm is ``assert_never``.
-DecodeSchema = ScalarDecode | ListDecode | DictDecode | RecordDecode | EnumDecode
+DecodeSchema = ScalarDecode | ListDecode | DictDecode | RecordDecode | EnumDecode | RefDecode
+
+
+@dataclass(frozen=True, slots=True)
+class DecodePlan:
+    """A decode schema paired with its ``$defs`` table, as ``build_decode_schema`` returns it.
+
+    ``root`` is the decode schema for the requested type itself (a
+    ``RefDecode`` when the type's own root instantiation is recursive).
+    ``defs`` holds one entry per recursive instantiation reachable from
+    *root*, keyed identically to ``derive_schema``'s own ``$defs`` keys for
+    the same type (same recursion plan, see ``type_schema._plan_schema``) — a
+    tuple of ``(key, schema)`` pairs (not a ``dict``) so the plan stays
+    hashable like every other IR descriptor.  Empty for a non-recursive type,
+    the representation-identical default.
+
+    This bundling is a convenience for callers that need to build both parts
+    together; carriers that persist a decode schema (``ContractRequest``,
+    ``ConversionRecipe``, ``ParamDecoder``) store ``decode``/``defs`` as two
+    sibling fields rather than one ``DecodePlan`` field, so non-recursive
+    carriers built directly (in tests or elsewhere) with a bare
+    ``DecodeSchema`` and no ``defs`` keyword continue to work unchanged.
+    """
+
+    root: DecodeSchema
+    defs: "tuple[tuple[str, DecodeSchema], ...]" = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +155,7 @@ class ParamDecoder:
     target_type_label: str
     json_schema: str
     decode: DecodeSchema
+    defs: "tuple[tuple[str, DecodeSchema], ...]" = ()
     text_verbatim: bool = False
 
 
@@ -149,8 +193,10 @@ class ConversionRecipe:
     ``json_schema`` carries the JSON Schema derived from the target type —
     serialized as a canonical JSON **string** so the recipe stays frozen and
     hashable (a bare ``dict`` would break ``__hash__``, the invariant every IR
-    node maintains) — and ``decode`` carries the typeless decode walk; both are
-    ``None`` for the total strategies.
+    node maintains) — and ``decode`` carries the typeless decode walk; ``defs``
+    carries the ``$defs`` table for a recursive target type (empty for a
+    non-recursive one, see ``DecodePlan``); all three are ``None``/empty for
+    the total strategies.
     """
 
     strategy: ConversionStrategy
@@ -158,6 +204,7 @@ class ConversionRecipe:
     target_label: str
     json_schema: str | None = None
     decode: DecodeSchema | None = None
+    defs: "tuple[tuple[str, DecodeSchema], ...]" = ()
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +238,9 @@ class ContractRequest:
                               immediately.  For ``ask-request`` the result is always
                               an ``AgentRequest`` record, never unit — ``is_unit``
                               is always ``False`` for ``ask-request`` call sites.
+    ``defs``                — ``$defs`` table for a recursive target type (empty
+                              for a non-recursive one, see ``DecodePlan``); ``()``
+                              for the text codec.
     """
 
     codec_name: str
@@ -201,3 +251,4 @@ class ContractRequest:
     structured_exec: bool
     format_instructions: str
     is_unit: bool = False
+    defs: "tuple[tuple[str, DecodeSchema], ...]" = ()

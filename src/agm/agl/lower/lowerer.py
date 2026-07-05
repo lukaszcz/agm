@@ -215,10 +215,9 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import (
-    build_decode_schema,
     build_format_instructions,
     build_param_decoder,
-    derive_schema,
+    derive_schema_and_decode,
 )
 from agm.agl.typecheck.env import CheckedProgram
 from agm.agl.typecheck.graph import CheckedModule
@@ -2207,14 +2206,18 @@ class _Lowerer:
         else:
             # Build format_instructions and json_schema from the spec.
             if spec.codec_name == "json":
-                schema_dict = derive_schema(spec.target_type, self._type_table)
+                schema_dict, decode_plan = derive_schema_and_decode(
+                    spec.target_type, self._type_table
+                )
                 json_schema_str: str | None = json.dumps(schema_dict)
                 fmt_instr = build_format_instructions(schema_dict)
-                decode_schema = build_decode_schema(spec.target_type, self._type_table)
+                decode_schema = decode_plan.root
+                decode_defs = decode_plan.defs
             else:
                 json_schema_str = None
                 fmt_instr = ""
                 decode_schema = None
+                decode_defs = ()
             contract_req = ContractRequest(
                 codec_name=spec.codec_name,
                 strict_json=spec.strict_json,
@@ -2224,6 +2227,7 @@ class _Lowerer:
                 structured_exec=structured_exec,
                 format_instructions=fmt_instr,
                 is_unit=False,
+                defs=decode_defs,
             )
 
         contract_id = self._alloc_contract(contract_req)
@@ -2265,14 +2269,16 @@ class _Lowerer:
         assert spec is not None, "exec always has a contract spec after checking"
         structured_exec = spec.structured_exec
         if spec.codec_name == "json":
-            schema_dict = derive_schema(spec.target_type, self._type_table)
+            schema_dict, decode_plan = derive_schema_and_decode(spec.target_type, self._type_table)
             json_schema_str: str | None = json.dumps(schema_dict)
             fmt_instr = build_format_instructions(schema_dict)
-            decode_schema = build_decode_schema(spec.target_type, self._type_table)
+            decode_schema = decode_plan.root
+            decode_defs = decode_plan.defs
         else:
             json_schema_str = None
             fmt_instr = ""
             decode_schema = None
+            decode_defs = ()
         contract_req = ContractRequest(
             codec_name=spec.codec_name,
             strict_json=spec.strict_json,
@@ -2282,6 +2288,7 @@ class _Lowerer:
             structured_exec=structured_exec,
             format_instructions=fmt_instr,
             is_unit=False,
+            defs=decode_defs,
         )
 
         contract_id = self._alloc_contract(contract_req)

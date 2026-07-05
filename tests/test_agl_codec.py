@@ -148,11 +148,13 @@ def _parse_typed(
     :data:`_DEFAULT_TABLE` (see :func:`_make_contract_for`).
     """
     table = table if table is not None else _DEFAULT_TABLE
+    decode_plan = build_decode_schema(typ, table)
     return codec.parse(
         raw,
         strict_json=strict_json,
         schema=schema if schema is not None else derive_schema(typ, table),
-        decode=build_decode_schema(typ, table),
+        decode=decode_plan.root,
+        defs=dict(decode_plan.defs),
     )
 
 
@@ -755,9 +757,231 @@ class TestRecursiveSchemaDerivation:
 
 
 # ---------------------------------------------------------------------------
-# 1c. Recursive schema validator round-trip (schema-only — the decode side
-# does not yet support recursion; these tests never call
-# build_decode_schema/JsonCodec.parse for a recursive type)
+# 1b-bis. RefDecode/DecodePlan emission — mirrors TestRecursiveSchemaDerivation's
+# matrix; keys must match derive_schema's own $defs keys one-to-one.
+# ---------------------------------------------------------------------------
+
+
+class TestRecursiveDecodeDerivation:
+    """build_decode_schema goldens over the same matrix as the schema goldens."""
+
+    def test_recursive_enum_root_is_refdecode_with_defs(self) -> None:
+        from agm.agl.ir.contracts import (
+            DecodePlan,
+            EnumDecode,
+            RefDecode,
+            ScalarDecode,
+            ScalarKind,
+            VariantDecode,
+        )
+        from agm.agl.ir.ids import NominalId
+
+        tree, tree_def = _tree_type_and_def()
+        plan = build_decode_schema(tree, type_table_for(tree_def))
+        tree_body = EnumDecode(
+            nominal=NominalId(ENTRY_ID, "Tree"),
+            display_name="Tree",
+            variants=(
+                VariantDecode(name="Leaf", fields=()),
+                VariantDecode(
+                    name="Node",
+                    fields=(
+                        ("value", ScalarDecode(ScalarKind.INT)),
+                        ("left", RefDecode("Tree")),
+                        ("right", RefDecode("Tree")),
+                    ),
+                ),
+            ),
+        )
+        assert plan == DecodePlan(root=RefDecode("Tree"), defs=(("Tree", tree_body),))
+
+    def test_list_guarded_recursive_record_is_refdecode_with_defs(self) -> None:
+        from agm.agl.ir.contracts import (
+            DecodePlan,
+            ListDecode,
+            RecordDecode,
+            RefDecode,
+            ScalarDecode,
+            ScalarKind,
+        )
+        from agm.agl.ir.ids import NominalId
+
+        category, category_def = record_type(
+            "Category",
+            {"name": TextType(), "subcategories": ListType(RecordType(name="Category"))},
+        )
+        plan = build_decode_schema(category, type_table_for(category_def))
+        category_body = RecordDecode(
+            nominal=NominalId(ENTRY_ID, "Category"),
+            display_name="Category",
+            fields=(
+                ("name", ScalarDecode(ScalarKind.TEXT)),
+                ("subcategories", ListDecode(RefDecode("Category"))),
+            ),
+        )
+        assert plan == DecodePlan(root=RefDecode("Category"), defs=(("Category", category_body),))
+
+    def test_non_recursive_wrapper_inlined_recursive_field_in_defs(self) -> None:
+        from agm.agl.ir.contracts import (
+            EnumDecode,
+            RecordDecode,
+            RefDecode,
+            ScalarDecode,
+            ScalarKind,
+        )
+        from agm.agl.ir.ids import NominalId
+
+        tree, tree_def = _tree_type_and_def()
+        wrapper, wrapper_def = record_type("Wrapper", {"root": tree, "label": TextType()})
+        plan = build_decode_schema(wrapper, type_table_for(wrapper_def, tree_def))
+        assert plan.root == RecordDecode(
+            nominal=NominalId(ENTRY_ID, "Wrapper"),
+            display_name="Wrapper",
+            fields=(
+                ("root", RefDecode("Tree")),
+                ("label", ScalarDecode(ScalarKind.TEXT)),
+            ),
+        )
+        assert [key for key, _ in plan.defs] == ["Tree"]
+        tree_body = dict(plan.defs)["Tree"]
+        assert isinstance(tree_body, EnumDecode)
+
+    def test_mutual_record_enum_pair_gets_two_defs_entries(self) -> None:
+        from agm.agl.ir.contracts import (
+            DecodePlan,
+            EnumDecode,
+            RecordDecode,
+            RefDecode,
+            VariantDecode,
+        )
+        from agm.agl.ir.ids import NominalId
+
+        a, a_def = record_type("A", {"b": EnumType(name="B")})
+        b, b_def = enum_type("B", {"Nil": {}, "Cons": {"a": RecordType(name="A")}})
+        plan = build_decode_schema(a, type_table_for(a_def, b_def))
+        a_body = RecordDecode(
+            nominal=NominalId(ENTRY_ID, "A"), display_name="A", fields=(("b", RefDecode("B")),)
+        )
+        b_body = EnumDecode(
+            nominal=NominalId(ENTRY_ID, "B"),
+            display_name="B",
+            variants=(
+                VariantDecode(name="Nil", fields=()),
+                VariantDecode(name="Cons", fields=(("a", RefDecode("A")),)),
+            ),
+        )
+        assert plan == DecodePlan(root=RefDecode("A"), defs=(("A", a_body), ("B", b_body)))
+
+    def test_generic_instantiations_get_distinct_keys_matching_schema(self) -> None:
+        tree_def = TypeDef(
+            kind="enum",
+            name="Tree",
+            module_id=ENTRY_ID,
+            type_params=("T",),
+            variants=(
+                ("Leaf", ()),
+                (
+                    "Node",
+                    (
+                        ("value", TypeVarType("T")),
+                        ("left", EnumType(name="Tree", type_args=(TypeVarType("T"),))),
+                        ("right", EnumType(name="Tree", type_args=(TypeVarType("T"),))),
+                    ),
+                ),
+            ),
+        )
+        tree_int = EnumType(name="Tree", type_args=(IntType(),))
+        tree_text = EnumType(name="Tree", type_args=(TextType(),))
+        wrapper, wrapper_def = record_type("Holder", {"a": tree_int, "b": tree_text})
+        table = type_table_for(wrapper_def, tree_def)
+        schema = derive_schema(wrapper, table)
+        plan = build_decode_schema(wrapper, table)
+        schema_defs = schema["$defs"]
+        assert isinstance(schema_defs, dict)
+        # The decode $defs keys are EXACTLY the schema's own $defs keys.
+        decode_keys = {key for key, _ in plan.defs}
+        assert decode_keys == set(schema_defs.keys()) == {"Tree_int", "Tree_text"}
+
+    def test_non_recursive_decode_output_unchanged(self) -> None:
+        """Spot-check: non-recursive DecodePlan has empty defs (representation-identical)."""
+        from agm.agl.ir.contracts import DecodePlan, RecordDecode, ScalarDecode, ScalarKind
+        from agm.agl.ir.ids import NominalId
+
+        inner, inner_def = record_type("Inner", {"x": IntType()})
+        outer, outer_def = record_type("Outer", {"inner": inner})
+        plan = build_decode_schema(outer, type_table_for(outer_def, inner_def))
+        assert plan == DecodePlan(
+            root=RecordDecode(
+                nominal=NominalId(ENTRY_ID, "Outer"),
+                display_name="Outer",
+                fields=(
+                    (
+                        "inner",
+                        RecordDecode(
+                            nominal=NominalId(ENTRY_ID, "Inner"),
+                            display_name="Inner",
+                            fields=(("x", ScalarDecode(ScalarKind.INT)),),
+                        ),
+                    ),
+                ),
+            ),
+            defs=(),
+        )
+
+    def test_raises_for_infinite_closure_root(self) -> None:
+        pair_def = TypeDef(
+            kind="record",
+            name="Pair",
+            module_id=ENTRY_ID,
+            type_params=("A", "B"),
+            fields=(("first", TypeVarType("A")), ("second", TypeVarType("B"))),
+        )
+        perfect_def = TypeDef(
+            kind="enum",
+            name="Perfect",
+            module_id=ENTRY_ID,
+            type_params=("T",),
+            variants=(
+                ("Single", (("value", TypeVarType("T")),)),
+                (
+                    "Succ",
+                    (
+                        (
+                            "next",
+                            EnumType(
+                                name="Perfect",
+                                type_args=(
+                                    RecordType(
+                                        name="Pair",
+                                        type_args=(TypeVarType("T"), TypeVarType("T")),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        table = type_table_for(pair_def, perfect_def)
+        perfect_int = EnumType(name="Perfect", type_args=(IntType(),))
+        with pytest.raises(TypeError, match="no finite schema"):
+            build_decode_schema(perfect_int, table)
+
+    def test_derive_schema_and_decode_shares_one_plan_and_matches_separate_calls(self) -> None:
+        """derive_schema_and_decode matches (derive_schema(...), build_decode_schema(...))."""
+        from agm.agl.type_schema import derive_schema_and_decode
+
+        tree, tree_def = _tree_type_and_def()
+        table = type_table_for(tree_def)
+        schema, plan = derive_schema_and_decode(tree, table)
+        assert schema == derive_schema(tree, table)
+        assert plan == build_decode_schema(tree, table)
+
+
+# ---------------------------------------------------------------------------
+# 1c. Recursive schema validator round-trip (JSON Schema validation only;
+# TestRecursiveDecodeDerivation below covers build_decode_schema/JsonCodec.parse
+# for a recursive type)
 # ---------------------------------------------------------------------------
 
 
@@ -2484,15 +2708,38 @@ class TestValidationMappingCoverage:
         from agm.agl.runtime.codec import _find_enum_decode_at_path
 
         rec, rec_def = record_type("R", {"a": IntType()})
-        decode = build_decode_schema(rec, type_table_for(rec_def))
+        decode = build_decode_schema(rec, type_table_for(rec_def)).root
         assert _find_enum_decode_at_path(decode, ["missing"]) is None
 
     def test_find_enum_decode_at_path_scalar_with_remaining_path(self) -> None:
         """_find_enum_decode_at_path returns None when path descends past a scalar."""
         from agm.agl.runtime.codec import _find_enum_decode_at_path
 
-        decode = build_decode_schema(IntType(), type_table_for())
+        decode = build_decode_schema(IntType(), type_table_for()).root
         assert _find_enum_decode_at_path(decode, ["deeper"]) is None
+
+    def test_find_enum_decode_at_path_unresolvable_ref_returns_none(self) -> None:
+        """An unresolvable RefDecode (unknown key) fails soft: no crash, no match found.
+
+        Classification walkers only refine an already-failed validation's
+        message; an inconsistent contract must never turn that into a crash.
+        """
+        from agm.agl.ir.contracts import RefDecode
+        from agm.agl.runtime.codec import _find_enum_decode_at_path
+
+        assert _find_enum_decode_at_path(RefDecode("NoSuchKey"), [], {}) is None
+
+    def test_find_enum_decode_at_path_resolves_recursive_ref_to_enum(self) -> None:
+        """A root RefDecode that DOES resolve reaches the EnumDecode it points to."""
+        from agm.agl.ir.contracts import RefDecode
+        from agm.agl.runtime.codec import _find_enum_decode_at_path
+
+        tree, tree_def = _tree_type_and_def()
+        plan = build_decode_schema(tree, type_table_for(tree_def))
+        assert plan.root == RefDecode("Tree")
+        defs = dict(plan.defs)
+        found = _find_enum_decode_at_path(plan.root, [], defs)
+        assert found is defs["Tree"]
 
     def test_classify_enum_failure_no_enum_decode_at_path(self) -> None:
         """_classify_enum_failure: _find_enum_decode_at_path returns None → bad_case fallback."""
@@ -2570,7 +2817,7 @@ class TestSchemaPrecomputedInParse:
         typ = _make_issue_type()
         table = _DEFAULT_TABLE
         schema = derive_schema(typ, table)
-        decode = build_decode_schema(typ, table)
+        decode = build_decode_schema(typ, table).root
         raw = '{"title": "Bug", "severity": 5, "description": "A bug"}'
         result = codec.parse(raw, strict_json=False, schema=schema, decode=decode)
         assert result.ok is True
@@ -2580,7 +2827,7 @@ class TestSchemaPrecomputedInParse:
         typ = _make_issue_type()
         table = _DEFAULT_TABLE
         schema = derive_schema(typ, table)
-        decode = build_decode_schema(typ, table)
+        decode = build_decode_schema(typ, table).root
         # Missing required fields → schema validation fails even with a precomputed schema.
         result = codec.parse('{"title": "Bug"}', strict_json=False, schema=schema, decode=decode)
         assert result.ok is False
@@ -2599,7 +2846,7 @@ class TestSchemaPrecomputedInParse:
         contract_schema = codec.make_contract(typ, table).json_schema
         assert isinstance(contract_schema, dict)
         fresh_schema = derive_schema(typ, table)
-        decode = build_decode_schema(typ, table)
+        decode = build_decode_schema(typ, table).root
 
         good = '{"title": "x", "severity": 1}'
         bad = '{"title": "x"}'  # missing required field
@@ -2647,7 +2894,7 @@ class TestSchemaPrecomputedInParse:
                 "42",
                 strict_json=False,
                 schema=None,
-                decode=build_decode_schema(IntType(), type_table_for()),
+                decode=build_decode_schema(IntType(), type_table_for()).root,
             )
 
     def test_parse_without_decode_raises(self) -> None:
@@ -2842,6 +3089,7 @@ class TestRegisterCodec:
                 strict_json: bool = False,
                 schema: dict[str, object] | None = None,
                 decode: DecodeSchema | None = None,
+                defs: dict[str, DecodeSchema] | None = None,
             ) -> "ParseResult":
                 from agm.agl.runtime.codec import ParseResult
 

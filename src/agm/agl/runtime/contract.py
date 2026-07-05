@@ -72,6 +72,9 @@ class OutputContract:
     ``decode``              — typeless ``DecodeSchema`` walk used to convert
                               validated JSON into a typed ``Value`` (None for
                               the text codec and for structured exec).
+    ``defs``                — ``$defs`` table for a recursive target type
+                              (empty for a non-recursive one, see
+                              ``type_schema.DecodePlan``).
     ``structured_exec``     — True for the structured ``exec`` passthrough
                               contract (raw ``ExecResult``, no parsing).
     """
@@ -83,6 +86,7 @@ class OutputContract:
     json_schema: object  # dict[str, object] | None, but object keeps mypy happy
     decode: DecodeSchema | None = None
     structured_exec: bool = False
+    defs: "tuple[tuple[str, DecodeSchema], ...]" = ()
 
 
 def materialize_ir_contract(
@@ -128,6 +132,7 @@ def materialize_ir_contract(
             format_instructions=base.format_instructions,
             json_schema=base.json_schema,
             decode=request.decode,
+            defs=request.defs,
             structured_exec=request.structured_exec,
         )
     schema: object = (
@@ -140,6 +145,7 @@ def materialize_ir_contract(
         format_instructions=request.format_instructions,
         json_schema=schema,
         decode=request.decode,
+        defs=request.defs,
         structured_exec=request.structured_exec,
     )
 
@@ -194,4 +200,5 @@ def materialize_contract(
         format_instructions=base.format_instructions,
         json_schema=base.json_schema,
         decode=base.decode,
+        defs=base.defs,
     )

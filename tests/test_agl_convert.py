@@ -24,6 +24,7 @@ from agm.agl.ir.contracts import (
     EnumDecode,
     ListDecode,
     RecordDecode,
+    RefDecode,
     ScalarDecode,
     ScalarKind,
     VariantDecode,
@@ -489,3 +490,98 @@ class TestDecodeValueErrors:
         )
         with pytest.raises(ValueError, match="missing field"):
             decode_value(schema, {"$case": "B"})
+
+
+# ---------------------------------------------------------------------------
+# RefDecode resolution — the runtime mirror of a recursive type's $ref/$defs.
+# ---------------------------------------------------------------------------
+
+
+class TestDecodeValueRefDecode:
+    """decode_value resolves RefDecode through the defs mapping threaded alongside the walk."""
+
+    @staticmethod
+    def _tree_defs() -> dict[str, "object"]:
+        """A self-recursive `Tree` decode schema: Leaf | Node(value, left, right)."""
+        nominal = NominalId(ENTRY_ID, "Tree")
+        tree_decode = EnumDecode(
+            nominal=nominal,
+            display_name="Tree",
+            variants=(
+                VariantDecode(name="Leaf", fields=()),
+                VariantDecode(
+                    name="Node",
+                    fields=(
+                        ("value", ScalarDecode(kind=ScalarKind.INT)),
+                        ("left", RefDecode("Tree")),
+                        ("right", RefDecode("Tree")),
+                    ),
+                ),
+            ),
+        )
+        return {"Tree": tree_decode}
+
+    def test_recursive_root_ref_decodes_deep_nested_tree(self) -> None:
+        """A deeply nested tree payload decodes correctly through repeated RefDecode resolution."""
+        defs = self._tree_defs()
+        schema = RefDecode("Tree")
+        # A tree 5 nodes deep, all leaning right.
+        payload: object = {"$case": "Leaf"}
+        for value in range(5):
+            payload = {
+                "$case": "Node",
+                "value": value,
+                "left": {"$case": "Leaf"},
+                "right": payload,
+            }
+        result = decode_value(schema, payload, defs)
+        assert isinstance(result, EnumValue)
+        assert result.nominal == NominalId(ENTRY_ID, "Tree")
+        assert result.variant == "Node"
+        assert result.fields["value"] == IntValue(4)
+        # Walk down the "right" spine to confirm every level decoded.
+        node = result
+        for expected in range(4, -1, -1):
+            assert isinstance(node, EnumValue)
+            assert node.variant == "Node"
+            assert node.fields["value"] == IntValue(expected)
+            next_node = node.fields["right"]
+            assert isinstance(next_node, EnumValue)
+            node = next_node
+        assert node.variant == "Leaf"
+
+    def test_ref_nested_inside_list_and_record(self) -> None:
+        """A RefDecode reachable through ListDecode/RecordDecode fields resolves the same way."""
+        defs = self._tree_defs()
+        category_nominal = NominalId(ENTRY_ID, "Wrapper")
+        schema = RecordDecode(
+            nominal=category_nominal,
+            display_name="Wrapper",
+            fields=(("trees", ListDecode(RefDecode("Tree"))),),
+        )
+        node_payload = {
+            "$case": "Node",
+            "value": 1,
+            "left": {"$case": "Leaf"},
+            "right": {"$case": "Leaf"},
+        }
+        payload = {"trees": [{"$case": "Leaf"}, node_payload]}
+        result = decode_value(schema, payload, defs)
+        assert isinstance(result, RecordValue)
+        trees = result.fields["trees"]
+        assert isinstance(trees, ListValue)
+        assert len(trees.elements) == 2
+        first = trees.elements[0]
+        second = trees.elements[1]
+        assert isinstance(first, EnumValue) and first.variant == "Leaf"
+        assert isinstance(second, EnumValue) and second.variant == "Node"
+
+    def test_unknown_defs_key_is_internal_error(self) -> None:
+        """An unresolvable RefDecode key is an internal-invariant violation, not a user error."""
+        with pytest.raises(AssertionError, match="unknown \\$defs key"):
+            decode_value(RefDecode("NoSuchKey"), {"$case": "Leaf"}, {})
+
+    def test_defs_defaults_to_empty_for_non_recursive_schemas(self) -> None:
+        """Calling decode_value with the historical 2-arg form still works (defs defaults empty)."""
+        schema = ScalarDecode(kind=ScalarKind.INT)
+        assert decode_value(schema, 5) == IntValue(5)

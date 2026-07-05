@@ -1411,6 +1411,129 @@ def test_validate_contract_request_json_decode_check_nominals() -> None:
     validate_ir(prog, deep=True)
 
 
+def test_validate_contract_request_recursive_decode_defs() -> None:
+    """validate.py accepts a ContractRequest whose decode is a recursive RefDecode + defs table."""
+    from agm.agl.ir.contracts import (
+        ContractRequest,
+        EnumDecode,
+        RefDecode,
+        ScalarDecode,
+        ScalarKind,
+        VariantDecode,
+    )
+    from agm.agl.ir.ids import ContractId, Location, NominalId, SourceId
+    from agm.agl.ir.nodes import IrConstUnit
+    from agm.agl.ir.program import (
+        ExecutableModule,
+        ExecutableProgram,
+        NominalDescriptor,
+        NominalKind,
+        SourceFile,
+        VariantDescriptor,
+    )
+    from agm.agl.ir.validate import validate_ir
+    from agm.agl.modules.ids import ENTRY_ID
+
+    src_id = SourceId(0)
+    dummy_loc = Location(
+        source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0
+    )
+    tree_nominal = NominalId(ENTRY_ID, "Tree")
+    tree_body = EnumDecode(
+        nominal=tree_nominal,
+        display_name="Tree",
+        variants=(
+            VariantDecode("Leaf", ()),
+            VariantDecode(
+                "Node",
+                (
+                    ("value", ScalarDecode(ScalarKind.INT)),
+                    ("left", RefDecode("Tree")),
+                    ("right", RefDecode("Tree")),
+                ),
+            ),
+        ),
+    )
+    cid = ContractId(0)
+    req = ContractRequest(
+        codec_name="json",
+        strict_json=None,
+        json_schema=_json.dumps({"$ref": "#/$defs/Tree"}),
+        decode=RefDecode("Tree"),
+        target_type_label="Tree",
+        structured_exec=False,
+        format_instructions="",
+        is_unit=False,
+        defs=(("Tree", tree_body),),
+    )
+    prog = ExecutableProgram(
+        entry_module=ENTRY_ID,
+        modules={
+            ENTRY_ID: ExecutableModule(
+                module_id=ENTRY_ID,
+                initializers=(IrConstUnit(location=dummy_loc),),
+            )
+        },
+        symbols={},
+        nominals={
+            tree_nominal: NominalDescriptor(
+                nominal=tree_nominal,
+                display_name="Tree",
+                kind=NominalKind.ENUM,
+                variants=(
+                    VariantDescriptor("Leaf", ()),
+                    VariantDescriptor("Node", ("value", "left", "right")),
+                ),
+            )
+        },
+        sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
+        contracts={cid: req},
+    )
+    validate_ir(prog, deep=True)  # no exception
+
+
+def test_validate_contract_request_recursive_decode_unknown_defs_key() -> None:
+    """An unresolvable RefDecode key in a ContractRequest's decode → InvalidIrError."""
+    from agm.agl.ir.contracts import ContractRequest, RefDecode
+    from agm.agl.ir.ids import ContractId, Location, SourceId
+    from agm.agl.ir.nodes import IrConstUnit
+    from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
+    from agm.agl.ir.validate import InvalidIrError, validate_ir
+    from agm.agl.modules.ids import ENTRY_ID
+
+    src_id = SourceId(0)
+    dummy_loc = Location(
+        source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0
+    )
+    cid = ContractId(0)
+    req = ContractRequest(
+        codec_name="json",
+        strict_json=None,
+        json_schema=_json.dumps({"$ref": "#/$defs/Tree"}),
+        decode=RefDecode("Tree"),
+        target_type_label="Tree",
+        structured_exec=False,
+        format_instructions="",
+        is_unit=False,
+        defs=(),  # missing the "Tree" entry
+    )
+    prog = ExecutableProgram(
+        entry_module=ENTRY_ID,
+        modules={
+            ENTRY_ID: ExecutableModule(
+                module_id=ENTRY_ID,
+                initializers=(IrConstUnit(location=dummy_loc),),
+            )
+        },
+        symbols={},
+        nominals={},
+        sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
+        contracts={cid: req},
+    )
+    with pytest.raises(InvalidIrError, match=r"unknown \$defs key"):
+        validate_ir(prog, deep=True)
+
+
 # ---------------------------------------------------------------------------
 # ir_interpreter.py uncovered paths
 # ---------------------------------------------------------------------------

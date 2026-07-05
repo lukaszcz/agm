@@ -128,7 +128,7 @@ def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":
     validation_errors = list(validator_for_schema(decoder.json_schema).iter_errors(normalized))
     if validation_errors:
         raise ValueError(_clean_validation_message(validation_errors[0]))
-    return decode_value(decoder.decode, obj)
+    return decode_value(decoder.decode, obj, dict(decoder.defs))
 
 
 def _prepare_ir_params(

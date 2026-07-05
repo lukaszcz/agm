@@ -105,7 +105,10 @@ validated against the declared type.
 The declared type must be JSON-wire-serializable, including for a param whose
 default is always used. Runtime-only values such as `unit`, agents, and
 functions are not valid program param types because the executable always
-includes external-decoder metadata for every declared param.
+includes external-decoder metadata for every declared param. A
+[recursive](types.md#recursive-types) record or enum param decodes normally,
+subject to the same finite-schema restriction as an agent output type or cast
+target — see [Generics](generics.md#the-finite-schema-boundary).
 
 ## Host-configurable settings
 

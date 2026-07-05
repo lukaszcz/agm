@@ -336,6 +336,7 @@ class IrInterpreter:
             strict_json=effective_strict,
             schema=schema,
             decode=host_contract.decode,
+            defs=dict(host_contract.defs),
         )
 
     @property

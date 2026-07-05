@@ -59,16 +59,31 @@ def _load_json(path: Path) -> Any:
 
 @dataclass
 class ScriptedAgent:
-    """Replays a scenario's scripted responses and records rendered prompts."""
+    """Replays a scenario's scripted responses and records rendered prompts.
+
+    ``format_instructions`` records, alongside each call's ``prompt``, the
+    output contract's ``format_instructions`` string for that same call (the
+    channel carrying the derived JSON Schema — including ``$defs``/``$ref``
+    for a recursive target type — that a real runner-backed agent appends to
+    the message; see ``runtime/agents.py``'s ``runner_backed_agent_factory``).
+    It is a SEPARATE list from ``prompts`` so existing ``equals``/``contains``
+    assertions against the literal user prompt are unaffected; a scenario
+    that wants to assert on the schema instead uses ``schema_contains``.
+    """
 
     name: str
     responses: list[str]
     repeat_last: bool = False
     prompts: list[str] = field(default_factory=list)
+    format_instructions: list[str] = field(default_factory=list)
     overflowed: bool = False
 
     def __call__(self, request: Any) -> str:
         self.prompts.append(request.prompt)
+        contract = request.output_contract
+        self.format_instructions.append(
+            contract.format_instructions if contract is not None else ""
+        )
         index = len(self.prompts) - 1
         if index < len(self.responses):
             return self.responses[index]
@@ -199,6 +214,11 @@ def _assert_calls(agents: dict[str, ScriptedAgent], expect: dict[str, Any]) -> N
             assert needle in prompt, f"{needle!r} not in prompt {prompt!r}"
         for needle in spec.get("not_contains", []):
             assert needle not in prompt, f"{needle!r} unexpectedly in prompt {prompt!r}"
+        for needle in spec.get("schema_contains", []):
+            schema_text = agents[spec["agent"]].format_instructions[call]
+            assert needle in schema_text, (
+                f"{needle!r} not in format instructions {schema_text!r}"
+            )
 
 
 def _scenario_params() -> list[Any]:

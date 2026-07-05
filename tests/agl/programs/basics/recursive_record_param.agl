@@ -1,0 +1,18 @@
+# Recursive-record host param: `Category` decodes through the same
+# $defs/$ref JSON Schema and RefDecode decode plan a recursive agent output
+# type uses, so a recursive-typed param round-trips nested JSON exactly like
+# any other structured param.
+record Category
+  name: text
+  subcategories: list[Category]
+
+param root: Category
+
+def count_categories(c: Category) -> int =
+  var total: int = 1
+  for sub in c.subcategories do
+    total := total + count_categories(sub)
+  total
+
+print root.name
+print count_categories(root)

@@ -285,6 +285,47 @@ generic function definition serves every level, exactly like any other
 generic function called at different type arguments; see
 [Functions](functions.md) for generic function calls in general.
 
+## The finite-schema boundary
+
+Every use in-language works uniformly across recursive generic types, whether
+uniform (`Tree[T]` referencing `Tree[T]`), a permutation (`Swap[B, A]`
+referencing `Swap[A, B]`), argument-constant (`R[int]` referencing `R[T]`), or
+growing (`Perfect[T]` referencing `Perfect[Pair[T, T]]`, as above). Two
+positions, however, need a **finite JSON Schema** for the concrete type in
+hand: an `ask`/`exec` response type ([Agent calls](agent-calls.md)) and an
+`as`/`as?` cast target ([Expressions](expressions.md#casts-as-and-as)).
+Deriving that schema means expanding every concrete instantiation the type's
+declaration can reach; for a uniform, permutation, or argument-constant
+reference this expansion always closes (finitely many distinct concrete
+shapes), but a growing self-reference like `Perfect[T]`'s can produce
+infinitely many distinct shapes (`Perfect[int]`, `Perfect[Pair[int, int]]`,
+`Perfect[Pair[Pair[int, int], Pair[int, int]]]`, …) — there is no finite
+schema to derive.
+
+A concrete instantiation whose reachable declarations are all finite-closing
+may cross either boundary; one that reaches a non-closing declaration is
+rejected with a static error at that specific use site:
+
+```agl
+let bad: Perfect[int] = ask("Give me a value.", agent = source)
+# static error: type 'Perfect[int]' cannot be used as an agent output type:
+# its recursive instantiations never close, so it has no finite JSON schema.
+
+let also_bad = some_json as Perfect[int]
+# the same error, naming "a cast target" instead
+```
+
+Nothing else about `Perfect[int]` is restricted: it can still be
+constructed, matched, compared, passed to and returned from ordinary
+functions, and rendered — only the two schema-needing boundaries reject it.
+A non-generic recursive type, and every uniform/permutation/argument-constant
+generic recursive type, always has a finite schema and crosses both
+boundaries normally — the [derived JSON Schema](agent-calls.md#derived-json-schema)
+for a recursive type uses `$defs`/`$ref` exactly as for a non-generic one, one
+entry per recursive concrete instantiation reachable from the target
+(`Tree[int]` and `Tree[text]` get distinct entries, since they are different
+concrete shapes).
+
 ## Unqualified variant ambiguity
 
 If two enums declare the same unqualified variant name, an unqualified
@@ -320,7 +361,9 @@ bare type parameter has no wire representation. Therefore a generic type
 parameter (or a type containing one in an unresolved position) may not be used
 as an `ask` response type. Instantiate the generic at a concrete type before
 the value crosses the agent boundary. See [Agent calls](agent-calls.md) for
-how response types drive output contracts.
+how response types drive output contracts, and [The finite-schema
+boundary](#the-finite-schema-boundary) above for the separate restriction that
+applies even to some already-concrete instantiations.
 
 ## No runtime cost (erasure)
 

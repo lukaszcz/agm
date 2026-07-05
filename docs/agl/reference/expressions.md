@@ -481,7 +481,7 @@ recursive parts) used at the agent-call boundary, and `as`/`as?` behave
 normally, including inside a container target such as `list[Tree]`. The same
 finite-schema restriction applies as for an agent output type: a
 [polymorphically recursive](generics.md#recursive-generic-types) generic type
-whose instantiation closure never closes cannot be used as a cast target
+whose reachable instantiations never close cannot be used as a cast target
 either — a static error at the `as`/`as?` expression, not a runtime failure.
 
 ### Variant tests: `is`, `is not`

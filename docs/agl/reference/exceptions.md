@@ -58,7 +58,7 @@ exception Broken extends Exception
 
 A `list`/`dict` field is the only guard available for a required field —
 there is no enum-style alternative variant to fall back on. The same
-inhabitation fixpoint also covers the `extends` chain itself: an `extends`
+inhabitation rule also covers the `extends` chain itself: an `extends`
 cycle (two exceptions each extending the other) is rejected as uninhabitable
 for the same reason a field cycle is.
 

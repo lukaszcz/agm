@@ -408,9 +408,9 @@ class _Checker:
 
     def check_program(self, program: Program) -> None:
         """Type-check the entire program."""
-        # Pre-pass: register all FuncDef signatures so calls can reference them
-        # in declaration order (mutual forward references are not supported but
-        # order-independence within the block is).
+        # Pre-pass: register all FuncDef signatures before any body is checked,
+        # so a call may reference any top-level function regardless of
+        # declaration order, including mutually recursive pairs.
         for item in program.body.items:
             if isinstance(item, FuncDef):
                 self._preregister_funcdef(item)

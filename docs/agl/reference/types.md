@@ -190,8 +190,8 @@ A structured record returned by `exec` when no target annotation is given
 
 ```text
 stdout:    text
-stderr:    text
 exit_code: int
+stderr:    text
 timed_out: bool
 ```
 
@@ -558,7 +558,7 @@ Before any value checking, the following are rejected as static errors:
 3. References to unknown types in records, enums, aliases, or `param`
    declarations.
 4. Cyclic aliases.
-5. An **uninhabited** record, enum, or exception — see
+5. An **uninhabitable** record, enum, or exception — see
    [Recursive types](#recursive-types).
 
 Type declarations are valid only at the program root.

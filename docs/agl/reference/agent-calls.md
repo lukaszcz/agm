@@ -178,7 +178,7 @@ let t: Tree = ask("Build a tree.", agent = builder)
 The one restriction is on the type's **shape**, not on recursion itself: the
 target type must have a finite JSON Schema. A non-generic recursive type
 always does. A [polymorphically recursive](generics.md#recursive-generic-types)
-generic type whose instantiation closure never closes (its schema would need
+generic type whose reachable instantiations never close (its schema would need
 infinitely many distinct concrete shapes) is rejected as a target type at the
 call site with a static error — the type is otherwise fully usable in every
 other position, only its JSON Schema is unbounded. See

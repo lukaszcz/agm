@@ -1,0 +1,34 @@
+# Recursive record guarded by a dict field: Tree can hold nested children
+# keyed by name without needing a base-case variant, since dict[text, Tree]
+# is always inhabited by the empty dict. Builds a nested tree (root with TWO
+# children, one of which optionally has a grandchild) plus an EMPTY-children
+# case, counts and renders both recursively.
+record Tree
+  name: text
+  children: dict[text, Tree]
+
+param root_name: text
+param child_name: text
+param include_grandchild: bool
+
+def count_nodes(t: Tree) -> int =
+  var total: int = 1
+  for key in t.children do
+    total := total + count_nodes(t.children[key])
+  total
+
+def render_tree(t: Tree) -> text =
+  var result: text = t.name
+  for key in t.children do
+    result := result + " > " + render_tree(t.children[key])
+  result
+
+let grandchildren: dict[text, Tree] = if include_grandchild => {"leaf": Tree(name = "leaf", children = {})} else => {}
+let child = Tree(name = child_name, children = grandchildren)
+let root = Tree(name = root_name, children = {"child": child, "second": Tree(name = "second", children = {})})
+let empty_root = Tree(name = "empty", children = {})
+
+print count_nodes(root)
+print render_tree(root)
+print count_nodes(empty_root)
+print render_tree(empty_root)

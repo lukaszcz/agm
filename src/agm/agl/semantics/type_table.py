@@ -34,6 +34,9 @@ reference itself at ever-larger arguments (polymorphic recursion), which
 never blocks construction/matching/equality but does mean no finite schema
 exists. Backed by ``semantics.analyses.compute_finite_closure``, cached and
 invalidated the same way as the equality-capability fixpoint.
+:meth:`TypeTable.first_infinite_declaration`/:meth:`TypeTable.no_finite_schema_message`
+build on the same query to name the culprit declaration for a use-site
+diagnostic (agent output target, cast target, parameter type).
 """
 
 from __future__ import annotations
@@ -452,28 +455,82 @@ class TypeTable:
     def has_finite_schema(self, t: Type) -> bool:
         """Return ``True`` if every declaration reachable from *t* has a finite closure.
 
+        Thin wrapper over :meth:`first_infinite_declaration`: *t* has a
+        finite schema iff no infinite declaration is reachable from it.
+        """
+        return self.first_infinite_declaration(t) is None
+
+    def first_infinite_declaration(self, t: Type) -> tuple[ModuleId, str] | None:
+        """Return the first infinite declaration reachable from *t*, or ``None``.
+
         Walks *t*'s own (finite) type tree for nominal references
         (:func:`~agm.agl.semantics.analyses.nominal_references`), then
         extends to every transitively reachable declaration via the
-        (declaration-level, argument-independent) reference graph, checking
-        each one's finite-closure flag. Never expands a concrete
-        instantiation, so it terminates regardless of how *t*'s
-        declarations recurse.
+        (declaration-level, argument-independent) reference graph, breadth-
+        first, checking each one's finite-closure flag. Never expands a
+        concrete instantiation, so it terminates regardless of how *t*'s
+        declarations recurse. Breadth-first (rather than depth-first) and
+        ordered deterministically (*t*'s own nominal references in tree
+        order, then each further hop sorted by declaration key) so that, when
+        *t* itself names an infinite declaration, that declaration — the most
+        useful "culprit" for a use-site diagnostic — is reported before any
+        declaration reachable only through a nested field.
         """
         from agm.agl.semantics.analyses import nominal_references
 
         caps = self._finite_closure_result()
         seen: set[tuple[ModuleId, str]] = set()
-        stack = [(ref.module_id, ref.name) for ref in nominal_references(t)]
-        while stack:
-            key = stack.pop()
+        queue = [(ref.module_id, ref.name) for ref in nominal_references(t)]
+        while queue:
+            key = queue.pop(0)
             if key in seen:
                 continue
             seen.add(key)
             if key in caps.infinite:
-                return False
-            stack.extend(caps.successors.get(key, frozenset()) - seen)
-        return True
+                return key
+            successors: frozenset[tuple[ModuleId, str]] = caps.successors.get(key, frozenset())
+            queue.extend(sorted(successors - seen, key=_decl_key_sort_key))
+        return None
+
+    def no_finite_schema_message(self, t: Type, *, use: str) -> str | None:
+        """Return the use-site diagnostic for *t* if it has no finite JSON schema.
+
+        Returns ``None`` when *t* has a finite schema (:meth:`has_finite_schema`
+        is true) — the call site should proceed normally in that case. *use*
+        is spliced into one user-facing sentence describing why a schema is
+        needed at this use site (e.g. ``"an agent output type"``,
+        ``"a cast target"``, ``"a parameter type"``). When the culprit
+        declaration IS *t*'s own (e.g. *t* is directly ``Perfect[int]``), only
+        *t* is named; when it is reached through a nested field (e.g. a
+        non-recursive record containing a ``Perfect[int]`` field), both *t*
+        and the culprit declaration's name are mentioned.
+        """
+        culprit = self.first_infinite_declaration(t)
+        if culprit is None:
+            return None
+        is_own_declaration = isinstance(t, (RecordType, EnumType, ExceptionType)) and (
+            t.module_id,
+            t.name,
+        ) == culprit
+        if is_own_declaration:
+            return (
+                f"type '{t!r}' cannot be used as {use}: its recursive instantiations "
+                "never close, so it has no finite JSON schema."
+            )
+        culprit_module, culprit_name = culprit
+        # Qualify the culprit with its module when it is not the entry module
+        # (bare names from an imported module can otherwise be ambiguous),
+        # matching the ``module.dotted()::name`` convention used by
+        # RecordType/EnumType's own ``__repr__``.
+        qualified_culprit = (
+            culprit_name
+            if culprit_module.is_entry
+            else f"{culprit_module.dotted()}::{culprit_name}"
+        )
+        return (
+            f"type '{t!r}' cannot be used as {use}: it contains '{qualified_culprit}', whose "
+            "recursive instantiations never close, so it has no finite JSON schema."
+        )
 
     def _finite_closure_result(self) -> "FiniteClosure":
         if self._finite_closure is None:
@@ -504,6 +561,11 @@ class TypeTable:
                 continue
             self._defs[key] = typedef
             self._invalidate_cache_for(key)
+
+
+def _decl_key_sort_key(key: tuple[ModuleId, str]) -> tuple[tuple[str, ...], str]:
+    """Deterministic sort key for a declaration key (module segments, then name)."""
+    return (key[0].segments, key[1])
 
 
 def _has_no_value_equality(t: Type, table: TypeTable) -> bool:

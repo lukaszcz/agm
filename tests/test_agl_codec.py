@@ -26,16 +26,18 @@ import itertools
 from decimal import Decimal
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from agm.agl import PipelineDriver
 from agm.agl.capabilities import HostCapabilities
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.runtime.agents import AgentFn, AgentRegistry
 from agm.agl.runtime.codec import JsonCodec, ParseResult, TextCodec
 from agm.agl.runtime.contract import OutputContract, materialize_contract
 from agm.agl.runtime.request import AgentRequest
 from agm.agl.scope import resolve
 from agm.agl.semantics.exceptions import AglRaise
-from agm.agl.semantics.type_table import TypeTable
+from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import (
     BoolType,
     DecimalType,
@@ -47,6 +49,7 @@ from agm.agl.semantics.types import (
     RecordType,
     TextType,
     Type,
+    TypeVarType,
 )
 from agm.agl.semantics.values import (
     BoolValue,
@@ -472,6 +475,344 @@ class TestDeriveSchema:
         required_b = b_schema["required"]
         assert isinstance(required_b, list)
         assert set(required_b) == {"$case", "x"}
+
+
+# ---------------------------------------------------------------------------
+# 1b. Recursive `$defs`/`$ref` schema emission
+# ---------------------------------------------------------------------------
+
+
+# The exact inline body of the `Tree` `$defs` entry shared by several tests
+# below: `enum Tree | Leaf | Node(value: int, left: Tree, right: Tree)`, whose
+# `left`/`right` fields are $ref'd back to Tree itself (a self-loop).
+_TREE_DEFS_BODY: dict[str, object] = {
+    "oneOf": [
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["$case"],
+            "properties": {"$case": {"const": "Leaf"}},
+        },
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["$case", "value", "left", "right"],
+            "properties": {
+                "$case": {"const": "Node"},
+                "value": {"type": "integer"},
+                "left": {"$ref": "#/$defs/Tree"},
+                "right": {"$ref": "#/$defs/Tree"},
+            },
+        },
+    ]
+}
+
+
+def _tree_type_and_def() -> tuple[EnumType, TypeDef]:
+    """``enum Tree | Leaf | Node(value: int, left: Tree, right: Tree)``."""
+    tree_ref = EnumType(name="Tree")
+    return enum_type(
+        "Tree",
+        {
+            "Leaf": {},
+            "Node": {"value": IntType(), "left": tree_ref, "right": tree_ref},
+        },
+    )
+
+
+class TestRecursiveSchemaDerivation:
+    """`$defs`/`$ref` emission over the concrete instantiation graph (golden schemas)."""
+
+    def test_recursive_enum_root_is_ref_with_defs(self) -> None:
+        # Root-is-recursive shape: the root itself is `$ref`'d, and the
+        # `$defs` entry holds the real (self-referencing) body.
+        tree, tree_def = _tree_type_and_def()
+        schema = derive_schema(tree, type_table_for(tree_def))
+        assert schema == {"$ref": "#/$defs/Tree", "$defs": {"Tree": _TREE_DEFS_BODY}}
+
+    def test_list_guarded_recursive_record_is_ref_with_defs(self) -> None:
+        category, category_def = record_type(
+            "Category",
+            {"name": TextType(), "subcategories": ListType(RecordType(name="Category"))},
+        )
+        schema = derive_schema(category, type_table_for(category_def))
+        assert schema == {
+            "$ref": "#/$defs/Category",
+            "$defs": {
+                "Category": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["name", "subcategories"],
+                    "properties": {
+                        "name": {"type": "string"},
+                        "subcategories": {
+                            "type": "array",
+                            "items": {"$ref": "#/$defs/Category"},
+                        },
+                    },
+                }
+            },
+        }
+
+    def test_non_recursive_wrapper_inlined_recursive_field_in_defs(self) -> None:
+        # Only PART of the graph is recursive: `Wrapper` itself has no cycle
+        # (it is inlined normally), but its `root: Tree` field is $ref'd and
+        # `Tree` gets the only `$defs` entry.
+        tree, tree_def = _tree_type_and_def()
+        wrapper, wrapper_def = record_type("Wrapper", {"root": tree, "label": TextType()})
+        schema = derive_schema(wrapper, type_table_for(wrapper_def, tree_def))
+        assert schema == {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["root", "label"],
+            "properties": {
+                "root": {"$ref": "#/$defs/Tree"},
+                "label": {"type": "string"},
+            },
+            "$defs": {"Tree": _TREE_DEFS_BODY},
+        }
+
+    def test_mutual_record_enum_pair_gets_two_defs_entries(self) -> None:
+        # record A { b: B } / enum B { Nil, Cons(a: A) }: A and B form one
+        # mutual cycle, so BOTH get their own `$defs` entry.
+        a, a_def = record_type("A", {"b": EnumType(name="B")})
+        b, b_def = enum_type("B", {"Nil": {}, "Cons": {"a": RecordType(name="A")}})
+        schema = derive_schema(a, type_table_for(a_def, b_def))
+        assert schema == {
+            "$ref": "#/$defs/A",
+            "$defs": {
+                "A": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["b"],
+                    "properties": {"b": {"$ref": "#/$defs/B"}},
+                },
+                "B": {
+                    "oneOf": [
+                        {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["$case"],
+                            "properties": {"$case": {"const": "Nil"}},
+                        },
+                        {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["$case", "a"],
+                            "properties": {
+                                "$case": {"const": "Cons"},
+                                "a": {"$ref": "#/$defs/A"},
+                            },
+                        },
+                    ]
+                },
+            },
+        }
+
+    def test_generic_instantiations_get_distinct_keys(self) -> None:
+        # Tree[int] and Tree[text] — two distinct concrete instantiations of
+        # the SAME generic declaration — get distinct, non-colliding keys.
+        tree_def = TypeDef(
+            kind="enum",
+            name="Tree",
+            module_id=ENTRY_ID,
+            type_params=("T",),
+            variants=(
+                ("Leaf", ()),
+                (
+                    "Node",
+                    (
+                        ("value", TypeVarType("T")),
+                        ("left", EnumType(name="Tree", type_args=(TypeVarType("T"),))),
+                        ("right", EnumType(name="Tree", type_args=(TypeVarType("T"),))),
+                    ),
+                ),
+            ),
+        )
+        tree_int = EnumType(name="Tree", type_args=(IntType(),))
+        tree_text = EnumType(name="Tree", type_args=(TextType(),))
+        wrapper, wrapper_def = record_type("Holder", {"a": tree_int, "b": tree_text})
+        schema = derive_schema(wrapper, type_table_for(wrapper_def, tree_def))
+        defs = schema["$defs"]
+        assert isinstance(defs, dict)
+        assert set(defs.keys()) == {"Tree_int", "Tree_text"}
+        properties = schema["properties"]
+        assert isinstance(properties, dict)
+        assert properties["a"] == {"$ref": "#/$defs/Tree_int"}
+        assert properties["b"] == {"$ref": "#/$defs/Tree_text"}
+
+    def test_cross_module_same_name_gets_qualified_keys(self) -> None:
+        mod_a = ModuleId.from_dotted("mod_a")
+        mod_b = ModuleId.from_dotted("mod_b")
+        tree_a, tree_a_def = enum_type(
+            "Tree",
+            {"Leaf": {}, "Node": {"next": EnumType(name="Tree", module_id=mod_a)}},
+            module_id=mod_a,
+        )
+        tree_b, tree_b_def = enum_type(
+            "Tree",
+            {"Leaf": {}, "Node": {"next": EnumType(name="Tree", module_id=mod_b)}},
+            module_id=mod_b,
+        )
+        wrapper, wrapper_def = record_type("Holder", {"a": tree_a, "b": tree_b})
+        schema = derive_schema(wrapper, type_table_for(wrapper_def, tree_a_def, tree_b_def))
+        defs = schema["$defs"]
+        assert isinstance(defs, dict)
+        assert set(defs.keys()) == {"mod_a.Tree", "mod_b.Tree"}
+        properties = schema["properties"]
+        assert isinstance(properties, dict)
+        assert properties["a"] == {"$ref": "#/$defs/mod_a.Tree"}
+        assert properties["b"] == {"$ref": "#/$defs/mod_b.Tree"}
+
+    def test_non_recursive_schema_has_no_defs_key(self) -> None:
+        # Non-recursive output stays byte-identical to a plain inlining
+        # derivation: no `$defs` key at all.
+        inner, inner_def = record_type("Inner", {"x": IntType()})
+        outer, outer_def = record_type("Outer", {"inner": inner})
+        schema = derive_schema(outer, type_table_for(outer_def, inner_def))
+        assert "$defs" not in schema
+
+    def test_raises_for_infinite_closure_root(self) -> None:
+        pair_def = TypeDef(
+            kind="record",
+            name="Pair",
+            module_id=ENTRY_ID,
+            type_params=("A", "B"),
+            fields=(("first", TypeVarType("A")), ("second", TypeVarType("B"))),
+        )
+        perfect_def = TypeDef(
+            kind="enum",
+            name="Perfect",
+            module_id=ENTRY_ID,
+            type_params=("T",),
+            variants=(
+                ("Single", (("value", TypeVarType("T")),)),
+                (
+                    "Succ",
+                    (
+                        (
+                            "next",
+                            EnumType(
+                                name="Perfect",
+                                type_args=(
+                                    RecordType(
+                                        name="Pair",
+                                        type_args=(TypeVarType("T"), TypeVarType("T")),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        table = type_table_for(pair_def, perfect_def)
+        perfect_int = EnumType(name="Perfect", type_args=(IntType(),))
+        with pytest.raises(TypeError, match="no finite schema"):
+            derive_schema(perfect_int, table)
+
+    def test_assign_defs_keys_breaks_residual_collision_with_numeric_suffix(self) -> None:
+        # Three handles whose bare display forms all sanitize to the
+        # identical string despite being genuinely distinct instantiations
+        # (`X[A_B]`, `X[A, B]`, and the plain type `X_A_B` all sanitize to
+        # `X_A_B`), all in the entry module (so module-qualification cannot
+        # disambiguate them): the numeric suffix is the final,
+        # always-available disambiguator, tried incrementally until free.
+        from agm.agl.type_schema import _assign_defs_keys
+
+        h1 = RecordType("X", type_args=(RecordType("A_B", module_id=ENTRY_ID),), module_id=ENTRY_ID)
+        h2 = RecordType(
+            "X",
+            type_args=(RecordType("A", module_id=ENTRY_ID), RecordType("B", module_id=ENTRY_ID)),
+            module_id=ENTRY_ID,
+        )
+        h3 = RecordType("X_A_B", module_id=ENTRY_ID)
+        keys = _assign_defs_keys((h1, h2, h3))
+        assert keys[h1] == "X_A_B"
+        assert keys[h2] == "X_A_B_2"
+        assert keys[h3] == "X_A_B_3"
+
+    def test_defs_key_order_is_deterministic_for_mutually_recursive_hub(self) -> None:
+        # Hub has three direct neighbours (Alpha, Mike, Zulu) discovered off
+        # ONE frozenset — a Python-hash-ordered set, not a sequence — and each
+        # of them loops back to Hub, putting all four in one mutually
+        # recursive component. The BFS queue extension that discovers Alpha/
+        # Mike/Zulu must sort them deterministically (by declaration key), or
+        # this order — and hence $defs dict insertion order — would vary with
+        # PYTHONHASHSEED. Field order is deliberately NOT alphabetical, so a
+        # test that only reproduced field order would not catch a
+        # frozenset-iteration-order regression.
+        hub_handle = RecordType("Hub", module_id=ENTRY_ID)
+        alpha, alpha_def = record_type("Alpha", {"back": hub_handle})
+        mike, mike_def = record_type("Mike", {"back": hub_handle})
+        zulu, zulu_def = record_type("Zulu", {"back": hub_handle})
+        hub, hub_def = record_type("Hub", {"a": zulu, "b": alpha, "c": mike})
+        table = type_table_for(hub_def, alpha_def, mike_def, zulu_def)
+        schema = derive_schema(hub, table)
+        defs = schema["$defs"]
+        assert isinstance(defs, dict)
+        assert list(defs.keys()) == ["Hub", "Alpha", "Mike", "Zulu"]
+
+
+# ---------------------------------------------------------------------------
+# 1c. Recursive schema validator round-trip (schema-only — the decode side
+# does not yet support recursion; these tests never call
+# build_decode_schema/JsonCodec.parse for a recursive type)
+# ---------------------------------------------------------------------------
+
+
+class TestRecursiveSchemaValidatorRoundtrip:
+    def test_accepts_nested_tree_payload(self) -> None:
+        tree, tree_def = _tree_type_and_def()
+        schema = derive_schema(tree, type_table_for(tree_def))
+        validator = Draft202012Validator(schema)
+        payload = {
+            "$case": "Node",
+            "value": 1,
+            "left": {"$case": "Leaf"},
+            "right": {
+                "$case": "Node",
+                "value": 2,
+                "left": {"$case": "Leaf"},
+                "right": {"$case": "Leaf"},
+            },
+        }
+        assert validator.is_valid(payload)
+
+    def test_rejects_missing_required_field_two_levels_deep(self) -> None:
+        tree, tree_def = _tree_type_and_def()
+        schema = derive_schema(tree, type_table_for(tree_def))
+        validator = Draft202012Validator(schema)
+        payload = {
+            "$case": "Node",
+            "value": 1,
+            "left": {"$case": "Leaf"},
+            # Missing "value" two levels deep inside "right.left"... actually
+            # inside "right" itself (a Node missing its required "value").
+            "right": {
+                "$case": "Node",
+                "left": {"$case": "Leaf"},
+                "right": {"$case": "Leaf"},
+            },
+        }
+        assert not validator.is_valid(payload)
+
+    def test_rejects_wrong_case_tag_in_nested_variant(self) -> None:
+        tree, tree_def = _tree_type_and_def()
+        schema = derive_schema(tree, type_table_for(tree_def))
+        validator = Draft202012Validator(schema)
+        payload = {
+            "$case": "Node",
+            "value": 1,
+            "left": {"$case": "Leaf"},
+            "right": {
+                "$case": "Bogus",
+                "value": 2,
+                "left": {"$case": "Leaf"},
+                "right": {"$case": "Leaf"},
+            },
+        }
+        assert not validator.is_valid(payload)
 
 
 # ---------------------------------------------------------------------------

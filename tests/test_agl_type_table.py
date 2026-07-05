@@ -1912,3 +1912,141 @@ class TestFiniteClosure:
         x_handle = RecordType("X", module_id=ENTRY_ID)
         root = RecordType("Pair", type_args=(x_handle, x_handle), module_id=ENTRY_ID)
         assert table.has_finite_schema(root) is True
+
+    # -----------------------------------------------------------------
+    # first_infinite_declaration / no_finite_schema_message
+    # -----------------------------------------------------------------
+
+    def _perfect_table(self) -> TypeTable:
+        """A table with ``Pair[A, B]`` and the growing ``Perfect[T]`` declaration."""
+        table = TypeTable()
+        table.register(_pair_def())
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Perfect",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(
+                    ("value", TypeVarType("T")),
+                    (
+                        "next",
+                        RecordType(
+                            "Perfect",
+                            type_args=(
+                                RecordType(
+                                    "Pair",
+                                    type_args=(TypeVarType("T"), TypeVarType("T")),
+                                    module_id=ENTRY_ID,
+                                ),
+                            ),
+                            module_id=ENTRY_ID,
+                        ),
+                    ),
+                ),
+            )
+        )
+        return table
+
+    def test_first_infinite_declaration_is_none_for_finite_root(self) -> None:
+        table = self._perfect_table()
+        pair_int = RecordType("Pair", type_args=(IntType(), IntType()), module_id=ENTRY_ID)
+        assert table.first_infinite_declaration(IntType()) is None
+        assert table.first_infinite_declaration(pair_int) is None
+
+    def test_first_infinite_declaration_names_root_itself(self) -> None:
+        table = self._perfect_table()
+        perfect_int = RecordType("Perfect", type_args=(IntType(),), module_id=ENTRY_ID)
+        assert table.first_infinite_declaration(perfect_int) == (ENTRY_ID, "Perfect")
+
+    def test_first_infinite_declaration_names_culprit_reached_through_field(self) -> None:
+        table = self._perfect_table()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Holder",
+                module_id=ENTRY_ID,
+                fields=(("p", RecordType("Perfect", type_args=(IntType(),), module_id=ENTRY_ID)),),
+            )
+        )
+        holder = RecordType("Holder", module_id=ENTRY_ID)
+        assert table.first_infinite_declaration(holder) == (ENTRY_ID, "Perfect")
+
+    def test_no_finite_schema_message_is_none_for_finite_type(self) -> None:
+        table = self._perfect_table()
+        pair_int = RecordType("Pair", type_args=(IntType(), IntType()), module_id=ENTRY_ID)
+        assert table.no_finite_schema_message(pair_int, use="a cast target") is None
+
+    def test_no_finite_schema_message_names_root_when_root_is_the_culprit(self) -> None:
+        table = self._perfect_table()
+        perfect_int = RecordType("Perfect", type_args=(IntType(),), module_id=ENTRY_ID)
+        message = table.no_finite_schema_message(perfect_int, use="an agent output type")
+        assert message is not None
+        assert "Perfect[int]" in message
+        assert "an agent output type" in message
+        assert "no finite JSON schema" in message
+
+    def test_no_finite_schema_message_mentions_both_root_and_culprit(self) -> None:
+        table = self._perfect_table()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Holder",
+                module_id=ENTRY_ID,
+                fields=(("p", RecordType("Perfect", type_args=(IntType(),), module_id=ENTRY_ID)),),
+            )
+        )
+        holder = RecordType("Holder", module_id=ENTRY_ID)
+        message = table.no_finite_schema_message(holder, use="a parameter type")
+        assert message is not None
+        assert "Holder" in message
+        assert "Perfect" in message
+        assert "a parameter type" in message
+
+    def test_no_finite_schema_message_qualifies_culprit_in_non_entry_module(self) -> None:
+        # The culprit ("Perfect") is reached through a field, not the root
+        # ("Holder") itself, and lives in a non-entry module: it must be
+        # named with its module qualifier (matching the ``mod::Name``
+        # convention RecordType/EnumType's own __repr__ uses) so it is never
+        # ambiguous with a same-named declaration elsewhere.
+        mod = ModuleId.from_dotted("mod_a")
+        table = TypeTable()
+        table.register(_pair_def())
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Perfect",
+                module_id=mod,
+                type_params=("T",),
+                fields=(
+                    ("value", TypeVarType("T")),
+                    (
+                        "next",
+                        RecordType(
+                            "Perfect",
+                            type_args=(
+                                RecordType(
+                                    "Pair",
+                                    type_args=(TypeVarType("T"), TypeVarType("T")),
+                                    module_id=ENTRY_ID,
+                                ),
+                            ),
+                            module_id=mod,
+                        ),
+                    ),
+                ),
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Holder",
+                module_id=ENTRY_ID,
+                fields=(("p", RecordType("Perfect", type_args=(IntType(),), module_id=mod)),),
+            )
+        )
+        holder = RecordType("Holder", module_id=ENTRY_ID)
+        message = table.no_finite_schema_message(holder, use="a parameter type")
+        assert message is not None
+        assert "mod_a::Perfect" in message
+        assert "a parameter type" in message

@@ -6136,6 +6136,152 @@ class TestCastClassificationTable:
         assert cast_classification(source, TextType()) == CastKind.TOTAL_RENDER
 
 
+# ---------------------------------------------------------------------------
+# No-finite-schema use-site enforcement (agent output target, cast target,
+# parameter type): a type whose reachable instantiation closure is infinite
+# (growing polymorphic recursion) is legal in-language but is rejected at
+# every use site that needs a finite JSON schema. Finite recursive types
+# (e.g. `Tree`) stay legal at the same sites.
+# ---------------------------------------------------------------------------
+
+# `Perfect[T]` references itself at a strictly larger argument
+# (`Pair[T, T]`), so its instantiation closure never closes — see
+# `tests/agl/programs/generics/perfect_polymorphic_recursion.agl` for the
+# matching in-language (non-boundary) usage.
+_GROWING_TYPE_SRC = (
+    "record Pair[A, B]\n"
+    "  first: A\n"
+    "  second: B\n"
+    "enum Perfect[T]\n"
+    "  | Single(value: T)\n"
+    "  | Succ(next: Perfect[Pair[T, T]])\n"
+)
+
+_TREE_SRC = "enum Tree\n  | Leaf\n  | Node(value: int, left: Tree, right: Tree)\n"
+
+
+class TestNoFiniteSchemaUseSites:
+    def test_ask_growing_type_rejected(self) -> None:
+        err = reject_type(_GROWING_TYPE_SRC + 'ask::[Perfect[int]]("Q")')
+        msg = str(err).lower()
+        assert "perfect[int]" in msg
+        assert "agent output type" in msg
+        assert "no finite json schema" in msg
+
+    def test_ask_request_growing_type_rejected(self) -> None:
+        err = reject_type(_GROWING_TYPE_SRC + 'ask-request::[Perfect[int]]("Q")')
+        msg = str(err).lower()
+        assert "perfect[int]" in msg
+        assert "agent output type" in msg
+
+    def test_exec_growing_type_rejected(self) -> None:
+        err = reject_type(_GROWING_TYPE_SRC + 'exec::[Perfect[int]]("cmd")')
+        msg = str(err).lower()
+        assert "perfect[int]" in msg
+        assert "agent output type" in msg
+
+    def test_cast_growing_type_target_rejected(self) -> None:
+        err = reject_type(_GROWING_TYPE_SRC + 'let raw: text = "{}"\nraw as Perfect[int]')
+        msg = str(err).lower()
+        assert "perfect[int]" in msg
+        assert "cast target" in msg
+
+    def test_param_growing_type_rejected(self) -> None:
+        err = reject_type(_GROWING_TYPE_SRC + "param p: Perfect[int]\np")
+        msg = str(err).lower()
+        assert "perfect[int]" in msg
+        assert "parameter type" in msg
+
+    def test_ask_growing_type_reachable_through_field_rejected(self) -> None:
+        # The root type (`Holder`) is not itself infinite; the culprit
+        # (`Perfect`) is reached through a nested field, so the message must
+        # name both.
+        src = _GROWING_TYPE_SRC + 'record Holder\n  p: Perfect[int]\nask::[Holder]("Q")'
+        err = reject_type(src)
+        msg = str(err).lower()
+        assert "holder" in msg
+        assert "perfect" in msg
+
+    def test_cast_growing_type_reachable_through_field_rejected(self) -> None:
+        src = (
+            _GROWING_TYPE_SRC
+            + 'record Holder\n  p: Perfect[int]\nlet raw: text = "{}"\nraw as Holder'
+        )
+        err = reject_type(src)
+        msg = str(err).lower()
+        assert "holder" in msg
+        assert "perfect" in msg
+
+    def test_param_growing_type_reachable_through_field_rejected(self) -> None:
+        src = _GROWING_TYPE_SRC + "record Holder\n  p: Perfect[int]\nparam h: Holder\nh"
+        err = reject_type(src)
+        msg = str(err).lower()
+        assert "holder" in msg
+        assert "perfect" in msg
+
+    def test_cast_growing_type_in_list_target_rejected(self) -> None:
+        # A FALLIBLE cast to a COMPOSITE target (list[...]) containing an
+        # infinite type must be rejected here too, not only a bare
+        # record/enum target — otherwise it passes check and crashes at
+        # lowering.
+        err = reject_type(_GROWING_TYPE_SRC + 'let raw: text = "{}"\nraw as list[Perfect[int]]')
+        msg = str(err).lower()
+        assert "perfect" in msg
+        assert "cast target" in msg
+
+    def test_cast_growing_type_in_dict_target_rejected(self) -> None:
+        err = reject_type(
+            _GROWING_TYPE_SRC + 'let raw: text = "{}"\nraw as dict[text, Perfect[int]]'
+        )
+        msg = str(err).lower()
+        assert "perfect" in msg
+        assert "cast target" in msg
+
+    def test_cast_scalar_fallible_target_still_legal(self) -> None:
+        # A FALLIBLE cast to a plain scalar target (no record/enum anywhere
+        # in it) never has a schema to derive, so it stays legal —
+        # no_finite_schema_message must be a safe no-op here.
+        r = accept_type('let raw: text = "42"\nraw as int')
+        assert r.resolved.program is not None
+
+    def test_cast_growing_type_as_render_source_is_legal(self) -> None:
+        # TOTAL_RENDER never derives a schema — only a FALLIBLE cast to a
+        # record/enum TARGET does — so a growing type stays legal as a cast
+        # SOURCE.
+        r = accept_type(
+            _GROWING_TYPE_SRC
+            + "let p: Perfect[int] = Single(value = 1)\nlet t: text = p as text\nt"
+        )
+        assert r.resolved.program is not None
+
+    def test_cast_growing_type_as_json_source_is_legal(self) -> None:
+        r = accept_type(
+            _GROWING_TYPE_SRC
+            + "let p: Perfect[int] = Single(value = 1)\nlet j: json = p as json\nj"
+        )
+        assert r.resolved.program is not None
+
+    def test_ask_finite_recursive_type_accepted(self) -> None:
+        # `check` alone must accept a finite recursive output type — lowering
+        # (the decode side) is not exercised here at all.
+        r = accept_type(_TREE_SRC + 'ask::[Tree]("Q")')
+        call = r.resolved.program.body.items[-1]
+        assert isinstance(call, Call)
+        assert r.contract_specs[call.node_id].target_type == EnumType(name="Tree")
+
+    def test_exec_finite_recursive_type_accepted(self) -> None:
+        r = accept_type(_TREE_SRC + 'exec::[Tree]("cmd")')
+        assert r.resolved.program is not None
+
+    def test_cast_finite_recursive_type_accepted(self) -> None:
+        r = accept_type(_TREE_SRC + 'let raw: text = "{}"\nraw as Tree')
+        assert r.resolved.program is not None
+
+    def test_param_finite_recursive_type_accepted(self) -> None:
+        r = accept_type(_TREE_SRC + "param t: Tree\nt")
+        assert r.resolved.program is not None
+
+
 class TestParseJsonCall:
     """Tests for parse_json built-in."""
 

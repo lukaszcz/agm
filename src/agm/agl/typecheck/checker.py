@@ -559,6 +559,17 @@ class _Checker:
                 declared_type = val_type
         else:
             declared_type = ann_type if ann_type is not None else TextType()
+        # A non-text param round-trips through the JSON boundary (schema +
+        # decode) at lowering time (see ``type_schema.build_param_decoder``);
+        # a type whose reachable instantiation closure is infinite has no
+        # finite schema to derive, so reject it here rather than crashing at
+        # lowering. Text params are taken verbatim and never build a schema.
+        if not isinstance(declared_type, TextType):
+            message = self._env.type_table.no_finite_schema_message(
+                declared_type, use="a parameter type"
+            )
+            if message is not None:
+                raise AglTypeError(message, span=stmt.span)
         self._env.set_binding_type(stmt.node_id, declared_type)
 
     def _check_config(self, stmt: ConfigDecl) -> None:
@@ -894,6 +905,20 @@ class _Checker:
                 f"cannot cast '{source_type!r}' to '{target_type!r}'.",
                 span=node.span,
             )
+        # Only a FALLIBLE cast derives a JSON schema at lowering time
+        # (TOTAL_RENDER/TOTAL_JSON/TOTAL_NOOP never do) — and it may need one
+        # not just for a bare record/enum target but for a composite target
+        # containing one (e.g. list[Perfect[int]], dict[text, Perfect[int]]).
+        # A type whose reachable instantiation closure is infinite has no
+        # finite schema to derive, so reject it here rather than crashing at
+        # lowering. no_finite_schema_message returns None for scalar/finite
+        # targets, so this is a safe no-op for every other FALLIBLE cast.
+        if kind == CastKind.FALLIBLE:
+            message = self._env.type_table.no_finite_schema_message(
+                target_type, use="a cast target"
+            )
+            if message is not None:
+                raise AglTypeError(message, span=node.span)
         self._cast_specs[node.node_id] = CastSpec(target_type=target_type, kind=kind)
         return BoolType() if node.test_only else target_type
 

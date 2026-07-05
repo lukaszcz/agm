@@ -246,6 +246,7 @@ class BuiltinCallChecker:
             codec_name, effective_strict, parse_policy_str = self._resolve_parse_options(
                 node, target_type, named
             )
+            self._check_finite_json_schema(target_type, codec_name, node.span)
             spec = OutputContractSpec(
                 target_type=target_type,
                 codec_name=codec_name,
@@ -337,6 +338,7 @@ class BuiltinCallChecker:
             codec_name, effective_strict, parse_policy_str = self._resolve_parse_options(
                 node, target_type, named
             )
+            self._check_finite_json_schema(target_type, codec_name, node.span)
             spec = OutputContractSpec(
                 target_type=target_type,
                 codec_name=codec_name,
@@ -396,6 +398,33 @@ class BuiltinCallChecker:
                 f"agent/exec target type cannot contain a type variable ('{tv}').",
                 span=span,
             )
+
+    def _check_finite_json_schema(
+        self, target_type: Type, codec_name: str, span: SourceSpan
+    ) -> None:
+        """Reject *target_type* if the 'json' codec will need a schema it cannot derive.
+
+        Shared by ``ask``/``ask-request`` (via ``_finish_ask_like``) and
+        ``exec``: only the 'json' codec ever calls ``derive_schema`` at
+        lowering time — a 'text' (or unit/structured-exec) target never
+        builds a schema, so this is a no-op for those. A type whose reachable
+        instantiation closure is infinite (growing polymorphic recursion) has
+        no finite JSON schema; using it as an agent/exec output type is
+        rejected here, as a normal checker error, rather than surfacing as an
+        internal crash when the lowerer later calls ``derive_schema``.
+        """
+        if codec_name != "json":
+            # A host-registered custom codec owns its own schema-derivation
+            # contract; it is not required to route through
+            # ``type_schema.derive_schema`` at all, and if it does, that
+            # function guards infinite types itself with a clear ``TypeError``
+            # rather than relying on this use-site check.
+            return
+        message = self._ctx._env.type_table.no_finite_schema_message(
+            target_type, use="an agent output type"
+        )
+        if message is not None:
+            raise AglTypeError(message, span=span)
 
     # --- shared parse-option handling (ask / exec) ---
 

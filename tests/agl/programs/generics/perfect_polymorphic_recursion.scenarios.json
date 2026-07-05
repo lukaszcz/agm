@@ -1,0 +1,18 @@
+{
+  "scenarios": [
+    {
+      "name": "positive_values",
+      "params": {"a": 1, "b": 2, "c": 3, "d": 4},
+      "expect": {
+        "stdout": "leaf\ndeeper\ndeeper\n1\n(1,2)\n((1,2),(3,4))\ntrue\nfalse\ntrue\nhas a next level\n"
+      }
+    },
+    {
+      "name": "negative_and_zero_values",
+      "params": {"a": -1, "b": 0, "c": 5, "d": -8},
+      "expect": {
+        "stdout": "leaf\ndeeper\ndeeper\n-1\n(-1,0)\n((-1,0),(5,-8))\ntrue\nfalse\ntrue\nhas a next level\n"
+      }
+    }
+  ]
+}

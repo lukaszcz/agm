@@ -19,6 +19,7 @@ from agm.agl.parser import parse_program
 from agm.agl.repl import ReplSession
 from agm.agl.scope import resolve
 from agm.agl.scope.graph import resolve_graph
+from agm.agl.semantics.analyses import compute_finite_closure
 from agm.agl.semantics.type_table import (
     BUILTIN_PRELUDE_TYPE_DEFS,
     TypeDef,
@@ -51,9 +52,7 @@ _CAPS = HostCapabilities(
     supports_shell_exec=True,
     codec_kinds={
         "text": frozenset({"text"}),
-        "json": frozenset(
-            {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
-        ),
+        "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
     },
 )
 
@@ -586,9 +585,7 @@ class TestGenericSubstitution:
                 ),
             )
         )
-        handle = RecordType(
-            name="Pair", type_args=(IntType(), TextType()), module_id=ENTRY_ID
-        )
+        handle = RecordType(name="Pair", type_args=(IntType(), TextType()), module_id=ENTRY_ID)
         result = table.record_fields(handle)
         assert dict(result) == {
             "first": IntType(),
@@ -608,9 +605,7 @@ class TestGenericSubstitution:
                 variants=(("None", ()), ("Just", (("value", TypeVarType("T")),))),
             )
         )
-        handle = EnumType(
-            name="Maybe", type_args=(IntType(),), module_id=ENTRY_ID
-        )
+        handle = EnumType(name="Maybe", type_args=(IntType(),), module_id=ENTRY_ID)
         result = table.enum_variants(handle)
         assert {v: dict(f) for v, f in result.items()} == {
             "None": {},
@@ -655,12 +650,8 @@ class TestMemoization:
                 fields=(("value", TypeVarType("T")),),
             )
         )
-        int_handle = RecordType(
-            name="Box", type_args=(IntType(),), module_id=ENTRY_ID
-        )
-        text_handle = RecordType(
-            name="Box", type_args=(TextType(),), module_id=ENTRY_ID
-        )
+        int_handle = RecordType(name="Box", type_args=(IntType(),), module_id=ENTRY_ID)
+        text_handle = RecordType(name="Box", type_args=(TextType(),), module_id=ENTRY_ID)
         assert dict(table.record_fields(int_handle)) == {"value": IntType()}
         assert dict(table.record_fields(text_handle)) == {"value": TextType()}
         # Re-fetching the first handle still returns its own cached result.
@@ -677,12 +668,8 @@ class TestMemoization:
                 variants=(("Just", (("value", TypeVarType("T")),)),),
             )
         )
-        int_handle = EnumType(
-            name="Maybe", type_args=(IntType(),), module_id=ENTRY_ID
-        )
-        text_handle = EnumType(
-            name="Maybe", type_args=(TextType(),), module_id=ENTRY_ID
-        )
+        int_handle = EnumType(name="Maybe", type_args=(IntType(),), module_id=ENTRY_ID)
+        text_handle = EnumType(name="Maybe", type_args=(TextType(),), module_id=ENTRY_ID)
         assert {v: dict(f) for v, f in table.enum_variants(int_handle).items()} == {
             "Just": {"value": IntType()}
         }
@@ -901,9 +888,7 @@ class TestBuiltinSeeding:
         typedef = table.get(STD_CORE_ID, "Option")
         assert typedef is not None
         assert typedef.type_params == ("T",)
-        handle = EnumType(
-            name="Option", type_args=(TextType(),), module_id=STD_CORE_ID
-        )
+        handle = EnumType(name="Option", type_args=(TextType(),), module_id=STD_CORE_ID)
         result = table.enum_variants(handle)
         assert {v: dict(f) for v, f in result.items()} == {
             "None": {},
@@ -921,9 +906,7 @@ class TestEnvTypeHasMatchingTableDefSingleModule:
     shared table (the only place shapes live now that handles carry none)."""
 
     def test_non_generic_record(self) -> None:
-        checked = _check(
-            "record Point\n  x: int\n  y: int\nlet p = Point(x = 1, y = 2)\np"
-        )
+        checked = _check("record Point\n  x: int\n  y: int\nlet p = Point(x = 1, y = 2)\np")
         point = checked.type_env.get_type("Point")
         assert isinstance(point, RecordType)
         table = checked.type_env.type_table
@@ -933,9 +916,7 @@ class TestEnvTypeHasMatchingTableDefSingleModule:
         assert dict(table.record_fields(point)) == {"x": IntType(), "y": IntType()}
 
     def test_generic_record(self) -> None:
-        checked = _check(
-            "record Box[T]\n  value: T\nlet b: Box[int] = Box(value = 1)\nb"
-        )
+        checked = _check("record Box[T]\n  value: T\nlet b: Box[int] = Box(value = 1)\nb")
         box = _binding_value_type(checked, "b")
         assert isinstance(box, RecordType)
         table = checked.type_env.type_table
@@ -945,9 +926,7 @@ class TestEnvTypeHasMatchingTableDefSingleModule:
         assert dict(table.record_fields(box)) == {"value": IntType()}
 
     def test_non_generic_enum(self) -> None:
-        checked = _check(
-            "enum Color\n  | Red\n  | Green\n  | Blue\nlet c = Red\nc"
-        )
+        checked = _check("enum Color\n  | Red\n  | Green\n  | Blue\nlet c = Red\nc")
         color = checked.type_env.get_type("Color")
         assert isinstance(color, EnumType)
         table = checked.type_env.type_table
@@ -962,9 +941,7 @@ class TestEnvTypeHasMatchingTableDefSingleModule:
         }
 
     def test_generic_enum(self) -> None:
-        checked = _check(
-            "enum Maybe[T]\n  | none\n  | just(value: T)\nlet m = just(value = 1)\nm"
-        )
+        checked = _check("enum Maybe[T]\n  | none\n  | just(value: T)\nlet m = just(value = 1)\nm")
         maybe = _binding_value_type(checked, "m")
         assert isinstance(maybe, EnumType)
         table = checked.type_env.type_table
@@ -984,19 +961,13 @@ class TestEnvTypeHasMatchingTableDefSingleModule:
 
 
 class TestEnvTypeHasMatchingTableDefGraphMode:
-    def test_record_declared_in_one_module_reachable_from_another(
-        self, tmp_path: Path
-    ) -> None:
+    def test_record_declared_in_one_module_reachable_from_another(self, tmp_path: Path) -> None:
         modules = {
             "entry": (
-                "import mylib\n"
-                "def make() -> mylib::Point = mylib::makePoint()\n"
-                "let p = make()\n"
-                "p"
+                "import mylib\ndef make() -> mylib::Point = mylib::makePoint()\nlet p = make()\np"
             ),
             "mylib": (
-                "record Point\n  x: int\n  y: int\n"
-                "def makePoint() -> Point = Point(x = 1, y = 2)"
+                "record Point\n  x: int\n  y: int\ndef makePoint() -> Point = Point(x = 1, y = 2)"
             ),
         }
         cg = _check_graph(tmp_path, modules)
@@ -1082,14 +1053,10 @@ class TestComparableTypesTableAware:
                 fields=(("value", TypeVarType("T")),),
             )
         )
-        agent_handle = RecordType(
-            name="Box", type_args=(AgentType(),), module_id=ENTRY_ID
-        )
+        agent_handle = RecordType(name="Box", type_args=(AgentType(),), module_id=ENTRY_ID)
         assert comparable_types(agent_handle, agent_handle, table) is False
 
-        int_handle = RecordType(
-            name="Box", type_args=(IntType(),), module_id=ENTRY_ID
-        )
+        int_handle = RecordType(name="Box", type_args=(IntType(),), module_id=ENTRY_ID)
         assert comparable_types(int_handle, int_handle, table) is True
 
     def test_generic_enum_function_variant_via_instantiation_not_comparable(self) -> None:
@@ -1104,14 +1071,10 @@ class TestComparableTypesTableAware:
             )
         )
         fn_type = FunctionType(params=(IntType(),), result=IntType())
-        fn_handle = EnumType(
-            name="Holder", type_args=(fn_type,), module_id=ENTRY_ID
-        )
+        fn_handle = EnumType(name="Holder", type_args=(fn_type,), module_id=ENTRY_ID)
         assert comparable_types(fn_handle, fn_handle, table) is False
 
-        text_handle = EnumType(
-            name="Holder", type_args=(TextType(),), module_id=ENTRY_ID
-        )
+        text_handle = EnumType(name="Holder", type_args=(TextType(),), module_id=ENTRY_ID)
         assert comparable_types(text_handle, text_handle, table) is True
 
     def test_record_with_unit_nested_in_list_field_not_comparable(self) -> None:
@@ -1128,9 +1091,7 @@ class TestComparableTypesTableAware:
                 fields=(("items", ListType(TypeVarType("T"))),),
             )
         )
-        handle = RecordType(
-            name="Wrapper", type_args=(UnitType(),), module_id=ENTRY_ID
-        )
+        handle = RecordType(name="Wrapper", type_args=(UnitType(),), module_id=ENTRY_ID)
         assert comparable_types(handle, handle, table) is False
 
     def test_enum_variant_with_agent_nested_in_dict_field_not_comparable(self) -> None:
@@ -1144,9 +1105,7 @@ class TestComparableTypesTableAware:
                 variants=(("Full", (("byKey", DictType(TypeVarType("T"))),)),),
             )
         )
-        handle = EnumType(
-            name="Bag", type_args=(AgentType(),), module_id=ENTRY_ID
-        )
+        handle = EnumType(name="Bag", type_args=(AgentType(),), module_id=ENTRY_ID)
         assert comparable_types(handle, handle, table) is False
 
     def test_exception_with_function_field_not_comparable(self) -> None:
@@ -1321,3 +1280,635 @@ class TestComparableTypesTableAware:
         b_handle = RecordType(name="B", module_id=ENTRY_ID)
         assert comparable_types(a_handle, a_handle, table) is True
         assert comparable_types(b_handle, b_handle, table) is True
+
+
+# ---------------------------------------------------------------------------
+# Finiteness (instantiation-closure) analysis
+# ---------------------------------------------------------------------------
+
+
+def _pair_def(name: str = "Pair") -> TypeDef:
+    """A plain non-recursive generic record with two independent parameters."""
+    return TypeDef(
+        kind="record",
+        name=name,
+        module_id=ENTRY_ID,
+        type_params=("X", "Y"),
+        fields=(("x", TypeVarType("X")), ("y", TypeVarType("Y"))),
+    )
+
+
+class TestFiniteClosure:
+    def test_uniform_self_reference_is_finite(self) -> None:
+        # Tree[T] referencing Tree[T]: the parameter-dependency self-loop
+        # (T -> T) passes the WHOLE argument through unchanged — never a
+        # proper subterm — so it is not growing.
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Tree",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(
+                    ("value", TypeVarType("T")),
+                    (
+                        "children",
+                        ListType(
+                            RecordType("Tree", type_args=(TypeVarType("T"),), module_id=ENTRY_ID)
+                        ),
+                    ),
+                ),
+            )
+        )
+        assert table.has_finite_closure(ENTRY_ID, "Tree") is True
+
+    def test_argument_constant_reference_is_finite(self) -> None:
+        # R[int] referenced from R[T]'s own body: the argument template
+        # "int" contains none of R's own parameters at all, so there is no
+        # parameter-dependency edge whatsoever for this reference.
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="R",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(
+                    ("value", TypeVarType("T")),
+                    ("constref", RecordType("R", type_args=(IntType(),), module_id=ENTRY_ID)),
+                ),
+            )
+        )
+        assert table.has_finite_closure(ENTRY_ID, "R") is True
+
+    def test_permutation_cycle_is_finite(self) -> None:
+        # Swap[A, B] referencing Swap[B, A]: each parameter is passed through
+        # to a DIFFERENT slot unchanged (never a proper subterm), so the
+        # A -> B -> A parameter cycle has no growing edge.
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="enum",
+                name="Swap",
+                module_id=ENTRY_ID,
+                type_params=("A", "B"),
+                variants=(
+                    ("Base", (("a", TypeVarType("A")), ("b", TypeVarType("B")))),
+                    (
+                        "Rec",
+                        (
+                            (
+                                "inner",
+                                EnumType(
+                                    "Swap",
+                                    type_args=(TypeVarType("B"), TypeVarType("A")),
+                                    module_id=ENTRY_ID,
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            )
+        )
+        assert table.has_finite_closure(ENTRY_ID, "Swap") is True
+
+    def test_growing_via_nominal_argument_is_infinite(self) -> None:
+        # Perfect[T] referencing Perfect[Pair[T, T]]: T occurs nested inside
+        # Pair's own argument list, a proper subterm of the whole argument
+        # template — a growing self-loop.
+        table = TypeTable()
+        table.register(_pair_def())
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Perfect",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(
+                    ("value", TypeVarType("T")),
+                    (
+                        "next",
+                        RecordType(
+                            "Perfect",
+                            type_args=(
+                                RecordType(
+                                    "Pair",
+                                    type_args=(TypeVarType("T"), TypeVarType("T")),
+                                    module_id=ENTRY_ID,
+                                ),
+                            ),
+                            module_id=ENTRY_ID,
+                        ),
+                    ),
+                ),
+            )
+        )
+        assert table.has_finite_closure(ENTRY_ID, "Perfect") is False
+        # Pair itself is unrelated (non-recursive) and stays finite.
+        assert table.has_finite_closure(ENTRY_ID, "Pair") is True
+
+    def test_growing_via_list_is_infinite(self) -> None:
+        # P[T] referencing P[list[T]]: T occurs under the list constructor,
+        # a proper subterm of the argument template.
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="P",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(
+                    ("value", TypeVarType("T")),
+                    (
+                        "next",
+                        RecordType(
+                            "P", type_args=(ListType(TypeVarType("T")),), module_id=ENTRY_ID
+                        ),
+                    ),
+                ),
+            )
+        )
+        assert table.has_finite_closure(ENTRY_ID, "P") is False
+
+    def test_mutual_growing_across_two_declarations_is_infinite(self) -> None:
+        # A[T] references B[Pair[T, T]]; B[T] references A[T] — the growing
+        # step and the cycle-closing step live on DIFFERENT declarations.
+        table = TypeTable()
+        table.register(_pair_def())
+        table.register(
+            TypeDef(
+                kind="record",
+                name="A",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(
+                    ("value", TypeVarType("T")),
+                    (
+                        "b",
+                        RecordType(
+                            "B",
+                            type_args=(
+                                RecordType(
+                                    "Pair",
+                                    type_args=(TypeVarType("T"), TypeVarType("T")),
+                                    module_id=ENTRY_ID,
+                                ),
+                            ),
+                            module_id=ENTRY_ID,
+                        ),
+                    ),
+                ),
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="record",
+                name="B",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(
+                    ("value", TypeVarType("T")),
+                    ("a", RecordType("A", type_args=(TypeVarType("T"),), module_id=ENTRY_ID)),
+                ),
+            )
+        )
+        assert table.has_finite_closure(ENTRY_ID, "A") is False
+        assert table.has_finite_closure(ENTRY_ID, "B") is False
+
+    def test_growing_edge_in_one_scc_member_poisons_whole_scc(self) -> None:
+        # C[T] references D[T] (uniform, non-growing); D[T] references
+        # C[Pair[T, T]] (growing). C and D form one SCC; the growing edge on
+        # the D -> C leg is enough to mark BOTH C and D infinite.
+        table = TypeTable()
+        table.register(_pair_def())
+        table.register(
+            TypeDef(
+                kind="record",
+                name="C",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(
+                    ("value", TypeVarType("T")),
+                    ("d", RecordType("D", type_args=(TypeVarType("T"),), module_id=ENTRY_ID)),
+                ),
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="record",
+                name="D",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(
+                    ("value", TypeVarType("T")),
+                    (
+                        "c",
+                        RecordType(
+                            "C",
+                            type_args=(
+                                RecordType(
+                                    "Pair",
+                                    type_args=(TypeVarType("T"), TypeVarType("T")),
+                                    module_id=ENTRY_ID,
+                                ),
+                            ),
+                            module_id=ENTRY_ID,
+                        ),
+                    ),
+                ),
+            )
+        )
+        assert table.has_finite_closure(ENTRY_ID, "C") is False
+        assert table.has_finite_closure(ENTRY_ID, "D") is False
+
+    def test_non_recursive_generic_is_finite(self) -> None:
+        table = TypeTable()
+        table.register(_pair_def())
+        assert table.has_finite_closure(ENTRY_ID, "Pair") is True
+
+    def test_non_generic_exception_is_finite(self) -> None:
+        # Exceptions are never generic, so they contribute no
+        # parameter-dependency nodes at all — any recursive exception chain
+        # (guarded through a list/dict field, as inhabitation requires) is
+        # unconditionally finite.
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Chain",
+                module_id=ENTRY_ID,
+                fields=(
+                    ("code", IntType()),
+                    ("causes", ListType(ExceptionType("Chain", module_id=ENTRY_ID))),
+                ),
+            )
+        )
+        assert table.has_finite_closure(ENTRY_ID, "Chain") is True
+
+    def test_unregistered_declaration_defaults_to_finite(self) -> None:
+        table = TypeTable()
+        assert table.has_finite_closure(ENTRY_ID, "Ghost") is True
+
+    def test_has_finite_schema_reports_infinite_for_nested_perfect_field(self) -> None:
+        # A non-recursive record containing a Perfect[int] field: the
+        # reachability query must walk INTO the field's own type_args (not
+        # just the record's direct fields) to find the infinite declaration.
+        table = TypeTable()
+        table.register(_pair_def())
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Perfect",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(
+                    ("value", TypeVarType("T")),
+                    (
+                        "next",
+                        RecordType(
+                            "Perfect",
+                            type_args=(
+                                RecordType(
+                                    "Pair",
+                                    type_args=(TypeVarType("T"), TypeVarType("T")),
+                                    module_id=ENTRY_ID,
+                                ),
+                            ),
+                            module_id=ENTRY_ID,
+                        ),
+                    ),
+                ),
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Holder",
+                module_id=ENTRY_ID,
+                fields=(("p", RecordType("Perfect", type_args=(IntType(),), module_id=ENTRY_ID)),),
+            )
+        )
+        holder = RecordType("Holder", module_id=ENTRY_ID)
+        assert table.has_finite_schema(holder) is False
+
+    def test_has_finite_schema_reports_finite_for_nested_tree_field(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Tree",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(
+                    ("value", TypeVarType("T")),
+                    (
+                        "children",
+                        ListType(
+                            RecordType("Tree", type_args=(TypeVarType("T"),), module_id=ENTRY_ID)
+                        ),
+                    ),
+                ),
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Holder",
+                module_id=ENTRY_ID,
+                fields=(("t", RecordType("Tree", type_args=(IntType(),), module_id=ENTRY_ID)),),
+            )
+        )
+        holder = RecordType("Holder", module_id=ENTRY_ID)
+        assert table.has_finite_schema(holder) is True
+
+    def test_has_finite_schema_true_for_scalar_root(self) -> None:
+        table = TypeTable()
+        assert table.has_finite_schema(IntType()) is True
+
+    def test_compute_finite_closure_successors_reach_transitively(self) -> None:
+        # Direct check of compute_finite_closure's own result shape: Holder
+        # does not itself reference Perfect's declaration in its OWN
+        # closure computation membership, but its successors chain through
+        # to Perfect via the field's nominal reference — exercised here via
+        # the function directly rather than through has_finite_schema.
+        table = TypeTable()
+        table.register(_pair_def())
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Perfect",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(
+                    ("value", TypeVarType("T")),
+                    (
+                        "next",
+                        RecordType(
+                            "Perfect",
+                            type_args=(
+                                RecordType(
+                                    "Pair",
+                                    type_args=(TypeVarType("T"), TypeVarType("T")),
+                                    module_id=ENTRY_ID,
+                                ),
+                            ),
+                            module_id=ENTRY_ID,
+                        ),
+                    ),
+                ),
+            )
+        )
+        result = compute_finite_closure(table)
+        perfect_key = (ENTRY_ID, "Perfect")
+        assert perfect_key in result.infinite
+        assert result.successors[perfect_key] == frozenset(
+            {(ENTRY_ID, "Perfect"), (ENTRY_ID, "Pair")}
+        )
+
+    def test_caches_result_and_invalidates_on_register(self) -> None:
+        table = TypeTable()
+        table.register(_pair_def())
+        assert table.has_finite_closure(ENTRY_ID, "Pair") is True
+        table.unregister(ENTRY_ID, "Pair")
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Pair",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(
+                    ("value", TypeVarType("T")),
+                    (
+                        "next",
+                        RecordType(
+                            "Pair", type_args=(ListType(TypeVarType("T")),), module_id=ENTRY_ID
+                        ),
+                    ),
+                ),
+            )
+        )
+        assert table.has_finite_closure(ENTRY_ID, "Pair") is False
+
+    def test_growing_via_dict_is_infinite(self) -> None:
+        # Q[T] referencing Q[dict[T]]: T occurs under the dict constructor,
+        # a proper subterm of the argument template.
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Q",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(
+                    ("value", TypeVarType("T")),
+                    (
+                        "next",
+                        RecordType(
+                            "Q", type_args=(DictType(TypeVarType("T")),), module_id=ENTRY_ID
+                        ),
+                    ),
+                ),
+            )
+        )
+        assert table.has_finite_closure(ENTRY_ID, "Q") is False
+
+    def test_growing_via_function_type_is_infinite(self) -> None:
+        # F[T] referencing F[(T) -> T]: T occurs under the function
+        # constructor, a proper subterm of the argument template.
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="F",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(
+                    ("value", TypeVarType("T")),
+                    (
+                        "next",
+                        RecordType(
+                            "F",
+                            type_args=(
+                                FunctionType(params=(TypeVarType("T"),), result=TypeVarType("T")),
+                            ),
+                            module_id=ENTRY_ID,
+                        ),
+                    ),
+                ),
+            )
+        )
+        assert table.has_finite_closure(ENTRY_ID, "F") is False
+
+    def test_exception_with_base_contributes_no_parameter_edges(self) -> None:
+        # The `extends` base is a reference edge like any other, but
+        # exceptions are never generic, so it never contributes a
+        # parameter-dependency node — the base chain stays finite.
+        table = TypeTable()
+        table.register(TypeDef(kind="exception", name="Root", module_id=ENTRY_ID))
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Derived",
+                module_id=ENTRY_ID,
+                fields=(("code", IntType()),),
+                base=(ENTRY_ID, "Root"),
+            )
+        )
+        assert table.has_finite_closure(ENTRY_ID, "Root") is True
+        assert table.has_finite_closure(ENTRY_ID, "Derived") is True
+
+    def test_dangling_reference_defaults_to_finite(self) -> None:
+        # A field referencing a declaration that was never registered (same
+        # defensive scenario as the equality-capability fixpoint): the
+        # dangling reference must not crash finiteness analysis, and
+        # defaults permissively to finite.
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Y",
+                module_id=ENTRY_ID,
+                fields=(("ghost", RecordType("Ghost", module_id=ENTRY_ID)),),
+            )
+        )
+        assert table.has_finite_closure(ENTRY_ID, "Y") is True
+
+    def test_argument_template_type_var_foreign_to_source_is_ignored(self) -> None:
+        # Defensive: an argument template's type variable that is not among
+        # the REFERENCING declaration's own type parameters (a malformed
+        # template — never produced by the real type builder) is simply
+        # ignored rather than crashing, mirroring the equality-capability
+        # fixpoint's "ignore what does not fit the expected shape" stance.
+        table = TypeTable()
+        table.register(_pair_def())
+        table.register(
+            TypeDef(
+                kind="record",
+                name="A",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(
+                    ("value", TypeVarType("T")),
+                    (
+                        "b",
+                        RecordType(
+                            "B",
+                            type_args=(TypeVarType("Q"),),
+                            module_id=ENTRY_ID,
+                        ),
+                    ),
+                ),
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="record",
+                name="B",
+                module_id=ENTRY_ID,
+                type_params=("Q",),
+                fields=(
+                    ("value", TypeVarType("Q")),
+                    ("a", RecordType("A", type_args=(TypeVarType("Q"),), module_id=ENTRY_ID)),
+                ),
+            )
+        )
+        assert table.has_finite_closure(ENTRY_ID, "A") is True
+        assert table.has_finite_closure(ENTRY_ID, "B") is True
+
+    def test_has_finite_schema_walks_into_root_type_args(self) -> None:
+        # The reachability query's initial walk must look INSIDE the root
+        # handle's own type_args, not just at the root handle itself: here
+        # the infinite `Perfect` declaration is nested as a type ARGUMENT of
+        # a (finite, unrelated) generic `Box[T]` root.
+        table = TypeTable()
+        table.register(_pair_def())
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Perfect",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(
+                    ("value", TypeVarType("T")),
+                    (
+                        "next",
+                        RecordType(
+                            "Perfect",
+                            type_args=(
+                                RecordType(
+                                    "Pair",
+                                    type_args=(TypeVarType("T"), TypeVarType("T")),
+                                    module_id=ENTRY_ID,
+                                ),
+                            ),
+                            module_id=ENTRY_ID,
+                        ),
+                    ),
+                ),
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Box",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(("value", TypeVarType("T")),),
+            )
+        )
+        root = RecordType(
+            "Box",
+            type_args=(RecordType("Perfect", type_args=(IntType(),), module_id=ENTRY_ID),),
+            module_id=ENTRY_ID,
+        )
+        assert table.has_finite_schema(root) is False
+
+    def test_has_finite_schema_walks_function_type_root(self) -> None:
+        # A bare FunctionType root whose result carries the infinite
+        # Perfect[int] instantiation.
+        table = TypeTable()
+        table.register(_pair_def())
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Perfect",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(
+                    ("value", TypeVarType("T")),
+                    (
+                        "next",
+                        RecordType(
+                            "Perfect",
+                            type_args=(
+                                RecordType(
+                                    "Pair",
+                                    type_args=(TypeVarType("T"), TypeVarType("T")),
+                                    module_id=ENTRY_ID,
+                                ),
+                            ),
+                            module_id=ENTRY_ID,
+                        ),
+                    ),
+                ),
+            )
+        )
+        root = FunctionType(
+            params=(IntType(),),
+            result=RecordType("Perfect", type_args=(IntType(),), module_id=ENTRY_ID),
+        )
+        assert table.has_finite_schema(root) is False
+
+    def test_has_finite_schema_dedupes_repeated_declaration_in_root(self) -> None:
+        # X appears TWICE as a sibling type argument of the (finite) root —
+        # the reachability walk must not re-process an already-seen
+        # declaration key a second time.
+        table = TypeTable()
+        table.register(_pair_def())
+        table.register(
+            TypeDef(kind="record", name="X", module_id=ENTRY_ID, fields=(("v", IntType()),))
+        )
+        x_handle = RecordType("X", module_id=ENTRY_ID)
+        root = RecordType("Pair", type_args=(x_handle, x_handle), module_id=ENTRY_ID)
+        assert table.has_finite_schema(root) is True

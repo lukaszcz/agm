@@ -1,0 +1,75 @@
+# Generic recursion: a single `enum Tree[T]` declaration built, matched,
+# folded, and compared with '=' at three different instantiations —
+# `Tree[int]`, `Tree[text]`, and the nested `Tree[list[int]]` — via one
+# generic `count_nodes[T]` fold plus instantiation-specific folds.
+enum Tree[T]
+  | Leaf
+  | Node(value: T, left: Tree[T], right: Tree[T])
+
+def count_nodes[T](t: Tree[T]) -> int =
+  case t of
+    | Leaf => 0
+    | Node(value, left, right) => 1 + count_nodes(left) + count_nodes(right)
+
+def sum_ints(t: Tree[int]) -> int =
+  case t of
+    | Leaf => 0
+    | Node(value, left, right) => value + sum_ints(left) + sum_ints(right)
+
+def concat_texts(t: Tree[text]) -> text =
+  case t of
+    | Leaf => ""
+    | Node(value, left, right) => concat_texts(left) + value + concat_texts(right)
+
+def sum_nested_lists(t: Tree[list[int]]) -> int =
+  case t of
+    | Leaf => 0
+    | Node(value, left, right) =>
+        var total: int = sum_nested_lists(left) + sum_nested_lists(right)
+        for x in value do
+          total := total + x
+        total
+
+param a: int
+param b: int
+param c: int
+
+# Tree[int]: build, fold, equality.
+let int_tree: Tree[int] = Node(
+  value = a,
+  left = Node(value = b, left = Leaf, right = Leaf),
+  right = Node(value = c, left = Leaf, right = Leaf),
+)
+let same_int_tree: Tree[int] = Node(
+  value = a,
+  left = Node(value = b, left = Leaf, right = Leaf),
+  right = Node(value = c, left = Leaf, right = Leaf),
+)
+let different_int_tree: Tree[int] = Node(value = a, left = Leaf, right = Leaf)
+
+print count_nodes(int_tree)
+print sum_ints(int_tree)
+print (int_tree == same_int_tree)
+print (int_tree == different_int_tree)
+
+# Tree[text]: the SAME generic declaration, a different instantiation.
+let text_tree: Tree[text] = Node(
+  value = "b",
+  left = Node(value = "a", left = Leaf, right = Leaf),
+  right = Node(value = "c", left = Leaf, right = Leaf),
+)
+print count_nodes(text_tree)
+print concat_texts(text_tree)
+
+# Tree[list[int]]: a container-of-container instantiation.
+let list_tree: Tree[list[int]] = Node(
+  value = [a, b],
+  left = Leaf,
+  right = Node(value = [c], left = Leaf, right = Leaf),
+)
+print count_nodes(list_tree)
+print sum_nested_lists(list_tree)
+
+case int_tree of
+  | Leaf => print "empty"
+  | Node(value, left, right) => print "root ${value}"

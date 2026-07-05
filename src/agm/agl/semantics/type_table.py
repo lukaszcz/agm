@@ -25,6 +25,15 @@ circular import. The flags themselves are a fixpoint over the whole table
 (``semantics.analyses.compute_equality_capabilities``, cycle-safe by
 construction), cached on :class:`TypeTable` and invalidated whenever the
 table's declarations change.
+
+:meth:`TypeTable.has_finite_closure`/:meth:`TypeTable.has_finite_schema`
+answer a related but distinct whole-type question: not "does this type
+support ``=``?" but "is this type's reachable *instantiation closure* finite
+(so it has a finite JSON schema)?" — a generic recursive declaration may
+reference itself at ever-larger arguments (polymorphic recursion), which
+never blocks construction/matching/equality but does mean no finite schema
+exists. Backed by ``semantics.analyses.compute_finite_closure``, cached and
+invalidated the same way as the equality-capability fixpoint.
 """
 
 from __future__ import annotations
@@ -55,7 +64,7 @@ from agm.agl.semantics.types import (
 )
 
 if TYPE_CHECKING:
-    from agm.agl.semantics.analyses import EqualityCapabilities
+    from agm.agl.semantics.analyses import EqualityCapabilities, FiniteClosure
 
 TypeDefKind = Literal["record", "enum", "exception"]
 
@@ -158,6 +167,9 @@ class TypeTable:
         # invalidated (set back to ``None``) whenever a declaration is added,
         # removed, or overwritten.
         self._equality_caps: EqualityCapabilities | None = None
+        # Whole-table finiteness fixpoint (see :meth:`has_finite_schema`),
+        # cached and invalidated the same way as ``_equality_caps``.
+        self._finite_closure: FiniteClosure | None = None
 
     def register(self, typedef: TypeDef) -> None:
         """Register *typedef*, idempotent under identical re-registration.
@@ -176,6 +188,7 @@ class TypeTable:
         if existing is None:
             self._defs[key] = typedef
             self._equality_caps = None
+            self._finite_closure = None
             return
         if existing != typedef:
             raise AssertionError(
@@ -207,10 +220,12 @@ class TypeTable:
         self._enum_variants_cache.pop(key, None)
         self._exception_fields_cache.pop(key, None)
         self._exception_field_kinds_cache.pop(key, None)
-        # The equality-capability fixpoint is whole-table (any declaration's
-        # flag can in principle depend on any other's), so a single changed
-        # key invalidates the whole cached result rather than just this key.
+        # The equality-capability and finiteness fixpoints are whole-table
+        # (any declaration's flag can in principle depend on any other's), so
+        # a single changed key invalidates the whole cached result rather
+        # than just this key.
         self._equality_caps = None
+        self._finite_closure = None
 
     def record_fields(self, handle: RecordType) -> Mapping[str, Type]:
         """Return *handle*'s field types with its ``type_args`` substituted in.
@@ -313,9 +328,7 @@ class TypeTable:
         typedef = self._require_exception_def(key, caller="exception_fields")
         fields: dict[str, Type] = {}
         if typedef.base is not None:
-            fields.update(
-                self._flatten_exception_fields(typedef.base, _visiting=_visiting | {key})
-            )
+            fields.update(self._flatten_exception_fields(typedef.base, _visiting=_visiting | {key}))
         fields.update(dict(typedef.fields))
         return fields
 
@@ -425,6 +438,50 @@ class TypeTable:
             self._equality_caps = compute_equality_capabilities(self)
         return self._equality_caps
 
+    def has_finite_closure(self, module_id: ModuleId, name: str) -> bool:
+        """Return ``True`` if the declaration ``(module_id, name)`` has a finite closure.
+
+        Declaration-level only (no ``type_args``): see
+        :func:`~agm.agl.semantics.analyses.compute_finite_closure` for what
+        "finite closure" means and how it is decided. A declaration key that
+        is not registered at all defaults to ``True`` (finite), matching the
+        defensive default of every other declaration-level query here.
+        """
+        return (module_id, name) not in self._finite_closure_result().infinite
+
+    def has_finite_schema(self, t: Type) -> bool:
+        """Return ``True`` if every declaration reachable from *t* has a finite closure.
+
+        Walks *t*'s own (finite) type tree for nominal references
+        (:func:`~agm.agl.semantics.analyses.nominal_references`), then
+        extends to every transitively reachable declaration via the
+        (declaration-level, argument-independent) reference graph, checking
+        each one's finite-closure flag. Never expands a concrete
+        instantiation, so it terminates regardless of how *t*'s
+        declarations recurse.
+        """
+        from agm.agl.semantics.analyses import nominal_references
+
+        caps = self._finite_closure_result()
+        seen: set[tuple[ModuleId, str]] = set()
+        stack = [(ref.module_id, ref.name) for ref in nominal_references(t)]
+        while stack:
+            key = stack.pop()
+            if key in seen:
+                continue
+            seen.add(key)
+            if key in caps.infinite:
+                return False
+            stack.extend(caps.successors.get(key, frozenset()) - seen)
+        return True
+
+    def _finite_closure_result(self) -> "FiniteClosure":
+        if self._finite_closure is None:
+            from agm.agl.semantics.analyses import compute_finite_closure
+
+            self._finite_closure = compute_finite_closure(self)
+        return self._finite_closure
+
     def merge_from(self, other: "TypeTable") -> None:
         """Copy every entry from *other* into this table.
 
@@ -472,8 +529,15 @@ def _has_no_value_equality(t: Type, table: TypeTable) -> bool:
             return _has_no_value_equality(t.value, table)
         case RecordType() | EnumType() | ExceptionType():
             return table.has_no_value_equality(t)
-        case (TextType() | JsonType() | BoolType() | IntType() | DecimalType()
-              | BottomType() | TypeVarType()):
+        case (
+            TextType()
+            | JsonType()
+            | BoolType()
+            | IntType()
+            | DecimalType()
+            | BottomType()
+            | TypeVarType()
+        ):
             return False
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)

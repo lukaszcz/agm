@@ -14,6 +14,8 @@ from __future__ import annotations
 import decimal
 from pathlib import Path
 
+import pytest
+
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.contracts import ConversionFailureMode, ConversionStrategy
 from agm.agl.ir.nodes import (
@@ -423,6 +425,45 @@ class TestCompileCoercion:
         box_decimal = RecordType("Box", type_args=(DecimalType(),), module_id=module_id)
         result = compile_coercion(box_int, box_decimal, table)
         assert result == MapRecordFields((("value", IntToDecimal()),))
+
+    def test_unequal_instantiations_of_recursive_declaration_raise_instead_of_looping(
+        self,
+    ) -> None:
+        # Box[T] here ALSO has a `list[Box[T]]` field, unlike the
+        # non-recursive Box[T] above: naively coercing Box[int] -> Box[decimal]
+        # would recurse into that same unequal pair forever (list[Box[int]] ->
+        # list[Box[decimal]] -> Box[int] -> Box[decimal] -> ...), a genuine
+        # Python RecursionError. This pair is never actually produced by the
+        # checker (nominal types are invariant — see
+        # docs/agl/reference/generics.md), so the internal cycle guard is the
+        # right response: fail loudly and immediately with a clear internal
+        # diagnostic rather than hang or silently mis-coerce.
+        from agm.agl.modules.ids import ModuleId
+        from agm.agl.semantics.type_table import TypeDef, create_seeded_type_table
+
+        module_id = ModuleId.from_dotted("recursive_generics_mod")
+        table = create_seeded_type_table()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Box",
+                module_id=module_id,
+                type_params=("T",),
+                fields=(
+                    ("value", TypeVarType("T")),
+                    (
+                        "children",
+                        ListType(
+                            RecordType("Box", type_args=(TypeVarType("T"),), module_id=module_id)
+                        ),
+                    ),
+                ),
+            )
+        )
+        box_int = RecordType("Box", type_args=(IntType(),), module_id=module_id)
+        box_decimal = RecordType("Box", type_args=(DecimalType(),), module_id=module_id)
+        with pytest.raises(AssertionError, match="compile_coercion re-entered"):
+            compile_coercion(box_int, box_decimal, table)
 
     # Fallthrough — otherwise → None
 

@@ -35,11 +35,42 @@ affect comparability of a concrete instantiation ("equality-relevant"
 parameters) — see :func:`compute_equality_capabilities` for the full
 definition and :meth:`~agm.agl.semantics.type_table.TypeTable.has_no_value_equality`
 for how a concrete handle's answer is derived from them.
+
+Finiteness (instantiation-closure) capability
+----------------------------------------------
+A generic recursive declaration may reference itself (or a mutually
+recursive peer) at a DIFFERENT argument, not just the same one — e.g.
+``Perfect[T]`` referencing ``Perfect[Pair[T, T]]``. Constructing, matching,
+and rendering such a type works fine (every actual VALUE is still a finite
+tree), but its **instantiation closure** — the set of concrete
+``(declaration, args)`` pairs reachable by repeatedly expanding fields
+starting from one concrete instantiation — can be infinite: ``Perfect[int]``
+reaches ``Perfect[Pair[int, int]]``, ``Perfect[Pair[Pair[int, int], Pair[int,
+int]]]``, … forever. A type with an infinite closure has no finite JSON
+schema, which matters only at the (not yet implemented) agent/cast boundary.
+
+:func:`compute_finite_closure` decides, once per table build, which
+declarations have a finite closure. Unlike inhabitation and equality
+capability, this is not a monotone fixpoint grown fact-by-fact — it is a
+one-shot graph classification: build the declaration reference graph (which
+declaration reference templates mention which other declarations, and with
+which argument templates), find its strongly-connected components (SCCs),
+and within each SCC build a small parameter-dependency graph (which of a
+referencing declaration's OWN parameters feed which of the referenced
+declaration's parameters, and whether that feed is "growing" — the source
+parameter occurs as a proper subterm of the argument template, under a
+list/dict/function/nominal-argument constructor, rather than being passed
+through unchanged). An SCC's closure is infinite iff that small graph has a
+cycle containing at least one growing edge; every declaration in such an SCC
+is infinite, everything else is finite. See :func:`compute_finite_closure`
+for the full definition and
+:meth:`~agm.agl.semantics.type_table.TypeTable.has_finite_schema` for the
+per-concrete-type reachability query built on top of it.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import assert_never
 
@@ -63,6 +94,7 @@ from agm.agl.semantics.types import (
     TypeVarType,
     UnitType,
 )
+from agm.util.graph import sccs
 
 # A declaration's identity in the shared type table.
 DeclKey = tuple[ModuleId, str]
@@ -223,9 +255,7 @@ def compute_equality_capabilities(table: TypeTable) -> EqualityCapabilities:
         for key, typedef in defs.items():
             own_params = frozenset(typedef.type_params)
             templates = tuple(_own_equality_templates(typedef))
-            bad = key in no_eq or any(
-                _template_no_eq(t, no_eq, relevant, defs) for t in templates
-            )
+            bad = key in no_eq or any(_template_no_eq(t, no_eq, relevant, defs) for t in templates)
             if typedef.kind == "exception" and typedef.base is not None:
                 bad = bad or typedef.base in no_eq
             if bad and key not in no_eq:
@@ -343,6 +373,263 @@ def _template_relevant_params(
             return set()
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
+
+
+# ---------------------------------------------------------------------------
+# Finiteness (instantiation-closure) analysis
+# ---------------------------------------------------------------------------
+
+# A parameter of a declaration, identified by the declaration's key and the
+# parameter's own name — a node in the small per-SCC parameter-dependency
+# graph.
+ParamKey = tuple[DeclKey, str]
+
+
+@dataclass(frozen=True, slots=True)
+class _RefEdge:
+    """One nominal reference found in a declaration's own body.
+
+    ``target`` is the referenced declaration; ``arg_templates`` are the
+    reference's argument templates, positionally aligned with the target's
+    OWN type parameters (empty for a reference to a non-generic declaration,
+    e.g. an exception or its ``extends`` base).
+    """
+
+    target: DeclKey
+    arg_templates: tuple[Type, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class FiniteClosure:
+    """Whole-table finiteness fixpoint result (see :func:`compute_finite_closure`).
+
+    ``infinite`` — declarations whose instantiation closure is infinite (a
+    growing polymorphic-recursion cycle).  Every other registered declaration
+    has a finite closure.
+    ``successors`` — the plain declaration reference graph (which
+    declarations a declaration's body mentions, regardless of argument
+    templates), used by
+    :meth:`~agm.agl.semantics.type_table.TypeTable.has_finite_schema` to
+    extend a concrete type's own reachable declarations without re-deriving
+    the reference graph.
+    """
+
+    infinite: frozenset[DeclKey]
+    successors: Mapping[DeclKey, frozenset[DeclKey]]
+
+
+def compute_finite_closure(table: TypeTable) -> FiniteClosure:
+    """Compute the declaration-level finiteness fixpoint over *table*.
+
+    Per the module docstring: build the declaration reference graph, find its
+    SCCs, and within each SCC build the parameter-dependency graph (edge
+    ``q -> p`` whenever a reference from a declaration A to a declaration B —
+    both in the SCC — has, in its argument template for B's parameter ``p``,
+    an occurrence of A's parameter ``q``; the edge is growing when ``q``
+    occurs as a proper subterm rather than being the WHOLE argument
+    template). An SCC's closure is infinite iff that parameter graph has a
+    cycle containing at least one growing edge.
+
+    Permutation cycles (``Swap[B, A]`` referenced from ``Swap[A, B]``'s body)
+    and argument-constant references (``R[int]`` referenced from ``R[T]``'s
+    body) never contribute a growing edge, so they stay finite. A
+    non-generic declaration contributes no parameter nodes at all, so a
+    purely-structural recursive cycle (``Tree``, mutually recursive
+    records/enums, recursive exceptions) is always finite — matching the
+    inhabitation-checked recursion that is already unconditionally legal.
+    """
+    defs = _all_defs(table)
+    edges = _reference_edges(defs)
+    successors: dict[DeclKey, frozenset[DeclKey]] = {
+        key: frozenset(edge.target for edge in refs) for key, refs in edges.items()
+    }
+    adjacency: dict[DeclKey, tuple[DeclKey, ...]] = {
+        key: tuple(targets) for key, targets in successors.items()
+    }
+    components = sccs(adjacency, key=lambda k: (k[0].segments, k[1]))
+    infinite: set[DeclKey] = set()
+    for component in components:
+        members = frozenset(component)
+        if _scc_has_growing_cycle(members, edges, defs):
+            infinite.update(members)
+    return FiniteClosure(infinite=frozenset(infinite), successors=successors)
+
+
+def nominal_references(t: Type) -> Iterator[RecordType | EnumType | ExceptionType]:
+    """Yield every nominal reference occurring anywhere in *t*, including nested.
+
+    Recurses into ``list``/``dict``/function shapes and, for a nominal
+    reference itself, into its OWN argument templates too — a reference's
+    arguments may themselves nest further nominal references (e.g.
+    ``Perfect[Wrapper[T]]``). ``t`` is always a finite tree (nominal
+    references are handles, not expanded bodies), so this always terminates.
+    """
+    match t:
+        case RecordType() | EnumType():
+            yield t
+            for arg in t.type_args:
+                yield from nominal_references(arg)
+        case ExceptionType():
+            yield t
+        case ListType(elem=elem):
+            yield from nominal_references(elem)
+        case DictType(value=value):
+            yield from nominal_references(value)
+        case FunctionType(params=params, result=result):
+            for p in params:
+                yield from nominal_references(p)
+            yield from nominal_references(result)
+        case (
+            TextType()
+            | JsonType()
+            | BoolType()
+            | IntType()
+            | DecimalType()
+            | UnitType()
+            | AgentType()
+            | BottomType()
+            | TypeVarType()
+        ):
+            return
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
+
+
+def _reference_edges(defs: Mapping[DeclKey, TypeDef]) -> dict[DeclKey, tuple[_RefEdge, ...]]:
+    """Return every declaration's outgoing reference edges (own body + exception base)."""
+    result: dict[DeclKey, tuple[_RefEdge, ...]] = {}
+    for key, typedef in defs.items():
+        found: list[_RefEdge] = []
+        for template in _own_reference_templates(typedef):
+            for ref in nominal_references(template):
+                target = (ref.module_id, ref.name)
+                arg_templates = ref.type_args if isinstance(ref, (RecordType, EnumType)) else ()
+                found.append(_RefEdge(target=target, arg_templates=arg_templates))
+        if typedef.kind == "exception" and typedef.base is not None:
+            found.append(_RefEdge(target=typedef.base, arg_templates=()))
+        result[key] = tuple(found)
+    return result
+
+
+def _own_reference_templates(typedef: TypeDef) -> list[Type]:
+    """Return every field-type template in *typedef*'s own body, flattened.
+
+    Shares the "flatten everything, ignore variant grouping" shape of
+    :func:`_own_equality_templates`: a reference to another declaration
+    matters here regardless of which variant carries it.
+    """
+    if typedef.kind == "enum":
+        return [ftype for _vname, vfields in typedef.variants for _fname, ftype in vfields]
+    return [ftype for _fname, ftype in typedef.fields]
+
+
+def _scc_has_growing_cycle(
+    members: frozenset[DeclKey],
+    edges: Mapping[DeclKey, tuple[_RefEdge, ...]],
+    defs: Mapping[DeclKey, TypeDef],
+) -> bool:
+    """Return ``True`` if *members*'s parameter-dependency graph has a growing cycle."""
+    adjacency: dict[ParamKey, list[ParamKey]] = {}
+    growing_edges: set[tuple[ParamKey, ParamKey]] = set()
+    for source_key in members:
+        # A member of an SCC is normally a registered declaration, but a
+        # dangling reference (a field naming a declaration that was never
+        # registered — an internal-invariant violation, defensively handled
+        # the same way as the equality-capability fixpoint) can surface here
+        # as its own singleton SCC; treat it as contributing no edges rather
+        # than crashing.
+        source_def = defs.get(source_key)
+        if source_def is None:
+            continue
+        for ref_edge in edges.get(source_key, ()):
+            target_key = ref_edge.target
+            if target_key not in members:
+                continue
+            target_def = defs.get(target_key)
+            if target_def is None:  # pragma: no cover
+                # Unreachable by construction: a dangling (never-registered)
+                # target has no outgoing edges of its own, so it can only
+                # ever form its own singleton SCC — never share "members"
+                # with a distinct source_key that has an edge into it. Kept
+                # as a defensive guard, matching the dangling-source check
+                # above, in case that invariant ever stops holding.
+                continue
+            for param_name, arg_template in zip(target_def.type_params, ref_edge.arg_templates):
+                occurrences = _param_occurrences(arg_template, growing=False)
+                for source_param, growing in occurrences.items():
+                    if source_param not in source_def.type_params:
+                        continue
+                    src: ParamKey = (source_key, source_param)
+                    dst: ParamKey = (target_key, param_name)
+                    adjacency.setdefault(src, []).append(dst)
+                    if growing:
+                        growing_edges.add((src, dst))
+    if not adjacency:
+        return False
+    param_components = sccs(adjacency, key=lambda n: (n[0][0].segments, n[0][1], n[1]))
+    for component in param_components:
+        comp_set = frozenset(component)
+        if len(comp_set) == 1:
+            node = component[0]
+            if (node, node) in growing_edges:
+                return True
+            continue
+        if any(src in comp_set and dst in comp_set for src, dst in growing_edges):
+            return True
+    return False
+
+
+def _param_occurrences(t: Type, *, growing: bool) -> dict[str, bool]:
+    """Return, for each type-variable name occurring in *t*, whether it occurs "growing".
+
+    An occurrence is growing when it is a PROPER SUBTERM of the top-level
+    template passed in — i.e. anywhere except when ``t`` itself, at the top
+    level, IS the bare type variable. Every recursive descent (into a list
+    element, dict value, function param/result, or a nominal reference's own
+    argument) passes ``growing=True``, so only the initial top-level call can
+    ever report a variable as non-growing. When a variable occurs more than
+    once, growing wins (only one growing path is needed to make the whole
+    reference growing).
+    """
+    match t:
+        case TypeVarType(name=name):
+            return {name: growing}
+        case ListType(elem=elem):
+            return _param_occurrences(elem, growing=True)
+        case DictType(value=value):
+            return _param_occurrences(value, growing=True)
+        case FunctionType(params=params, result=result):
+            merged: dict[str, bool] = {}
+            for p in params:
+                merged = _merge_growing(merged, _param_occurrences(p, growing=True))
+            merged = _merge_growing(merged, _param_occurrences(result, growing=True))
+            return merged
+        case RecordType() | EnumType():
+            merged = {}
+            for arg in t.type_args:
+                merged = _merge_growing(merged, _param_occurrences(arg, growing=True))
+            return merged
+        case (
+            ExceptionType()
+            | AgentType()
+            | UnitType()
+            | TextType()
+            | JsonType()
+            | BoolType()
+            | IntType()
+            | DecimalType()
+            | BottomType()
+        ):
+            return {}
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
+
+
+def _merge_growing(a: dict[str, bool], b: dict[str, bool]) -> dict[str, bool]:
+    result = dict(a)
+    for name, growing in b.items():
+        result[name] = result.get(name, False) or growing
+    return result
 
 
 # ---------------------------------------------------------------------------

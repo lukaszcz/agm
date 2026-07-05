@@ -233,6 +233,58 @@ print xs[0]
 `list[int]` is not assignable to `list[decimal]` or `list[json]`, and
 `Box[int]` is a different type from `Box[text]`.
 
+## Recursive generic types
+
+A generic record or enum may reference itself, or another declaration that
+in turn reaches back to it, in its own field or variant definitions — the
+same recursion rule as [Recursive types](types.md#recursive-types), extended
+to generics. The self-reference's type argument is not required to be the
+declaration's own type parameter unchanged; it may be a different type built
+from that parameter (polymorphic recursion):
+
+```agl
+record Pair[A, B]
+  first: A
+  second: B
+
+enum Perfect[T]
+  | Single(value: T)
+  | Succ(next: Perfect[Pair[T, T]])
+```
+
+`Perfect[T]`'s `Succ` variant carries a `Perfect[Pair[T, T]]`, not a
+`Perfect[T]` — each `Succ` layer doubles the "roundness" of the payload type
+one level further. This is unrestricted: a recursive reference's argument may
+combine any number of type parameters, containers, and other generic
+declarations, and different references (in a mutually recursive group of
+declarations) may each recurse at a different argument.
+
+The [inhabitation](types.md#inhabitation) rule applies exactly as for a
+non-generic recursive type: `Single` is the base-case variant that makes
+`Perfect[T]` constructible for every `T`. Constructing, matching, comparing,
+and folding a value works exactly like any other recursive type — a value is
+always a finite tree, regardless of how many argument levels its declaration
+can grow through:
+
+```agl
+let level0: Perfect[int] = Single(value = 1)
+let level1: Perfect[int] = Succ(next = Single(value = Pair(first = 1, second = 2)))
+
+def shape[T](p: Perfect[T]) -> text =
+  case p of
+    | Single(value) => "leaf"
+    | Succ(next) => "deeper"
+
+print shape(level0)   # "leaf"
+print shape(level1)   # "deeper"
+```
+
+A generic function may recurse alongside such a type's own growth, calling
+itself at a new instantiation to process the nested payload — the same
+generic function definition serves every level, exactly like any other
+generic function called at different type arguments; see
+[Functions](functions.md) for generic function calls in general.
+
 ## Unqualified variant ambiguity
 
 If two enums declare the same unqualified variant name, an unqualified

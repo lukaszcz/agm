@@ -6283,6 +6283,38 @@ class TestOpen:
         assert parsed.get("deps") == {"vyper-automation": "main"}
         assert (project / "deps" / "vyper-automation" / "main").is_dir()
 
+    def test_open_unrelated_branch_does_not_inherit_branch_only_dependency(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        bare_dep = make_bare_repo(tmp_path / "vyper-automation.git", env)
+        project = _make_project(tmp_path, bare, env, name="proj")
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+        run_agm(["open", "dep-owner"], env=env, cwd=str(project))
+        run_agm(
+            ["dep", "new", str(bare_dep)],
+            env=env,
+            cwd=str(project / "worktrees" / "dep-owner"),
+        )
+
+        run_agm(["open", "unrelated"], env=env, cwd=str(project))
+
+        main_config = project / "config" / "config.toml"
+        if main_config.exists():
+            with main_config.open("rb") as handle:
+                main_parsed = cast(dict[str, object], tomllib.load(handle))
+        else:
+            main_parsed = {}
+        workspace_config = project / "config" / "unrelated" / "config.toml"
+        if workspace_config.exists():
+            with workspace_config.open("rb") as handle:
+                workspace_parsed = cast(dict[str, object], tomllib.load(handle))
+        else:
+            workspace_parsed = {}
+        assert "deps" not in main_parsed
+        assert "deps" not in workspace_parsed
+
     def test_open_missing_branch_uses_created_dependency_config_for_env(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:

@@ -9,7 +9,7 @@ import tomlkit
 
 import agm.vcs.git as git_helpers
 from agm.core.fs import exists, is_dir, is_file, iterdir, mkdir, read_text, rglob, write_text
-from agm.core.toml import TomlDict, load_toml_file, set_toml_table_value, toml_dict
+from agm.core.toml import load_toml_file, set_toml_table_value, toml_dict
 from agm.project.layout import (
     current_workspace,
     default_worktrees_dir,
@@ -287,7 +287,7 @@ def ensure_dependency_configs_for_branch(
     branch: str,
     parent_branch: str | None = None,
 ) -> None:
-    """Create missing workspace config TOML values for project dependencies."""
+    """Create missing workspace config TOML values for inherited dependencies."""
 
     deps_dir = project_deps_dir(project_dir)
     if not is_dir(deps_dir):
@@ -298,21 +298,21 @@ def ensure_dependency_configs_for_branch(
             project_dir=project_dir, parent_branch=parent_branch, branch=branch
         )
 
-    config_file = config_toml_file(project_dir, branch)
-    existing_deps: TomlDict = {}
-    if config_file.is_file():
-        existing_deps = toml_dict(load_toml_file(config_file).get("deps"))
+    inherited_deps = read_deps_table(config_toml_file(project_dir, parent_branch))
+    existing_deps = read_deps_table(config_toml_file(project_dir, branch))
 
-    for dep_dir in sorted(path for path in iterdir(deps_dir) if is_dir(path)):
-        existing_branch = existing_deps.get(dep_dir.name)
-        if isinstance(existing_branch, str) and existing_branch:
+    for dep_name in sorted(inherited_deps):
+        if existing_deps.get(dep_name):
+            continue
+        dep_dir = deps_dir / dep_name
+        if not is_dir(dep_dir):
             continue
         checkout_name = _dependency_config_checkout_name(dep_dir, branch)
         if checkout_name is None:
             continue
         update_dependency_toml_config(
             project_dir=project_dir,
-            dep_name=dep_dir.name,
+            dep_name=dep_name,
             dep_branch=checkout_name,
             config_branch=branch,
         )

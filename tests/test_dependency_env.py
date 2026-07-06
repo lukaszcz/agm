@@ -704,7 +704,7 @@ class TestEnsureDependencyConfigsForBranch:
         config_file = project_dir / "config" / "feat" / "config.toml"
         assert not config_file.exists()
 
-    def test_fills_missing_dep_entry(
+    def test_fills_missing_inherited_dep_entry(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -718,6 +718,10 @@ class TestEnsureDependencyConfigsForBranch:
         main_dir = dep_dir / "main"
         main_dir.mkdir()
         subprocess.run(["git", "init", "-b", "main"], cwd=main_dir, env=env, check=True)
+        (project_dir / "config").mkdir()
+        (project_dir / "config" / "config.toml").write_text(
+            '[deps]\nmylib = "main"\n', encoding="utf-8"
+        )
         monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
         ensure_dependency_configs_for_branch(project_dir=project_dir, branch="feat")
         config_file = project_dir / "config" / "feat" / "config.toml"
@@ -740,6 +744,11 @@ class TestEnsureDependencyConfigsForBranch:
         main_dir.mkdir()
         subprocess.run(["git", "init", "-b", "main"], cwd=main_dir, env=env, check=True)
         monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
+        main_config_dir = project_dir / "config"
+        main_config_dir.mkdir()
+        (main_config_dir / "config.toml").write_text(
+            '[deps]\nmylib = "main"\n', encoding="utf-8"
+        )
         # Pre-create config with existing entry
         config_dir = project_dir / "config" / "feat"
         config_dir.mkdir(parents=True)
@@ -765,6 +774,11 @@ class TestEnsureDependencyConfigsForBranch:
             main_dir.mkdir()
             subprocess.run(["git", "init", "-b", "main"], cwd=main_dir, env=env, check=True)
         monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
+        main_config_dir = project_dir / "config"
+        main_config_dir.mkdir()
+        (main_config_dir / "config.toml").write_text(
+            '[deps]\nliba = "main"\nlibb = "main"\n', encoding="utf-8"
+        )
         # Pre-create config with only liba entry
         config_dir = project_dir / "config" / "feat"
         config_dir.mkdir(parents=True)
@@ -807,6 +821,37 @@ class TestEnsureDependencyConfigsForBranch:
         assert config_file.exists()
         content = config_file.read_text(encoding="utf-8")
         assert 'mylib = "dev"' in content
+
+    def test_parent_branch_does_not_inject_undeclared_dependency(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        env: dict[str, str],
+    ) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        deps_dir = project_dir / "deps"
+        deps_dir.mkdir()
+        for dep_name in ["declared", "undeclared"]:
+            main_dir = deps_dir / dep_name / "main"
+            main_dir.mkdir(parents=True)
+            subprocess.run(["git", "init", "-b", "main"], cwd=main_dir, env=env, check=True)
+        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
+        parent_config_dir = project_dir / "config" / "parent-branch"
+        parent_config_dir.mkdir(parents=True)
+        (parent_config_dir / "config.toml").write_text(
+            '[deps]\ndeclared = "main"\n', encoding="utf-8"
+        )
+
+        ensure_dependency_configs_for_branch(
+            project_dir=project_dir,
+            branch="child-branch",
+            parent_branch="parent-branch",
+        )
+
+        config_file = project_dir / "config" / "child-branch" / "config.toml"
+        content = config_file.read_text(encoding="utf-8")
+        assert "declared" in content
+        assert "undeclared" not in content
 
     def test_parent_branch_copies_env_file(self, tmp_path: Path) -> None:
         project_dir = self._workspace_project(tmp_path)
@@ -866,7 +911,22 @@ class TestEnsureDependencyConfigsForBranch:
         content = child_config_file.read_text(encoding="utf-8")
         assert 'mylib = "custom"' in content
 
-    def test_no_parent_branch_behaves_as_before(
+    def test_skips_inherited_dep_without_checkout_directory(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        deps_dir = project_dir / "deps"
+        deps_dir.mkdir()
+        config_dir = project_dir / "config"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text(
+            '[deps]\nmissing = "main"\n', encoding="utf-8"
+        )
+
+        ensure_dependency_configs_for_branch(project_dir=project_dir, branch="feat")
+
+        config_file = project_dir / "config" / "feat" / "config.toml"
+        assert not config_file.exists()
+
+    def test_no_parent_branch_uses_main_config_not_deps_filesystem(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -881,14 +941,13 @@ class TestEnsureDependencyConfigsForBranch:
         main_dir.mkdir()
         subprocess.run(["git", "init", "-b", "main"], cwd=main_dir, env=env, check=True)
         monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
-        # Without parent_branch, falls back to main workspace
+
         ensure_dependency_configs_for_branch(
             project_dir=project_dir, branch="feat"
         )
+
         config_file = project_dir / "config" / "feat" / "config.toml"
-        assert config_file.exists()
-        content = config_file.read_text(encoding="utf-8")
-        assert "main" in content
+        assert not config_file.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -1333,6 +1392,11 @@ class TestEnsureDependencyConfigsForBranchSkipsNone:
         deps_dir = project_dir / "deps"
         dep_dir = deps_dir / "mylib"
         dep_dir.mkdir(parents=True)
+        config_dir = project_dir / "config"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text(
+            '[deps]\nmylib = "main"\n', encoding="utf-8"
+        )
 
         # Make _dependency_config_checkout_name return None
         monkeypatch.setattr(

@@ -19,7 +19,7 @@ Worktree orchestration coordinates git operations with dependency setup: creatin
 
 ## Dependencies
 
-Dependencies are sibling repositories checked out under the project's deps directory, managed by the `dep` command group (list, new, switch, remove). Each dependency contributes environment variables describing its checked-out branch, assembled from the project's dependency TOML tables, so that a workspace's environment reflects which branch of each dependency is active.
+Dependencies are sibling repositories checked out under the project's deps directory, managed by the `dep` command group (list, new, switch, remove). Each dependency contributes environment variables describing its checked-out branch, assembled from the project's dependency TOML tables, so that a workspace's environment reflects which branch of each dependency is active. Branch dependency configs are inherited from the parent or main config; checkout directories under `deps/` are resolved only for dependencies that the inherited config already declares.
 
 ## Sync
 

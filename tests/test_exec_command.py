@@ -841,8 +841,8 @@ class TestExecCLIPaths:
         assert result.exit_code != 0
 
 
-class TestExecCommandM1:
-    """Exec command behavior: exit codes, params, agent calls."""
+class TestExecCommandExitCodes:
+    """Exec command exit codes for valid programs, params, and flag collisions."""
 
     def test_valid_program_exits_0(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"

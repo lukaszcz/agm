@@ -7,7 +7,7 @@ renderer names, and returns a ``CheckedProgram``.
 Rules implemented
 -----------------
 1.  Type declaration validation: duplicate names, unknown referenced types,
-    recursive records/enums, alias cycles, and built-in-name shadowing.
+    uninhabitable recursive records/enums, alias cycles, and built-in-name shadowing.
 2.  Function declarations: parameter/return types resolved; ordering enforced
     (required before defaulted); FunctionSignature registered.
 3.  Binding type inference:

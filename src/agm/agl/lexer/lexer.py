@@ -57,6 +57,7 @@ from agm.agl.lexer.tokens import (
     PRIVATE,
     QUALIFIED,
     RSQB,
+    TYPEARG_LSQB,
     USING,
 )
 
@@ -351,6 +352,40 @@ def _remap_adjacent_brackets(tokens: list[Token]) -> list[Token]:
     return result
 
 
+def _mark_typearg_lsqb(tokens: list[Token]) -> list[Token]:
+    """Retag ``Type[T]::Ctor`` opening brackets for the parser.
+
+    Only the outer ``[`` immediately adjacent to a preceding ``NAME`` is
+    retagged, and only when its matching ``]`` is followed by ``::`` and then a
+    non-``[`` token.  The guard preserves value-position type application such
+    as ``xs[i]::[T]``.
+    """
+    result = list(tokens)
+    n = len(result)
+    open_types = {LSQB, INDEX_LSQB, TYPEARG_LSQB, DO_LSQB}
+    for i, tok in enumerate(result):
+        if tok.type != INDEX_LSQB:
+            continue
+        if i == 0 or result[i - 1].type != NAME:
+            continue
+        depth = 1
+        j = i + 1
+        while j < n:
+            tt = result[j].type
+            if tt in open_types:
+                depth += 1
+            elif tt == RSQB:
+                depth -= 1
+                if depth == 0:
+                    after = result[j + 1].type if j + 1 < n else None
+                    after_next = result[j + 2].type if j + 2 < n else None
+                    if after == DCOLON and after_next != LSQB:
+                        result[i] = _retype(tok, TYPEARG_LSQB)
+                    break
+            j += 1
+    return result
+
+
 class AglLexer(Lexer):
     """Custom Lark lexer for AgL.
 
@@ -391,7 +426,9 @@ class AglLexer(Lexer):
         scanner = _Scanner(source)
         try:
             after_remap = list(_remap(layout(scanner.scan())))
-            tokens = _remap_adjacent_brackets(apply_module_passes(after_remap))
+            tokens = _mark_typearg_lsqb(
+                _remap_adjacent_brackets(apply_module_passes(after_remap))
+            )
         finally:
             sink = _TAB_WARNING_SINK.get()
             if sink is not None:

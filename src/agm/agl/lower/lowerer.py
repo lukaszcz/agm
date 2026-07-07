@@ -29,6 +29,8 @@ Dispatch uses structural ``match`` with a final ``assert_never`` arm.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import assert_never, cast
@@ -94,6 +96,7 @@ from agm.agl.ir.nodes import (
     IrRaise,
     IrRenderTemplate,
     IrRenderValue,
+    IrReturn,
     IrSequence,
     IrTemplateText,
     IrTemplateValue,
@@ -137,6 +140,7 @@ from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPES,
     BoolType,
+    BottomType,
     CastKind,
     DecimalType,
     DictType,
@@ -200,6 +204,7 @@ from agm.agl.syntax.nodes import (
     ProgramDecl,
     Raise,
     RecordDef,
+    Return,
     StringLit,
     Template,
     TextSegment,
@@ -324,6 +329,16 @@ class _Lowerer:
         # lowering entry point was given one; embedded verbatim in every
         # ExternFunctionDescriptor lowered from this module's `extern def`s.
         self._companion_path = companion_path
+        self._return_expected_stack: list[Type] = []
+
+    @contextmanager
+    def _return_context(self, expected: Type) -> Iterator[None]:
+        """Track the coercion target for ``return`` inside a function body."""
+        self._return_expected_stack.append(expected)
+        try:
+            yield
+        finally:
+            self._return_expected_stack.pop()
 
     # ------------------------------------------------------------------
     # SymbolId allocation
@@ -547,6 +562,9 @@ class _Lowerer:
                         self._scan_captures(seg.expr, local_ids, captured)
             case Raise():
                 self._scan_captures(node.exc, local_ids, captured)
+            case Return():
+                if node.value is not None:
+                    self._scan_captures(node.value, local_ids, captured)
             case Break() | Continue():
                 pass  # leaf — no captures
             case UnitLit() | IntLit() | DecimalLit() | BoolLit() | NullLit() | StringLit():
@@ -672,7 +690,8 @@ class _Lowerer:
             self._lower_declared_params(funcdef, fn_id)
         )
         captures = self._compute_captures(funcdef, param_decl_ids)
-        body_ir = self.lower_coerced(funcdef.body, sig.result)
+        with self._return_context(sig.result):
+            body_ir = self.lower_coerced(funcdef.body, sig.result)
 
         desc = FunctionDescriptor(
             function_id=fn_id,
@@ -799,7 +818,8 @@ class _Lowerer:
             ir_params.append(IrFunctionParam(symbol=psym, default=default_ir))
 
         # Lower the body coerced to the declared return type (bakes result coercion in).
-        body_ir = self.lower_coerced(body_expr, fn_type.result)
+        with self._return_context(fn_type.result):
+            body_ir = self.lower_coerced(body_expr, fn_type.result)
 
         desc = FunctionDescriptor(
             function_id=fn_id,
@@ -913,6 +933,20 @@ class _Lowerer:
             # Variable reference — constructor ref or IrLoad
             # ----------------------------------------------------------
             case VarRef(node_id=nid, span=span):
+                qcr = self._checked.resolved.qualified_constructor_refs.get(nid)
+                if qcr is not None:
+                    owner_name, variant_name, qcr_mid = qcr
+                    node_typ = self._node_type(nid)
+                    if isinstance(node_typ, FunctionType):
+                        nominal, display = self._nominal_for_cref_owner(owner_name, qcr_mid)
+                        return IrMakeConstructor(
+                            location=self._loc(span),
+                            nominal=nominal,
+                            display_name=display,
+                            variant=variant_name,
+                        )
+                    return self._lower_nullary_constructor(nid, owner_name, variant_name, span)
+
                 # Check for constructor reference FIRST (mirrors legacy _eval_var_ref).
                 cref = self._checked.resolved.constructor_refs.get(nid)
                 if cref is not None:
@@ -975,25 +1009,9 @@ class _Lowerer:
                 )
 
             # ----------------------------------------------------------
-            # Field access — qualified constructor ref or IrField
+            # Field access → IrField
             # ----------------------------------------------------------
-            case FieldAccess(obj=obj_expr, field=field_name, span=span, node_id=nid):
-                qcr = self._checked.resolved.qualified_constructor_refs.get(nid)
-                if qcr is not None:
-                    # qcr is (owner_name, member, owner_module_id | None)
-                    owner_name, variant_name, qcr_mid = qcr
-                    node_typ = self._node_type(nid)
-                    if isinstance(node_typ, FunctionType):
-                        # With-fields variant used as value → IrMakeConstructor.
-                        nominal, display = self._nominal_for_cref_owner(owner_name, qcr_mid)
-                        return IrMakeConstructor(
-                            location=self._loc(span),
-                            nominal=nominal,
-                            display_name=display,
-                            variant=variant_name,
-                        )
-                    # Nullary variant used as value → construct immediately.
-                    return self._lower_nullary_constructor(nid, owner_name, variant_name, span)
+            case FieldAccess(obj=obj_expr, field=field_name, span=span):
                 return IrField(
                     location=self._loc(span),
                     value=self.lower_expr(obj_expr),
@@ -1091,6 +1109,18 @@ class _Lowerer:
                 return IrRaise(
                     location=self._loc(span),
                     exc=self.lower_expr(exc_expr),
+                )
+
+            case Return(value=value_expr, span=span):
+                assert self._return_expected_stack, (
+                    "compiler bug: return lowered outside a function"
+                )
+                expected = self._return_expected_stack[-1]
+                return IrReturn(
+                    location=self._loc(span),
+                    value=IrConstUnit(location=self._loc(span))
+                    if value_expr is None
+                    else self.lower_coerced(value_expr, expected),
                 )
 
             case Try(body=body_expr, handlers=handlers, span=span):
@@ -1601,10 +1631,18 @@ class _Lowerer:
         """Lower a BinaryOp to the appropriate IR node."""
         loc = self._loc(span)
 
+        left_type = self._node_type(left.node_id)
+        if isinstance(left_type, BottomType):
+            return self.lower_expr(left)
+
         if op is BinOp.AND:
             return IrAnd(location=loc, lhs=self.lower_expr(left), rhs=self.lower_expr(right))
         if op is BinOp.OR:
             return IrOr(location=loc, lhs=self.lower_expr(left), rhs=self.lower_expr(right))
+
+        right_type = self._node_type(right.node_id)
+        if isinstance(right_type, BottomType):
+            return IrSequence(location=loc, items=(self.lower_expr(left), self.lower_expr(right)))
         if op is BinOp.IN:
             return self._lower_in_op(left, right, loc)
         if op is BinOp.ADD or op is BinOp.SUB or op is BinOp.MUL:
@@ -1830,8 +1868,8 @@ class _Lowerer:
     def _lower_call(self, call_node: "Call", nid: int, span: "SourceSpan") -> IrExpr:
         """Lower a Call node.
 
-        Constructor calls (VarRef or FieldAccess callee resolving to a constructor)
-        are lowered to IrMakeRecord/IrMakeEnum/IrMakeException.  Direct user function
+        Constructor calls (VarRef callee resolving to a constructor) are lowered
+        to IrMakeRecord/IrMakeEnum/IrMakeException.  Direct user function
         calls are lowered to IrDirectCall.  Lambda calls are lowered to IrMakeClosure,
         indirect calls to IrIndirectCall, and host builtins to
         IrPrint/IrRenderValue/IrParseJson/IrAsk/IrAskRequest/IrExec.
@@ -1845,6 +1883,15 @@ class _Lowerer:
 
         # (a) VarRef callee in constructor_refs
         if isinstance(callee, VarRef):
+            qcr = self._checked.resolved.qualified_constructor_refs.get(callee.node_id)
+            if qcr is not None:
+                owner_name, variant_name, _qcr_mid = qcr
+                return self._lower_named_constructor_call(
+                    nid,
+                    owner_name,
+                    variant_name,
+                    span,
+                )
             cref = self._checked.resolved.constructor_refs.get(callee.node_id)
             if cref is not None:
                 return self._lower_named_constructor_call(
@@ -1871,17 +1918,6 @@ class _Lowerer:
                 and callee_ref.kind is BinderKind.function_binding
             ):
                 return self._lower_direct_call(call_node, callee_ref, nid, span)
-
-        elif isinstance(callee, FieldAccess):
-            qcr = self._checked.resolved.qualified_constructor_refs.get(callee.node_id)
-            if qcr is not None:
-                owner_name, variant_name, _qcr_mid = qcr
-                return self._lower_named_constructor_call(
-                    nid,
-                    owner_name,
-                    variant_name,
-                    span,
-                )
 
         # Indirect/value call: callee is an arbitrary expression (lambda, let-bound
         # closure, function-value param, etc.).  Named args are rejected by the checker at
@@ -2050,6 +2086,12 @@ class _Lowerer:
     # Block helper
     # ------------------------------------------------------------------
 
+    def _item_is_bottom(self, item: Item) -> bool:
+        """Return whether a checked block item unconditionally exits."""
+        if isinstance(item, (LetDecl, VarDecl, AssignStmt)):
+            return isinstance(self._node_type(item.value.node_id), BottomType)
+        return isinstance(self._node_type(item.node_id), BottomType)
+
     def _lower_block(
         self,
         items: tuple[Item, ...],
@@ -2060,11 +2102,17 @@ class _Lowerer:
         All items inside a block body are lowered as **nested** (``top_level=False``),
         so any ``let``/``var`` binders they declare are allocated with
         ``public=False`` and do not appear in ``_collect_results``.  Only the
-        top-level module-initializer driver passes ``top_level=True``.
+        top-level module-initializer driver passes ``top_level=True``.  Scope
+        rejects root-only declarations in nested blocks, so every reachable item
+        must lower to a runtime expression.
         """
-        ir_items = tuple(self.lower_item(it, top_level=False) for it in items)
-        # Filter out None (items with no runtime action); validate non-empty.
-        real: list[IrExpr] = [x for x in ir_items if x is not None]
+        real: list[IrExpr] = []
+        for item in items:
+            ir = self.lower_item(item, top_level=False)
+            assert ir is not None, "compiler bug: non-runtime item in nested block"
+            real.append(ir)
+            if self._item_is_bottom(item):
+                break
         assert real, "compiler bug: lowered block has no runtime items"
         return IrBlock(location=self._loc(span), items=tuple(real))
 
@@ -2372,7 +2420,8 @@ class _Lowerer:
         purely compile-time declarations (type definitions, function defs, etc.)
         that have no IR representation.
 
-        The IrBlock construction must then filter out the ``None`` values.
+        Module-initializer construction filters out the ``None`` values;
+        nested blocks reject root-only declarations before lowering.
 
         Parameters
         ----------
@@ -2521,7 +2570,7 @@ class _Lowerer:
 
         When the engine-key type is ``Option[T]`` and the source value's type is
         not itself an enum (i.e. it is the inner ``T``), wrap the lowered inner
-        value in an ``Option.Some`` construction.  Otherwise lower with ordinary
+        value in an ``Option::Some`` construction.  Otherwise lower with ordinary
         coercion to the declared type.
         """
         if isinstance(declared_type, EnumType) and declared_type.type_args:

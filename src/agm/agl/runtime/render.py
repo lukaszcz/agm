@@ -132,7 +132,7 @@ def _render(value: Value, *, pretty: bool, quote_strings: bool, top_level: bool,
 
     if isinstance(value, ConstructorValue):
         if value.variant is not None:
-            return f"<constructor {value.display_name}.{value.variant}>"
+            return f"<constructor {value.display_name}::{value.variant}>"
         return f"<constructor {value.display_name}>"
 
     if isinstance(value, IrClosureValue):
@@ -168,7 +168,7 @@ def _render(value: Value, *, pretty: bool, quote_strings: bool, top_level: bool,
 
     if isinstance(value, (EnumValue, ExceptionValue)):
         prefix = (
-            f"{value.display_name}.{value.variant}"
+            f"{value.display_name}::{value.variant}"
             if isinstance(value, EnumValue)
             else value.display_name
         )

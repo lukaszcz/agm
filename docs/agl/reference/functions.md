@@ -11,17 +11,20 @@ from other functions. The type of a function value is written
 ## `def` — named function declarations
 
 ```ebnf
-func_def   ::= "def" NAME type_params? "(" param_list? ")" ("->" type_expr)? "=" expr
-             | "builtin" "def" NAME type_params? "(" param_list? ")" "->" type_expr
-type_params  ::= "[" NAME ("," NAME)* "]"
-param_list   ::= param_entry ("," param_entry)* ","?
-param_entry  ::= param | param_marker
-param        ::= NAME ":" type_expr ("=" expr)?
-param_marker ::= "/" | "*" | "@" NAME    (* @pos, @std, @named *)
+func_def      ::= "def" NAME type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
+                | "builtin" "def" NAME type_params? "(" param_list? ")" "->" type_expr
+func_body     ::= expr | suite | inline_binder_block
+type_params   ::= "[" NAME ("," NAME)* "]"
+param_list    ::= param_entry ("," param_entry)* ","?
+param_entry   ::= param | param_marker
+param         ::= NAME ":" type_expr ("=" expr)?
+param_marker  ::= "/" | "*" | "@" NAME    (* @pos, @std, @named *)
 ```
 
-A `def` is a top-level declaration. The body is a single expression — which
-may be a block (a sequence of items ending in an expression):
+A `def` is a top-level declaration. An inline body requires `=`. For an
+indented suite body, the `=` before the newline is optional. The body is a
+single expression — which may be a block (a sequence of items ending in an
+expression):
 
 ```agl
 def classify(n: int) -> text =
@@ -36,7 +39,14 @@ def summarize(doc: text, limit: int = 3) -> text =
   tagged
 
 def double(n: int) = n * 2
+
+# Compact one-line block body.
+def incremented() -> int = let x = 0; x + 1
 ```
+
+A compact one-line block body must start with one or more `let`, `var`, or
+assignment items separated by semicolons, followed by the expression that
+provides the function's result.
 
 ### Return type
 
@@ -47,7 +57,48 @@ the body has no inferable result, for example because it always raises or calls
 the same unannotated function before its signature is known, AgL reports a type
 error and asks for an explicit return type annotation.
 
-There is no `return` keyword — the body's value is its last expression.
+A function may also exit early with `return`; see [Early return](#early-return).
+
+### Early return
+
+```ebnf
+return_expr ::= "return" or_expr?
+```
+
+`return expr` exits the nearest enclosing `def` or `fn` body immediately and
+makes `expr` the function call's result. A bare `return` is equivalent to
+`return ()` and is valid only when the function result type is `unit`.
+
+```agl
+def first_positive(xs: list[int]) -> int =
+  for x in xs do
+    if x > 0 =>
+      return x
+  done
+  -1
+
+def log_and_stop() -> unit =
+  print "stopping"
+  return
+```
+
+The usual tail-value rule still applies: a body that does not execute a
+`return` yields its last expression. With an explicit return type annotation,
+each `return` operand is checked against that result type. Without an
+annotation, the inferred result type is the common type of all `return`
+operands and the body's tail value, using the same branch-unification rules as
+`if` and `case` (`int` may widen to `decimal`, and divergent branches are
+ignored). If these values have no common type, add a return type annotation.
+
+A `return` inside a lambda returns from that lambda, not from an enclosing
+`def`. A `return` is valid only inside a function body; it is a static error at
+the program top level, in parameter/config defaults, or in function parameter
+defaults.
+
+Like `raise`, `return` is a top-level expression form. Inline branch and loop
+body positions accept only `or_expr`, so write a suite body or parenthesize the
+return expression (`if done => (return x)`). A `return` followed by a newline is
+a bare `return`; the operand never continues onto the next line.
 
 ### Built-in functions
 
@@ -292,7 +343,7 @@ print review          # equivalent to print(review)
 ask "Hello?"          # equivalent to ask("Hello?")
 print res.stdout      # field-access path is a valid sugar argument
 print classify(x)     # equivalent to print(classify(x))
-f Opt.Some(x = 1)      # equivalent to f(Opt.Some(x = 1))
+f Opt::Some(x = 1)      # equivalent to f(Opt::Some(x = 1))
 ```
 
 Application binds **tighter than all operators**:
@@ -430,7 +481,7 @@ can be stored in bindings and passed to functions:
 
 ```agl
 def make_policy(retries: int) -> ParsePolicy =
-  if retries == 0 => ParsePolicy.Abort else => Retry(n = retries)
+  if retries == 0 => ParsePolicy::Abort else => Retry(n = retries)
 ```
 
 ## Complete example

@@ -39,26 +39,84 @@ def merge_settings_chain(settings_list: list[JsonDict]) -> JsonDict:
     return merged
 
 
+def _dedupe_list(items: list[object]) -> list[object]:
+    unique: list[object] = []
+    for item in items:
+        if not any(item == existing for existing in unique):
+            unique.append(item)
+    return unique
+
+
+def _remove_denied_values(
+    section: JsonDict, local_section: JsonDict, *, allow_key: str, deny_key: str
+) -> None:
+    local_denied = local_section.get(deny_key)
+    allowed = section.get(allow_key)
+    if not isinstance(local_denied, list) or not isinstance(allowed, list):
+        return
+    local_denied_list = cast(list[object], local_denied)
+    allowed_list = cast(list[object], allowed)
+    denied = _dedupe_list(local_denied_list)
+    section[allow_key] = [
+        item for item in allowed_list if not any(item == value for value in denied)
+    ]
+
+
+def _merge_settings_section(
+    home_data: JsonDict,
+    local_data: JsonDict,
+    section_name: str,
+    deny_pairs: tuple[tuple[str, str], ...],
+) -> JsonDict | None:
+    local_value = local_data.get(section_name)
+    if not isinstance(local_value, dict):
+        return None
+
+    local_section = cast(JsonDict, local_value)
+    home_value = home_data.get(section_name)
+    merged_section = dict(cast(JsonDict, home_value)) if isinstance(home_value, dict) else {}
+
+    for key, value in local_section.items():
+        existing = merged_section.get(key)
+        if isinstance(existing, list) and isinstance(value, list):
+            existing_list = cast(list[object], existing)
+            value_list = cast(list[object], value)
+            merged_section[key] = _dedupe_list([*existing_list, *value_list])
+        elif isinstance(value, list):
+            value_list = cast(list[object], value)
+            merged_section[key] = _dedupe_list(value_list)
+        else:
+            merged_section[key] = value
+
+    for allow_key, deny_key in deny_pairs:
+        _remove_denied_values(merged_section, local_section, allow_key=allow_key, deny_key=deny_key)
+
+    return merged_section
+
+
 def merge_settings(home_data: JsonDict, local_data: JsonDict) -> JsonDict:
     merged = dict(home_data)
     if "enabled" in local_data and local_data["enabled"] is not None:
         merged["enabled"] = local_data["enabled"]
-    if isinstance(local_data.get("network"), dict):
-        local_network = cast(JsonDict, local_data["network"])
-        home_network = (
-            cast(JsonDict, home_data["network"])
-            if isinstance(home_data.get("network"), dict)
-            else {}
-        )
-        merged["network"] = {**home_network, **local_network}
-    if isinstance(local_data.get("filesystem"), dict):
-        local_filesystem = cast(JsonDict, local_data["filesystem"])
-        home_filesystem = (
-            cast(JsonDict, home_data["filesystem"])
-            if isinstance(home_data.get("filesystem"), dict)
-            else {}
-        )
-        merged["filesystem"] = {**home_filesystem, **local_filesystem}
+
+    network = _merge_settings_section(
+        home_data,
+        local_data,
+        "network",
+        (("allowedDomains", "deniedDomains"),),
+    )
+    if network is not None:
+        merged["network"] = network
+
+    filesystem = _merge_settings_section(
+        home_data,
+        local_data,
+        "filesystem",
+        (("allowRead", "denyRead"), ("allowWrite", "denyWrite")),
+    )
+    if filesystem is not None:
+        merged["filesystem"] = filesystem
+
     if isinstance(local_data.get("ignoreViolations"), dict):
         merged["ignoreViolations"] = local_data["ignoreViolations"]
     if (

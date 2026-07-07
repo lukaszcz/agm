@@ -40,6 +40,10 @@ class EntryResult:
         for declarations, statements, ``check_only`` runs, and failures.
     ``value_type``
         The static type of the echoed value; ``None`` when not applicable.
+    ``type_display``
+        Pre-rendered type-focused display text for REPL-only type entries that
+        are definitions rather than concrete semantic ``Type`` instances (for
+        example a bare generic record or enum name).
     ``diagnostics``
         Pre-execution error diagnostics (parse/scope/typecheck/contract/unset
         param).  Empty on success.
@@ -76,3 +80,4 @@ class EntryResult:
     trace_path: "Path | None" = None
     installed: tuple[str, ...] = ()
     quote_strings: bool = True
+    type_display: str | None = None

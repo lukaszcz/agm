@@ -22,8 +22,11 @@ The core standard library module is `std.core`. It defines common names such as
 types, and the host-implemented built-in functions.
 
 The stdlib is a normal module tree. In the source checkout it lives under
-`stdlib/`; `just install` copies it to `.agm/stdlib/`, so `std.core` resolves
-from `.agm/stdlib/std/core.agl` and can be replaced without reinstalling AGM.
+`stdlib/`; `just install` copies it to `.agm/stdlib/`, so `std.core` normally
+resolves from `.agm/stdlib/std/core.agl` and can be replaced without
+reinstalling AGM. During source-checkout development, AGM skips an installed
+stdlib that still uses legacy constructor qualification and falls back to the
+checkout's `stdlib/` tree.
 
 For batch execution, `std.core` is opened unqualified in the entry module by
 default. This is equivalent to an implicit leading:
@@ -94,7 +97,7 @@ the module handle for qualified access.
 The names in `using`/`hiding` identify **top-level declarations** — `def`,
 `record`, `enum`, and `type` aliases. **Enum variants travel with their enum**
 and are not separately listable in `using`/`hiding`. To import an enum type
-named `Color` (and thereby gain access to `Color.Red` etc.), write `using
+named `Color` (and thereby gain access to `Color::Red` etc.), write `using
 Color`. Writing `using Red` — naming only the variant constructor — is a static
 error ("Red is not exported by module …").
 

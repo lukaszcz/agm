@@ -18,7 +18,7 @@
 
 - `-b`, `--branch`: use `agm dep switch --branch DEP BRANCH` to create `DEP`'s `BRANCH` from the dependency's default branch before adding the new worktree; without this flag, `BRANCH` must already exist
 
-Dependency commands track selected dependency checkout names in config `config.toml` `[deps]` tables. Environment loading turns those entries into dependency path variables, so `[deps].vyper-automation = "feat/app"` provides `VYPER_AUTOMATION=/path/to/proj/deps/vyper-automation/feat/app` before `.env` and `env.sh` are loaded.
+Dependency commands track selected dependency checkout names in config `config.toml` `[deps]` tables. Environment loading turns those entries into dependency path variables ending in `_DIR`, so `[deps].vyper-automation = "feat/app"` provides `VYPER_AUTOMATION_DIR=/path/to/proj/deps/vyper-automation/feat/app` before `.env` and `env.sh` are loaded. Opening a branch materializes only dependencies inherited from that branch's parent or the main config; dependency checkouts present on disk are not added to unrelated branch configs unless they are declared there.
 
 `agm dep list` options:
 

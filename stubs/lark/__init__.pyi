@@ -75,6 +75,7 @@ class Lark:
         start: str = ...,
         debug: bool = ...,
         keep_all_tokens: bool = ...,
+        cache: bool | str = ...,
     ) -> None: ...
 
     def parse(self, text: str, start: str | None = ...) -> Tree: ...

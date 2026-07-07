@@ -52,6 +52,7 @@ from agm.agl.syntax.types import (
     Qualifier,
     TextT,
     TypeExpr,
+    TypeQualifier,
     UnitT,
 )
 
@@ -654,7 +655,7 @@ class AstBuilder(Transformer):
 
     def func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
         """func_def: "def" name type_params? LPAR param_list? RPAR
-        (THIN_ARROW type_expr)? EQ func_body
+        (THIN_ARROW type_expr)? (EQ func_body | suite_expr)
         """
         name_tok = _find_name_token(args)
         type_params_val: tuple[str, ...] = ()
@@ -746,10 +747,23 @@ class AstBuilder(Transformer):
         )
 
     def func_body(self, meta: Meta, args: _Args) -> syntax.Expr:
-        """func_body: suite_expr | expr — pass through the inner expr."""
-        # args[0] is a Block (from suite_expr) or any Expr (from expr).
+        """func_body: suite_expr | func_inline_seq | expr — pass through the inner expr."""
+        # args[0] is a Block (from suite_expr/func_inline_seq) or any Expr (from expr).
         expr = _find_non_token(args)
         return cast(syntax.Expr, expr)
+
+    def func_inline_seq(self, meta: Meta, args: _Args) -> syntax.Block:
+        """func_inline_seq: binder (SEMICOLON binder)* SEMICOLON expr."""
+        items = tuple(
+            cast(syntax.Item, a)
+            for a in args
+            if a is not None and not isinstance(a, Token)
+        )
+        return syntax.Block(
+            items=items,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+        )
 
     # ------------------------------------------------------------------
     # let_decl / var_decl / assign_stmt
@@ -1159,7 +1173,7 @@ class AstBuilder(Transformer):
 
         Builds the restricted postfix chain allowed by single-arg call sugar,
         such as ``print res.stdout``, ``print xs[0]``, and
-        ``f Opt.Some(x: 1)`` and ``f Opt.None::[int]()``.
+        ``f Opt::Some(x = 1)`` and ``f Opt[int]::None()``.
         """
         non_tokens = [a for a in args if a is not None and not isinstance(a, Token)]
         assert non_tokens, "juxt_arg: no base atom"
@@ -1424,19 +1438,24 @@ class AstBuilder(Transformer):
         self, meta: Meta, args: _Args, *, qualified: bool, negated: bool
     ) -> syntax.IsTest:
         left = cast(syntax.Expr, args[0])
-        name_toks = [
-            a for a in args if _is_name_token(a)
-        ]
+        name_toks = [a for a in args if _is_name_token(a)]
+        module_qual = next((a for a in args if isinstance(a, Qualifier)), None)
+        type_qual = next((a for a in args if isinstance(a, TypeQualifier)), None)
         if qualified:
-            assert len(name_toks) >= 2
-            qualifier: str | None = str(name_toks[0])
-            variant = str(name_toks[1])
+            assert module_qual is not None
+            qualifier = type_qual.name if type_qual is not None else None
+            variant = str(name_toks[-1])
         else:
             qualifier = None
             variant = str(name_toks[0])
         return syntax.IsTest(
-            expr=left, qualifier=qualifier, variant=variant, negated=negated,
-            span=self._span_from_meta(meta), node_id=self._next_id(),
+            expr=left,
+            qualifier=qualifier,
+            variant=variant,
+            negated=negated,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+            module_qualifier=module_qual,
         )
 
     def is_test_simple(self, meta: Meta, args: _Args) -> syntax.IsTest:
@@ -1841,6 +1860,10 @@ class AstBuilder(Transformer):
         exc = _find_expr(args)
         return syntax.Raise(exc=exc, span=self._span_from_meta(meta), node_id=self._next_id())
 
+    def return_expr(self, meta: Meta, args: _Args) -> syntax.Return:
+        value = next((cast(syntax.Expr, a) for a in args if _is_expr_node(a)), None)
+        return syntax.Return(value=value, span=self._span_from_meta(meta), node_id=self._next_id())
+
     # ------------------------------------------------------------------
     # suite_expr / branch_body
     # ------------------------------------------------------------------
@@ -1869,25 +1892,6 @@ class AstBuilder(Transformer):
             return syntax.WildcardPattern(span=self._span_from_meta(meta), node_id=self._next_id())
         return syntax.VarPattern(
             name=str(tok), span=self._span_from_meta(meta), node_id=self._next_id()
-        )
-
-    def pat_qualified_constructor(self, meta: Meta, args: _Args) -> syntax.ConstructorPattern:
-        """pat_qualified_constructor: name DOT name (LPAR pattern_fields? RPAR)?"""
-        name_toks = [
-            a for a in args if _is_name_token(a)
-        ]
-        assert len(name_toks) >= 2, "pat_qualified_constructor: expected 2 name tokens"
-        qualifier: str | None = str(name_toks[0])
-        name = str(name_toks[1])
-        positional: tuple[syntax.Pattern, ...] = ()
-        named: tuple[syntax.PatternField, ...] = ()
-        for a in args:
-            if isinstance(a, _PatternFieldsSplit):
-                positional = a.positional
-                named = a.named
-        return syntax.ConstructorPattern(
-            qualifier=qualifier, name=name, positional=positional, named=named,
-            span=self._span_from_meta(meta), node_id=self._next_id(),
         )
 
     def pat_constructor(self, meta: Meta, args: _Args) -> syntax.ConstructorPattern:
@@ -2332,15 +2336,34 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
+    def type_qual(self, meta: Meta, args: _Args) -> TypeQualifier:
+        """type_qual: MODQUAL."""
+        tok = args[0]
+        assert isinstance(tok, Token)
+        segments = tuple(str(tok).split("."))
+        if len(segments) != 1:
+            raise AglSyntaxError(
+                "A type qualifier after '::' must be a single type name.",
+                span=self._span_from_token(tok),
+            )
+        return TypeQualifier(
+            name=segments[0],
+            type_args=None,
+            span=self._span_from_token(tok),
+            node_id=self._next_id(),
+        )
+
     def qual_var_ref(self, meta: Meta, args: _Args) -> syntax.VarRef:
-        """qual_var_ref: qual_prefix NAME"""
+        """qual_var_ref: qual_prefix type_qual? NAME"""
         qual = next(a for a in args if isinstance(a, Qualifier))
+        type_qual = next((a for a in args if isinstance(a, TypeQualifier)), None)
         name_tok = next(a for a in args if _is_name_token(a))
         return syntax.VarRef(
             name=str(name_tok),
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
             module_qualifier=qual,
+            type_qualifier=type_qual,
         )
 
     def qual_named_type(self, meta: Meta, args: _Args) -> NameT:
@@ -2354,16 +2377,44 @@ class AstBuilder(Transformer):
             module_qualifier=qual,
         )
 
-    def pat_qual_constructor(self, meta: Meta, args: _Args) -> syntax.ConstructorPattern:
-        """pat_qual_constructor: qual_prefix NAME (DOT NAME)? (LPAR pattern_fields? RPAR)?"""
-        qual = next(a for a in args if isinstance(a, Qualifier))
+    def applied_qual_ref(self, meta: Meta, args: _Args) -> syntax.VarRef:
+        """Type-qualified constructor with explicit type arguments."""
+        qual = next((a for a in args if isinstance(a, Qualifier)), None)
         name_toks = [a for a in args if _is_name_token(a)]
-        qualifier_str: str | None = None
-        if len(name_toks) == 2:
-            qualifier_str = str(name_toks[0])
-            name = str(name_toks[1])
-        else:
-            name = str(name_toks[0])
+        type_name = str(name_toks[0])
+        variant_name = str(name_toks[-1])
+        type_args_val = cast(
+            tuple[TypeExpr, ...],
+            next(
+                (
+                    arg
+                    for arg in args
+                    if isinstance(arg, tuple)
+                    and len(arg) > 0
+                    and isinstance(arg[0], _ALL_TYPE_EXPRS)
+                ),
+                (),
+            ),
+        )
+        type_qual = TypeQualifier(
+            name=type_name,
+            type_args=type_args_val,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+        return syntax.VarRef(
+            name=variant_name,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+            module_qualifier=qual,
+            type_qualifier=type_qual,
+        )
+
+    def pat_qual_constructor(self, meta: Meta, args: _Args) -> syntax.ConstructorPattern:
+        """pat_qual_constructor: qual_prefix type_qual? NAME (LPAR pattern_fields? RPAR)?"""
+        qual = next(a for a in args if isinstance(a, Qualifier))
+        type_qual = next((a for a in args if isinstance(a, TypeQualifier)), None)
+        name_tok = next(a for a in args if _is_name_token(a))
         positional: tuple[syntax.Pattern, ...] = ()
         named: tuple[syntax.PatternField, ...] = ()
         for a in args:
@@ -2371,8 +2422,8 @@ class AstBuilder(Transformer):
                 positional = a.positional
                 named = a.named
         return syntax.ConstructorPattern(
-            qualifier=qualifier_str,
-            name=name,
+            qualifier=type_qual.name if type_qual is not None else None,
+            name=str(name_tok),
             positional=positional,
             named=named,
             span=self._span_from_meta(meta),
@@ -2933,6 +2984,11 @@ def _rewrite_expr(
         )
     if isinstance(expr, syntax.Raise):
         return replace(expr, exc=_rewrite_expr(expr.exc, table, builder))
+    if isinstance(expr, syntax.Return):
+        return replace(
+            expr,
+            value=None if expr.value is None else _rewrite_expr(expr.value, table, builder),
+        )
     if isinstance(expr, syntax.ListLit):
         return replace(
             expr,

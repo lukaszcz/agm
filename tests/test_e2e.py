@@ -168,8 +168,15 @@ _dispatch() {
 # Use a temp file to safely pass each subcommand group to _dispatch.
 # Writing each group as null-delimited arguments avoids eval-expansion
 # issues with special characters in command arguments.
-_tmpdir="${TMPDIR:-/tmp}"
-_dispatch_tmp="$_tmpdir/fake_tmux_$$"
+#
+# The files live in a private per-invocation directory so cleanup removes a
+# known path (rm -rf "$_dispatch_dir") instead of globbing a shared
+# world-writable directory.  A glob such as "$tmpdir/fake_tmux_$$".* forces the
+# shell to scan every entry of $tmpdir; on a polluted /tmp (millions of stale
+# files) each scan costs hundreds of milliseconds, which — multiplied across
+# the ~8 tmux invocations per "agm open" — is what makes these e2e tests slow.
+_dispatch_dir="$(mktemp -d)"
+_dispatch_tmp="$_dispatch_dir/g"
 
 # Build subcommand groups by splitting on ';' tokens.
 group_idx=0
@@ -193,11 +200,10 @@ for i in $(seq 0 $group_idx); do
       args+=("$arg")
     done < "$_dispatch_tmp.$i"
     _dispatch "${args[@]}"
-    rm -f "$_dispatch_tmp.$i"
   fi
 done
 
-rm -f "$_dispatch_tmp".*
+rm -rf "$_dispatch_dir"
 exit 0
 """
 
@@ -369,6 +375,21 @@ def _agm_install(tmp_path_factory: pytest.TempPathFactory) -> None:
     _AGM_INSTALL["bin_dir"] = bin_dir
     _AGM_INSTALL["bin"] = agm_bin
     _AGM_INSTALL["guard_dir"] = guard_dir
+
+    # Warm the AgL parser cache once, up front.  The AgL grammar is compiled into
+    # LALR tables on the first parse and cached to a shared temp file keyed by
+    # grammar hash and Python version; building the tables costs ~1s.  Doing it
+    # here (session setup) means the first exec/repl command in every test hits a
+    # warm cache instead of a cold rebuild — otherwise a parallel run has the
+    # whole first wave of AgL tests rebuild the tables at once.  Best-effort: the
+    # cache is a pure optimization, so any failure is ignored.
+    warm_home = tmp_path_factory.mktemp("agm-cache-warm")
+    subprocess.run(
+        [str(agm_bin), "exec", "-c", "print 1"],
+        capture_output=True,
+        env=_agm_env({**os.environ, "HOME": str(warm_home)}),
+        check=False,
+    )
 
 
 def _agm_argv(args: list[str]) -> list[str]:
@@ -959,7 +980,7 @@ class TestConfigEnv:
             encoding="utf-8",
         )
         (config / "env.sh").write_text(
-            'export DEP_SEEN_BY_ENV_SH="$VYPER_AUTOMATION/from-env-sh"\n',
+            'export DEP_SEEN_BY_ENV_SH="$VYPER_AUTOMATION_DIR/from-env-sh"\n',
             encoding="utf-8",
         )
 
@@ -969,8 +990,8 @@ class TestConfigEnv:
                 "-c",
                 (
                     f'eval "$({shlex.quote(str(_AGM_INSTALL["bin"]))} config env)"; '
-                    'printf "VYPER_AUTOMATION=%s\\nDEP_SEEN_BY_ENV_SH=%s\\n" '
-                    '"$VYPER_AUTOMATION" "$DEP_SEEN_BY_ENV_SH"'
+                    'printf "VYPER_AUTOMATION_DIR=%s\\nDEP_SEEN_BY_ENV_SH=%s\\n" '
+                    '"$VYPER_AUTOMATION_DIR" "$DEP_SEEN_BY_ENV_SH"'
                 ),
             ],
             capture_output=True,
@@ -982,7 +1003,7 @@ class TestConfigEnv:
 
         expected_dep = project / "deps" / "vyper-automation" / "feat/app"
         assert result.stdout.splitlines() == [
-            f"VYPER_AUTOMATION={expected_dep}",
+            f"VYPER_AUTOMATION_DIR={expected_dep}",
             f"DEP_SEEN_BY_ENV_SH={expected_dep}/from-env-sh",
         ]
 
@@ -996,9 +1017,9 @@ class TestConfigEnv:
             '[deps]\nvyper-automation = "feat/app"\n',
             encoding="utf-8",
         )
-        (config / ".env").write_text("VYPER_AUTOMATION=/custom/dep\n", encoding="utf-8")
+        (config / ".env").write_text("VYPER_AUTOMATION_DIR=/custom/dep\n", encoding="utf-8")
         (config / "env.sh").write_text(
-            'export DEP_SEEN_BY_ENV_SH="$VYPER_AUTOMATION/from-env-sh"\n',
+            'export DEP_SEEN_BY_ENV_SH="$VYPER_AUTOMATION_DIR/from-env-sh"\n',
             encoding="utf-8",
         )
 
@@ -1008,8 +1029,8 @@ class TestConfigEnv:
                 "-c",
                 (
                     f'eval "$({shlex.quote(str(_AGM_INSTALL["bin"]))} config env)"; '
-                    'printf "VYPER_AUTOMATION=%s\\nDEP_SEEN_BY_ENV_SH=%s\\n" '
-                    '"$VYPER_AUTOMATION" "$DEP_SEEN_BY_ENV_SH"'
+                    'printf "VYPER_AUTOMATION_DIR=%s\\nDEP_SEEN_BY_ENV_SH=%s\\n" '
+                    '"$VYPER_AUTOMATION_DIR" "$DEP_SEEN_BY_ENV_SH"'
                 ),
             ],
             capture_output=True,
@@ -1020,7 +1041,7 @@ class TestConfigEnv:
         )
 
         assert result.stdout.splitlines() == [
-            "VYPER_AUTOMATION=/custom/dep",
+            "VYPER_AUTOMATION_DIR=/custom/dep",
             "DEP_SEEN_BY_ENV_SH=/custom/dep/from-env-sh",
         ]
 
@@ -1044,7 +1065,7 @@ class TestConfigEnv:
             encoding="utf-8",
         )
         (workspace_config / "env.sh").write_text(
-            'export DEP_SEEN_BY_ENV_SH="$VYPER_AUTOMATION/from-env-sh"\n',
+            'export DEP_SEEN_BY_ENV_SH="$VYPER_AUTOMATION_DIR/from-env-sh"\n',
             encoding="utf-8",
         )
 
@@ -1054,8 +1075,8 @@ class TestConfigEnv:
                 "-c",
                 (
                     f'eval "$({shlex.quote(str(_AGM_INSTALL["bin"]))} config env)"; '
-                    'printf "VYPER_AUTOMATION=%s\\nDEP_SEEN_BY_ENV_SH=%s\\n" '
-                    '"$VYPER_AUTOMATION" "$DEP_SEEN_BY_ENV_SH"'
+                    'printf "VYPER_AUTOMATION_DIR=%s\\nDEP_SEEN_BY_ENV_SH=%s\\n" '
+                    '"$VYPER_AUTOMATION_DIR" "$DEP_SEEN_BY_ENV_SH"'
                 ),
             ],
             capture_output=True,
@@ -1067,7 +1088,7 @@ class TestConfigEnv:
 
         expected_dep = project / "deps" / "vyper-automation" / "feat/app"
         assert result.stdout.splitlines() == [
-            f"VYPER_AUTOMATION={expected_dep}",
+            f"VYPER_AUTOMATION_DIR={expected_dep}",
             f"DEP_SEEN_BY_ENV_SH={expected_dep}/from-env-sh",
         ]
 
@@ -1940,6 +1961,50 @@ class TestClose:
         result = run_agm(["close"], env=env, cwd=str(tmp_path), check=False)
         assert result.returncode != 0
         assert "usage" in result.stderr.lower()
+
+    def test_keep_branch_removes_worktree_but_keeps_branch(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env, name="proj")
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+
+        run_agm(["wt", "new", "feat/keep-branch"], env=env, cwd=str(project / "repo"))
+        worktree = project / "worktrees" / "feat/keep-branch"
+
+        run_agm(["close", "--keep-branch", "feat/keep-branch"], env=env, cwd=str(project))
+
+        assert not worktree.exists()
+        branches = _git("branch", cwd=str(project / "repo"), env=env).stdout
+        assert "feat/keep-branch" in branches
+        assert "kill-session -t proj/feat/keep-branch" in tmux_log.read_text()
+
+    def test_keep_workspace_keeps_worktree_config_and_branch(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env, name="proj")
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+
+        run_agm(["wt", "new", "feat/keep-workspace"], env=env, cwd=str(project / "repo"))
+        worktree = project / "worktrees" / "feat/keep-workspace"
+        workspace_config = project / "config" / "feat" / "keep-workspace"
+        workspace_config.mkdir(parents=True)
+        run_agm(["open", "-d", "feat/keep-workspace"], env=env, cwd=str(project))
+        wrapper = _workspace_shell_path(env, "proj/feat/keep-workspace")
+
+        run_agm(
+            ["close", "--keep-workspace", "feat/keep-workspace"], env=env, cwd=str(project)
+        )
+
+        assert worktree.is_dir()
+        assert workspace_config.is_dir()
+        assert not wrapper.exists()
+        branches = _git("branch", cwd=str(project / "repo"), env=env).stdout
+        assert "feat/keep-workspace" in branches
+        assert "kill-session -t proj/feat/keep-workspace" in tmux_log.read_text()
 
     def test_close_succeeds_when_workspace_config_not_tracked_by_git(
         self, tmp_path: Path, env: dict[str, str]
@@ -3430,7 +3495,7 @@ class TestSandbox:
         assert result.returncode == 0
 
         merged = _srt_settings(result)
-        assert merged["network"]["allowedDomains"] == ["local.com"]
+        assert merged["network"]["allowedDomains"] == ["home.com", "local.com"]
         assert merged["filesystem"]["allowWrite"] == ["/home"]
 
     def test_merges_proj_dir_and_cwd_settings(self, tmp_path: Path, env: dict[str, str]) -> None:
@@ -3460,7 +3525,7 @@ class TestSandbox:
         assert result.returncode == 0
 
         merged = _srt_settings(result)
-        assert merged["network"]["allowedDomains"] == ["local.com"]
+        assert merged["network"]["allowedDomains"] == ["proj.com", "local.com"]
         assert merged["filesystem"]["allowWrite"] == [
             "/proj",
             str(proj_dir / "notes"),
@@ -6283,6 +6348,38 @@ class TestOpen:
         assert parsed.get("deps") == {"vyper-automation": "main"}
         assert (project / "deps" / "vyper-automation" / "main").is_dir()
 
+    def test_open_unrelated_branch_does_not_inherit_branch_only_dependency(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        bare_dep = make_bare_repo(tmp_path / "vyper-automation.git", env)
+        project = _make_project(tmp_path, bare, env, name="proj")
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+        run_agm(["open", "dep-owner"], env=env, cwd=str(project))
+        run_agm(
+            ["dep", "new", str(bare_dep)],
+            env=env,
+            cwd=str(project / "worktrees" / "dep-owner"),
+        )
+
+        run_agm(["open", "unrelated"], env=env, cwd=str(project))
+
+        main_config = project / "config" / "config.toml"
+        if main_config.exists():
+            with main_config.open("rb") as handle:
+                main_parsed = cast(dict[str, object], tomllib.load(handle))
+        else:
+            main_parsed = {}
+        workspace_config = project / "config" / "unrelated" / "config.toml"
+        if workspace_config.exists():
+            with workspace_config.open("rb") as handle:
+                workspace_parsed = cast(dict[str, object], tomllib.load(handle))
+        else:
+            workspace_parsed = {}
+        assert "deps" not in main_parsed
+        assert "deps" not in workspace_parsed
+
     def test_open_missing_branch_uses_created_dependency_config_for_env(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
@@ -6298,10 +6395,10 @@ class TestOpen:
         log = tmux_log.read_text()
         expected_dep_path = project / "deps" / "vyper-automation" / "main"
         assert expected_dep_path.is_dir()
-        assert f"-e VYPER_AUTOMATION={expected_dep_path}" not in log
+        assert f"-e VYPER_AUTOMATION_DIR={expected_dep_path}" not in log
         result = subprocess.run(
             [str(_workspace_shell_path(env, "proj/feat/test"))],
-            input='printf "%s\\n" "$VYPER_AUTOMATION"\nexit\n',
+            input='printf "%s\\n" "$VYPER_AUTOMATION_DIR"\nexit\n',
             cwd=project / "worktrees" / "feat/test",
             env=_agm_env(env),
             capture_output=True,
@@ -6331,10 +6428,10 @@ class TestOpen:
 
         log = tmux_log.read_text()
         expected_dep_path = project / "deps" / "vyper-automation" / "main"
-        assert f"-e VYPER_AUTOMATION={expected_dep_path}" not in log
+        assert f"-e VYPER_AUTOMATION_DIR={expected_dep_path}" not in log
         result = subprocess.run(
             [str(_workspace_shell_path(env, "proj/feat/test"))],
-            input='printf "%s\\n" "$VYPER_AUTOMATION"\nexit\n',
+            input='printf "%s\\n" "$VYPER_AUTOMATION_DIR"\nexit\n',
             cwd=project / "worktrees" / "feat/test",
             env=_agm_env(env),
             capture_output=True,

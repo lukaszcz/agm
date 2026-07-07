@@ -1,0 +1,60 @@
+# Return expression workflows: guard clauses, loops, try/catch, lambdas,
+# recursion, inference widening, bare return, and returning an agent call.
+param mode
+
+agent helper
+
+def guard(x: int) =
+  if x < 0 =>
+    return -1
+  x * 2
+
+def stop() -> unit =
+  print "before stop"
+  return
+  print "after stop"
+
+def loop-find(target: int) -> int =
+  for n in [1, 2, 3, 4] do
+    if n == target =>
+      return n
+  done
+  -1
+
+def try-return(which: text) -> text =
+  try
+    if which == "try" =>
+      return "from try"
+    raise Abort(message = "boom")
+  catch Abort =>
+    return "from catch"
+  "tail"
+
+def lambda-return(x: int) -> int =
+  let f = fn(y: int) => if y > 0 => (return y + 10) | else => y
+  f(x)
+
+def recursive-first(xs: list[int], i: int) -> int =
+  if i >= 3 =>
+    return -1
+  if xs[i] > 0 =>
+    return xs[i]
+  recursive-first(xs, i + 1)
+
+def widen(flag: bool) =
+  if flag =>
+    return 1
+  1.5
+
+def agent-value() -> text =
+  return ask("give a short value", agent = helper)
+
+print "mode ${mode}"
+print "guard ${guard(-2)} ${guard(5)}"
+stop()
+print "loop ${loop-find(3)}"
+print "try ${try-return("try")} ${try-return("catch")}"
+print "lambda ${lambda-return(2)}"
+print "recursive ${recursive-first([0, -1, 7], 0)}"
+print "widen ${widen(true)}"
+print "agent ${agent-value()}"

@@ -37,7 +37,10 @@ Sandbox settings resolution:
   1. `$HOME/.agm/sandbox/`
   2. the project sandbox config directory
   3. `./.sandbox/`
-- later files override earlier ones
+- later files are merged over earlier ones
 - `network` and `filesystem` are merged by key
+- list-valued `network` and `filesystem` keys are appended and deduplicated in precedence order
+- later `network.deniedDomains` entries remove matching earlier `network.allowedDomains` entries
+- later `filesystem.denyRead` and `filesystem.denyWrite` entries remove matching earlier `filesystem.allowRead` and `filesystem.allowWrite` entries
 - `ignoreViolations` replaces the earlier value
 - `enabled` and `enableWeakerNestedSandbox` override when set

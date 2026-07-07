@@ -100,6 +100,7 @@ __all__ = [
     "IrParseJson",
     "IrPrint",
     "IrRaise",
+    "IrReturn",
     "IrRenderValue",
     "IrRenderTemplate",
     "IrSequence",
@@ -476,7 +477,7 @@ class IrMakeRecord:
 
 @dataclass(frozen=True, slots=True)
 class IrMakeEnum:
-    """IR enum-variant construction: ``EnumName.Variant(field: expr, ...)``.
+    """IR enum-variant construction: ``EnumName::Variant(field = expr, ...)``.
 
     ``nominal`` — the ``NominalId`` of the owning enum type.
     ``display_name`` — user-facing enum type name.
@@ -607,6 +608,19 @@ class IrRaise:
 
     location: Location
     exc: "IrExpr"
+
+
+@dataclass(frozen=True, slots=True)
+class IrReturn:
+    """IR return: evaluate ``value`` and exit the current function call.
+
+    Implemented by raising an internal ``_ReturnSignal`` Python exception in the
+    evaluator; the signal propagates through loops and ``IrTry`` bodies to the
+    function-call boundary, where its payload becomes the call result.
+    """
+
+    location: Location
+    value: "IrExpr"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1059,6 +1073,7 @@ IrExpr = (
     | IrConvert
     | IrIf
     | IrRaise
+    | IrReturn
     | IrTry
     | IrCase
     | IrLoop

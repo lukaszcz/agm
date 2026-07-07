@@ -3,7 +3,7 @@
 Driven by ``_Checker`` via the narrow ``ConstructorCheckCtx`` Protocol.  All
 logic lives here; the host checker instantiates ``ConstructorChecker(self)``
 and delegates the constructor dispatch branches in ``_check_varref``,
-``_check_field_access``, and ``_check_call`` to the public entry points.
+``_check_varref`` and ``_check_call`` to the public entry points.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from agm.agl.semantics.types import (
     Type,
     substitute,
 )
-from agm.agl.syntax.nodes import Call, Expr, FieldAccess, NamedArg, VarRef
+from agm.agl.syntax.nodes import Call, Expr, NamedArg, VarRef
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import TypeExpr
 from agm.agl.typecheck.arguments import bind_constructor_args
@@ -96,7 +96,7 @@ class ConstructorChecker:
     Instantiated once per ``_Checker`` instance (``self._constructors``).
     Handles record, enum-variant, exception, generic, and cross-module
     constructor checking; ``_Checker`` delegates the relevant branches in
-    ``_check_varref``, ``_check_field_access``, and ``_check_call`` here.
+    ``_check_varref`` and ``_check_call`` here.
     """
 
     def __init__(self, ctx: ConstructorCheckCtx) -> None:
@@ -320,7 +320,7 @@ class ConstructorChecker:
     ) -> Type:
         """Type a qualified generic constructor with explicit type args as a value.
 
-        e.g. ``Option.some::[int]`` or ``Option.none::[int]``.
+        e.g. ``Option[int]::some`` or ``Option[int]::none``.
         """
         gdef = (
             self._ctx._env.get_generic_type_from_module(owner_module_id, owner_name)
@@ -504,7 +504,7 @@ class ConstructorChecker:
         span: SourceSpan,
         expected: Type | None,
     ) -> Type:
-        """Type a qualified constructor (``Owner.variant``) used in value position."""
+        """Type a qualified constructor (``Owner::variant``) used in value position."""
         gdef = self._ctx._env.get_generic_type(owner_name)
         if gdef is not None:
             # owner_decl_node_id is unused on the as-value path (only owner_name,
@@ -537,7 +537,7 @@ class ConstructorChecker:
     ) -> EnumType:
         """Resolve a non-generic qualified constructor's owner to a validated enum.
 
-        Scope records ``Owner.member`` for any declared type name without
+        Scope records ``Owner::member`` for any declared type name without
         checking enum-ness or variant existence, so both are validated here.
         When ``owner_module_id`` is given (cross-module constructor ref), look up
         directly in the graph type table instead of the unqualified import map.
@@ -609,7 +609,7 @@ class ConstructorChecker:
         expected: Type | None = None,
         type_args: tuple[object, ...] = (),
     ) -> Type:
-        """Validate and dispatch a qualified constructor (EnumName.variant)."""
+        """Validate and dispatch a qualified constructor (EnumName::variant)."""
         # Check if this is a generic enum type.
         gdef = (
             self._ctx._env.get_generic_type_from_module(owner_module_id, owner_name)
@@ -644,7 +644,7 @@ class ConstructorChecker:
             )
         if type_args:
             raise AglTypeError(
-                f"'{owner_name}.{variant}' is not a generic constructor and does not accept "
+                f"'{owner_name}::{variant}' is not a generic constructor and does not accept "
                 "type arguments.",
                 span=span,
             )
@@ -773,15 +773,21 @@ class ConstructorChecker:
     def check_qualified_constructor_callee_call(
         self, node: Call, *, expected: Type | None = None
     ) -> Type:
-        """Handle a Call whose callee is a qualified constructor FieldAccess."""
-        assert isinstance(node.callee, FieldAccess)
+        """Handle a Call whose callee is a qualified constructor VarRef."""
+        assert isinstance(node.callee, VarRef)
         owner_name, variant, owner_module_id = (
             self._ctx._resolved.qualified_constructor_refs[node.callee.node_id]
         )
+        type_args: tuple[object, ...] = ()
+        if (
+            node.callee.type_qualifier is not None
+            and node.callee.type_qualifier.type_args is not None
+        ):
+            type_args = node.callee.type_qualifier.type_args
         return self._resolve_qualified_constructor_and_call(
             owner_name=owner_name, variant=variant, owner_module_id=owner_module_id,
             positional=node.args, named=node.named_args, span=node.span,
-            node_id=node.node_id, expected=expected, type_args=node.type_args,
+            node_id=node.node_id, expected=expected, type_args=type_args,
         )
 
     # --- Constructor call validation (private helper) ---

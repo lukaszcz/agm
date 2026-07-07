@@ -23,6 +23,7 @@ import pytest
 from agm.agl.ir.ids import Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import (
     IrBind,
+    IrBlock,
     IrCatchHandler,
     IrConstBool,
     IrConstInt,
@@ -33,6 +34,7 @@ from agm.agl.ir.nodes import (
     IrIfBranch,
     IrMakeException,
     IrRaise,
+    IrReturn,
     IrTry,
 )
 from agm.agl.ir.program import (
@@ -51,6 +53,7 @@ from agm.agl.semantics.values import (
     TextValue,
     UnitValue,
 )
+from agm.agl.typecheck import AglTypeError
 from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises
 
 # ---------------------------------------------------------------------------
@@ -166,6 +169,142 @@ r
 """
     ir = evaluate_ir(source)
     assert ir["r"] == TextValue("big")
+
+
+# ---------------------------------------------------------------------------
+# IR evaluation tests — return
+# ---------------------------------------------------------------------------
+
+
+def test_return_value_exits_function_early() -> None:
+    source = """\
+def choose(x: int) -> int =
+  if x > 0 =>
+    return x
+  0
+let r = choose(5)
+r
+"""
+    ir = evaluate_ir(source)
+    assert ir["r"] == IntValue(5)
+
+
+def test_bare_return_yields_unit() -> None:
+    source = """\
+def stop(flag: bool) -> unit =
+  if flag =>
+    return
+  print("after")
+let r = stop(true)
+r
+"""
+    ir = evaluate_ir(source)
+    assert ir["r"] == UnitValue()
+
+
+def test_return_unwinds_through_loop_and_try() -> None:
+    source = """\
+def find() -> int =
+  var n = 0
+  do[5]
+    n := n + 1
+    try
+      if n == 3 =>
+        return n
+      ()
+    catch Exception =>
+      ()
+  done
+  0
+let r = find()
+r
+"""
+    ir = evaluate_ir(source)
+    assert ir["r"] == IntValue(3)
+
+
+def test_return_in_catch_handler_is_not_caught() -> None:
+    source = """\
+def recover() -> int =
+  try
+    raise Abort(message = "x")
+  catch Abort =>
+    return 7
+  0
+let r = recover()
+r
+"""
+    ir = evaluate_ir(source)
+    assert ir["r"] == IntValue(7)
+
+
+def test_return_in_binding_rhs_does_not_hide_following_type_mismatch() -> None:
+    source = """\
+def f() -> int =
+  let unused: int = return 1
+  "tail"
+let r = f()
+r
+"""
+    with pytest.raises(AglTypeError):
+        evaluate_ir(source)
+
+
+def test_return_in_enclosing_expression_does_not_hide_following_type_mismatch() -> None:
+    source = """\
+def f() -> int =
+  print(return 1)
+  "tail"
+let r = f()
+r
+"""
+    with pytest.raises(AglTypeError):
+        evaluate_ir(source)
+
+
+def test_return_in_binary_operand_does_not_hide_following_type_mismatch() -> None:
+    source = """\
+def f() -> int =
+  (return 1) and false
+  "tail"
+let r = f()
+r
+"""
+    with pytest.raises(AglTypeError):
+        evaluate_ir(source)
+
+
+def test_return_in_non_short_circuit_right_operand_does_not_hide_type_mismatch() -> None:
+    source = """\
+def f() -> text =
+  1 + (return 2)
+let r = f()
+r
+"""
+    with pytest.raises(AglTypeError):
+        evaluate_ir(source)
+
+
+def test_return_in_left_binary_operand_still_returns_at_runtime() -> None:
+    source = """\
+def f() -> int =
+  (return 1) + 2
+let r = f()
+r
+"""
+    ir = evaluate_ir(source)
+    assert ir["r"] == IntValue(1)
+
+
+def test_return_in_right_binary_operand_still_returns_at_runtime() -> None:
+    source = """\
+def f() -> int =
+  1 + (return 2)
+let r = f()
+r
+"""
+    ir = evaluate_ir(source)
+    assert ir["r"] == IntValue(2)
 
 
 # ---------------------------------------------------------------------------
@@ -461,6 +600,20 @@ def test_lower_raise_shape() -> None:
     assert ir_raise.exc.display_name == "Abort"
 
 
+def test_lower_return_shape() -> None:
+    """Golden lowering: return produces IrReturn with a value expression."""
+    from agm.agl.ir.program import ExecutableProgram
+
+    source = "def f() -> int =\n  return 1\n  0\nf()\n"
+    prog = _lower(source)
+    assert isinstance(prog, ExecutableProgram)
+    desc = next(iter(prog.functions.values()))
+    assert isinstance(desc.body, IrBlock)
+    ir_return = desc.body.items[0]
+    assert isinstance(ir_return, IrReturn)
+    assert isinstance(ir_return.value, IrConstInt)
+
+
 def test_lower_try_no_binding_shape() -> None:
     """Golden lowering: specific catch (no binding) → IrCatchHandler with symbol=None."""
     from agm.agl.ir.program import ExecutableProgram
@@ -676,6 +829,14 @@ def test_validate_ir_if_cheap_ok() -> None:
         has_else=False,
     )
     prog = _make_program((ir_if,))
+    validate_ir(prog, deep=False)
+
+
+def test_validate_ir_return_cheap_ok() -> None:
+    """Validate IrReturn without deep: location and value are accepted."""
+    loc = _DUMMY_LOC
+    ir_return = IrReturn(location=loc, value=IrConstUnit(loc))
+    prog = _make_program((ir_return,))
     validate_ir(prog, deep=False)
 
 

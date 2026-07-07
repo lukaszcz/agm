@@ -181,10 +181,10 @@ let s: text = "point: ${p}"
 
 
 def test_enum_nullary_variant() -> None:
-    """Enum nullary variant: Color.Red() constructs correctly."""
+    """Enum nullary variant: Color::Red() constructs correctly."""
     source = """\
 enum Color | Red | Blue
-let c = Color.Red()
+let c = Color::Red()
 ()
 """
     ir = evaluate_ir(source)
@@ -198,7 +198,7 @@ def test_enum_variant_with_fields() -> None:
     """Enum variant with fields constructs correctly."""
     source = """\
 enum Shape | Circle(radius: decimal) | Rectangle(w: decimal, h: decimal)
-let s = Shape.Circle(radius = 3.0)
+let s = Shape::Circle(radius = 3.0)
 ()
 """
     ir = evaluate_ir(source)
@@ -212,8 +212,8 @@ def test_enum_equality_same_variant() -> None:
     """Two enum values with same variant and fields compare equal."""
     source = """\
 enum Color | Red | Blue
-let c1 = Color.Red()
-let c2 = Color.Red()
+let c1 = Color::Red()
+let c2 = Color::Red()
 let eq = c1 == c2
 ()
 """
@@ -225,8 +225,8 @@ def test_enum_inequality_different_variants() -> None:
     """Two enum values with different variants compare not-equal."""
     source = """\
 enum Color | Red | Blue
-let c1 = Color.Red()
-let c2 = Color.Blue()
+let c1 = Color::Red()
+let c2 = Color::Blue()
 let ne = c1 != c2
 ()
 """
@@ -242,12 +242,12 @@ def test_enum_inequality_different_nominals() -> None:
     """
     source_a = """\
 enum ColorA | Red
-let c = ColorA.Red()
+let c = ColorA::Red()
 ()
 """
     source_b = """\
 enum ColorB | Red
-let c = ColorB.Red()
+let c = ColorB::Red()
 ()
 """
     ir_a = evaluate_ir(source_a)
@@ -269,7 +269,7 @@ def test_enum_variant_field_coercion() -> None:
     """Enum variant field: int→decimal coercion applied at lowering time."""
     source = """\
 enum Size | Big(amount: decimal) | Small
-let s = Size.Big(amount = 7)
+let s = Size::Big(amount = 7)
 ()
 """
     ir = evaluate_ir(source)
@@ -359,9 +359,9 @@ def test_nominal_id_hashing_enum_as_set_member() -> None:
     """
     source = """\
 enum Color | Red | Blue
-let c1 = Color.Red()
-let c2 = Color.Red()
-let c3 = Color.Blue()
+let c1 = Color::Red()
+let c2 = Color::Red()
+let c3 = Color::Blue()
 ()
 """
     ir = evaluate_ir(source)
@@ -478,7 +478,7 @@ def test_first_class_enum_constructor_ref_nullary_gives_enum_value() -> None:
     """
     source = """\
 enum Color | Red | Blue
-let mk = Color.Red
+let mk = Color::Red
 ()
 """
     ir = evaluate_ir(source)
@@ -491,13 +491,13 @@ def test_first_class_enum_constructor_ref_with_fields_gives_constructor_value() 
     """An enum variant WITH fields used as a value (not called) gives a ConstructorValue.
 
     Only non-nullary variants (those with at least one field) produce a ConstructorValue
-    when accessed in value position via qualified form (Enum.Variant).
+    when accessed in value position via qualified form (Enum::Variant).
     """
     source = """\
 enum Shape
   | Circle(radius: int)
   | Square(side: int)
-let mk = Shape.Circle
+let mk = Shape::Circle
 ()
 """
     ir = evaluate_ir(source)
@@ -542,14 +542,14 @@ let z = none::[int]
 
 
 def test_qualified_constructor_type_apply_is_callable_value() -> None:
-    """``Option.some::[int]`` and ``Option.none::[int]`` work as values."""
+    """``Option[int]::some`` and ``Option[int]::none`` work as values."""
     source = """\
 enum Option[T]
   | none
   | some(value: T)
-let mk = Option.some::[int]
+let mk = Option[int]::some
 let v = mk(7)
-let z = Option.none::[int]
+let z = Option[int]::none
 ()
 """
     ir = evaluate_ir(source)
@@ -594,7 +594,7 @@ def test_golden_enum_lowers_to_ir_make_enum() -> None:
     """Enum variant call lowers to IrMakeEnum with correct variant."""
     source = """\
 enum Color | Red | Blue
-let c = Color.Red()
+let c = Color::Red()
 ()
 """
     prog = _lower(source)

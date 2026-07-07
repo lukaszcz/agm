@@ -125,6 +125,12 @@ def resolve_lib_root(mr_config: ModuleRootsConfig) -> Path:
     return Path(os.path.expanduser("~/.agm/lib"))
 
 
+def _has_legacy_constructor_syntax(stdlib_root: Path) -> bool:
+    """Return whether *stdlib_root* is from before ``Type::Ctor`` syntax."""
+    core = stdlib_root / "std" / "core.agl"
+    return core.is_file() and "ParsePolicy.Abort" in core.read_text(encoding="utf-8")
+
+
 def resolve_stdlib_root(*, home: Path, env: Mapping[str, str] | None = None) -> Path:
     """Return the selected AgL standard-library module root.
 
@@ -132,18 +138,20 @@ def resolve_stdlib_root(*, home: Path, env: Mapping[str, str] | None = None) -> 
     explicit ``AGM_STDLIB`` environment override wins outright.  Otherwise a
     user-writable home stdlib wins when present (honouring ``AGM_HOME``), then
     an installation-prefix stdlib, then the repository ``stdlib/`` tree for
-    source-checkout workflows.  If none exists yet, return the home destination
-    so diagnostics mention the path that ``just install`` populates.
+    source-checkout workflows.  A legacy installed stdlib that still uses old
+    constructor syntax is skipped when a source-checkout stdlib is available.
+    If none exists yet, return the home destination so diagnostics mention the
+    path that ``just install`` populates.
     """
     override = resolve_env(env).get("AGM_STDLIB")
     if override is not None and override.strip():
         return Path(os.path.expanduser(override))
     candidates = agm_path_candidates(home=home, relative_path=Path("stdlib"), env=env)
     repo_stdlib = Path(__file__).resolve().parents[3] / "stdlib"
-    if repo_stdlib.is_dir():
-        candidates.append(repo_stdlib)
-    for candidate in reversed(candidates[:2]):
-        if candidate.is_dir():
+    for candidate in reversed(candidates):
+        if candidate.is_dir() and not (
+            repo_stdlib.is_dir() and _has_legacy_constructor_syntax(candidate)
+        ):
             return candidate
     if repo_stdlib.is_dir():
         return repo_stdlib

@@ -277,6 +277,18 @@ class TestResolveStdlibRoot:
 
         assert resolve_stdlib_root(home=home, env={}) == stdlib
 
+    def test_legacy_home_stdlib_uses_source_tree_fallback(self, tmp_path: Path) -> None:
+        home = tmp_path / "home"
+        stdlib = home / ".agm" / "stdlib" / "std"
+        stdlib.mkdir(parents=True)
+        (stdlib / "core.agl").write_text("ParsePolicy.Abort", encoding="utf-8")
+
+        result = resolve_stdlib_root(home=home)
+
+        assert result.name == "stdlib"
+        assert result.is_dir()
+        assert result != stdlib.parent
+
     def test_missing_home_stdlib_returns_source_tree_fallback(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
         home.mkdir()

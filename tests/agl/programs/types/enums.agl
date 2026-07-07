@@ -25,5 +25,5 @@ case first of
 
 let made: Outcome = Partial(left = 2)
 print made
-let qualified = Outcome.Failed(reason = fallback, fatal = false)
+let qualified = Outcome::Failed(reason = fallback, fatal = false)
 print qualified

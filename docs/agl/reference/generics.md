@@ -292,8 +292,9 @@ uniform (`Tree[T]` referencing `Tree[T]`), a permutation (`Swap[B, A]`
 referencing `Swap[A, B]`), argument-constant (`R[int]` referencing `R[T]`), or
 growing (`Perfect[T]` referencing `Perfect[Pair[T, T]]`, as above). Two
 positions, however, need a **finite JSON Schema** for the concrete type in
-hand: an `ask`/`exec` response type ([Agent calls](agent-calls.md)) and an
-`as`/`as?` cast target ([Expressions](expressions.md#casts-as-and-as)).
+hand: an `ask`/`exec` response type ([Agent calls](agent-calls.md)), an
+`as`/`as?` cast target ([Expressions](expressions.md#casts-as-and-as)), and a
+non-`text` host `param` declaration ([Host environment](host-environment.md#params)).
 Deriving that schema means expanding every concrete instantiation the type's
 declaration can reach; for a uniform, permutation, or argument-constant
 reference this expansion always closes (finitely many distinct concrete
@@ -317,9 +318,9 @@ let also_bad = some_json as Perfect[int]
 
 Nothing else about `Perfect[int]` is restricted: it can still be
 constructed, matched, compared, passed to and returned from ordinary
-functions, and rendered — only the two schema-needing boundaries reject it.
+functions, and rendered — only the schema-needing boundaries reject it.
 A non-generic recursive type, and every uniform/permutation/argument-constant
-generic recursive type, always has a finite schema and crosses both
+generic recursive type, always has a finite schema and crosses these
 boundaries normally — the [derived JSON Schema](agent-calls.md#derived-json-schema)
 for a recursive type uses `$defs`/`$ref` exactly as for a non-generic one, one
 entry per recursive concrete instantiation reachable from the target

@@ -458,10 +458,14 @@ _HELP_TEXTS: dict[str, str] = {
                          2. the project sandbox config directory
                          3. ./.sandbox/<command>.json
                             fallback: ./.sandbox/default.json
-                       Later files override earlier ones. network and
-                       filesystem are merged by key; ignoreViolations replaces
-                       the earlier value; enabled and
-                       enableWeakerNestedSandbox are overridden when set.
+                       Later files are merged over earlier ones. network and
+                       filesystem are merged by key; list-valued keys are
+                       appended and deduplicated in precedence order. Later
+                       network.deniedDomains removes earlier allowedDomains;
+                       later filesystem denyRead/denyWrite removes earlier
+                       allowRead/allowWrite. ignoreViolations replaces the
+                       earlier value; enabled and enableWeakerNestedSandbox are
+                       overridden when set.
           -f, --file SETTINGS
                        Skip default discovery and use SETTINGS as-is.
 

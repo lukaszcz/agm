@@ -3495,7 +3495,7 @@ class TestSandbox:
         assert result.returncode == 0
 
         merged = _srt_settings(result)
-        assert merged["network"]["allowedDomains"] == ["local.com"]
+        assert merged["network"]["allowedDomains"] == ["home.com", "local.com"]
         assert merged["filesystem"]["allowWrite"] == ["/home"]
 
     def test_merges_proj_dir_and_cwd_settings(self, tmp_path: Path, env: dict[str, str]) -> None:
@@ -3525,7 +3525,7 @@ class TestSandbox:
         assert result.returncode == 0
 
         merged = _srt_settings(result)
-        assert merged["network"]["allowedDomains"] == ["local.com"]
+        assert merged["network"]["allowedDomains"] == ["proj.com", "local.com"]
         assert merged["filesystem"]["allowWrite"] == [
             "/proj",
             str(proj_dir / "notes"),

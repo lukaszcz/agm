@@ -1392,6 +1392,20 @@ class TestInhabitationAnalysis:
 
         assert compute_uninhabited(table) == frozenset({(ENTRY_ID, "R")})
 
+    def test_exception_with_missing_base_stays_uninhabited(self) -> None:
+        """A malformed exception base link is not treated as constructible evidence."""
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="E",
+                module_id=ENTRY_ID,
+                base=(ENTRY_ID, "Missing"),
+            )
+        )
+
+        assert compute_uninhabited(table) == frozenset({(ENTRY_ID, "E")})
+
 
 class TestFiniteClosure:
     def test_nominal_references_walks_nested_type_shapes(self) -> None:

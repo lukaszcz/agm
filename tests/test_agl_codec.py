@@ -34,7 +34,6 @@ from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.contracts import (
     ContractRequest,
     DecodeSchema,
-    ListDecode,
     RefDecode,
     ScalarDecode,
     ScalarKind,
@@ -3462,6 +3461,60 @@ class TestRegisterCodec:
             contract = materialize_ir_contract(request, {"capture": codec})
             assert contract is not None
             assert isinstance(codec.seen[-1], expected_type)
+
+    def test_custom_codec_ir_materialization_falls_back_to_request_schema(self) -> None:
+        """Custom IR materialization keeps compiled schema when the codec omits one."""
+
+        class SchemaLessCodec:
+            @property
+            def name(self) -> str:
+                return "schema-less"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"record"})
+
+            def supports_type(self, t: Type) -> bool:
+                return True
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=None,
+                    format_instructions="custom",
+                    json_schema=None,
+                )
+
+            def parse(
+                self,
+                raw: str,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
+                decode: DecodeSchema | None = None,
+                defs: Mapping[str, DecodeSchema] | None = None,
+            ) -> ParseResult:
+                return ParseResult.failure(raw)
+
+        request = ContractRequest(
+            codec_name="schema-less",
+            strict_json=None,
+            json_schema='{"type": "object"}',
+            decode=None,
+            target_type_label="Node",
+            structured_exec=False,
+            format_instructions="json",
+            target_type_kind="record",
+        )
+
+        contract = materialize_ir_contract(request, {"schema-less": SchemaLessCodec()})
+
+        assert contract is not None
+        assert contract.format_instructions == "custom"
+        assert contract.json_schema == {"type": "object"}
 
     def test_custom_codec_ir_materialization_preserves_recursive_decode(self) -> None:
         """Execution-time custom contracts keep codec-provided decode metadata."""

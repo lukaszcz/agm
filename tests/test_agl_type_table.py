@@ -19,7 +19,7 @@ from agm.agl.parser import parse_program
 from agm.agl.repl import ReplSession
 from agm.agl.scope import resolve
 from agm.agl.scope.graph import resolve_graph
-from agm.agl.semantics.analyses import compute_finite_closure
+from agm.agl.semantics.analyses import compute_finite_closure, nominal_references
 from agm.agl.semantics.type_table import (
     BUILTIN_PRELUDE_TYPE_DEFS,
     TypeDef,
@@ -30,6 +30,7 @@ from agm.agl.semantics.type_table import (
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
     AgentType,
+    BoolType,
     DictType,
     EnumType,
     ExceptionType,
@@ -1299,6 +1300,14 @@ def _pair_def(name: str = "Pair") -> TypeDef:
 
 
 class TestFiniteClosure:
+    def test_nominal_references_walks_nested_type_shapes(self) -> None:
+        exc = ExceptionType("Oops", module_id=ENTRY_ID)
+        enum = EnumType("Choice", module_id=ENTRY_ID)
+        box = RecordType("Box", type_args=(enum,), module_id=ENTRY_ID)
+        typ = FunctionType(params=(ListType(exc),), result=DictType(box))
+        assert list(nominal_references(typ)) == [exc, box, enum]
+        assert list(nominal_references(BoolType())) == []
+
     def test_uniform_self_reference_is_finite(self) -> None:
         # Tree[T] referencing Tree[T]: the parameter-dependency self-loop
         # (T -> T) passes the WHOLE argument through unchanged — never a

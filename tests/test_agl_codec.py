@@ -30,15 +30,17 @@ from jsonschema import Draft202012Validator
 
 from agm.agl import PipelineDriver
 from agm.agl.capabilities import HostCapabilities
+from agm.agl.ir.contracts import ContractRequest, DecodeSchema
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.runtime.agents import AgentFn, AgentRegistry
 from agm.agl.runtime.codec import JsonCodec, ParseResult, TextCodec
-from agm.agl.runtime.contract import OutputContract, materialize_contract
+from agm.agl.runtime.contract import OutputContract, materialize_contract, materialize_ir_contract
 from agm.agl.runtime.request import AgentRequest
 from agm.agl.scope import resolve
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import (
+    AgentType,
     BoolType,
     DecimalType,
     DictType,
@@ -50,6 +52,7 @@ from agm.agl.semantics.types import (
     TextType,
     Type,
     TypeVarType,
+    UnitType,
 )
 from agm.agl.semantics.values import (
     BoolValue,
@@ -2999,7 +3002,6 @@ class TestRegisterCodec:
         assert capsys.readouterr().out == "response\n"
 
     def test_register_duplicate_codec_raises(self) -> None:
-        from agm.agl.ir.contracts import DecodeSchema
         from agm.agl.runtime.codec import ParseResult as PR
         from agm.agl.runtime.contract import OutputContract as OC
 
@@ -3052,7 +3054,6 @@ class TestRegisterCodec:
         (observable as a distinctive prefix on the resulting binding) are
         exercised end-to-end through ``run()`` with a stub agent.
         """
-        from agm.agl.ir.contracts import DecodeSchema
         from agm.agl.semantics.values import TextValue
 
         class TagCodec:
@@ -3115,7 +3116,6 @@ class TestRegisterCodec:
 
     def test_custom_int_codec_sees_int_target_and_old_parse_signature_works(self) -> None:
         """Custom codecs get a kind-correct target and may omit the newer defs keyword."""
-        from agm.agl.ir.contracts import DecodeSchema
 
         seen_targets: list[str] = []
 
@@ -3159,6 +3159,90 @@ class TestRegisterCodec:
         assert result.ok is True
         assert result.bindings["y"] == IntValue(7)
         assert seen_targets == ["int"]
+
+    def test_custom_codec_ir_materialization_reconstructs_target_kinds(self) -> None:
+        """IR contract materialization gives custom codecs kind-correct placeholders."""
+
+        class CaptureCodec:
+            def __init__(self) -> None:
+                self.seen: list[Type] = []
+
+            @property
+            def name(self) -> str:
+                return "capture"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset(
+                    {
+                        "text",
+                        "int",
+                        "decimal",
+                        "bool",
+                        "json",
+                        "agent",
+                        "list",
+                        "dict",
+                        "record",
+                        "enum",
+                        "unit",
+                    }
+                )
+
+            def supports_type(self, t: Type) -> bool:
+                return True
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                self.seen.append(type_ref)
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=None,
+                    format_instructions="",
+                    json_schema=None,
+                )
+
+            def parse(
+                self,
+                raw: str,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
+                decode: DecodeSchema | None = None,
+                defs: dict[str, DecodeSchema] | None = None,
+            ) -> ParseResult:
+                return ParseResult.failure(raw)
+
+        codec = CaptureCodec()
+        cases = [
+            ("text", "text", TextType),
+            ("int", "int", IntType),
+            ("decimal", "decimal", DecimalType),
+            ("bool", "bool", BoolType),
+            ("json", "json", JsonType),
+            ("agent", "agent", AgentType),
+            ("list", "list[int]", ListType),
+            ("dict", "dict[text, int]", DictType),
+            ("record", "Issue", RecordType),
+            ("enum", "Result", EnumType),
+            ("", "unit", UnitType),
+        ]
+        for kind, label, expected_type in cases:
+            request = ContractRequest(
+                codec_name="capture",
+                strict_json=None,
+                json_schema=None,
+                decode=None,
+                target_type_label=label,
+                structured_exec=False,
+                format_instructions="",
+                target_type_kind=kind,
+            )
+            contract = materialize_ir_contract(request, {"capture": codec})
+            assert contract is not None
+            assert isinstance(codec.seen[-1], expected_type)
 
 
 class TestRuntimeBuildsCodecKinds:

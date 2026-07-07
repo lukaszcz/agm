@@ -548,6 +548,13 @@ class TestFailureEffects:
         assert not result.ok
         assert s.declared_params() == []
 
+    def test_runtime_raise_does_not_promote_later_type(self) -> None:
+        s = ReplSession()
+        result = s.eval_entry("let z: decimal = 1 / 0\nrecord After\n  value: int")
+        assert not result.ok
+        assert not s.eval_entry("After").ok
+        assert not s.eval_entry("After(value = 3)").ok
+
     def test_runtime_raise_preserves_prior_type_but_not_later_binding(self) -> None:
         s = ReplSession()
         result = s.eval_entry(

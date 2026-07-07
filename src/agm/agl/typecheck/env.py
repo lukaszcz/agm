@@ -1395,3 +1395,35 @@ class TypeEnvironment:
         self._constructor_field_kinds.update(other._constructor_field_kinds)
         self._alias_type_params.update(other._alias_type_params)
         self._function_signatures_by_node_id.update(other._function_signatures_by_node_id)
+
+    def restore_type_names_from(self, other: TypeEnvironment, names: Iterable[str]) -> None:
+        """Restore selected type-namespace names from *other*.
+
+        Used by the REPL after partial runtime failure: checking an entry builds
+        metadata for every declaration in the entry, but only declarations before
+        the failure are promoted. For each unpromoted type name, remove the
+        checked-entry metadata and restore the previous session definition when
+        one existed.
+        """
+        builtin = frozenset(BUILTIN_EXCEPTIONS) | BUILTIN_PRELUDE_TYPE_NAMES
+        for name in names:
+            if name in builtin:
+                continue
+            self.unregister_name(name)
+            typedef = other._type_table.get(other._module_id, name)
+            if typedef is not None:
+                self._type_table.register(typedef)
+            if name in other._types:
+                self._types[name] = other._types[name]
+            if name in other._alias_targets:
+                self._alias_targets[name] = other._alias_targets[name]
+            if name in other._generic_types:
+                self._generic_types[name] = other._generic_types[name]
+            if name in other._alias_type_params:
+                self._alias_type_params[name] = other._alias_type_params[name]
+            for key, sig in other._constructor_sigs.items():
+                if key[0] == name:
+                    self._constructor_sigs[key] = sig
+            for key, kinds in other._constructor_field_kinds.items():
+                if key[0] == name:
+                    self._constructor_field_kinds[key] = kinds

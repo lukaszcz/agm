@@ -771,6 +771,7 @@ class ReplSession:
             TypeAlias,
             VarDecl,
         )
+        from agm.agl.typecheck.env import TypeEnvironment
 
         entry_root = checked.resolved.root_scope
         named_declarations = (
@@ -802,12 +803,16 @@ class ReplSession:
                 failure_span is not None and end_offset <= failure_span.start_offset
             )
 
+        entry_type_names = frozenset(
+            item.name for item in program.body.items if isinstance(item, (RecordDef, EnumDef, TypeAlias))
+        )
         promoted_type_names = frozenset(
             item.name
             for item in program.body.items
             if isinstance(item, (RecordDef, EnumDef, TypeAlias))
             and _before_failure(item.span.end_offset)
         )
+        unpromoted_type_names = entry_type_names - promoted_type_names
         stale_binding_names: set[str] = set()
         stale_binding_node_ids: set[int] = set()
         if promoted_type_names:
@@ -855,7 +860,11 @@ class ReplSession:
                 self._session_scope.bindings[name] = ref
                 if partial and name in entry_names:
                     installed.append(name)
+        previous_type_env = TypeEnvironment()
+        previous_type_env.seed_from(self._type_env)
         self._type_env.seed_from(checked.type_env)
+        if partial and unpromoted_type_names:
+            self._type_env.restore_type_names_from(previous_type_env, unpromoted_type_names)
         self._type_env.remove_binding_types(stale_binding_node_ids)
 
         promoted_agents = {

@@ -598,8 +598,49 @@ class TestTypeEnvironment:
     def test_unregister_name(self) -> None:
         env = TypeEnvironment()
         env.register_type("Foo", RecordType(name="Foo"))
+        env.register_alias(
+            "Foo", IntT(span=SourceSpan(1, 1, 1, 1, 0, 0), node_id=1), type_params=("T",)
+        )
+        env.register_generic_type(
+            "Foo",
+            GenericTypeDef(
+                kind="record",
+                type_params=("T",),
+                template=RecordType(name="Foo", type_args=(TypeVarType("T"),)),
+            ),
+        )
+        env.register_constructor_signature(
+            ConstructorSignature(
+                owner_name="Foo",
+                variant=None,
+                field_names=("x",),
+                field_templates=(TypeVarType("T"),),
+                result_template=RecordType(name="Foo", type_args=(TypeVarType("T"),)),
+                type_params=("T",),
+            )
+        )
+        env.register_constructor_signature(
+            ConstructorSignature(
+                owner_name="Foo",
+                variant="Some",
+                field_names=("x",),
+                field_templates=(TypeVarType("T"),),
+                result_template=RecordType(name="Foo", type_args=(TypeVarType("T"),)),
+                type_params=("T",),
+            )
+        )
+        env.register_constructor_field_kinds("Foo", None, (("x", ParamKind.NAMED_ONLY),))
+        env.register_constructor_field_kinds("Foo", "Some", (("x", ParamKind.NAMED_ONLY),))
+
         env.unregister_name("Foo")
+
         assert env.get_type("Foo") is None
+        assert env.get_alias_type_params("Foo") == ()
+        assert env.get_generic_type("Foo") is None
+        assert env.get_constructor_signature("Foo", None) is None
+        assert env.get_constructor_signature("Foo", "Some") is None
+        assert env.get_constructor_field_kinds("Foo", None) is None
+        assert env.get_constructor_field_kinds("Foo", "Some") is None
 
     def test_unregister_builtin_is_noop(self) -> None:
         env = TypeEnvironment()

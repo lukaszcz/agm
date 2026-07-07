@@ -234,6 +234,18 @@ class TestRedefinition:
         bad = s.eval_entry("let r2 = R(a = 1)")
         assert not bad.ok  # old field 'a' no longer valid
 
+    def test_record_redefinition_clears_generic_metadata(self) -> None:
+        s = ReplSession()
+        first = s.eval_entry("record Box[T]\n  x: T")
+        assert first.ok
+        second = s.eval_entry("record Box\n  x: int")
+        assert second.ok
+
+        use = s.eval_entry("let y: Box[int] = Box(x = 1)")
+
+        assert not use.ok
+        assert any("does not take type arguments" in d.message for d in use.diagnostics)
+
 
 # ---------------------------------------------------------------------------
 # Recursive types across entries

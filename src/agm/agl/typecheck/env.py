@@ -482,14 +482,15 @@ class TypeEnvironment:
         Used by the type-builder when an incremental-session entry redeclares a
         *seeded* name — either with a different kind (e.g. a seeded ``record R``
         redefined as ``type R = int``) or a different shape (e.g. ``record R``
-        redefined with different fields).  ``_types`` (records/enums/exceptions)
-        and ``_alias_targets`` (aliases) are separate tables, so a cross-kind
-        redefinition would otherwise leave a stale entry in the other table and
-        make ``get_type`` disagree with annotation/constructor resolution.
-        Dropping the name from all namespaces before the new declaration is
-        registered keeps them mutually consistent, and lets the type table's
-        dual-write ``register`` calls treat every registration as a fresh one
-        rather than a conflicting re-registration of the same key.
+        redefined with different fields).  Type handles, aliases, generic
+        templates, constructor metadata, and alias parameter metadata live in
+        separate tables, so a cross-kind redefinition would otherwise leave a
+        stale entry in another table and make ``get_type`` disagree with
+        annotation/constructor resolution.  Dropping the name from all
+        namespaces before the new declaration is registered keeps them mutually
+        consistent, and lets the type table's dual-write ``register`` calls
+        treat every registration as a fresh one rather than a conflicting
+        re-registration of the same key.
 
         Built-in exception names and built-in prelude type names are never
         removed: they are non-shadowable (rejected earlier by
@@ -500,6 +501,14 @@ class TypeEnvironment:
             return
         self._types.pop(name, None)
         self._alias_targets.pop(name, None)
+        self._generic_types.pop(name, None)
+        self._alias_type_params.pop(name, None)
+        for key in tuple(self._constructor_sigs):
+            if key[0] == name:
+                self._constructor_sigs.pop(key, None)
+        for key in tuple(self._constructor_field_kinds):
+            if key[0] == name:
+                self._constructor_field_kinds.pop(key, None)
         self._type_table.unregister(self._module_id, name)
 
     def register_alias(
@@ -1342,11 +1351,22 @@ class TypeEnvironment:
 
         Also merges *other*'s ``type_table`` entries in: *other* is treated as
         authoritative, so an entry under a key already present in this
-        environment's table is overwritten (last-write-wins), mirroring how
-        ``_types`` itself is seeded below. See :meth:`TypeTable.merge_from`.
+        environment's table is overwritten (last-write-wins). For names present
+        in *other*'s type namespace, stale metadata in this environment is
+        cleared before copying so cross-kind REPL redefinitions do not leave old
+        generic/constructor/alias tables behind. See :meth:`TypeTable.merge_from`.
         """
-        self._type_table.merge_from(other._type_table)
         builtin = frozenset(BUILTIN_EXCEPTIONS) | BUILTIN_PRELUDE_TYPE_NAMES
+        incoming_type_names = {
+            name for name in other._types if name not in builtin
+        } | set(other._alias_targets) | set(other._generic_types) | set(other._alias_type_params)
+        incoming_type_names |= {owner_name for owner_name, _variant in other._constructor_sigs}
+        incoming_type_names |= {
+            owner_name for owner_name, _variant in other._constructor_field_kinds
+        }
+        for name in incoming_type_names:
+            self.unregister_name(name)
+        self._type_table.merge_from(other._type_table)
         for name, typ in other._types.items():
             if name not in builtin:
                 self._types[name] = typ

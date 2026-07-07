@@ -3,14 +3,14 @@
 | Command | Description |
 |---|---|
 | `agm open [-d\|--detach] [-n\|--num-panes PANES] [-p\|--parent PARENT] TARGET` | Shortcut for `agm workspace open` |
-| `agm close [-f\|--force] [-D] BRANCH` | Shortcut for `agm workspace close` |
+| `agm close [-f\|--force] [-D] [--keep-branch] [--keep-worktree] BRANCH` | Shortcut for `agm workspace close` |
 | `agm workspace open [-d\|--detach] [-n\|--num-panes PANES] [-p\|--parent PARENT] TARGET` | Open the main workspace or a branch workspace, creating or checking it out when needed |
-| `agm workspace close [-f\|--force] [-D] BRANCH` | Remove a branch workspace and close its tmux session |
+| `agm workspace close [-f\|--force] [-D] [--keep-branch] [--keep-worktree] BRANCH` | Remove a branch workspace and close its tmux session |
 | `agm workspace list [-v\|--verbose]` | List all open AGM workspaces |
 | `agm workspace setup` | Run setup scripts for the current workspace |
 | `agm workspace shell-regen SHELL_DIR` | Regenerate the per-session shell wrapper and rc files in `SHELL_DIR` |
 | `agm wsp open [-d\|--detach] [-n\|--num-panes PANES] [-p\|--parent PARENT] TARGET` | Alias form of `agm workspace open` |
-| `agm wsp close [-f\|--force] [-D] BRANCH` | Alias form of `agm workspace close` |
+| `agm wsp close [-f\|--force] [-D] [--keep-branch] [--keep-worktree] BRANCH` | Alias form of `agm workspace close` |
 | `agm wsp list [-v\|--verbose]` | Alias form of `agm workspace list` |
 | `agm wsp setup` | Alias form of `agm workspace setup` |
 | `agm wsp shell-regen SHELL_DIR` | Alias form of `agm workspace shell-regen` |
@@ -42,6 +42,8 @@ config, workspace config, dependency environment, setup scripts, and tmux sessio
 
 - `-f`, `--force`: force remove the branch workspace's Git worktree (even with untracked or uncommitted changes) and force delete the branch (`git branch -D`). Implies `-D`.
 - `-D`: force delete the branch (`git branch -D`) instead of safe delete (`git branch -d`). The worktree is only removed if the branch deletion would succeed.
+- `--keep-branch`: remove the worktree but keep the local branch.
+- `--keep-worktree`: keep the worktree and local branch, remove no workspace config, and only close the workspace session. Implies `--keep-branch`.
 
 `agm workspace close` notes:
 

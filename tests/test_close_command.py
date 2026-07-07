@@ -309,6 +309,42 @@ class TestCloseSession:
         assert not worktree_dir.exists()
         assert not _branch_exists(repo_dir, "feature", env)
 
+    def test_keep_branch_removes_worktree_without_deleting_branch(
+        self,
+        tmp_path: Path,
+        env: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        project_dir, repo_dir, worktree_dir = _make_git_close_project(
+            tmp_path, env, unmerged=True
+        )
+        _install_fake_tmux(tmp_path, monkeypatch, path=env["PATH"])
+
+        close_workspace(branch="feature", keep_branch=True, cwd=project_dir)
+
+        assert not worktree_dir.exists()
+        assert _branch_exists(repo_dir, "feature", env)
+
+    def test_keep_worktree_keeps_worktree_branch_and_workspace_config(
+        self,
+        tmp_path: Path,
+        env: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        project_dir, repo_dir, worktree_dir = _make_git_close_project(
+            tmp_path, env, unmerged=True
+        )
+        tmux_log = _install_fake_tmux(tmp_path, monkeypatch, path=env["PATH"])
+        workspace_config = project_dir / "config" / "feature"
+        workspace_config.mkdir()
+
+        close_workspace(branch="feature", keep_worktree=True, cwd=project_dir)
+
+        assert worktree_dir.exists()
+        assert workspace_config.exists()
+        assert _branch_exists(repo_dir, "feature", env)
+        assert "kill-session -t proj/feature" in tmux_log.read_text(encoding="utf-8")
+
 
 # ===========================================================================
 # run (entry point)
@@ -361,7 +397,15 @@ class TestCloseRun:
         self._setup_force_sensitive_close(tmp_path, monkeypatch)
 
         with pytest.raises(SystemExit):
-            close_module.run(CloseArgs(branch="feature", force=False, force_delete=False))
+            close_module.run(
+                CloseArgs(
+                    branch="feature",
+                    force=False,
+                    force_delete=False,
+                    keep_branch=False,
+                    keep_worktree=False,
+                )
+            )
 
         assert "not fully merged" in capsys.readouterr().err
 
@@ -370,11 +414,42 @@ class TestCloseRun:
     ) -> None:
         self._setup_force_sensitive_close(tmp_path, monkeypatch)
 
-        close_module.run(CloseArgs(branch="feature", force=False, force_delete=True))
+        close_module.run(
+            CloseArgs(
+                branch="feature",
+                force=False,
+                force_delete=True,
+                keep_branch=False,
+                keep_worktree=False,
+            )
+        )
 
     def test_run_force_allows_unmerged_branch(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         self._setup_force_sensitive_close(tmp_path, monkeypatch)
 
-        close_module.run(CloseArgs(branch="feature", force=True, force_delete=False))
+        close_module.run(
+            CloseArgs(
+                branch="feature",
+                force=True,
+                force_delete=False,
+                keep_branch=False,
+                keep_worktree=False,
+            )
+        )
+
+    def test_run_keep_worktree_skips_branch_delete_check(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._setup_force_sensitive_close(tmp_path, monkeypatch)
+
+        close_module.run(
+            CloseArgs(
+                branch="feature",
+                force=False,
+                force_delete=False,
+                keep_branch=False,
+                keep_worktree=True,
+            )
+        )

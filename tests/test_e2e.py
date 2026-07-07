@@ -1941,6 +1941,50 @@ class TestClose:
         assert result.returncode != 0
         assert "usage" in result.stderr.lower()
 
+    def test_keep_branch_removes_worktree_but_keeps_branch(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env, name="proj")
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+
+        run_agm(["wt", "new", "feat/keep-branch"], env=env, cwd=str(project / "repo"))
+        worktree = project / "worktrees" / "feat/keep-branch"
+
+        run_agm(["close", "--keep-branch", "feat/keep-branch"], env=env, cwd=str(project))
+
+        assert not worktree.exists()
+        branches = _git("branch", cwd=str(project / "repo"), env=env).stdout
+        assert "feat/keep-branch" in branches
+        assert "kill-session -t proj/feat/keep-branch" in tmux_log.read_text()
+
+    def test_keep_worktree_keeps_worktree_config_and_branch(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env, name="proj")
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+
+        run_agm(["wt", "new", "feat/keep-worktree"], env=env, cwd=str(project / "repo"))
+        worktree = project / "worktrees" / "feat/keep-worktree"
+        workspace_config = project / "config" / "feat" / "keep-worktree"
+        workspace_config.mkdir(parents=True)
+        run_agm(["open", "-d", "feat/keep-worktree"], env=env, cwd=str(project))
+        wrapper = _workspace_shell_path(env, "proj/feat/keep-worktree")
+
+        run_agm(
+            ["close", "--keep-worktree", "feat/keep-worktree"], env=env, cwd=str(project)
+        )
+
+        assert worktree.is_dir()
+        assert workspace_config.is_dir()
+        assert not wrapper.exists()
+        branches = _git("branch", cwd=str(project / "repo"), env=env).stdout
+        assert "feat/keep-worktree" in branches
+        assert "kill-session -t proj/feat/keep-worktree" in tmux_log.read_text()
+
     def test_close_succeeds_when_workspace_config_not_tracked_by_git(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:

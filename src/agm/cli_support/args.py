@@ -71,6 +71,8 @@ class CloseArgs:
     branch: str
     force: bool
     force_delete: bool
+    keep_branch: bool
+    keep_worktree: bool
 
 
 @dataclass(slots=True)

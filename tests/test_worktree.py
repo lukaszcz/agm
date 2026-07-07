@@ -783,6 +783,46 @@ class TestRemoveWorktree:
 
         assert deleted == [("feat", True)]
 
+    def test_can_skip_branch_delete(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        project_dir = tmp_path / "proj"
+        repo_dir = project_dir / "repo"
+        worktree_path = project_dir / "worktrees" / "feat"
+        project_dir.mkdir()
+        repo_dir.mkdir()
+        worktree_path.mkdir(parents=True)
+
+        monkeypatch.setattr(
+            worktree_mod, "discover_current_project_dir", lambda cwd=None, env=None: project_dir
+        )
+        monkeypatch.setattr(worktree_mod.git_helpers, "current_branch", lambda p, env=None: "main")
+        monkeypatch.setattr(
+            worktree_mod.git_helpers,
+            "worktree_list",
+            lambda p, env=None: [WorktreeInfo(path=worktree_path, branch="feat")],
+        )
+
+        removed: list[Path] = []
+        monkeypatch.setattr(
+            worktree_mod.git_helpers,
+            "worktree_remove",
+            lambda p, path, force=False, env=None: removed.append(path),
+        )
+        deleted: list[str] = []
+        monkeypatch.setattr(
+            worktree_mod.git_helpers,
+            "branch_delete",
+            lambda p, b, force=False, env=None: deleted.append(b),
+        )
+
+        worktree_mod.remove_worktree(
+            repo_dir=repo_dir, force=False, branch="feat", delete_branch=False
+        )
+
+        assert removed == [worktree_path]
+        assert deleted == []
+
     def test_plain_git_repo_skips_agm_main_branch_check(
         self,
         tmp_path: Path,

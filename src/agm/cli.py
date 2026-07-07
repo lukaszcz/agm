@@ -646,6 +646,8 @@ def _run_workspace_close(
     branch: str | None,
     force: bool,
     force_delete: bool,
+    keep_branch: bool,
+    keep_worktree: bool,
 ) -> None:
     workspace_close_command.run(
         CloseArgs(
@@ -656,6 +658,8 @@ def _run_workspace_close(
             ),
             force=force,
             force_delete=force_delete,
+            keep_branch=keep_branch or keep_worktree,
+            keep_worktree=keep_worktree,
         )
     )
 
@@ -719,6 +723,16 @@ def close(
         "-D",
         help="Force delete the branch (git branch -D) instead of safe delete (git branch -d).",
     ),
+    keep_branch: bool = typer.Option(
+        False,
+        "--keep-branch",
+        help="Remove the branch workspace's Git worktree but keep the local branch.",
+    ),
+    keep_worktree: bool = typer.Option(
+        False,
+        "--keep-worktree",
+        help="Keep the Git worktree and local branch; only close the workspace session.",
+    ),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
@@ -729,6 +743,8 @@ def close(
         branch=branch,
         force=force,
         force_delete=force_delete,
+        keep_branch=keep_branch,
+        keep_worktree=keep_worktree,
     )
 
 
@@ -877,6 +893,16 @@ def workspace_close(
         "-D",
         help="Force delete the branch (git branch -D) instead of safe delete (git branch -d).",
     ),
+    keep_branch: bool = typer.Option(
+        False,
+        "--keep-branch",
+        help="Remove the branch workspace's Git worktree but keep the local branch.",
+    ),
+    keep_worktree: bool = typer.Option(
+        False,
+        "--keep-worktree",
+        help="Keep the Git worktree and local branch; only close the workspace session.",
+    ),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
@@ -887,6 +913,8 @@ def workspace_close(
         branch=branch,
         force=force,
         force_delete=force_delete,
+        keep_branch=keep_branch,
+        keep_worktree=keep_worktree,
     )
 
 

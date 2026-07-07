@@ -40,7 +40,13 @@ def _remove_workspace_config(*, proj_dir: Path, branch: str, env: dict[str, str]
 
 
 def close_workspace(
-    *, branch: str, force: bool = False, force_delete: bool = False, cwd: Path | None = None
+    *,
+    branch: str,
+    force: bool = False,
+    force_delete: bool = False,
+    keep_branch: bool = False,
+    keep_worktree: bool = False,
+    cwd: Path | None = None,
 ) -> None:
     current = Path.cwd() if cwd is None else cwd.resolve()
     proj_dir = require_current_project_dir(current)
@@ -58,28 +64,43 @@ def close_workspace(
 
     # --force implies force_delete as well (git branch -D semantics).
     effective_force_delete = force or force_delete
+    effective_keep_branch = keep_branch or keep_worktree
 
-    # Pre-check: verify the branch can be deleted before removing the Git worktree.
-    # Uses default environment; project-specific env is not needed for git checks.
-    if not git_helpers.branch_can_delete(repo_dir, branch, force=effective_force_delete):
-        if not git_helpers.local_branch_exists(repo_dir, branch):
-            print(f"error: branch '{branch}' does not exist", file=sys.stderr)
-        else:
-            print(
-                f"error: branch '{branch}' is not fully merged. Use -D to force delete.",
-                file=sys.stderr,
-            )
-        raise SystemExit(1)
+    if not keep_worktree:
+        # Pre-check: verify the branch can be deleted before removing the Git worktree.
+        # Uses default environment; project-specific env is not needed for git checks.
+        if not effective_keep_branch and not git_helpers.branch_can_delete(
+            repo_dir, branch, force=effective_force_delete
+        ):
+            if not git_helpers.local_branch_exists(repo_dir, branch):
+                print(f"error: branch '{branch}' does not exist", file=sys.stderr)
+            else:
+                print(
+                    f"error: branch '{branch}' is not fully merged. Use -D to force delete.",
+                    file=sys.stderr,
+                )
+            raise SystemExit(1)
 
-    remove_worktree(
-        repo_dir=repo_dir, force=force, branch=branch, force_delete=effective_force_delete
-    )
+        remove_worktree(
+            repo_dir=repo_dir,
+            force=force,
+            branch=branch,
+            force_delete=effective_force_delete,
+            delete_branch=not effective_keep_branch,
+        )
     env = load_workspace_env(proj_dir, None, workspace_dir=repo_dir)
-    _remove_workspace_config(proj_dir=proj_dir, branch=branch, env=env)
+    if not keep_worktree:
+        _remove_workspace_config(proj_dir=proj_dir, branch=branch, env=env)
     session_name = branch_session_name(proj_dir, branch)
     close_tmux_session(session_name=session_name, cwd=repo_dir, env=env)
     remove_workspace_shell(session_name)
 
 
 def run(args: CloseArgs) -> None:
-    close_workspace(branch=args.branch, force=args.force, force_delete=args.force_delete)
+    close_workspace(
+        branch=args.branch,
+        force=args.force,
+        force_delete=args.force_delete,
+        keep_branch=args.keep_branch,
+        keep_worktree=args.keep_worktree,
+    )

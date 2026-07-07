@@ -168,8 +168,15 @@ _dispatch() {
 # Use a temp file to safely pass each subcommand group to _dispatch.
 # Writing each group as null-delimited arguments avoids eval-expansion
 # issues with special characters in command arguments.
-_tmpdir="${TMPDIR:-/tmp}"
-_dispatch_tmp="$_tmpdir/fake_tmux_$$"
+#
+# The files live in a private per-invocation directory so cleanup removes a
+# known path (rm -rf "$_dispatch_dir") instead of globbing a shared
+# world-writable directory.  A glob such as "$tmpdir/fake_tmux_$$".* forces the
+# shell to scan every entry of $tmpdir; on a polluted /tmp (millions of stale
+# files) each scan costs hundreds of milliseconds, which — multiplied across
+# the ~8 tmux invocations per "agm open" — is what makes these e2e tests slow.
+_dispatch_dir="$(mktemp -d)"
+_dispatch_tmp="$_dispatch_dir/g"
 
 # Build subcommand groups by splitting on ';' tokens.
 group_idx=0
@@ -193,11 +200,10 @@ for i in $(seq 0 $group_idx); do
       args+=("$arg")
     done < "$_dispatch_tmp.$i"
     _dispatch "${args[@]}"
-    rm -f "$_dispatch_tmp.$i"
   fi
 done
 
-rm -f "$_dispatch_tmp".*
+rm -rf "$_dispatch_dir"
 exit 0
 """
 
@@ -369,6 +375,21 @@ def _agm_install(tmp_path_factory: pytest.TempPathFactory) -> None:
     _AGM_INSTALL["bin_dir"] = bin_dir
     _AGM_INSTALL["bin"] = agm_bin
     _AGM_INSTALL["guard_dir"] = guard_dir
+
+    # Warm the AgL parser cache once, up front.  The AgL grammar is compiled into
+    # LALR tables on the first parse and cached to a shared temp file keyed by
+    # grammar hash and Python version; building the tables costs ~1s.  Doing it
+    # here (session setup) means the first exec/repl command in every test hits a
+    # warm cache instead of a cold rebuild — otherwise a parallel run has the
+    # whole first wave of AgL tests rebuild the tables at once.  Best-effort: the
+    # cache is a pure optimization, so any failure is ignored.
+    warm_home = tmp_path_factory.mktemp("agm-cache-warm")
+    subprocess.run(
+        [str(agm_bin), "exec", "-c", "print 1"],
+        capture_output=True,
+        env=_agm_env({**os.environ, "HOME": str(warm_home)}),
+        check=False,
+    )
 
 
 def _agm_argv(args: list[str]) -> list[str]:

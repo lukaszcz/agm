@@ -244,6 +244,10 @@ class ArgumentBindings:
     ``function_calls``
         Direct user-function ``Call.node_id`` → declaration-order argument tuple
         (one entry per parameter; ``None`` means "use the parameter's default").
+    ``function_param_types``
+        Direct user-function ``Call.node_id`` → concrete declaration-order parameter
+        types after generic type-argument substitution.  The lowerer uses these
+        types to insert call-site coercions without re-inferring generic arguments.
     ``constructor_calls``
         Record/enum/exception constructor ``Call.node_id`` → ordered
         ``{field_name: expr}`` mapping (every field bound; constructors have no
@@ -254,6 +258,7 @@ class ArgumentBindings:
     """
 
     function_calls: dict[int, tuple[Expr | None, ...]]
+    function_param_types: dict[int, tuple[Type, ...]]
     constructor_calls: dict[int, dict[str, Expr]]
     constructor_patterns: dict[int, tuple[tuple[str, Pattern], ...]]
 

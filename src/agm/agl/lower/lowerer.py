@@ -1879,20 +1879,16 @@ class _Lowerer:
             f"compiler bug: no FunctionId for function decl_node_id={callee_ref.decl_node_id!r}"
         )
 
-        sig = self._checked.type_env.get_function_signature_by_node_id(callee_ref.decl_node_id)
-        assert sig is not None, (
-            f"compiler bug: no signature for function {callee_ref.name!r}"
-        )
-
         # The checker already bound the call; reuse its result (never re-bind).
         binding = self._checked.argument_bindings.function_calls[result_node_id]
 
+        param_types = self._checked.argument_bindings.function_param_types[result_node_id]
         ir_args: list[IrExpr | UseDefault] = []
-        for i, (spec, bound_expr) in enumerate(zip(sig.params, binding)):
+        for i, (param_type, bound_expr) in enumerate(zip(param_types, binding)):
             if bound_expr is None:
                 ir_args.append(UseDefault(param_index=i))
             else:
-                ir_args.append(self.lower_coerced(bound_expr, spec.type))
+                ir_args.append(self.lower_coerced(bound_expr, param_type))
 
         return IrDirectCall(
             location=self._loc(span),

@@ -293,6 +293,7 @@ class _Checker:
         # Argument bindings computed during the check, reused by the lowerer so it
         # never re-binds.  Keyed by Call/Pattern node_id (see ``ArgumentBindings``).
         self._function_call_bindings: dict[int, tuple[Expr | None, ...]] = {}
+        self._function_call_param_types: dict[int, tuple[Type, ...]] = {}
         self._constructor_call_bindings: dict[int, dict[str, Expr]] = {}
         self._constructor_pattern_bindings: dict[int, tuple[tuple[str, Pattern], ...]] = {}
         self._builtins = BuiltinCallChecker(self)
@@ -1183,9 +1184,12 @@ class _Checker:
         type-variable inference before calling this helper with the substituted params.
         """
         binding = self._bind_call_args(params, node, func_name)
-        # Record the binding for the lowerer (binding is type-independent, so the
-        # generic path's pre- and post-substitution calls produce the same tuple).
+        # Record the binding and concrete parameter types for the lowerer.  The
+        # binding itself is type-independent, so the generic path's pre- and
+        # post-substitution calls produce the same tuple; the substituted parameter
+        # types are not, and drive call-site coercions during lowering.
         self._function_call_bindings[node.node_id] = binding
+        self._function_call_param_types[node.node_id] = tuple(p.type for p in params)
 
         # Type-check each bound expression.  A ``None`` binding means "use default";
         # the default's type was checked at definition time, so skip it here.
@@ -2346,6 +2350,7 @@ class _Checker:
             cast_specs=self._cast_specs,
             argument_bindings=ArgumentBindings(
                 function_calls=self._function_call_bindings,
+                function_param_types=self._function_call_param_types,
                 constructor_calls=self._constructor_call_bindings,
                 constructor_patterns=self._constructor_pattern_bindings,
             ),

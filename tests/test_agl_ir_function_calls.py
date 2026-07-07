@@ -82,6 +82,13 @@ def test_arg_coercion() -> None:
     assert ir["result"] == DecimalValue(decimal.Decimal("5"))
 
 
+def test_generic_explicit_arg_coercion_uses_instantiated_param_type() -> None:
+    """Generic direct calls coerce arguments against instantiated parameter types."""
+    source = "def id[T](x: T) -> T = x\nlet result: decimal = id::[decimal](1)\n()"
+    ir = evaluate_ir(source)
+    assert ir["result"] == DecimalValue(decimal.Decimal("1"))
+
+
 def test_self_recursion_factorial() -> None:
     """Self-recursive factorial function."""
     source = (

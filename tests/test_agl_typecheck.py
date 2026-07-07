@@ -631,6 +631,16 @@ class TestTypeEnvironment:
         )
         env.register_constructor_field_kinds("Foo", None, (("x", ParamKind.NAMED_ONLY),))
         env.register_constructor_field_kinds("Foo", "Some", (("x", ParamKind.NAMED_ONLY),))
+        bar_sig = ConstructorSignature(
+            owner_name="Bar",
+            variant=None,
+            field_names=(),
+            field_templates=(),
+            result_template=RecordType(name="Bar"),
+            type_params=(),
+        )
+        env.register_constructor_signature(bar_sig)
+        env.register_constructor_field_kinds("Bar", None, ())
 
         env.unregister_name("Foo")
 
@@ -641,6 +651,8 @@ class TestTypeEnvironment:
         assert env.get_constructor_signature("Foo", "Some") is None
         assert env.get_constructor_field_kinds("Foo", None) is None
         assert env.get_constructor_field_kinds("Foo", "Some") is None
+        assert env.get_constructor_signature("Bar", None) == bar_sig
+        assert env.get_constructor_field_kinds("Bar", None) == ()
 
     def test_unregister_builtin_is_noop(self) -> None:
         env = TypeEnvironment()

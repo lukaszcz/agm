@@ -46,14 +46,14 @@ default prompt is `revise.md`. When `COMMAND` is provided before `REVIEW_FILE`, 
 `agm refine` runs review/revise cycles until the revise response is `COMPLETE`, or until the maximum
 number of revision attempts is reached. A `CONTINUE` response from revise starts a fresh review;
 any other non-`COMPLETE` response retries revise with the same review file. The default maximum
-is 20. Review output is saved to the default timestamped review path by default.
+is 12. Review output is saved to the default timestamped review path by default.
 
 When `COMMAND` is provided, config from `[refine.COMMAND]` is merged over `[refine]` and the same
 command name is forwarded to review/revise config lookup.
 
 `agm refine` options:
 
-- `--max-steps N|unlimited`: maximum revision attempts (default: 20). Use `unlimited` for no limit.
+- `--max-steps N|unlimited`: maximum revision attempts (default: 12). Use `unlimited` for no limit.
 - `--no-max-steps`: disable the step limit (run until COMPLETE). Mutually exclusive with `--max-steps`.
 - `--runner COMMAND`: runner command for both review and revise
 - `--reviewer COMMAND`: review runner command. Overrides `--runner` for the review step.

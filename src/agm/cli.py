@@ -1617,7 +1617,7 @@ def refine(
     max_steps: str | None = typer.Option(
         None,
         "--max-steps",
-        help="Maximum revision attempts. Use 'unlimited' for no limit.",
+        help="Maximum revision attempts (default: 12). Use 'unlimited' for no limit.",
     ),
     no_max_steps: bool = typer.Option(
         False,

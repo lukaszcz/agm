@@ -324,7 +324,7 @@ _HELP_TEXTS: dict[str, str] = {
         Run review/revise cycles until revise returns COMPLETE, or until the
         maximum number of revision attempts is reached. A CONTINUE response
         starts a fresh review; any other response retries revise with the same
-        review file. The default maximum is 20.
+        review file. The default maximum is 12.
         Review output is saved to the default timestamped review path by
         default. Use --no-save-review to keep review handoff files temporary
         only, or --review-file FILE to choose a custom path.

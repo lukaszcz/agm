@@ -422,7 +422,10 @@ def _decode_contains_ref(decode: DecodeSchema, *, seen: frozenset[int] = frozens
     if isinstance(decode, DictDecode):
         return _decode_contains_ref(decode.value, seen=seen)
     if isinstance(decode, RecordDecode):
-        return any(_decode_contains_ref(field_decode, seen=seen) for _name, field_decode in decode.fields)
+        return any(
+            _decode_contains_ref(field_decode, seen=seen)
+            for _name, field_decode in decode.fields
+        )
     if isinstance(decode, EnumDecode):
         return any(
             _decode_contains_ref(field_decode, seen=seen)

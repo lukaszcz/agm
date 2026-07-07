@@ -804,7 +804,9 @@ class ReplSession:
             )
 
         entry_type_names = frozenset(
-            item.name for item in program.body.items if isinstance(item, (RecordDef, EnumDef, TypeAlias))
+            item.name
+            for item in program.body.items
+            if isinstance(item, (RecordDef, EnumDef, TypeAlias))
         )
         promoted_type_names = frozenset(
             item.name

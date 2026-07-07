@@ -340,13 +340,23 @@ class IrInterpreter:
             if isinstance(host_contract.json_schema, dict)
             else None
         )
-        return host_contract.codec.parse(
-            raw,
-            strict_json=effective_strict,
-            schema=schema,
-            decode=host_contract.decode,
-            defs=dict(host_contract.defs),
-        )
+        try:
+            return host_contract.codec.parse(
+                raw,
+                strict_json=effective_strict,
+                schema=schema,
+                decode=host_contract.decode,
+                defs=dict(host_contract.defs),
+            )
+        except TypeError as exc:
+            if "unexpected keyword argument 'defs'" not in str(exc):
+                raise
+            return host_contract.codec.parse(
+                raw,
+                strict_json=effective_strict,
+                schema=schema,
+                decode=host_contract.decode,
+            )
 
     @property
     def _frame(self) -> Frame:

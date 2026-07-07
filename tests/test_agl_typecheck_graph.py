@@ -1370,15 +1370,13 @@ def test_find_type_decl_span_missing_name_returns_none(tmp_path: Path) -> None:
     assert _find_type_decl_span(rg, (ENTRY_ID, "NoSuchType")) is None
 
 
-def test_cross_module_generic_argument_cycle_is_accepted(tmp_path: Path) -> None:
-    """A cross-module cycle through a generic type argument is accepted.
+def test_cross_module_generic_argument_cycle_is_uninhabitable(tmp_path: Path) -> None:
+    """A cross-module cycle hidden behind generic wrapper arguments is rejected.
 
     Neither ``lib1::A`` nor ``lib2::B`` is itself generic, but each applies
-    the generic ``lib1::Box`` to the other, forming a cycle through the
-    argument position across module boundaries; inhabitation is
-    declaration-level and ignores type arguments, so ``Box``'s own
-    declaration is unconditionally inhabited and both ``A`` and ``B``
-    trivially inherit that.
+    the generic ``lib1::Box`` to the other. ``Box[T]`` stores a ``T``, so the
+    wrapper does not guard recursion: an ``A`` needs a ``B`` and a ``B`` needs
+    an ``A``.
     """
     modules = {
         "entry": ("import lib1\nimport lib2\n()"),
@@ -1389,9 +1387,8 @@ def test_cross_module_generic_argument_cycle_is_accepted(tmp_path: Path) -> None
         ),
         "lib2": ("import lib1\nrecord B\n  a: lib1::Box[lib1::A]\n"),
     }
-    cg = _check_graph(tmp_path, modules)
-    assert ModuleId.from_dotted("lib1") in cg.modules
-    assert ModuleId.from_dotted("lib2") in cg.modules
+    with pytest.raises(AglTypeError, match="uninhabitable"):
+        _check_graph(tmp_path, modules)
 
 
 def test_record_exception_field_cycle_across_check_is_uninhabitable(tmp_path: Path) -> None:

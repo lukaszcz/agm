@@ -3381,6 +3381,77 @@ class TestRegisterCodec:
         assert result.ok
         assert seen_defs == dict(defs)
 
+    def test_custom_codec_parse_type_error_propagates(self) -> None:
+        """Only old parse signatures are retried; codec TypeError bugs still propagate."""
+        from agm.agl.eval.ir_interpreter import IrInterpreter
+        from agm.agl.ir.ids import ContractId
+        from agm.agl.ir.program import ExecutableModule, ExecutableProgram
+
+        class BrokenCodec:
+            @property
+            def name(self) -> str:
+                return "broken"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"record"})
+
+            def supports_type(self, t: Type) -> bool:
+                return True
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=False,
+                    format_instructions="",
+                    json_schema={},
+                )
+
+            def parse(
+                self,
+                raw: str,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
+                decode: DecodeSchema | None = None,
+                defs: Mapping[str, DecodeSchema] | None = None,
+            ) -> ParseResult:
+                raise TypeError("codec parse bug")
+
+        contract_id = ContractId(0)
+        request = ContractRequest(
+            codec_name="broken",
+            strict_json=False,
+            json_schema=None,
+            decode=None,
+            target_type_label="Node",
+            structured_exec=False,
+            format_instructions="",
+            target_type_kind="record",
+        )
+        host_contract = OutputContract(
+            target_type_label="Node",
+            codec=BrokenCodec(),
+            strict_json=False,
+            format_instructions="",
+            json_schema={},
+        )
+        program = ExecutableProgram(
+            entry_module=ENTRY_ID,
+            modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=())},
+            symbols={},
+            nominals={},
+            sources={},
+            contracts={contract_id: request},
+        )
+        interpreter = IrInterpreter(program, host_contracts={contract_id: host_contract})
+
+        with pytest.raises(TypeError, match="codec parse bug"):
+            interpreter._parse_host_output("{}", contract_id, effective_strict=False)
+
 
 class TestRuntimeBuildsCodecKinds:
     """A custom codec is selectable via ``format:`` only after registration."""

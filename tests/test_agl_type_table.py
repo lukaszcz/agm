@@ -19,7 +19,11 @@ from agm.agl.parser import parse_program
 from agm.agl.repl import ReplSession
 from agm.agl.scope import resolve
 from agm.agl.scope.graph import resolve_graph
-from agm.agl.semantics.analyses import compute_finite_closure, nominal_references
+from agm.agl.semantics.analyses import (
+    compute_finite_closure,
+    compute_uninhabited,
+    nominal_references,
+)
 from agm.agl.semantics.type_table import (
     BUILTIN_PRELUDE_TYPE_DEFS,
     TypeDef,
@@ -1297,6 +1301,22 @@ def _pair_def(name: str = "Pair") -> TypeDef:
         type_params=("X", "Y"),
         fields=(("x", TypeVarType("X")), ("y", TypeVarType("Y"))),
     )
+
+
+class TestInhabitationAnalysis:
+    def test_dangling_nominal_reference_stays_uninhabited(self) -> None:
+        """A malformed table with a missing target does not mark the source inhabited."""
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="R",
+                module_id=ENTRY_ID,
+                fields=(("missing", RecordType("Missing", module_id=ENTRY_ID)),),
+            )
+        )
+
+        assert compute_uninhabited(table) == frozenset({(ENTRY_ID, "R")})
 
 
 class TestFiniteClosure:

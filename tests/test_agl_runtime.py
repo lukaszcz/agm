@@ -1964,6 +1964,16 @@ class TestRuntimeErrorPaths:
         result = convert_param_value("meta", [1, 2, 3], JsonType(), type_table_for())
         assert result == JsonValue([1, 2, 3])
 
+    def test_convert_param_value_json_type_decodes_normalized_value(self) -> None:
+        from agm.agl.runtime.params import convert_param_value
+        from agm.agl.semantics.types import JsonType
+        from agm.agl.semantics.values import JsonValue
+
+        result = convert_param_value("meta", "1.0", JsonType(), type_table_for())
+
+        assert result == JsonValue(1)
+        assert isinstance(result.raw, int)
+
     def test_convert_param_value_list_type_parsed_via_json_codec(self) -> None:
         # list/dict/record/enum params are now accepted via the JsonCodec.
         from agm.agl.runtime.params import convert_param_value

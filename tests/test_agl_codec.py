@@ -31,7 +31,14 @@ from jsonschema import Draft202012Validator
 
 from agm.agl import PipelineDriver
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.ir.contracts import ContractRequest, DecodeSchema, RefDecode, ScalarDecode, ScalarKind
+from agm.agl.ir.contracts import (
+    ContractRequest,
+    DecodeSchema,
+    ListDecode,
+    RefDecode,
+    ScalarDecode,
+    ScalarKind,
+)
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.runtime.agents import AgentFn, AgentRegistry
 from agm.agl.runtime.codec import JsonCodec, ParseResult, TextCodec
@@ -3242,6 +3249,48 @@ class TestRegisterCodec:
         assert result.bindings["y"] == IntValue(11)
         assert seen_contract_targets == ["int", "int"]
         assert seen_parse_targets == ["int"]
+
+    def test_custom_structured_codec_uses_compiled_schema_not_lossy_placeholder(self) -> None:
+        """Structured custom codecs receive the lowered decode plan for the real target."""
+
+        seen_decode: list[DecodeSchema | None] = []
+
+        class ListIntCodec:
+            @property
+            def name(self) -> str:
+                return "list-int-codec"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"list"})
+
+            def supports_type(self, t: Type) -> bool:
+                return isinstance(t, ListType)
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                raise AssertionError(f"lossy runtime placeholder reached codec: {type_ref!r}")
+
+            def parse(
+                self,
+                raw: str,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
+                decode: DecodeSchema | None = None,
+                defs: Mapping[str, DecodeSchema] | None = None,
+            ) -> ParseResult:
+                seen_decode.append(decode)
+                return ParseResult.success(ListValue((IntValue(int(raw)),)))
+
+        rt = PipelineDriver(default_agent=lambda req: "3")
+        rt.register_codec(ListIntCodec())
+        result = rt.run('let xs: list[int] = ask("Q", format = "list-int-codec")\nxs')
+
+        assert result.ok is True
+        assert result.bindings["xs"] == ListValue((IntValue(3),))
+        assert seen_decode == [ListDecode(ScalarDecode(ScalarKind.INT))]
 
     def test_custom_codec_ir_materialization_reconstructs_target_kinds(self) -> None:
         """IR contract materialization gives custom codecs kind-correct placeholders."""

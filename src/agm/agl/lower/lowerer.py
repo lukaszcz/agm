@@ -34,7 +34,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import assert_never, cast
 
-from agm.agl.ir.contracts import ContractRequest, ConversionFailureMode
+from agm.agl.ir.contracts import ContractRequest, ConversionFailureMode, DecodeSchema
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import (
     AutoTraceField,
@@ -224,7 +224,7 @@ from agm.agl.type_schema import (
     build_param_decoder,
     derive_schema_and_decode,
 )
-from agm.agl.typecheck.env import CheckedProgram
+from agm.agl.typecheck.env import CheckedProgram, OutputContractSpec
 from agm.agl.typecheck.graph import CheckedModule
 from agm.util.text import normalize_newlines
 
@@ -411,6 +411,24 @@ class _Lowerer:
         self._link.next_contract += 1
         self._link.contracts[cid] = request
         return cid
+
+    def _contract_payload_for_spec(
+        self, spec: OutputContractSpec
+    ) -> tuple[str | None, str, DecodeSchema | None, tuple[tuple[str, DecodeSchema], ...]]:
+        """Return JSON schema, instructions, decode root, and defs for a contract spec."""
+        structured_kinds = {"record", "enum", "list", "dict"}
+        should_compile_schema = spec.codec_name == "json" or (
+            spec.codec_name != "text" and spec.target_type.kind in structured_kinds
+        )
+        if not should_compile_schema:
+            return None, "", None, ()
+        schema_dict, decode_plan = derive_schema_and_decode(spec.target_type, self._type_table)
+        return (
+            json.dumps(schema_dict),
+            build_format_instructions(schema_dict),
+            decode_plan.root,
+            decode_plan.defs,
+        )
 
     def _prealloc_funcdef(self, funcdef: "FuncDef") -> None:
         """Pre-allocate SymbolId and FunctionId for a top-level FuncDef."""
@@ -2247,20 +2265,9 @@ class _Lowerer:
                 target_type_kind="unit",
             )
         else:
-            # Build format_instructions and json_schema from the spec.
-            if spec.codec_name == "json":
-                schema_dict, decode_plan = derive_schema_and_decode(
-                    spec.target_type, self._type_table
-                )
-                json_schema_str: str | None = json.dumps(schema_dict)
-                fmt_instr = build_format_instructions(schema_dict)
-                decode_schema = decode_plan.root
-                decode_defs = decode_plan.defs
-            else:
-                json_schema_str = None
-                fmt_instr = ""
-                decode_schema = None
-                decode_defs = ()
+            json_schema_str, fmt_instr, decode_schema, decode_defs = (
+                self._contract_payload_for_spec(spec)
+            )
             contract_req = ContractRequest(
                 codec_name=spec.codec_name,
                 strict_json=spec.strict_json,
@@ -2312,17 +2319,9 @@ class _Lowerer:
         spec = self._checked.contract_specs.get(call_node.node_id)
         assert spec is not None, "exec always has a contract spec after checking"
         structured_exec = spec.structured_exec
-        if spec.codec_name == "json":
-            schema_dict, decode_plan = derive_schema_and_decode(spec.target_type, self._type_table)
-            json_schema_str: str | None = json.dumps(schema_dict)
-            fmt_instr = build_format_instructions(schema_dict)
-            decode_schema = decode_plan.root
-            decode_defs = decode_plan.defs
-        else:
-            json_schema_str = None
-            fmt_instr = ""
-            decode_schema = None
-            decode_defs = ()
+        json_schema_str, fmt_instr, decode_schema, decode_defs = (
+            self._contract_payload_for_spec(spec)
+        )
         contract_req = ContractRequest(
             codec_name=spec.codec_name,
             strict_json=spec.strict_json,

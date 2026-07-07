@@ -915,21 +915,25 @@ def _validate_contract_request(
 ) -> None:
     """Validate a ContractRequest entry (deep tier)."""
     has_decode_fields = req.json_schema is not None or req.decode is not None or bool(req.defs)
-    if req.is_unit or req.codec_name != "json":
+    if req.is_unit or req.codec_name == "text":
         if has_decode_fields:
             raise InvalidIrError(
                 f"ContractRequest {cid!r} must not carry json_schema/decode/defs"
             )
         return
-    if req.json_schema is None:
-        raise InvalidIrError(
-            f"ContractRequest {cid!r} has codec_name='json' but json_schema is None"
-        )
-    if req.decode is None:
-        raise InvalidIrError(
-            f"ContractRequest {cid!r} has codec_name='json' but decode is None"
-        )
-    _check_decode_nominals(req.decode, req.defs, ctx)
+    if req.codec_name == "json":
+        if req.json_schema is None:
+            raise InvalidIrError(
+                f"ContractRequest {cid!r} has codec_name='json' but json_schema is None"
+            )
+        if req.decode is None:
+            raise InvalidIrError(
+                f"ContractRequest {cid!r} has codec_name='json' but decode is None"
+            )
+    elif req.defs and req.decode is None:
+        raise InvalidIrError(f"ContractRequest {cid!r} has defs but decode is None")
+    if req.decode is not None:
+        _check_decode_nominals(req.decode, req.defs, ctx)
 
 
 # ---------------------------------------------------------------------------

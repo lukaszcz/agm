@@ -1452,6 +1452,27 @@ class TestM6aIrParamValidation:
         with pytest.raises(InvalidIrError, match="start_offset"):
             validate_ir(prog, deep=False)
 
+    def test_ir_param_external_decoder_refs_are_validated_deep(self) -> None:
+        """IrParam external decoders must not carry dangling recursive refs."""
+        from agm.agl.ir.contracts import ParamDecoder, RefDecode
+        from agm.agl.ir.program import IrParam
+
+        p = IrParam(
+            symbol=SYM0,
+            public_name="tree",
+            required=True,
+            default=None,
+            location=LOC,
+            external_decoder=ParamDecoder(
+                target_type_label="Tree",
+                json_schema="{}",
+                decode=RefDecode("Tree"),
+            ),
+        )
+        prog = self._make_program_with_params((p,))
+        with pytest.raises(InvalidIrError, match="RefDecode.*Tree"):
+            validate_ir(prog, deep=True)
+
 
 # ===========================================================================
 # IrExec validation

@@ -879,6 +879,12 @@ def _validate_ir_param(param: IrParam, ctx: _Context) -> None:
                 f"IrParam public_name={param.public_name!r} references"
                 f" symbol_id={param.symbol.value!r} which is not in program.symbols"
             )
+        if param.external_decoder is not None:
+            _check_decode_nominals(
+                param.external_decoder.decode,
+                param.external_decoder.defs,
+                ctx,
+            )
     if param.default is not None:
         _validate_expr(param.default, ctx)
 

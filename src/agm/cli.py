@@ -647,7 +647,7 @@ def _run_workspace_close(
     force: bool,
     force_delete: bool,
     keep_branch: bool,
-    keep_worktree: bool,
+    keep_workspace: bool,
 ) -> None:
     workspace_close_command.run(
         CloseArgs(
@@ -658,8 +658,8 @@ def _run_workspace_close(
             ),
             force=force,
             force_delete=force_delete,
-            keep_branch=keep_branch or keep_worktree,
-            keep_worktree=keep_worktree,
+            keep_branch=keep_branch or keep_workspace,
+            keep_workspace=keep_workspace,
         )
     )
 
@@ -728,10 +728,10 @@ def close(
         "--keep-branch",
         help="Remove the branch workspace's Git worktree but keep the local branch.",
     ),
-    keep_worktree: bool = typer.Option(
+    keep_workspace: bool = typer.Option(
         False,
-        "--keep-worktree",
-        help="Keep the Git worktree and local branch; only close the workspace session.",
+        "--keep-workspace",
+        help="Keep the branch workspace and local branch; only close the workspace session.",
     ),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
@@ -744,7 +744,7 @@ def close(
         force=force,
         force_delete=force_delete,
         keep_branch=keep_branch,
-        keep_worktree=keep_worktree,
+        keep_workspace=keep_workspace,
     )
 
 
@@ -898,10 +898,10 @@ def workspace_close(
         "--keep-branch",
         help="Remove the branch workspace's Git worktree but keep the local branch.",
     ),
-    keep_worktree: bool = typer.Option(
+    keep_workspace: bool = typer.Option(
         False,
-        "--keep-worktree",
-        help="Keep the Git worktree and local branch; only close the workspace session.",
+        "--keep-workspace",
+        help="Keep the branch workspace and local branch; only close the workspace session.",
     ),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
@@ -914,7 +914,7 @@ def workspace_close(
         force=force,
         force_delete=force_delete,
         keep_branch=keep_branch,
-        keep_worktree=keep_worktree,
+        keep_workspace=keep_workspace,
     )
 
 

@@ -325,7 +325,7 @@ class TestCloseSession:
         assert not worktree_dir.exists()
         assert _branch_exists(repo_dir, "feature", env)
 
-    def test_keep_worktree_keeps_worktree_branch_and_workspace_config(
+    def test_keep_workspace_keeps_worktree_branch_and_workspace_config(
         self,
         tmp_path: Path,
         env: dict[str, str],
@@ -338,7 +338,7 @@ class TestCloseSession:
         workspace_config = project_dir / "config" / "feature"
         workspace_config.mkdir()
 
-        close_workspace(branch="feature", keep_worktree=True, cwd=project_dir)
+        close_workspace(branch="feature", keep_workspace=True, cwd=project_dir)
 
         assert worktree_dir.exists()
         assert workspace_config.exists()
@@ -403,7 +403,7 @@ class TestCloseRun:
                     force=False,
                     force_delete=False,
                     keep_branch=False,
-                    keep_worktree=False,
+                    keep_workspace=False,
                 )
             )
 
@@ -420,7 +420,7 @@ class TestCloseRun:
                 force=False,
                 force_delete=True,
                 keep_branch=False,
-                keep_worktree=False,
+                keep_workspace=False,
             )
         )
 
@@ -435,11 +435,11 @@ class TestCloseRun:
                 force=True,
                 force_delete=False,
                 keep_branch=False,
-                keep_worktree=False,
+                keep_workspace=False,
             )
         )
 
-    def test_run_keep_worktree_skips_branch_delete_check(
+    def test_run_keep_workspace_skips_branch_delete_check(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         self._setup_force_sensitive_close(tmp_path, monkeypatch)
@@ -450,6 +450,6 @@ class TestCloseRun:
                 force=False,
                 force_delete=False,
                 keep_branch=False,
-                keep_worktree=True,
+                keep_workspace=True,
             )
         )

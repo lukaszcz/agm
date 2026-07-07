@@ -239,14 +239,14 @@ class TestWorkspace:
         assert calls[0].branch == "feat/x"
         assert calls[0].force_delete is True
 
-    def test_wsp_close_keep_worktree(
+    def test_wsp_close_keep_workspace(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         calls = make_recorder(monkeypatch, cli.workspace_close_command)
-        result = invoke(runner, ["wsp", "close", "--keep-worktree", "feat/x"])
+        result = invoke(runner, ["wsp", "close", "--keep-workspace", "feat/x"])
         assert result.exit_code == 0
         assert len(calls) == 1
-        assert calls[0].keep_worktree is True
+        assert calls[0].keep_workspace is True
 
 
 class TestWorktreeRemove:
@@ -967,17 +967,17 @@ class TestClose:
         assert result.exit_code == 0
         assert len(calls) == 1
         assert calls[0].keep_branch is True
-        assert calls[0].keep_worktree is False
+        assert calls[0].keep_workspace is False
 
-    def test_close_keep_worktree_implies_keep_branch_in_args(
+    def test_close_keep_workspace_implies_keep_branch_in_args(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         calls = make_recorder(monkeypatch, cli.workspace_close_command)
-        result = invoke(runner, ["close", "--keep-worktree", "feat/x"])
+        result = invoke(runner, ["close", "--keep-workspace", "feat/x"])
         assert result.exit_code == 0
         assert len(calls) == 1
         assert calls[0].keep_branch is True
-        assert calls[0].keep_worktree is True
+        assert calls[0].keep_workspace is True
 
 
 class TestRun:

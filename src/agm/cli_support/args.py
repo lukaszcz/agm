@@ -72,7 +72,7 @@ class CloseArgs:
     force: bool
     force_delete: bool
     keep_branch: bool
-    keep_worktree: bool
+    keep_workspace: bool
 
 
 @dataclass(slots=True)

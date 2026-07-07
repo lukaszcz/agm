@@ -45,7 +45,7 @@ def close_workspace(
     force: bool = False,
     force_delete: bool = False,
     keep_branch: bool = False,
-    keep_worktree: bool = False,
+    keep_workspace: bool = False,
     cwd: Path | None = None,
 ) -> None:
     current = Path.cwd() if cwd is None else cwd.resolve()
@@ -64,9 +64,9 @@ def close_workspace(
 
     # --force implies force_delete as well (git branch -D semantics).
     effective_force_delete = force or force_delete
-    effective_keep_branch = keep_branch or keep_worktree
+    effective_keep_branch = keep_branch or keep_workspace
 
-    if not keep_worktree:
+    if not keep_workspace:
         # Pre-check: verify the branch can be deleted before removing the Git worktree.
         # Uses default environment; project-specific env is not needed for git checks.
         if not effective_keep_branch and not git_helpers.branch_can_delete(
@@ -89,7 +89,7 @@ def close_workspace(
             delete_branch=not effective_keep_branch,
         )
     env = load_workspace_env(proj_dir, None, workspace_dir=repo_dir)
-    if not keep_worktree:
+    if not keep_workspace:
         _remove_workspace_config(proj_dir=proj_dir, branch=branch, env=env)
     session_name = branch_session_name(proj_dir, branch)
     close_tmux_session(session_name=session_name, cwd=repo_dir, env=env)
@@ -102,5 +102,5 @@ def run(args: CloseArgs) -> None:
         force=args.force,
         force_delete=args.force_delete,
         keep_branch=args.keep_branch,
-        keep_worktree=args.keep_worktree,
+        keep_workspace=args.keep_workspace,
     )

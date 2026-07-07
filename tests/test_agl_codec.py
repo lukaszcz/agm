@@ -3273,6 +3273,56 @@ class TestRegisterCodec:
         assert seen_contract_targets == ["int", "int"]
         assert seen_parse_targets == ["int"]
 
+    def test_custom_codec_make_contract_keyword_only_type_table(self) -> None:
+        """Custom make_contract hooks may request type_table as a keyword-only arg."""
+
+        seen_tables: list[TypeTable | None] = []
+        table = type_table_for(_ISSUE_TYPEDEF)
+
+        class KeywordOnlyCodec:
+            @property
+            def name(self) -> str:
+                return "kw-only-contract"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"record"})
+
+            def supports_type(self, t: Type) -> bool:
+                return isinstance(t, RecordType)
+
+            def make_contract(
+                self, type_ref: Type, *, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                seen_tables.append(type_table)
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=None,
+                    format_instructions="KW-ONLY",
+                    json_schema=None,
+                )
+
+            def parse(
+                self,
+                raw: str,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
+                decode: DecodeSchema | None = None,
+                defs: Mapping[str, DecodeSchema] | None = None,
+            ) -> ParseResult:
+                return ParseResult.failure(raw)
+
+        contract = materialize_contract(
+            OutputContractSpec(_ISSUE_TYPE, "kw-only-contract", strict_json=None),
+            {"kw-only-contract": KeywordOnlyCodec()},
+            table,
+        )
+
+        assert contract.format_instructions == "KW-ONLY"
+        assert seen_tables == [table]
+
     def test_custom_codec_make_contract_signature_probe_fallback(self) -> None:
         """Compatibility still works if a callable make_contract has no inspectable signature."""
 

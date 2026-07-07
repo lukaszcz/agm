@@ -85,8 +85,8 @@ record Foo
 enum Color | Red | Blue
 let r_text = Foo(a = 1) as text
 let r_json = Foo(a = 1) as json
-let c_text = Color.Red() as text
-let c_json = Color.Red() as json
+let c_text = Color::Red() as text
+let c_json = Color::Red() as json
 ()
 """
     evaluate_ir(source)

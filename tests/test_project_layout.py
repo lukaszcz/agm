@@ -598,6 +598,13 @@ def test_branch_session_name_for_plain_project_name(tmp_path: Path) -> None:
     assert branch_session_name(project, "repo") == "alpha"
 
 
+def test_branch_session_name_sanitizes_dots_for_tmux(tmp_path: Path) -> None:
+    project = tmp_path / "coq.hammer"
+    (project / "repo").mkdir(parents=True)
+
+    assert branch_session_name(project, "repo") == "coq_hammer"
+
+
 def test_branch_session_name_for_worktree_branch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -611,6 +618,7 @@ def test_branch_session_name_for_worktree_branch(
     monkeypatch.setattr(layout_module.git_helpers, "current_branch", fake_current_branch)
 
     assert branch_session_name(project, "feat/my-branch") == "proj/feat/my-branch"
+    assert branch_session_name(project, "rocq-9.2") == "proj/rocq-9_2"
 
 
 def test_branch_session_name_for_main_branch_same_as_repo_branch(

@@ -31,12 +31,12 @@ if
       print(point.y)
       print(boxed.value)
   | mode == "enum" =>
-      let make_some: (int) -> Option[int] = Option.some(?)
+      let make_some: (int) -> Option[int] = Option::some(?)
       let value = make_some(base)
       case value of
-        | Option.none => print("none")
-        | Option.some(n) => print(n)
-      let make_failed = Status.failed(reason = ?)
+        | Option::none => print("none")
+        | Option::some(n) => print(n)
+      let make_failed = Status::failed(reason = ?)
       let status = make_failed("bad")
       case status of
         | ok(n) => print(n)

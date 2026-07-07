@@ -90,6 +90,7 @@ KW_OF = "of"
 KW_TRY = "try"
 KW_CATCH = "catch"
 KW_RAISE = "raise"
+KW_RETURN = "return"
 KW_AS = "as"
 KW_AS_QUESTION = "as?"
 # `pass` is a plain identifier (role taken by `()`).
@@ -140,6 +141,7 @@ KEYWORDS: frozenset[str] = frozenset(
         KW_TRY,
         KW_CATCH,
         KW_RAISE,
+        KW_RETURN,
         KW_AS,
         KW_AS_QUESTION,
         KW_AND,
@@ -195,6 +197,7 @@ LPAR = "LPAR"  # (
 RPAR = "RPAR"  # )
 LSQB = "LSQB"  # [
 INDEX_LSQB = "INDEX_LSQB"  # [ immediately adjacent to an expression-ending token
+TYPEARG_LSQB = "TYPEARG_LSQB"  # [ opening Type[T]::Ctor type arguments
 RSQB = "RSQB"  # ]
 LBRACE = "LBRACE"  # {
 CALL_LBRACE = "CALL_LBRACE"  # { immediately adjacent to an expression-ending token

@@ -97,6 +97,7 @@ from agm.agl.syntax import (
     ProgramDecl,
     Raise,
     RecordDef,
+    Return,
     # spans
     SourceSpan,
     StringLit,
@@ -2066,6 +2067,24 @@ class TestVisitorWalk:
         walk(node, visited.append)
         assert visited == [node]
 
+    def test_walk_return_visits_optional_value(self) -> None:
+        from agm.agl.syntax.visitor import walk
+
+        s = span()
+        value = IntLit(value=1, span=s, node_id=2)
+        node = Return(value=value, span=s, node_id=1)
+        visited: list[object] = []
+        walk(node, visited.append)
+        assert visited == [node, value]
+
+    def test_walk_bare_return_is_leaf(self) -> None:
+        from agm.agl.syntax.visitor import walk
+
+        node = Return(value=None, span=span(), node_id=1)
+        visited: list[object] = []
+        walk(node, visited.append)
+        assert visited == [node]
+
     def test_walk_unit_lit_is_leaf(self) -> None:
         from agm.agl.syntax.visitor import walk
 
@@ -2250,6 +2269,7 @@ class TestUnionAliases:
         import typing
         args = typing.get_args(Expr)
         assert Raise in args, "Raise must be in Expr (bottom type)"
+        assert Return in args, "Return must be in Expr (bottom type)"
 
     def test_block_is_expr(self) -> None:
         import typing

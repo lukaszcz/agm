@@ -79,6 +79,7 @@ from agm.agl.syntax.nodes import (
     ProgramDecl,
     Raise,
     RecordDef,
+    Return,
     StringLit,
     Template,
     TextSegment,
@@ -232,6 +233,7 @@ class Visitor:
     def visit_CatchClause(self, node: CatchClause) -> None: ...
     def visit_Try(self, node: Try) -> None: ...
     def visit_Raise(self, node: Raise) -> None: ...
+    def visit_Return(self, node: Return) -> None: ...
 
     # Pattern nodes
     def visit_WildcardPattern(self, node: WildcardPattern) -> None: ...
@@ -331,6 +333,7 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         CatchClause,
         Try,
         Raise,
+        Return,
         # pattern nodes
         WildcardPattern,
         LiteralPattern,
@@ -617,6 +620,10 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
 
     elif isinstance(node, Raise):
         walk(node.exc, callback)
+
+    elif isinstance(node, Return):
+        if node.value is not None:
+            walk(node.value, callback)
 
     elif isinstance(node, Break | Continue):
         pass  # leaf

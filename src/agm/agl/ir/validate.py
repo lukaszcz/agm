@@ -100,6 +100,7 @@ from agm.agl.ir.nodes import (
     IrRaise,
     IrRenderTemplate,
     IrRenderValue,
+    IrReturn,
     IrSequence,
     IrTemplateText,
     IrTemplateValue,
@@ -571,6 +572,10 @@ def _validate_expr(node: IrExpr, ctx: _Context) -> None:
         case IrRaise(exc=exc):
             _validate_location(node.location, ctx)
             _validate_expr(exc, ctx)
+
+        case IrReturn(value=value):
+            _validate_location(node.location, ctx)
+            _validate_expr(value, ctx)
 
         case IrTry(body=body, handlers=handlers):
             _validate_location(node.location, ctx)

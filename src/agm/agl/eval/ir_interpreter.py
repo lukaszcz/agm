@@ -91,6 +91,7 @@ from agm.agl.ir.nodes import (
     IrRaise,
     IrRenderTemplate,
     IrRenderValue,
+    IrReturn,
     IrSequence,
     IrTemplateText,
     IrTemplateValue,
@@ -175,6 +176,14 @@ class _ContinueSignal(Exception):
     catches this and executes ``continue`` on its Python ``while True`` loop to
     start the next iteration.
     """
+
+
+class _ReturnSignal(Exception):
+    """Raised by ``IrReturn`` evaluation; caught at the function-call boundary."""
+
+    def __init__(self, value: Value) -> None:
+        super().__init__()
+        self.value = value
 
 
 # ---------------------------------------------------------------------------
@@ -469,7 +478,10 @@ class IrInterpreter:
         self._frames.append(call_frame)
         self._call_depth += 1
         try:
-            result = self._eval(desc.body)
+            try:
+                result = self._eval(desc.body)
+            except _ReturnSignal as signal:
+                result = signal.value
         finally:
             self._call_depth -= 1
             self._frames.pop()
@@ -1068,6 +1080,9 @@ class IrInterpreter:
                         " expected ExceptionValue"
                     )
                 raise AglRaise(exc_val, span=node.location)
+
+            case IrReturn(value=value_expr):
+                raise _ReturnSignal(self._eval(value_expr))
 
             case IrTry(body=body_expr, handlers=handlers):
                 try:

@@ -1,7 +1,7 @@
 # Bare constructors as function values with explicit type arguments.
 # `some::[int]` is a function value equivalent to `fn (x: int) => some(x)`;
 # `none::[int]` constructs the nullary value directly, with no parentheses.
-# The qualified `Option.some::[int]` / `Option.none::[int]` forms behave the same.
+# The qualified `Option[int]::some` / `Option[int]::none` forms behave the same.
 enum Option[T]
   | none
   | some(value: T)
@@ -14,11 +14,11 @@ let v = mk(7)
 let z: Option[int] = none::[int]
 
 # The qualified forms work the same way.
-let qmk: (int) -> Option[int] = Option.some::[int]
+let qmk: (int) -> Option[int] = Option[int]::some
 let qv = qmk(9)
-let qz: Option[int] = Option.none::[int]
+let qz: Option[int] = Option[int]::none
 
-print(v is Option.some)
-print(z is Option.none)
-print(qv is Option.some)
-print(qz is Option.none)
+print(v is Option::some)
+print(z is Option::none)
+print(qv is Option::some)
+print(qz is Option::none)

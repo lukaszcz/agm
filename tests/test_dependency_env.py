@@ -34,60 +34,60 @@ from agm.vcs.git import WorktreeInfo
 
 class TestDepEnvVarName:
     def test_simple_lowercase(self) -> None:
-        assert dep_env_var_name("mylib") == "MYLIB"
+        assert dep_env_var_name("mylib") == "MYLIB_DIR"
 
     def test_simple_uppercase(self) -> None:
-        assert dep_env_var_name("MYLIB") == "MYLIB"
+        assert dep_env_var_name("MYLIB") == "MYLIB_DIR"
 
     def test_mixed_case(self) -> None:
-        assert dep_env_var_name("MyLib") == "MYLIB"
+        assert dep_env_var_name("MyLib") == "MYLIB_DIR"
 
     def test_hyphen_replaced_by_underscore(self) -> None:
-        assert dep_env_var_name("my-lib") == "MY_LIB"
+        assert dep_env_var_name("my-lib") == "MY_LIB_DIR"
 
     def test_dot_replaced_by_underscore(self) -> None:
-        assert dep_env_var_name("my.lib") == "MY_LIB"
+        assert dep_env_var_name("my.lib") == "MY_LIB_DIR"
 
     def test_space_replaced_by_underscore(self) -> None:
-        assert dep_env_var_name("my lib") == "MY_LIB"
+        assert dep_env_var_name("my lib") == "MY_LIB_DIR"
 
     def test_multiple_non_alnum_collapsed(self) -> None:
-        assert dep_env_var_name("my--lib") == "MY_LIB"
+        assert dep_env_var_name("my--lib") == "MY_LIB_DIR"
 
     def test_leading_digit_gets_underscore_prefix(self) -> None:
-        assert dep_env_var_name("1lib") == "_1LIB"
+        assert dep_env_var_name("1lib") == "_1LIB_DIR"
 
     def test_all_digits_gets_underscore_prefix(self) -> None:
-        assert dep_env_var_name("123") == "_123"
+        assert dep_env_var_name("123") == "_123_DIR"
 
     def test_empty_string_returns_dep(self) -> None:
-        assert dep_env_var_name("") == "DEP"
+        assert dep_env_var_name("") == "DEP_DIR"
 
     def test_only_special_chars_returns_dep(self) -> None:
-        assert dep_env_var_name("---") == "DEP"
+        assert dep_env_var_name("---") == "DEP_DIR"
 
     def test_only_special_chars_mixed_returns_dep(self) -> None:
-        assert dep_env_var_name("...") == "DEP"
+        assert dep_env_var_name("...") == "DEP_DIR"
 
     def test_underscores_preserved(self) -> None:
-        assert dep_env_var_name("my_lib") == "MY_LIB"
+        assert dep_env_var_name("my_lib") == "MY_LIB_DIR"
 
     def test_leading_underscore_stripped_then_uppercased(self) -> None:
         # leading/trailing _ are stripped by .strip("_") before checking digit
-        assert dep_env_var_name("_mylib") == "MYLIB"
+        assert dep_env_var_name("_mylib") == "MYLIB_DIR"
 
     def test_numbers_in_middle(self) -> None:
-        assert dep_env_var_name("lib2go") == "LIB2GO"
+        assert dep_env_var_name("lib2go") == "LIB2GO_DIR"
 
     def test_single_letter(self) -> None:
-        assert dep_env_var_name("a") == "A"
+        assert dep_env_var_name("a") == "A_DIR"
 
     def test_digit_only_after_stripping(self) -> None:
         # "-1-" → strip "_" → "1" → starts with digit → "_1"
-        assert dep_env_var_name("-1-") == "_1"
+        assert dep_env_var_name("-1-") == "_1_DIR"
 
     def test_complex_name(self) -> None:
-        assert dep_env_var_name("some-complex.dep_name") == "SOME_COMPLEX_DEP_NAME"
+        assert dep_env_var_name("some-complex.dep_name") == "SOME_COMPLEX_DEP_NAME_DIR"
 
 
 # ---------------------------------------------------------------------------
@@ -293,7 +293,7 @@ class TestLoadDependencyTomlEnv:
             env=env,
         )
         expected_path = str(project_dir / "deps" / "mylib" / "main")
-        assert result["MYLIB"] == expected_path
+        assert result["MYLIB_DIR"] == expected_path
 
     def test_skips_empty_dep_branch(self, tmp_path: Path) -> None:
         project_dir = self._workspace_project(tmp_path)
@@ -307,7 +307,7 @@ class TestLoadDependencyTomlEnv:
             config_files=[config_file],
             env=env,
         )
-        assert "MYLIB" not in result
+        assert "MYLIB_DIR" not in result
 
     def test_skips_non_string_dep_branch(self, tmp_path: Path) -> None:
         project_dir = self._workspace_project(tmp_path)
@@ -321,7 +321,7 @@ class TestLoadDependencyTomlEnv:
             config_files=[config_file],
             env=env,
         )
-        assert "MYLIB" not in result
+        assert "MYLIB_DIR" not in result
 
     def test_multiple_config_files_later_wins(self, tmp_path: Path) -> None:
         project_dir = self._workspace_project(tmp_path)
@@ -340,7 +340,7 @@ class TestLoadDependencyTomlEnv:
             env=env,
         )
         expected_path = str(project_dir / "deps" / "mylib" / "feat")
-        assert result["MYLIB"] == expected_path
+        assert result["MYLIB_DIR"] == expected_path
 
     def test_multiple_deps_loaded(self, tmp_path: Path) -> None:
         project_dir = self._workspace_project(tmp_path)
@@ -354,8 +354,8 @@ class TestLoadDependencyTomlEnv:
             config_files=[config_file],
             env=env,
         )
-        assert result["LIB_A"] == str(project_dir / "deps" / "lib-a" / "main")
-        assert result["LIB_B"] == str(project_dir / "deps" / "lib-b" / "dev")
+        assert result["LIB_A_DIR"] == str(project_dir / "deps" / "lib-a" / "main")
+        assert result["LIB_B_DIR"] == str(project_dir / "deps" / "lib-b" / "dev")
 
     def test_preserves_existing_env_vars(self, tmp_path: Path) -> None:
         project_dir = self._workspace_project(tmp_path)
@@ -397,7 +397,7 @@ class TestLoadDependencyTomlEnv:
             config_files=[config_file],
             env=env,
         )
-        assert result["MY_DEP"] == str(project_dir / "deps" / "my-dep" / "main")
+        assert result["MY_DEP_DIR"] == str(project_dir / "deps" / "my-dep" / "main")
 
     def test_no_deps_table_in_config(self, tmp_path: Path) -> None:
         project_dir = self._workspace_project(tmp_path)
@@ -704,7 +704,7 @@ class TestEnsureDependencyConfigsForBranch:
         config_file = project_dir / "config" / "feat" / "config.toml"
         assert not config_file.exists()
 
-    def test_fills_missing_dep_entry(
+    def test_fills_missing_inherited_dep_entry(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -718,6 +718,10 @@ class TestEnsureDependencyConfigsForBranch:
         main_dir = dep_dir / "main"
         main_dir.mkdir()
         subprocess.run(["git", "init", "-b", "main"], cwd=main_dir, env=env, check=True)
+        (project_dir / "config").mkdir()
+        (project_dir / "config" / "config.toml").write_text(
+            '[deps]\nmylib = "main"\n', encoding="utf-8"
+        )
         monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
         ensure_dependency_configs_for_branch(project_dir=project_dir, branch="feat")
         config_file = project_dir / "config" / "feat" / "config.toml"
@@ -740,6 +744,11 @@ class TestEnsureDependencyConfigsForBranch:
         main_dir.mkdir()
         subprocess.run(["git", "init", "-b", "main"], cwd=main_dir, env=env, check=True)
         monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
+        main_config_dir = project_dir / "config"
+        main_config_dir.mkdir()
+        (main_config_dir / "config.toml").write_text(
+            '[deps]\nmylib = "main"\n', encoding="utf-8"
+        )
         # Pre-create config with existing entry
         config_dir = project_dir / "config" / "feat"
         config_dir.mkdir(parents=True)
@@ -765,6 +774,11 @@ class TestEnsureDependencyConfigsForBranch:
             main_dir.mkdir()
             subprocess.run(["git", "init", "-b", "main"], cwd=main_dir, env=env, check=True)
         monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
+        main_config_dir = project_dir / "config"
+        main_config_dir.mkdir()
+        (main_config_dir / "config.toml").write_text(
+            '[deps]\nliba = "main"\nlibb = "main"\n', encoding="utf-8"
+        )
         # Pre-create config with only liba entry
         config_dir = project_dir / "config" / "feat"
         config_dir.mkdir(parents=True)
@@ -807,6 +821,37 @@ class TestEnsureDependencyConfigsForBranch:
         assert config_file.exists()
         content = config_file.read_text(encoding="utf-8")
         assert 'mylib = "dev"' in content
+
+    def test_parent_branch_does_not_inject_undeclared_dependency(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        env: dict[str, str],
+    ) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        deps_dir = project_dir / "deps"
+        deps_dir.mkdir()
+        for dep_name in ["declared", "undeclared"]:
+            main_dir = deps_dir / dep_name / "main"
+            main_dir.mkdir(parents=True)
+            subprocess.run(["git", "init", "-b", "main"], cwd=main_dir, env=env, check=True)
+        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
+        parent_config_dir = project_dir / "config" / "parent-branch"
+        parent_config_dir.mkdir(parents=True)
+        (parent_config_dir / "config.toml").write_text(
+            '[deps]\ndeclared = "main"\n', encoding="utf-8"
+        )
+
+        ensure_dependency_configs_for_branch(
+            project_dir=project_dir,
+            branch="child-branch",
+            parent_branch="parent-branch",
+        )
+
+        config_file = project_dir / "config" / "child-branch" / "config.toml"
+        content = config_file.read_text(encoding="utf-8")
+        assert "declared" in content
+        assert "undeclared" not in content
 
     def test_parent_branch_copies_env_file(self, tmp_path: Path) -> None:
         project_dir = self._workspace_project(tmp_path)
@@ -866,7 +911,22 @@ class TestEnsureDependencyConfigsForBranch:
         content = child_config_file.read_text(encoding="utf-8")
         assert 'mylib = "custom"' in content
 
-    def test_no_parent_branch_behaves_as_before(
+    def test_skips_inherited_dep_without_checkout_directory(self, tmp_path: Path) -> None:
+        project_dir = self._workspace_project(tmp_path)
+        deps_dir = project_dir / "deps"
+        deps_dir.mkdir()
+        config_dir = project_dir / "config"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text(
+            '[deps]\nmissing = "main"\n', encoding="utf-8"
+        )
+
+        ensure_dependency_configs_for_branch(project_dir=project_dir, branch="feat")
+
+        config_file = project_dir / "config" / "feat" / "config.toml"
+        assert not config_file.exists()
+
+    def test_no_parent_branch_uses_main_config_not_deps_filesystem(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -881,14 +941,13 @@ class TestEnsureDependencyConfigsForBranch:
         main_dir.mkdir()
         subprocess.run(["git", "init", "-b", "main"], cwd=main_dir, env=env, check=True)
         monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
-        # Without parent_branch, falls back to main workspace
+
         ensure_dependency_configs_for_branch(
             project_dir=project_dir, branch="feat"
         )
+
         config_file = project_dir / "config" / "feat" / "config.toml"
-        assert config_file.exists()
-        content = config_file.read_text(encoding="utf-8")
-        assert "main" in content
+        assert not config_file.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -1333,6 +1392,11 @@ class TestEnsureDependencyConfigsForBranchSkipsNone:
         deps_dir = project_dir / "deps"
         dep_dir = deps_dir / "mylib"
         dep_dir.mkdir(parents=True)
+        config_dir = project_dir / "config"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text(
+            '[deps]\nmylib = "main"\n', encoding="utf-8"
+        )
 
         # Make _dependency_config_checkout_name return None
         monkeypatch.setattr(

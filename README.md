@@ -113,10 +113,13 @@ Shortcut for `agm workspace close`. Remove a branch workspace and close its tmux
 ```bash
 agm close feat/search
 agm close --force feat/search
+agm close --keep-branch feat/search
+agm close --keep-workspace feat/search
 ```
 
 `repo` and the branch currently checked out in the main workspace resolve to the main workspace and
-cannot be closed.
+cannot be closed. Use `--keep-branch` to remove only the worktree, or `--keep-workspace` to close the
+session while keeping both the workspace and branch.
 
 ### `agm init`
 
@@ -283,7 +286,7 @@ agm run --no-sandbox --memory 8G make lint
 3. `./.agm/config.toml`
 
 Sandbox settings are resolved from the global sandbox directory, the project sandbox config
-directory, and `./.sandbox/`, with later files overriding earlier ones.
+directory, and `./.sandbox/`, with later files merged over earlier ones.
 
 ### `agm config copy`
 

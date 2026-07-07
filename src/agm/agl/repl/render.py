@@ -105,17 +105,25 @@ def _render_check_only(result: "EntryResult") -> str | None:
     type to show and echo nothing.  A REPL bare-type entry (``kind == "type"``)
     echoes ``<type: T>`` just as in the live echo.
     """
+    from agm.agl.repl.type_display import (
+        format_type_echo_for_repl,
+        format_type_for_repl,
+        format_type_text_echo_for_repl,
+    )
+
     if result.kind == "type":
+        if result.type_display is not None:
+            return format_type_text_echo_for_repl(result.type_display)
         assert result.value_type is not None
-        return f"<type: {result.value_type!r}>"
+        return format_type_echo_for_repl(result.value_type)
     if result.kind == "expression":
         # A bare expression always carries a checked type on success.
         assert result.value_type is not None
-        return f": {result.value_type!r}"
+        return f": {format_type_for_repl(result.value_type)}"
     if result.kind == "binding":
         assert result.name is not None
         assert result.value_type is not None
-        return f"{result.name} : {result.value_type!r}"
+        return f"{result.name} : {format_type_for_repl(result.value_type)}"
     if result.kind == "declaration":
         assert result.name is not None
         return f"{result.name} declared"
@@ -131,8 +139,15 @@ def _render_echo(result: "EntryResult") -> str | None:
         # A bare type expression entered at the prompt is not a value; echo it
         # in the same ``<…>`` surface form used for other non-value echoes
         # (functions, agents, constructors) and tag it as a type.
+        from agm.agl.repl.type_display import (
+            format_type_echo_for_repl,
+            format_type_text_echo_for_repl,
+        )
+
+        if result.type_display is not None:
+            return format_type_text_echo_for_repl(result.type_display)
         assert result.value_type is not None
-        return f"<type: {result.value_type!r}>"
+        return format_type_echo_for_repl(result.value_type)
     if result.kind == "expression":
         # A bare expression always carries a value and type on success.
         assert result.value is not None

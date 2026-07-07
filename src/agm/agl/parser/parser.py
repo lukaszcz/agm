@@ -2,7 +2,9 @@
 
 The module-level ``_PARSER`` is built once at import time from
 ``grammar/agl.lark`` (loaded via ``importlib.resources`` anchored on
-``agm.agl``).
+``agm.agl``).  ``cache=True`` persists the compiled LALR tables to a
+grammar-hash-keyed temp file so repeated process starts (every ``agm exec`` /
+``agm repl`` invocation) reload them instead of rebuilding from scratch.
 
 ``parse_program(text)`` is the single public entry point.  It feeds the
 source string to ``_PARSER``, then passes the resulting Lark tree to
@@ -65,6 +67,7 @@ _PARSER: Lark = Lark(
     lexer=AglLexer,
     propagate_positions=True,
     maybe_placeholders=True,
+    cache=True,
 )
 
 _TYPED_CALL_WITHOUT_CALL_RE = re.compile(r"::\s*\[.*\]\s*$", re.DOTALL)
@@ -88,6 +91,7 @@ def _type_parser() -> Lark:
             propagate_positions=True,
             maybe_placeholders=True,
             start="type_expr",
+            cache=True,
         )
     return _TYPE_PARSER
 

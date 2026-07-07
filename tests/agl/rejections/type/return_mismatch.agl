@@ -1,0 +1,4 @@
+def f() -> int =
+  return "bad"
+  0
+f()

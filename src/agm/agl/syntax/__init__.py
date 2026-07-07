@@ -73,6 +73,7 @@ from agm.agl.syntax.nodes import (
     ProgramDecl,
     Raise,
     RecordDef,
+    Return,
     StringLit,
     Template,
     TemplateSegment,
@@ -107,6 +108,7 @@ from agm.agl.syntax.types import (
     Qualifier,
     TextT,
     TypeExpr,
+    TypeQualifier,
     UnitT,
 )
 from agm.agl.syntax.visitor import Visitor, walk
@@ -131,6 +133,7 @@ __all__ = [
     # module system
     "ImportMode",
     "Qualifier",
+    "TypeQualifier",
     "ImportItem",
     "ImportDecl",
     "ExportItem",
@@ -187,6 +190,7 @@ __all__ = [
     "Try",
     "CatchClause",
     "Raise",
+    "Return",
     "UnitLit",
     "IntLit",
     "DecimalLit",

@@ -22,7 +22,7 @@
               "Report for ",
               "Ada",
               "Item(name = \"bolt\", qty = 7)",
-              "Pick.One(item = Item(name = \"bolt\", qty = 7))"
+              "Pick::One(item = Item(name = \"bolt\", qty = 7))"
             ]
           }
         ]

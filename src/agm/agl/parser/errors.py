@@ -238,6 +238,13 @@ def syntax_error_from_lark(
             return _make_inline_compound_error(
                 tok.value, span, stmt_context=stmt_context
             )
+        if tok.type == "_NEWLINE":
+            if "_INDENT" in exc.expected:
+                return AglSyntaxError(
+                    "Expected an indented block or inline expression after this line.",
+                    span=span,
+                )
+            return AglSyntaxError("Unexpected newline.", span=span)
         return AglSyntaxError(
             f"Unexpected {tok.value!r}.",
             span=span,

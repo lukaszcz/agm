@@ -851,6 +851,59 @@ def test_refine_repeats_revise_for_unknown_status_and_honors_max_steps(
     assert len(revisions) == 3
 
 
+def test_refine_uses_default_max_steps_when_unconfigured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _setup_home(tmp_path)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    revisions: list[ReviseArgs] = []
+
+    def fake_review_once(
+        args: ReviewArgs,
+        *,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
+    ) -> str:
+        del args, stdout_callback, stderr_callback
+        return "review result\n"
+
+    def fake_revise_once(
+        args: ReviseArgs,
+        *,
+        stdout_callback: Callable[[str], None] = review_pass.write_stdout,
+        stderr_callback: Callable[[str], None] = review_pass.write_stderr,
+    ) -> str:
+        del stdout_callback, stderr_callback
+        revisions.append(args)
+        return "try again\n"
+
+    monkeypatch.setattr("agm.commands.refine.review_once", fake_review_once)
+    monkeypatch.setattr("agm.commands.refine.revise_once", fake_revise_once)
+
+    refine(
+        RefineArgs(
+            max_steps=None,
+            no_max_steps=False,
+            runner=None,
+            reviewer=None,
+            reviser=None,
+            scope=None,
+            aspects=None,
+            review_prompt=None,
+            review_prompt_file=None,
+            extra_review_prompt=None,
+            extra_review_prompt_file=None,
+            revise_prompt=None,
+            revise_prompt_file=None,
+            extra_revise_prompt=None,
+            extra_revise_prompt_file=None,
+        )
+    )
+
+    assert len(revisions) == 12
+
+
 def test_refine_max_steps_limits_iterations_to_exact_count(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

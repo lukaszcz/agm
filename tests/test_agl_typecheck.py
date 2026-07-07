@@ -64,6 +64,7 @@ from agm.agl.syntax.nodes import (
     Placeholder,
     Program,
     Raise,
+    Return,
     StringLit,
     Try,
     TypeApply,
@@ -698,6 +699,10 @@ class TestBlockTyping:
         r = accept_type("def f() -> int = 1")
         assert r.resolved.program is not None
 
+    def test_top_level_after_divergent_expression_is_still_checked(self) -> None:
+        err = reject_type('raise Abort(message = "x")\ndef bad() -> int = "oops"')
+        assert "int" in str(err).lower()
+
     def test_unit_literal_valid(self) -> None:
         r = accept_type("()")
         assert r.resolved.program is not None
@@ -985,24 +990,24 @@ class TestAsk:
         assert r.call_sites[0].parse_policy == "abort"
 
     def test_ask_on_parse_error_bare_qualified_abort(self) -> None:
-        # Bare ``ParsePolicy.Abort`` (no parens) is accepted as abort policy.
-        r = accept_type('let n: int = ask("Q", on_parse_error = ParsePolicy.Abort)\nn')
+        # Bare ``ParsePolicy::Abort`` (no parens) is accepted as abort policy.
+        r = accept_type('let n: int = ask("Q", on_parse_error = ParsePolicy::Abort)\nn')
         assert r.call_sites[0].parse_policy == "abort"
 
     def test_ask_on_parse_error_bad_qualified_policy_raises(self) -> None:
-        # A FieldAccess callee with wrong qualifier is rejected.
+        # A qualified constructor with the wrong owner is rejected.
         err = reject_type(
             "enum FooBar\n  | Abort\n"
-            'let n: int = ask("Q", on_parse_error = FooBar.Abort())\nn'
+            'let n: int = ask("Q", on_parse_error = FooBar::Abort())\nn'
         )
         assert "parse_error" in str(err).lower() or "ParsePolicy" in str(err)
 
     def test_ask_on_parse_error_bare_wrong_qualifier_raises(self) -> None:
-        # Bare FieldAccess ``SomethingElse.Abort`` (no parens, non-ParsePolicy qualifier)
-        # is rejected even though the field name is "Abort".
+        # Bare ``SomethingElse::Abort`` (no parens, non-ParsePolicy qualifier) is
+        # rejected even though the field name is "Abort".
         err = reject_type(
             "enum SomethingElse\n  | Abort\n"
-            'let n: int = ask("Q", on_parse_error = SomethingElse.Abort)\nn'
+            'let n: int = ask("Q", on_parse_error = SomethingElse::Abort)\nn'
         )
         assert "parse_error" in str(err).lower() or "ParsePolicy" in str(err)
 
@@ -1323,6 +1328,72 @@ class TestFuncDef:
         r = accept_type('def f(x: int) -> text = raise Abort(message = "err")\nf(1)')
         assert r.resolved.program is not None
 
+    def test_funcdef_return_value_checked_against_annotation(self) -> None:
+        r = accept_type("def f(x: int) -> int =\n  return x\n  0\nf(1)")
+        return_node = r.resolved.program.body.items[0].body.items[0]
+        assert isinstance(return_node, Return)
+        assert isinstance(r.node_types[return_node.node_id], BottomType)
+
+    def test_funcdef_return_widening_checked_against_annotation(self) -> None:
+        r = accept_type("def f() -> decimal =\n  return 1\nf")
+        f_ref = r.resolved.program.body.items[1]
+        assert isinstance(f_ref, VarRef)
+        assert r.node_types[f_ref.node_id] == FunctionType(params=(), result=DecimalType())
+
+    def test_funcdef_tail_after_return_checked_against_annotation(self) -> None:
+        err = reject_type('def f() -> int =\n  return 1\n  "tail"\nf')
+        assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
+
+    def test_funcdef_tail_after_bottom_binding_checked_against_annotation(self) -> None:
+        err = reject_type('def f() -> int = let x: int = return 1; "A"')
+        assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
+
+    def test_funcdef_tail_after_return_participates_in_inference(self) -> None:
+        err = reject_type('def f() =\n  return 1\n  "tail"\nf')
+        assert "infer" in str(err).lower()
+        assert "annotation" in str(err).lower()
+
+    def test_funcdef_tail_after_return_is_type_checked(self) -> None:
+        err = reject_type('def f() -> int =\n  return 1\n  let x: int = "bad"\n  0')
+        assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
+
+    def test_bottom_left_binary_operand_does_not_skip_right_operand_type(self) -> None:
+        err = reject_type('def f() -> int = (return 1) + "x"\nf')
+        assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
+
+    def test_bottom_binary_operand_does_not_make_comparison_bottom(self) -> None:
+        err = reject_type('def f() -> int = (return 1) == "x"\nf')
+        assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
+
+    def test_bottom_plus_bottom_is_still_type_checked(self) -> None:
+        r = accept_type("def f() -> int = (return 1) + (return 2)\nf")
+        assert r.resolved.program is not None
+
+    def test_bottom_right_in_operand_is_still_type_checked(self) -> None:
+        r = accept_type("def f() -> bool = 1 in (return true)\nf")
+        assert r.resolved.program is not None
+
+    def test_funcdef_return_mismatch_rejected(self) -> None:
+        err = reject_type('def f() -> int =\n  return "bad"\n  0')
+        assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
+
+    def test_funcdef_bare_return_requires_unit(self) -> None:
+        err = reject_type("def f() -> int =\n  return\n  1")
+        assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
+
+    def test_funcdef_infers_return_and_tail_unification_with_widening(self) -> None:
+        r = accept_type("def f(flag: bool) =\n  if flag =>\n    return 1\n  1.5\nf")
+        f_ref = r.resolved.program.body.items[1]
+        assert isinstance(f_ref, VarRef)
+        assert r.node_types[f_ref.node_id] == FunctionType(
+            params=(BoolType(),), result=DecimalType()
+        )
+
+    def test_funcdef_inference_conflicting_returns_rejected(self) -> None:
+        err = reject_type('def f(flag: bool) =\n  if flag =>\n    return 1\n  "tail"')
+        assert "infer" in str(err).lower()
+        assert "annotation" in str(err).lower()
+
     def test_funcdef_called_with_named_args(self) -> None:
         r = accept_type("def f(x: int, y: int = 0) -> int = x + y\nf(1, y = 2)")
         assert r.resolved.program is not None
@@ -1377,6 +1448,50 @@ class TestFuncDef:
         assert isinstance(f_ref, VarRef)
         t = r.node_types[f_ref.node_id]
         assert isinstance(t, FunctionType)
+
+    def test_return_in_if_condition_does_not_hide_branch_type_mismatch(self) -> None:
+        err = reject_type('def f() -> int =\n  if (return 1) => "a" | else => "b"\nf')
+        assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
+
+    def test_return_in_loop_bound_does_not_make_loop_bottom(self) -> None:
+        err = reject_type("def f() -> int =\n  do[(return 1)]\n    ()\nf")
+        assert "bottom" in str(err).lower() or "mismatch" in str(err).lower()
+
+    def test_return_in_exec_command_does_not_make_call_bottom(self) -> None:
+        err = reject_type("def f() = exec(return 1)\nf")
+        assert "infer" in str(err).lower() or "annotation" in str(err).lower()
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            'def f() = render(return 1)\nf',
+            'def f() = render("x", pretty = (return 1))\nf',
+            'def f() = ask(return 1)\nf',
+            'agent a\ndef f() = ask("x", agent = (return 1))\nf',
+        ],
+    )
+    def test_return_in_builtin_runtime_argument_does_not_make_call_bottom(
+        self, source: str
+    ) -> None:
+        err = reject_type(source)
+        assert "infer" in str(err).lower() or "mismatch" in str(err).lower()
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "def f() -> int =\n  for i in (return 1) to 3 do () done\nf",
+            "def f() -> int =\n  for i in 1 to (return 1) do () done\nf",
+            "def f() -> int =\n  for i in 1 to 3 by (return 1) do () done\nf",
+            "def f() -> int =\n  for x in (return 1) do () done\nf",
+            "def f() -> int =\n  while (return 1) do\n    ()\nf",
+            "def f() -> int =\n  do\n    ()\n  until (return 1)\nf",
+        ],
+    )
+    def test_return_in_loop_header_or_guard_does_not_make_loop_bottom(
+        self, source: str
+    ) -> None:
+        err = reject_type(source)
+        assert "bottom" in str(err).lower() or "mismatch" in str(err).lower()
 
 
 # ---------------------------------------------------------------------------
@@ -1583,7 +1698,7 @@ class TestPartialConstructorAndValueCalls:
             "  | failed(reason: text)\n"
             "exception Boom extends Exception\n"
             "  code: int\n"
-            "let make_status = Status.failed(reason = ?)\n"
+            "let make_status = Status::failed(reason = ?)\n"
             "let make_boom = Boom(message = ?, code = 7)\n"
             "make_boom"
         )
@@ -1629,7 +1744,7 @@ class TestPartialConstructorAndValueCalls:
             "enum Option[T]\n"
             "  | none\n"
             "  | some(value: T)\n"
-            "let make: (int) -> Option[int] = Option.some(?)\n"
+            "let make: (int) -> Option[int] = Option::some(?)\n"
             "make"
         )
         call = self._let_call(checked, "make")
@@ -1668,9 +1783,13 @@ class TestPartialConstructorAndValueCalls:
         )
         assert "type argument" in str(arity_err).lower()
         qualified_err = reject_type(
-            "enum E\n  | v(x: int)\nlet make = E.v::[int](x = ?)\nmake"
+            "enum E\n  | v(x: int)\nlet make = E[int]::v(x = ?)\nmake"
         )
         assert "type argument" in str(qualified_err).lower()
+        qualified_call_arg_err = reject_type(
+            "enum E\n  | v(x: int)\nlet make = E::v::[int](x = ?)\nmake"
+        )
+        assert "type argument" in str(qualified_call_arg_err).lower()
         abstract_err = reject_type("let make = Exception(message = ?)\nmake")
         assert "abstract" in str(abstract_err).lower()
 
@@ -1811,6 +1930,26 @@ class TestLambda:
         r = accept_type('fn() -> int => raise Abort(message = "x")')
         assert r.resolved.program is not None
 
+    def test_lambda_return_targets_inner_function(self) -> None:
+        r = accept_type(
+            "def outer() -> int =\n"
+            "  let f = fn() -> text => return \"inner\"\n"
+            "  1\n"
+            "outer()"
+        )
+        assert r.resolved.program is not None
+
+    def test_lambda_infers_return_type(self) -> None:
+        r = accept_type("fn(flag: bool) => if flag => (return 1) | else => 2")
+        lam = r.resolved.program.body.items[0]
+        assert isinstance(lam, Lambda)
+        assert r.node_types[lam.node_id] == FunctionType(params=(BoolType(),), result=IntType())
+
+    def test_lambda_inference_conflicting_return_rejected(self) -> None:
+        err = reject_type('fn(flag: bool) => if flag => (return 1) | else => "tail"')
+        assert "infer" in str(err).lower()
+        assert "annotation" in str(err).lower()
+
     def test_lambda_value_call(self) -> None:
         r = accept_type("let f = fn(x: int) -> int => x\nf(42)")
         assert r.resolved.program is not None
@@ -1893,7 +2032,7 @@ class TestCase:
     def test_case_enum_constructor_pattern(self) -> None:
         r = accept_type(
             "enum Status\n  | Pass\n  | Fail\nlet s = Pass()\n"
-            "case s of | Status.Pass => 1 | Status.Fail => 2"
+            'case s of | Status::Pass => 1 | Status::Fail => 2'
         )
         assert r.resolved.program is not None
 
@@ -1904,14 +2043,14 @@ class TestCase:
     def test_case_non_exhaustive_enum_warns(self) -> None:
         r = accept_type(
             "enum Status\n  | Pass\n  | Fail\nlet s = Pass()\n"
-            "case s of | Status.Pass => 1"
+            'case s of | Status::Pass => 1'
         )
         assert any("Non-exhaustive" in w.message for w in r.warnings)
 
     def test_case_exhaustive_enum_no_warn(self) -> None:
         r = accept_type(
             "enum Status\n  | Pass\n  | Fail\nlet s = Pass()\n"
-            "case s of | Status.Pass => 1 | Status.Fail => 2"
+            'case s of | Status::Pass => 1 | Status::Fail => 2'
         )
         assert not any("Non-exhaustive" in w.message for w in r.warnings)
 
@@ -1934,7 +2073,7 @@ class TestCase:
         r = accept_type(
             "enum Result\n  | Ok(value: int)\n  | Err(msg: text)\n"
             "let res = Ok(value = 42)\n"
-            "case res of | Result.Ok(value = v) => v | Result.Err(msg = m) => 0"
+            'case res of | Result::Ok(value = v) => v | Result::Err(msg = m) => 0'
         )
         assert r.resolved.program is not None
 
@@ -2025,6 +2164,17 @@ class TestRaise:
     def test_raise_in_funcdef_body(self) -> None:
         r = accept_type('def f() -> text = raise Abort(message = "err")\nf()')
         assert r.resolved.program is not None
+
+    def test_return_outside_function_rejected_defensively_by_checker(self) -> None:
+        prog = parse_program("return 1")
+        resolved = _ResolvedProgram(
+            program=prog,
+            resolution={},
+            builtin_calls={},
+            root_scope=ScopeNode(node_id=prog.node_id),
+        )
+        with pytest.raises(AglTypeError, match="return"):
+            check(resolved, default_capabilities())
 
 
 # ---------------------------------------------------------------------------
@@ -2224,8 +2374,8 @@ class TestBinaryOps:
         err = reject_type(
             "def f(n: int) -> int = n\n"
             "enum E\n  | A(cb: (int) -> int)\n  | B\n"
-            "let e1 = E.A(cb = f)\n"
-            "let e2 = E.B\n"
+            'let e1 = E::A(cb = f)\n'
+            'let e2 = E::B\n'
             "let result = (e1 == e2)\nresult"
         )
         assert "equality" in str(err).lower()
@@ -2304,7 +2454,7 @@ class TestBinaryOps:
     def test_eq_enum_with_scalar_fields_accepted(self) -> None:
         accept_type(
             "enum Color\n  | Red\n  | Blue\n"
-            "let r = (Color.Red == Color.Blue)\nr"
+            'let r = (Color::Red == Color::Blue)\nr'
         )
 
     def test_ordering_non_numeric_non_text_raises(self) -> None:
@@ -2398,14 +2548,14 @@ class TestFieldAccess:
 class TestIsTest:
     def test_is_enum_variant(self) -> None:
         r = accept_type(
-            "enum Status\n  | Pass\n  | Fail\nlet s = Pass()\ns is Status.Pass"
+            'enum Status\n  | Pass\n  | Fail\nlet s = Pass()\ns is Status::Pass'
         )
         node = r.resolved.program.body.items[2]
         assert r.node_types[node.node_id] == BoolType()
 
     def test_is_not(self) -> None:
         r = accept_type(
-            "enum Status\n  | Pass\n  | Fail\nlet s = Pass()\ns is not Status.Pass"
+            'enum Status\n  | Pass\n  | Fail\nlet s = Pass()\ns is not Status::Pass'
         )
         assert r.resolved.program is not None
 
@@ -2415,15 +2565,19 @@ class TestIsTest:
 
     def test_is_unknown_variant_raises(self) -> None:
         err = reject_type(
-            "enum Status\n  | Pass\n  | Fail\nlet s = Pass()\ns is Status.Gone"
+            'enum Status\n  | Pass\n  | Fail\nlet s = Pass()\ns is Status::Gone'
         )
         assert "variant" in str(err).lower()
 
     def test_is_test_wrong_qualifier_raises(self) -> None:
         err = reject_type(
-            "enum A\n  | X\nenum B\n  | X\nlet a = A.X()\na is B.X"
+            'enum A\n  | X\nenum B\n  | X\nlet a = A::X()\na is B::X'
         )
         assert "qualifier" in str(err).lower() or "enum" in str(err).lower()
+
+    def test_is_test_self_qualified_enum_variant(self) -> None:
+        r = accept_type('enum Status\n  | Pass\n  | Fail\nlet s = Pass()\ns is ::Status::Pass')
+        assert r.resolved.program is not None
 
 
 # ---------------------------------------------------------------------------
@@ -2458,7 +2612,7 @@ class TestConstructors:
         assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
 
     def test_enum_variant_qualified(self) -> None:
-        r = accept_type("enum Status\n  | Pass\n  | Fail\nStatus.Pass()")
+        r = accept_type('enum Status\n  | Pass\n  | Fail\nStatus::Pass()')
         assert r.resolved.program is not None
 
     def test_enum_variant_unqualified_unique(self) -> None:
@@ -2471,7 +2625,7 @@ class TestConstructors:
         assert "ambiguous" in str(err).lower()
 
     def test_enum_variant_unknown_raises(self) -> None:
-        err = reject_type("enum Status\n  | Pass\nStatus.Gone()")
+        err = reject_type('enum Status\n  | Pass\nStatus::Gone()')
         assert "variant" in str(err).lower()
 
     def test_exception_constructor(self) -> None:
@@ -2495,21 +2649,21 @@ class TestConstructors:
         assert r.resolved.program is not None
 
     def test_qualified_constructor_wrong_enum_raises(self) -> None:
-        err = reject_type("enum A\n  | X\nenum B\n  | Y\nA.Y()")
+        err = reject_type('enum A\n  | X\nenum B\n  | Y\nA::Y()')
         assert "variant" in str(err).lower()
 
     def test_qualified_constructor_not_enum_raises(self) -> None:
-        err = reject_type("record R\n  x: int\nR.Something()")
+        err = reject_type('record R\n  x: int\nR::Something()')
         assert "enum" in str(err).lower()
 
 
 # ---------------------------------------------------------------------------
-# Constructor ref dispatch (VarRef/Call/FieldAccess paths)
+# Constructor ref dispatch (VarRef/Call paths)
 # ---------------------------------------------------------------------------
 
 
 class TestConstructorRefDispatch:
-    """Verify construction via the new VarRef/Call/FieldAccess constructor paths."""
+    """Verify construction via the new VarRef/Call constructor paths."""
 
     def test_bare_varref_nullary_variant(self) -> None:
         # Bare nullary variant as VarRef → zero-arg construction
@@ -2527,13 +2681,25 @@ class TestConstructorRefDispatch:
         assert r.resolved.program is not None
 
     def test_qualified_call_enum_variant(self) -> None:
-        # Qualified construction: Option.some(value = 1)
-        r = accept_type("enum Option\n  | none\n  | some(value: int)\nOption.some(value = 1)")
+        # Qualified construction: Option::some(value = 1)
+        r = accept_type('enum Option\n  | none\n  | some(value: int)\nOption::some(value = 1)')
         assert r.resolved.program is not None
 
+    def test_type_apply_on_qualified_constructor_rejected(self) -> None:
+        err = reject_type(
+            "enum Option[T]\n  | some(value: T)\nlet mk = Option::some::[int]\nmk"
+        )
+        assert "Type[T]::Ctor" in str(err)
+
+    def test_typed_call_on_qualified_constructor_rejected(self) -> None:
+        err = reject_type(
+            "enum Option[T]\n  | some(value: T)\nOption::some::[int](value = 1)"
+        )
+        assert "Type[T]::Ctor" in str(err)
+
     def test_qualified_bare_nullary_variant(self) -> None:
-        # Bare qualified constructor: FieldAccess → zero-arg construction
-        r = accept_type("enum Status\n  | Pass\n  | Fail\nStatus.Pass()")
+        # Bare qualified constructor: VarRef → zero-arg construction
+        r = accept_type('enum Status\n  | Pass\n  | Fail\nStatus::Pass()')
         assert r.resolved.program is not None
 
     def test_missing_field_still_errors(self) -> None:
@@ -2553,11 +2719,11 @@ class TestConstructorRefDispatch:
         assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
 
     def test_qualified_variant_not_found_errors(self) -> None:
-        err = reject_type("enum Status\n  | Pass\n  | Fail\nStatus.Missing()")
+        err = reject_type('enum Status\n  | Pass\n  | Fail\nStatus::Missing()')
         assert "variant" in str(err).lower()
 
     def test_qualified_non_enum_errors(self) -> None:
-        err = reject_type("record R\n  x: int\nR.Something()")
+        err = reject_type('record R\n  x: int\nR::Something()')
         assert "enum" in str(err).lower()
 
     def test_exception_constructor_via_new_dispatch(self) -> None:
@@ -2581,7 +2747,7 @@ class TestConstructorRefDispatch:
 
     def test_positional_arg_on_qualified_constructor_rejected(self) -> None:
         # Qualified constructor with positional arg is rejected.
-        err = reject_type("enum E\n  | Pass\nE.Pass(1)")
+        err = reject_type('enum E\n  | Pass\nE::Pass(1)')
         assert "named" in str(err).lower() or "positional" in str(err).lower()
 
     def test_type_arg_on_qualified_constructor_rejected(self) -> None:
@@ -2676,7 +2842,7 @@ class TestBareConstructorTypeApply:
         assert r.resolved.program is not None
 
     def test_qualified_payload_constructor_type_apply(self) -> None:
-        r = accept_type(self._OPT + "let f = Option.some::[int]\nf")
+        r = accept_type(self._OPT + 'let f = Option[int]::some\nf')
         prog = r.resolved.program
         f_ref = prog.body.items[-1]
         assert isinstance(f_ref, VarRef)
@@ -2685,7 +2851,7 @@ class TestBareConstructorTypeApply:
         )
 
     def test_qualified_nullary_constructor_type_apply(self) -> None:
-        r = accept_type(self._OPT + "let z = Option.none::[int]\nz")
+        r = accept_type(self._OPT + 'let z = Option[int]::none\nz')
         prog = r.resolved.program
         z_ref = prog.body.items[-1]
         assert isinstance(z_ref, VarRef)
@@ -2694,7 +2860,7 @@ class TestBareConstructorTypeApply:
         )
 
     def test_qualified_payload_constructor_callable(self) -> None:
-        r = accept_type(self._OPT + "let v = (Option.some::[int])(7)\nv")
+        r = accept_type(self._OPT + 'let v = (Option[int]::some)(7)\nv')
         assert r.resolved.program is not None
 
     def test_non_generic_constructor_type_apply_rejected(self) -> None:
@@ -2702,7 +2868,7 @@ class TestBareConstructorTypeApply:
         assert "not a generic constructor" in str(err).lower()
 
     def test_qualified_non_generic_constructor_type_apply_rejected(self) -> None:
-        err = reject_type("enum E\n  | Pass\nlet f = E.Pass::[int]\nf")
+        err = reject_type('enum E\n  | Pass\nlet f = E[int]::Pass\nf')
         assert "not a generic constructor" in str(err).lower()
 
     def test_wrong_arity_type_apply_rejected(self) -> None:
@@ -2710,7 +2876,7 @@ class TestBareConstructorTypeApply:
         assert "type argument" in str(err).lower()
 
     def test_qualified_wrong_arity_type_apply_rejected(self) -> None:
-        err = reject_type(self._OPT + "let f = Option.some::[int, text]\nf")
+        err = reject_type(self._OPT + 'let f = Option[int, text]::some\nf')
         assert "type argument" in str(err).lower()
 
     def test_generic_record_constructor_type_apply(self) -> None:
@@ -2956,7 +3122,7 @@ class TestParsePolicy:
 
     def test_on_parse_error_wrong_qualifier_raises(self) -> None:
         # 'Other' is not a declared type name, so this fails at scope time.
-        err = reject_any('let n: int = ask("Q", on_parse_error = Other.Abort())\nn')
+        err = reject_any('let n: int = ask("Q", on_parse_error = Other::Abort())\nn')
         err_str = str(err).lower()
         assert "on_parse_error" in err_str or "ParsePolicy" in str(err) or "Other" in str(err)
 
@@ -3199,7 +3365,7 @@ class TestMisc:
         assert BottomType() == BottomType()
 
     def test_is_test_simple(self) -> None:
-        r = accept_type("enum E\n  | A\n  | B\nlet e = A()\ne is E.A")
+        r = accept_type('enum E\n  | A\n  | B\nlet e = A()\ne is E::A')
         assert r.resolved.program is not None
 
     def test_template_empty_dict_in_template(self) -> None:
@@ -3253,7 +3419,7 @@ class TestMisc:
 
     def test_qualified_enum_variant_wrong_qualifier_raises(self) -> None:
         err = reject_type(
-            "enum A\n  | X\nenum B\n  | X\nlet a = A.X()\na is B.X"
+            'enum A\n  | X\nenum B\n  | X\nlet a = A::X()\na is B::X'
         )
         assert "qualifier" in str(err).lower() or "enum" in str(err).lower()
 
@@ -3286,30 +3452,30 @@ class TestMisc:
     def test_constructor_pattern_duplicate_field_raises(self) -> None:
         err = reject_type(
             "enum E\n  | A(x: int)\nlet e = A(x = 1)\n"
-            "case e of | E.A(x = n, x = m) => n | _ => 0"
+            'case e of | E::A(x = n, x = m) => n | _ => 0'
         )
         assert "duplicate" in str(err).lower() or "field" in str(err).lower()
 
     def test_constructor_pattern_unknown_field_raises(self) -> None:
         err = reject_type(
             "enum E\n  | A(x: int)\nlet e = A(x = 1)\n"
-            "case e of | E.A(z = n) => n | _ => 0"
+            'case e of | E::A(z = n) => n | _ => 0'
         )
         msg = str(err).lower()
         assert "no field" in msg or "unknown" in msg or "field" in msg
 
     def test_variant_qualifier_wrong_raises(self) -> None:
         err = reject_type(
-            "enum A\n  | X\nenum B\n  | X\nlet a = A.X()\na is B.X"
+            'enum A\n  | X\nenum B\n  | X\nlet a = A::X()\na is B::X'
         )
         assert "qualifier" in str(err).lower() or "enum" in str(err).lower()
 
     def test_qualified_constructor_wrong_enum_raises(self) -> None:
-        err = reject_type("enum A\n  | X\nenum B\n  | Y\nA.Y()")
+        err = reject_type('enum A\n  | X\nenum B\n  | Y\nA::Y()')
         assert "variant" in str(err).lower()
 
     def test_qualified_constructor_not_enum_raises(self) -> None:
-        err = reject_type("record R\n  x: int\nR.Something()")
+        err = reject_type('record R\n  x: int\nR::Something()')
         assert "enum" in str(err).lower()
 
     def test_enum_variant_with_fields(self) -> None:
@@ -3322,7 +3488,7 @@ class TestMisc:
         r = accept_type(
             "enum Result\n  | Ok(value: int)\n  | Err(msg: text)\n"
             "let res = Ok(value = 42)\n"
-            "case res of | Result.Ok(value = v) => v | Result.Err(msg = m) => 0"
+            'case res of | Result::Ok(value = v) => v | Result::Err(msg = m) => 0'
         )
         assert r.resolved.program is not None
 
@@ -3381,17 +3547,17 @@ class TestMisc:
 
     def test_is_test_with_correct_qualifier(self) -> None:
         # Exercises the qualifier check path in is-test expressions.
-        r = accept_type("enum E\n  | A\n  | B\nlet e = E.A()\ne is E.A")
+        r = accept_type('enum E\n  | A\n  | B\nlet e = E::A()\ne is E::A')
         assert r.resolved.program is not None
 
     def test_is_test_qualifier_not_enum_raises(self) -> None:
         # Exercises the error path when the qualifier resolves to a non-enum type.
-        err = reject_type("enum A\n  | X\nrecord R\n  x: int\nlet a = A.X()\na is R.X")
+        err = reject_type('enum A\n  | X\nrecord R\n  x: int\nlet a = A::X()\na is R::X')
         assert "not a known enum" in str(err).lower() or "enum" in str(err).lower()
 
     def test_is_test_unknown_qualifier_raises(self) -> None:
         # Exercises the error path when the qualifier name is not a known enum.
-        err = reject_type("enum E\n  | A\nlet e = E.A()\ne is UnknownEnum.A")
+        err = reject_type('enum E\n  | A\nlet e = E::A()\ne is UnknownEnum::A')
         assert "not a known enum" in str(err).lower() or "enum" in str(err).lower()
 
     def test_enum_variant_field_duplicate_raises(self) -> None:
@@ -3416,7 +3582,7 @@ class TestMisc:
         # Exercises the qualifier check in constructor pattern matching.
         r = accept_type(
             "enum E\n  | A(x: int)\nlet e = A(x = 1)\n"
-            "case e of | E.A(x = n) => n | _ => 0"
+            'case e of | E::A(x = n) => n | _ => 0'
         )
         assert r.resolved.program is not None
 
@@ -3424,7 +3590,7 @@ class TestMisc:
         # Exercises the error when a constructor pattern variant is not found in the enum.
         err = reject_type(
             "enum E\n  | A\n  | B\nlet e = A()\n"
-            "case e of | E.C() => 1 | _ => 0"
+            'case e of | E::C() => 1 | _ => 0'
         )
         assert "variant" in str(err).lower()
 
@@ -3461,7 +3627,7 @@ class TestMisc:
 
     def test_parse_policy_unknown_variant_raises(self) -> None:
         # Exercises line 877->890: arg.name is neither "Abort" nor "Retry"
-        err = reject_type('let n: int = ask("Q", on_parse_error = ParsePolicy.Bad())\nn')
+        err = reject_type('let n: int = ask("Q", on_parse_error = ParsePolicy::Bad())\nn')
         assert "on_parse_error" in str(err).lower() or "ParsePolicy" in str(err)
 
     def test_exec_strict_json_non_bool_raises(self) -> None:
@@ -3520,7 +3686,7 @@ class TestMisc:
 
     def test_is_test_without_qualifier(self) -> None:
         # Exercises the is-test without a qualifier (no qualifier check is performed).
-        r = accept_type("enum E\n  | A\n  | B\nlet e = E.A()\ne is A")
+        r = accept_type('enum E\n  | A\n  | B\nlet e = E::A()\ne is A')
         assert r.resolved.program is not None
 
     def test_constructor_pattern_without_qualifier(self) -> None:
@@ -3528,6 +3694,13 @@ class TestMisc:
         r = accept_type(
             "enum E\n  | A(x: int)\nlet e = A(x = 1)\n"
             "case e of | A(x = n) => n | _ => 0"
+        )
+        assert r.resolved.program is not None
+
+    def test_constructor_pattern_with_self_qualified_owner(self) -> None:
+        r = accept_type(
+            "enum E\n  | A(x: int)\nlet e = A(x = 1)\n"
+            "case e of | ::E::A(x = n) => n | _ => 0"
         )
         assert r.resolved.program is not None
 
@@ -4280,7 +4453,7 @@ class TestDefensiveGuards:
             check(resolved, default_capabilities(), seed_env=checked_base.type_env)
 
     def test_type_arg_on_qualified_constructor_rejected(self) -> None:
-        err = reject_type("enum Status\n  | Pass\n  | Fail\nStatus.Pass::[int]()\n()")
+        err = reject_type('enum Status\n  | Pass\n  | Fail\nStatus[int]::Pass()\n()')
         assert "type argument" in str(err).lower()
 
 
@@ -5064,7 +5237,7 @@ class TestGenerics:
         )
 
     def test_d2_is_test_on_T_rejected(self) -> None:
-        err = reject_type("enum E\n  | A\ndef check[T](x: T) -> bool = x is E.A")
+        err = reject_type('enum E\n  | A\ndef check[T](x: T) -> bool = x is E::A')
         assert "type variable" in str(err).lower() or "abstract" in str(err).lower()
 
     def test_d2_in_op_bare_T_rejected(self) -> None:
@@ -5487,7 +5660,7 @@ class TestGenericConstructorInference:
             "enum Option[T]\n"
             "  | none\n"
             "  | some(value: T)\n"
-            "let x: Option[int] = Option.some(value = 1)\nx"
+            'let x: Option[int] = Option::some(value = 1)\nx'
         )
         assert r.resolved.program is not None
 
@@ -5554,7 +5727,7 @@ class TestGenericConstructorExplicit:
             "enum Option[T]\n"
             "  | none\n"
             "  | some(value: T)\n"
-            "Option.some::[int](value = 1)"
+            'Option[int]::some(value = 1)'
         )
         assert r.resolved.program is not None
 
@@ -5861,7 +6034,7 @@ class TestNonGenericConstructorAsValue:
 
     def test_qualified_enum_payload_variant_as_value_is_function_type(self) -> None:
         r = accept_type(
-            "enum E\n  | Nope\n  | Wrap(value: int)\nlet w = E.Wrap\nw"
+            'enum E\n  | Nope\n  | Wrap(value: int)\nlet w = E::Wrap\nw'
         )
         prog = r.resolved.program
         assert prog is not None
@@ -5888,17 +6061,16 @@ class TestNonGenericConstructorAsValue:
         assert "exception" in str(err).lower()
         assert "first-class" in str(err).lower() or "directly" in str(err).lower()
 
-    def test_qualified_record_field_as_value_rejected(self) -> None:
-        # A `RecordName.field` reference in value position routes through the
-        # qualified-constructor-as-value path; the record is not an enum.
-        err = reject_type('record Box\n  item: int\nlet f = Box.item\n"x"')
-        assert "not a known enum" in str(err).lower()
+    def test_dot_type_name_as_value_rejected(self) -> None:
+        err = reject_any('record Box\n  item: int\nlet f = Box.item\n"x"')
+        assert "type name" in str(err).lower()
+        assert "::" in str(err)
 
     def test_qualified_unknown_variant_as_value_rejected(self) -> None:
-        # An `EnumName.bogus` reference in value position names a variant that
+        # An `EnumName::bogus` reference in value position names a variant that
         # does not exist; scope defers this to the checker.
         err = reject_type(
-            'enum E\n  | Nope\n  | Wrap(value: int)\nlet f = E.Bogus\n"x"'
+            'enum E\n  | Nope\n  | Wrap(value: int)\nlet f = E::Bogus\n"x"'
         )
         assert "does not exist in enum" in str(err).lower()
 
@@ -5916,8 +6088,8 @@ class TestGenericEnumQualifiersAndTypeVarScoping:
             self._OPTION
             + "let o: Option[int] = some(value = 5)\n"
             + "case o of\n"
-            + "  | Option.none => 0\n"
-            + "  | Option.some(value) => value\n"
+            + '  | Option::none => 0\n'
+            + '  | Option::some(value) => value\n'
         )
         assert r.resolved.program is not None
 
@@ -5927,8 +6099,8 @@ class TestGenericEnumQualifiersAndTypeVarScoping:
             self._OPTION
             + "let o: Option[int] = some(value = 5)\n"
             + "case o of\n"
-            + "  | Option.none => 0\n"
-            + "  | Option.some(value) => value + 1\n"
+            + '  | Option::none => 0\n'
+            + '  | Option::some(value) => value + 1\n'
         )
         assert r.resolved.program is not None
 
@@ -5936,8 +6108,8 @@ class TestGenericEnumQualifiersAndTypeVarScoping:
         r = accept_type(
             self._OPTION
             + "let o: Option[int] = some(value = 5)\n"
-            + "if o is Option.some => print 1\n"
-            + "if o is not Option.none => print 2\n"
+            + 'if o is Option::some => print 1\n'
+            + 'if o is not Option::none => print 2\n'
         )
         assert r.resolved.program is not None
 
@@ -5948,7 +6120,7 @@ class TestGenericEnumQualifiersAndTypeVarScoping:
             self._OPTION
             + "record Box[T]\n  value: T\n"
             + "let o: Option[int] = some(value = 5)\n"
-            + "if o is Box.some => print 1\n"
+            + "if o is Box::some => print 1\n"
         )
         assert "not a known enum type" in str(err).lower()
 
@@ -5958,7 +6130,7 @@ class TestGenericEnumQualifiersAndTypeVarScoping:
             self._OPTION
             + "enum Maybe[T]\n  | nothing\n  | just(value: T)\n"
             + "let o: Option[int] = some(value = 5)\n"
-            + "if o is Maybe.just => print 1\n"
+            + 'if o is Maybe::just => print 1\n'
         )
         assert "resolves to enum" in str(err).lower()
 

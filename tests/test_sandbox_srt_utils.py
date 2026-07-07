@@ -137,14 +137,27 @@ class TestMergeSettings:
         result = merge_settings(home, local)
         assert result["enabled"] is True
 
-    def test_network_is_shallow_merged(self) -> None:
-        home: JsonDict = {"network": {"allowedDomains": ["a.com"], "allowedPorts": [80]}}
-        local: JsonDict = {"network": {"allowedDomains": ["b.com"]}}
+    def test_network_lists_are_merged_and_deduplicated(self) -> None:
+        home: JsonDict = {
+            "network": {"allowedDomains": ["a.com", "shared.com"], "allowedPorts": [80]}
+        }
+        local: JsonDict = {
+            "network": {"allowedDomains": ["shared.com", "b.com"], "allowedPorts": [80, 443]}
+        }
+        result = merge_settings(home, local)
+        network = result["network"]
+        assert isinstance(network, dict)
+        assert network["allowedDomains"] == ["a.com", "shared.com", "b.com"]
+        assert network["allowedPorts"] == [80, 443]
+
+    def test_later_denied_domains_remove_earlier_allowed_domains(self) -> None:
+        home: JsonDict = {"network": {"allowedDomains": ["a.com", "b.com"]}}
+        local: JsonDict = {"network": {"deniedDomains": ["a.com", "blocked.com"]}}
         result = merge_settings(home, local)
         network = result["network"]
         assert isinstance(network, dict)
         assert network["allowedDomains"] == ["b.com"]
-        assert network["allowedPorts"] == [80]
+        assert network["deniedDomains"] == ["a.com", "blocked.com"]
 
     def test_network_from_scratch_when_home_has_none(self) -> None:
         home: JsonDict = {}
@@ -158,14 +171,37 @@ class TestMergeSettings:
         result = merge_settings(home, local)
         assert result["network"] == {"key": "val"}
 
-    def test_filesystem_is_shallow_merged(self) -> None:
-        home: JsonDict = {"filesystem": {"allowWrite": ["/home"], "denyWrite": ["/etc"]}}
-        local: JsonDict = {"filesystem": {"allowWrite": ["/local"]}}
+    def test_network_non_list_keys_override_earlier_values(self) -> None:
+        home: JsonDict = {"network": {"mode": "restricted"}}
+        local: JsonDict = {"network": {"mode": "open"}}
+        result = merge_settings(home, local)
+        assert result["network"] == {"mode": "open"}
+
+    def test_filesystem_lists_are_merged_and_deduplicated(self) -> None:
+        home: JsonDict = {
+            "filesystem": {"allowWrite": ["/home", "/shared"], "denyWrite": ["/etc"]}
+        }
+        local: JsonDict = {
+            "filesystem": {"allowWrite": ["/shared", "/local"], "denyWrite": ["/etc"]}
+        }
         result = merge_settings(home, local)
         filesystem = result["filesystem"]
         assert isinstance(filesystem, dict)
-        assert filesystem["allowWrite"] == ["/local"]
+        assert filesystem["allowWrite"] == ["/home", "/shared", "/local"]
         assert filesystem["denyWrite"] == ["/etc"]
+
+    def test_later_filesystem_denies_remove_earlier_allows(self) -> None:
+        home: JsonDict = {
+            "filesystem": {"allowRead": ["/data", "/secrets"], "allowWrite": ["/work", "/tmp"]}
+        }
+        local: JsonDict = {"filesystem": {"denyRead": ["/secrets"], "denyWrite": ["/tmp"]}}
+        result = merge_settings(home, local)
+        filesystem = result["filesystem"]
+        assert isinstance(filesystem, dict)
+        assert filesystem["allowRead"] == ["/data"]
+        assert filesystem["denyRead"] == ["/secrets"]
+        assert filesystem["allowWrite"] == ["/work"]
+        assert filesystem["denyWrite"] == ["/tmp"]
 
     def test_filesystem_from_scratch_when_home_has_none(self) -> None:
         home: JsonDict = {}
@@ -232,13 +268,13 @@ class TestMergeSettingsChain:
         result = merge_settings_chain([a, b, c])
         assert result["enabled"] is True
 
-    def test_later_filesystem_overrides_earlier(self) -> None:
+    def test_later_filesystem_extends_earlier(self) -> None:
         a: JsonDict = {"filesystem": {"allowWrite": ["/a"]}}
         b: JsonDict = {"filesystem": {"allowWrite": ["/b"]}}
         result = merge_settings_chain([a, b])
         filesystem = result["filesystem"]
         assert isinstance(filesystem, dict)
-        assert filesystem["allowWrite"] == ["/b"]
+        assert filesystem["allowWrite"] == ["/a", "/b"]
 
 
 # ===========================================================================

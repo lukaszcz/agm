@@ -57,6 +57,16 @@ increment()
     assert ir["count"] == ir["count"] == IntValue(2)
 
 
+def test_inline_function_body_with_let() -> None:
+    source = """
+def g() -> int = let x = 0; x + 1
+let r = g()
+r
+"""
+    ir = evaluate_ir(source)
+    assert ir["r"] == IntValue(1)
+
+
 # ---------------------------------------------------------------------------
 # 1. Lambda with explicit return type bound to let, then called
 # ---------------------------------------------------------------------------

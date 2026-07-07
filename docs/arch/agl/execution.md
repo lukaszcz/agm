@@ -14,7 +14,7 @@ The IR is a runtime-neutral data model: program-local identities and source loca
 
 ### Single-Loop Primitive and Desugar
 
-The IR has exactly one loop kind: `IrLoop(body, guarded)`, which repeats `body` unconditionally. The only loop exits are `IrBreak` (leave the loop, yielding unit) and `IrContinue` (start the next iteration). Both propagate through `IrTry` bodies — which catch only `AglRaise` — so a `break`/`continue` inside a `try` block exits the loop, not the `try`. The loop evaluator is a simple `while True:` that catches `_BreakSignal`/`_ContinueSignal` (internal Python exceptions, not `AglRaise`).
+The IR has exactly one loop kind: `IrLoop(body, guarded)`, which repeats `body` unconditionally. The loop-local exits are `IrBreak` (leave the loop, yielding unit) and `IrContinue` (start the next iteration). Function-level `IrReturn` may also unwind through a loop. These signals propagate through `IrTry` bodies — which catch only `AglRaise` — so `break`/`continue`/`return` inside a `try` block are not caught by the `try`. The loop evaluator is a simple `while True:` that catches only `_BreakSignal`/`_ContinueSignal` (internal Python exceptions, not `AglRaise`).
 
 All richer loop features are desugared by the lowerer (`lower/lowerer.py` → `_lower_loop`) before the evaluator sees them:
 
@@ -42,10 +42,13 @@ The `guarded` flag marks self-bounded loops — those with a `[n]` bound (which 
 | `Loop` (while clause) | item 3 inside body: `IrIf(NOT lower(while_cond))=>IrBreak` |
 | `Break` | `IrBreak` |
 | `Continue` | `IrContinue` |
+| `Return` | `IrReturn` |
 
 ## Evaluator
 
 The evaluator interprets the linked program and nothing else. Its frame stack holds immutable bindings by value and mutable bindings in shared cells; the base frame is module scope, and function frames hold parameters and captured lexical bindings. Programs run under a pinned decimal arithmetic context so results never depend on the host's ambient precision.
+
+`IrReturn` evaluates its value and raises an internal `_ReturnSignal`; the function-call boundary catches that signal and uses its payload as the call result. No other evaluator site catches it, so it unwinds through loops and `try`/`catch` naturally.
 
 `IrIterInit` materializes an `IteratorValue` — a mutable cursor over a pre-built element list — that is stored as a regular immutable binding (the cell holds the same object throughout the loop). `IrIterHasNext` tests the position, and `IrIterNext` reads the current element and advances the position in place. `IteratorValue` is intentionally not a user-visible value type: it cannot be printed, serialized, or returned from a function.
 

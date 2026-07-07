@@ -143,7 +143,7 @@ def _build_cross_module_constructor_candidates(
     - TypeAlias: not constructible, skip.
 
     Returns ``(candidates, type_names)`` where ``type_names`` is the set of
-    open-imported type names (for qualified constructor access like ``Color.Red``).
+    open-imported type names (for qualified constructor access like ``Color::Red``).
     """
     candidates: dict[str, list[ConstructorRef]] = {}
     type_names: set[str] = set()
@@ -426,9 +426,10 @@ def resolve_graph(
                     private_info[key] = True
                 else:
                     all_public_types[key] = item
-                    # RecordDef/EnumDef/ExceptionDef use constructor_binding so cross-module
-                    # field access (mylib::Color.Red) is detected as type-qualified.
-                    # TypeAlias uses let_binding (it's not constructible).
+                    # RecordDef/EnumDef/ExceptionDef use constructor_binding so
+                    # cross-module constructor refs (mylib::Color::Red) are
+                    # detected as type-qualified. TypeAlias uses let_binding
+                    # (it's not constructible).
                     kind = (
                         BinderKind.let_binding
                         if isinstance(item, TypeAlias)

@@ -872,11 +872,7 @@ class TypeEnvironment:
                     resolved_args,
                     span=eff_span,
                 )
-            graph_alias_key = (self._module_id, name)
-            graph_alias_def = self._graph_alias_table.get(graph_alias_key)
-            if graph_alias_def is None and graph_alias_key in self._graph_alias_keys:
-                self._ensure_graph_alias_resolved(self._module_id, name, eff_span)
-                graph_alias_def = self._graph_alias_table.get(graph_alias_key)
+            graph_alias_def = self._graph_alias_table.get((self._module_id, name))
             if graph_alias_def is not None:
                 return self.instantiate_alias(name, graph_alias_def, resolved_args, span=eff_span)
             if name in self._types:
@@ -1027,20 +1023,14 @@ class TypeEnvironment:
                 _resolving=_resolving | {name},
                 type_vars=type_vars,
             )
-        graph_alias_key = (self._module_id, name)
-        graph_alias_def = self._graph_alias_table.get(graph_alias_key)
-        if graph_alias_def is None and graph_alias_key in self._graph_alias_keys:
-            self._ensure_graph_alias_resolved(self._module_id, name, span)
-            graph_alias_def = self._graph_alias_table.get(graph_alias_key)
+        graph_alias_def = self._graph_alias_table.get((self._module_id, name))
         if graph_alias_def is not None:
-            if graph_alias_def.type_params:
-                raise AglTypeError(
-                    f"Parameterized alias '{name}' requires "
-                    f"{len(graph_alias_def.type_params)} type argument(s); "
-                    f"use '{name}[...]' to apply it.",
-                    span=span,
-                )
-            return graph_alias_def.template
+            raise AglTypeError(
+                f"Parameterized alias '{name}' requires "
+                f"{len(graph_alias_def.type_params)} type argument(s); "
+                f"use '{name}[...]' to apply it.",
+                span=span,
+            )
         # Direct named type (record, enum, exception, prelude).
         typ = self._types.get(name)
         if typ is not None:

@@ -2431,6 +2431,15 @@ def test_same_module_parameterized_alias_in_function_signature(tmp_path: Path) -
     _check_graph(tmp_path, modules)
 
 
+def test_same_module_parameterized_alias_bare_reference_is_rejected(tmp_path: Path) -> None:
+    modules = {
+        "entry": "type Box[T] = list[T]\ndef f(x: Box) -> int = 1\nf([1])",
+    }
+
+    with pytest.raises(AglTypeError):
+        _check_graph(tmp_path, modules)
+
+
 def test_open_imported_parameterized_alias_in_type_definition(tmp_path: Path) -> None:
     wrapper_id = ModuleId.from_dotted("wrapper")
     modules = {

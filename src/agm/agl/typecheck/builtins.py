@@ -60,6 +60,8 @@ class BuiltinCheckCtx(Protocol):
         self, value_type: Type, target_type: Type, span: SourceSpan
     ) -> None: ...
 
+    def _type_is_wire_serializable(self, typ: Type) -> bool: ...
+
 
 # ---------------------------------------------------------------------------
 # Collaborator class
@@ -418,6 +420,12 @@ class BuiltinCallChecker:
         message = self._ctx._env.type_table.no_finite_schema_message(target_type, use=use)
         if message is not None:
             raise AglTypeError(message, span=span)
+        if not self._ctx._type_is_wire_serializable(target_type):
+            raise AglTypeError(
+                f"{use.capitalize()} '{target_type!r}' is not JSON-serializable; "
+                "use a JSON-serializable data type.",
+                span=span,
+            )
 
     # --- shared parse-option handling (ask / exec) ---
 

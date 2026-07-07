@@ -6525,6 +6525,24 @@ class TestNoFiniteSchemaUseSites:
         assert "perfect" in msg
         assert "cast target" in msg
 
+    def test_ask_record_with_nested_function_field_rejected(self) -> None:
+        err = reject_type('record Holder\n  f: int -> text\nask::[Holder]("Q")')
+        msg = str(err).lower()
+        assert "agent output type" in msg
+        assert "json-serializable" in msg
+
+    def test_exec_record_with_nested_agent_field_rejected(self) -> None:
+        err = reject_type('record Holder\n  a: agent\nexec::[Holder]("cmd")')
+        msg = str(err).lower()
+        assert "exec output type" in msg
+        assert "json-serializable" in msg
+
+    def test_cast_record_with_nested_function_field_rejected(self) -> None:
+        err = reject_type('record Holder\n  f: int -> text\nlet raw: text = "{}"\nraw as Holder')
+        msg = str(err).lower()
+        assert "cast target" in msg
+        assert "json-serializable" in msg
+
     def test_cast_scalar_fallible_target_still_legal(self) -> None:
         # A FALLIBLE cast to a plain scalar target (no record/enum anywhere
         # in it) never has a schema to derive, so it stays legal —

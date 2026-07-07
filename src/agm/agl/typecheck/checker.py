@@ -606,7 +606,7 @@ class _Checker:
             )
             if message is not None:
                 raise AglTypeError(message, span=stmt.span)
-            if not self._param_type_is_wire_serializable(declared_type):
+            if not self._type_is_wire_serializable(declared_type):
                 raise AglTypeError(
                     f"Param type '{declared_type!r}' cannot be decoded from JSON; "
                     "use text or a JSON-serializable data type.",
@@ -614,8 +614,8 @@ class _Checker:
                 )
         self._env.set_binding_type(stmt.node_id, declared_type)
 
-    def _param_type_is_wire_serializable(self, typ: Type) -> bool:
-        """Return whether *typ* can be decoded from the external param boundary."""
+    def _type_is_wire_serializable(self, typ: Type) -> bool:
+        """Return whether *typ* can be decoded from a JSON/schema boundary."""
         return self._wire_type_is_serializable(typ, seen=frozenset())
 
     def _wire_type_is_serializable(self, typ: Type, *, seen: frozenset[Type]) -> bool:
@@ -1013,6 +1013,12 @@ class _Checker:
             )
             if message is not None:
                 raise AglTypeError(message, span=node.span)
+            if not self._type_is_wire_serializable(target_type):
+                raise AglTypeError(
+                    f"Cast target '{target_type!r}' is not JSON-serializable; "
+                    "use a JSON-serializable data type.",
+                    span=node.span,
+                )
         self._cast_specs[node.node_id] = CastSpec(target_type=target_type, kind=kind)
         return BoolType() if node.test_only else target_type
 

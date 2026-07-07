@@ -3186,6 +3186,63 @@ class TestRegisterCodec:
         assert result.bindings["y"] == IntValue(7)
         assert seen_targets == ["int"]
 
+    def test_legacy_custom_codec_contract_and_parse_signatures_work(self) -> None:
+        """Custom codecs may use make_contract(type) and parse(raw, target_type, ...)."""
+
+        seen_contract_targets: list[str] = []
+        seen_parse_targets: list[str] = []
+
+        class LegacyCodec:
+            @property
+            def name(self) -> str:
+                return "legacy-int"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"int"})
+
+            def supports_type(self, t: Type) -> bool:
+                return isinstance(t, IntType)
+
+            def make_contract(self, type_ref: Type) -> OutputContract:
+                seen_contract_targets.append(repr(type_ref))
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=None,
+                    format_instructions="LEGACY",
+                    json_schema=None,
+                )
+
+            def parse(
+                self,
+                raw: str,
+                target_type: Type,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
+                decode: DecodeSchema | None = None,
+            ) -> ParseResult:
+                seen_parse_targets.append(repr(target_type))
+                return ParseResult.success(IntValue(int(raw)))
+
+        rt = PipelineDriver(default_agent=lambda req: "11")
+        rt.register_codec(LegacyCodec())
+        result = rt.run('let y: int = ask("Q", format = "legacy-int")\ny')
+
+        from agm.agl.runtime.contract import materialize_contract
+        from agm.agl.typecheck.env import OutputContractSpec
+
+        materialize_contract(
+            OutputContractSpec(IntType(), "legacy-int", strict_json=None),
+            {"legacy-int": LegacyCodec()},
+        )
+
+        assert result.ok is True
+        assert result.bindings["y"] == IntValue(11)
+        assert seen_contract_targets == ["int", "int"]
+        assert seen_parse_targets == ["int"]
+
     def test_custom_codec_ir_materialization_reconstructs_target_kinds(self) -> None:
         """IR contract materialization gives custom codecs kind-correct placeholders."""
 

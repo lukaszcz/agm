@@ -27,6 +27,7 @@ scope at all (see ``eval/effects.py``'s ``ask``-display fallback).
 
 from __future__ import annotations
 
+import inspect
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -132,7 +133,7 @@ def materialize_ir_contract(
             "This is a host-configuration error."
         )
     if request.codec_name not in BUILTIN_CODEC_NAMES:
-        base = codec.make_contract(_placeholder_type_for_request(request), None)
+        base = _call_make_contract(codec, _placeholder_type_for_request(request), None)
         format_instructions = base.format_instructions
         schema: object = base.json_schema
         decode = base.decode
@@ -154,6 +155,25 @@ def materialize_ir_contract(
         defs=defs,
         structured_exec=request.structured_exec,
     )
+
+
+def _call_make_contract(
+    codec: OutputCodec, type_ref: Type, type_table: "TypeTable | None"
+) -> OutputContract:
+    """Call a codec's contract hook, accepting the legacy one-argument form."""
+    try:
+        params = inspect.signature(codec.make_contract).parameters.values()
+    except (TypeError, ValueError):
+        return codec.make_contract(type_ref, type_table)
+    positional = [
+        param
+        for param in params
+        if param.kind.name in {"POSITIONAL_ONLY", "POSITIONAL_OR_KEYWORD"}
+    ]
+    has_varargs = any(param.kind.name == "VAR_POSITIONAL" for param in params)
+    if not has_varargs and len(positional) <= 1:
+        return codec.make_contract(type_ref)
+    return codec.make_contract(type_ref, type_table)
 
 
 def _placeholder_type_for_request(request: ContractRequest) -> Type:
@@ -222,7 +242,7 @@ def materialize_contract(
             "This is a host-configuration error."
         )
     # Delegate format_instructions/json_schema/decode derivation to the codec.
-    base = codec.make_contract(spec.target_type, type_table)
+    base = _call_make_contract(codec, spec.target_type, type_table)
     # Overlay the per-call strict_json from the spec (the codec's make_contract
     # sets a default; the static spec overrides it for the specific call site).
     return OutputContract(

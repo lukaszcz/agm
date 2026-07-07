@@ -1128,6 +1128,7 @@ class _Checker:
             isinstance(template, (RecordType, EnumType))
             and isinstance(concrete, (RecordType, EnumType))
             and type(template) is type(concrete)
+            and template.module_id == concrete.module_id
             and template.name == concrete.name
             and len(template.type_args) == len(concrete.type_args)
         ):

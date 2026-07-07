@@ -105,6 +105,7 @@ from agm.agl.typecheck import (
     ListType,
     RecordType,
     TextType,
+    Type,
     TypeEnvironment,
     UnitType,
     check,
@@ -6622,6 +6623,23 @@ class TestGenericNominalModuleId:
             "Box[int] from libA and Box[int] from libB must be distinct types. "
             "Both had module_id=ENTRY_ID before the fix."
         )
+
+    def test_generic_match_does_not_infer_through_different_module_id(self) -> None:
+        """Generic inference must respect nominal module identity."""
+        from agm.agl.modules.ids import ModuleId
+        from agm.agl.typecheck.checker import _Checker
+
+        lib_a = ModuleId.from_dotted("libA")
+        lib_b = ModuleId.from_dotted("libB")
+        checker = _Checker(TypeEnvironment(), resolve(parse_program("()")), default_capabilities())
+        subst: dict[str, Type] = {}
+        checker._match(
+            RecordType("Box", type_args=(TypeVarType("T"),), module_id=lib_a),
+            RecordType("Box", type_args=(IntType(),), module_id=lib_b),
+            subst,
+            span=mk_span(),
+        )
+        assert subst == {}
 
     def test_build_generic_record_stamps_module_id(self) -> None:
         """_TypeBuilder._build_generic_record stamps the template with module_id.

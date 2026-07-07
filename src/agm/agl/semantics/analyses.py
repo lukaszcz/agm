@@ -93,11 +93,14 @@ from agm.agl.semantics.types import (
     Type,
     TypeVarType,
     UnitType,
+    substitute,
 )
 from agm.util.graph import sccs
 
 # A declaration's identity in the shared type table.
 DeclKey = tuple[ModuleId, str]
+TypeEnv = Mapping[str, Type]
+InstantiationKey = tuple[DeclKey, tuple[Type, ...]]
 
 
 # ---------------------------------------------------------------------------
@@ -115,16 +118,12 @@ def compute_uninhabited(table: TypeTable) -> frozenset[DeclKey]:
     Iterates to a fixpoint (bounded by the number of declarations) before
     returning the keys that never got promoted.
 
-    A handle's ``type_args`` play no part here: a type variable counts as
-    inhabited regardless of what it is eventually instantiated with, so a
-    generic declaration's inhabitation is a property of its template alone,
-    independent of any particular instantiation. This is exact for the
-    common case (a type parameter used directly, or nested in containers,
-    behaves the same for inhabitation purposes no matter the argument) and,
-    for a self-referential argument (a declaration applying a generic type to
-    itself), is a deliberate, documented simplification: it only ever ERRS
-    toward accepting a declaration, never toward rejecting an inhabited one,
-    so it never produces a false "uninhabitable" diagnostic.
+    Generic references are checked at the concrete argument templates used at
+    the reference site. A free type variable in a declaration body is treated
+    as inhabited, but once a generic wrapper is applied to an uninhabited
+    recursive type (for example ``Box[Bad]`` where ``Box[T]`` stores a ``T``),
+    the wrapper's body is evaluated with that argument substituted, so it does
+    not hide unguarded recursion.
     """
     defs = _all_defs(table)
     inhabited: set[DeclKey] = set()
@@ -134,7 +133,7 @@ def compute_uninhabited(table: TypeTable) -> frozenset[DeclKey]:
         for key, typedef in defs.items():
             if key in inhabited:
                 continue
-            if _decl_inhabited(typedef, inhabited):
+            if _decl_inhabited(typedef, inhabited, defs):
                 inhabited.add(key)
                 changed = True
     return frozenset(defs) - inhabited
@@ -150,13 +149,41 @@ def uninhabitable_message(kind: TypeDefKind, name: str) -> str:
     )
 
 
-def _decl_inhabited(typedef: TypeDef, inhabited: set[DeclKey]) -> bool:
+def _decl_inhabited(
+    typedef: TypeDef,
+    inhabited: set[DeclKey],
+    defs: Mapping[DeclKey, TypeDef],
+) -> bool:
+    args = tuple(TypeVarType(param) for param in typedef.type_params)
+    return _body_inhabited(
+        typedef,
+        {},
+        inhabited,
+        defs,
+        stack=frozenset({((typedef.module_id, typedef.name), args)}),
+    )
+
+
+def _body_inhabited(
+    typedef: TypeDef,
+    env: TypeEnv,
+    inhabited: set[DeclKey],
+    defs: Mapping[DeclKey, TypeDef],
+    *,
+    stack: frozenset[InstantiationKey],
+) -> bool:
     if typedef.kind == "enum":
         return any(
-            all(_template_inhabited(t, inhabited) for _fname, t in vfields)
+            all(
+                _template_inhabited(t, env, inhabited, defs, stack=stack)
+                for _fname, t in vfields
+            )
             for _vname, vfields in typedef.variants
         )
-    own_ok = all(_template_inhabited(t, inhabited) for _fname, t in typedef.fields)
+    own_ok = all(
+        _template_inhabited(t, env, inhabited, defs, stack=stack)
+        for _fname, t in typedef.fields
+    )
     if typedef.kind == "exception" and typedef.base is not None:
         # Model the ``extends`` link as a conjunct rather than flattening the
         # base's fields in: equivalent (the base's own conjunct already
@@ -168,13 +195,49 @@ def _decl_inhabited(typedef: TypeDef, inhabited: set[DeclKey]) -> bool:
     return own_ok
 
 
-def _template_inhabited(t: Type, inhabited: set[DeclKey]) -> bool:
+def _template_inhabited(
+    t: Type,
+    env: TypeEnv,
+    inhabited: set[DeclKey],
+    defs: Mapping[DeclKey, TypeDef],
+    *,
+    stack: frozenset[InstantiationKey],
+) -> bool:
     match t:
-        case RecordType() | EnumType() | ExceptionType():
-            return (t.module_id, t.name) in inhabited
+        case TypeVarType():
+            replacement = env.get(t.name)
+            if replacement is None:
+                return True
+            return _template_inhabited(replacement, env, inhabited, defs, stack=stack)
+        case RecordType() | EnumType():
+            key = (t.module_id, t.name)
+            if any(stack_key == key for stack_key, _args in stack):
+                return False
+            target = defs.get(key)
+            if target is None:
+                return key in inhabited
+            args = tuple(substitute(arg, env) for arg in t.type_args)
+            instantiation = (key, args)
+            target_env = dict(zip(target.type_params, args))
+            return _body_inhabited(
+                target,
+                target_env,
+                inhabited,
+                defs,
+                stack=stack | frozenset({instantiation}),
+            )
+        case ExceptionType():
+            key = (t.module_id, t.name)
+            if any(stack_key == key for stack_key, _args in stack):
+                return False
+            return key in inhabited
         case ListType() | DictType():
             # The empty collection is always a value, regardless of the
             # element/value type — this is exactly what "guards" recursion.
+            return True
+        case FunctionType():
+            # Function values are opaque for inhabitation; their parameter and
+            # result types do not require values to exist at this site.
             return True
         case (
             TextType()
@@ -184,9 +247,7 @@ def _template_inhabited(t: Type, inhabited: set[DeclKey]) -> bool:
             | DecimalType()
             | UnitType()
             | AgentType()
-            | FunctionType()
             | BottomType()
-            | TypeVarType()
         ):
             return True
         case _ as unreachable:  # pragma: no cover

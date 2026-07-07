@@ -6014,42 +6014,42 @@ class TestGenericRecursiveTypes:
         err = reject_type("record A[T]\n  b: B[T]\nrecord B[T]\n  a: A[T]\nA(b = B(a = ()))")
         assert "uninhabitable" in str(err).lower()
 
-    def test_generic_argument_self_reference_is_accepted(self) -> None:
-        # A[T] (a generic record) is not itself recursive; a non-generic
-        # record applying it to itself (Box[A]) is still accepted:
-        # inhabitation is declaration-level and ignores type arguments, so
-        # Box's declaration is unconditionally inhabited regardless of what
-        # A[T] is instantiated with.
-        r = accept_type("record Box[T]\n  v: T\nrecord A\n  x: Box[A]\n()")
-        assert r.resolved.program is not None
+    def test_generic_argument_self_reference_is_uninhabitable(self) -> None:
+        # Box[A] requires a Box value whose own value field requires A again,
+        # so the generic wrapper does not guard the recursion.
+        err = reject_type("record Box[T]\n  value: T\nrecord A\n  child: Box[A]\n()")
+        assert "uninhabitable" in str(err).lower()
 
-    def test_generic_argument_self_reference_is_accepted_for_enum(self) -> None:
-        # enum variant field applying a generic type to the enclosing enum.
-        r = accept_type("record Box[T]\n  v: T\nenum E\n  | C(b: Box[E])\n()")
-        assert r.resolved.program is not None
+    def test_generic_argument_self_reference_is_uninhabitable_for_enum(self) -> None:
+        # An enum with only a generic-wrapper recursive variant still has no base case.
+        err = reject_type("record Box[T]\n  value: T\nenum E\n  | C(child: Box[E])\n()")
+        assert "uninhabitable" in str(err).lower()
 
-    def test_generic_argument_mutual_reference_is_accepted(self) -> None:
-        # record A (b: Box[B]) + record B (a: Box[A]): neither A nor B is
-        # generic, but each applies a generic Box to the other through the
-        # type argument position — accepted for the same reason as above.
-        r = accept_type(
-            "record Box[T]\n  v: T\n"
+    def test_generic_argument_mutual_reference_is_uninhabitable(self) -> None:
+        # record A (b: Box[B]) + record B (a: Box[A]): both wrapper values
+        # ultimately require the other record, so neither side can bottom out.
+        err = reject_type(
+            "record Box[T]\n  value: T\n"
             "record A\n  b: Box[B]\n"
             "record B\n  a: Box[A]\n"
             "()"
         )
-        assert r.resolved.program is not None
+        assert "uninhabitable" in str(err).lower()
 
-    def test_generic_argument_reference_via_parameterized_alias_is_accepted(self) -> None:
-        # type AL[X] = Box[X] is a parameterized alias; applying it to A
-        # (AL[A]) inlines to Box[A], the same accepted self-referencing
-        # argument case as the direct-application case above.
-        r = accept_type(
-            "record Box[T]\n  v: T\n"
+    def test_generic_argument_reference_via_parameterized_alias_is_uninhabitable(self) -> None:
+        # type AL[X] = Box[X] aliases the same unguarded wrapper recursion as Box[A].
+        err = reject_type(
+            "record Box[T]\n  value: T\n"
             "type AL[X] = Box[X]\n"
             "record A\n  x: AL[A]\n"
             "()"
         )
+        assert "uninhabitable" in str(err).lower()
+
+    def test_phantom_generic_argument_self_reference_is_accepted(self) -> None:
+        # Phantom[T] does not use T in its value shape, so Phantom[A] does not
+        # require an A value and the record has a finite value.
+        r = accept_type("record Phantom[T]()\nrecord A\n  child: Phantom[A]\nA(child = Phantom())")
         assert r.resolved.program is not None
 
 

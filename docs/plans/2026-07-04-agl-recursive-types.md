@@ -254,7 +254,7 @@ updates, written user-side with no implementation references:
   applicable) — the no-finite-schema use-site rule at agent output and cast
   targets.
 - `docs/arch/agl/frontend.md` — handle + type-table model, declaration-level
-  analyses; `docs/arch/agl/execution.md` — decode defs; 
+  analyses; `docs/arch/agl/execution.md` — decode defs;
   `docs/arch/agl/modules.md` — graph type pass without body toposort.
 
 ## Testing

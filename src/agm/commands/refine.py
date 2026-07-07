@@ -15,7 +15,7 @@ from agm.config.command_config import load_command_config
 from agm.config.general import RefineConfig, load_refine_config
 from agm.core.log import append_log, prepare_log_file, resolve_log_file
 
-DEFAULT_MAX_STEPS = 20
+DEFAULT_MAX_STEPS = 12
 
 
 def _refine_config(command_name: str | None) -> RefineConfig:

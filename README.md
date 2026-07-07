@@ -113,10 +113,13 @@ Shortcut for `agm workspace close`. Remove a branch workspace and close its tmux
 ```bash
 agm close feat/search
 agm close --force feat/search
+agm close --keep-branch feat/search
+agm close --keep-workspace feat/search
 ```
 
 `repo` and the branch currently checked out in the main workspace resolve to the main workspace and
-cannot be closed.
+cannot be closed. Use `--keep-branch` to remove only the worktree, or `--keep-workspace` to close the
+session while keeping both the workspace and branch.
 
 ### `agm init`
 

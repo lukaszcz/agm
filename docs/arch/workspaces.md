@@ -15,11 +15,11 @@ The layout module detects which layout is in use from the directory structure an
 
 A *workspace* is either the main repository or a linked git worktree for a branch, interpreted with AGM's project config, dependency environment, setup scripts, and tmux lifecycle. Opening a branch that has no worktree checks it out into one; opening a missing branch creates it first. Branch workspaces map to a predictable worktree path derived from the branch name.
 
-Worktree orchestration coordinates git operations with dependency setup: creating a worktree, ensuring tracking branches exist, and syncing remote-tracking branches. The `worktree` and `workspace` command groups expose creation, removal, listing, and opening; only branch workspaces can be closed (the main workspace and its branch are protected).
+Worktree orchestration coordinates git operations with dependency setup: creating a worktree, ensuring tracking branches exist, and syncing remote-tracking branches. The `worktree` and `workspace` command groups expose creation, removal, listing, and opening; only branch workspaces can be closed (the main workspace and its branch are protected), and close can optionally retain the branch or the whole workspace while still closing the session.
 
 ## Dependencies
 
-Dependencies are sibling repositories checked out under the project's deps directory, managed by the `dep` command group (list, new, switch, remove). Each dependency contributes environment variables describing its checked-out branch, assembled from the project's dependency TOML tables, so that a workspace's environment reflects which branch of each dependency is active. Branch dependency configs are inherited from the parent or main config; checkout directories under `deps/` are resolved only for dependencies that the inherited config already declares.
+Dependencies are sibling repositories checked out under the project's deps directory, managed by the `dep` command group (list, new, switch, remove). Each dependency contributes `_DIR` environment variables describing its checked-out branch, assembled from the project's dependency TOML tables, so that a workspace's environment reflects which branch of each dependency is active. Branch dependency configs are inherited from the parent or main config; checkout directories under `deps/` are resolved only for dependencies that the inherited config already declares.
 
 ## Sync
 

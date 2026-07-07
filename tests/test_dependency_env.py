@@ -34,60 +34,60 @@ from agm.vcs.git import WorktreeInfo
 
 class TestDepEnvVarName:
     def test_simple_lowercase(self) -> None:
-        assert dep_env_var_name("mylib") == "MYLIB"
+        assert dep_env_var_name("mylib") == "MYLIB_DIR"
 
     def test_simple_uppercase(self) -> None:
-        assert dep_env_var_name("MYLIB") == "MYLIB"
+        assert dep_env_var_name("MYLIB") == "MYLIB_DIR"
 
     def test_mixed_case(self) -> None:
-        assert dep_env_var_name("MyLib") == "MYLIB"
+        assert dep_env_var_name("MyLib") == "MYLIB_DIR"
 
     def test_hyphen_replaced_by_underscore(self) -> None:
-        assert dep_env_var_name("my-lib") == "MY_LIB"
+        assert dep_env_var_name("my-lib") == "MY_LIB_DIR"
 
     def test_dot_replaced_by_underscore(self) -> None:
-        assert dep_env_var_name("my.lib") == "MY_LIB"
+        assert dep_env_var_name("my.lib") == "MY_LIB_DIR"
 
     def test_space_replaced_by_underscore(self) -> None:
-        assert dep_env_var_name("my lib") == "MY_LIB"
+        assert dep_env_var_name("my lib") == "MY_LIB_DIR"
 
     def test_multiple_non_alnum_collapsed(self) -> None:
-        assert dep_env_var_name("my--lib") == "MY_LIB"
+        assert dep_env_var_name("my--lib") == "MY_LIB_DIR"
 
     def test_leading_digit_gets_underscore_prefix(self) -> None:
-        assert dep_env_var_name("1lib") == "_1LIB"
+        assert dep_env_var_name("1lib") == "_1LIB_DIR"
 
     def test_all_digits_gets_underscore_prefix(self) -> None:
-        assert dep_env_var_name("123") == "_123"
+        assert dep_env_var_name("123") == "_123_DIR"
 
     def test_empty_string_returns_dep(self) -> None:
-        assert dep_env_var_name("") == "DEP"
+        assert dep_env_var_name("") == "DEP_DIR"
 
     def test_only_special_chars_returns_dep(self) -> None:
-        assert dep_env_var_name("---") == "DEP"
+        assert dep_env_var_name("---") == "DEP_DIR"
 
     def test_only_special_chars_mixed_returns_dep(self) -> None:
-        assert dep_env_var_name("...") == "DEP"
+        assert dep_env_var_name("...") == "DEP_DIR"
 
     def test_underscores_preserved(self) -> None:
-        assert dep_env_var_name("my_lib") == "MY_LIB"
+        assert dep_env_var_name("my_lib") == "MY_LIB_DIR"
 
     def test_leading_underscore_stripped_then_uppercased(self) -> None:
         # leading/trailing _ are stripped by .strip("_") before checking digit
-        assert dep_env_var_name("_mylib") == "MYLIB"
+        assert dep_env_var_name("_mylib") == "MYLIB_DIR"
 
     def test_numbers_in_middle(self) -> None:
-        assert dep_env_var_name("lib2go") == "LIB2GO"
+        assert dep_env_var_name("lib2go") == "LIB2GO_DIR"
 
     def test_single_letter(self) -> None:
-        assert dep_env_var_name("a") == "A"
+        assert dep_env_var_name("a") == "A_DIR"
 
     def test_digit_only_after_stripping(self) -> None:
         # "-1-" → strip "_" → "1" → starts with digit → "_1"
-        assert dep_env_var_name("-1-") == "_1"
+        assert dep_env_var_name("-1-") == "_1_DIR"
 
     def test_complex_name(self) -> None:
-        assert dep_env_var_name("some-complex.dep_name") == "SOME_COMPLEX_DEP_NAME"
+        assert dep_env_var_name("some-complex.dep_name") == "SOME_COMPLEX_DEP_NAME_DIR"
 
 
 # ---------------------------------------------------------------------------
@@ -293,7 +293,7 @@ class TestLoadDependencyTomlEnv:
             env=env,
         )
         expected_path = str(project_dir / "deps" / "mylib" / "main")
-        assert result["MYLIB"] == expected_path
+        assert result["MYLIB_DIR"] == expected_path
 
     def test_skips_empty_dep_branch(self, tmp_path: Path) -> None:
         project_dir = self._workspace_project(tmp_path)
@@ -307,7 +307,7 @@ class TestLoadDependencyTomlEnv:
             config_files=[config_file],
             env=env,
         )
-        assert "MYLIB" not in result
+        assert "MYLIB_DIR" not in result
 
     def test_skips_non_string_dep_branch(self, tmp_path: Path) -> None:
         project_dir = self._workspace_project(tmp_path)
@@ -321,7 +321,7 @@ class TestLoadDependencyTomlEnv:
             config_files=[config_file],
             env=env,
         )
-        assert "MYLIB" not in result
+        assert "MYLIB_DIR" not in result
 
     def test_multiple_config_files_later_wins(self, tmp_path: Path) -> None:
         project_dir = self._workspace_project(tmp_path)
@@ -340,7 +340,7 @@ class TestLoadDependencyTomlEnv:
             env=env,
         )
         expected_path = str(project_dir / "deps" / "mylib" / "feat")
-        assert result["MYLIB"] == expected_path
+        assert result["MYLIB_DIR"] == expected_path
 
     def test_multiple_deps_loaded(self, tmp_path: Path) -> None:
         project_dir = self._workspace_project(tmp_path)
@@ -354,8 +354,8 @@ class TestLoadDependencyTomlEnv:
             config_files=[config_file],
             env=env,
         )
-        assert result["LIB_A"] == str(project_dir / "deps" / "lib-a" / "main")
-        assert result["LIB_B"] == str(project_dir / "deps" / "lib-b" / "dev")
+        assert result["LIB_A_DIR"] == str(project_dir / "deps" / "lib-a" / "main")
+        assert result["LIB_B_DIR"] == str(project_dir / "deps" / "lib-b" / "dev")
 
     def test_preserves_existing_env_vars(self, tmp_path: Path) -> None:
         project_dir = self._workspace_project(tmp_path)
@@ -397,7 +397,7 @@ class TestLoadDependencyTomlEnv:
             config_files=[config_file],
             env=env,
         )
-        assert result["MY_DEP"] == str(project_dir / "deps" / "my-dep" / "main")
+        assert result["MY_DEP_DIR"] == str(project_dir / "deps" / "my-dep" / "main")
 
     def test_no_deps_table_in_config(self, tmp_path: Path) -> None:
         project_dir = self._workspace_project(tmp_path)

@@ -298,6 +298,12 @@ def project_name(project_dir: Path) -> str:
     return project_root(project_dir).name
 
 
+def _tmux_session_name(name: str) -> str:
+    """Return *name* normalized the same way tmux stores session names."""
+
+    return name.replace(".", "_").replace(":", "_")
+
+
 def project_repo_dir(project_dir: Path) -> Path:
     """Return the main repository directory for *project_dir*."""
 
@@ -377,7 +383,7 @@ def parent_config_branch(project_dir: Path, parent: str | None) -> str | None:
 def branch_session_name(project_dir: Path, branch: str) -> str:
     """Return the tmux session name corresponding to *branch*."""
 
-    name = project_name(project_dir)
+    name = _tmux_session_name(project_name(project_dir))
 
     if branch == "repo":
         return name
@@ -385,7 +391,7 @@ def branch_session_name(project_dir: Path, branch: str) -> str:
     repo_branch = git_helpers.current_branch(project_repo_dir(project_dir))
     if is_main_workspace_branch(project_dir, branch, repo_branch=repo_branch):
         return name
-    return f"{name}/{branch}"
+    return f"{name}/{_tmux_session_name(branch)}"
 
 
 def exit_if_main_workspace_branch(project_dir: Path, branch: str, *, repo_branch: str) -> None:

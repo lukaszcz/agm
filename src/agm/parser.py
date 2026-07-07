@@ -44,11 +44,11 @@ _HELP_TEXTS: dict[str, str] = {
           agm open --parent main feat/search
     """),
     "close": textwrap.dedent("""\
-        agm close [-f|--force] [-D] BRANCH
+        agm close [-f|--force] [-D] [--keep-branch] [--keep-workspace] BRANCH
 
         Close a branch workspace.
 
-        Remove the workspace's Git worktree via agm wt rm, then kill
+        Remove the workspace's Git worktree unless --keep-workspace is used, then kill
         the corresponding tmux session.
 
         Options:
@@ -58,6 +58,11 @@ _HELP_TEXTS: dict[str, str] = {
           -D            Force delete the branch (git branch -D) instead of
                         safe delete (git branch -d). The Git worktree is only
                         removed if the branch deletion would succeed.
+          --keep-branch
+                        Remove the Git worktree but keep the local branch.
+          --keep-workspace
+                        Keep the Git worktree and local branch; only close the
+                        workspace session. Implies --keep-branch.
     """),
     "init": textwrap.dedent("""\
         agm init [--embedded | --split]
@@ -99,12 +104,12 @@ _HELP_TEXTS: dict[str, str] = {
     """),
     "workspace": textwrap.dedent("""\
         agm workspace open  [-d|--detach] [-n|--num-panes PANES] [-p|--parent PARENT] TARGET
-        agm workspace close [-f|--force] [-D] BRANCH
+        agm workspace close [-f|--force] [-D] [--keep-branch] [--keep-workspace] BRANCH
         agm workspace setup
         agm workspace list  [-v|--verbose]
         agm workspace shell-regen SHELL_DIR
         agm wsp open        [-d|--detach] [-n|--num-panes PANES] [-p|--parent PARENT] TARGET
-        agm wsp close       [-f|--force] [-D] BRANCH
+        agm wsp close       [-f|--force] [-D] [--keep-branch] [--keep-workspace] BRANCH
         agm wsp setup
         agm wsp list        [-v|--verbose]
 
@@ -600,13 +605,13 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         Alias form of agm workspace open.
     """),
     ("workspace", "close"): textwrap.dedent("""\
-        agm workspace close [-f|--force] [-D] BRANCH
+        agm workspace close [-f|--force] [-D] [--keep-branch] [--keep-workspace] BRANCH
 
-        Close a branch workspace, remove its Git worktree, remove workspace config,
-        and kill its tmux session.
+        Close a branch workspace, remove its Git worktree unless --keep-workspace is used,
+        remove workspace config when removing the worktree, and kill its tmux session.
     """),
     ("wsp", "close"): textwrap.dedent("""\
-        agm wsp close [-f|--force] [-D] BRANCH
+        agm wsp close [-f|--force] [-D] [--keep-branch] [--keep-workspace] BRANCH
 
         Alias form of agm workspace close.
     """),

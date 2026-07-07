@@ -222,8 +222,12 @@ class TypeTable:
     def _invalidate_cache_for(self, key: tuple[ModuleId, str]) -> None:
         self._record_fields_cache.pop(key, None)
         self._enum_variants_cache.pop(key, None)
-        self._exception_fields_cache.pop(key, None)
-        self._exception_field_kinds_cache.pop(key, None)
+        # Exception field accessors flatten inherited base chains, so changing
+        # one exception can invalidate cached descendants as well as the changed
+        # key. Clear the exception caches wholesale rather than trying to
+        # maintain a reverse-inheritance index.
+        self._exception_fields_cache.clear()
+        self._exception_field_kinds_cache.clear()
         # The equality-capability and finiteness fixpoints are whole-table
         # (any declaration's flag can in principle depend on any other's), so
         # a single changed key invalidates the whole cached result rather

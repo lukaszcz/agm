@@ -318,6 +318,80 @@ class TestExceptionAccessors:
         second = table.exception_fields(handle)
         assert first is second
 
+    def test_exception_fields_cache_updates_when_base_is_redefined(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Base",
+                module_id=ENTRY_ID,
+                fields=(("old", IntType()),),
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Child",
+                module_id=ENTRY_ID,
+                fields=(("own", TextType()),),
+                base=(ENTRY_ID, "Base"),
+            )
+        )
+        child = ExceptionType(name="Child", module_id=ENTRY_ID)
+        assert dict(table.exception_fields(child)) == {"old": IntType(), "own": TextType()}
+
+        table.unregister(ENTRY_ID, "Base")
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Base",
+                module_id=ENTRY_ID,
+                fields=(("new", BoolType()),),
+            )
+        )
+
+        assert dict(table.exception_fields(child)) == {"new": BoolType(), "own": TextType()}
+
+    def test_exception_field_kinds_cache_updates_when_base_is_redefined(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Base",
+                module_id=ENTRY_ID,
+                fields=(("old", IntType()),),
+                field_kinds=("standard",),
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Child",
+                module_id=ENTRY_ID,
+                fields=(("own", TextType()),),
+                field_kinds=("named_only",),
+                base=(ENTRY_ID, "Base"),
+            )
+        )
+        child = ExceptionType(name="Child", module_id=ENTRY_ID)
+        assert table.exception_field_kinds(child) == (("old", "standard"), ("own", "named_only"))
+
+        table.unregister(ENTRY_ID, "Base")
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Base",
+                module_id=ENTRY_ID,
+                fields=(("new", BoolType()),),
+                field_kinds=("positional_only",),
+            )
+        )
+
+        assert table.exception_field_kinds(child) == (
+            ("new", "positional_only"),
+            ("own", "named_only"),
+        )
+
     def test_exception_fields_missing_def_raises_keyerror(self) -> None:
         table = TypeTable()
         handle = ExceptionType(name="Ghost", module_id=ENTRY_ID)

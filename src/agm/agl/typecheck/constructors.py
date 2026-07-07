@@ -702,6 +702,7 @@ class ConstructorChecker:
             f"constructor_binding for '{callee_ref.name}' in "
             f"'{callee_ref.module_id.dotted()}' resolved to {type(owner_type).__name__}"
         )
+        self._reject_abstract_exception_constructor(owner_type, node.span)
         return self._check_constructor_call(
             owner=owner_type, variant=None, positional=node.args, named=node.named_args,
             span=node.span, node_id=node.node_id,
@@ -745,14 +746,7 @@ class ConstructorChecker:
                 span=node.span,
             )
         owner = self.resolve_constructor_owner(ctor_ref, node.span)
-        if isinstance(owner, ExceptionType) and self._ctx._env.type_table.exception_def(
-            owner
-        ).abstract:
-            raise AglTypeError(
-                "The abstract 'Exception' base type is not constructible. "
-                "Use a concrete exception type (e.g. 'Abort').",
-                span=node.span,
-            )
+        self._reject_abstract_exception_constructor(owner, node.span)
         return self._check_constructor_call(
             owner=owner, variant=ctor_ref.variant, positional=node.args, named=node.named_args,
             span=node.span, node_id=node.node_id,
@@ -781,6 +775,18 @@ class ConstructorChecker:
         )
 
     # --- Constructor call validation (private helper) ---
+
+    def _reject_abstract_exception_constructor(
+        self, owner: RecordType | EnumType | ExceptionType, span: SourceSpan
+    ) -> None:
+        if isinstance(owner, ExceptionType) and self._ctx._env.type_table.exception_def(
+            owner
+        ).abstract:
+            raise AglTypeError(
+                "The abstract 'Exception' base type is not constructible. "
+                "Use a concrete exception type (e.g. 'Abort').",
+                span=span,
+            )
 
     def _check_constructor_call(
         self,

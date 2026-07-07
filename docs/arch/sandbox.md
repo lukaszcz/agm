@@ -8,7 +8,7 @@ Sandboxing is delegated to SRT (the external sandbox-runtime tool); AGM does not
 
 ## Settings Resolution
 
-Sandbox settings are discovered and merged across the same scopes as general configuration (install, home, project, workspace). A per-command settings file is selected by command name, falling back to a default when no command-specific file exists. Before execution, AGM patches the merged settings to grant write access to the project-internal git directories the command legitimately needs, then runs SRT against the resulting settings. Configuration details live in [config.md](config.md).
+Sandbox settings are discovered and merged across the same scopes as general configuration (install, home, project, workspace). A per-command settings file is selected by command name, falling back to a default when no command-specific file exists. Network and filesystem policy sections merge by key; list-valued policy keys are appended with duplicates removed, and later deny lists subtract from earlier allow lists. Before execution, AGM patches the merged settings to grant write access to the project-internal git directories the command legitimately needs, then runs SRT against the resulting settings. Configuration details live in [config.md](config.md).
 
 ## Resource Limits
 

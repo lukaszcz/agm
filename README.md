@@ -286,7 +286,7 @@ agm run --no-sandbox --memory 8G make lint
 3. `./.agm/config.toml`
 
 Sandbox settings are resolved from the global sandbox directory, the project sandbox config
-directory, and `./.sandbox/`, with later files overriding earlier ones.
+directory, and `./.sandbox/`, with later files merged over earlier ones.
 
 ### `agm config copy`
 

@@ -6001,6 +6001,18 @@ class TestGenericRecursiveTypes:
         )
         assert r.resolved.program is not None
 
+    def test_generic_wrapper_around_type_var_is_accepted(self) -> None:
+        # Box[T] needs only the caller-provided T value; substituting the
+        # wrapper's type variable must not recurse forever in inhabitation.
+        r = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "record Wrap[T]\n"
+            "  box: Box[T]\n"
+            "Wrap(box = Box(value = 1))"
+        )
+        assert r.resolved.program is not None
+
     def test_generic_enum_direct_recursion_with_base_case_is_accepted(self) -> None:
         # enum L[T] | nil | cons(tail: L[T]): nil is a base-case variant.
         r = accept_type(

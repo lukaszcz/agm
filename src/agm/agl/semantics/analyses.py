@@ -207,7 +207,7 @@ def _template_inhabited(
     match t:
         case TypeVarType():
             replacement = env.get(t.name)
-            if replacement is None:
+            if replacement is None or replacement == t:
                 return True
             return _template_inhabited(replacement, env, inhabited, defs, stack=stack)
         case RecordType() | EnumType():

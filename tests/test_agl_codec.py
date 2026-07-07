@@ -3323,6 +3323,56 @@ class TestRegisterCodec:
         assert contract.format_instructions == "KW-ONLY"
         assert seen_tables == [table]
 
+    def test_custom_codec_make_contract_positional_only_type_table(self) -> None:
+        """Custom make_contract hooks may accept type_table positionally only."""
+
+        seen_tables: list[TypeTable | None] = []
+        table = type_table_for(_ISSUE_TYPEDEF)
+
+        class PositionalOnlyCodec:
+            @property
+            def name(self) -> str:
+                return "pos-only-contract"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"record"})
+
+            def supports_type(self, t: Type) -> bool:
+                return isinstance(t, RecordType)
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None, /
+            ) -> OutputContract:
+                seen_tables.append(type_table)
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=None,
+                    format_instructions="POS-ONLY",
+                    json_schema=None,
+                )
+
+            def parse(
+                self,
+                raw: str,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
+                decode: DecodeSchema | None = None,
+                defs: Mapping[str, DecodeSchema] | None = None,
+            ) -> ParseResult:
+                return ParseResult.failure(raw)
+
+        contract = materialize_contract(
+            OutputContractSpec(_ISSUE_TYPE, "pos-only-contract", strict_json=None),
+            {"pos-only-contract": PositionalOnlyCodec()},
+            table,
+        )
+
+        assert contract.format_instructions == "POS-ONLY"
+        assert seen_tables == [table]
+
     def test_custom_codec_make_contract_signature_probe_fallback(self) -> None:
         """Compatibility still works if a callable make_contract has no inspectable signature."""
 

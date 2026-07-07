@@ -241,7 +241,7 @@ class BuiltinCallChecker:
             codec_name, effective_strict, parse_policy_str = self._resolve_parse_options(
                 node, target_type, named
             )
-            self._check_finite_json_schema(
+            self._check_schema_compilable(
                 target_type, codec_name, node.span, use="an agent output type"
             )
             spec = OutputContractSpec(
@@ -335,7 +335,7 @@ class BuiltinCallChecker:
             codec_name, effective_strict, parse_policy_str = self._resolve_parse_options(
                 node, target_type, named
             )
-            self._check_finite_json_schema(
+            self._check_schema_compilable(
                 target_type, codec_name, node.span, use="an exec output type"
             )
             spec = OutputContractSpec(
@@ -398,26 +398,22 @@ class BuiltinCallChecker:
                 span=span,
             )
 
-    def _check_finite_json_schema(
+    def _check_schema_compilable(
         self, target_type: Type, codec_name: str, span: SourceSpan, *, use: str
     ) -> None:
-        """Reject *target_type* if the 'json' codec will need a schema it cannot derive.
+        """Reject *target_type* if lowering will schema-compile it but cannot.
 
         Shared by ``ask``/``ask-request`` (via ``_finish_ask_like``) and
-        ``exec``: only the 'json' codec ever calls ``derive_schema`` at
-        lowering time — a 'text' (or unit/structured-exec) target never
-        builds a schema, so this is a no-op for those. A type whose reachable
-        instantiation closure is infinite (growing polymorphic recursion) has
-        no finite JSON schema; using it as an agent/exec output type is
-        rejected here, as a normal checker error, rather than surfacing as an
-        internal crash when the lowerer later calls ``derive_schema``.
+        ``exec``. The lowerer derives schema/decode metadata for the built-in
+        JSON codec and for structured targets handled by custom codecs, so the
+        checker must reject infinite instantiation closures for the same set of
+        calls. Text (and unit/structured-exec) outputs do not build a schema.
         """
-        if codec_name != "json":
-            # A host-registered custom codec owns its own schema-derivation
-            # contract; it is not required to route through
-            # ``type_schema.derive_schema`` at all, and if it does, that
-            # function guards infinite types itself with a clear ``TypeError``
-            # rather than relying on this use-site check.
+        structured_kinds = {"record", "enum", "list", "dict"}
+        should_compile_schema = codec_name == "json" or (
+            codec_name != "text" and target_type.kind in structured_kinds
+        )
+        if not should_compile_schema:
             return
         message = self._ctx._env.type_table.no_finite_schema_message(target_type, use=use)
         if message is not None:

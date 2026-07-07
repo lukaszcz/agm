@@ -6451,6 +6451,23 @@ class TestNoFiniteSchemaUseSites:
         assert "perfect[int]" in msg
         assert "exec output type" in msg
 
+    def test_custom_structured_codec_growing_type_rejected(self) -> None:
+        caps = HostCapabilities(
+            agent_names=frozenset(),
+            has_default_agent=True,
+            supports_shell_exec=True,
+            codec_kinds={
+                "text": frozenset({"text"}),
+                "custom": frozenset({"record", "enum", "list", "dict"}),
+            },
+        )
+        err = reject_type(
+            _GROWING_TYPE_SRC + 'ask::[Perfect[int]]("Q", format = "custom")', caps
+        )
+        msg = str(err).lower()
+        assert "perfect[int]" in msg
+        assert "agent output type" in msg
+
     def test_cast_growing_type_target_rejected(self) -> None:
         err = reject_type(_GROWING_TYPE_SRC + 'let raw: text = "{}"\nraw as Perfect[int]')
         msg = str(err).lower()

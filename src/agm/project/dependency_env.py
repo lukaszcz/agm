@@ -32,14 +32,14 @@ def current_config_branch(
 
 
 def dep_env_var_name(dep_name: str) -> str:
-    """Return the environment variable name for *dep_name*."""
+    """Return the dependency directory environment variable name for *dep_name*."""
 
     name = re.sub(r"[^A-Za-z0-9]+", "_", dep_name).strip("_").upper()
     if not name:
-        return "DEP"
+        name = "DEP"
     if name[0].isdigit():
-        return f"_{name}"
-    return name
+        name = f"_{name}"
+    return f"{name}_DIR"
 
 
 def config_toml_file(project_dir: Path, branch: str | None) -> Path:

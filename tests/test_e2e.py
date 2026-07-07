@@ -959,7 +959,7 @@ class TestConfigEnv:
             encoding="utf-8",
         )
         (config / "env.sh").write_text(
-            'export DEP_SEEN_BY_ENV_SH="$VYPER_AUTOMATION/from-env-sh"\n',
+            'export DEP_SEEN_BY_ENV_SH="$VYPER_AUTOMATION_DIR/from-env-sh"\n',
             encoding="utf-8",
         )
 
@@ -969,8 +969,8 @@ class TestConfigEnv:
                 "-c",
                 (
                     f'eval "$({shlex.quote(str(_AGM_INSTALL["bin"]))} config env)"; '
-                    'printf "VYPER_AUTOMATION=%s\\nDEP_SEEN_BY_ENV_SH=%s\\n" '
-                    '"$VYPER_AUTOMATION" "$DEP_SEEN_BY_ENV_SH"'
+                    'printf "VYPER_AUTOMATION_DIR=%s\\nDEP_SEEN_BY_ENV_SH=%s\\n" '
+                    '"$VYPER_AUTOMATION_DIR" "$DEP_SEEN_BY_ENV_SH"'
                 ),
             ],
             capture_output=True,
@@ -982,7 +982,7 @@ class TestConfigEnv:
 
         expected_dep = project / "deps" / "vyper-automation" / "feat/app"
         assert result.stdout.splitlines() == [
-            f"VYPER_AUTOMATION={expected_dep}",
+            f"VYPER_AUTOMATION_DIR={expected_dep}",
             f"DEP_SEEN_BY_ENV_SH={expected_dep}/from-env-sh",
         ]
 
@@ -996,9 +996,9 @@ class TestConfigEnv:
             '[deps]\nvyper-automation = "feat/app"\n',
             encoding="utf-8",
         )
-        (config / ".env").write_text("VYPER_AUTOMATION=/custom/dep\n", encoding="utf-8")
+        (config / ".env").write_text("VYPER_AUTOMATION_DIR=/custom/dep\n", encoding="utf-8")
         (config / "env.sh").write_text(
-            'export DEP_SEEN_BY_ENV_SH="$VYPER_AUTOMATION/from-env-sh"\n',
+            'export DEP_SEEN_BY_ENV_SH="$VYPER_AUTOMATION_DIR/from-env-sh"\n',
             encoding="utf-8",
         )
 
@@ -1008,8 +1008,8 @@ class TestConfigEnv:
                 "-c",
                 (
                     f'eval "$({shlex.quote(str(_AGM_INSTALL["bin"]))} config env)"; '
-                    'printf "VYPER_AUTOMATION=%s\\nDEP_SEEN_BY_ENV_SH=%s\\n" '
-                    '"$VYPER_AUTOMATION" "$DEP_SEEN_BY_ENV_SH"'
+                    'printf "VYPER_AUTOMATION_DIR=%s\\nDEP_SEEN_BY_ENV_SH=%s\\n" '
+                    '"$VYPER_AUTOMATION_DIR" "$DEP_SEEN_BY_ENV_SH"'
                 ),
             ],
             capture_output=True,
@@ -1020,7 +1020,7 @@ class TestConfigEnv:
         )
 
         assert result.stdout.splitlines() == [
-            "VYPER_AUTOMATION=/custom/dep",
+            "VYPER_AUTOMATION_DIR=/custom/dep",
             "DEP_SEEN_BY_ENV_SH=/custom/dep/from-env-sh",
         ]
 
@@ -1044,7 +1044,7 @@ class TestConfigEnv:
             encoding="utf-8",
         )
         (workspace_config / "env.sh").write_text(
-            'export DEP_SEEN_BY_ENV_SH="$VYPER_AUTOMATION/from-env-sh"\n',
+            'export DEP_SEEN_BY_ENV_SH="$VYPER_AUTOMATION_DIR/from-env-sh"\n',
             encoding="utf-8",
         )
 
@@ -1054,8 +1054,8 @@ class TestConfigEnv:
                 "-c",
                 (
                     f'eval "$({shlex.quote(str(_AGM_INSTALL["bin"]))} config env)"; '
-                    'printf "VYPER_AUTOMATION=%s\\nDEP_SEEN_BY_ENV_SH=%s\\n" '
-                    '"$VYPER_AUTOMATION" "$DEP_SEEN_BY_ENV_SH"'
+                    'printf "VYPER_AUTOMATION_DIR=%s\\nDEP_SEEN_BY_ENV_SH=%s\\n" '
+                    '"$VYPER_AUTOMATION_DIR" "$DEP_SEEN_BY_ENV_SH"'
                 ),
             ],
             capture_output=True,
@@ -1067,7 +1067,7 @@ class TestConfigEnv:
 
         expected_dep = project / "deps" / "vyper-automation" / "feat/app"
         assert result.stdout.splitlines() == [
-            f"VYPER_AUTOMATION={expected_dep}",
+            f"VYPER_AUTOMATION_DIR={expected_dep}",
             f"DEP_SEEN_BY_ENV_SH={expected_dep}/from-env-sh",
         ]
 
@@ -6374,10 +6374,10 @@ class TestOpen:
         log = tmux_log.read_text()
         expected_dep_path = project / "deps" / "vyper-automation" / "main"
         assert expected_dep_path.is_dir()
-        assert f"-e VYPER_AUTOMATION={expected_dep_path}" not in log
+        assert f"-e VYPER_AUTOMATION_DIR={expected_dep_path}" not in log
         result = subprocess.run(
             [str(_workspace_shell_path(env, "proj/feat/test"))],
-            input='printf "%s\\n" "$VYPER_AUTOMATION"\nexit\n',
+            input='printf "%s\\n" "$VYPER_AUTOMATION_DIR"\nexit\n',
             cwd=project / "worktrees" / "feat/test",
             env=_agm_env(env),
             capture_output=True,
@@ -6407,10 +6407,10 @@ class TestOpen:
 
         log = tmux_log.read_text()
         expected_dep_path = project / "deps" / "vyper-automation" / "main"
-        assert f"-e VYPER_AUTOMATION={expected_dep_path}" not in log
+        assert f"-e VYPER_AUTOMATION_DIR={expected_dep_path}" not in log
         result = subprocess.run(
             [str(_workspace_shell_path(env, "proj/feat/test"))],
-            input='printf "%s\\n" "$VYPER_AUTOMATION"\nexit\n',
+            input='printf "%s\\n" "$VYPER_AUTOMATION_DIR"\nexit\n',
             cwd=project / "worktrees" / "feat/test",
             env=_agm_env(env),
             capture_output=True,

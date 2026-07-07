@@ -1309,7 +1309,7 @@ class TestRenderValue:
     # ------------------------------------------------------------------
 
     def test_enum_with_payload(self) -> None:
-        """Enum with payload renders as ``TypeName.Variant(field = value)``."""
+        'Enum with payload renders as ``TypeName::Variant(field = value)``.'
         from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import EnumValue, IntValue
 
@@ -1319,10 +1319,10 @@ class TestRenderValue:
             variant="Partial",
             fields={"left": IntValue(2)},
         )
-        assert render_value(v) == "Outcome.Partial(left = 2)"
+        assert render_value(v) == 'Outcome::Partial(left = 2)'
 
     def test_enum_nullary_variant(self) -> None:
-        """Nullary enum variant renders as ``TypeName.Variant`` (no parens)."""
+        'Nullary enum variant renders as ``TypeName::Variant`` (no parens).'
         from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import EnumValue
 
@@ -1332,7 +1332,7 @@ class TestRenderValue:
             variant="Done",
             fields={},
         )
-        assert render_value(v) == "Outcome.Done"
+        assert render_value(v) == 'Outcome::Done'
 
     def test_enum_multi_field_payload(self) -> None:
         """Enum with multiple payload fields renders them in stored order."""
@@ -1345,7 +1345,7 @@ class TestRenderValue:
             variant="V",
             fields={"a": IntValue(1), "b": IntValue(2), "c": IntValue(3)},
         )
-        assert render_value(v) == "E.V(a = 1, b = 2, c = 3)"
+        assert render_value(v) == 'E::V(a = 1, b = 2, c = 3)'
 
     # ------------------------------------------------------------------
     # exception: record-style with all fields incl. trace_id

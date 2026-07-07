@@ -6,6 +6,7 @@ build-backend = "hatchling.build"
 name = "agm"
 version = "0.1.0"
 description = "Unified CLI for managing worktrees, project dependencies, configuration and tmux sessions"
+license = "GPL-3.0-or-later"
 requires-python = ">=3.12"
 dependencies = [
     "click>=8.0",

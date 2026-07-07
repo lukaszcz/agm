@@ -97,7 +97,7 @@ def test_constructor_render_and_serialization_edges() -> None:
     record = ConstructorValue(nominal, "Thing", None)
     variant = ConstructorValue(nominal, "Thing", "Case")
     assert render_value(record) == "<constructor Thing>"
-    assert render_value(variant) == "<constructor Thing.Case>"
+    assert render_value(variant) == '<constructor Thing::Case>'
     with pytest.raises(TypeError, match="ConstructorValue"):
         value_to_json_obj(record)
     with pytest.raises(TypeError, match="IteratorValue"):

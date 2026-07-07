@@ -21,9 +21,9 @@ print n
 print ["a", "b"]
 print {alpha: 1, beta: 2}
 print(Pair(name = "x", score = 3))
-print(Verdict.Bad(reason = "slow"))
+print(Verdict::Bad(reason = "slow"))
 let j: json = null
 print j
 # JSON opt-in via "as json": print still emits single-line render output.
 print(Pair(name = "x", score = 3) as json)
-print(Verdict.Bad(reason = "slow") as json)
+print(Verdict::Bad(reason = "slow") as json)

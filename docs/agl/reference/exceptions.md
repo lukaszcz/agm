@@ -114,6 +114,9 @@ Semantics:
 5. If no clause matches, the exception propagates outward.
 6. An exception raised inside a catch body propagates normally.
 
+A `return` inside a `try` body or a catch body is not an exception and is never
+caught by `catch`; it unwinds to the nearest enclosing function.
+
 Catch patterns:
 
 - `catch SomeError` / `catch SomeError as e` — matches exactly that built-in

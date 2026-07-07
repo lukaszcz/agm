@@ -860,9 +860,9 @@ class TestWildcardImports:
         assert ref.module_id == ModuleId.from_dotted("foo.alpha")
 
     def test_wildcard_as_reroots_qualifier(self, tmp_path: Path) -> None:
-        """'import foo.* as F' makes 'F.alpha::alpha()' accessible via qualifier."""
+        "'import foo.* as F' makes 'F.alpha::alpha()' accessible via qualifier."
         graph = _make_graph_from_files(tmp_path, {
-            "entry": "import foo.* as F\nlet a = F.alpha::alpha()",
+            "entry": 'import foo.* as F\nlet a = F.alpha::alpha()',
             "foo.alpha": "def alpha() -> int = 1",
         })
         result = resolve_graph(graph)
@@ -873,6 +873,14 @@ class TestWildcardImports:
         assert alpha_var is not None
         ref = result.modules[ENTRY_ID].resolved.resolution[alpha_var.node_id]
         assert ref.module_id == ModuleId.from_dotted("foo.alpha")
+
+    def test_type_name_import_handle_ambiguity_errors(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(tmp_path, {
+            "entry": "import lib qualified as Color\nenum Color | Red\nlet x = Color::Red\nx",
+            "lib": "def f() -> int = 1",
+        })
+        with pytest.raises(AglScopeError, match="both a type name and an import handle"):
+            resolve_graph(graph)
 
     def test_wildcard_compatible_overlap_idempotent(self, tmp_path: Path) -> None:
         """Two wildcards that expose same QName from same module are idempotent (no error)."""
@@ -1201,36 +1209,28 @@ class TestModuleQualifiedCall:
 
 class TestFieldAccessCoverage:
     def test_self_ref_field_access_in_non_entry_module(self, tmp_path: Path) -> None:
-        """Coverage: resolver.py 1354-1355 — ::TypeName.Variant self-ref in non-entry module.
-
-        A non-entry module using ``::Color.Red`` should resolve correctly via the
-        self-ref path in ``_resolve_cross_module_type_name``.
-        """
+        """A non-entry module can resolve a self-qualified constructor ref."""
         graph = _make_graph_from_files(tmp_path, {
             "mylib": (
                 "enum Color\n"
                 "  | Red\n"
                 "  | Blue\n"
-                "def getDefault() -> Color = ::Color.Red"
+                'def getDefault() -> Color = ::Color::Red'
             ),
             "entry": "import mylib\nmylib::getDefault()",
         })
         result = resolve_graph(graph)
         assert ENTRY_ID in result.modules
-        # The self-ref ::Color.Red within mylib is in mylib's qualified_constructor_refs
+        # The self-ref ::Color::Red within mylib is in mylib's qualified_constructor_refs
         mylib_id = ModuleId.from_dotted("mylib")
         mylib_resolved = result.modules[mylib_id].resolved
         assert len(mylib_resolved.qualified_constructor_refs) > 0
 
     def test_unrecognized_qualifier_in_field_access_errors(self, tmp_path: Path) -> None:
-        """Coverage: resolver.py 1360 — qual_map is None for unrecognized qualifier.
-
-        ``notimported::Color.Red`` where ``notimported`` is not in the import env
-        exercises the ``qual_map is None`` early-return path.
-        """
+        """An unknown module qualifier in a constructor ref is rejected."""
         graph = _make_graph_from_files(tmp_path, {
             "mylib": "enum Color\n  | Red\n  | Blue",
-            "entry": "import mylib\nlet x = notimported::Color.Red\nx",
+            "entry": 'import mylib\nlet x = notimported::Color::Red\nx',
         })
         with pytest.raises(AglScopeError):
             resolve_graph(graph)
@@ -1238,16 +1238,28 @@ class TestFieldAccessCoverage:
     def test_unknown_exported_name_in_qualified_field_access_errors(
         self, tmp_path: Path
     ) -> None:
-        """Coverage: resolver.py 1363 — qname is None for name not exported by module.
-
-        ``mylib::NonExistent.Red`` where ``NonExistent`` is not exported by mylib
-        exercises the ``qname is None`` path in ``_resolve_cross_module_type_name``.
-        """
+        """An unknown type name in a module-qualified constructor ref is rejected."""
         graph = _make_graph_from_files(tmp_path, {
             "mylib": "enum Color\n  | Red\n  | Blue",
-            "entry": "import mylib qualified\nlet x = mylib::NonExistent.Red\nx",
+            "entry": 'import mylib qualified\nlet x = mylib::NonExistent::Red\nx',
         })
         with pytest.raises(AglScopeError):
+            resolve_graph(graph)
+
+    def test_private_type_in_qualified_constructor_errors(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(tmp_path, {
+            "mylib": "private enum Hidden\n  | Red\ndef public() -> int = 1",
+            "entry": "import mylib qualified\nlet x = mylib::Hidden::Red\nx",
+        })
+        with pytest.raises(AglScopeError, match="private"):
+            resolve_graph(graph)
+
+    def test_non_constructible_qualified_type_errors(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(tmp_path, {
+            "mylib": "type Alias = int",
+            "entry": "import mylib qualified\nlet x = mylib::Alias::Ctor\nx",
+        })
+        with pytest.raises(AglScopeError, match="constructible"):
             resolve_graph(graph)
 
     def test_non_type_exported_name_in_field_access_falls_through(
@@ -1282,13 +1294,9 @@ class TestFieldAccessCoverage:
         assert ref.module_id == ModuleId.from_dotted("mylib")
 
     def test_self_ref_field_access_unknown_type_errors(self, tmp_path: Path) -> None:
-        """Coverage: resolver.py 1356 — ::Name.Variant where Name not in declared type names.
-
-        ``::NonExistent.Red`` in a non-entry module where NonExistent is not a declared
-        type exercises the False branch of ``obj.name in _declared_type_names``.
-        """
+        """An unknown self-qualified constructor type name is rejected."""
         graph = _make_graph_from_files(tmp_path, {
-            "mylib": "def foo() -> int = ::NonExistent.Red",
+            "mylib": 'def foo() -> int = ::NonExistent::Red',
             "entry": "import mylib\n()",
         })
         with pytest.raises(AglScopeError):

@@ -26,7 +26,6 @@ from agm.agl.syntax.nodes import (
     BoolLit,
     Call,
     Expr,
-    FieldAccess,
     IntLit,
     NamedArg,
     StringLit,
@@ -155,7 +154,7 @@ class BuiltinCallChecker:
 
         Like ``ask`` it builds an output contract from a target type and the
         parse-shaping named args (``format`` / ``strict_json`` /
-        ``on_parse_error``), and accepts an ``agent:`` named arg.  But it never
+        ``on_parse_error``), and accepts an ``agent:`` named arg. But it never
         dispatches to the agent: it yields the ``AgentRequest`` record that the
         corresponding ``ask`` call would pass to ``AgentRegistry.dispatch`` on
         its first attempt.
@@ -224,12 +223,8 @@ class BuiltinCallChecker:
         # agent: named arg.
         if "agent" in named:
             agent_na = named["agent"]
-            agent_type = self._ctx._check_expr(agent_na.value, expected=None)
-            if not isinstance(agent_type, AgentType):
-                raise AglTypeError(
-                    f"'agent:' argument must be of type agent; got '{agent_type!r}'.",
-                    span=agent_na.span,
-                )
+            agent_type = self._ctx._check_expr(agent_na.value, expected=AgentType())
+            self._ctx._assert_assignable(agent_type, AgentType(), agent_na.value.span)
         elif require_default_agent and not self._ctx._caps.has_default_agent:
             raise AglTypeError(
                 "No default agent is configured; the built-in 'ask' call "
@@ -502,24 +497,21 @@ class BuiltinCallChecker:
 
     def _extract_parse_policy_str(self, arg: Expr, span: SourceSpan) -> str:
         """Extract a static ``ParsePolicy`` constructor as an inventory string."""
-        if isinstance(arg, Call) and isinstance(arg.callee, FieldAccess):
-            qualifier = arg.callee.obj
-            if not (isinstance(qualifier, VarRef) and qualifier.name == "ParsePolicy"):
-                raise AglTypeError(
-                    "'on_parse_error' must be a static ParsePolicy constructor "
-                    "(Abort or Retry(n: <int>)).",
-                    span=span,
-                )
-            return self._extract_parse_policy_variant(arg.callee.field, arg.named_args, span)
         if isinstance(arg, Call) and isinstance(arg.callee, VarRef):
+            if arg.callee.module_qualifier is not None:
+                if arg.callee.module_qualifier.segments not in ((), ("ParsePolicy",)):
+                    raise AglTypeError(
+                        "'on_parse_error' must be a static ParsePolicy constructor "
+                        "(Abort or Retry(n: <int>)).",
+                        span=span,
+                    )
             return self._extract_parse_policy_variant(arg.callee.name, arg.named_args, span)
-        # Bare VarRef: ``Abort`` (no parens) is also accepted as abort policy.
+        # Bare VarRef: ``Abort`` or ``ParsePolicy::Abort`` (no parens) is also accepted.
         if isinstance(arg, VarRef) and arg.name == "Abort":
-            return "abort"
-        # Bare FieldAccess: ``ParsePolicy.Abort`` (no parens) is also accepted.
-        if isinstance(arg, FieldAccess) and arg.field == "Abort":
-            qualifier = arg.obj
-            if isinstance(qualifier, VarRef) and qualifier.name == "ParsePolicy":
+            if (
+                arg.module_qualifier is None
+                or arg.module_qualifier.segments in ((), ("ParsePolicy",))
+            ):
                 return "abort"
         raise AglTypeError(
             "'on_parse_error' must be a static ParsePolicy constructor "

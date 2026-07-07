@@ -23,7 +23,7 @@ Design notes
 - ``Call`` is the single call node for both paren-form and single-arg sugar.
 - ``FuncDef`` / ``Lambda`` / ``Param`` support first-class recursive functions.
 - ``UnitLit`` is the ``()`` unit-value literal.
-- ``Raise`` is an expression with bottom type (usable anywhere an ``Expr`` is).
+- ``Raise`` and ``Return`` are expressions with bottom type (usable anywhere an ``Expr`` is).
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from dataclasses import field as dc_field
 
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import ImportMode, Qualifier, TypeExpr
+from agm.agl.syntax.types import ImportMode, Qualifier, TypeExpr, TypeQualifier
 
 # ---------------------------------------------------------------------------
 # Sentinel for the else-branch of If
@@ -172,12 +172,13 @@ TemplateSegment = TextSegment | InterpSegment
 
 @dataclass(frozen=True, slots=True)
 class VarRef:
-    """Reference to a variable or param binding."""
+    """Reference to a variable, param binding, or qualified constructor."""
 
     name: str
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     module_qualifier: Qualifier | None = None
+    type_qualifier: TypeQualifier | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,7 +266,7 @@ class Cast:
 
 @dataclass(frozen=True, slots=True)
 class IsTest:
-    """Pattern membership test: ``expr is [not] [Qualifier.]Variant``."""
+    """Pattern membership test: ``expr is [not] [Qualifier::]Variant``."""
 
     expr: Expr
     qualifier: str | None
@@ -273,6 +274,7 @@ class IsTest:
     negated: bool
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    module_qualifier: Qualifier | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -606,6 +608,19 @@ class Raise:
     node_id: int = dc_field(compare=False)
 
 
+@dataclass(frozen=True, slots=True)
+class Return:
+    """``return [expr]`` — return early from the nearest enclosing function.
+
+    Has the bottom type: it is assignable to any expected type because it
+    never produces a value at the expression site.
+    """
+
+    value: Expr | None
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
 # --- Literals ---
 
 
@@ -690,7 +705,7 @@ class DictLit:
 
 
 # Closed union of all expression nodes.
-# NOTE: Raise is an Expr (bottom type — assignable to any expected type).
+# NOTE: Raise/Return are Exprs (bottom type — assignable to any expected type).
 # Block, If, Case, Loop, Try are expressions (value-producing in AgL).
 # Let/Var/Set are NOT Expr — they are binders (Item only, not directly usable
 # in expression position; they scope over the rest of a Block).
@@ -713,6 +728,7 @@ Expr = (
     | Loop
     | Try
     | Raise
+    | Return
     | Break
     | Continue
     | UnitLit

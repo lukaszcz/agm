@@ -452,6 +452,10 @@ class TypeEnvironment:
     def get_type(self, name: str) -> Type | None:
         return self._types.get(name)
 
+    def has_qualified_import_handle(self, handle: tuple[str, ...]) -> bool:
+        """Return whether *handle* is a qualified import handle in this module."""
+        return self._import_env is not None and handle in self._import_env.qualified
+
     def register_type(self, name: str, typ: Type) -> None:
         self._types[name] = typ
 
@@ -1071,7 +1075,7 @@ class TypeEnvironment:
         """Directly look up a type by owning module and name in the graph type table.
 
         Used for cross-module constructor references when the owning module is
-        already known from scope resolution (e.g. ``mylib::Color.Red``).
+        already known from scope resolution (e.g. ``mylib::Color::Red``).
 
         Returns ``None`` in single-program mode or if not found.
         """
@@ -1096,18 +1100,87 @@ class TypeEnvironment:
         self, exposed_name: str
     ) -> tuple[ModuleId, str, GenericTypeDef] | None:
         """Return the unique generic type exposed by an open-imported name."""
+        matches = self._open_imported_generic_type_matches(exposed_name)
+        if len(matches) == 1:
+            return matches[0]
+        return None
+
+    def resolve_unapplied_generic_type(
+        self,
+        name: str,
+        *,
+        span: SourceSpan | None = None,
+    ) -> tuple[str, GenericTypeDef] | None:
+        """Resolve a bare generic type name without applying type arguments.
+
+        This serves REPL type-definition display only. Normal type-expression
+        resolution still rejects unapplied generics because they are not concrete
+        value-level types.
+        """
+        gdef = self._generic_types.get(name)
+        if gdef is not None:
+            return name, gdef
+        matches = self._open_imported_generic_type_matches(name)
+        if len(matches) > 1:
+            labels = sorted(
+                f"{module_id.dotted()}::{source_name}"
+                for module_id, source_name, _ in matches
+            )
+            raise AglTypeError(
+                f"Ambiguous generic type '{name}': it is exported by multiple modules "
+                f"({', '.join(labels)}). Use a qualified reference to disambiguate.",
+                span=span,
+            )
+        if len(matches) == 1:
+            return name, matches[0][2]
+        return None
+
+    def resolve_qualified_unapplied_generic_type(
+        self,
+        qualifier: object,
+        name: str,
+        *,
+        span: SourceSpan | None = None,
+    ) -> tuple[str, GenericTypeDef] | None:
+        """Resolve a module-qualified generic type name without applying arguments."""
+        from agm.agl.syntax.types import Qualifier
+
+        assert isinstance(qualifier, Qualifier)
+        if not qualifier.segments:
+            gdef = self._generic_types.get(name)
+            if gdef is not None:
+                return name, gdef
+            if self._graph_generic_table is None:
+                return None
+            gdef = self._graph_generic_table.get((self._module_id, name))
+            return (name, gdef) if gdef is not None else None
         if self._import_env is None or self._graph_generic_table is None:
             return None
-        matches = []
+        handle_map = self._import_env.qualified.get(qualifier.segments)
+        if handle_map is None:
+            return None
+        qname = handle_map.get(name)
+        if qname is None:
+            return None
+        gdef = self._graph_generic_table.get((qname[0], qname[1]))
+        if gdef is None:
+            return None
+        qualified_name = f"{'.'.join(qualifier.segments)}::{name}"
+        return qualified_name, gdef
+
+    def _open_imported_generic_type_matches(
+        self, exposed_name: str
+    ) -> list[tuple[ModuleId, str, GenericTypeDef]]:
+        if self._import_env is None or self._graph_generic_table is None:
+            return []
+        matches: list[tuple[ModuleId, str, GenericTypeDef]] = []
         for module_id, source_name in self._import_env.unqualified.get(
             exposed_name, frozenset()
         ):
             gdef = self._graph_generic_table.get((module_id, source_name))
             if gdef is not None:
                 matches.append((module_id, source_name, gdef))
-        if len(matches) == 1:
-            return matches[0]
-        return None
+        return matches
 
     def get_ctor_sig_from_module(
         self, module_id: ModuleId, owner_name: str, variant: str | None

@@ -970,7 +970,7 @@ class TestNominalsEmpty:
             "type ColorAlias = Color\n"
             "\n"
             "let p = Point(x = 1, y = 2)\n"
-            "let c = Color.Red\n"
+            "let c = Color::Red\n"
             "()\n"
         )
         prog = _lower(source)
@@ -1036,7 +1036,7 @@ class TestUnsupportedNodes:
         assert isinstance(indirect.callee, IrMakeClosure)
 
     def test_qualified_enum_constructor_lowers_correctly(self) -> None:
-        """Qualified constructor (e.g. Color.Red) lowers to IrMakeEnum/IrMakeConstructor.
+        """Qualified constructor (e.g. Color::Red) lowers to IrMakeEnum/IrMakeConstructor.
 
         Qualified constructor lowering supports a nullary variant (no fields)
         lowers to IrMakeEnum (eagerly constructed).  A variant with fields lowers to
@@ -1049,7 +1049,7 @@ enum Color
   | Red
   | Blue
 
-let c = Color.Red
+let c = Color::Red
 ()
 """
         prog = _lower(source)
@@ -2195,7 +2195,7 @@ class TestPatternPlanLowering:
             "  | Active\n"
             "  | Inactive\n"
             "\n"
-            "let s = Status.Active\n"
+            "let s = Status::Active\n"
             "let r = case s of\n"
             "  | Active => 1\n"
             "  | _ => 0\n"
@@ -2223,7 +2223,7 @@ class TestPatternPlanLowering:
             "  | Active\n"
             "  | Inactive\n"
             "\n"
-            "let s = Status.Active\n"
+            "let s = Status::Active\n"
             "let r = case s of\n"
             "  | Active => 1\n"
             "  | x => 0\n"
@@ -2255,7 +2255,7 @@ class TestPatternPlanLowering:
             "  | Active\n"
             "  | Inactive\n"
             "\n"
-            "let s = Status.Inactive\n"
+            "let s = Status::Inactive\n"
             "let r = case s of\n"
             "  | Active => 1\n"
             "  | x => 2\n"

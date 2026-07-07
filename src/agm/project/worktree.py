@@ -141,9 +141,10 @@ def remove_worktree(
     force: bool,
     branch: str,
     force_delete: bool = False,
+    delete_branch: bool = True,
     env: dict[str, str] | None = None,
 ) -> None:
-    """Remove a worktree from *repo_dir* and delete its branch."""
+    """Remove a worktree from *repo_dir* and optionally delete its branch."""
 
     project_dir = discover_current_project_dir(repo_dir, env=env)
     repo_branch = git_helpers.current_branch(repo_dir, env=env)
@@ -169,4 +170,5 @@ def remove_worktree(
 
     git_helpers.worktree_remove(repo_dir, worktree_path, force=force, env=env)
     print(f"Removed worktree for branch '{branch}': {worktree_path}")
-    git_helpers.branch_delete(repo_dir, branch, force=force_delete, env=env)
+    if delete_branch:
+        git_helpers.branch_delete(repo_dir, branch, force=force_delete, env=env)

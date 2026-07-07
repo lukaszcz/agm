@@ -88,6 +88,19 @@ class Qualifier:
 
 
 @dataclass(frozen=True, slots=True)
+class TypeQualifier:
+    """A static type qualifier in ``Type::Ctor`` or ``Type[T]::Ctor``.
+
+    ``type_args is None`` means the source omitted brackets.
+    """
+
+    name: str
+    type_args: tuple[TypeExpr, ...] | None
+    span: SourceSpan = field(compare=False)
+    node_id: int = field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
 class NameT:
     """A named type reference (record, enum, or type-alias name)."""
 

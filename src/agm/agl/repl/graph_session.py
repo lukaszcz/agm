@@ -461,4 +461,5 @@ class GraphSession:
             ok=True,
             trace_path=self._ctx._trace_path,
             quote_strings=self._ctx._quote_strings_for_entry(orig_program),
+            type_table=checked.type_env.type_table,
         )

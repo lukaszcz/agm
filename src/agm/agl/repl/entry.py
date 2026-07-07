@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from agm.agl.pipeline import RunError
+    from agm.agl.semantics.type_table import TypeTable
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import Value
 
@@ -40,6 +41,14 @@ class EntryResult:
         for declarations, statements, ``check_only`` runs, and failures.
     ``value_type``
         The static type of the echoed value; ``None`` when not applicable.
+    ``type_display``
+        Pre-rendered type-focused display text for REPL-only type entries that
+        are definitions rather than concrete semantic ``Type`` instances (for
+        example a bare generic record or enum name).
+    ``type_table``
+        The shared ``TypeTable`` that resolves nominal record / enum shapes for
+        ``value_type``; supplied whenever a type-focused echo may expand a
+        record or enum handle to its field / constructor declarations.
     ``diagnostics``
         Pre-execution error diagnostics (parse/scope/typecheck/contract/unset
         param).  Empty on success.
@@ -76,3 +85,5 @@ class EntryResult:
     trace_path: "Path | None" = None
     installed: tuple[str, ...] = ()
     quote_strings: bool = True
+    type_display: str | None = None
+    type_table: "TypeTable | None" = None

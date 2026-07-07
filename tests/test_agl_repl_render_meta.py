@@ -495,6 +495,23 @@ class TestType:
         outcome = meta_mod.dispatch_meta(":type x + 1", _session_ctx(s))
         assert outcome.text == "int"
 
+    def test_type_of_record_expr_shows_fields(self) -> None:
+        s = ReplSession()
+        s.eval_entry("record Point\n  x: int\n  y: text")
+        s.eval_entry('let p = Point(x = 1, y = "north")')
+        outcome = meta_mod.dispatch_meta(":type p", _session_ctx(s))
+        assert outcome.text == "record Point\n  x: int\n  y: text"
+
+    def test_empty_record_type_display_uses_empty_constructor_form(self) -> None:
+        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.repl.type_display import format_type_for_repl
+        from agm.agl.semantics.type_table import TypeDef, TypeTable
+        from agm.agl.semantics.types import RecordType
+
+        table = TypeTable()
+        table.register(TypeDef(kind="record", name="Empty", module_id=ENTRY_ID))
+        assert format_type_for_repl(RecordType(name="Empty"), table) == "record Empty()"
+
     def test_type_empty_arg_gives_usage(self) -> None:
         outcome = meta_mod.dispatch_meta(":type", _session_ctx())
         assert "usage" in (outcome.text or "").lower()
@@ -824,21 +841,21 @@ class TestNominalRenderingEcho:
 
         s = ReplSession()
         s.eval_entry("enum Outcome\n  | Partial(left: int)\n  | Done")
-        r = s.eval_entry("let o = Outcome.Partial(left = 7)")
+        r = s.eval_entry('let o = Outcome::Partial(left = 7)')
         assert r.ok
         rendered = render_entry_result(r, echo=True)
-        assert rendered == "o : Outcome = Outcome.Partial(\n  left = 7\n)"
+        assert rendered == 'o : Outcome = Outcome::Partial(\n  left = 7\n)'
 
     def test_enum_nullary_variant_echo(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
         s = ReplSession()
         s.eval_entry("enum Outcome\n  | Partial(left: int)\n  | Done")
-        r = s.eval_entry("let d = Outcome.Done")
+        r = s.eval_entry('let d = Outcome::Done')
         assert r.ok
         rendered = render_entry_result(r, echo=True)
         assert rendered is not None
-        assert "Outcome.Done" in rendered
+        assert 'Outcome::Done' in rendered
 
     def test_top_level_text_stays_quoted(self) -> None:
         from agm.agl.repl.render import render_entry_result

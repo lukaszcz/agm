@@ -92,7 +92,7 @@ Static rules, all checked before execution:
 ## `def` — function declarations
 
 ```ebnf
-func_def ::= ["private"] "def" NAME type_params? "(" params? ")" "->" type_expr "=" expr
+func_def ::= ["private"] "def" NAME type_params? "(" params? ")" ("->" type_expr)? ("=" func_body | suite)
 ```
 
 `def` is a root-only declaration. It introduces an immutable binding of
@@ -295,7 +295,7 @@ enum Holder[T]
 enum Other
   | tagged(label: text)      # same unqualified name 'tagged'
 
-let h: Holder[int] = Holder.tagged(by = 7)   # qualified — unambiguous
+let h: Holder[int] = Holder::tagged(by = 7)   # qualified — unambiguous
 ```
 
 A **nearer ordinary binding shadows** a constructor (or an overload set): an

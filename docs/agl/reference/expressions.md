@@ -99,8 +99,8 @@ static errors.
 Qualified or unqualified:
 
 ```agl
-Review.Pass
-Review.Fail(issues = ["missing tests"])
+Review::Pass
+Review::Fail(issues = ["missing tests"])
 
 let review: Review = Pass           # resolved by expected type
 ```
@@ -137,7 +137,7 @@ enum Holder[T]
 enum Other
   | tagged(name: text)
 
-let h: Holder[int] = Holder.tagged(by = 7)   # qualified; unqualified 'tagged' is an error
+let h: Holder[int] = Holder::tagged(by = 7)   # qualified; unqualified 'tagged' is an error
 ```
 
 A nearer binding (a `let`/`var`/parameter of the same name) **shadows** a
@@ -175,7 +175,7 @@ enum Option[T]
 
 let e: Option[int] = none          # T = int, fixed by the annotation
 let s = some::[int](value = 1)      # T pinned explicitly
-let q = Option.some::[int](value = 2) # qualification disambiguates the owner
+let q = Option[int]::some(value = 2) # qualification disambiguates the owner
 ```
 
 ### Constructors as values
@@ -283,7 +283,7 @@ print review          # equivalent to print(review)
 ask "Hello?"          # equivalent to ask("Hello?")
 print res.stdout      # field-access path is valid sugar argument
 print classify(x)     # equivalent to print(classify(x))
-f Opt.Some(x = 1)      # equivalent to f(Opt.Some(x = 1))
+f Opt::Some(x = 1)      # equivalent to f(Opt::Some(x = 1))
 ```
 
 Application binds **tighter than all operators**:
@@ -488,7 +488,7 @@ either — a static error at the `as`/`as?` expression, not a runtime failure.
 
 ```agl
 review is Pass
-status is Status.Blocked     # qualified; aliases resolve transparently
+status is Status::Blocked     # qualified; aliases resolve transparently
 ```
 
 The left operand must have enum type; the variant must belong to that enum.
@@ -547,6 +547,7 @@ effect, not their value:
 | `x := e` | `unit` | mutates `x` and returns `void` |
 | `if c => body` (no `else`) | `unit` | branch body must be `unit`; returns `void` |
 | loop expressions | `unit` | loops run for effect and return `void` |
+| `return` | bottom expression returning `()` | valid only in a `unit` function |
 | `()` | `unit` | the printable unit literal |
 
 An `if` without `else` always has type `unit`, and each branch body must also
@@ -579,21 +580,25 @@ def broken() -> int =
   let x = 1        # static error: 'let' must be followed by an expression
 ```
 
-## `raise` as an expression
+## Divergent expressions
 
-`raise expr` diverges — it never yields a value. Its type is the **bottom
-type** (assignable to any expected type), so `raise` may appear in any
-expression position, including as the initializer of a `let`/`var` or as the
-body of a branch suite:
+`raise expr` and `return expr` diverge — they never yield a value at their
+expression site. Their type is the **bottom type** (assignable to any expected
+type), so they may appear in expression positions such as a branch suite or the
+initializer of a `let`/`var`:
 
 ```agl
 let x: int = raise Abort(message = "Cannot continue.")
+let y: int = if done => (return 0) | else => 1
 
 case status of
   | Ok => ()
   | Error(reason) =>
       raise Abort(message = reason)
 ```
+
+`raise` is described in [Exceptions](exceptions.md); `return` is described in
+[Functions](functions.md).
 
 ## `break` and `continue` as expressions
 

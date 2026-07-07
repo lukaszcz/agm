@@ -104,7 +104,7 @@ def test_print_enum_variant() -> None:
         ()
     """)
     out = evaluate_ir_output(source)
-    assert out == "Color.Green\n"
+    assert out == 'Color::Green\n'
 
 
 def test_print_multiple_calls() -> None:

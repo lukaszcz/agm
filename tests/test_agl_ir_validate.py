@@ -1604,6 +1604,34 @@ class TestM6cIrExecValidation:
         with pytest.raises(InvalidIrError, match="duplicate.*A"):
             validate_ir(prog, deep=True)
 
+    def test_custom_contract_rejects_defs_without_decode(self) -> None:
+        """Custom contracts may carry decode metadata, but defs require a decode root."""
+        from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+        from agm.agl.ir.ids import ContractId
+        from agm.agl.ir.nodes import IrExec
+
+        cid = ContractId(value=0)
+        contract = ContractRequest(
+            codec_name="custom-json",
+            strict_json=None,
+            json_schema="{}",
+            decode=None,
+            target_type_label="text",
+            structured_exec=False,
+            format_instructions="",
+            is_unit=False,
+            defs=(("A", ScalarDecode(ScalarKind.INT)),),
+        )
+        node = IrExec(
+            location=LOC,
+            command=IrConstText(location=LOC, value="echo hi"),
+            contract_id=cid,
+            max_attempts=1,
+        )
+        prog = self._make_prog_with_contract(node, cid, {cid: contract})
+        with pytest.raises(InvalidIrError, match="defs but decode is None"):
+            validate_ir(prog, deep=True)
+
     def test_text_contract_rejects_stale_json_decode_fields(self) -> None:
         """Text contracts must not carry stale JSON-only decode fields."""
         from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind

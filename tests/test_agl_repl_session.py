@@ -295,6 +295,27 @@ class TestRecursiveTypesAcrossEntries:
         stale = s.eval_entry('let bad = Category(name = "root", subcategories = [])')
         assert not stale.ok
 
+    def test_type_redefinition_invalidation_detects_nested_nominal_types(self) -> None:
+        from agm.agl.semantics.types import (
+            DictType,
+            ExceptionType,
+            FunctionType,
+            ListType,
+            RecordType,
+            TextType,
+        )
+
+        names = frozenset({"R"})
+
+        assert ReplSession._type_mentions_entry_nominal(ExceptionType("R"), names)
+        assert ReplSession._type_mentions_entry_nominal(ListType(RecordType("R")), names)
+        assert ReplSession._type_mentions_entry_nominal(DictType(RecordType("R")), names)
+        assert ReplSession._type_mentions_entry_nominal(
+            FunctionType((RecordType("R"),), TextType()), names
+        )
+        assert ReplSession._type_mentions_entry_nominal(FunctionType((), RecordType("R")), names)
+        assert not ReplSession._type_mentions_entry_nominal(TextType(), names)
+
     def test_record_redefinition_invalidates_old_nominal_values(self) -> None:
         s = ReplSession()
         assert s.eval_entry("record R\n  old: int").ok

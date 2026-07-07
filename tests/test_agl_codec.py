@@ -3250,6 +3250,56 @@ class TestRegisterCodec:
         assert seen_contract_targets == ["int", "int"]
         assert seen_parse_targets == ["int"]
 
+    def test_custom_codec_make_contract_signature_probe_fallback(self) -> None:
+        """Compatibility still works if a callable make_contract has no inspectable signature."""
+
+        class ContractCallable:
+            __signature__ = object()
+
+            def __call__(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=codec,
+                    strict_json=None,
+                    format_instructions="fallback",
+                    json_schema=None,
+                )
+
+        class FallbackCodec:
+            make_contract = ContractCallable()
+
+            @property
+            def name(self) -> str:
+                return "fallback-contract"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"int"})
+
+            def supports_type(self, t: Type) -> bool:
+                return isinstance(t, IntType)
+
+            def parse(
+                self,
+                raw: str,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
+                decode: DecodeSchema | None = None,
+                defs: Mapping[str, DecodeSchema] | None = None,
+            ) -> ParseResult:
+                return ParseResult.failure(raw)
+
+        codec = FallbackCodec()
+        contract = materialize_contract(
+            OutputContractSpec(IntType(), "fallback-contract", strict_json=None),
+            {"fallback-contract": codec},
+        )
+
+        assert contract.format_instructions == "fallback"
+
     def test_custom_structured_codec_uses_compiled_schema_not_lossy_placeholder(self) -> None:
         """Structured custom codecs receive the lowered decode plan for the real target."""
 
@@ -3511,6 +3561,76 @@ class TestRegisterCodec:
 
         assert result.ok
         assert seen_defs == dict(defs)
+
+    def test_custom_codec_parse_signature_probe_fallback(self) -> None:
+        """Compatibility still works if a callable parse hook has no inspectable signature."""
+        from agm.agl.eval.ir_interpreter import IrInterpreter
+        from agm.agl.ir.ids import ContractId
+        from agm.agl.ir.program import ExecutableModule, ExecutableProgram
+
+        class ParseCallable:
+            __signature__ = object()
+
+            def __call__(self, raw: str, **kwargs: object) -> ParseResult:
+                return ParseResult.success(TextValue(f"fallback::{raw}"))
+
+        class FallbackCodec:
+            parse = ParseCallable()
+
+            @property
+            def name(self) -> str:
+                return "fallback-parse"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"text"})
+
+            def supports_type(self, t: Type) -> bool:
+                return isinstance(t, TextType)
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=None,
+                    format_instructions="",
+                    json_schema=None,
+                )
+
+        contract_id = ContractId(0)
+        request = ContractRequest(
+            codec_name="fallback-parse",
+            strict_json=False,
+            json_schema=None,
+            decode=None,
+            target_type_label="text",
+            structured_exec=False,
+            format_instructions="",
+            target_type_kind="text",
+        )
+        host_contract = OutputContract(
+            target_type_label="text",
+            codec=FallbackCodec(),
+            strict_json=False,
+            format_instructions="",
+            json_schema={},
+        )
+        program = ExecutableProgram(
+            entry_module=ENTRY_ID,
+            modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=())},
+            symbols={},
+            nominals={},
+            sources={},
+            contracts={contract_id: request},
+        )
+        interpreter = IrInterpreter(program, host_contracts={contract_id: host_contract})
+
+        result = interpreter._parse_host_output("ok", contract_id, effective_strict=False)
+
+        assert result.ok
+        assert result.value == TextValue("fallback::ok")
 
     def test_custom_codec_parse_type_error_propagates(self) -> None:
         """Only old parse signatures are retried; codec TypeError bugs still propagate."""

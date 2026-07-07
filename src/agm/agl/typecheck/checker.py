@@ -41,7 +41,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from typing import TypeGuard
+from typing import TypeGuard, assert_never
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
@@ -595,17 +595,59 @@ class _Checker:
         else:
             declared_type = ann_type if ann_type is not None else TextType()
         # A non-text param round-trips through the JSON boundary (schema +
-        # decode) at lowering time (see ``type_schema.build_param_decoder``);
-        # a type whose reachable instantiation closure is infinite has no
-        # finite schema to derive, so reject it here rather than crashing at
-        # lowering. Text params are taken verbatim and never build a schema.
+        # decode) at lowering time (see ``type_schema.build_param_decoder``).
+        # Reject both kinds of non-decodable type here rather than crashing at
+        # lowering: infinite instantiation closures have no finite schema, and
+        # opaque/non-data values (unit, agent, functions, exceptions, …) have no
+        # JSON wire representation at all. Text params are taken verbatim.
         if not isinstance(declared_type, TextType):
             message = self._env.type_table.no_finite_schema_message(
                 declared_type, use="a parameter type"
             )
             if message is not None:
                 raise AglTypeError(message, span=stmt.span)
+            if not self._param_type_is_wire_serializable(declared_type):
+                raise AglTypeError(
+                    f"Param type '{declared_type!r}' cannot be decoded from JSON; "
+                    "use text or a JSON-serializable data type.",
+                    span=stmt.span,
+                )
         self._env.set_binding_type(stmt.node_id, declared_type)
+
+    def _param_type_is_wire_serializable(self, typ: Type) -> bool:
+        """Return whether *typ* can be decoded from the external param boundary."""
+        return self._wire_type_is_serializable(typ, seen=frozenset())
+
+    def _wire_type_is_serializable(self, typ: Type, *, seen: frozenset[Type]) -> bool:
+        if isinstance(typ, (TextType, JsonType, BoolType, IntType, DecimalType)):
+            return True
+        if isinstance(typ, ListType):
+            return self._wire_type_is_serializable(typ.elem, seen=seen)
+        if isinstance(typ, DictType):
+            return self._wire_type_is_serializable(typ.value, seen=seen)
+        if isinstance(typ, RecordType):
+            if typ in seen:
+                return True
+            next_seen = seen | {typ}
+            return all(
+                self._wire_type_is_serializable(field_type, seen=next_seen)
+                for field_type in self._env.type_table.record_fields(typ).values()
+            )
+        if isinstance(typ, EnumType):
+            if typ in seen:
+                return True
+            next_seen = seen | {typ}
+            return all(
+                self._wire_type_is_serializable(field_type, seen=next_seen)
+                for variant_fields in self._env.type_table.enum_variants(typ).values()
+                for field_type in variant_fields.values()
+            )
+        if isinstance(
+            typ,
+            (ExceptionType, UnitType, AgentType, FunctionType, BottomType, TypeVarType),
+        ):
+            return False
+        assert_never(typ)  # pragma: no cover
 
     def _check_config(self, stmt: ConfigDecl) -> None:
         """Check a ``config`` declaration against the engine-key registry.

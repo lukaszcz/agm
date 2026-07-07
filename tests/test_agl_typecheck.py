@@ -736,6 +736,11 @@ class TestBlockTyping:
         r = accept_type("param n: int\nn")
         assert r.resolved.program is not None
 
+    @pytest.mark.parametrize("annotation", ["unit", "agent", "(int) -> int"])
+    def test_param_rejects_non_wire_serializable_annotation(self, annotation: str) -> None:
+        err = reject_type(f"param x: {annotation}\nx")
+        assert "JSON" in str(err)
+
     def test_param_defaults_to_text(self) -> None:
         r = accept_type("param x\nx")
         prog = r.resolved.program

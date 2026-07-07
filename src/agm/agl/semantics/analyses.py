@@ -691,7 +691,12 @@ def _scc_has_growing_cycle(
             for param_name, arg_template in zip(target_def.type_params, ref_edge.arg_templates):
                 if param_name not in target_relevant:
                     continue
-                occurrences = _param_occurrences(arg_template, growing=False)
+                occurrences = _param_occurrences(
+                    arg_template,
+                    growing=False,
+                    defs=defs,
+                    relevant_params=relevant_params,
+                )
                 for source_param, growing in occurrences.items():
                     if source_param not in source_def.type_params:
                         continue
@@ -713,35 +718,72 @@ def _scc_has_growing_cycle(
     return False
 
 
-def _param_occurrences(t: Type, *, growing: bool) -> dict[str, bool]:
-    """Return, for each type-variable name occurring in *t*, whether it occurs "growing".
+def _param_occurrences(
+    t: Type,
+    *,
+    growing: bool,
+    defs: Mapping[DeclKey, TypeDef],
+    relevant_params: Mapping[DeclKey, set[str]],
+) -> dict[str, bool]:
+    """Return type-variable occurrences in *t* that affect schema identity.
 
     An occurrence is growing when it is a PROPER SUBTERM of the top-level
     template passed in — i.e. anywhere except when ``t`` itself, at the top
-    level, IS the bare type variable. Every recursive descent (into a list
-    element, dict value, function param/result, or a nominal reference's own
-    argument) passes ``growing=True``, so only the initial top-level call can
-    ever report a variable as non-growing. When a variable occurs more than
-    once, growing wins (only one growing path is needed to make the whole
-    reference growing).
+    level, IS the bare type variable. Recursive descent into a nominal
+    reference follows only schema-relevant parameters of that referenced
+    declaration, so phantom arguments do not create spurious growth edges.
+    When a variable occurs more than once, growing wins (only one growing path
+    is needed to make the whole reference growing).
     """
     match t:
         case TypeVarType(name=name):
             return {name: growing}
         case ListType(elem=elem):
-            return _param_occurrences(elem, growing=True)
+            return _param_occurrences(
+                elem, growing=True, defs=defs, relevant_params=relevant_params
+            )
         case DictType(value=value):
-            return _param_occurrences(value, growing=True)
+            return _param_occurrences(
+                value, growing=True, defs=defs, relevant_params=relevant_params
+            )
         case FunctionType(params=params, result=result):
             merged: dict[str, bool] = {}
             for p in params:
-                merged = _merge_growing(merged, _param_occurrences(p, growing=True))
-            merged = _merge_growing(merged, _param_occurrences(result, growing=True))
+                merged = _merge_growing(
+                    merged,
+                    _param_occurrences(
+                        p, growing=True, defs=defs, relevant_params=relevant_params
+                    ),
+                )
+            merged = _merge_growing(
+                merged,
+                _param_occurrences(
+                    result, growing=True, defs=defs, relevant_params=relevant_params
+                ),
+            )
             return merged
         case RecordType() | EnumType():
+            key = (t.module_id, t.name)
+            target = defs.get(key)
+            if target is None:
+                relevant_args = t.type_args
+            else:
+                target_relevant = relevant_params.get(key, set())
+                relevant_args = tuple(
+                    arg
+                    for pname, arg in zip(target.type_params, t.type_args)
+                    if pname in target_relevant
+                )
+                if len(t.type_args) > len(target.type_params):
+                    relevant_args += t.type_args[len(target.type_params) :]
             merged = {}
-            for arg in t.type_args:
-                merged = _merge_growing(merged, _param_occurrences(arg, growing=True))
+            for arg in relevant_args:
+                merged = _merge_growing(
+                    merged,
+                    _param_occurrences(
+                        arg, growing=True, defs=defs, relevant_params=relevant_params
+                    ),
+                )
             return merged
         case (
             ExceptionType()

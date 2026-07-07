@@ -1766,6 +1766,53 @@ class TestFiniteClosure:
             RecordType("R", type_args=(IntType(),), module_id=ENTRY_ID)
         ) is True
 
+    def test_nested_phantom_argument_growth_is_finite_schema(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Phantom",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(),
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="enum",
+                name="E",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                variants=(
+                    ("Leaf", (("value", TypeVarType("T")),)),
+                    (
+                        "Node",
+                        (
+                            (
+                                "child",
+                                EnumType(
+                                    "E",
+                                    type_args=(
+                                        RecordType(
+                                            "Phantom",
+                                            type_args=(ListType(TypeVarType("T")),),
+                                            module_id=ENTRY_ID,
+                                        ),
+                                    ),
+                                    module_id=ENTRY_ID,
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            )
+        )
+
+        assert table.has_finite_closure(ENTRY_ID, "E") is True
+        assert table.has_finite_schema(
+            EnumType("E", type_args=(IntType(),), module_id=ENTRY_ID)
+        ) is True
+
     def test_has_finite_schema_reports_finite_for_nested_tree_field(self) -> None:
         table = TypeTable()
         table.register(

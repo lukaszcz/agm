@@ -43,6 +43,9 @@ from agm.agl.type_schema import build_format_instructions, derive_schema_and_dec
 if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract
 
+DecodeDefsInput = Mapping[str, DecodeSchema] | tuple[tuple[str, DecodeSchema], ...]
+
+
 # ---------------------------------------------------------------------------
 # ParseResult — outcome of codec.parse()
 # ---------------------------------------------------------------------------
@@ -146,7 +149,7 @@ class OutputCodec(Protocol):
         strict_json: bool = False,
         schema: dict[str, object] | None = None,
         decode: DecodeSchema | None = None,
-        defs: Mapping[str, DecodeSchema] | None = None,
+        defs: DecodeDefsInput | None = None,
     ) -> ParseResult: ...
 
 
@@ -217,7 +220,7 @@ class TextCodec:
         strict_json: bool = False,
         schema: dict[str, object] | None = None,
         decode: DecodeSchema | None = None,
-        defs: Mapping[str, DecodeSchema] | None = None,
+        defs: DecodeDefsInput | None = None,
     ) -> ParseResult:
         # Text codec: always succeeds; the raw string is the value.
         # ``strict_json``/``schema``/``decode``/``defs`` are inapplicable for text targets.
@@ -427,6 +430,15 @@ def _decode_contains_ref(decode: DecodeSchema) -> bool:
             for _name, field_decode in variant.fields
         )
     return False
+
+
+def _coerce_decode_defs(defs: DecodeDefsInput | None) -> Mapping[str, DecodeSchema]:
+    """Normalize parse-time decode defs from either contract storage shape."""
+    if defs is None:
+        return _EMPTY_DEFS
+    if isinstance(defs, Mapping):
+        return defs
+    return dict(defs)
 
 
 def _find_enum_decode_at_path(
@@ -751,7 +763,7 @@ class JsonCodec:
         strict_json: bool = False,
         schema: dict[str, object] | None = None,
         decode: DecodeSchema | None = None,
-        defs: Mapping[str, DecodeSchema] | None = None,
+        defs: DecodeDefsInput | None = None,
     ) -> ParseResult:
         """Parse *raw* agent output into the typed ``Value`` described by *schema*/*decode*.
 
@@ -787,7 +799,7 @@ class JsonCodec:
                 "it no longer derives them from a checker Type. Pass the "
                 "contract-carried json_schema/decode (see ContractRequest)."
             )
-        effective_defs = defs if defs is not None else _EMPTY_DEFS
+        effective_defs = _coerce_decode_defs(defs)
         if not effective_defs and _decode_contains_ref(decode):
             raise ValueError(
                 "JsonCodec.parse requires defs when the decode walk contains RefDecode nodes."

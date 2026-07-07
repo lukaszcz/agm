@@ -2927,6 +2927,25 @@ class TestSchemaPrecomputedInParse:
             # Identity: contract still holds the same schema object.
             assert contract.json_schema is schema
 
+    def test_parse_accepts_contract_defs_tuple(self) -> None:
+        """Direct JsonCodec callers may pass OutputContract.defs without converting it."""
+        codec = JsonCodec()
+        tree, tree_def = _tree_type_and_def()
+        contract = codec.make_contract(tree, type_table_for(tree_def))
+        schema = contract.json_schema
+        assert isinstance(schema, dict)
+        assert contract.decode is not None
+
+        result = codec.parse(
+            '{"$case": "Leaf"}',
+            strict_json=False,
+            schema=schema,
+            decode=contract.decode,
+            defs=contract.defs,
+        )
+
+        assert result.ok is True
+
     def test_parse_without_schema_raises(self) -> None:
         """parse() with schema=None raises: no derivation fallback from a Type."""
         codec = JsonCodec()

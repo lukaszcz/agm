@@ -110,6 +110,9 @@ class ConstructorChecker:
         ctor_ref: ConstructorRef,
         span: SourceSpan,
         expected: Type | None,
+        sig: ConstructorSignature | None = None,
+        gdef: GenericTypeDef | None = None,
+        source_name: str | None = None,
     ) -> Type:
         """Handle a generic constructor used as a bare value (not in direct call position).
 
@@ -119,12 +122,13 @@ class ConstructorChecker:
         owner_name = ctor_ref.owner_name
         variant = ctor_ref.variant
         type_params = ctor_ref.type_params
-        sig = self._ctx._env.get_constructor_signature(owner_name, variant)
-        # Open-imported generic constructor used as a bare value: the own-module
-        # env has no signature for it; fall back to the owning module's graph
-        # tables (mirrors the call-position path in _check_constructor_callee_call).
-        imported_gdef: GenericTypeDef | None = None
-        imported_source_name = owner_name
+        # Open-imported and cross-module qualified generic constructors used as bare
+        # values may supply their graph-table signature up front; otherwise start
+        # with the own-module registry and fall back to the open-import map.
+        imported_gdef: GenericTypeDef | None = gdef
+        imported_source_name = source_name or owner_name
+        if sig is None:
+            sig = self._ctx._env.get_constructor_signature(owner_name, variant)
         if sig is None:
             # A generic constructor with no own-module signature must be open-imported
             # (the scope resolver guarantees the reference resolved to some type).
@@ -494,8 +498,20 @@ class ConstructorChecker:
         expected: Type | None,
     ) -> Type:
         """Type a qualified constructor (``Owner::variant``) used in value position."""
-        gdef = self._ctx._env.get_generic_type(owner_name)
+        gdef = (
+            self._ctx._env.get_generic_type_from_module(owner_module_id, owner_name)
+            if owner_module_id is not None
+            else self._ctx._env.get_generic_type(owner_name)
+        )
         if gdef is not None:
+            sig = (
+                self._ctx._env.get_ctor_sig_from_module(owner_module_id, owner_name, variant)
+                if owner_module_id is not None
+                else self._ctx._env.get_constructor_signature(owner_name, variant)
+            )
+            assert sig is not None, (
+                f"Generic enum '{owner_name}' has no constructor signature for '{variant}'"
+            )
             # owner_decl_node_id is unused on the as-value path (only owner_name,
             # variant, and type_params are consumed); pass the 0 placeholder.
             ctor_ref = ConstructorRef(
@@ -505,7 +521,12 @@ class ConstructorChecker:
                 type_params=gdef.type_params,
             )
             return self.check_generic_constructor_as_value(
-                ctor_ref=ctor_ref, span=span, expected=expected
+                ctor_ref=ctor_ref,
+                span=span,
+                expected=expected,
+                sig=sig,
+                gdef=gdef if owner_module_id is not None else None,
+                source_name=owner_name,
             )
         enum_type = self._resolve_qualified_enum_owner(
             owner_name, variant, span, owner_module_id=owner_module_id

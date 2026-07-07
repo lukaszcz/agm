@@ -2215,6 +2215,18 @@ def test_cross_module_qualified_generic_enum_explicit_type_args(tmp_path: Path) 
     )
 
 
+def test_cross_module_qualified_generic_nullary_constructor_as_value(tmp_path: Path) -> None:
+    lib_id = ModuleId.from_dotted("lib")
+    modules = {
+        "lib": "enum Option[T]\n  | none\n  | some(value: T)",
+        "entry": "import lib qualified\nlet n: lib::Option[int] = lib::Option::none\nn",
+    }
+    cg = _check_graph(tmp_path, modules)
+    assert _binding_value_type(cg, ENTRY_ID, "n") == EnumType(
+        "Option", module_id=lib_id, type_args=(IntType(),)
+    )
+
+
 def test_open_imported_generic_constructor_payload_type_apply_as_value(tmp_path: Path) -> None:
     """Open-imported generic payload constructor as a value with explicit type args.
 

@@ -2422,6 +2422,15 @@ def test_imported_parameterized_alias_in_function_signature(tmp_path: Path) -> N
     _check_graph(tmp_path, modules)
 
 
+def test_same_module_parameterized_alias_in_function_signature(tmp_path: Path) -> None:
+    """Graph signature pre-pass resolves a module's own generic aliases."""
+    modules = {
+        "entry": "type Box[T] = list[T]\ndef f(x: Box[int]) -> int = 1\nf([1])",
+    }
+
+    _check_graph(tmp_path, modules)
+
+
 def test_open_imported_parameterized_alias_in_type_definition(tmp_path: Path) -> None:
     wrapper_id = ModuleId.from_dotted("wrapper")
     modules = {

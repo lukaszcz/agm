@@ -227,19 +227,16 @@ def decode_value(
     *defs* resolves ``RefDecode`` nodes for a recursive target type — the
     ``$defs`` table built alongside *schema* by ``type_schema.build_decode_schema``
     (see ``DecodePlan``); empty for a non-recursive *schema*, which then never
-    contains a ``RefDecode`` node. It is threaded unchanged through every
-    recursive call: *obj* is a finite JSON-shaped value, so resolving a
-    ``RefDecode`` by looking it up and recursing into the resolved schema
-    always terminates, however many recursive fields the walk passes through.
-    An unknown key indicates an inconsistent decode plan (a lowering bug, not
-    a user-facing condition) since a well-formed plan's keys always match its
-    own ``RefDecode`` occurrences one-to-one.
+    contains a ``RefDecode`` node. Ref resolution follows chains until a
+    non-ref body is reached, then decodes that body; this allows ordinary
+    recursive bodies while rejecting malformed ref-only cycles. An unknown key
+    or ref-only cycle indicates an inconsistent decode plan (a lowering bug,
+    not a user-facing condition) since a well-formed plan's keys always match
+    its own ``RefDecode`` occurrences one-to-one and always name real bodies.
     """
     match schema:
         case RefDecode(key=key):
-            resolved = defs.get(key)
-            if resolved is None:  # pragma: no cover — invariant: plan keys always resolve
-                raise AssertionError(f"decode_value: unknown $defs key {key!r}")
+            resolved = _resolve_decode_ref(key, defs)
             return decode_value(resolved, obj, defs)
         case ScalarDecode(kind=kind):
             return _decode_scalar(kind, obj)
@@ -294,6 +291,22 @@ def decode_value(
             )
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
+
+
+def _resolve_decode_ref(key: str, defs: Mapping[str, DecodeSchema]) -> DecodeSchema:
+    """Resolve a ``RefDecode`` key to a non-ref body, rejecting malformed cycles."""
+    seen: set[str] = set()
+    current = key
+    while True:
+        if current in seen:
+            raise AssertionError(f"decode_value: RefDecode cycle at $defs key {current!r}")
+        seen.add(current)
+        resolved = defs.get(current)
+        if resolved is None:  # pragma: no cover — invariant: plan keys always resolve
+            raise AssertionError(f"decode_value: unknown $defs key {current!r}")
+        if not isinstance(resolved, RefDecode):
+            return resolved
+        current = resolved.key
 
 
 def _decode_scalar(kind: ScalarKind, obj: object) -> Value:

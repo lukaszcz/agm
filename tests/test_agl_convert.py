@@ -581,6 +581,11 @@ class TestDecodeValueRefDecode:
         with pytest.raises(AssertionError, match="unknown \\$defs key"):
             decode_value(RefDecode("NoSuchKey"), {"$case": "Leaf"}, {})
 
+    def test_ref_only_defs_cycle_is_internal_error(self) -> None:
+        """A malformed defs table must not make RefDecode resolution recurse forever."""
+        with pytest.raises(AssertionError, match="RefDecode cycle"):
+            decode_value(RefDecode("A"), {}, {"A": RefDecode("B"), "B": RefDecode("A")})
+
     def test_defs_defaults_to_empty_for_non_recursive_schemas(self) -> None:
         """Calling decode_value with the historical 2-arg form still works (defs defaults empty)."""
         schema = ScalarDecode(kind=ScalarKind.INT)

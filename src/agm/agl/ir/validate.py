@@ -263,10 +263,11 @@ def _check_decode_nominals(
     """Deep tier: every nominal referenced by a decode schema (root + ``defs``) must be registered.
 
     Walks *decode* (the root) and every DISTINCT ``defs`` entry exactly once:
-    a ``RefDecode`` node is checked for key membership in *defs* but never
-    walked inline from there — each entry is instead walked once from the
-    loop below, so a self- or mutually-recursive ``defs`` table (the normal
-    shape for a recursive type) terminates rather than re-entering itself.
+    a ``RefDecode`` node is checked for key membership and its ref chain is
+    required to reach a non-ref body, but that body is not walked inline from
+    the ref — each entry is instead walked once from the loop below, so a
+    normal self- or mutually-recursive decode body terminates while malformed
+    ref-only cycles are rejected.
     """
     defs_map = dict(defs)
     _walk_decode_schema(decode, defs_map, ctx)
@@ -286,10 +287,7 @@ def _walk_decode_schema(
         case ScalarDecode():
             return
         case RefDecode(key=key):
-            if key not in defs:
-                raise InvalidIrError(
-                    f"DecodeSchema RefDecode references unknown $defs key {key!r}"
-                )
+            _check_refdecode_chain(key, defs)
         case ListDecode(elem=elem):
             _walk_decode_schema(elem, defs, ctx)
         case DictDecode(value=value_schema):
@@ -305,6 +303,26 @@ def _walk_decode_schema(
                     _walk_decode_schema(fschema, defs, ctx)
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
+
+
+def _check_refdecode_chain(key: str, defs: Mapping[str, DecodeSchema]) -> None:
+    """Ensure a ``RefDecode`` chain reaches a non-ref body without cycling."""
+    seen: set[str] = set()
+    current = key
+    while True:
+        if current in seen:
+            raise InvalidIrError(
+                f"DecodeSchema RefDecode cycle reaches no body at $defs key {current!r}"
+            )
+        seen.add(current)
+        target = defs.get(current)
+        if target is None:
+            raise InvalidIrError(
+                f"DecodeSchema RefDecode references unknown $defs key {current!r}"
+            )
+        if not isinstance(target, RefDecode):
+            return
+        current = target.key
 
 
 # ---------------------------------------------------------------------------

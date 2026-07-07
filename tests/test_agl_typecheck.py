@@ -387,6 +387,44 @@ class TestComparableTypes:
         )
         assert not comparable_types(et, et, _table_for(typedef))
 
+    def test_exception_base_with_non_comparable_descendant_not_comparable(self) -> None:
+        base = ExceptionType(name="Base")
+        child = ExceptionType(name="Child")
+        table = _table_for(
+            TypeDef(kind="exception", name="Base", module_id=base.module_id),
+            TypeDef(
+                kind="exception",
+                name="Child",
+                module_id=child.module_id,
+                base=(base.module_id, base.name),
+                fields=(("assignee", AgentType()),),
+            ),
+        )
+        assert not comparable_types(base, base, table)
+
+    def test_exception_sibling_of_non_comparable_descendant_remains_comparable(self) -> None:
+        base = ExceptionType(name="Base")
+        bad = ExceptionType(name="Bad")
+        good = ExceptionType(name="Good")
+        table = _table_for(
+            TypeDef(kind="exception", name="Base", module_id=base.module_id),
+            TypeDef(
+                kind="exception",
+                name="Bad",
+                module_id=bad.module_id,
+                base=(base.module_id, base.name),
+                fields=(("assignee", AgentType()),),
+            ),
+            TypeDef(
+                kind="exception",
+                name="Good",
+                module_id=good.module_id,
+                base=(base.module_id, base.name),
+                fields=(("code", IntType()),),
+            ),
+        )
+        assert comparable_types(good, good, table)
+
     def test_record_with_only_scalars_comparable(self) -> None:
         rt = RecordType(name="R")
         typedef = TypeDef(
@@ -2129,6 +2167,22 @@ class TestBinaryOps:
             'let t1 = Task(name = "a", assignee = reviewer)\n'
             'let t2 = Task(name = "b", assignee = reviewer)\n'
             "let result = (t1 == t2)\nresult"
+        )
+        assert "equality" in str(err).lower()
+
+    def test_eq_wildcard_catch_binding_rejects_non_comparable_descendant(self) -> None:
+        err = reject_type(
+            "agent reviewer\n"
+            "exception Bad extends Exception\n  assignee: agent\n"
+            'try\n  raise Bad(message = "x", assignee = reviewer)\ncatch _ as e => e == e'
+        )
+        assert "equality" in str(err).lower()
+
+    def test_eq_base_catch_binding_rejects_non_comparable_descendant(self) -> None:
+        err = reject_type(
+            "agent reviewer\n"
+            "exception Bad extends Exception\n  assignee: agent\n"
+            'try\n  raise Bad(message = "x", assignee = reviewer)\ncatch Exception as e => e == e'
         )
         assert "equality" in str(err).lower()
 

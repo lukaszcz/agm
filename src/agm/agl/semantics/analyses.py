@@ -331,14 +331,14 @@ def compute_equality_capabilities(table: TypeTable) -> EqualityCapabilities:
     Two facts are grown together to a least fixpoint, per declaration:
 
     - ``no_equality`` (an unconditional, argument-independent fact): true iff
-      some field/variant-field template (for an exception, its OWN fields;
-      inheritance is folded in as an extra disjunct on the base's already-
-      computed flag, exactly like :func:`compute_uninhabited` models
-      ``extends`` as a conjunct) contains a function/agent/unit type, or
-      references a declaration whose own ``no_equality`` is already true —
+      some field/variant-field template contains a function/agent/unit type,
+      or references a declaration whose own ``no_equality`` is already true —
       at any depth, but never through a bare type-variable position (a
       parameter standing for "whatever the caller instantiates" is not
-      itself a problem).
+      itself a problem). For exceptions this also accounts for subtyping:
+      inherited field problems flow from base to child, while a child with no
+      equality also makes each catchable ancestor non-comparable because a
+      value statically typed as that ancestor may hold the child at runtime.
     - ``relevant_params``: the subset of a declaration's OWN type parameters
       whose concrete instantiation can flip a reference to it from
       comparable to not. A parameter is relevant if it appears directly in a
@@ -358,6 +358,15 @@ def compute_equality_capabilities(table: TypeTable) -> EqualityCapabilities:
     exactly, without ever expanding an instantiation.
     """
     defs = _all_defs(table)
+    exception_children: dict[DeclKey, set[DeclKey]] = {key: set() for key in defs}
+    for key, typedef in defs.items():
+        if typedef.kind == "exception" and typedef.base in exception_children:
+            exception_children[typedef.base].add(key)
+
+    # ``field_no_eq`` is the exact-value/inherited-field fact for exceptions.
+    # ``no_eq`` additionally includes non-comparable descendants, which should
+    # poison ancestor catch/base types but must not flow back down to siblings.
+    field_no_eq: set[DeclKey] = set()
     no_eq: set[DeclKey] = set()
     relevant: dict[DeclKey, set[str]] = {key: set() for key in defs}
     changed = True
@@ -366,12 +375,25 @@ def compute_equality_capabilities(table: TypeTable) -> EqualityCapabilities:
         for key, typedef in defs.items():
             own_params = frozenset(typedef.type_params)
             templates = tuple(_own_field_templates(typedef))
-            bad = key in no_eq or any(_template_no_eq(t, no_eq, relevant, defs) for t in templates)
-            if typedef.kind == "exception" and typedef.base is not None:
-                bad = bad or typedef.base in no_eq
+            template_bad = any(_template_no_eq(t, no_eq, relevant, defs) for t in templates)
+            inherited_field_bad = (
+                typedef.kind == "exception"
+                and typedef.base is not None
+                and typedef.base in field_no_eq
+            )
+            exact_bad = key in field_no_eq or template_bad or inherited_field_bad
+            if exact_bad and key not in field_no_eq:
+                field_no_eq.add(key)
+                changed = True
+
+            descendant_bad = typedef.kind == "exception" and any(
+                child_key in no_eq for child_key in exception_children[key]
+            )
+            bad = exact_bad or descendant_bad
             if bad and key not in no_eq:
                 no_eq.add(key)
                 changed = True
+
             gained: set[str] = set()
             for t in templates:
                 gained |= _template_relevant_params(t, own_params, relevant, defs)

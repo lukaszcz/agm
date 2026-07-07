@@ -229,6 +229,8 @@ class ContractRequest:
                               ``None`` for the text codec.
     ``target_type_label``   — ``repr(target_type)`` stored for ``AgentParseError``
                               field text and failure-message formatting.
+    ``target_type_kind``    — semantic kind string (``int``, ``record``, …) used
+                              only by host custom-codec materialization.
     ``structured_exec``     — ``True`` for structured exec; ``False`` for ``ask``.
     ``format_instructions`` — pre-computed format instructions string (empty for
                               text codec and unit-typed asks).
@@ -251,4 +253,5 @@ class ContractRequest:
     structured_exec: bool
     format_instructions: str
     is_unit: bool = False
+    target_type_kind: str = ""
     defs: "tuple[tuple[str, DecodeSchema], ...]" = ()

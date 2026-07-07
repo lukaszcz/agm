@@ -2246,6 +2246,7 @@ class _Lowerer:
                 structured_exec=structured_exec,
                 format_instructions="",
                 is_unit=True,
+                target_type_kind="unit",
             )
         else:
             # Build format_instructions and json_schema from the spec.
@@ -2271,6 +2272,7 @@ class _Lowerer:
                 structured_exec=structured_exec,
                 format_instructions=fmt_instr,
                 is_unit=False,
+                target_type_kind=spec.target_type.kind,
                 defs=decode_defs,
             )
 
@@ -2332,6 +2334,7 @@ class _Lowerer:
             structured_exec=structured_exec,
             format_instructions=fmt_instr,
             is_unit=False,
+            target_type_kind=spec.target_type.kind,
             defs=decode_defs,
         )
 

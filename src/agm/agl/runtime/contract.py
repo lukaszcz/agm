@@ -34,7 +34,20 @@ from typing import TYPE_CHECKING, cast
 
 from agm.agl.ir.contracts import ContractRequest, DecodeSchema
 from agm.agl.runtime.codec import BUILTIN_CODEC_NAMES, OutputCodec
-from agm.agl.semantics.types import TextType, Type, UnitType
+from agm.agl.semantics.types import (
+    AgentType,
+    BoolType,
+    DecimalType,
+    DictType,
+    EnumType,
+    IntType,
+    JsonType,
+    ListType,
+    RecordType,
+    TextType,
+    Type,
+    UnitType,
+)
 from agm.agl.typecheck.env import OutputContractSpec
 
 if TYPE_CHECKING:
@@ -103,14 +116,12 @@ def materialize_ir_contract(
     produced, without re-deriving anything from a checker ``Type``.
 
     Host-registered custom codecs (see ``PipelineDriver.register_codec``) are
-    third-party ``OutputCodec`` implementations whose ``make_contract`` may
-    run arbitrary logic against the real target type.  The lowerer only
-    derives a decode walk for the built-in ``json`` codec (any other
-    ``codec_name`` always has ``request.decode is None``), so the only target
-    type information ever available for a custom codec is whether the call
-    was declared ``text``.  A minimal placeholder ``Type`` (``text`` or
-    ``unit``) is reconstructed for that one case, to keep a custom codec's own
-    ``make_contract`` behavior working exactly as before.
+    third-party ``OutputCodec`` implementations whose ``make_contract`` may run
+    arbitrary logic against the target type.  The IR intentionally does not carry
+    checker ``Type`` objects, but it does carry the erased target kind and label;
+    reconstruct a best-effort placeholder of the same kind so primitive custom
+    codecs (for example an ``int`` codec) observe the expected target instead of
+    the historical ``unit`` fallback.
     """
     if request.is_unit:
         return None
@@ -121,10 +132,7 @@ def materialize_ir_contract(
             "This is a host-configuration error."
         )
     if request.codec_name not in BUILTIN_CODEC_NAMES:
-        placeholder_type: Type = (
-            TextType() if request.target_type_label == "text" else UnitType()
-        )
-        base = codec.make_contract(placeholder_type, None)
+        base = codec.make_contract(_placeholder_type_for_request(request), None)
         format_instructions = base.format_instructions
         schema: object = base.json_schema
     else:
@@ -142,6 +150,32 @@ def materialize_ir_contract(
         defs=request.defs,
         structured_exec=request.structured_exec,
     )
+
+
+def _placeholder_type_for_request(request: ContractRequest) -> Type:
+    """Reconstruct a best-effort target ``Type`` for custom-codec materialization."""
+    kind = request.target_type_kind or request.target_type_label
+    if kind == "text":
+        return TextType()
+    if kind == "int":
+        return IntType()
+    if kind == "decimal":
+        return DecimalType()
+    if kind == "bool":
+        return BoolType()
+    if kind == "json":
+        return JsonType()
+    if kind == "agent":
+        return AgentType()
+    if kind == "list":
+        return ListType(JsonType())
+    if kind == "dict":
+        return DictType(JsonType())
+    if kind == "record":
+        return RecordType(request.target_type_label)
+    if kind == "enum":
+        return EnumType(request.target_type_label)
+    return UnitType()
 
 
 def materialize_contract(

@@ -3113,6 +3113,53 @@ class TestRegisterCodec:
         assert received[0].output_contract is not None
         assert received[0].output_contract.format_instructions == "TAGCODEC-INSTRUCTIONS"
 
+    def test_custom_int_codec_sees_int_target_and_old_parse_signature_works(self) -> None:
+        """Custom codecs get a kind-correct target and may omit the newer defs keyword."""
+        from agm.agl.ir.contracts import DecodeSchema
+
+        seen_targets: list[str] = []
+
+        class IntCodec:
+            @property
+            def name(self) -> str:
+                return "intcodec"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"int"})
+
+            def supports_type(self, t: Type) -> bool:
+                return isinstance(t, IntType)
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                seen_targets.append(repr(type_ref))
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=None,
+                    format_instructions="INTCODEC-INSTRUCTIONS",
+                    json_schema=None,
+                )
+
+            def parse(
+                self,
+                raw: str,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
+                decode: DecodeSchema | None = None,
+            ) -> ParseResult:
+                return ParseResult.success(IntValue(int(raw)))
+
+        rt = PipelineDriver(default_agent=lambda req: "7")
+        rt.register_codec(IntCodec())
+        result = rt.run('let y: int = ask("Q", format = "intcodec")\ny')
+        assert result.ok is True
+        assert result.bindings["y"] == IntValue(7)
+        assert seen_targets == ["int"]
+
 
 class TestRuntimeBuildsCodecKinds:
     """A custom codec is selectable via ``format:`` only after registration."""

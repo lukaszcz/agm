@@ -110,6 +110,24 @@ def clear_workspace_shell_env(monkeypatch: pytest.MonkeyPatch) -> None:
             monkeypatch.delenv(name, raising=False)
 
 
+_REPO_STDLIB_ROOT = Path(__file__).resolve().parent.parent / "stdlib"
+
+
+@pytest.fixture(autouse=True)
+def pin_agm_stdlib_to_repo(
+    clear_workspace_shell_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pin the AgL stdlib to the in-repo tree so tests never read installed files.
+
+    ``clear_workspace_shell_env`` strips every ``AGM_*`` variable first; this
+    runs afterwards and points ``AGM_STDLIB`` at ``<repo>/stdlib``.  Every
+    ``agm exec``/``agm repl`` invocation — in-process or as a subprocess that
+    inherits the environment — then resolves the standard library from the
+    current source tree, independent of whatever ``~/.agm`` happens to contain.
+    """
+    monkeypatch.setenv("AGM_STDLIB", str(_REPO_STDLIB_ROOT))
+
+
 @pytest.fixture()
 def env(tmp_path: Path) -> dict[str, str]:
     """Environment dict with git identity and isolated HOME."""

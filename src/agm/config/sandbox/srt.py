@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from typing import cast
 
+from agm.config.general import agm_home_dir
 from agm.project.layout import (
     project_config_dir,
     project_deps_dir,
@@ -115,7 +116,9 @@ def sandbox_settings_candidates(
     alias_command_name: str | None = None,
 ) -> list[Path]:
     candidates = [
-        sandbox_settings_path(home / ".agm" / "sandbox", command_name, alias_command_name)
+        sandbox_settings_path(
+            agm_home_dir(home=home) / "sandbox", command_name, alias_command_name
+        )
     ]
     if proj_dir is not None:
         candidates.append(

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from agm.config.engine_keys import ENGINE_KEY_KINDS
-from agm.core.env import agm_installation_prefix
+from agm.core.env import agm_installation_prefix, resolve_env
 from agm.core.fs import mkdir, write_text
 from agm.core.parse import parse_timeout as parse_timeout
 from agm.core.toml import (
@@ -95,12 +96,28 @@ def _unique_paths(paths: list[Path]) -> list[Path]:
     return unique_paths
 
 
-def agm_path_candidates(*, home: Path, relative_path: Path) -> list[Path]:
+def agm_home_dir(*, home: Path, env: Mapping[str, str] | None = None) -> Path:
+    """Return the AGM home directory (the ``.agm`` data/config root).
+
+    Defaults to ``home/.agm``.  When the ``AGM_HOME`` environment variable is
+    set to a non-blank value it overrides that default entirely, so the whole
+    ``.agm`` tree — config, prompts, sandbox settings, and stdlib — can be
+    relocated.  A leading ``~`` in the override is expanded.
+    """
+    override = resolve_env(env).get("AGM_HOME")
+    if override is not None and override.strip():
+        return Path(os.path.expanduser(override))
+    return home / ".agm"
+
+
+def agm_path_candidates(
+    *, home: Path, relative_path: Path, env: Mapping[str, str] | None = None
+) -> list[Path]:
     candidates: list[Path] = []
     install_prefix = agm_installation_prefix()
     if install_prefix is not None:
         candidates.append(install_prefix / ".agm" / relative_path)
-    candidates.append(home / ".agm" / relative_path)
+    candidates.append(agm_home_dir(home=home, env=env) / relative_path)
     return _unique_paths(candidates)
 
 
@@ -712,7 +729,7 @@ def load_repl_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> ReplCon
 
 def save_repl_theme(theme: str, *, home: Path) -> None:
     """Persist the REPL theme preference to the home-level ``config.toml``."""
-    path = home / ".agm" / "config.toml"
+    path = agm_home_dir(home=home) / "config.toml"
     doc = load_toml_doc(path) if path.is_file() else empty_toml_doc()
     set_toml_table_value(doc, "repl", "theme", theme)
     mkdir(path.parent, parents=True, exist_ok=True)

@@ -23,10 +23,12 @@ For ``roots``, entries from *all* layers are accumulated (union).
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from agm.config.general import agm_path_candidates, config_file_candidates
+from agm.core.env import resolve_env
 from agm.core.toml import load_toml_file, toml_dict
 
 
@@ -123,16 +125,20 @@ def resolve_lib_root(mr_config: ModuleRootsConfig) -> Path:
     return Path(os.path.expanduser("~/.agm/lib"))
 
 
-def resolve_stdlib_root(*, home: Path) -> Path:
+def resolve_stdlib_root(*, home: Path, env: Mapping[str, str] | None = None) -> Path:
     """Return the selected AgL standard-library module root.
 
-    The stdlib is a normal module tree installed under ``.agm/stdlib``.  A
-    user-writable home stdlib wins when present, then an installation-prefix
-    stdlib, then the repository ``stdlib/`` tree for source-checkout workflows.
-    If none exists yet, return the home destination so diagnostics mention the
-    path that ``just install`` populates.
+    The stdlib is a normal module tree installed under ``.agm/stdlib``.  An
+    explicit ``AGM_STDLIB`` environment override wins outright.  Otherwise a
+    user-writable home stdlib wins when present (honouring ``AGM_HOME``), then
+    an installation-prefix stdlib, then the repository ``stdlib/`` tree for
+    source-checkout workflows.  If none exists yet, return the home destination
+    so diagnostics mention the path that ``just install`` populates.
     """
-    candidates = agm_path_candidates(home=home, relative_path=Path("stdlib"))
+    override = resolve_env(env).get("AGM_STDLIB")
+    if override is not None and override.strip():
+        return Path(os.path.expanduser(override))
+    candidates = agm_path_candidates(home=home, relative_path=Path("stdlib"), env=env)
     repo_stdlib = Path(__file__).resolve().parents[3] / "stdlib"
     if repo_stdlib.is_dir():
         candidates.append(repo_stdlib)

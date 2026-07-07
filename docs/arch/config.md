@@ -6,6 +6,10 @@ AGM is configured through layered TOML files. Configuration is resolved relative
 
 A config context locates the directories that contribute configuration. The project directory is discovered from an environment variable when set, otherwise by walking up the filesystem from the invocation directory until a recognizable project layout is found (see [workspaces.md](workspaces.md)). This context is what lets the same command behave correctly whether run from the main workspace or a branch worktree.
 
+## Home Directory Overrides
+
+The AGM home directory defaults to `~/.agm` but is relocatable through the environment. `AGM_HOME` overrides the whole directory — config, prompts, sandbox settings, and the stdlib all resolve beneath it. `AGM_STDLIB` overrides just the AgL standard-library root, taking precedence over every other stdlib candidate. Both accept a leading `~`. These env overrides are the only way to redirect the home layer, since it is where `config.toml` itself lives; project and workspace layers remain path-discovered as usual.
+
 ## Layering and Precedence
 
 General configuration merges across scopes, from least to most specific:

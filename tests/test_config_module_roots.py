@@ -275,13 +275,13 @@ class TestResolveStdlibRoot:
         stdlib = home / ".agm" / "stdlib"
         stdlib.mkdir(parents=True)
 
-        assert resolve_stdlib_root(home=home) == stdlib
+        assert resolve_stdlib_root(home=home, env={}) == stdlib
 
     def test_missing_home_stdlib_returns_source_tree_fallback(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
         home.mkdir()
 
-        result = resolve_stdlib_root(home=home)
+        result = resolve_stdlib_root(home=home, env={})
 
         assert result.name == "stdlib"
         assert result.is_dir()
@@ -296,6 +296,6 @@ class TestResolveStdlibRoot:
         home.mkdir()
         monkeypatch.setattr(module_roots, "__file__", str(fake_module))
 
-        result = resolve_stdlib_root(home=home)
+        result = resolve_stdlib_root(home=home, env={})
 
         assert result == home / ".agm" / "stdlib"

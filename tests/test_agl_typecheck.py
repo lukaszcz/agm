@@ -22,6 +22,7 @@ from typing import cast
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
+from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.parser import parse_program
 from agm.agl.scope import resolve
 from agm.agl.scope.symbols import BinderKind, BindingRef, ScopeNode
@@ -594,6 +595,63 @@ class TestTypeEnvironment:
         env2 = TypeEnvironment()
         env2.seed_from(env1)
         assert env2.has_type("Abort")
+
+    def test_restore_type_names_from_restores_all_type_metadata(self) -> None:
+        previous = TypeEnvironment()
+        restored = RecordType(name="Restored")
+        previous.type_table.register(
+            TypeDef(kind="record", name="Restored", module_id=ENTRY_ID, fields=(("x", IntType()),))
+        )
+        previous.register_type("Restored", restored)
+        previous.register_alias("Restored", IntT(span=mk_span(), node_id=1), type_params=("T",))
+        previous.register_generic_type(
+            "Restored",
+            GenericTypeDef(
+                kind="record",
+                type_params=("T",),
+                template=RecordType(name="Restored", type_args=(TypeVarType("T"),)),
+            ),
+        )
+        previous.register_constructor_signature(
+            ConstructorSignature(
+                owner_name="Restored",
+                variant=None,
+                field_names=("x",),
+                field_templates=(IntType(),),
+                result_template=restored,
+                type_params=(),
+            )
+        )
+        previous.register_constructor_signature(
+            ConstructorSignature(
+                owner_name="Other",
+                variant=None,
+                field_names=(),
+                field_templates=(),
+                result_template=RecordType(name="Other"),
+                type_params=(),
+            )
+        )
+        previous.register_constructor_field_kinds(
+            "Restored", None, (("x", ParamKind.STANDARD),)
+        )
+
+        current = TypeEnvironment()
+        current.register_type("Restored", TextType())
+        current.restore_type_names_from(previous, ("Abort", "Restored"))
+
+        assert current.type_table.get(ENTRY_ID, "Restored") == previous.type_table.get(
+            ENTRY_ID, "Restored"
+        )
+        assert current.get_type("Restored") == restored
+        assert current.get_alias_type_params("Restored") == ("T",)
+        assert current.get_generic_type("Restored") == previous.get_generic_type("Restored")
+        assert current.get_constructor_signature(
+            "Restored", None
+        ) == previous.get_constructor_signature("Restored", None)
+        assert current.get_constructor_field_kinds(
+            "Restored", None
+        ) == previous.get_constructor_field_kinds("Restored", None)
 
     def test_unregister_name(self) -> None:
         env = TypeEnvironment()

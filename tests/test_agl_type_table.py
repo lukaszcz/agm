@@ -1813,6 +1813,73 @@ class TestFiniteClosure:
             EnumType("E", type_args=(IntType(),), module_id=ENTRY_ID)
         ) is True
 
+    def test_unknown_nested_nominal_argument_counts_as_schema_growth(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="R",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(
+                    ("value", TypeVarType("T")),
+                    (
+                        "child",
+                        RecordType(
+                            "R",
+                            type_args=(
+                                RecordType(
+                                    "Unknown",
+                                    type_args=(ListType(TypeVarType("T")),),
+                                    module_id=ENTRY_ID,
+                                ),
+                            ),
+                            module_id=ENTRY_ID,
+                        ),
+                    ),
+                ),
+            )
+        )
+        assert table.has_finite_closure(ENTRY_ID, "R") is False
+
+    def test_extra_nested_nominal_argument_counts_as_schema_growth(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Box",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(("value", TypeVarType("T")),),
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="record",
+                name="R",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(
+                    ("value", TypeVarType("T")),
+                    (
+                        "child",
+                        RecordType(
+                            "R",
+                            type_args=(
+                                RecordType(
+                                    "Box",
+                                    type_args=(TypeVarType("T"), ListType(TypeVarType("T"))),
+                                    module_id=ENTRY_ID,
+                                ),
+                            ),
+                            module_id=ENTRY_ID,
+                        ),
+                    ),
+                ),
+            )
+        )
+        assert table.has_finite_closure(ENTRY_ID, "R") is False
+
     def test_has_finite_schema_reports_finite_for_nested_tree_field(self) -> None:
         table = TypeTable()
         table.register(

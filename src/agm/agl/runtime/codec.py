@@ -410,25 +410,19 @@ def _resolve_ref(decode: DecodeSchema, defs: Mapping[str, DecodeSchema]) -> Deco
     return decode
 
 
-def _decode_contains_ref(decode: DecodeSchema, *, seen: frozenset[int] = frozenset()) -> bool:
+def _decode_contains_ref(decode: DecodeSchema) -> bool:
     """Return whether *decode* contains any ``RefDecode`` node."""
-    if id(decode) in seen:
-        return False
-    seen = seen | {id(decode)}
     if isinstance(decode, RefDecode):
         return True
     if isinstance(decode, ListDecode):
-        return _decode_contains_ref(decode.elem, seen=seen)
+        return _decode_contains_ref(decode.elem)
     if isinstance(decode, DictDecode):
-        return _decode_contains_ref(decode.value, seen=seen)
+        return _decode_contains_ref(decode.value)
     if isinstance(decode, RecordDecode):
-        return any(
-            _decode_contains_ref(field_decode, seen=seen)
-            for _name, field_decode in decode.fields
-        )
+        return any(_decode_contains_ref(field_decode) for _name, field_decode in decode.fields)
     if isinstance(decode, EnumDecode):
         return any(
-            _decode_contains_ref(field_decode, seen=seen)
+            _decode_contains_ref(field_decode)
             for variant in decode.variants
             for _name, field_decode in variant.fields
         )

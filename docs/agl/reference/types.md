@@ -362,8 +362,8 @@ insignificant).
 
 ## Recursive types
 
-A record or enum may reference its own type, directly or through another
-declaration, in its own field or variant definitions:
+A record, enum, or exception may reference its own type, directly or through
+another declaration, in its own field or variant definitions:
 
 ```agl
 enum Tree
@@ -373,12 +373,15 @@ enum Tree
 record Category
   name: text
   subcategories: list[Category]
+
+exception Retryable extends Exception
+  causes: list[Retryable]
 ```
 
-Mutual recursion — a record referencing an enum, an enum referencing a
-record, two records referencing each other, and so on — is allowed, and a
-recursive type may span any number of imported modules: a cycle through a
-cross-module reference is exactly as legal as one within a single module.
+Mutual recursion — records, enums, and exceptions referencing each other in
+any combination — is allowed, and a recursive type may span any number of
+imported modules: a cycle through a cross-module reference is exactly as legal
+as one within a single module.
 
 ### Inhabitation
 
@@ -404,11 +407,14 @@ record Node
 # list/dict field.
 ```
 
-The same rule rejects an enum whose only variant carries itself, and a
-mutually recursive pair with no base case or guard anywhere in the cycle
-(for example `record A { b: B }` / `record B { a: A }`, with no list/dict
-field and no enum alternative on either side). The error is reported at the
-declaration and names its kind (`Record type`/`Enum type`/`Exception type`).
+The same rule rejects an enum whose only variant carries itself, an exception
+whose required fields contain an unguarded cycle, and a mutually recursive
+pair with no base case or guard anywhere in the cycle (for example
+`record A { b: B }` / `record B { a: A }`, with no list/dict field and no enum
+alternative on either side). Abstract exception roots are inhabited only by
+constructible descendants, not by their own fields alone. The error is
+reported at the declaration and names its kind (`Record type`/`Enum type`/
+`Exception type`).
 
 Generic recursive types — a declaration referencing itself at a different
 type argument, such as `Expr[T]` referencing `Expr[list[T]]` in its own body —
@@ -417,10 +423,10 @@ generics-specific recursion rules.
 
 ### Recursive aliases are not allowed
 
-Unlike records and enums, a `type` alias may not be recursive, directly or
-through another alias — see [Type aliases](#type-aliases). An alias has no
-nominal identity of its own to anchor a cycle; recursion must always pass
-through a named `record`, `enum`, or `exception`.
+Unlike records, enums, and exceptions, a `type` alias may not be recursive,
+directly or through another alias — see [Type aliases](#type-aliases). An
+alias has no nominal identity of its own to anchor a cycle; recursion must
+always pass through a named `record`, `enum`, or `exception`.
 
 ## Module-qualified type identity
 

@@ -310,9 +310,10 @@ A [recursive](types.md#recursive-types) target type's schema uses standard
 JSON Schema `$defs`/`$ref`: every recursive record/enum reachable from the
 target gets one entry under a top-level `"$defs"` object, and every place it
 occurs — including the target itself, if it is directly recursive — is a
-`{"$ref": "#/$defs/<name>"}` instead of being inlined. A non-recursive type's
-schema has no `$defs` at all and is fully inlined, exactly as the table above
-shows.
+`{"$ref": "#/$defs/<name>"}` instead of being inlined. A target that is not
+itself recursive can still have `$defs` when one of its fields reaches a
+recursive type; otherwise the schema is fully inlined, exactly as the table
+above shows.
 
 ### Format instructions
 

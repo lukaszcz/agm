@@ -411,8 +411,8 @@ field and no enum alternative on either side). The error is reported at the
 declaration and names its kind (`Record type`/`Enum type`/`Exception type`).
 
 Generic recursive types — a declaration referencing itself at a different
-type argument, such as `Expr[T]` referencing `Expr[T]` in its own body — are
-constructible under the same rule; see [Generics](generics.md) for the
+type argument, such as `Expr[T]` referencing `Expr[list[T]]` in its own body —
+are constructible under the same rule; see [Generics](generics.md) for the
 generics-specific recursion rules.
 
 ### Recursive aliases are not allowed

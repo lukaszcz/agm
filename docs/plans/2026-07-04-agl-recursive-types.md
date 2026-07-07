@@ -2,11 +2,10 @@
 
 ## Overview
 
-AgL currently bans recursive type declarations: the single-module type builder
-(`typecheck/builder.py`) rejects any direct or indirect cycle via an
-in-progress set, and the module-graph pass (`typecheck/graph.py`) topologically
-sorts type bodies and rejects structural cycles outright. This plan lifts the
-ban and makes recursion a first-class feature:
+AgL supports recursive type declarations for records, enums, and exceptions.
+This plan records the work that lifted the earlier ban, replacing acyclic body
+ordering with nominal handles, table-backed shape lookup, and whole-table
+analyses for inhabitation, equality, and finite-schema boundaries:
 
 ```agl
 enum Tree

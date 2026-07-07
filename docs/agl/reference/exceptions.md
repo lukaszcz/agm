@@ -56,11 +56,12 @@ exception Broken extends Exception
   child: Broken   # rejected: uninhabitable, no list/dict guard
 ```
 
-A `list`/`dict` field is the only guard available for a required field —
-there is no enum-style alternative variant to fall back on. The same
-inhabitation rule also covers the `extends` chain itself: an `extends`
-cycle (two exceptions each extending the other) is rejected as uninhabitable
-for the same reason a field cycle is.
+For a required exception field, recursion must be guarded by a field type
+that itself has a finite base value, such as `list`/`dict` (empty collection)
+or an enum/option-style type with a base-case variant. The same inhabitation
+rule also covers the `extends` chain itself: an `extends` cycle (two exceptions
+each extending the other) is rejected as uninhabitable for the same reason a
+field cycle is.
 
 Exception values support field access (`e.raw`), equality, and rendering.
 In interpolation and `print` an exception renders in **AgL record form**,

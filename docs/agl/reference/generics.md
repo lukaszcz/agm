@@ -290,7 +290,7 @@ generic function called at different type arguments; see
 Every use in-language works uniformly across recursive generic types, whether
 uniform (`Tree[T]` referencing `Tree[T]`), a permutation (`Swap[B, A]`
 referencing `Swap[A, B]`), argument-constant (`R[int]` referencing `R[T]`), or
-growing (`Perfect[T]` referencing `Perfect[Pair[T, T]]`, as above). Two
+growing (`Perfect[T]` referencing `Perfect[Pair[T, T]]`, as above). Three
 positions, however, need a **finite JSON Schema** for the concrete type in
 hand: an `ask`/`exec` response type ([Agent calls](agent-calls.md)), an
 `as`/`as?` cast target ([Expressions](expressions.md#casts-as-and-as)), and a
@@ -304,7 +304,7 @@ infinitely many distinct shapes (`Perfect[int]`, `Perfect[Pair[int, int]]`,
 schema to derive.
 
 A concrete instantiation whose reachable declarations are all finite-closing
-may cross either boundary; one that reaches a non-closing declaration is
+may cross any schema boundary; one that reaches a non-closing declaration is
 rejected with a static error at that specific use site:
 
 ```agl

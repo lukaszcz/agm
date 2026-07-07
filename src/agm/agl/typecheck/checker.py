@@ -619,35 +619,36 @@ class _Checker:
         return self._wire_type_is_serializable(typ, seen=frozenset())
 
     def _wire_type_is_serializable(self, typ: Type, *, seen: frozenset[Type]) -> bool:
-        if isinstance(typ, (TextType, JsonType, BoolType, IntType, DecimalType)):
+        schema_type = self._env.type_table.canonical_schema_type(typ)
+        if isinstance(schema_type, (TextType, JsonType, BoolType, IntType, DecimalType)):
             return True
-        if isinstance(typ, ListType):
-            return self._wire_type_is_serializable(typ.elem, seen=seen)
-        if isinstance(typ, DictType):
-            return self._wire_type_is_serializable(typ.value, seen=seen)
-        if isinstance(typ, RecordType):
-            if typ in seen:
+        if isinstance(schema_type, ListType):
+            return self._wire_type_is_serializable(schema_type.elem, seen=seen)
+        if isinstance(schema_type, DictType):
+            return self._wire_type_is_serializable(schema_type.value, seen=seen)
+        if isinstance(schema_type, RecordType):
+            if schema_type in seen:
                 return True
-            next_seen = seen | {typ}
+            next_seen = seen | {schema_type}
             return all(
                 self._wire_type_is_serializable(field_type, seen=next_seen)
-                for field_type in self._env.type_table.record_fields(typ).values()
+                for field_type in self._env.type_table.record_fields(schema_type).values()
             )
-        if isinstance(typ, EnumType):
-            if typ in seen:
+        if isinstance(schema_type, EnumType):
+            if schema_type in seen:
                 return True
-            next_seen = seen | {typ}
+            next_seen = seen | {schema_type}
             return all(
                 self._wire_type_is_serializable(field_type, seen=next_seen)
-                for variant_fields in self._env.type_table.enum_variants(typ).values()
+                for variant_fields in self._env.type_table.enum_variants(schema_type).values()
                 for field_type in variant_fields.values()
             )
         if isinstance(
-            typ,
+            schema_type,
             (ExceptionType, UnitType, AgentType, FunctionType, BottomType, TypeVarType),
         ):
             return False
-        assert_never(typ)  # pragma: no cover
+        assert_never(schema_type)  # pragma: no cover
 
     def _check_config(self, stmt: ConfigDecl) -> None:
         """Check a ``config`` declaration against the engine-key registry.

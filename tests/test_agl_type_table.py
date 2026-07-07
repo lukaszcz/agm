@@ -1739,6 +1739,33 @@ class TestFiniteClosure:
         )
         assert table.has_finite_schema(phantom) is True
 
+    def test_phantom_recursive_argument_growth_is_finite_schema(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="R",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(
+                    (
+                        "children",
+                        ListType(
+                            RecordType(
+                                "R",
+                                type_args=(ListType(TypeVarType("T")),),
+                                module_id=ENTRY_ID,
+                            )
+                        ),
+                    ),
+                ),
+            )
+        )
+        assert table.has_finite_closure(ENTRY_ID, "R") is True
+        assert table.has_finite_schema(
+            RecordType("R", type_args=(IntType(),), module_id=ENTRY_ID)
+        ) is True
+
     def test_has_finite_schema_reports_finite_for_nested_tree_field(self) -> None:
         table = TypeTable()
         table.register(
@@ -1920,6 +1947,35 @@ class TestFiniteClosure:
             )
         )
         assert table.has_finite_closure(ENTRY_ID, "Y") is True
+
+    def test_schema_canonical_type_preserves_unregistered_reference_args(self) -> None:
+        table = TypeTable()
+        ghost = RecordType(
+            "Ghost",
+            type_args=(ListType(IntType()),),
+            module_id=ENTRY_ID,
+        )
+        assert table.canonical_schema_type(ghost) == ghost
+        assert table.schema_relevant_type_args(ghost) == (ListType(IntType()),)
+
+    def test_schema_canonical_type_preserves_extra_defensive_args(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Weird",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(("value", TypeVarType("T")),),
+            )
+        )
+        weird = RecordType(
+            "Weird",
+            type_args=(IntType(), TextType()),
+            module_id=ENTRY_ID,
+        )
+        assert table.canonical_schema_type(weird) == weird
+        assert table.schema_relevant_type_args(weird) == (IntType(), TextType())
 
     def test_argument_template_type_var_foreign_to_source_is_ignored(self) -> None:
         # Defensive: an argument template's type variable that is not among

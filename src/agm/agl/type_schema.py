@@ -184,9 +184,10 @@ def derive_schema_and_decode(
 
 def _emit(typ: Type, type_table: TypeTable, plan: _SchemaPlan) -> dict[str, object]:
     """Emit *typ*'s schema, ``$ref``-ing it out if it is itself a recursive instantiation."""
-    if isinstance(typ, (RecordType, EnumType)) and typ in plan.recursive:
-        return {"$ref": f"#/$defs/{plan.keys[typ]}"}
-    return _emit_body(typ, type_table, plan)
+    schema_type = type_table.canonical_schema_type(typ)
+    if isinstance(schema_type, (RecordType, EnumType)) and schema_type in plan.recursive:
+        return {"$ref": f"#/$defs/{plan.keys[schema_type]}"}
+    return _emit_body(schema_type, type_table, plan)
 
 
 def _emit_body(typ: Type, type_table: TypeTable, plan: _SchemaPlan) -> dict[str, object]:
@@ -321,7 +322,7 @@ def _plan_schema(typ: Type, type_table: TypeTable) -> _SchemaPlan:
     return _SchemaPlan(
         recursive=frozenset(recursive),
         order=recursive_order,
-        keys=_assign_defs_keys(recursive_order),
+        keys=_assign_defs_keys(recursive_order, type_table),
     )
 
 
@@ -395,10 +396,13 @@ def _instantiation_sort_key(handle: Instantiation) -> tuple[object, ...]:
 _UNSAFE_KEY_CHARS = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
-def _bare_display(handle: Instantiation) -> str:
+def _bare_display(handle: Instantiation, type_table: TypeTable | None = None) -> str:
     """*handle*'s display form WITHOUT its module qualifier (bare name[, args])."""
-    if handle.type_args:
-        args = ", ".join(repr(arg) for arg in handle.type_args)
+    type_args = handle.type_args
+    if type_table is not None:
+        type_args = type_table.schema_relevant_type_args(handle)
+    if type_args:
+        args = ", ".join(repr(arg) for arg in type_args)
         return f"{handle.name}[{args}]"
     return handle.name
 
@@ -407,7 +411,9 @@ def _sanitize_key(raw: str) -> str:
     return _UNSAFE_KEY_CHARS.sub("_", raw).strip("_")
 
 
-def _assign_defs_keys(order: tuple[Instantiation, ...]) -> dict[Instantiation, str]:
+def _assign_defs_keys(
+    order: tuple[Instantiation, ...], type_table: TypeTable | None = None
+) -> dict[Instantiation, str]:
     """Assign each recursive instantiation in *order* a deterministic, collision-free ``$defs`` key.
 
     Base key: the sanitized bare display form (``Tree``, ``Tree_int``).  If
@@ -418,14 +424,14 @@ def _assign_defs_keys(order: tuple[Instantiation, ...]) -> dict[Instantiation, s
     argument lists sanitize identically) is broken by a numeric suffix in
     first-encounter order, guaranteeing a collision-free result.
     """
-    bare = {handle: _sanitize_key(_bare_display(handle)) for handle in order}
+    bare = {handle: _sanitize_key(_bare_display(handle, type_table)) for handle in order}
     bare_counts: dict[str, int] = {}
     for key in bare.values():
         bare_counts[key] = bare_counts.get(key, 0) + 1
     candidates: dict[Instantiation, str] = {}
     for handle in order:
         if bare_counts[bare[handle]] > 1 and not handle.module_id.is_entry:
-            qualified = f"{handle.module_id.dotted()}.{_bare_display(handle)}"
+            qualified = f"{handle.module_id.dotted()}.{_bare_display(handle, type_table)}"
             candidates[handle] = _sanitize_key(qualified)
         else:
             candidates[handle] = bare[handle]
@@ -477,9 +483,10 @@ def _build_decode_plan(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") ->
 
 def _emit_decode(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -> DecodeSchema:
     """Emit *typ*'s decode schema, ``RefDecode``-ing it out if it is a recursive instantiation."""
-    if isinstance(typ, (RecordType, EnumType)) and typ in plan.recursive:
-        return RefDecode(plan.keys[typ])
-    return _emit_decode_body(typ, type_table, plan)
+    schema_type = type_table.canonical_schema_type(typ)
+    if isinstance(schema_type, (RecordType, EnumType)) and schema_type in plan.recursive:
+        return RefDecode(plan.keys[schema_type])
+    return _emit_decode_body(schema_type, type_table, plan)
 
 
 def _emit_decode_body(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -> DecodeSchema:

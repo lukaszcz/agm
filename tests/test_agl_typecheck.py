@@ -6416,6 +6416,8 @@ _GROWING_TYPE_SRC = (
 
 _TREE_SRC = "enum Tree\n  | Leaf\n  | Node(value: int, left: Tree, right: Tree)\n"
 
+_PHANTOM_GROWING_TYPE_SRC = "record R[T]\n  children: list[R[list[T]]]\n"
+
 
 class TestNoFiniteSchemaUseSites:
     def test_ask_growing_type_rejected(self) -> None:
@@ -6537,6 +6539,14 @@ class TestNoFiniteSchemaUseSites:
     def test_param_finite_recursive_type_accepted(self) -> None:
         r = accept_type(_TREE_SRC + "param t: Tree\nt")
         assert r.resolved.program is not None
+
+    def test_phantom_growing_recursive_type_accepted_at_schema_boundaries(self) -> None:
+        # R's T parameter never affects its wire shape, so recursively
+        # mentioning R[list[T]] still closes to one schema definition.
+        assert accept_type(_PHANTOM_GROWING_TYPE_SRC + 'ask::[R[int]]("Q")')
+        assert accept_type(_PHANTOM_GROWING_TYPE_SRC + 'exec::[R[int]]("cmd")')
+        assert accept_type(_PHANTOM_GROWING_TYPE_SRC + 'let raw: text = "{}"\nraw as R[int]')
+        assert accept_type(_PHANTOM_GROWING_TYPE_SRC + "param r: R[int]\nr")
 
 
 class TestParseJsonCall:

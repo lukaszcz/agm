@@ -44,7 +44,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, assert_never
+from typing import TYPE_CHECKING, Literal, assert_never, cast
 
 from agm.agl.modules.ids import PRELUDE_ID, STD_CORE_ID, ModuleId
 from agm.agl.semantics.types import (
@@ -500,6 +500,99 @@ class TypeTable:
             queue.extend(sorted(successors - seen, key=decl_key_sort_key))
         return None
 
+    def canonical_schema_type(self, t: Type) -> Type:
+        """Return *t* with schema-irrelevant nominal type arguments canonicalized.
+
+        Phantom parameters cannot affect a declaration's emitted JSON schema,
+        so schema planning must treat instantiations that differ only at those
+        positions as the same node. Relevant arguments are canonicalized
+        recursively so phantom differences nested inside them are erased too.
+        """
+        return self._canonical_schema_type(t, self._finite_closure_result().relevant_params)
+
+    def _canonical_schema_type(
+        self, t: Type, relevant_params: Mapping[tuple[ModuleId, str], frozenset[str]]
+    ) -> Type:
+        match t:
+            case RecordType():
+                return RecordType(
+                    name=t.name,
+                    type_args=self._canonical_schema_args(t, relevant_params),
+                    module_id=t.module_id,
+                )
+            case EnumType():
+                return EnumType(
+                    name=t.name,
+                    type_args=self._canonical_schema_args(t, relevant_params),
+                    module_id=t.module_id,
+                )
+            case ListType(elem=elem):
+                return ListType(self._canonical_schema_type(elem, relevant_params))
+            case DictType(value=value):
+                return DictType(self._canonical_schema_type(value, relevant_params))
+            case FunctionType(params=params, result=result):
+                return FunctionType(
+                    params=tuple(self._canonical_schema_type(p, relevant_params) for p in params),
+                    result=self._canonical_schema_type(result, relevant_params),
+                )
+            case (
+                ExceptionType()
+                | AgentType()
+                | UnitType()
+                | TextType()
+                | JsonType()
+                | BoolType()
+                | IntType()
+                | DecimalType()
+                | BottomType()
+                | TypeVarType()
+            ):
+                return t
+            case _ as unreachable:  # pragma: no cover
+                assert_never(unreachable)
+
+    def _canonical_schema_args(
+        self,
+        t: RecordType | EnumType,
+        relevant_params: Mapping[tuple[ModuleId, str], frozenset[str]],
+    ) -> tuple[Type, ...]:
+        key = (t.module_id, t.name)
+        typedef = self._defs.get(key)
+        if typedef is None:
+            return tuple(self._canonical_schema_type(arg, relevant_params) for arg in t.type_args)
+        relevant = relevant_params.get(key, frozenset())
+        result: list[Type] = []
+        for pname, arg in zip(typedef.type_params, t.type_args):
+            if pname in relevant:
+                result.append(self._canonical_schema_type(arg, relevant_params))
+            else:
+                result.append(UnitType())
+        if len(t.type_args) > len(typedef.type_params):
+            result.extend(
+                self._canonical_schema_type(arg, relevant_params)
+                for arg in t.type_args[len(typedef.type_params) :]
+            )
+        return tuple(result)
+
+    def schema_relevant_type_args(self, t: RecordType | EnumType) -> tuple[Type, ...]:
+        """Return the canonical type arguments that should appear in schema identity labels."""
+        caps = self._finite_closure_result()
+        canonical = self._canonical_schema_type(t, caps.relevant_params)
+        if not isinstance(canonical, (RecordType, EnumType)):  # pragma: no cover
+            raise AssertionError(f"canonicalized nominal handle became {canonical!r}")
+        typedef = self._defs.get((t.module_id, t.name))
+        if typedef is None:
+            return canonical.type_args
+        relevant = caps.relevant_params.get((t.module_id, t.name), frozenset())
+        result = [
+            arg
+            for pname, arg in zip(typedef.type_params, canonical.type_args)
+            if pname in relevant
+        ]
+        if len(canonical.type_args) > len(typedef.type_params):
+            result.extend(canonical.type_args[len(typedef.type_params) :])
+        return tuple(result)
+
     def schema_relevant_nominal_references(
         self, t: Type
     ) -> tuple[RecordType | EnumType | ExceptionType, ...]:
@@ -507,7 +600,11 @@ class TypeTable:
         from agm.agl.semantics.analyses import nominal_references_for_schema
 
         caps = self._finite_closure_result()
-        return tuple(nominal_references_for_schema(t, self._defs, caps.relevant_params))
+        result: list[RecordType | EnumType | ExceptionType] = []
+        for ref in nominal_references_for_schema(t, self._defs, caps.relevant_params):
+            canonical = self._canonical_schema_type(ref, caps.relevant_params)
+            result.append(cast(RecordType | EnumType | ExceptionType, canonical))
+        return tuple(result)
 
     def no_finite_schema_message(self, t: Type, *, use: str) -> str | None:
         """Return the use-site diagnostic for *t* if it has no finite JSON schema.

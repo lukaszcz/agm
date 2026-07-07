@@ -518,7 +518,7 @@ def compute_finite_closure(table: TypeTable) -> FiniteClosure:
     infinite: set[DeclKey] = set()
     for component in components:
         members = frozenset(component)
-        if _scc_has_growing_cycle(members, edges, defs):
+        if _scc_has_growing_cycle(members, edges, defs, relevant):
             infinite.update(members)
     return FiniteClosure(
         infinite=frozenset(infinite),
@@ -659,6 +659,7 @@ def _scc_has_growing_cycle(
     members: frozenset[DeclKey],
     edges: Mapping[DeclKey, tuple[_RefEdge, ...]],
     defs: Mapping[DeclKey, TypeDef],
+    relevant_params: Mapping[DeclKey, set[str]],
 ) -> bool:
     """Return ``True`` if *members*'s parameter-dependency graph has a growing cycle."""
     adjacency: dict[ParamKey, list[ParamKey]] = {}
@@ -686,7 +687,10 @@ def _scc_has_growing_cycle(
                 # as a defensive guard, matching the dangling-source check
                 # above, in case that invariant ever stops holding.
                 continue
+            target_relevant = relevant_params.get(target_key, set())
             for param_name, arg_template in zip(target_def.type_params, ref_edge.arg_templates):
+                if param_name not in target_relevant:
+                    continue
                 occurrences = _param_occurrences(arg_template, growing=False)
                 for source_param, growing in occurrences.items():
                     if source_param not in source_def.type_params:

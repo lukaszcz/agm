@@ -678,6 +678,31 @@ class TestRecursiveSchemaDerivation:
         schema = derive_schema(outer, type_table_for(outer_def, inner_def))
         assert "$defs" not in schema
 
+    def test_phantom_recursive_argument_growth_refs_same_defs_entry(self) -> None:
+        recursive = RecordType("R", type_args=(ListType(TypeVarType("T")),), module_id=ENTRY_ID)
+        root = RecordType("R", type_args=(IntType(),), module_id=ENTRY_ID)
+        r_def = TypeDef(
+            kind="record",
+            name="R",
+            module_id=ENTRY_ID,
+            type_params=("T",),
+            fields=(("children", ListType(recursive)),),
+        )
+        schema = derive_schema(root, type_table_for(r_def))
+        assert schema == {
+            "$ref": "#/$defs/R",
+            "$defs": {
+                "R": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["children"],
+                    "properties": {
+                        "children": {"type": "array", "items": {"$ref": "#/$defs/R"}}
+                    },
+                }
+            },
+        }
+
     def test_raises_for_infinite_closure_root(self) -> None:
         pair_def = TypeDef(
             kind="record",

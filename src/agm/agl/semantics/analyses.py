@@ -47,7 +47,8 @@ tree), but its **instantiation closure** — the set of concrete
 starting from one concrete instantiation — can be infinite: ``Perfect[int]``
 reaches ``Perfect[Pair[int, int]]``, ``Perfect[Pair[Pair[int, int], Pair[int,
 int]]]``, … forever. A type with an infinite closure has no finite JSON
-schema, which matters only at the (not yet implemented) agent/cast boundary.
+schema, which matters at schema-producing boundaries such as agent/exec
+outputs, casts from JSON/text, and external params.
 
 :func:`compute_finite_closure` decides, once per table build, which
 declarations have a finite closure. Unlike inhabitation and equality

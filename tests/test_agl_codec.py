@@ -23,6 +23,7 @@ Covers (per the AgL DSL contract):
 from __future__ import annotations
 
 import itertools
+from collections.abc import Mapping
 from decimal import Decimal
 
 import pytest
@@ -30,7 +31,7 @@ from jsonschema import Draft202012Validator
 
 from agm.agl import PipelineDriver
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.ir.contracts import ContractRequest, DecodeSchema
+from agm.agl.ir.contracts import ContractRequest, DecodeSchema, RefDecode, ScalarDecode, ScalarKind
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.runtime.agents import AgentFn, AgentRegistry
 from agm.agl.runtime.codec import JsonCodec, ParseResult, TextCodec
@@ -3211,7 +3212,7 @@ class TestRegisterCodec:
                 strict_json: bool = False,
                 schema: dict[str, object] | None = None,
                 decode: DecodeSchema | None = None,
-                defs: dict[str, DecodeSchema] | None = None,
+                defs: Mapping[str, DecodeSchema] | None = None,
             ) -> ParseResult:
                 return ParseResult.failure(raw)
 
@@ -3243,6 +3244,142 @@ class TestRegisterCodec:
             contract = materialize_ir_contract(request, {"capture": codec})
             assert contract is not None
             assert isinstance(codec.seen[-1], expected_type)
+
+    def test_custom_codec_ir_materialization_preserves_recursive_decode(self) -> None:
+        """Execution-time custom contracts keep codec-provided decode metadata."""
+
+        class RecursiveCodec:
+            @property
+            def name(self) -> str:
+                return "recursive"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"record"})
+
+            def supports_type(self, t: Type) -> bool:
+                return True
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=False,
+                    format_instructions="recursive",
+                    json_schema={"$ref": "#/$defs/Node"},
+                    decode=RefDecode("Node"),
+                    defs=(("Node", ScalarDecode(ScalarKind.JSON)),),
+                )
+
+            def parse(
+                self,
+                raw: str,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
+                decode: DecodeSchema | None = None,
+                defs: Mapping[str, DecodeSchema] | None = None,
+            ) -> ParseResult:
+                return ParseResult.failure(raw)
+
+        request = ContractRequest(
+            codec_name="recursive",
+            strict_json=None,
+            json_schema=None,
+            decode=None,
+            target_type_label="Node",
+            structured_exec=False,
+            format_instructions="",
+            target_type_kind="record",
+        )
+
+        contract = materialize_ir_contract(request, {"recursive": RecursiveCodec()})
+
+        assert contract is not None
+        assert contract.decode == RefDecode("Node")
+        assert contract.defs == (("Node", ScalarDecode(ScalarKind.JSON)),)
+
+    def test_custom_codec_parse_receives_recursive_defs(self) -> None:
+        """The IR interpreter passes custom contract defs through to parse()."""
+        from agm.agl.eval.ir_interpreter import IrInterpreter
+        from agm.agl.ir.ids import ContractId
+        from agm.agl.ir.program import ExecutableModule, ExecutableProgram
+
+        seen_defs: Mapping[str, DecodeSchema] | None = None
+
+        class DefsCaptureCodec:
+            @property
+            def name(self) -> str:
+                return "capture-defs"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"record"})
+
+            def supports_type(self, t: Type) -> bool:
+                return True
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=False,
+                    format_instructions="",
+                    json_schema={},
+                )
+
+            def parse(
+                self,
+                raw: str,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
+                decode: DecodeSchema | None = None,
+                defs: Mapping[str, DecodeSchema] | None = None,
+            ) -> ParseResult:
+                nonlocal seen_defs
+                seen_defs = defs
+                return ParseResult.success(JsonValue({"ok": True}))
+
+        contract_id = ContractId(0)
+        request = ContractRequest(
+            codec_name="capture-defs",
+            strict_json=False,
+            json_schema=None,
+            decode=None,
+            target_type_label="Node",
+            structured_exec=False,
+            format_instructions="",
+            target_type_kind="record",
+        )
+        defs = (("Node", ScalarDecode(ScalarKind.JSON)),)
+        host_contract = OutputContract(
+            target_type_label="Node",
+            codec=DefsCaptureCodec(),
+            strict_json=False,
+            format_instructions="",
+            json_schema={},
+            decode=RefDecode("Node"),
+            defs=defs,
+        )
+        program = ExecutableProgram(
+            entry_module=ENTRY_ID,
+            modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=())},
+            symbols={},
+            nominals={},
+            sources={},
+            contracts={contract_id: request},
+        )
+        interpreter = IrInterpreter(program, host_contracts={contract_id: host_contract})
+
+        result = interpreter._parse_host_output("{}", contract_id, effective_strict=False)
+
+        assert result.ok
+        assert seen_defs == dict(defs)
 
 
 class TestRuntimeBuildsCodecKinds:

@@ -135,19 +135,23 @@ def materialize_ir_contract(
         base = codec.make_contract(_placeholder_type_for_request(request), None)
         format_instructions = base.format_instructions
         schema: object = base.json_schema
+        decode = base.decode
+        defs = base.defs
     else:
         format_instructions = request.format_instructions
         schema = (
             None if request.json_schema is None else cast(object, json.loads(request.json_schema))
         )
+        decode = request.decode
+        defs = request.defs
     return OutputContract(
         target_type_label=request.target_type_label,
         codec=codec,
         strict_json=request.strict_json,
         format_instructions=format_instructions,
         json_schema=schema,
-        decode=request.decode,
-        defs=request.defs,
+        decode=decode,
+        defs=defs,
         structured_exec=request.structured_exec,
     )
 

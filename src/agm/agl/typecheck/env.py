@@ -12,7 +12,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 
 from agm.agl.diagnostics import AglError, Diagnostic
@@ -732,6 +732,12 @@ class TypeEnvironment:
 
     def get_binding_type(self, node_id: int) -> Type | None:
         return self._binding_types.get(node_id)
+
+    def remove_binding_types(self, node_ids: Iterable[int]) -> None:
+        """Forget binding-type metadata for the given declaration node ids."""
+        for node_id in node_ids:
+            self._binding_types.pop(node_id, None)
+            self._function_signatures_by_node_id.pop(node_id, None)
 
     def resolve_binding(self, ref: BindingRef) -> Type | None:
         """Return the declared type for a ``BindingRef``."""

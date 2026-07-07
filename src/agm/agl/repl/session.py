@@ -211,6 +211,34 @@ class ReplSession:
 
         return AgentType()
 
+    @staticmethod
+    def _type_mentions_entry_nominal(typ: "Type", names: frozenset[str]) -> bool:
+        """Return whether *typ* contains an entry-module nominal in *names*."""
+        from agm.agl.semantics.types import (
+            DictType,
+            EnumType,
+            ExceptionType,
+            FunctionType,
+            ListType,
+            RecordType,
+        )
+
+        if isinstance(typ, (RecordType, EnumType)):
+            return (typ.module_id.is_entry and typ.name in names) or any(
+                ReplSession._type_mentions_entry_nominal(arg, names) for arg in typ.type_args
+            )
+        if isinstance(typ, ExceptionType):
+            return typ.module_id.is_entry and typ.name in names
+        if isinstance(typ, ListType):
+            return ReplSession._type_mentions_entry_nominal(typ.elem, names)
+        if isinstance(typ, DictType):
+            return ReplSession._type_mentions_entry_nominal(typ.value, names)
+        if isinstance(typ, FunctionType):
+            return any(
+                ReplSession._type_mentions_entry_nominal(param, names) for param in typ.params
+            ) or ReplSession._type_mentions_entry_nominal(typ.result, names)
+        return False
+
     # ------------------------------------------------------------------
     # Registration (delegated to the internal runtime — shared validation)
     # ------------------------------------------------------------------
@@ -769,6 +797,42 @@ class ReplSession:
         config_decl_names: frozenset[str] = frozenset(
             item.name for item in program.body.items if isinstance(item, ConfigDecl)
         )
+        def _before_failure(end_offset: int) -> bool:
+            return not partial or (
+                failure_span is not None and end_offset <= failure_span.start_offset
+            )
+
+        promoted_type_names = frozenset(
+            item.name
+            for item in program.body.items
+            if isinstance(item, (RecordDef, EnumDef, TypeAlias))
+            and _before_failure(item.span.end_offset)
+        )
+        stale_binding_names: set[str] = set()
+        stale_binding_node_ids: set[int] = set()
+        if promoted_type_names:
+            for name, ref in self._session_scope.bindings.items():
+                typ = self._type_env.resolve_binding(ref)
+                if typ is not None and self._type_mentions_entry_nominal(typ, promoted_type_names):
+                    stale_binding_names.add(name)
+                    stale_binding_node_ids.add(ref.decl_node_id)
+            for name in stale_binding_names:
+                self._session_scope.bindings.pop(name, None)
+            self._declared_params = {
+                name: typ
+                for name, typ in self._declared_params.items()
+                if not self._type_mentions_entry_nominal(typ, promoted_type_names)
+            }
+            self._ambient_constructor_candidates = {
+                cname: tuple(ref for ref in crefs if ref.owner_name not in promoted_type_names)
+                for cname, crefs in self._ambient_constructor_candidates.items()
+            }
+            self._ambient_constructor_candidates = {
+                cname: crefs
+                for cname, crefs in self._ambient_constructor_candidates.items()
+                if crefs
+            }
+
         installed: list[str] = []
         for name, ref in entry_root.bindings.items():
             # Config bindings are promoted only on full success (alongside the
@@ -792,18 +856,8 @@ class ReplSession:
                 if partial and name in entry_names:
                     installed.append(name)
         self._type_env.seed_from(checked.type_env)
+        self._type_env.remove_binding_types(stale_binding_node_ids)
 
-        def _before_failure(end_offset: int) -> bool:
-            return not partial or (
-                failure_span is not None and end_offset <= failure_span.start_offset
-            )
-
-        promoted_type_names = {
-            item.name
-            for item in program.body.items
-            if isinstance(item, (RecordDef, EnumDef, TypeAlias))
-            and _before_failure(item.span.end_offset)
-        }
         promoted_agents = {
             item.name
             for item in program.body.items

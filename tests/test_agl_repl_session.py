@@ -295,6 +295,16 @@ class TestRecursiveTypesAcrossEntries:
         stale = s.eval_entry('let bad = Category(name = "root", subcategories = [])')
         assert not stale.ok
 
+    def test_record_redefinition_invalidates_old_nominal_values(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("record R\n  old: int").ok
+        assert s.eval_entry("let stale = R(old = 1)").ok
+        assert s.eval_entry("record R\n  fresh: int").ok
+
+        result = s.eval_entry("stale.fresh")
+
+        assert not result.ok
+
     def test_ask_with_recursive_output_type_does_not_crash(self) -> None:
         """The REPL's contract-preview path (make_contract) handles a recursive ask target.
 

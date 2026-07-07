@@ -181,19 +181,68 @@ def _body_inhabited(
             )
             for _vname, vfields in typedef.variants
         )
+    if typedef.kind == "exception":
+        return _exception_decl_inhabited(typedef, env, inhabited, defs, stack=stack)
+    return all(
+        _template_inhabited(t, env, inhabited, defs, stack=stack)
+        for _fname, t in typedef.fields
+    )
+
+
+def _exception_decl_inhabited(
+    typedef: TypeDef,
+    env: TypeEnv,
+    inhabited: set[DeclKey],
+    defs: Mapping[DeclKey, TypeDef],
+    *,
+    stack: frozenset[InstantiationKey],
+) -> bool:
+    key = (typedef.module_id, typedef.name)
+    if typedef.abstract:
+        return any(
+            child.kind == "exception" and child.base == key and child_key in inhabited
+            for child_key, child in defs.items()
+        )
+    return _exception_fields_inhabited(
+        typedef,
+        env,
+        inhabited,
+        defs,
+        stack=stack,
+        extends_stack=frozenset({key}),
+    )
+
+
+def _exception_fields_inhabited(
+    typedef: TypeDef,
+    env: TypeEnv,
+    inhabited: set[DeclKey],
+    defs: Mapping[DeclKey, TypeDef],
+    *,
+    stack: frozenset[InstantiationKey],
+    extends_stack: frozenset[DeclKey],
+) -> bool:
     own_ok = all(
         _template_inhabited(t, env, inhabited, defs, stack=stack)
         for _fname, t in typedef.fields
     )
-    if typedef.kind == "exception" and typedef.base is not None:
-        # Model the ``extends`` link as a conjunct rather than flattening the
-        # base's fields in: equivalent (the base's own conjunct already
-        # accounts for ITS base, transitively), and it makes an ``extends``
-        # cycle fall out of the SAME fixpoint as ordinary field recursion —
-        # neither side of the cycle ever gets independent evidence, so both
-        # stay uninhabited rather than needing a separate cycle check.
-        return own_ok and typedef.base in inhabited
-    return own_ok
+    if not own_ok:
+        return False
+    if typedef.base is None:
+        return True
+    if typedef.base in extends_stack:
+        return False
+    base_def = defs.get(typedef.base)
+    if base_def is None or base_def.kind != "exception":
+        return False
+    return _exception_fields_inhabited(
+        base_def,
+        env,
+        inhabited,
+        defs,
+        stack=stack,
+        extends_stack=extends_stack | frozenset({typedef.base}),
+    )
 
 
 def _template_inhabited(

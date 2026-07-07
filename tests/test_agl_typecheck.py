@@ -6155,6 +6155,25 @@ class TestExceptionRecursiveTypes:
         )
         assert r.resolved.program is not None
 
+    def test_abstract_exception_root_field_cycle_is_uninhabitable(self) -> None:
+        err = reject_type(
+            "exception Root()\n"
+            "exception Bad extends Root\n"
+            "  root: Root\n"
+            "()"
+        )
+        assert "uninhabitable" in str(err).lower()
+
+    def test_concrete_child_of_abstract_exception_root_is_accepted(self) -> None:
+        r = accept_type(
+            'exception Root\n'
+            '  detail: text\n'
+            'exception Good extends Root\n'
+            '  code: int\n'
+            'Good(detail = "ok", code = 1)'
+        )
+        assert r.resolved.program is not None
+
     def test_record_field_of_builtin_exception_type_is_accepted(self) -> None:
         # A field whose type is a built-in exception (not a user ExceptionDef)
         # must not be treated as a self-recursive re-entry: it is a plain,

@@ -16,12 +16,13 @@ def _make_git_close_project(
     tmp_path: Path,
     env: dict[str, str],
     *,
+    branch: str = "feature",
     unmerged: bool = False,
     dirty: bool = False,
 ) -> tuple[Path, Path, Path]:
     project_dir = tmp_path / "proj"
     repo_dir = project_dir / "repo"
-    worktree_dir = project_dir / "worktrees" / "feature"
+    worktree_dir = project_dir / "worktrees" / branch
     (project_dir / "config").mkdir(parents=True)
     repo_dir.mkdir()
 
@@ -30,7 +31,7 @@ def _make_git_close_project(
     subprocess.run(["git", "add", "README.md"], cwd=repo_dir, env=env, check=True)
     subprocess.run(["git", "commit", "-m", "initial"], cwd=repo_dir, env=env, check=True)
     subprocess.run(
-        ["git", "worktree", "add", "-b", "feature", str(worktree_dir)],
+        ["git", "worktree", "add", "-b", branch, str(worktree_dir)],
         cwd=repo_dir,
         env=env,
         check=True,
@@ -220,6 +221,24 @@ class TestCloseSession:
         assert not worktree_dir.exists()
         assert not _branch_exists(repo_dir, "feature", env)
         assert "kill-session -t proj/feature" in tmux_log.read_text(encoding="utf-8")
+
+    def test_closes_sanitized_tmux_session_for_dotted_branch(
+        self,
+        tmp_path: Path,
+        env: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        branch = "rocq-9.2"
+        project_dir, repo_dir, worktree_dir = _make_git_close_project(
+            tmp_path, env, branch=branch
+        )
+        tmux_log = _install_fake_tmux(tmp_path, monkeypatch, path=env["PATH"])
+
+        close_workspace(branch=branch, cwd=project_dir)
+
+        assert not worktree_dir.exists()
+        assert not _branch_exists(repo_dir, branch, env)
+        assert "kill-session -t proj/rocq-9_2" in tmux_log.read_text(encoding="utf-8")
 
     def test_exits_when_branch_is_main_checkout(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

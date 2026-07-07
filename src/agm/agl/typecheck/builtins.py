@@ -406,16 +406,12 @@ class BuiltinCallChecker:
         """Reject *target_type* if lowering will schema-compile it but cannot.
 
         Shared by ``ask``/``ask-request`` (via ``_finish_ask_like``) and
-        ``exec``. The lowerer derives schema/decode metadata for the built-in
-        JSON codec and for structured targets handled by custom codecs, so the
-        checker must reject infinite instantiation closures for the same set of
-        calls. Text (and unit/structured-exec) outputs do not build a schema.
+        ``exec``. The lowerer derives schema/decode metadata only for the
+        built-in JSON codec, so custom codecs are responsible for their own
+        output format and parsing behavior. Text (and unit/structured-exec)
+        outputs do not build a schema.
         """
-        structured_kinds = {"record", "enum", "list", "dict"}
-        should_compile_schema = codec_name == "json" or (
-            codec_name != "text" and target_type.kind in structured_kinds
-        )
-        if not should_compile_schema:
+        if codec_name != "json":
             return
         message = self._ctx._env.type_table.no_finite_schema_message(target_type, use=use)
         if message is not None:

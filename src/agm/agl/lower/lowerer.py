@@ -416,11 +416,7 @@ class _Lowerer:
         self, spec: OutputContractSpec
     ) -> tuple[str | None, str, DecodeSchema | None, tuple[tuple[str, DecodeSchema], ...]]:
         """Return JSON schema, instructions, decode root, and defs for a contract spec."""
-        structured_kinds = {"record", "enum", "list", "dict"}
-        should_compile_schema = spec.codec_name == "json" or (
-            spec.codec_name != "text" and spec.target_type.kind in structured_kinds
-        )
-        if not should_compile_schema:
+        if spec.codec_name != "json":
             return None, "", None, ()
         schema_dict, decode_plan = derive_schema_and_decode(spec.target_type, self._type_table)
         return (

@@ -3305,10 +3305,11 @@ class TestRegisterCodec:
 
         assert contract.format_instructions == "fallback"
 
-    def test_custom_structured_codec_uses_compiled_schema_not_lossy_placeholder(self) -> None:
-        """Structured custom codecs receive the lowered decode plan for the real target."""
+    def test_custom_structured_codec_uses_own_contract_instructions(self) -> None:
+        """Structured custom codecs keep their own instructions instead of JSON schema text."""
 
         seen_decode: list[DecodeSchema | None] = []
+        received: list[AgentRequest] = []
 
         class ListIntCodec:
             @property
@@ -3325,7 +3326,13 @@ class TestRegisterCodec:
             def make_contract(
                 self, type_ref: Type, type_table: TypeTable | None = None
             ) -> OutputContract:
-                raise AssertionError(f"lossy runtime placeholder reached codec: {type_ref!r}")
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=None,
+                    format_instructions="LIST-INT-CUSTOM-FORMAT",
+                    json_schema=None,
+                )
 
             def parse(
                 self,
@@ -3339,13 +3346,19 @@ class TestRegisterCodec:
                 seen_decode.append(decode)
                 return ParseResult.success(ListValue((IntValue(int(raw)),)))
 
-        rt = PipelineDriver(default_agent=lambda req: "3")
+        def agent(req: AgentRequest) -> str:
+            received.append(req)
+            return "3"
+
+        rt = PipelineDriver(default_agent=agent)
         rt.register_codec(ListIntCodec())
         result = rt.run('let xs: list[int] = ask("Q", format = "list-int-codec")\nxs')
 
         assert result.ok is True
         assert result.bindings["xs"] == ListValue((IntValue(3),))
-        assert seen_decode == [ListDecode(ScalarDecode(ScalarKind.INT))]
+        assert seen_decode == [None]
+        assert received[0].output_contract is not None
+        assert received[0].output_contract.format_instructions == "LIST-INT-CUSTOM-FORMAT"
 
     def test_custom_codec_ir_materialization_reconstructs_target_kinds(self) -> None:
         """IR contract materialization gives custom codecs kind-correct placeholders."""

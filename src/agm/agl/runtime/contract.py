@@ -132,13 +132,18 @@ def materialize_ir_contract(
             f"No codec registered for codec_name={request.codec_name!r}. "
             "This is a host-configuration error."
         )
-    has_compiled_contract = request.json_schema is not None or request.decode is not None
-    if request.codec_name not in BUILTIN_CODEC_NAMES and not has_compiled_contract:
+    if request.codec_name not in BUILTIN_CODEC_NAMES:
         base = _call_make_contract(codec, _placeholder_type_for_request(request), None)
         format_instructions = base.format_instructions
         schema: object = base.json_schema
         decode = base.decode
         defs = base.defs
+        if schema is None and request.json_schema is not None:
+            schema = cast(object, json.loads(request.json_schema))
+        if decode is None:
+            decode = request.decode
+        if not defs:
+            defs = request.defs
     else:
         format_instructions = request.format_instructions
         schema = (

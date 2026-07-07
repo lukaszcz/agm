@@ -63,6 +63,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import deque
 from dataclasses import dataclass, field
 from typing import assert_never
 
@@ -343,11 +344,11 @@ def _instantiation_graph(
     order: list[Instantiation] = []
     adjacency: dict[Instantiation, frozenset[Instantiation]] = {}
     seen: set[Instantiation] = set()
-    queue: list[Instantiation] = [
+    queue: deque[Instantiation] = deque(
         ref for ref in nominal_references(root) if isinstance(ref, (RecordType, EnumType))
-    ]
+    )
     while queue:
-        handle = queue.pop(0)
+        handle = queue.popleft()
         if handle in seen:
             continue
         seen.add(handle)

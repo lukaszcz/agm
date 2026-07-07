@@ -70,7 +70,7 @@ from agm.agl.scope.graph import ResolvedModuleGraph
 from agm.agl.scope.imports import ImportEnv
 from agm.agl.scope.symbols import ResolvedProgram
 from agm.agl.semantics.analyses import compute_uninhabited, uninhabitable_message
-from agm.agl.semantics.type_table import TypeTable, create_seeded_type_table
+from agm.agl.semantics.type_table import TypeTable, create_seeded_type_table, decl_key_sort_key
 from agm.agl.semantics.types import (
     CastSpec,
     FunctionType,
@@ -298,7 +298,7 @@ def _collect_all_type_keys(
     never present here because ``_collect_shells_only`` rejects them earlier.
 
     This set is the fixed order in which Step C below resolves every
-    declaration's body (sorted by :func:`_type_key_sort_key`). It is LARGER
+    declaration's body (sorted by :func:`decl_key_sort_key`). It is LARGER
     than ``graph_type_table`` during the shell-collection step because
     aliases are not yet resolved to shells there — the graph table is only
     populated with record/enum shells and is updated with alias resolutions
@@ -315,10 +315,6 @@ def _collect_all_type_keys(
                 # function.  Only non-builtin types reach this point.
                 all_keys.add((mid, item.name))
     return all_keys
-
-
-def _type_key_sort_key(k: tuple[ModuleId, str]) -> tuple[tuple[str, ...], str]:
-    return (k[0].segments, k[1])
 
 
 def _find_type_decl_span(
@@ -351,7 +347,7 @@ def _raise_first_uninhabited(
     resolved_graph: ResolvedModuleGraph,
 ) -> None:
     """Raise ``AglTypeError`` for the first uninhabited key, sorted deterministically."""
-    mid, name = sorted(uninhabited, key=_type_key_sort_key)[0]
+    mid, name = sorted(uninhabited, key=decl_key_sort_key)[0]
     typedef = type_table.get(mid, name)
     assert typedef is not None
     span = _find_type_decl_span(resolved_graph, (mid, name))
@@ -395,7 +391,7 @@ def _build_graph_type_table(
     Step C: Once every body is resolved, run the inhabitation fixpoint
             (:func:`~agm.agl.semantics.analyses.compute_uninhabited`) over the
             whole shared table and reject the first uninhabited declaration
-            (sorted by :func:`_type_key_sort_key`), at its declaration span.
+            (sorted by :func:`decl_key_sort_key`), at its declaration span.
 
     Cross-module type cycles are allowed (a cycle may span any modules, the
     same as same-module mutual recursion) as long as the declarations
@@ -504,7 +500,7 @@ def _build_graph_type_table(
     # dependency-ordering constraint of any kind, since every reference
     # (including an exception's ``extends`` base) is a handle, valid whether
     # or not the referenced declaration's own body has been resolved yet.
-    body_order = sorted(all_type_keys, key=_type_key_sort_key)
+    body_order = sorted(all_type_keys, key=decl_key_sort_key)
 
     for key in body_order:
         _resolve_one(key)

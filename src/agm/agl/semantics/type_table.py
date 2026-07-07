@@ -41,6 +41,7 @@ diagnostic (agent output target, cast target, parameter type).
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, assert_never
@@ -480,16 +481,18 @@ class TypeTable:
 
         caps = self._finite_closure_result()
         seen: set[tuple[ModuleId, str]] = set()
-        queue = [(ref.module_id, ref.name) for ref in nominal_references(t)]
+        queue: deque[tuple[ModuleId, str]] = deque(
+            (ref.module_id, ref.name) for ref in nominal_references(t)
+        )
         while queue:
-            key = queue.pop(0)
+            key = queue.popleft()
             if key in seen:
                 continue
             seen.add(key)
             if key in caps.infinite:
                 return key
             successors: frozenset[tuple[ModuleId, str]] = caps.successors.get(key, frozenset())
-            queue.extend(sorted(successors - seen, key=_decl_key_sort_key))
+            queue.extend(sorted(successors - seen, key=decl_key_sort_key))
         return None
 
     def no_finite_schema_message(self, t: Type, *, use: str) -> str | None:
@@ -563,7 +566,7 @@ class TypeTable:
             self._invalidate_cache_for(key)
 
 
-def _decl_key_sort_key(key: tuple[ModuleId, str]) -> tuple[tuple[str, ...], str]:
+def decl_key_sort_key(key: tuple[ModuleId, str]) -> tuple[tuple[str, ...], str]:
     """Deterministic sort key for a declaration key (module segments, then name)."""
     return (key[0].segments, key[1])
 

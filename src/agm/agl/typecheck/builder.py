@@ -118,6 +118,10 @@ class _TypeBuilder:
         self._enum_defs: dict[str, EnumDef] = {}
         self._exception_defs: dict[str, ExceptionDef] = {}
 
+    def _owning_module_id(self, is_builtin: bool) -> ModuleId:
+        """Module a declaration belongs to: the prelude if built-in, else this module."""
+        return PRELUDE_ID if is_builtin else self._module_id
+
     def collect(self, program: Program, *, check_inhabitation: bool = True) -> None:
         """Scan *program* and populate ``self._env``.
 
@@ -180,7 +184,7 @@ class _TypeBuilder:
             elif isinstance(item, ExceptionDef):
                 self._register_name(item.name, item.span, is_builtin=item.is_builtin)
                 self._env.unregister_name(item.name)
-                module_id = PRELUDE_ID if item.is_builtin else self._module_id
+                module_id = self._owning_module_id(item.is_builtin)
                 self._env.register_type(
                     item.name, ExceptionType(name=item.name, module_id=module_id)
                 )
@@ -193,7 +197,7 @@ class _TypeBuilder:
     def _register_record_or_enum_handle(
         self, item: RecordDef | EnumDef, *, is_enum: bool
     ) -> None:
-        module_id = PRELUDE_ID if item.is_builtin else self._module_id
+        module_id = self._owning_module_id(item.is_builtin)
         if item.type_params:
             type_args = tuple(TypeVarType(p) for p in item.type_params)
             template: RecordType | EnumType = (
@@ -268,7 +272,7 @@ class _TypeBuilder:
                 )
             seen_fields[fd.name] = fd.span
             fields[fd.name] = self._resolve_field_type(fd)
-        module_id = PRELUDE_ID if stmt.is_builtin else self._module_id
+        module_id = self._owning_module_id(stmt.is_builtin)
         typedef = TypeDef(
             kind="record",
             name=stmt.name,
@@ -306,7 +310,7 @@ class _TypeBuilder:
                 seen_vfields[fd.name] = fd.span
                 vfields[fd.name] = self._resolve_field_type(fd)
             variants[vd.name] = vfields
-        module_id = PRELUDE_ID if stmt.is_builtin else self._module_id
+        module_id = self._owning_module_id(stmt.is_builtin)
         typedef = TypeDef(
             kind="enum",
             name=stmt.name,
@@ -351,7 +355,7 @@ class _TypeBuilder:
                 )
             seen_fields[fd.name] = fd.span
             fields[fd.name] = self._resolve_field_type(fd)
-        module_id = PRELUDE_ID if stmt.is_builtin else self._module_id
+        module_id = self._owning_module_id(stmt.is_builtin)
         # Own field kinds honor each field's declared @pos/@std/@named marker —
         # exactly like a record's fields — in declaration order, parallel to
         # ``fields`` above.  Stored as ``ParamKind.value`` strings (see
@@ -388,7 +392,7 @@ class _TypeBuilder:
         for item in self._exception_defs.values():
             if item.base is None:
                 continue
-            module_id = PRELUDE_ID if item.is_builtin else self._module_id
+            module_id = self._owning_module_id(item.is_builtin)
             typedef = self._env.type_table.exception_def(
                 ExceptionType(name=item.name, module_id=module_id)
             )
@@ -565,7 +569,7 @@ class _TypeBuilder:
         for item in program.body.items:
             if not isinstance(item, (RecordDef, EnumDef, ExceptionDef)):
                 continue
-            module_id = PRELUDE_ID if item.is_builtin else self._module_id
+            module_id = self._owning_module_id(item.is_builtin)
             key = (module_id, item.name)
             if key not in uninhabited:
                 continue

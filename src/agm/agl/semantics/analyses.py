@@ -75,7 +75,7 @@ from dataclasses import dataclass
 from typing import assert_never
 
 from agm.agl.modules.ids import ModuleId
-from agm.agl.semantics.type_table import TypeDef, TypeDefKind, TypeTable
+from agm.agl.semantics.type_table import TypeDef, TypeDefKind, TypeTable, decl_key_sort_key
 from agm.agl.semantics.types import (
     AgentType,
     BoolType,
@@ -254,7 +254,7 @@ def compute_equality_capabilities(table: TypeTable) -> EqualityCapabilities:
         changed = False
         for key, typedef in defs.items():
             own_params = frozenset(typedef.type_params)
-            templates = tuple(_own_equality_templates(typedef))
+            templates = tuple(_own_field_templates(typedef))
             bad = key in no_eq or any(_template_no_eq(t, no_eq, relevant, defs) for t in templates)
             if typedef.kind == "exception" and typedef.base is not None:
                 bad = bad or typedef.base in no_eq
@@ -273,14 +273,15 @@ def compute_equality_capabilities(table: TypeTable) -> EqualityCapabilities:
     )
 
 
-def _own_equality_templates(typedef: TypeDef) -> list[Type]:
+def _own_field_templates(typedef: TypeDef) -> list[Type]:
     """Return every field-type template in *typedef*'s own body, flattened.
 
     Unlike :func:`_decl_inhabited`'s enum handling (which groups fields by
-    variant, since only ONE variant needs to be fully inhabited), equality
-    looks at every field of every variant flat: ANY function/agent/unit
-    anywhere in the declaration makes every value of it non-comparable,
-    regardless of which variant a given value happens to be.
+    variant, since only ONE variant needs to be fully inhabited), both the
+    equality-capability and reference-edge fixpoints look at every field of
+    every variant flat: a function/agent/unit anywhere makes every value
+    non-comparable, and a reference to another declaration matters, regardless
+    of which variant carries it.
     """
     if typedef.kind == "enum":
         return [ftype for _vname, vfields in typedef.variants for _fname, ftype in vfields]
@@ -446,7 +447,7 @@ def compute_finite_closure(table: TypeTable) -> FiniteClosure:
     adjacency: dict[DeclKey, tuple[DeclKey, ...]] = {
         key: tuple(targets) for key, targets in successors.items()
     }
-    components = sccs(adjacency, key=lambda k: (k[0].segments, k[1]))
+    components = sccs(adjacency, key=decl_key_sort_key)
     infinite: set[DeclKey] = set()
     for component in components:
         members = frozenset(component)
@@ -500,7 +501,7 @@ def _reference_edges(defs: Mapping[DeclKey, TypeDef]) -> dict[DeclKey, tuple[_Re
     result: dict[DeclKey, tuple[_RefEdge, ...]] = {}
     for key, typedef in defs.items():
         found: list[_RefEdge] = []
-        for template in _own_reference_templates(typedef):
+        for template in _own_field_templates(typedef):
             for ref in nominal_references(template):
                 target = (ref.module_id, ref.name)
                 arg_templates = ref.type_args if isinstance(ref, (RecordType, EnumType)) else ()
@@ -509,18 +510,6 @@ def _reference_edges(defs: Mapping[DeclKey, TypeDef]) -> dict[DeclKey, tuple[_Re
             found.append(_RefEdge(target=typedef.base, arg_templates=()))
         result[key] = tuple(found)
     return result
-
-
-def _own_reference_templates(typedef: TypeDef) -> list[Type]:
-    """Return every field-type template in *typedef*'s own body, flattened.
-
-    Shares the "flatten everything, ignore variant grouping" shape of
-    :func:`_own_equality_templates`: a reference to another declaration
-    matters here regardless of which variant carries it.
-    """
-    if typedef.kind == "enum":
-        return [ftype for _vname, vfields in typedef.variants for _fname, ftype in vfields]
-    return [ftype for _fname, ftype in typedef.fields]
 
 
 def _scc_has_growing_cycle(
@@ -568,12 +557,10 @@ def _scc_has_growing_cycle(
         return False
     param_components = sccs(adjacency, key=lambda n: (n[0][0].segments, n[0][1], n[1]))
     for component in param_components:
+        # A growing self-loop within a singleton SCC ``{node}`` is the pair
+        # ``(node, node)``; the same membership test catches it, so singletons
+        # need no special case.
         comp_set = frozenset(component)
-        if len(comp_set) == 1:
-            node = component[0]
-            if (node, node) in growing_edges:
-                return True
-            continue
         if any(src in comp_set and dst in comp_set for src, dst in growing_edges):
             return True
     return False

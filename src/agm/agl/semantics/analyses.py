@@ -407,16 +407,20 @@ class FiniteClosure:
     ``infinite`` — declarations whose instantiation closure is infinite (a
     growing polymorphic-recursion cycle).  Every other registered declaration
     has a finite closure.
-    ``successors`` — the plain declaration reference graph (which
-    declarations a declaration's body mentions, regardless of argument
-    templates), used by
+    ``successors`` — the schema-relevant declaration reference graph (which
+    declarations a declaration's body mentions through fields and non-phantom
+    type arguments), used by
     :meth:`~agm.agl.semantics.type_table.TypeTable.has_finite_schema` to
     extend a concrete type's own reachable declarations without re-deriving
     the reference graph.
+    ``relevant_params`` — for each declaration, the subset of its own type
+    parameters whose concrete instantiation can affect the reachable schema.
+    Phantom parameters are intentionally absent.
     """
 
     infinite: frozenset[DeclKey]
     successors: Mapping[DeclKey, frozenset[DeclKey]]
+    relevant_params: Mapping[DeclKey, frozenset[str]]
 
 
 def compute_finite_closure(table: TypeTable) -> FiniteClosure:
@@ -440,7 +444,8 @@ def compute_finite_closure(table: TypeTable) -> FiniteClosure:
     inhabitation-checked recursion that is already unconditionally legal.
     """
     defs = _all_defs(table)
-    edges = _reference_edges(defs)
+    relevant = _compute_schema_relevant_params(defs)
+    edges = _reference_edges(defs, relevant)
     successors: dict[DeclKey, frozenset[DeclKey]] = {
         key: frozenset(edge.target for edge in refs) for key, refs in edges.items()
     }
@@ -453,7 +458,11 @@ def compute_finite_closure(table: TypeTable) -> FiniteClosure:
         members = frozenset(component)
         if _scc_has_growing_cycle(members, edges, defs):
             infinite.update(members)
-    return FiniteClosure(infinite=frozenset(infinite), successors=successors)
+    return FiniteClosure(
+        infinite=frozenset(infinite),
+        successors=successors,
+        relevant_params={key: frozenset(params) for key, params in relevant.items()},
+    )
 
 
 def nominal_references(t: Type) -> Iterator[RecordType | EnumType | ExceptionType]:
@@ -496,13 +505,85 @@ def nominal_references(t: Type) -> Iterator[RecordType | EnumType | ExceptionTyp
             assert_never(unreachable)
 
 
-def _reference_edges(defs: Mapping[DeclKey, TypeDef]) -> dict[DeclKey, tuple[_RefEdge, ...]]:
-    """Return every declaration's outgoing reference edges (own body + exception base)."""
+def nominal_references_for_schema(
+    t: Type,
+    defs: Mapping[DeclKey, TypeDef],
+    relevant_params: Mapping[DeclKey, frozenset[str]],
+) -> Iterator[RecordType | EnumType | ExceptionType]:
+    """Yield nominal references that can affect *t*'s finite schema.
+
+    A record/enum handle is always relevant itself, but its type arguments are
+    only relevant when the corresponding declaration parameter is used by the
+    declaration's schema. This keeps phantom arguments from pulling unrelated
+    infinite declarations into a schema boundary.
+    """
+    match t:
+        case RecordType() | EnumType():
+            yield t
+            key = (t.module_id, t.name)
+            typedef = defs.get(key)
+            if typedef is None:
+                return
+            relevant = relevant_params.get(key, frozenset())
+            for pname, arg in zip(typedef.type_params, t.type_args):
+                if pname in relevant:
+                    yield from nominal_references_for_schema(arg, defs, relevant_params)
+        case ExceptionType():
+            yield t
+        case ListType(elem=elem):
+            yield from nominal_references_for_schema(elem, defs, relevant_params)
+        case DictType(value=value):
+            yield from nominal_references_for_schema(value, defs, relevant_params)
+        case FunctionType(params=params, result=result):
+            for p in params:
+                yield from nominal_references_for_schema(p, defs, relevant_params)
+            yield from nominal_references_for_schema(result, defs, relevant_params)
+        case (
+            TextType()
+            | JsonType()
+            | BoolType()
+            | IntType()
+            | DecimalType()
+            | UnitType()
+            | AgentType()
+            | BottomType()
+            | TypeVarType()
+        ):
+            return
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
+
+
+def _compute_schema_relevant_params(
+    defs: Mapping[DeclKey, TypeDef],
+) -> dict[DeclKey, set[str]]:
+    """Return params whose instantiation can affect schema reachability."""
+    relevant: dict[DeclKey, set[str]] = {key: set() for key in defs}
+    changed = True
+    while changed:
+        changed = False
+        for key, typedef in defs.items():
+            own_params = frozenset(typedef.type_params)
+            gained: set[str] = set()
+            for template in _own_field_templates(typedef):
+                gained |= _template_relevant_params(template, own_params, relevant, defs)
+            if not gained <= relevant[key]:
+                relevant[key] |= gained
+                changed = True
+    return relevant
+
+
+def _reference_edges(
+    defs: Mapping[DeclKey, TypeDef],
+    relevant_params: Mapping[DeclKey, set[str]],
+) -> dict[DeclKey, tuple[_RefEdge, ...]]:
+    """Return every declaration's schema-relevant outgoing reference edge."""
+    frozen_relevant = {key: frozenset(params) for key, params in relevant_params.items()}
     result: dict[DeclKey, tuple[_RefEdge, ...]] = {}
     for key, typedef in defs.items():
         found: list[_RefEdge] = []
         for template in _own_field_templates(typedef):
-            for ref in nominal_references(template):
+            for ref in nominal_references_for_schema(template, defs, frozen_relevant):
                 target = (ref.module_id, ref.name)
                 arg_templates = ref.type_args if isinstance(ref, (RecordType, EnumType)) else ()
                 found.append(_RefEdge(target=target, arg_templates=arg_templates))

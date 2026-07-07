@@ -1592,6 +1592,50 @@ class TestFiniteClosure:
         holder = RecordType("Holder", module_id=ENTRY_ID)
         assert table.has_finite_schema(holder) is False
 
+    def test_has_finite_schema_ignores_phantom_type_arguments(self) -> None:
+        table = TypeTable()
+        table.register(_pair_def())
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Perfect",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(
+                    ("value", TypeVarType("T")),
+                    (
+                        "next",
+                        RecordType(
+                            "Perfect",
+                            type_args=(
+                                RecordType(
+                                    "Pair",
+                                    type_args=(TypeVarType("T"), TypeVarType("T")),
+                                    module_id=ENTRY_ID,
+                                ),
+                            ),
+                            module_id=ENTRY_ID,
+                        ),
+                    ),
+                ),
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Phantom",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(),
+            )
+        )
+        phantom = RecordType(
+            "Phantom",
+            type_args=(RecordType("Perfect", type_args=(IntType(),), module_id=ENTRY_ID),),
+            module_id=ENTRY_ID,
+        )
+        assert table.has_finite_schema(phantom) is True
+
     def test_has_finite_schema_reports_finite_for_nested_tree_field(self) -> None:
         table = TypeTable()
         table.register(

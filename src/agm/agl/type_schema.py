@@ -81,7 +81,6 @@ from agm.agl.ir.contracts import (
     VariantDecode,
 )
 from agm.agl.ir.ids import NominalId
-from agm.agl.semantics.analyses import nominal_references
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import (
     AgentType,
@@ -345,7 +344,9 @@ def _instantiation_graph(
     adjacency: dict[Instantiation, frozenset[Instantiation]] = {}
     seen: set[Instantiation] = set()
     queue: deque[Instantiation] = deque(
-        ref for ref in nominal_references(root) if isinstance(ref, (RecordType, EnumType))
+        ref
+        for ref in type_table.schema_relevant_nominal_references(root)
+        if isinstance(ref, (RecordType, EnumType))
     )
     while queue:
         handle = queue.popleft()
@@ -378,7 +379,7 @@ def _direct_neighbours(handle: Instantiation, type_table: TypeTable) -> frozense
     return frozenset(
         ref
         for ftype in field_types
-        for ref in nominal_references(ftype)
+        for ref in type_table.schema_relevant_nominal_references(ftype)
         if isinstance(ref, (RecordType, EnumType))
     )
 

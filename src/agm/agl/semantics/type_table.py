@@ -477,12 +477,13 @@ class TypeTable:
         useful "culprit" for a use-site diagnostic — is reported before any
         declaration reachable only through a nested field.
         """
-        from agm.agl.semantics.analyses import nominal_references
+        from agm.agl.semantics.analyses import nominal_references_for_schema
 
         caps = self._finite_closure_result()
         seen: set[tuple[ModuleId, str]] = set()
         queue: deque[tuple[ModuleId, str]] = deque(
-            (ref.module_id, ref.name) for ref in nominal_references(t)
+            (ref.module_id, ref.name)
+            for ref in nominal_references_for_schema(t, self._defs, caps.relevant_params)
         )
         while queue:
             key = queue.popleft()
@@ -494,6 +495,15 @@ class TypeTable:
             successors: frozenset[tuple[ModuleId, str]] = caps.successors.get(key, frozenset())
             queue.extend(sorted(successors - seen, key=decl_key_sort_key))
         return None
+
+    def schema_relevant_nominal_references(
+        self, t: Type
+    ) -> tuple[RecordType | EnumType | ExceptionType, ...]:
+        """Return nominal references that can affect *t*'s finite schema."""
+        from agm.agl.semantics.analyses import nominal_references_for_schema
+
+        caps = self._finite_closure_result()
+        return tuple(nominal_references_for_schema(t, self._defs, caps.relevant_params))
 
     def no_finite_schema_message(self, t: Type, *, use: str) -> str | None:
         """Return the use-site diagnostic for *t* if it has no finite JSON schema.

@@ -1216,6 +1216,11 @@ class TestLenientParsing:
         assert result.ok is False
         assert "multiple JSON values" in result.error_msg
 
+    def test_ref_decode_without_defs_raises_clear_value_error(self) -> None:
+        codec = self._codec()
+        with pytest.raises(ValueError, match="defs.*RefDecode"):
+            codec.parse("{}", schema={}, decode=RefDecode("Node"))
+
 
 # ---------------------------------------------------------------------------
 # 4. Strict mode

@@ -410,6 +410,28 @@ def _resolve_ref(decode: DecodeSchema, defs: Mapping[str, DecodeSchema]) -> Deco
     return decode
 
 
+def _decode_contains_ref(decode: DecodeSchema, *, seen: frozenset[int] = frozenset()) -> bool:
+    """Return whether *decode* contains any ``RefDecode`` node."""
+    if id(decode) in seen:
+        return False
+    seen = seen | {id(decode)}
+    if isinstance(decode, RefDecode):
+        return True
+    if isinstance(decode, ListDecode):
+        return _decode_contains_ref(decode.elem, seen=seen)
+    if isinstance(decode, DictDecode):
+        return _decode_contains_ref(decode.value, seen=seen)
+    if isinstance(decode, RecordDecode):
+        return any(_decode_contains_ref(field_decode, seen=seen) for _name, field_decode in decode.fields)
+    if isinstance(decode, EnumDecode):
+        return any(
+            _decode_contains_ref(field_decode, seen=seen)
+            for variant in decode.variants
+            for _name, field_decode in variant.fields
+        )
+    return False
+
+
 def _find_enum_decode_at_path(
     decode: DecodeSchema,
     path_elements: list[object],
@@ -768,6 +790,9 @@ class JsonCodec:
                 "it no longer derives them from a checker Type. Pass the "
                 "contract-carried json_schema/decode (see ContractRequest)."
             )
-        return _parse_json_core(
-            raw, schema, decode, defs if defs is not None else _EMPTY_DEFS, strict=strict_json
-        )
+        effective_defs = defs if defs is not None else _EMPTY_DEFS
+        if not effective_defs and _decode_contains_ref(decode):
+            raise ValueError(
+                "JsonCodec.parse requires defs when the decode walk contains RefDecode nodes."
+            )
+        return _parse_json_core(raw, schema, decode, effective_defs, strict=strict_json)

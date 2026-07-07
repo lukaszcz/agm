@@ -1573,6 +1573,37 @@ class TestM6cIrExecValidation:
         with pytest.raises(InvalidIrError, match="RefDecode.*cycle.*A"):
             validate_ir(prog, deep=True)
 
+    def test_contract_duplicate_decode_defs_key_raises_deep(self) -> None:
+        """Duplicate decode defs keys are rejected before dict coercion."""
+        from agm.agl.ir.contracts import ContractRequest, RefDecode, ScalarDecode, ScalarKind
+        from agm.agl.ir.ids import ContractId
+        from agm.agl.ir.nodes import IrExec
+
+        cid = ContractId(value=0)
+        contract = ContractRequest(
+            codec_name="json",
+            strict_json=None,
+            json_schema="{}",
+            decode=RefDecode("A"),
+            target_type_label="A",
+            structured_exec=False,
+            format_instructions="",
+            is_unit=False,
+            defs=(
+                ("A", ScalarDecode(ScalarKind.INT)),
+                ("A", ScalarDecode(ScalarKind.TEXT)),
+            ),
+        )
+        node = IrExec(
+            location=LOC,
+            command=IrConstText(location=LOC, value="echo hi"),
+            contract_id=cid,
+            max_attempts=1,
+        )
+        prog = self._make_prog_with_contract(node, cid, {cid: contract})
+        with pytest.raises(InvalidIrError, match="duplicate.*A"):
+            validate_ir(prog, deep=True)
+
     def test_ir_exec_bad_max_attempts_raises_deep(self) -> None:
         """IrExec with max_attempts=0 raises InvalidIrError in deep mode."""
         from agm.agl.ir.contracts import ContractRequest

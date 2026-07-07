@@ -269,13 +269,14 @@ def _check_decode_nominals(
     normal self- or mutually-recursive decode body terminates while malformed
     ref-only cycles are rejected.
     """
+    visited: set[str] = set()
+    for key, _entry in defs:
+        if key in visited:
+            raise InvalidIrError(f"DecodeSchema has duplicate $defs key {key!r}")
+        visited.add(key)
     defs_map = dict(defs)
     _walk_decode_schema(decode, defs_map, ctx)
-    visited: set[str] = set()
     for key, entry in defs:
-        if key in visited:  # pragma: no cover — defs keys are unique by construction
-            continue
-        visited.add(key)
         _walk_decode_schema(entry, defs_map, ctx)
 
 

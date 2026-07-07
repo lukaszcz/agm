@@ -3,7 +3,7 @@
 # by raw positional index.  All three call forms exercise that path.
 #
 # g[T, U] has two named-only params z:T and w:U, and returns T (the value of z).
-# The repro cases from Finding 1 are:
+# The repro cases are:
 #   g(1, z, w)      — in-order shorthands (already worked, must keep working)
 #   g(1, w, z = v)  — shorthand w + named z, out of declaration order
 #   g(1, w, z)      — two shorthands, out of declaration order (w before z)

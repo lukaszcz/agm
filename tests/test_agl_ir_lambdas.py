@@ -26,7 +26,7 @@ from agm.agl.scope import resolve
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import DecimalValue, IntValue, TextValue
 from agm.agl.typecheck import check
-from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises, m2_caps
+from tests.agl.ir_harness import base_caps, evaluate_ir, evaluate_ir_raises
 
 
 def test_top_level_call_can_reference_later_function() -> None:
@@ -303,7 +303,7 @@ def test_recursion_depth_custom_limit_indirect() -> None:
     )
     program = parse_program(source)
     resolved = resolve(program)
-    caps = m2_caps()
+    caps = base_caps()
     checked = check(resolved, caps)
     executable = lower_program(
         checked, source_text=source, source_label="<test>", validate=True

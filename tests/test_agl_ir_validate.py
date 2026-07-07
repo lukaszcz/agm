@@ -980,7 +980,7 @@ def _make_direct_call(fn_id: FunctionId = FN0, args: "tuple" = ()) -> IrDirectCa
     return IrDirectCall(location=LOC, function_id=fn_id, arguments=args)
 
 
-class TestM4aFunctionDescriptorTable:
+class TestFunctionDescriptorTable:
     """FunctionDescriptor table consistency invariants."""
 
     def test_valid_function_with_symbol_in_table(self) -> None:
@@ -1032,7 +1032,7 @@ class TestM4aFunctionDescriptorTable:
         validate_ir(prog)  # no exception
 
 
-class TestM4aIrMakeClosure:
+class TestIrMakeClosure:
     """IrMakeClosure validation invariants."""
 
     def test_valid_make_closure_passes(self) -> None:
@@ -1072,7 +1072,7 @@ class TestM4aIrMakeClosure:
         validate_ir(prog, deep=False)  # no exception
 
 
-class TestM4aIrDirectCall:
+class TestIrDirectCall:
     """IrDirectCall validation invariants."""
 
     def test_valid_direct_call_passes(self) -> None:
@@ -1164,7 +1164,7 @@ def _make_indirect_call(
     return IrIndirectCall(location=LOC, callee=_callee, arguments=args)
 
 
-class TestM4bIrIndirectCall:
+class TestIrIndirectCall:
     """IrIndirectCall validation invariants."""
 
     def test_valid_indirect_call_passes(self) -> None:
@@ -1248,7 +1248,7 @@ class TestM4bIrIndirectCall:
 # ===========================================================================
 
 
-class TestM6aPrintParseJsonValidation:
+class TestPrintParseJsonValidation:
     """Negative validate tests for IrPrint and IrParseJson nodes."""
 
     def test_ir_print_valid(self) -> None:
@@ -1343,7 +1343,7 @@ class TestM6aPrintParseJsonValidation:
 # ===========================================================================
 
 
-class TestM6aIrParamValidation:
+class TestIrParamValidation:
     """Negative validate tests for IrParam in program.params."""
 
     def _make_program_with_params(
@@ -1458,7 +1458,7 @@ class TestM6aIrParamValidation:
 # ===========================================================================
 
 
-class TestM6cIrExecValidation:
+class TestIrExecValidation:
     """Validation tests for IrExec nodes."""
 
     def _make_prog_with_contract(

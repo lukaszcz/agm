@@ -25,7 +25,7 @@ from agm.agl.scope import resolve
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import BoolValue, DecimalValue, IntValue, TextValue
 from agm.agl.typecheck import check
-from tests.agl.ir_harness import evaluate_ir, m2_caps
+from tests.agl.ir_harness import base_caps, evaluate_ir
 
 # ---------------------------------------------------------------------------
 # Basic function call tests
@@ -116,7 +116,7 @@ def test_call_depth_guard_ir_only() -> None:
     source = "def inf(n: int) -> int = inf(n + 1)\nlet result = inf(0)\n()"
     program = parse_program(source)
     resolved = resolve(program)
-    caps = m2_caps()
+    caps = base_caps()
     checked = check(resolved, caps)
     executable = lower_program(
         checked, source_text=source, source_label="<test>", validate=True

@@ -81,9 +81,9 @@ def _lower(source: str) -> ExecutableProgram:
     from agm.agl.parser import parse_program
     from agm.agl.scope import resolve
     from agm.agl.typecheck import check
-    from tests.agl.ir_harness import m2_caps
+    from tests.agl.ir_harness import base_caps
 
-    checked = check(resolve(parse_program(source)), m2_caps())
+    checked = check(resolve(parse_program(source)), base_caps())
     return lower_program(
         checked, source_text=source, source_label="<test>", validate=True
     )
@@ -826,7 +826,7 @@ def test_for_loop_with_while_guard() -> None:
 def test_for_loop_non_iterable_bool_raises_type_error() -> None:
     """for x in bool do body done — non-iterable type is a typecheck error."""
     from agm.agl.typecheck.env import AglTypeError
-    from tests.agl.ir_harness import m2_caps
+    from tests.agl.ir_harness import base_caps
 
     source = "for x in true do\n  ()\ndone\n"
     with pytest.raises(AglTypeError):
@@ -834,13 +834,13 @@ def test_for_loop_non_iterable_bool_raises_type_error() -> None:
         from agm.agl.scope import resolve
         from agm.agl.typecheck import check
 
-        check(resolve(parse_program(source)), m2_caps())
+        check(resolve(parse_program(source)), base_caps())
 
 
 def test_for_loop_int_collection_raises_type_error() -> None:
     """for x in int_expr do body done — int is not an iterable collection."""
     from agm.agl.typecheck.env import AglTypeError
-    from tests.agl.ir_harness import m2_caps
+    from tests.agl.ir_harness import base_caps
 
     source = "for x in 42 do\n  ()\ndone\n"
     with pytest.raises(AglTypeError):
@@ -848,7 +848,7 @@ def test_for_loop_int_collection_raises_type_error() -> None:
         from agm.agl.scope import resolve
         from agm.agl.typecheck import check
 
-        check(resolve(parse_program(source)), m2_caps())
+        check(resolve(parse_program(source)), base_caps())
 
 
 # ---------------------------------------------------------------------------

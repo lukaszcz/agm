@@ -12,7 +12,7 @@ from agm.core.process import ProcessCaptureResult
 from tests.agl.ir_harness import (
     evaluate_ir_raises_with_shell,
     evaluate_ir_with_shell,
-    m6c_caps,
+    shell_caps,
 )
 
 # ---------------------------------------------------------------------------
@@ -192,7 +192,7 @@ def test_t7_retry_success() -> None:
     source = "let n: int = exec(\"cmd\", on_parse_error = Retry(n = 1))\nn"
     from tests.agl.ir_harness import _run_ir_exec
 
-    caps = m6c_caps()
+    caps = shell_caps()
 
     call_count[0] = 0
     ir_snap, _ = _run_ir_exec(source, fake_shell, caps)
@@ -252,7 +252,7 @@ def test_t10_golden_lowering() -> None:
     from agm.agl.typecheck import check
 
     source = 'let result = exec("echo hi")\nresult'
-    caps = m6c_caps()
+    caps = shell_caps()
     program = parse_program(source)
     resolved = resolve(program)
     checked = check(resolved, caps)
@@ -392,7 +392,7 @@ def test_t12_retry_then_nonzero_exit() -> None:
     from agm.agl.semantics.values import ExceptionValue
     from tests.agl.ir_harness import _run_ir_exec
 
-    caps = m6c_caps()
+    caps = shell_caps()
 
     call_count[0] = 0
     with pytest.raises(AglRaise) as exc_info:

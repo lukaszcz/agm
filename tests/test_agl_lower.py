@@ -1060,7 +1060,7 @@ class TestIrFieldLowering:
 # ---------------------------------------------------------------------------
 
 
-class TestM4aLowerFunctions:
+class TestLowerFunctions:
     """Tests for function lowering coverage."""
 
     def test_try_with_bound_exception_in_function_body(self) -> None:
@@ -1264,7 +1264,7 @@ class TestScanCapturesLoopForIterWhileCond:
 # ===========================================================================
 
 
-class TestM4bLambdaLowering:
+class TestLambdaLowering:
     """Golden tests: lambda lowers to IrMakeClosure with correct FunctionDescriptor."""
 
     def test_lambda_lowers_to_make_closure(self) -> None:
@@ -1356,7 +1356,7 @@ class TestM4bLambdaLowering:
         )
 
 
-class TestM4bIndirectCallLowering:
+class TestIndirectCallLowering:
     """Golden tests: indirect call lowers to IrIndirectCall with coerced args."""
 
     def test_indirect_call_lowers_to_indirect_call_node(self) -> None:
@@ -1671,7 +1671,7 @@ class TestLowerGraph:
 # ---------------------------------------------------------------------------
 
 
-class TestM6aLowering:
+class TestHostOpLowering:
     """Golden lowering tests for host operations."""
 
     def test_print_lowers_to_ir_print(self) -> None:
@@ -1835,7 +1835,7 @@ class TestLambdaCapturePositive:
     """Structural tests for the lambda capture positive path.
 
     The negative (empty-captures) path for module-level bindings is already
-    covered in TestM4bLambdaLowering.  These tests assert the non-empty
+    covered in TestLambdaLowering.  These tests assert the non-empty
     capture shape when a lambda references function-local bindings, and verify
     by_cell for both param (let-like) and var captures.
     """

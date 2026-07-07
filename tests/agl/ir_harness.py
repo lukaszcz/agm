@@ -37,7 +37,7 @@ def _roots(*paths: Path) -> RootSet:
     return RootSet(roots=frozenset((*paths, _REPO_STDLIB_ROOT)))
 
 
-def m2_caps() -> HostCapabilities:
+def base_caps() -> HostCapabilities:
     return HostCapabilities(
         codec_kinds={
             "text": frozenset({"text"}),
@@ -49,7 +49,7 @@ def m2_caps() -> HostCapabilities:
 
 
 def extern_caps() -> HostCapabilities:
-    base = m2_caps()
+    base = base_caps()
     return HostCapabilities(supports_extern=True, codec_kinds=base.codec_kinds)
 
 
@@ -67,7 +67,7 @@ def _run_ir(
     caps: HostCapabilities | None = None,
     registry: AgentRegistry | None = None,
 ) -> tuple[dict[str, Value], str]:
-    checked = check(resolve(parse_program(source)), caps or m2_caps())
+    checked = check(resolve(parse_program(source)), caps or base_caps())
     executable = lower_program(
         checked, source_text=source, source_label="<ir-test>", validate=True
     )
@@ -222,7 +222,7 @@ def _checked_graph(
     for dotted, source in modules.items():
         write_module_file(root, dotted, source)
     graph = load_graph(entry_source, entry_path=None, roots=_roots(root))
-    return check_graph(resolve_graph(graph), m2_caps())
+    return check_graph(resolve_graph(graph), base_caps())
 
 
 def evaluate_ir_graph(
@@ -244,8 +244,8 @@ def evaluate_ir_graph_raises(
     raise AssertionError("IR graph did not raise AglRaise")
 
 
-def m6b_caps(agent_names: frozenset[str], *, has_default: bool = False) -> HostCapabilities:
-    base = m2_caps()
+def agent_caps(agent_names: frozenset[str], *, has_default: bool = False) -> HostCapabilities:
+    base = base_caps()
     return HostCapabilities(
         agent_names=agent_names,
         has_default_agent=has_default,
@@ -286,7 +286,7 @@ def evaluate_ir_with_agents(
     agent_names: frozenset[str] | None = None,
     has_default: bool = False,
 ) -> dict[str, Value]:
-    caps = m6b_caps(agent_names or frozenset(scripts), has_default=has_default)
+    caps = agent_caps(agent_names or frozenset(scripts), has_default=has_default)
     registry = _make_scripted_registry(scripts, default_responses=default_responses)
     result, _ = _run_ir(source, caps=caps, registry=registry)
     return result
@@ -300,7 +300,7 @@ def evaluate_ir_raises_with_agents(
     agent_names: frozenset[str] | None = None,
     has_default: bool = False,
 ) -> ExceptionValue:
-    caps = m6b_caps(agent_names or frozenset(scripts), has_default=has_default)
+    caps = agent_caps(agent_names or frozenset(scripts), has_default=has_default)
     registry = _make_scripted_registry(scripts, default_responses=default_responses)
     try:
         _run_ir(source, caps=caps, registry=registry)
@@ -309,10 +309,10 @@ def evaluate_ir_raises_with_agents(
     raise AssertionError("IR agent program did not raise AglRaise")
 
 
-def m6c_caps(
+def shell_caps(
     *, agent_names: frozenset[str] = frozenset(), has_default: bool = False
 ) -> HostCapabilities:
-    base = m2_caps()
+    base = base_caps()
     return HostCapabilities(
         agent_names=agent_names,
         has_default_agent=has_default,
@@ -356,7 +356,7 @@ def evaluate_ir_with_shell(
     cmd_log_ir: list[str] | None = None,
 ) -> dict[str, Value]:
     shell = _scripted_shell(commands, cmd_log=cmd_log_ir)
-    result, _ = _run_ir_exec(source, shell, caps or m6c_caps())
+    result, _ = _run_ir_exec(source, shell, caps or shell_caps())
     return result
 
 
@@ -366,7 +366,7 @@ def evaluate_ir_raises_with_shell(
     caps: HostCapabilities | None = None,
 ) -> ExceptionValue:
     try:
-        _run_ir_exec(source, _scripted_shell(commands), caps or m6c_caps())
+        _run_ir_exec(source, _scripted_shell(commands), caps or shell_caps())
     except AglRaise as exc:
         return exc.exc
     raise AssertionError("IR shell program did not raise AglRaise")

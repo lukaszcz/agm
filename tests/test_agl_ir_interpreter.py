@@ -1364,7 +1364,7 @@ def _loc_at_line(line: int) -> Location:
     )
 
 
-class TestM4aFunctionEvaluation:
+class TestFunctionEvaluation:
     """Tests for IrMakeClosure and IrDirectCall evaluation."""
 
     def test_simple_direct_call(self) -> None:
@@ -1608,7 +1608,7 @@ class TestM4aFunctionEvaluation:
         assert result["result2"] == IntValue(55)
 
 
-class TestM4aInterpreterDefensivePaths:
+class TestDirectCallInterpreterDefensivePaths:
     """Defensive error paths in IrMakeClosure and IrDirectCall evaluation."""
 
     def test_get_closure_for_symbol_not_in_frame_raises(self) -> None:
@@ -1705,7 +1705,7 @@ class TestM4aInterpreterDefensivePaths:
 # ---------------------------------------------------------------------------
 
 
-class TestM4bInterpreterDefensivePaths:
+class TestIndirectCallInterpreterDefensivePaths:
     """Defensive error paths in IrIndirectCall evaluation."""
 
     def test_indirect_call_non_closure_callee_raises(self) -> None:
@@ -1847,7 +1847,7 @@ class TestM4bInterpreterDefensivePaths:
 # ===========================================================================
 
 
-class TestM6aPrintParseJsonParam:
+class TestPrintParseJsonParam:
     """Unit tests for host operations in the IrInterpreter."""
 
     def test_required_param_without_value_raises_invalid_ir_error(self) -> None:
@@ -1925,7 +1925,7 @@ class TestM6aPrintParseJsonParam:
 # ===========================================================================
 
 
-class TestM6cIrExec:
+class TestIrExec:
     """Unit tests for _eval_ir_exec in IrInterpreter."""
 
     def _make_exec_program(

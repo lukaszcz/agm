@@ -2361,6 +2361,10 @@ class TestConstructors:
         )
         assert "duplicate" in str(err).lower()
 
+    def test_user_exception_cannot_declare_trace_id_field(self) -> None:
+        err = reject_type("exception Root\n  trace_id: int\n()\n")
+        assert "trace_id" in str(err)
+
     def test_unknown_constructor_raises(self) -> None:
         # Unknown names are now caught at scope-resolution time (AglScopeError).
         err = reject_any("Unknown(x = 1)")

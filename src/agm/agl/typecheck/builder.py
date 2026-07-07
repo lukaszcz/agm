@@ -348,6 +348,11 @@ class _TypeBuilder:
         fields: dict[str, Type] = {}
         seen_fields: dict[str, SourceSpan] = {}
         for fd in stmt.fields:
+            if not stmt.is_builtin and fd.name == "trace_id":
+                raise AglTypeError(
+                    "Exception field name 'trace_id' is reserved for the built-in trace id.",
+                    span=fd.span,
+                )
             if fd.name in seen_fields:
                 raise AglTypeError(
                     f"Duplicate field '{fd.name}' in exception '{stmt.name}'.",

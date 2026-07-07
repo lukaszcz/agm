@@ -1100,10 +1100,7 @@ class IrInterpreter:
                     return self._eval(body_expr)
                 except AglRaise as exc:
                     for handler in handlers:
-                        if (
-                            handler.display_name is None
-                            or handler.display_name == exc.exc.display_name
-                        ):
+                        if handler.nominal is None or handler.nominal == exc.exc.nominal:
                             if handler.symbol is not None:
                                 self._frame[handler.symbol] = exc.exc
                             return self._eval(handler.body)

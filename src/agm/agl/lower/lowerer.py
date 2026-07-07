@@ -2275,6 +2275,8 @@ class _Lowerer:
                 is_unit=False,
                 target_type_kind=spec.target_type.kind,
                 defs=decode_defs,
+                target_type=spec.target_type,
+                type_table=self._type_table,
             )
 
         contract_id = self._alloc_contract(contract_req)
@@ -2329,6 +2331,8 @@ class _Lowerer:
             is_unit=False,
             target_type_kind=spec.target_type.kind,
             defs=decode_defs,
+            target_type=spec.target_type,
+            type_table=self._type_table,
         )
 
         contract_id = self._alloc_contract(contract_req)

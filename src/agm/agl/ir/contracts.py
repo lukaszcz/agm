@@ -231,6 +231,12 @@ class ContractRequest:
                               field text and failure-message formatting.
     ``target_type_kind``    — semantic kind string (``int``, ``record``, …) used
                               only by host custom-codec materialization.
+    ``target_type``         — optional opaque checker type object retained for
+                              host custom codecs that need full generic/nominal
+                              type shape; built-in codecs ignore it.
+    ``type_table``          — optional opaque checker type table retained for
+                              host custom codecs that need nominal field shapes;
+                              built-in codecs ignore it.
     ``structured_exec``     — ``True`` for structured exec; ``False`` for ``ask``.
     ``format_instructions`` — pre-computed format instructions string (empty for
                               text codec and unit-typed asks).
@@ -255,3 +261,5 @@ class ContractRequest:
     is_unit: bool = False
     target_type_kind: str = ""
     defs: "tuple[tuple[str, DecodeSchema], ...]" = ()
+    target_type: object | None = None
+    type_table: object | None = None

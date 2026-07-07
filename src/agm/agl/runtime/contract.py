@@ -89,6 +89,8 @@ class OutputContract:
     ``defs``                — ``$defs`` table for a recursive target type
                               (empty for a non-recursive one, see
                               ``type_schema.DecodePlan``).
+    ``type_table``          — checker type table retained only for host custom
+                              codecs that request it at parse time.
     ``structured_exec``     — True for the structured ``exec`` passthrough
                               contract (raw ``ExecResult``, no parsing).
     """
@@ -101,6 +103,7 @@ class OutputContract:
     decode: DecodeSchema | None = None
     structured_exec: bool = False
     defs: "tuple[tuple[str, DecodeSchema], ...]" = ()
+    type_table: "TypeTable | None" = None
 
 
 def materialize_ir_contract(
@@ -118,11 +121,11 @@ def materialize_ir_contract(
 
     Host-registered custom codecs (see ``PipelineDriver.register_codec``) are
     third-party ``OutputCodec`` implementations whose ``make_contract`` may run
-    arbitrary logic against the target type.  The IR intentionally does not carry
-    checker ``Type`` objects, but it does carry the erased target kind and label;
-    reconstruct a best-effort placeholder of the same kind so primitive custom
-    codecs (for example an ``int`` codec) observe the expected target instead of
-    the historical ``unit`` fallback.
+    arbitrary logic against the target type.  Lowering retains the checked
+    target type and TypeTable as opaque IR payloads for those codecs, while
+    built-in codecs continue to use the typeless schema/decode fields.  Older
+    hand-built IR requests that omit the opaque payload fall back to an erased
+    kind-correct placeholder.
     """
     if request.is_unit:
         return None
@@ -133,7 +136,8 @@ def materialize_ir_contract(
             "This is a host-configuration error."
         )
     if request.codec_name not in BUILTIN_CODEC_NAMES:
-        base = _call_make_contract(codec, _placeholder_type_for_request(request), None)
+        type_table = cast("TypeTable | None", request.type_table)
+        base = _call_make_contract(codec, _target_type_for_request(request), type_table)
         format_instructions = base.format_instructions
         schema: object = base.json_schema
         decode = base.decode
@@ -160,6 +164,7 @@ def materialize_ir_contract(
         decode=decode,
         defs=defs,
         structured_exec=request.structured_exec,
+        type_table=cast("TypeTable | None", request.type_table),
     )
 
 
@@ -180,6 +185,13 @@ def _call_make_contract(
     if not has_varargs and len(positional) <= 1:
         return codec.make_contract(type_ref)
     return codec.make_contract(type_ref, type_table)
+
+
+def _target_type_for_request(request: ContractRequest) -> Type:
+    """Return the checked target type, falling back to an erased placeholder."""
+    if request.target_type is not None:
+        return cast(Type, request.target_type)
+    return _placeholder_type_for_request(request)
 
 
 def _placeholder_type_for_request(request: ContractRequest) -> Type:
@@ -259,4 +271,5 @@ def materialize_contract(
         json_schema=base.json_schema,
         decode=base.decode,
         defs=base.defs,
+        type_table=type_table,
     )

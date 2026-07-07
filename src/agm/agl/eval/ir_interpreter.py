@@ -174,6 +174,7 @@ def _call_custom_codec_parse(
         "schema": schema,
         "decode": host_contract.decode,
         "defs": dict(host_contract.defs),
+        "type_table": host_contract.type_table,
     }
     parse = cast(_FlexibleParse, host_contract.codec.parse)
     try:
@@ -192,9 +193,9 @@ def _call_custom_codec_parse(
     ]
     accepts_varargs = any(param.kind.name == "VAR_POSITIONAL" for param in params.values())
     if accepts_varargs or len(positional) >= 2:
-        from agm.agl.runtime.contract import _placeholder_type_for_request
+        from agm.agl.runtime.contract import _target_type_for_request
 
-        return parse(raw, _placeholder_type_for_request(request), **accepted_kwargs)
+        return parse(raw, _target_type_for_request(request), **accepted_kwargs)
     return parse(raw, **accepted_kwargs)
 
 

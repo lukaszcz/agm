@@ -3378,6 +3378,84 @@ class TestRegisterCodec:
         assert received[0].output_contract is not None
         assert received[0].output_contract.format_instructions == "LIST-INT-CUSTOM-FORMAT"
 
+    def test_custom_codec_receives_checked_type_and_table_from_ir_pipeline(self) -> None:
+        """Custom codecs see the real checked target type and TypeTable at execution time."""
+        from agm.agl.ir.ids import NominalId
+
+        seen_contract_type: list[Type] = []
+        seen_parse_type: list[Type] = []
+        seen_contract_fields: list[Mapping[str, Type]] = []
+        seen_parse_fields: list[Mapping[str, Type]] = []
+
+        class ShapeCodec:
+            @property
+            def name(self) -> str:
+                return "shape"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"record"})
+
+            def supports_type(self, t: Type) -> bool:
+                return isinstance(t, RecordType)
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                assert isinstance(type_ref, RecordType)
+                assert type_table is not None
+                seen_contract_type.append(type_ref)
+                seen_contract_fields.append(type_table.record_fields(type_ref))
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=None,
+                    format_instructions="shape",
+                    json_schema=None,
+                )
+
+            def parse(
+                self,
+                raw: str,
+                target_type: Type,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
+                decode: DecodeSchema | None = None,
+                defs: Mapping[str, DecodeSchema] | None = None,
+                type_table: TypeTable | None = None,
+            ) -> ParseResult:
+                assert isinstance(target_type, RecordType)
+                assert type_table is not None
+                seen_parse_type.append(target_type)
+                seen_parse_fields.append(type_table.record_fields(target_type))
+                return ParseResult.success(
+                    RecordValue(
+                        nominal=NominalId(ENTRY_ID, target_type.name),
+                        display_name=target_type.name,
+                        fields={"value": IntValue(int(raw))},
+                    )
+                )
+
+        rt = PipelineDriver(default_agent=lambda req: "5")
+        rt.register_codec(ShapeCodec())
+        result = rt.run(
+            "record Box\n  value: int\n"
+            'let box: Box = ask("Q", format = "shape")\n'
+            "box"
+        )
+
+        assert result.ok is True
+        assert result.bindings["box"] == RecordValue(
+            nominal=NominalId(ENTRY_ID, "Box"),
+            display_name="Box",
+            fields={"value": IntValue(5)},
+        )
+        assert seen_contract_type == [RecordType("Box")]
+        assert seen_parse_type == [RecordType("Box")]
+        assert seen_contract_fields == [{"value": IntType()}]
+        assert seen_parse_fields == [{"value": IntType()}]
+
     def test_custom_codec_ir_materialization_reconstructs_target_kinds(self) -> None:
         """IR contract materialization gives custom codecs kind-correct placeholders."""
 

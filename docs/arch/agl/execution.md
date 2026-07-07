@@ -54,7 +54,7 @@ The evaluator interprets the linked program and nothing else. Its frame stack ho
 
 Host-backed operations are dispatched by contract identity:
 
-- **Agents.** An `ask` call extracts the target agent value (or the default agent) and issues the call through the host agent runtime, receiving output shaped by the contract's format metadata and any codec-provided schema.
+- **Agents.** An `ask` call extracts the target agent value (or the default agent) and issues the call through the host agent runtime, receiving output shaped by the contract's format metadata and any codec-provided schema. Built-in codecs consume the typeless schema/decode descriptors compiled into the contract; custom host codecs may also receive the checked target type and shared `TypeTable` retained as opaque contract payload so they can inspect nominal and generic shape.
 - **Shell.** `exec` either returns a structured result built from the subprocess output (a nonzero exit does not raise) or parses stdout into a target type (raising on nonzero exit or parse failure), as selected during checking.
 - **Conversions.** Casts and `parse_json` are pre-resolved into typeless conversion recipes carrying a decode schema (and its `defs` table, for a recursive target), executed against strict leaf parsers. Casts and `parse_json` always parse strictly; agent- and `exec`-output parsing uses the configurable strict/lenient codec pipeline.
 

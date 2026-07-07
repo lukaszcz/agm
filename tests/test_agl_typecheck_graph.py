@@ -664,6 +664,99 @@ def test_type_alias_in_module_graph(tmp_path: Path) -> None:
     assert _binding_value_type(cg, ENTRY_ID, "n") == IntType()
 
 
+def test_later_module_alias_available_to_entry_type_body(tmp_path: Path) -> None:
+    """Entry type bodies can reference aliases from later-sorting imported modules."""
+    cg = _check_graph(
+        tmp_path,
+        {
+            "entry": "import zzz\nrecord Box\n  value: zzz::Alias\nlet b = Box(value = 1)\nb",
+            "zzz": "type Alias = int",
+        },
+    )
+    assert _binding_value_type(cg, ENTRY_ID, "b") == RecordType("Box", module_id=ENTRY_ID)
+
+
+def test_later_module_alias_available_to_entry_type_body_via_open_import(
+    tmp_path: Path,
+) -> None:
+    """Entry type bodies can reference open-imported aliases before the alias module's turn."""
+    cg = _check_graph(
+        tmp_path,
+        {
+            "entry": "import zzz\nrecord Box\n  value: Alias\nlet b = Box(value = 1)\nb",
+            "zzz": "type Alias = int",
+        },
+    )
+    assert _binding_value_type(cg, ENTRY_ID, "b") == RecordType("Box", module_id=ENTRY_ID)
+
+
+def test_later_module_parameterized_alias_available_to_entry_type_body(
+    tmp_path: Path,
+) -> None:
+    """Entry type bodies can reference parameterized aliases from later modules."""
+    cg = _check_graph(
+        tmp_path,
+        {
+            "entry": "import zzz\nrecord Box\n  xs: zzz::Alias[int]\nlet b = Box(xs = [])\nb",
+            "zzz": "type Alias[T] = list[T]",
+        },
+    )
+    assert _binding_value_type(cg, ENTRY_ID, "b") == RecordType("Box", module_id=ENTRY_ID)
+
+
+def test_later_module_parameterized_alias_available_via_open_import(
+    tmp_path: Path,
+) -> None:
+    """Open-imported parameterized aliases resolve lazily before their module's turn."""
+    cg = _check_graph(
+        tmp_path,
+        {
+            "entry": "import zzz\nrecord Box\n  xs: Alias[int]\nlet b = Box(xs = [])\nb",
+            "zzz": "type Alias[T] = list[T]",
+        },
+    )
+    assert _binding_value_type(cg, ENTRY_ID, "b") == RecordType("Box", module_id=ENTRY_ID)
+
+
+def test_later_module_parameterized_alias_bare_reference_is_rejected(
+    tmp_path: Path,
+) -> None:
+    """A lazy open-imported parameterized alias still requires type arguments."""
+    with pytest.raises(AglTypeError, match="requires 1 type argument"):
+        _check_graph(
+            tmp_path,
+            {
+                "entry": "import zzz\nrecord Box\n  xs: Alias\nBox(xs = [])",
+                "zzz": "type Alias[T] = list[T]",
+            },
+        )
+
+
+def test_later_module_cross_alias_cycle_is_rejected(tmp_path: Path) -> None:
+    """Lazy cross-module alias resolution rejects transparent alias cycles."""
+    with pytest.raises(AglTypeError, match="part of a cycle"):
+        _check_graph(
+            tmp_path,
+            {
+                "entry": "import zzz\nrecord Box\n  value: zzz::Alias\nBox(value = 1)",
+                "zzz": "import yyy qualified\ntype Alias = yyy::Alias",
+                "yyy": "import zzz qualified\ntype Alias = zzz::Alias",
+            },
+        )
+
+
+def test_open_imported_generic_type_bare_reference_is_rejected(tmp_path: Path) -> None:
+    """A bare open-imported generic nominal type is not a concrete type."""
+    with pytest.raises(AglTypeError, match="Unknown type 'Box'"):
+        _check_graph(
+            tmp_path,
+            {
+                "entry": "import zzz\nrecord Use\n  value: Box\nUse(value = 1)",
+                "zzz": "record Box[T]\n  value: T",
+            },
+        )
+
+
 # ---------------------------------------------------------------------------
 # Coverage: qualified access to a non-type name is an error
 # ---------------------------------------------------------------------------

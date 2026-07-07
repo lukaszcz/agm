@@ -12,7 +12,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from agm.agl.diagnostics import AglError, Diagnostic
@@ -329,7 +329,10 @@ class TypeEnvironment:
       ``Type`` objects stamped with their owning ``module_id``.  Built once by
       the graph pre-pass; shared (read-only) across all per-module envs.
     - ``graph_generic_table`` and ``graph_alias_table`` carry cross-module
-      templates for applied nominal types and parameterized aliases.
+      templates for applied nominal types and parameterized aliases; during
+      graph type-table construction, ``graph_alias_keys`` and
+      ``graph_alias_resolver`` let transparent cross-module aliases resolve
+      lazily before their sorted body-resolution turn.
     - ``import_env`` is the per-module :class:`~agm.agl.scope.imports.ImportEnv`
       produced by graph scope resolution. Used to resolve qualified and open-imported type names.
     - ``module_id`` is the owning module of the current env.  ``::Name``
@@ -347,6 +350,9 @@ class TypeEnvironment:
         graph_type_table: Mapping[tuple[ModuleId, str], Type] | None = None,
         graph_generic_table: Mapping[tuple[ModuleId, str], GenericTypeDef] | None = None,
         graph_alias_table: Mapping[tuple[ModuleId, str], GenericAliasDef] | None = None,
+        graph_alias_keys: frozenset[tuple[ModuleId, str]] | None = None,
+        graph_alias_resolver: Callable[[ModuleId, str, SourceSpan | None], Type | None]
+        | None = None,
         graph_ctor_sig_table: Mapping[
             tuple[ModuleId, str, str | None], ConstructorSignature
         ] | None = None,
@@ -406,6 +412,12 @@ class TypeEnvironment:
         self._graph_alias_table: Mapping[tuple[ModuleId, str], GenericAliasDef] = (
             graph_alias_table if graph_alias_table is not None else {}
         )
+        self._graph_alias_keys: frozenset[tuple[ModuleId, str]] = (
+            graph_alias_keys if graph_alias_keys is not None else frozenset()
+        )
+        self._graph_alias_resolver: Callable[
+            [ModuleId, str, SourceSpan | None], Type | None
+        ] | None = graph_alias_resolver
         # Cross-module constructor signatures: (ModuleId, owner_name, variant) → sig.
         self._graph_ctor_sig_table: Mapping[
             tuple[ModuleId, str, str | None], ConstructorSignature
@@ -611,12 +623,53 @@ class TypeEnvironment:
         # Graph mode: look up via open imports.
         if self._import_env is not None and self._graph_type_table is not None:
             candidates = self._import_env.unqualified.get(name, frozenset())
-            type_candidates = [
-                qn for qn in candidates if (qn[0], qn[1]) in self._graph_type_table
-            ]
+            type_candidates = [qn for qn in candidates if self._is_graph_type_candidate(qn)]
             if len(type_candidates) == 1:
-                return self._graph_type_table.get((type_candidates[0][0], type_candidates[0][1]))
+                return self._resolve_graph_qname_as_bare_type(
+                    type_candidates[0], name, span=None
+                )
         return None
+
+    def _is_graph_type_candidate(self, qname: QName) -> bool:
+        """Return whether a graph QName denotes any type-namespace declaration."""
+        key = (qname[0], qname[1])
+        return (
+            (self._graph_type_table is not None and key in self._graph_type_table)
+            or (self._graph_generic_table is not None and key in self._graph_generic_table)
+            or key in self._graph_alias_table
+            or key in self._graph_alias_keys
+        )
+
+    def _ensure_graph_alias_resolved(
+        self, module_id: ModuleId, name: str, span: SourceSpan | None
+    ) -> Type | None:
+        """Resolve a graph alias lazily when the graph pre-pass is still building it."""
+        key = (module_id, name)
+        if key not in self._graph_alias_keys or self._graph_alias_resolver is None:
+            return None
+        return self._graph_alias_resolver(module_id, name, span)
+
+    def _resolve_graph_qname_as_bare_type(
+        self, qname: QName, exposed_name: str, *, span: SourceSpan | None
+    ) -> Type | None:
+        """Resolve a graph QName used as an unapplied type expression."""
+        assert self._graph_type_table is not None
+        key = (qname[0], qname[1])
+        typ = self._graph_type_table.get(key)
+        if typ is not None:
+            return typ
+        typ = self._ensure_graph_alias_resolved(qname[0], qname[1], span)
+        if typ is not None:
+            return typ
+        alias_def = self._graph_alias_table.get(key)
+        if alias_def is not None and alias_def.type_params:
+            raise AglTypeError(
+                f"Parameterized alias '{exposed_name}' requires "
+                f"{len(alias_def.type_params)} type argument(s); "
+                f"use '{exposed_name}[...]' to apply it.",
+                span=span,
+            )
+        return self._graph_type_table.get(key)
 
     # --- Function signature table ---
 
@@ -836,16 +889,7 @@ class TypeEnvironment:
         if self._import_env is None or self._graph_generic_table is None:
             return None
         candidates = self._import_env.unqualified.get(name, frozenset())
-        type_candidates = [
-            qname
-            for qname in candidates
-            if (qname[0], qname[1]) in self._graph_generic_table
-            or (qname[0], qname[1]) in self._graph_alias_table
-            or (
-                self._graph_type_table is not None
-                and (qname[0], qname[1]) in self._graph_type_table
-            )
-        ]
+        type_candidates = [qname for qname in candidates if self._is_graph_type_candidate(qname)]
         if len(type_candidates) > 1:
             labels = sorted(f"{qname[0].dotted()}::{qname[1]}" for qname in type_candidates)
             raise AglTypeError(
@@ -860,6 +904,9 @@ class TypeEnvironment:
         if gdef is not None:
             return self.instantiate_from_gdef(source_name, gdef, args, span=span)
         alias_def = self._graph_alias_table.get((module_id, source_name))
+        if alias_def is None and (module_id, source_name) in self._graph_alias_keys:
+            self._ensure_graph_alias_resolved(module_id, source_name, span)
+            alias_def = self._graph_alias_table.get((module_id, source_name))
         if alias_def is not None:
             return self.instantiate_alias(source_name, alias_def, args, span=span)
         raise AglTypeError(
@@ -903,6 +950,9 @@ class TypeEnvironment:
         if gdef is not None:
             return self.instantiate_from_gdef(qname[1], gdef, args, span=span)
         alias_def = self._graph_alias_table.get((qname[0], qname[1]))
+        if alias_def is None and (qname[0], qname[1]) in self._graph_alias_keys:
+            self._ensure_graph_alias_resolved(qname[0], qname[1], span)
+            alias_def = self._graph_alias_table.get((qname[0], qname[1]))
         if alias_def is not None:
             return self.instantiate_alias(qname[1], alias_def, args, span=span)
         if self._graph_type_table is not None and (qname[0], qname[1]) in self._graph_type_table:
@@ -963,13 +1013,15 @@ class TypeEnvironment:
         # Graph mode: unqualified lookup through open-imported names.
         if self._import_env is not None and self._graph_type_table is not None:
             candidates = self._import_env.unqualified.get(name, frozenset())
-            # Filter to candidates that are type names in the graph type table.
+            # Filter to candidates that are type names in the graph type namespace.
             type_candidates: list[QName] = [
-                qn for qn in candidates if (qn[0], qn[1]) in self._graph_type_table
+                qn for qn in candidates if self._is_graph_type_candidate(qn)
             ]
             if len(type_candidates) == 1:
                 qn = type_candidates[0]
-                return self._graph_type_table[(qn[0], qn[1])]
+                typ = self._resolve_graph_qname_as_bare_type(qn, name, span=span)
+                if typ is not None:
+                    return typ
             elif len(type_candidates) > 1:
                 # Ambiguous: multiple modules export this type name.
                 sorted_candidates = sorted(
@@ -1040,7 +1092,7 @@ class TypeEnvironment:
                 "It may not be in the imported set S, or may not be exported.",
                 span=span,
             )
-        t = self._graph_type_table.get((qname[0], qname[1]))
+        t = self._resolve_graph_qname_as_bare_type(qname, name, span=span)
         if t is not None:
             return t
         # Name is in S but isn't a type in the graph table — it might be a function.

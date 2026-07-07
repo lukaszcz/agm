@@ -20,14 +20,15 @@ Algorithm
 
    a. **Headers** — every declared name's handle (or, for a generic
       declaration, its ``GenericTypeDef``) is registered into the shared
-      ``graph_type_table`` first; type aliases are tracked separately in a
-      per-module env.
+      ``graph_type_table`` first; type aliases are registered as lazy graph
+      alias keys because aliases are transparent and have no handle shell.
    b. **Bodies, order-free** — each declaration's body (field/variant type
       expressions) is resolved in a fixed deterministic order (sorted by
       ``(ModuleId.segments, name)``), with no dependency-ordering
-      constraint — a cycle (same-module, mutual, or spanning any number of
-      modules) is legal, since every reference resolves to a handle
-      regardless of build order.
+      constraint — nominal cycles (same-module, mutual, or spanning any
+      number of modules) are legal, since every nominal reference resolves to
+      a handle regardless of build order; alias references resolve lazily and
+      still reject transparent alias cycles.
    c. **Inhabitation** — once every body is resolved, the whole-graph
       inhabitation fixpoint
       (:func:`~agm.agl.semantics.analyses.compute_uninhabited`) rejects the
@@ -378,15 +379,17 @@ def _build_graph_type_table(
             ``graph_type_table`` directly (a handle carries no field/variant
             data, so there is nothing left to fill in later — forward
             references within or across modules are valid immediately).
-            Type aliases are registered in per-module envs (their target
+            Type aliases are registered as lazy graph alias keys (their target
             type is not known until the alias body is resolved, so they have
-            no entry in the table yet).
+            no handle entry yet).
 
     Step B: Resolve every type body in a fixed deterministic order (sorted by
             ``(ModuleId.segments, name)``), with no dependency-ordering
-            constraint — every field/variant/element type reference is a
-            handle, valid regardless of whether the referenced declaration's
-            own body has been resolved yet.
+            constraint — every nominal field/variant/element type reference is
+            a handle, valid regardless of whether the referenced declaration's
+            own body has been resolved yet. Transparent aliases are resolved
+            lazily when referenced so alias dependencies do not impose a body
+            ordering, while recursive aliases are still rejected.
 
     Step C: Once every body is resolved, run the inhabitation fixpoint
             (:func:`~agm.agl.semantics.analyses.compute_uninhabited`) over the
@@ -434,7 +437,8 @@ def _build_graph_type_table(
     # gated on that module's own body-resolution order in Step C: a qualified
     # generic application (e.g. ``lib::Box[int]``) inside a field of a type
     # declared in a module that sorts before ``lib`` in the fixed body-resolution
-    # order must still resolve.  Parameterized aliases, constructor signatures,
+    # order must still resolve.  Aliases need resolved targets rather than
+    # shells, so graph environments resolve them lazily; constructor signatures
     # and constructor field kinds genuinely need a resolved body (field/target
     # types), so those remain filled as each type body is resolved in Step C.
     graph_generic_table: dict[tuple[ModuleId, str], GenericTypeDef] = {}
@@ -442,6 +446,14 @@ def _build_graph_type_table(
         for name, gdef in env.all_generic_types().items():
             graph_generic_table[(mid, name)] = gdef
     graph_alias_table: dict[tuple[ModuleId, str], GenericAliasDef] = {}
+    alias_decls: dict[tuple[ModuleId, str], TypeAlias] = {}
+    for mid, rmod in resolved_graph.modules.items():
+        program = rmod.resolved.program
+        assert isinstance(program, Program)
+        for item in program.body.items:
+            if isinstance(item, TypeAlias):
+                alias_decls[(mid, item.name)] = item
+    graph_alias_keys = frozenset(alias_decls)
     graph_ctor_sig_table: dict[tuple[ModuleId, str, str | None], ConstructorSignature] = {}
     graph_ctor_field_kinds_table: dict[
         tuple[ModuleId, str, str | None], tuple[tuple[str, ParamKind], ...]
@@ -452,6 +464,37 @@ def _build_graph_type_table(
     # module's ImportEnv so qualified and open-imported type refs resolve.
     cross_envs: dict[ModuleId, TypeEnvironment] = {}
     cross_builders: dict[ModuleId, _TypeBuilder] = {}
+    resolving_aliases: set[tuple[ModuleId, str]] = set()
+
+    def _resolve_graph_alias(
+        alias_mid: ModuleId, alias_name: str, span: SourceSpan | None
+    ) -> Type | None:
+        key = (alias_mid, alias_name)
+        item = alias_decls[key]
+        if key in resolving_aliases:
+            raise AglTypeError(
+                f"Type alias '{alias_name}' is part of a cycle.",
+                span=span,
+            )
+        resolving_aliases.add(key)
+        try:
+            env = cross_envs[alias_mid]
+            if item.type_params:
+                template = env.resolve_type_expr(
+                    item.type_expr,
+                    span=item.span,
+                    type_vars=frozenset(item.type_params),
+                )
+                graph_alias_table[key] = GenericAliasDef(
+                    type_params=item.type_params,
+                    template=template,
+                )
+                return None
+            resolved = env.resolve_type_expr(item.type_expr, span=item.span)
+            graph_type_table[key] = resolved
+            return resolved
+        finally:
+            resolving_aliases.remove(key)
 
     for mid, rmod in resolved_graph.modules.items():
         import_env = rmod.import_env
@@ -459,6 +502,8 @@ def _build_graph_type_table(
             graph_type_table=graph_type_table,
             graph_generic_table=graph_generic_table,
             graph_alias_table=graph_alias_table,
+            graph_alias_keys=graph_alias_keys,
+            graph_alias_resolver=_resolve_graph_alias,
             graph_ctor_sig_table=graph_ctor_sig_table,
             graph_ctor_field_kinds_table=graph_ctor_field_kinds_table,
             import_env=import_env,

@@ -16,7 +16,6 @@ NOT allowed: ``agm.agl.syntax``, ``agm.agl.scope``, ``agm.agl.typecheck``.
 from __future__ import annotations
 
 import decimal
-import inspect
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, assert_never
 
@@ -272,17 +271,6 @@ def _apply_coercion(value: Value, coercion: Coercion) -> Value:
 # ---------------------------------------------------------------------------
 
 
-def _accepts_defs_keyword(callable_obj: object) -> bool:
-    """Return whether a custom codec ``parse`` callable accepts ``defs=...``."""
-    try:
-        params = inspect.signature(callable_obj).parameters
-    except (TypeError, ValueError):
-        return True
-    return "defs" in params or any(
-        param.kind is inspect.Parameter.VAR_KEYWORD for param in params.values()
-    )
-
-
 class IrInterpreter:
     """Evaluates an ``ExecutableProgram`` using the frame/cell model.
 
@@ -352,14 +340,6 @@ class IrInterpreter:
             if isinstance(host_contract.json_schema, dict)
             else None
         )
-        if _accepts_defs_keyword(host_contract.codec.parse):
-            return host_contract.codec.parse(
-                raw,
-                strict_json=effective_strict,
-                schema=schema,
-                decode=host_contract.decode,
-                defs=dict(host_contract.defs),
-            )
         return host_contract.codec.parse(
             raw,
             strict_json=effective_strict,

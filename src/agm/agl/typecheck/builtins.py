@@ -241,7 +241,9 @@ class BuiltinCallChecker:
             codec_name, effective_strict, parse_policy_str = self._resolve_parse_options(
                 node, target_type, named
             )
-            self._check_finite_json_schema(target_type, codec_name, node.span)
+            self._check_finite_json_schema(
+                target_type, codec_name, node.span, use="an agent output type"
+            )
             spec = OutputContractSpec(
                 target_type=target_type,
                 codec_name=codec_name,
@@ -333,7 +335,9 @@ class BuiltinCallChecker:
             codec_name, effective_strict, parse_policy_str = self._resolve_parse_options(
                 node, target_type, named
             )
-            self._check_finite_json_schema(target_type, codec_name, node.span)
+            self._check_finite_json_schema(
+                target_type, codec_name, node.span, use="an exec output type"
+            )
             spec = OutputContractSpec(
                 target_type=target_type,
                 codec_name=codec_name,
@@ -395,7 +399,7 @@ class BuiltinCallChecker:
             )
 
     def _check_finite_json_schema(
-        self, target_type: Type, codec_name: str, span: SourceSpan
+        self, target_type: Type, codec_name: str, span: SourceSpan, *, use: str
     ) -> None:
         """Reject *target_type* if the 'json' codec will need a schema it cannot derive.
 
@@ -415,9 +419,7 @@ class BuiltinCallChecker:
             # function guards infinite types itself with a clear ``TypeError``
             # rather than relying on this use-site check.
             return
-        message = self._ctx._env.type_table.no_finite_schema_message(
-            target_type, use="an agent output type"
-        )
+        message = self._ctx._env.type_table.no_finite_schema_message(target_type, use=use)
         if message is not None:
             raise AglTypeError(message, span=span)
 

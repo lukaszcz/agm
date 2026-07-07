@@ -6449,7 +6449,7 @@ class TestNoFiniteSchemaUseSites:
         err = reject_type(_GROWING_TYPE_SRC + 'exec::[Perfect[int]]("cmd")')
         msg = str(err).lower()
         assert "perfect[int]" in msg
-        assert "agent output type" in msg
+        assert "exec output type" in msg
 
     def test_cast_growing_type_target_rejected(self) -> None:
         err = reject_type(_GROWING_TYPE_SRC + 'let raw: text = "{}"\nraw as Perfect[int]')

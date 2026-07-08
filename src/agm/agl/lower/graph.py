@@ -216,7 +216,6 @@ def lower_graph(
 
     # Collect entry-module params (only the entry module contributes params).
     entry_lowerer = module_lowerers[checked_graph.entry_id]
-    entry_cm = checked_graph.modules[checked_graph.entry_id]
     payloads = contract_payloads if contract_payloads is not None else {}
     dry_run_entries: list[DryRunEntry] = []
     for cm in checked_graph.modules.values():

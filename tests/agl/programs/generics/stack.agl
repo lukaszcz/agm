@@ -20,7 +20,7 @@ enum Option[T]
 def peek[T](s: Stack[T]) -> Option[T] =
   if s.size == 0 => none::[T]() else => some(value = s.items[0])
 
-def map_top[A, B](s: Stack[A], f: (A) -> B) -> Option[B] =
+def map_top[A, B](s: Stack[A], f: A -> B) -> Option[B] =
   case peek(s) of
     | none() => none::[B]()
     | some(value) => some(value = f(value))

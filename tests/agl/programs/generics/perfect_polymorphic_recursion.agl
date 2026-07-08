@@ -17,10 +17,10 @@ enum Perfect[T]
 # instantiates `render_perfect` again at `Pair[T, T]`, one level "rounder"
 # than the caller's own `T`, with a freshly-built `show` closure that unwraps
 # one more level of pairing before delegating to the caller's own `show`.
-def show_pair_of[T](show: (T) -> text) -> (Pair[T, T]) -> text =
+def show_pair_of[T](show: T -> text) -> Pair[T, T] -> text =
   fn(pr: Pair[T, T]) -> text => "(" + show(pr.first) + "," + show(pr.second) + ")"
 
-def render_perfect[T](p: Perfect[T], show: (T) -> text) -> text =
+def render_perfect[T](p: Perfect[T], show: T -> text) -> text =
   case p of
     | Single(value) => show(value)
     | Succ(next) => render_perfect(next, show_pair_of(show))
@@ -35,7 +35,7 @@ param b: int
 param c: int
 param d: int
 
-let show_int: (int) -> text = fn(n: int) -> text => "${n}"
+let show_int: int -> text = fn(n: int) -> text => "${n}"
 
 # Level 0: the base case, no growth yet.
 let level0: Perfect[int] = Single(value = a)

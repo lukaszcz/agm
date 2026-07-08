@@ -250,6 +250,21 @@ class TestSealingViolations:
         exc = evaluate_ir_raises_with_externs(source, companion, tmp_path)
         assert exc.display_name == "ExternError"
 
+    def test_companion_minted_handle_from_public_helpers_is_rejected(
+        self, tmp_path: Path
+    ) -> None:
+        source = "extern def forge[T]() -> T\nforge::[int]()\n()\n"
+        companion = (
+            "from agm.agl.ir.contracts import BoundarySealVar\n"
+            "from agm.agl.runtime.externs import encode_boundary_value\n"
+            "from agm.agl.semantics.values import IntValue\n"
+            "def forge():\n"
+            "    schema = BoundarySealVar('T')\n"
+            "    return encode_boundary_value(schema, IntValue(999), {'T': object()})\n"
+        )
+        exc = evaluate_ir_raises_with_externs(source, companion, tmp_path)
+        assert exc.display_name == "ExternError"
+
 
 # ---------------------------------------------------------------------------
 # Extern calls at a rigid type variable

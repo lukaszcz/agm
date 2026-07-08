@@ -23,7 +23,6 @@ from __future__ import annotations
 import copy
 import decimal
 import importlib.util
-import itertools
 import sys
 import weakref
 from collections.abc import Mapping, Sequence
@@ -125,8 +124,6 @@ class _SealedPayload:
 
 
 _HANDLE_FACTORY_KEY = object()
-_NEXT_HANDLE_ID = itertools.count()
-_SEALED_PAYLOADS: dict[int, _SealedPayload] = {}
 
 
 class SealedHandle:
@@ -144,49 +141,82 @@ class SealedHandle:
     debugging aid.
     """
 
-    __slots__ = ("__id", "__weakref__")
+    __slots__ = ("__eq_key", "__hash_value", "__repr_value", "__weakref__")
 
     def __init__(
         self,
         *_args: object,
         _factory_key: object | None = None,
-        _handle_id: int | None = None,
+        _eq_key: object | None = None,
+        _hash_value: int | None = None,
+        _repr_value: str | None = None,
     ) -> None:
-        if _factory_key is not _HANDLE_FACTORY_KEY or _handle_id is None:
+        if (
+            _factory_key is not _HANDLE_FACTORY_KEY
+            or _eq_key is None
+            or _hash_value is None
+            or _repr_value is None
+        ):
             raise TypeError("SealedHandle instances can only be minted by the extern boundary")
-        self.__id = _handle_id
+        self.__eq_key = _eq_key
+        self.__hash_value = _hash_value
+        self.__repr_value = _repr_value
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, SealedHandle):
             return False
-        return _open_sealed_handle(self).value == _open_sealed_handle(other).value
+        try:
+            return self.__eq_key == other.__eq_key
+        except AttributeError:
+            return False
 
     def __hash__(self) -> int:
-        return hash(_open_sealed_handle(self).value)
+        try:
+            return self.__hash_value
+        except AttributeError as exc:
+            raise TypeError("uninitialized sealed handle is not hashable") from exc
 
     def __repr__(self) -> str:
-        return render_value(_open_sealed_handle(self).value)
+        try:
+            return self.__repr_value
+        except AttributeError:
+            return "<sealed handle>"
 
 
-def _make_sealed_handle(value: Value, seal: object) -> SealedHandle:
-    """Mint a sealed handle and retain its payload outside the public object."""
-    handle_id = next(_NEXT_HANDLE_ID)
-    handle = SealedHandle(_factory_key=_HANDLE_FACTORY_KEY, _handle_id=handle_id)
-    _SEALED_PAYLOADS[handle_id] = _SealedPayload(value=value, seal=seal)
-    weakref.finalize(handle, _SEALED_PAYLOADS.pop, handle_id, None)
-    return handle
+class _HandleVault:
+    """Per-boundary storage for sealed payloads, kept out of module globals."""
+
+    def __init__(self) -> None:
+        self._payloads: dict[int, _SealedPayload] = {}
+
+    def make(self, value: Value, seal: object) -> SealedHandle:
+        """Mint a sealed handle and retain its payload in this vault."""
+        rendered = render_value(value)
+        try:
+            value_hash = hash(value)
+        except TypeError:
+            value_hash = id(value)
+        eq_key = (type(value), value_hash, rendered)
+        handle = SealedHandle(
+            _factory_key=_HANDLE_FACTORY_KEY,
+            _eq_key=eq_key,
+            _hash_value=hash(eq_key),
+            _repr_value=rendered,
+        )
+        handle_id = id(handle)
+        self._payloads[handle_id] = _SealedPayload(value=value, seal=seal)
+        weakref.finalize(handle, self._payloads.pop, handle_id, None)
+        return handle
+
+    def open(self, handle: SealedHandle) -> _SealedPayload:
+        """Return a minted handle's payload, rejecting handles outside this vault."""
+        payload = self._payloads.get(id(handle))
+        if payload is None:
+            raise BoundaryViolation("sealed handle was not minted by this boundary")
+        return payload
 
 
-def _open_sealed_handle(handle: SealedHandle) -> _SealedPayload:
-    """Return a minted handle's payload, rejecting unmapped forged instances."""
-    try:
-        handle_id = cast(int, object.__getattribute__(handle, "_SealedHandle__id"))
-    except AttributeError as exc:
-        raise BoundaryViolation("sealed handle was not minted by this boundary") from exc
-    payload = _SEALED_PAYLOADS.get(handle_id)
-    if payload is None:
-        raise BoundaryViolation("sealed handle was not minted by this boundary")
-    return payload
+_DEFAULT_HANDLE_VAULT = _HandleVault()
 
 
 def _typename(obj: object) -> str:
@@ -209,6 +239,7 @@ def encode_boundary_value(
     value: Value,
     seals: Mapping[str, object],
     defs: Mapping[str, BoundarySchema] = _NO_DEFS,
+    vault: _HandleVault = _DEFAULT_HANDLE_VAULT,
 ) -> object:
     """Encode one AgL value crossing an extern boundary as a Python argument.
 
@@ -235,12 +266,14 @@ def encode_boundary_value(
         case BoundaryList(element=elem_schema):
             if not isinstance(value, ListValue):
                 raise BoundaryViolation(f"expected a list value, got {_typename(value)}")
-            return [encode_boundary_value(elem_schema, e, seals, defs) for e in value.elements]
+            return [
+                encode_boundary_value(elem_schema, e, seals, defs, vault) for e in value.elements
+            ]
         case BoundaryDict(value=val_schema):
             if not isinstance(value, DictValue):
                 raise BoundaryViolation(f"expected a dict value, got {_typename(value)}")
             return {
-                k: encode_boundary_value(val_schema, v, seals, defs)
+                k: encode_boundary_value(val_schema, v, seals, defs, vault)
                 for k, v in value.entries.items()
             }
         case BoundaryRecord(display_name=display_name, fields=fields):
@@ -248,7 +281,7 @@ def encode_boundary_value(
                 raise BoundaryViolation(
                     f"expected record {display_name!r}, got {_typename(value)}"
                 )
-            return _encode_boundary_fields(fields, value.fields, seals, defs)
+            return _encode_boundary_fields(fields, value.fields, seals, defs, vault)
         case BoundaryEnum(display_name=display_name, variants=variants):
             if not isinstance(value, EnumValue):
                 raise BoundaryViolation(f"expected enum {display_name!r}, got {_typename(value)}")
@@ -258,18 +291,20 @@ def encode_boundary_value(
                     f"enum {display_name!r}: unknown variant {value.variant!r}"
                 )
             result: dict[str, object] = {"$case": value.variant}
-            result.update(_encode_boundary_fields(variant.fields, value.fields, seals, defs))
+            result.update(
+                _encode_boundary_fields(variant.fields, value.fields, seals, defs, vault)
+            )
             return result
         case BoundaryException(display_name=display_name, fields=fields):
             if not isinstance(value, ExceptionValue):
                 raise BoundaryViolation(
                     f"expected exception {display_name!r}, got {_typename(value)}"
                 )
-            return _encode_boundary_fields(fields, value.fields, seals, defs)
+            return _encode_boundary_fields(fields, value.fields, seals, defs, vault)
         case BoundarySealVar(var=var):
-            return _make_sealed_handle(value, seals[var])
+            return vault.make(value, seals[var])
         case BoundaryRef(key=key):
-            return encode_boundary_value(defs[key], value, seals, defs)
+            return encode_boundary_value(defs[key], value, seals, defs, vault)
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 
@@ -279,10 +314,11 @@ def _encode_boundary_fields(
     values: Mapping[str, Value],
     seals: Mapping[str, object],
     defs: Mapping[str, BoundarySchema],
+    vault: _HandleVault,
 ) -> dict[str, object]:
     """Encode a nominal payload's ordered fields through the boundary schema."""
     return {
-        fname: encode_boundary_value(fschema, values[fname], seals, defs)
+        fname: encode_boundary_value(fschema, values[fname], seals, defs, vault)
         for fname, fschema in fields
     }
 
@@ -324,6 +360,7 @@ def decode_boundary_value(
     obj: object,
     seals: Mapping[str, object],
     defs: Mapping[str, BoundarySchema] = _NO_DEFS,
+    vault: _HandleVault = _DEFAULT_HANDLE_VAULT,
 ) -> Value:
     """Strictly decode one Python return value against *schema*.
 
@@ -352,7 +389,7 @@ def decode_boundary_value(
                 raise BoundaryViolation(f"expected a list, got {_typename(obj)}")
             items: list[object] = obj
             return ListValue(
-                tuple(decode_boundary_value(elem_schema, e, seals, defs) for e in items)
+                tuple(decode_boundary_value(elem_schema, e, seals, defs, vault) for e in items)
             )
         case BoundaryDict(value=val_schema):
             if not isinstance(obj, dict):
@@ -362,12 +399,12 @@ def decode_boundary_value(
             for k, v in mapping.items():
                 if not isinstance(k, str):
                     raise BoundaryViolation(f"dict key must be str, got {_typename(k)}")
-                entries[k] = decode_boundary_value(val_schema, v, seals, defs)
+                entries[k] = decode_boundary_value(val_schema, v, seals, defs, vault)
             return DictValue(entries=entries)
         case BoundaryRecord(nominal=nominal, display_name=display_name, fields=fields):
             obj_fields = _expect_object(obj, display_name)
             _check_exact_fields(display_name, {fname for fname, _ in fields}, obj_fields)
-            record_fields = _decode_boundary_fields(fields, obj_fields, seals, defs)
+            record_fields = _decode_boundary_fields(fields, obj_fields, seals, defs, vault)
             return RecordValue(nominal=nominal, display_name=display_name, fields=record_fields)
         case BoundaryEnum(nominal=nominal, display_name=display_name, variants=variants):
             obj_fields = _expect_object(obj, display_name)
@@ -381,28 +418,28 @@ def decode_boundary_value(
                 raise BoundaryViolation(f"enum {display_name!r}: unknown variant {case_val!r}")
             expected = {fname for fname, _ in variant.fields} | {"$case"}
             _check_exact_fields(f"{display_name}.{case_val}", expected, obj_fields)
-            payload = _decode_boundary_fields(variant.fields, obj_fields, seals, defs)
+            payload = _decode_boundary_fields(variant.fields, obj_fields, seals, defs, vault)
             return EnumValue(
                 nominal=nominal, display_name=display_name, variant=case_val, fields=payload
             )
         case BoundaryException(nominal=nominal, display_name=display_name, fields=fields):
             obj_fields = _expect_object(obj, display_name)
             _check_exact_fields(display_name, {fname for fname, _ in fields}, obj_fields)
-            exc_fields = _decode_boundary_fields(fields, obj_fields, seals, defs)
+            exc_fields = _decode_boundary_fields(fields, obj_fields, seals, defs, vault)
             return ExceptionValue(nominal=nominal, display_name=display_name, fields=exc_fields)
         case BoundarySealVar(var=var):
             if not isinstance(obj, SealedHandle):
                 raise BoundaryViolation(
                     f"expected a sealed handle for type variable {var!r}, got {_typename(obj)}"
                 )
-            sealed_payload = _open_sealed_handle(obj)
+            sealed_payload = vault.open(obj)
             if sealed_payload.seal is not seals.get(var):
                 raise BoundaryViolation(
                     f"handle does not carry this call's seal for type variable {var!r}"
                 )
             return sealed_payload.value
         case BoundaryRef(key=key):
-            return decode_boundary_value(defs[key], obj, seals, defs)
+            return decode_boundary_value(defs[key], obj, seals, defs, vault)
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 
@@ -437,10 +474,11 @@ def _decode_boundary_fields(
     obj_fields: Mapping[str, object],
     seals: Mapping[str, object],
     defs: Mapping[str, BoundarySchema],
+    vault: _HandleVault,
 ) -> dict[str, Value]:
     """Decode a nominal payload's ordered fields through the boundary schema."""
     return {
-        fname: decode_boundary_value(fschema, obj_fields[fname], seals, defs)
+        fname: decode_boundary_value(fschema, obj_fields[fname], seals, defs, vault)
         for fname, fschema in fields
     }
 
@@ -642,6 +680,7 @@ class ExternRegistry:
         violation.
         """
         seals: dict[str, object] = {var: object() for var in contract.type_params}
+        vault = _HandleVault()
         # A fresh dict is only needed for a recursive contract (non-empty
         # ``defs``); the common non-recursive case reuses the shared empty map
         # rather than allocating one per call.
@@ -649,7 +688,7 @@ class ExternRegistry:
 
         try:
             encoded_args = [
-                encode_boundary_value(param.schema, arg, seals, defs)
+                encode_boundary_value(param.schema, arg, seals, defs, vault)
                 for param, arg in zip(contract.params, args, strict=True)
             ]
         except BoundaryViolation as exc:
@@ -669,7 +708,7 @@ class ExternRegistry:
             ) from exc
 
         try:
-            return decode_boundary_value(contract.result, result, seals, defs)
+            return decode_boundary_value(contract.result, result, seals, defs, vault)
         except BoundaryViolation as exc:
             raise _extern_error(
                 function_name, f"return value violates contract: {exc}", trace_id, python_type=""

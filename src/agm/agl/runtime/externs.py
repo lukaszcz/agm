@@ -478,9 +478,11 @@ class ExternRegistry:
     different module id sharing it — is a no-op); :meth:`resolve` then looks
     up one already-loaded companion's callable by name, caching each
     successful lookup by ``(module_id, name)`` so repeated invocations of the
-    same extern skip the attribute lookup.  :meth:`invoke` is the single
-    chokepoint that turns every runtime failure crossing the boundary into a
-    catchable ``ExternError``, mirroring ``AgentRegistry.dispatch``.
+    same extern skip the attribute lookup.  If a module id is later remapped to
+    a different companion module, cached callables for that module id are
+    discarded.  :meth:`invoke` is the single chokepoint that turns every runtime
+    failure crossing the boundary into a catchable ``ExternError``, mirroring
+    ``AgentRegistry.dispatch``.
     """
 
     def __init__(self) -> None:
@@ -500,7 +502,7 @@ class ExternRegistry:
         canonical = companion_path.resolve()
         cached = self._by_path.get(canonical)
         if cached is not None:
-            self._by_module[module_id] = cached
+            self._bind_module(module_id, cached)
             return cached
 
         synthetic_name = (
@@ -526,8 +528,17 @@ class ExternRegistry:
             del sys.modules[synthetic_name]
 
         self._by_path[canonical] = module
-        self._by_module[module_id] = module
+        self._bind_module(module_id, module)
         return module
+
+    def _bind_module(self, module_id: ModuleId, module: ModuleType) -> None:
+        """Bind *module_id* to *module*, dropping stale resolved callables."""
+        previous = self._by_module.get(module_id)
+        if previous is not None and previous is not module:
+            stale_keys = [key for key in self._resolved if key[0] == module_id]
+            for key in stale_keys:
+                del self._resolved[key]
+        self._by_module[module_id] = module
 
     def resolve(self, module_id: ModuleId, name: str) -> ExternCallable:
         """Return *module_id*'s companion callable named *name*.

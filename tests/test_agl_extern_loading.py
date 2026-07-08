@@ -269,6 +269,20 @@ class TestExternRegistryLoadAndResolve:
         assert second is first
         assert second(1) == 2
 
+    def test_remapping_module_id_invalidates_resolved_callables(self, tmp_path: Path) -> None:
+        old_path = tmp_path / "old.py"
+        new_path = tmp_path / "new.py"
+        old_path.write_text("def f(x):\n    return 'old'\n")
+        new_path.write_text("def f(x):\n    return 'new'\n")
+        mid = ModuleId.from_dotted("lib.mod")
+        registry = ExternRegistry()
+
+        registry.load_companion(mid, old_path)
+        assert registry.resolve(mid, "f")(None) == "old"
+
+        registry.load_companion(mid, new_path)
+        assert registry.resolve(mid, "f")(None) == "new"
+
 
 # ---------------------------------------------------------------------------
 # Pipeline wiring: capability gate, fail-fast diagnostics, ordering

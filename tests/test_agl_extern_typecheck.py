@@ -365,6 +365,19 @@ class TestExternCallSiteRecording:
         assert sites[0].line == 3
         assert sites[0].target_type == IntType()
 
+    def test_partial_extern_function_value_recorded_at_invocation(self) -> None:
+        source = (
+            "extern def f(x: int, y: int) -> int\n"
+            "let g = f(?, ?)\n"
+            "let h = g(?, 2)\n"
+            "h(1)"
+        )
+        cp = check_extern(source)
+        sites = [s for s in cp.call_sites if s.callee == "f"]
+        assert len(sites) == 1
+        assert sites[0].line == 4
+        assert sites[0].target_type == IntType()
+
     def test_graph_mode_imported_extern_call_recorded(self, tmp_path: Path) -> None:
         write_companion_file(tmp_path / "root", "lib.mod", "def f(x):\n    return x\n")
         checked = check_extern_graph(

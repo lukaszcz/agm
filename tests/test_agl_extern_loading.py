@@ -495,17 +495,10 @@ class TestRegistryPopulatedViaPipeline:
         )
         assert fn(1) == 2
 
-    def test_run_prepared_graph_wires_the_registry_before_lowering_and_lowers_cleanly(
+    def test_run_prepared_graph_wires_the_registry_before_evaluation(
         self, tmp_path: Path
     ) -> None:
-        """``run_prepared_graph`` itself performs the wiring, not just the helper.
-
-        Interpreter dispatch of an extern call is a later stage of this effort,
-        so this only drives the pipeline through ``check_only`` (static passes,
-        lowering, and dry-run inventory — no evaluation) to prove the registry
-        is fully populated and lowering succeeds, without depending on
-        evaluating the extern call itself.
-        """
+        """``run_prepared_graph`` itself performs real-run extern wiring."""
         write_module_file(tmp_path / "root", "lib.mod", "extern def f(x: int) -> int")
         write_companion_file(tmp_path / "root", "lib.mod", "def f(x):\n    return x + 1\n")
         driver = PipelineDriver()
@@ -515,9 +508,8 @@ class TestRegistryPopulatedViaPipeline:
             roots=_roots(tmp_path / "root"),
             default_stdlib=False,
         )
-        result = driver.run_prepared_graph(prepared, check_only=True)
+        result = driver.run_prepared_graph(prepared)
         assert result.ok is True
-        assert [cs.callee for cs in result.call_sites] == ["f"]
         fn = driver.host_environment().extern_registry.resolve(
             ModuleId.from_dotted("lib.mod"), "f"
         )

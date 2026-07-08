@@ -1279,9 +1279,10 @@ class _Checker:
         if ref.kind is BinderKind.function_binding and self._env.is_extern_node_id(
             ref.decl_node_id
         ):
-            if isinstance(typ, FunctionType):
-                return ((ref.name, typ.result),)
-            return ()
+            assert isinstance(typ, FunctionType), (
+                f"extern binding {ref.name!r} has non-function type {typ!r}"
+            )
+            return ((ref.name, typ.result),)
         return self._extern_binding_targets.get(ref.decl_node_id, ())
 
     def _record_extern_call_site(self, node: Call, callee: str, target_type: Type) -> None:

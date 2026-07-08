@@ -143,8 +143,8 @@ class SealedHandle:
         return render_value(self._value)
 
 
-def _pytype(obj: object) -> str:
-    """Human-readable Python type name for a boundary-violation message."""
+def _typename(obj: object) -> str:
+    """Human-readable type name (AgL value-kind or Python type) for a boundary message."""
     return type(obj).__name__
 
 
@@ -184,15 +184,15 @@ def encode_boundary_value(
             return _encode_scalar(kind, value)
         case BoundaryUnit():
             if not isinstance(value, UnitValue):
-                raise BoundaryViolation(f"expected unit, got {_agltype(value)}")
+                raise BoundaryViolation(f"expected unit, got {_typename(value)}")
             return None
         case BoundaryList(element=elem_schema):
             if not isinstance(value, ListValue):
-                raise BoundaryViolation(f"expected a list value, got {_agltype(value)}")
+                raise BoundaryViolation(f"expected a list value, got {_typename(value)}")
             return [encode_boundary_value(elem_schema, e, seals, defs) for e in value.elements]
         case BoundaryDict(value=val_schema):
             if not isinstance(value, DictValue):
-                raise BoundaryViolation(f"expected a dict value, got {_agltype(value)}")
+                raise BoundaryViolation(f"expected a dict value, got {_typename(value)}")
             return {
                 k: encode_boundary_value(val_schema, v, seals, defs)
                 for k, v in value.entries.items()
@@ -200,7 +200,7 @@ def encode_boundary_value(
         case BoundaryRecord(display_name=display_name, fields=fields):
             if not isinstance(value, RecordValue):
                 raise BoundaryViolation(
-                    f"expected record {display_name!r}, got {_agltype(value)}"
+                    f"expected record {display_name!r}, got {_typename(value)}"
                 )
             return {
                 fname: encode_boundary_value(fschema, value.fields[fname], seals, defs)
@@ -208,7 +208,7 @@ def encode_boundary_value(
             }
         case BoundaryEnum(display_name=display_name, variants=variants):
             if not isinstance(value, EnumValue):
-                raise BoundaryViolation(f"expected enum {display_name!r}, got {_agltype(value)}")
+                raise BoundaryViolation(f"expected enum {display_name!r}, got {_typename(value)}")
             variant = next((v for v in variants if v.name == value.variant), None)
             if variant is None:
                 raise BoundaryViolation(
@@ -225,7 +225,7 @@ def encode_boundary_value(
         case BoundaryException(display_name=display_name, fields=fields):
             if not isinstance(value, ExceptionValue):
                 raise BoundaryViolation(
-                    f"expected exception {display_name!r}, got {_agltype(value)}"
+                    f"expected exception {display_name!r}, got {_typename(value)}"
                 )
             return {
                 fname: encode_boundary_value(fschema, value.fields[fname], seals, defs)
@@ -239,33 +239,28 @@ def encode_boundary_value(
             assert_never(unreachable)
 
 
-def _agltype(value: Value) -> str:
-    """Human-readable AgL value-kind name for a boundary-violation message."""
-    return type(value).__name__
-
-
 def _encode_scalar(kind: ScalarKind, value: Value) -> object:
     """Encode one scalar (or opaque json) leaf as its Python argument."""
     match kind:
         case ScalarKind.TEXT:
             if not isinstance(value, TextValue):
-                raise BoundaryViolation(f"expected text, got {_agltype(value)}")
+                raise BoundaryViolation(f"expected text, got {_typename(value)}")
             return value.value
         case ScalarKind.INT:
             if not isinstance(value, IntValue):
-                raise BoundaryViolation(f"expected int, got {_agltype(value)}")
+                raise BoundaryViolation(f"expected int, got {_typename(value)}")
             return value.value
         case ScalarKind.DECIMAL:
             if not isinstance(value, DecimalValue):
-                raise BoundaryViolation(f"expected decimal, got {_agltype(value)}")
+                raise BoundaryViolation(f"expected decimal, got {_typename(value)}")
             return value.value
         case ScalarKind.BOOL:
             if not isinstance(value, BoolValue):
-                raise BoundaryViolation(f"expected bool, got {_agltype(value)}")
+                raise BoundaryViolation(f"expected bool, got {_typename(value)}")
             return value.value
         case ScalarKind.JSON:
             if not isinstance(value, JsonValue):
-                raise BoundaryViolation(f"expected json, got {_agltype(value)}")
+                raise BoundaryViolation(f"expected json, got {_typename(value)}")
             return copy.deepcopy(value_to_json_obj(value))
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
@@ -302,23 +297,23 @@ def decode_boundary_value(
             return _decode_scalar(kind, obj)
         case BoundaryUnit():
             if obj is not None:
-                raise BoundaryViolation(f"expected unit (None), got {_pytype(obj)}")
+                raise BoundaryViolation(f"expected unit (None), got {_typename(obj)}")
             return UnitValue()
         case BoundaryList(element=elem_schema):
             if not isinstance(obj, list):
-                raise BoundaryViolation(f"expected a list, got {_pytype(obj)}")
+                raise BoundaryViolation(f"expected a list, got {_typename(obj)}")
             items: list[object] = obj
             return ListValue(
                 tuple(decode_boundary_value(elem_schema, e, seals, defs) for e in items)
             )
         case BoundaryDict(value=val_schema):
             if not isinstance(obj, dict):
-                raise BoundaryViolation(f"expected a dict, got {_pytype(obj)}")
+                raise BoundaryViolation(f"expected a dict, got {_typename(obj)}")
             mapping: dict[object, object] = obj
             entries: dict[str, Value] = {}
             for k, v in mapping.items():
                 if not isinstance(k, str):
-                    raise BoundaryViolation(f"dict key must be str, got {_pytype(k)}")
+                    raise BoundaryViolation(f"dict key must be str, got {_typename(k)}")
                 entries[k] = decode_boundary_value(val_schema, v, seals, defs)
             return DictValue(entries=entries)
         case BoundaryRecord(nominal=nominal, display_name=display_name, fields=fields):
@@ -359,7 +354,7 @@ def decode_boundary_value(
         case BoundarySealVar(var=var):
             if not isinstance(obj, SealedHandle):
                 raise BoundaryViolation(
-                    f"expected a sealed handle for type variable {var!r}, got {_pytype(obj)}"
+                    f"expected a sealed handle for type variable {var!r}, got {_typename(obj)}"
                 )
             if obj._seal is not seals.get(var):
                 raise BoundaryViolation(
@@ -375,12 +370,12 @@ def decode_boundary_value(
 def _expect_object(obj: object, display_name: str) -> dict[str, object]:
     """Return *obj* as a ``str``-keyed dict, or raise ``BoundaryViolation``."""
     if not isinstance(obj, dict):
-        raise BoundaryViolation(f"expected an object for {display_name!r}, got {_pytype(obj)}")
+        raise BoundaryViolation(f"expected an object for {display_name!r}, got {_typename(obj)}")
     mapping: dict[object, object] = obj
     result: dict[str, object] = {}
     for k, v in mapping.items():
         if not isinstance(k, str):
-            raise BoundaryViolation(f"{display_name!r}: object key must be str, got {_pytype(k)}")
+            raise BoundaryViolation(f"{display_name!r}: object key must be str, got {_typename(k)}")
         result[k] = v
     return result
 
@@ -403,13 +398,13 @@ def _decode_scalar(kind: ScalarKind, obj: object) -> Value:
         case ScalarKind.TEXT:
             if isinstance(obj, str):
                 return TextValue(obj)
-            raise BoundaryViolation(f"expected text (str), got {_pytype(obj)}")
+            raise BoundaryViolation(f"expected text (str), got {_typename(obj)}")
         case ScalarKind.INT:
             if isinstance(obj, bool):
                 raise BoundaryViolation("expected int, got bool")
             if isinstance(obj, int):
                 return IntValue(obj)
-            raise BoundaryViolation(f"expected int, got {_pytype(obj)}")
+            raise BoundaryViolation(f"expected int, got {_typename(obj)}")
         case ScalarKind.DECIMAL:
             if isinstance(obj, bool):
                 raise BoundaryViolation("expected decimal, got bool")
@@ -417,14 +412,14 @@ def _decode_scalar(kind: ScalarKind, obj: object) -> Value:
                 return DecimalValue(obj)
             if isinstance(obj, int):
                 return DecimalValue(Decimal(obj))
-            raise BoundaryViolation(f"expected decimal, got {_pytype(obj)}")
+            raise BoundaryViolation(f"expected decimal, got {_typename(obj)}")
         case ScalarKind.BOOL:
             if isinstance(obj, bool):
                 return BoolValue(obj)
-            raise BoundaryViolation(f"expected bool, got {_pytype(obj)}")
+            raise BoundaryViolation(f"expected bool, got {_typename(obj)}")
         case ScalarKind.JSON:
             if not _is_json_shaped(obj):
-                raise BoundaryViolation(f"expected a JSON-shaped value, got {_pytype(obj)}")
+                raise BoundaryViolation(f"expected a JSON-shaped value, got {_typename(obj)}")
             return JsonValue(copy.deepcopy(obj))
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
@@ -579,7 +574,10 @@ class ExternRegistry:
         violation.
         """
         seals: dict[str, object] = {var: object() for var in contract.type_params}
-        defs: dict[str, BoundarySchema] = dict(contract.defs)
+        # A fresh dict is only needed for a recursive contract (non-empty
+        # ``defs``); the common non-recursive case reuses the shared empty map
+        # rather than allocating one per call.
+        defs: Mapping[str, BoundarySchema] = dict(contract.defs) if contract.defs else _NO_DEFS
 
         try:
             encoded_args = [

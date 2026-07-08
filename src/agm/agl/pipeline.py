@@ -1538,8 +1538,11 @@ def _wire_extern_registry(
     """
     from agm.agl.runtime.externs import ExternImportError, ExternResolutionError
 
-    declarations = _extern_declarations(checked_graph)
-    if not declarations:
+    # A companion path is recorded (non-``None``) exactly for extern-declaring
+    # modules, so this cheap check short-circuits the common no-extern program
+    # before the full declared-function walk in ``_extern_declarations`` — and,
+    # equivalently, gates the capability diagnostic without that walk.
+    if not any(path is not None for path in companion_paths.values()):
         return []
     if not capabilities.supports_extern:
         return [
@@ -1552,6 +1555,7 @@ def _wire_extern_registry(
                 line=1,
             )
         ]
+    declarations = _extern_declarations(checked_graph)
 
     diagnostics: list[Diagnostic] = []
     loaded_modules: set["ModuleId"] = set()

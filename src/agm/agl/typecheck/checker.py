@@ -463,33 +463,45 @@ class _Checker:
         its JSON schema — cannot be built). A finite recursive type is allowed:
         it crosses as a ``BoundaryRef`` graph.
         """
-        type_table = self._env.type_table
-        # Finite-schema is checked BEFORE the banned-type walk: a type whose
-        # instantiations never close (growing polymorphic recursion) has an
-        # infinite structure, and ``_contains_banned_extern_type`` walks that
-        # structure — its cycle guard only catches repeated instantiations, not
-        # ever-growing ones. ``no_finite_schema_message`` works at the
-        # declaration level and always terminates, so it rejects such a type
-        # first, leaving the banned-type walk only finite closures to traverse.
         for p, spec in zip(node.params, sig.params):
-            message = type_table.no_finite_schema_message(spec.type, use="an extern parameter type")
-            if message is not None:
-                raise AglTypeError(message, span=p.span)
-            if _contains_banned_extern_type(spec.type, type_table):
-                raise AglTypeError(
+            self._reject_uncrossable_extern_type(
+                spec.type,
+                span=p.span,
+                use="an extern parameter type",
+                banned_message=(
                     f"extern function '{node.name}' parameter '{p.name}' has a "
-                    "function or agent type, which cannot cross the Python boundary.",
-                    span=p.span,
-                )
-        message = type_table.no_finite_schema_message(sig.result, use="an extern return type")
-        if message is not None:
-            raise AglTypeError(message, span=node.span)
-        if _contains_banned_extern_type(sig.result, type_table):
-            raise AglTypeError(
-                f"extern function '{node.name}' has a return type containing a "
-                "function or agent type, which cannot cross the Python boundary.",
-                span=node.span,
+                    "function or agent type, which cannot cross the Python boundary."
+                ),
             )
+        self._reject_uncrossable_extern_type(
+            sig.result,
+            span=node.span,
+            use="an extern return type",
+            banned_message=(
+                f"extern function '{node.name}' has a return type containing a "
+                "function or agent type, which cannot cross the Python boundary."
+            ),
+        )
+
+    def _reject_uncrossable_extern_type(
+        self, typ: Type, *, span: SourceSpan, use: str, banned_message: str
+    ) -> None:
+        """Reject one extern parameter/result type that cannot cross the boundary.
+
+        Finite-schema is checked BEFORE the banned-type walk: a type whose
+        instantiations never close (growing polymorphic recursion) has an
+        infinite structure, and ``_contains_banned_extern_type`` walks that
+        structure — its cycle guard only catches repeated instantiations, not
+        ever-growing ones. ``no_finite_schema_message`` works at the
+        declaration level and always terminates, so it rejects such a type
+        first, leaving the banned-type walk only finite closures to traverse.
+        """
+        type_table = self._env.type_table
+        message = type_table.no_finite_schema_message(typ, use=use)
+        if message is not None:
+            raise AglTypeError(message, span=span)
+        if _contains_banned_extern_type(typ, type_table):
+            raise AglTypeError(banned_message, span=span)
 
     def _build_funcdef_signature(
         self, node: FuncDef, *, result_type: TypeExpr | Type

@@ -36,10 +36,9 @@ Flag notes:
       ``log-file``.  CLI flags always take precedence.
       ``--max-call-depth`` remains a host/runtime recursion guard.
     - ``--dry-run`` (global flag) runs only the static pipeline + contract
-      materialization and never writes a trace.  Evaluation is skipped, but an
-      extern-declaring program's companion Python file(s) still import eagerly
-      during loading (before this stop point) — a broken companion still
-      exits 1 under ``--dry-run``.
+      materialization and never writes a trace.  Evaluation and extern
+      companion imports are skipped, so broken companion Python files do not
+      fail a dry run.
 """
 
 from __future__ import annotations

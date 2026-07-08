@@ -93,11 +93,10 @@ like any other static error.
 - `--dry-run`: Run the full static pipeline, param validation, and contract
   materialization, then stop before evaluating any expression (static errors exit 1; a
   clean check exits 0 with no program output). A program declaring `extern def`
-  (see [Python FFI](../agl/reference/ffi.md)) still imports its companion Python
-  file(s) under `--dry-run`: companion loading is eager and fail-fast at program
-  setup, before this stop point, so a broken companion still exits 1. Only
-  actually *calling* an extern is skipped, like every other statement. When the
-  check succeeds and one or more agent-call, `exec`, or extern-call sites exist,
+  (see [Python FFI](../agl/reference/ffi.md)) does **not** import its companion
+  Python file(s) under `--dry-run`; companion loading is skipped with evaluation
+  to keep dry runs side-effect-free, so a broken companion does not fail a dry
+  run. When the check succeeds and one or more agent-call, `exec`, or extern-call sites exist,
   the static call-site inventory is printed to stdout:
 
   ```

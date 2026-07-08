@@ -1055,7 +1055,8 @@ class PipelineDriver:
                 checked_graph=checked_graph,
             )
 
-        capabilities = self.host_environment().capabilities
+        host_env = self.host_environment()
+        capabilities = host_env.capabilities
         if checked_graph is None:
             checked_graph, tc_diagnostics = _run_typecheck_graph(
                 prepared.resolved_graph, capabilities
@@ -1073,16 +1074,47 @@ class PipelineDriver:
 
         warnings.extend(checked_graph.warnings)
 
+        contract_payloads, contract_errors = _materialize_graph_custom_contract_payloads(
+            checked_graph,
+            host_env.codecs,
+        )
+        if contract_errors:
+            return StartupConfigResult(
+                ok=False,
+                diagnostics=contract_errors,
+                error=None,
+                warnings=warnings,
+                checked_graph=checked_graph,
+            )
+
         from agm.agl.lower import lower_graph
         from agm.agl.semantics.exceptions import AglRaise
 
-        executable = lower_graph(checked_graph, validate=True)
+        executable = lower_graph(
+            checked_graph,
+            validate=True,
+            contract_payloads=contract_payloads,
+        )
+        host_contracts, ir_contract_errors = _materialize_ir_contracts(
+            executable,
+            host_env.codecs,
+        )
+        if ir_contract_errors:
+            return StartupConfigResult(
+                ok=False,
+                diagnostics=ir_contract_errors,
+                error=None,
+                warnings=warnings,
+                checked_graph=checked_graph,
+            )
         interp = IrInterpreter(
             executable,
+            registry=host_env.registry,
             loop_limit=self._default_loop_limit,
             strict_json=self._default_strict_json,
             shell_exec_timeout=self._shell_exec_timeout,
             max_call_depth=self._default_call_depth_limit,
+            host_contracts=host_contracts,
             config_cli=config_cli,
             config_base=config_base,
         )

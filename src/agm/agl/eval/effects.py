@@ -14,8 +14,8 @@ from typing import NoReturn, Protocol, cast
 
 from agm.agl.ir.ids import ContractId, Location, NominalId
 from agm.agl.ir.nodes import IrAsk, IrAskRequest, IrExec, IrExpr
-from agm.agl.ir.program import ExecutableProgram, ExternFunctionDescriptor
-from agm.agl.modules.ids import PRELUDE_ID
+from agm.agl.ir.program import ExecutableProgram, ExternFunctionBody
+from agm.agl.modules.ids import PRELUDE_ID, ModuleId
 from agm.agl.runtime.agents import AgentRegistry
 from agm.agl.runtime.codec import ParseResult
 from agm.agl.runtime.contract import OutputContract
@@ -82,7 +82,7 @@ class EffectHandlers:
     # ------------------------------------------------------------------
 
     def eval_extern_call(
-        self, desc: ExternFunctionDescriptor, args: Sequence[Value]
+        self, module_id: ModuleId, extern: ExternFunctionBody, args: Sequence[Value]
     ) -> Value:
         """Handle a call to an ``extern def``: resolve, mint a trace id, invoke.
 
@@ -93,9 +93,11 @@ class EffectHandlers:
         argument-conversion failure, or a return-contract violation — into
         ``AglRaise(ExternError)``, mirroring the ``exec`` model.
         """
-        fn = self._ctx._extern_registry.resolve(desc.module_id, desc.name)
+        fn = self._ctx._extern_registry.resolve(module_id, extern.name)
         trace_id = self._ctx._trace.new_event_id()
-        return self._ctx._extern_registry.invoke(desc.name, desc.contract, fn, args, trace_id)
+        return self._ctx._extern_registry.invoke(
+            extern.name, extern.contract, fn, args, trace_id
+        )
 
     # ------------------------------------------------------------------
     # Agent call helpers

@@ -126,8 +126,9 @@ from agm.agl.ir.program import (
     DryRunEntry,
     ExecutableModule,
     ExecutableProgram,
-    ExternFunctionDescriptor,
+    ExternFunctionBody,
     FunctionDescriptor,
+    IrFunctionBody,
     IrParam,
     NominalDescriptor,
     NominalKind,
@@ -307,7 +308,6 @@ class _LinkState:
     fn_node_to_id: dict[int, FunctionId] = field(default_factory=dict)
     symbols: dict[SymbolId, SymbolDescriptor] = field(default_factory=dict)
     functions: dict[FunctionId, FunctionDescriptor] = field(default_factory=dict)
-    externs: dict[FunctionId, ExternFunctionDescriptor] = field(default_factory=dict)
     nominals: dict[NominalId, NominalDescriptor] = field(default_factory=dict)
     sources: dict[SourceId, SourceFile] = field(default_factory=dict)
     contracts: dict[ContractId, ContractRequest] = field(default_factory=dict)
@@ -744,7 +744,7 @@ class _Lowerer:
             function_symbol=fn_sym,
             module_id=self._module_id,
             params=ir_params,
-            body=body_ir,
+            impl=IrFunctionBody(body=body_ir),
             param_labels=param_labels,
             result_label=result_label,
         )
@@ -755,7 +755,7 @@ class _Lowerer:
         return IrBind(location=loc, symbol=fn_sym, value=closure_ir)
 
     def _lower_extern_funcdef(self, funcdef: "FuncDef") -> IrExpr:
-        """Lower an ``extern def`` to an ``ExternFunctionDescriptor`` + closure binding.
+        """Lower an ``extern def`` to a descriptor + closure binding.
 
         An extern has no body and no captures (there is nothing to capture: the
         boundary crossing reads only its own arguments).  Its top-level binding
@@ -774,17 +774,19 @@ class _Lowerer:
             self._lower_declared_params(funcdef, fn_id)
         )
 
-        desc = ExternFunctionDescriptor(
+        desc = FunctionDescriptor(
             function_id=fn_id,
             function_symbol=fn_sym,
             module_id=self._module_id,
-            name=funcdef.name,
             params=ir_params,
-            contract=build_extern_contract(sig, self._type_table),
+            impl=ExternFunctionBody(
+                name=funcdef.name,
+                contract=build_extern_contract(sig, self._type_table),
+            ),
             param_labels=param_labels,
             result_label=result_label,
         )
-        self._link.externs[fn_id] = desc
+        self._link.functions[fn_id] = desc
 
         loc = self._loc(funcdef.span)
         closure_ir = IrMakeClosure(location=loc, function_id=fn_id, captures=())
@@ -871,7 +873,7 @@ class _Lowerer:
             function_symbol=fn_sym,
             module_id=self._module_id,
             params=tuple(ir_params),
-            body=body_ir,
+            impl=IrFunctionBody(body=body_ir),
             param_labels=tuple(repr(param_type) for param_type in fn_type.params),
             result_label=repr(fn_type.result),
         )
@@ -2883,7 +2885,6 @@ class _Lowerer:
             nominals=dict(self._link.nominals),
             sources=dict(self._link.sources),
             functions=dict(self._link.functions),
-            externs=dict(self._link.externs),
             params=tuple(self._params),
             contracts=dict(self._link.contracts),
             dry_run_inventory=dry_run_inventory,

@@ -14,7 +14,7 @@ Two tiers (validate_ir runs ONLY when explicitly called):
     2. Each ``program.symbols`` entry: ``descriptor.symbol_id`` equals its
        key; ``descriptor.owner``, when a ``ModuleId``, exists in
        ``program.modules``; a ``FunctionId`` owner must exist in the
-       functions or externs table.
+       functions table.
     3. Each ``program.nominals`` entry: ``descriptor.nominal`` equals its key.
     4. Every ``SymbolId`` referenced by ``IrLoad``/``IrBind``/``IrAssign``
        exists in ``program.symbols``.
@@ -22,12 +22,11 @@ Two tiers (validate_ir runs ONLY when explicitly called):
     6. Every ``Location`` on every node (and ``IrIndexStep``): its
        ``source_id`` exists in ``program.sources``; and
        ``0 <= start_offset <= end_offset <= len(normalized_text)``.
-    7. ``program.functions`` and ``program.externs`` share one ``FunctionId``
-       space: every id lives in exactly one of the two tables. A reference
-       from ``IrMakeClosure``/``IrDirectCall`` (or a symbol owner) is accepted
-       against either table; each extern's boundary contract is checked for
-       internal consistency (registered nominals, type-variable positions
-       matching its declared type parameters).
+    7. ``program.functions`` contains every callable descriptor. A reference
+       from ``IrMakeClosure``/``IrDirectCall`` (or a symbol owner) must resolve
+       there; extern boundary contracts are checked for internal consistency
+       (registered nominals, type-variable positions matching their declared
+       type parameters).
 
 The expression dispatcher uses a closed structural ``match`` with a final
 ``assert_never(node)`` arm so that adding an ``IrExpr`` variant in a
@@ -38,8 +37,8 @@ future change without a validator arm produces a mypy exhaustiveness error.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import assert_never
+from collections.abc import Callable, Mapping
+from typing import TypeVar, assert_never
 
 from agm.agl.ir.contracts import (
     BoundaryDict,
@@ -132,7 +131,14 @@ from agm.agl.ir.nodes import (
     UseDefault,
 )
 from agm.agl.ir.operations import ArithKind, ArithOp, CmpOp, CompareKind, UnaryOp
-from agm.agl.ir.program import ExecutableProgram, IrParam, NominalKind, SourceFile
+from agm.agl.ir.program import (
+    ExecutableProgram,
+    ExternFunctionBody,
+    IrFunctionBody,
+    IrParam,
+    NominalKind,
+    SourceFile,
+)
 from agm.agl.modules.ids import ModuleId
 
 __all__ = ["InvalidIrError", "validate_ir"]
@@ -306,7 +312,13 @@ def _walk_decode_schema(
         case ScalarDecode():
             return
         case RefDecode(key=key):
-            _check_refdecode_chain(key, defs)
+            _check_ref_chain(
+                key,
+                defs,
+                lambda t: t.key if isinstance(t, RefDecode) else None,
+                ref_kind="DecodeSchema RefDecode",
+                key_noun="$defs key",
+            )
         case ListDecode(elem=elem):
             _walk_decode_schema(elem, defs, ctx)
         case DictDecode(value=value_schema):
@@ -324,24 +336,38 @@ def _walk_decode_schema(
             assert_never(unreachable)
 
 
-def _check_refdecode_chain(key: str, defs: Mapping[str, DecodeSchema]) -> None:
-    """Ensure a ``RefDecode`` chain reaches a non-ref body without cycling."""
+_RefT = TypeVar("_RefT")
+
+
+def _check_ref_chain(
+    key: str,
+    defs: "Mapping[str, _RefT]",
+    follow: "Callable[[_RefT], str | None]",
+    *,
+    ref_kind: str,
+    key_noun: str,
+) -> None:
+    """Ensure a chain of ``$defs`` refs reaches a non-ref body without cycling.
+
+    *follow* returns the next key when its argument is itself a ref node
+    (``RefDecode``/``BoundaryRef``), or ``None`` at a concrete body where the
+    chain terminates.  A key absent from *defs* or revisited (a cycle) is an
+    IR invariant violation; *ref_kind* and *key_noun* name the schema flavour
+    and its defs-key wording in the message.
+    """
     seen: set[str] = set()
     current = key
     while True:
         if current in seen:
-            raise InvalidIrError(
-                f"DecodeSchema RefDecode cycle reaches no body at $defs key {current!r}"
-            )
+            raise InvalidIrError(f"{ref_kind} cycle reaches no body at {key_noun} {current!r}")
         seen.add(current)
         target = defs.get(current)
         if target is None:
-            raise InvalidIrError(
-                f"DecodeSchema RefDecode references unknown $defs key {current!r}"
-            )
-        if not isinstance(target, RefDecode):
+            raise InvalidIrError(f"{ref_kind} references unknown {key_noun} {current!r}")
+        next_key = follow(target)
+        if next_key is None:
             return
-        current = target.key
+        current = next_key
 
 
 # ---------------------------------------------------------------------------
@@ -361,7 +387,13 @@ def _check_boundary_schema_nominals(
         case BoundaryScalar() | BoundaryUnit() | BoundarySealVar():
             return
         case BoundaryRef(key=key):
-            _check_boundaryref_chain(key, defs)
+            _check_ref_chain(
+                key,
+                defs,
+                lambda t: t.key if isinstance(t, BoundaryRef) else None,
+                ref_kind="BoundarySchema BoundaryRef",
+                key_noun="defs key",
+            )
         case BoundaryList(element=element):
             _check_boundary_schema_nominals(element, defs, ctx)
         case BoundaryDict(value=value_schema):
@@ -381,26 +413,6 @@ def _check_boundary_schema_nominals(
                 _check_boundary_schema_nominals(fschema, defs, ctx)
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
-
-
-def _check_boundaryref_chain(key: str, defs: "Mapping[str, BoundarySchema]") -> None:
-    """Ensure a ``BoundaryRef`` chain reaches a non-ref body without cycling."""
-    seen: set[str] = set()
-    current = key
-    while True:
-        if current in seen:
-            raise InvalidIrError(
-                f"BoundarySchema BoundaryRef cycle reaches no body at defs key {current!r}"
-            )
-        seen.add(current)
-        target = defs.get(current)
-        if target is None:
-            raise InvalidIrError(
-                f"BoundarySchema BoundaryRef references unknown defs key {current!r}"
-            )
-        if not isinstance(target, BoundaryRef):
-            return
-        current = target.key
 
 
 def _collect_boundary_seal_vars(schema: BoundarySchema, out: set[str]) -> None:
@@ -447,7 +459,7 @@ def _validate_extern_contract(
     for key, _entry in contract.defs:
         if key in seen_keys:
             raise InvalidIrError(
-                f"ExternFunctionDescriptor for {fn_key!r}: contract has duplicate"
+                f"FunctionDescriptor for {fn_key!r}: contract has duplicate"
                 f" defs key {key!r}"
             )
         seen_keys.add(key)
@@ -465,20 +477,10 @@ def _validate_extern_contract(
     unknown = seal_vars - set(contract.type_params)
     if unknown:
         raise InvalidIrError(
-            f"ExternFunctionDescriptor for {fn_key!r}: contract references type"
+            f"FunctionDescriptor for {fn_key!r}: contract references type"
             f" variable(s) {sorted(unknown)!r} not declared in type_params"
             f" {contract.type_params!r}"
         )
-
-
-# ---------------------------------------------------------------------------
-# Function-id membership (shared between program.functions and program.externs)
-# ---------------------------------------------------------------------------
-
-
-def _fn_or_extern_exists(fn_id: FunctionId, program: ExecutableProgram) -> bool:
-    """Return ``True`` if *fn_id* is registered in the functions or externs table."""
-    return fn_id in program.functions or fn_id in program.externs
 
 
 def _resolve_callable_params(
@@ -486,21 +488,14 @@ def _resolve_callable_params(
 ) -> "tuple[IrFunctionParam, ...]":
     """Resolve *fn_id* to its declared parameter tuple.
 
-    ``function_id``s share one id space between ``program.functions`` and
-    ``program.externs`` — a reference resolving to neither table is a
-    dangling reference; the tables are checked disjoint separately (an id
-    registered in both is a global table-consistency error, not a
-    per-reference one).
+    ``function_id``s resolve through the unified ``program.functions`` table.
     """
     fn_desc = ctx.program.functions.get(fn_id)
     if fn_desc is not None:
         return fn_desc.params
-    extern_desc = ctx.program.externs.get(fn_id)
-    if extern_desc is not None:
-        return extern_desc.params
     raise InvalidIrError(
         f"{node_desc} references function_id={fn_id!r} which is not in"
-        " program.functions or program.externs"
+        " program.functions"
     )
 
 
@@ -846,10 +841,10 @@ def _validate_expr(node: IrExpr, ctx: _Context) -> None:
         case IrMakeClosure(function_id=fn_id, captures=captures):
             _validate_location(node.location, ctx)
             if ctx.deep:
-                if not _fn_or_extern_exists(fn_id, ctx.program):
+                if fn_id not in ctx.program.functions:
                     raise InvalidIrError(
                         f"IrMakeClosure references function_id={fn_id!r}"
-                        " which is not in program.functions or program.externs"
+                        " which is not in program.functions"
                     )
                 for cap in captures:
                     if cap.symbol not in ctx.program.symbols:
@@ -1005,10 +1000,10 @@ def _validate_program_tables(program: ExecutableProgram) -> None:
                     " which is not in program.modules"
                 )
         elif isinstance(owner, FunctionId):
-            if not _fn_or_extern_exists(owner, program):
+            if owner not in program.functions:
                 raise InvalidIrError(
                     f"SymbolDescriptor for symbol_id={sym_key!r} has owner={owner!r}"
-                    " which is not in program.functions or program.externs"
+                    " which is not in program.functions"
                 )
         else:
             assert_never(owner)  # pragma: no cover
@@ -1047,53 +1042,19 @@ def _validate_program_tables(program: ExecutableProgram) -> None:
                 )
             if param.default is not None:
                 _validate_expr(param.default, fn_ctx)
-        _validate_expr(fn_desc.body, fn_ctx)
-
-    # 4b. functions/externs share one id space: an id in both tables is a
-    #     compiler bug (which table dispatch resolves through is ambiguous).
-    dup_id_set: set[FunctionId] = set(program.functions) & set(program.externs)
-    dup_ids = sorted(fid.value for fid in dup_id_set)
-    if dup_ids:
-        raise InvalidIrError(
-            f"function_id(s) {dup_ids!r} registered in both"
-            " program.functions and program.externs"
-        )
-
-    # 4c. externs table consistency — mirrors the functions table checks above,
-    #     plus the boundary contract's internal consistency (nominal references,
-    #     type-variable positions matching declared type_params).
-    for fn_key, extern_desc in program.externs.items():
-        if extern_desc.function_id != fn_key:
-            raise InvalidIrError(
-                f"program.externs entry keyed by {fn_key!r} has"
-                f" function_id={extern_desc.function_id!r} (mismatch)"
-            )
-        if extern_desc.function_symbol not in program.symbols:
-            raise InvalidIrError(
-                f"ExternFunctionDescriptor for {fn_key!r} has"
-                f" function_symbol={extern_desc.function_symbol!r} which is not"
-                " in program.symbols"
-            )
-        if extern_desc.module_id not in program.modules:
-            raise InvalidIrError(
-                f"ExternFunctionDescriptor for {fn_key!r} has"
-                f" module_id={extern_desc.module_id!r} which is not in program.modules"
-            )
-        for param in extern_desc.params:
-            if param.symbol not in program.symbols:
-                raise InvalidIrError(
-                    f"ExternFunctionDescriptor for {fn_key!r}: param symbol"
-                    f" {param.symbol!r} is not in program.symbols"
-                )
-            if param.default is not None:
-                _validate_expr(param.default, fn_ctx)
-        if len(extern_desc.params) != len(extern_desc.contract.params):
-            raise InvalidIrError(
-                f"ExternFunctionDescriptor for {fn_key!r} has {len(extern_desc.params)}"
-                f" IR params but its contract has {len(extern_desc.contract.params)}"
-                " boundary params"
-            )
-        _validate_extern_contract(fn_key, extern_desc.contract, fn_ctx)
+        match fn_desc.impl:
+            case IrFunctionBody(body=body):
+                _validate_expr(body, fn_ctx)
+            case ExternFunctionBody(contract=contract):
+                if len(fn_desc.params) != len(contract.params):
+                    raise InvalidIrError(
+                        f"FunctionDescriptor for {fn_key!r} has {len(fn_desc.params)}"
+                        f" IR params but its contract has {len(contract.params)}"
+                        " boundary params"
+                    )
+                _validate_extern_contract(fn_key, contract, fn_ctx)
+            case other:  # pragma: no cover
+                assert_never(other)
 
     # 5. params table — each IrParam must reference a registered symbol, and
     #    the default expression (if present) must be structurally valid.

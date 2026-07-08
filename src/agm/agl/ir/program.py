@@ -30,8 +30,10 @@ __all__ = [
     "DryRunEntry",
     "ExecutableModule",
     "ExecutableProgram",
-    "ExternFunctionDescriptor",
+    "ExternFunctionBody",
     "FunctionDescriptor",
+    "FunctionImpl",
+    "IrFunctionBody",
     "IrParam",
     "NominalDescriptor",
     "NominalKind",
@@ -133,44 +135,45 @@ class SourceFile:
 
 
 @dataclass(frozen=True, slots=True)
-class FunctionDescriptor:
-    """Descriptor for a user-defined function."""
+class IrFunctionBody:
+    """Ordinary function implementation: an AgL expression evaluated per call."""
 
-    function_id: FunctionId
-    function_symbol: SymbolId
-    module_id: ModuleId
-    params: "tuple[IrFunctionParam, ...]"
     body: IrExpr
-    param_labels: tuple[str, ...] = ()
-    result_label: str = "?"
 
 
 @dataclass(frozen=True, slots=True)
-class ExternFunctionDescriptor:
-    """Descriptor for an ``extern def`` — a Python FFI boundary function.
+class ExternFunctionBody:
+    """``extern def`` implementation: crosses into a companion Python module.
 
-    Unlike :class:`FunctionDescriptor`, an extern has no ``body``: invoking it
-    crosses into the companion Python module instead of evaluating an
-    ``IrExpr``.  ``function_id`` and ``function_symbol`` share the same id
-    spaces as ordinary functions — a given ``FunctionId``/``SymbolId`` lives
-    in exactly one of the two function tables.
-
-    ``name``           — the extern's declared name (identical in AgL and
-                          Python; ``runtime.externs.ExternRegistry`` resolves
-                          it positionally on the companion module).
-    ``contract``       — the compiled boundary contract (argument encode
-                          recipes + strict return decode), built from the
-                          checked signature at lowering.
+    ``name``     — the extern's declared name (identical in AgL and Python;
+                   ``runtime.externs.ExternRegistry`` resolves it positionally).
+    ``contract`` — the compiled boundary contract (per-parameter encode recipe +
+                   strict return decode), built from the checked signature at
+                   lowering.
     """
+
+    name: str
+    contract: ExternContract
+
+
+FunctionImpl = IrFunctionBody | ExternFunctionBody
+
+
+@dataclass(frozen=True, slots=True)
+class FunctionDescriptor:
+    """Descriptor for any callable — ordinary function or extern def."""
 
     function_id: FunctionId
     function_symbol: SymbolId
     module_id: ModuleId
-    name: str
     params: "tuple[IrFunctionParam, ...]"
-    contract: ExternContract
+    impl: FunctionImpl
     param_labels: tuple[str, ...] = ()
     result_label: str = "?"
+
+    @property
+    def is_extern(self) -> bool:
+        return isinstance(self.impl, ExternFunctionBody)
 
 
 # ---------------------------------------------------------------------------
@@ -271,10 +274,7 @@ class ExecutableProgram:
       ``symbols``      — map from ``SymbolId`` to ``SymbolDescriptor``.
       ``nominals``     — map from ``NominalId`` to ``NominalDescriptor``.
       ``sources``      — map from ``SourceId`` to ``SourceFile``.
-      ``functions``    — ordinary user-defined functions, keyed by ``FunctionId``.
-      ``externs``      — ``extern def`` boundary functions, keyed by
-                         ``FunctionId``.  Shares one id space with ``functions``:
-                         a given id lives in exactly one of the two tables.
+      ``functions``    — ordinary functions and externs, keyed by ``FunctionId``.
 
     """
 
@@ -284,7 +284,6 @@ class ExecutableProgram:
     nominals: dict[NominalId, NominalDescriptor]
     sources: dict[SourceId, SourceFile]
     functions: dict[FunctionId, FunctionDescriptor] = field(default_factory=dict)
-    externs: dict[FunctionId, ExternFunctionDescriptor] = field(default_factory=dict)
     params: tuple[IrParam, ...] = ()
     contracts: dict["ContractId", "ContractRequest"] = field(default_factory=dict)
     dry_run_inventory: "tuple[DryRunEntry, ...]" = ()

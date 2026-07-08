@@ -42,6 +42,7 @@ from agm.agl.ir import (
     IrConstUnit,
     IrDirectCall,
     IrField,
+    IrFunctionBody,
     IrFunctionParam,
     IrIndex,
     IrIndexStep,
@@ -968,7 +969,7 @@ def _make_fn_desc(
         function_symbol=fn_sym,
         module_id=mod_id,
         params=params,
-        body=IrConstInt(location=LOC, value=42),
+        impl=IrFunctionBody(body=IrConstInt(location=LOC, value=42)),
     )
 
 

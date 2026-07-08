@@ -40,6 +40,7 @@ from agm.agl.ir.nodes import (
 from agm.agl.ir.program import (
     ExecutableModule,
     ExecutableProgram,
+    IrFunctionBody,
     NominalDescriptor,
     NominalKind,
     SourceFile,
@@ -608,8 +609,9 @@ def test_lower_return_shape() -> None:
     prog = _lower(source)
     assert isinstance(prog, ExecutableProgram)
     desc = next(iter(prog.functions.values()))
-    assert isinstance(desc.body, IrBlock)
-    ir_return = desc.body.items[0]
+    assert isinstance(desc.impl, IrFunctionBody)
+    assert isinstance(desc.impl.body, IrBlock)
+    ir_return = desc.impl.body.items[0]
     assert isinstance(ir_return, IrReturn)
     assert isinstance(ir_return.value, IrConstInt)
 

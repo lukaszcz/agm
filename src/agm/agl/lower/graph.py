@@ -240,7 +240,6 @@ def lower_graph(
         nominals=dict(link.nominals),
         sources=dict(link.sources),
         functions=dict(link.functions),
-        externs=dict(link.externs),
         params=tuple(entry_lowerer._params),
         contracts=dict(link.contracts),
         dry_run_inventory=dry_run_inventory,

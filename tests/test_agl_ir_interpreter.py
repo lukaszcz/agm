@@ -49,6 +49,7 @@ from agm.agl.ir import (
     IrDirectCall,
     IrExpr,
     IrField,
+    IrFunctionBody,
     IrFunctionParam,
     IrIndex,
     IrIndexStep,
@@ -1350,7 +1351,7 @@ def _make_fn_descriptor(
         function_symbol=_FN_SID,
         module_id=ENTRY_ID,
         params=params,
-        body=body,
+        impl=IrFunctionBody(body=body),
     )
 
 
@@ -1493,7 +1494,7 @@ class TestFunctionEvaluation:
             function_symbol=g_sid,
             module_id=ENTRY_ID,
             params=(),
-            body=g_body,
+            impl=IrFunctionBody(body=g_body),
         )
 
         g_call_loc = _loc_at_line(5)  # the g(...) call site inside f
@@ -1754,7 +1755,7 @@ class TestIndirectCallInterpreterDefensivePaths:
             function_symbol=fn2_sid,
             module_id=ENTRY_ID,
             params=(),
-            body=body,
+            impl=IrFunctionBody(body=body),
         )
         symbols = {
             fn2_sid: SymbolDescriptor(

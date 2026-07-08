@@ -12,7 +12,7 @@ from pathlib import Path
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.eval.ir_interpreter import IrInterpreter
 from agm.agl.ir.ids import SymbolId
-from agm.agl.ir.program import ExecutableProgram
+from agm.agl.ir.program import ExecutableProgram, ExternFunctionBody
 from agm.agl.lower import lower_program
 from agm.agl.lower.graph import lower_graph
 from agm.agl.modules.ids import ModuleId
@@ -153,10 +153,11 @@ def _prepare_extern_program(
     )
     registry = ExternRegistry()
     loaded: set[ModuleId] = set()
-    for desc in executable.externs.values():
-        if desc.module_id not in loaded:
-            registry.load_companion(desc.module_id, companion_path)
-            loaded.add(desc.module_id)
+    for desc in executable.functions.values():
+        if not isinstance(desc.impl, ExternFunctionBody) or desc.module_id in loaded:
+            continue
+        registry.load_companion(desc.module_id, companion_path)
+        loaded.add(desc.module_id)
     return executable, registry
 
 

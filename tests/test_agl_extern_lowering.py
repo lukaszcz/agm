@@ -2,8 +2,8 @@
 
 Covers everything from a checked program/graph to the linked
 ``ExecutableProgram`` for `extern def`:
-- an extern lowers to an ``ExternFunctionDescriptor`` in ``program.externs``
-  (never ``program.functions``), with a closure-initialization binding
+- an extern lowers to a ``FunctionDescriptor`` in ``program.functions`` with an
+  ``ExternFunctionBody`` implementation and a closure-initialization binding
   identical in shape to an ordinary function's.
 - default expressions lower to ``IrExpr``s on the descriptor's params.
 - direct and first-class (indirect) calls to an extern lower through the
@@ -11,9 +11,8 @@ Covers everything from a checked program/graph to the linked
 - whole-graph lowering keeps ids consistent between an extern-bearing
   library module and the entry module that calls it.
 - the dry-run inventory carries a row per extern call site.
-- ``validate_ir`` accepts the shared function-id space between
-  ``program.functions``/``program.externs`` and rejects every way it can be
-  broken (aliasing, dangling references, an inconsistent boundary contract).
+- ``validate_ir`` accepts the unified function table and rejects dangling
+  references or an inconsistent boundary contract.
 
 NO interpreter dispatch is exercised here — evaluating a program that calls
 an extern is out of scope until dispatch lands (a later stage of this
@@ -31,6 +30,7 @@ from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir import (
     ExecutableModule,
     ExecutableProgram,
+    ExternFunctionBody,
     FunctionDescriptor,
     FunctionId,
     IrBind,
@@ -58,7 +58,6 @@ from agm.agl.ir.contracts import (
     ExternParamSchema,
     ScalarKind,
 )
-from agm.agl.ir.program import ExternFunctionDescriptor
 from agm.agl.ir.validate import InvalidIrError, validate_ir
 from agm.agl.lower import lower_program
 from agm.agl.lower.graph import lower_graph
@@ -112,9 +111,15 @@ def _lower_source(
     )
 
 
-def _only_extern(executable: ExecutableProgram) -> ExternFunctionDescriptor:
-    assert len(executable.externs) == 1
-    return next(iter(executable.externs.values()))
+def _only_extern(executable: ExecutableProgram) -> FunctionDescriptor:
+    externs = [desc for desc in executable.functions.values() if desc.is_extern]
+    assert len(externs) == 1
+    return externs[0]
+
+
+def _extern_impl(desc: FunctionDescriptor) -> ExternFunctionBody:
+    assert isinstance(desc.impl, ExternFunctionBody)
+    return desc.impl
 
 
 # ---------------------------------------------------------------------------
@@ -125,9 +130,8 @@ def _only_extern(executable: ExecutableProgram) -> ExternFunctionDescriptor:
 class TestExternDescriptor:
     def test_extern_produces_a_descriptor_not_a_function(self) -> None:
         executable = _lower_source("extern def f(x: int) -> int\nf(1)")
-        assert executable.functions == {}
         desc = _only_extern(executable)
-        assert desc.name == "f"
+        assert _extern_impl(desc).name == "f"
         assert desc.result_label == "int"
         assert desc.param_labels == ("int",)
         assert len(desc.params) == 1
@@ -135,11 +139,12 @@ class TestExternDescriptor:
     def test_contract_matches_the_declared_signature(self) -> None:
         executable = _lower_source("extern def f(x: int) -> int\nf(1)")
         desc = _only_extern(executable)
-        assert desc.contract.params == (
+        contract = _extern_impl(desc).contract
+        assert contract.params == (
             ExternParamSchema(label="int", schema=BoundaryScalar(ScalarKind.INT)),
         )
-        assert desc.contract.result == BoundaryScalar(ScalarKind.INT)
-        assert desc.contract.result_label == "int"
+        assert contract.result == BoundaryScalar(ScalarKind.INT)
+        assert contract.result_label == "int"
 
     def test_private_extern_is_unexported_but_lowers_the_same(self) -> None:
         executable = _lower_source("private extern def f(x: int) -> int\nf(1)")
@@ -288,18 +293,20 @@ def _extern_desc(
     module_id: ModuleId = MOD_A,
     params: "tuple[IrFunctionParam, ...] | None" = None,
     contract: ExternContract | None = None,
-) -> ExternFunctionDescriptor:
-    return ExternFunctionDescriptor(
+) -> FunctionDescriptor:
+    return FunctionDescriptor(
         function_id=function_id,
         function_symbol=function_symbol,
         module_id=module_id,
-        name="f",
         params=(
             params
             if params is not None
             else (IrFunctionParam(symbol=SYM_EXT_PARAM, default=None),)
         ),
-        contract=contract if contract is not None else _extern_contract(),
+        impl=ExternFunctionBody(
+            name="f",
+            contract=contract if contract is not None else _extern_contract(),
+        ),
     )
 
 
@@ -316,7 +323,6 @@ def _default_symbols() -> dict[SymbolId, SymbolDescriptor]:
 
 def _make_program(
     *,
-    externs: "dict[FunctionId, ExternFunctionDescriptor] | None" = None,
     functions: "dict[FunctionId, FunctionDescriptor] | None" = None,
     symbols: "dict[SymbolId, SymbolDescriptor] | None" = None,
     initializers: tuple = (),
@@ -331,8 +337,7 @@ def _make_program(
         symbols=symbols if symbols is not None else _default_symbols(),
         nominals={NOM0: nom_desc},
         sources={SID0: sf},
-        functions=functions or {},
-        externs=externs if externs is not None else {FN_EXT: _extern_desc()},
+        functions=functions if functions is not None else {FN_EXT: _extern_desc()},
     )
 
 
@@ -363,7 +368,7 @@ class TestValidatorAcceptsAWellFormedExternProgram:
         call = IrDirectCall(
             location=LOC, function_id=FN_EXT, arguments=(UseDefault(param_index=0),)
         )
-        validate_ir(_make_program(externs={FN_EXT: extern}, initializers=(call,)))
+        validate_ir(_make_program(functions={FN_EXT: extern}, initializers=(call,)))
 
     def test_every_boundary_schema_shape_is_walked_without_error(self) -> None:
         """One extern whose signature exercises every BoundarySchema variant.
@@ -383,58 +388,49 @@ class TestValidatorAcceptsAWellFormedExternProgram:
             "0"
         )
         executable = _lower_source(source)
-        assert len(executable.externs) == 1
+        extern_count = sum(
+            1 for desc in executable.functions.values() if isinstance(desc.impl, ExternFunctionBody)
+        )
+        assert extern_count == 1
 
 
 class TestValidatorNegatives:
-    def test_function_id_in_both_tables_is_rejected(self) -> None:
-        fn_desc = FunctionDescriptor(
-            function_id=FN_EXT,
-            function_symbol=SYM_EXT_FN,
-            module_id=MOD_A,
-            params=(),
-            body=IrConstInt(location=LOC, value=1),
-        )
-        program = _make_program(functions={FN_EXT: fn_desc})
-        with pytest.raises(InvalidIrError, match="both"):
-            validate_ir(program)
-
     def test_extern_function_id_key_mismatch_is_rejected(self) -> None:
         bad = _extern_desc(function_id=FunctionId(value=1))
-        program = _make_program(externs={FN_EXT: bad})
+        program = _make_program(functions={FN_EXT: bad})
         with pytest.raises(InvalidIrError, match="mismatch"):
             validate_ir(program)
 
     def test_extern_function_symbol_must_be_registered(self) -> None:
         bad = _extern_desc(function_symbol=SymbolId(value=999))
         with pytest.raises(InvalidIrError, match="function_symbol"):
-            validate_ir(_make_program(externs={FN_EXT: bad}))
+            validate_ir(_make_program(functions={FN_EXT: bad}))
 
     def test_extern_module_id_must_be_registered(self) -> None:
         bad = _extern_desc(module_id=ModuleId.from_dotted("nope"))
         with pytest.raises(InvalidIrError, match="module_id"):
-            validate_ir(_make_program(externs={FN_EXT: bad}))
+            validate_ir(_make_program(functions={FN_EXT: bad}))
 
     def test_extern_param_symbol_must_be_registered(self) -> None:
         bad_param = IrFunctionParam(symbol=SymbolId(value=999), default=None)
         bad = _extern_desc(params=(bad_param,))
         with pytest.raises(InvalidIrError, match="param symbol"):
-            validate_ir(_make_program(externs={FN_EXT: bad}))
+            validate_ir(_make_program(functions={FN_EXT: bad}))
 
     def test_extern_contract_param_count_must_match_ir_params(self) -> None:
         bad = _extern_desc(contract=_extern_contract(n_params=2))
         with pytest.raises(InvalidIrError, match="boundary params"):
-            validate_ir(_make_program(externs={FN_EXT: bad}))
+            validate_ir(_make_program(functions={FN_EXT: bad}))
 
     def test_seal_var_not_declared_in_type_params_is_rejected(self) -> None:
         bad = _extern_desc(contract=_extern_contract(result=BoundarySealVar("T")))
         with pytest.raises(InvalidIrError, match="T"):
-            validate_ir(_make_program(externs={FN_EXT: bad}))
+            validate_ir(_make_program(functions={FN_EXT: bad}))
 
     def test_boundaryref_to_unknown_defs_key_is_rejected(self) -> None:
         bad = _extern_desc(contract=_extern_contract(result=BoundaryRef("missing")))
         with pytest.raises(InvalidIrError, match="unknown defs key"):
-            validate_ir(_make_program(externs={FN_EXT: bad}))
+            validate_ir(_make_program(functions={FN_EXT: bad}))
 
     def test_boundaryref_cycle_is_rejected(self) -> None:
         # A defs key that only refs itself never reaches a body.
@@ -442,7 +438,7 @@ class TestValidatorNegatives:
             result=BoundaryRef("a"), defs=(("a", BoundaryRef("a")),)
         )
         with pytest.raises(InvalidIrError, match="cycle"):
-            validate_ir(_make_program(externs={FN_EXT: _extern_desc(contract=contract)}))
+            validate_ir(_make_program(functions={FN_EXT: _extern_desc(contract=contract)}))
 
     def test_duplicate_defs_key_is_rejected(self) -> None:
         contract = _extern_contract(
@@ -452,7 +448,7 @@ class TestValidatorNegatives:
             )
         )
         with pytest.raises(InvalidIrError, match="duplicate"):
-            validate_ir(_make_program(externs={FN_EXT: _extern_desc(contract=contract)}))
+            validate_ir(_make_program(functions={FN_EXT: _extern_desc(contract=contract)}))
 
     def test_direct_call_arg_count_mismatch_against_extern_is_rejected(self) -> None:
         call = IrDirectCall(location=LOC, function_id=FN_EXT, arguments=())
@@ -469,7 +465,7 @@ class TestValidatorNegatives:
 
     def test_direct_call_to_unknown_function_id_is_rejected(self) -> None:
         call = IrDirectCall(location=LOC, function_id=FunctionId(value=999), arguments=())
-        with pytest.raises(InvalidIrError, match="not in program.functions or program.externs"):
+        with pytest.raises(InvalidIrError, match="not in program.functions"):
             validate_ir(_make_program(initializers=(call,)))
 
     def test_closure_reference_to_unknown_function_id_is_rejected(self) -> None:
@@ -478,7 +474,7 @@ class TestValidatorNegatives:
             symbol=SYM_EXT_FN,
             value=IrMakeClosure(location=LOC, function_id=FunctionId(value=999), captures=()),
         )
-        with pytest.raises(InvalidIrError, match="not in program.functions or program.externs"):
+        with pytest.raises(InvalidIrError, match="not in program.functions"):
             validate_ir(_make_program(initializers=(bind,)))
 
     def test_symbol_owned_by_unknown_function_id_is_rejected(self) -> None:
@@ -489,5 +485,5 @@ class TestValidatorNegatives:
             public_name=None,
             owner=FunctionId(value=999),
         )
-        with pytest.raises(InvalidIrError, match="not in program.functions or program.externs"):
+        with pytest.raises(InvalidIrError, match="not in program.functions"):
             validate_ir(_make_program(symbols=symbols))

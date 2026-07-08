@@ -74,6 +74,8 @@ def _build_indirect_extern_call_program(tmp_path: Path, call_args: tuple[int, ..
     from agm.agl.ir import (
         ExecutableModule,
         ExecutableProgram,
+        ExternFunctionBody,
+        FunctionDescriptor,
         FunctionId,
         IrBind,
         IrConstInt,
@@ -93,7 +95,6 @@ def _build_indirect_extern_call_program(tmp_path: Path, call_args: tuple[int, ..
         ExternParamSchema,
         ScalarKind,
     )
-    from agm.agl.ir.program import ExternFunctionDescriptor
     from agm.agl.modules.ids import ENTRY_ID
     from agm.agl.runtime.externs import ExternRegistry
 
@@ -117,16 +118,15 @@ def _build_indirect_extern_call_program(tmp_path: Path, call_args: tuple[int, ..
         type_params=(),
         result_label="int",
     )
-    extern_desc = ExternFunctionDescriptor(
+    extern_desc = FunctionDescriptor(
         function_id=fn_id,
         function_symbol=fn_sym,
         module_id=ENTRY_ID,
-        name="inc",
         params=(
             IrFunctionParam(symbol=SymbolId(4), default=None),
             IrFunctionParam(symbol=SymbolId(5), default=IrConstInt(loc, 1)),
         ),
-        contract=contract,
+        impl=ExternFunctionBody(name="inc", contract=contract),
     )
 
     symbols = {
@@ -160,8 +160,7 @@ def _build_indirect_extern_call_program(tmp_path: Path, call_args: tuple[int, ..
         symbols=symbols,
         nominals={},
         sources={source_id: SourceFile(display_name="<test>", normalized_text="x")},
-        functions={},
-        externs={fn_id: extern_desc},
+        functions={fn_id: extern_desc},
     )
 
     registry = ExternRegistry()

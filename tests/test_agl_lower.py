@@ -74,7 +74,7 @@ from agm.agl.ir.operations import (
     ToJson,
     UnaryOp,
 )
-from agm.agl.ir.program import ExecutableProgram
+from agm.agl.ir.program import ExecutableProgram, FunctionDescriptor, IrFunctionBody
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower import LinkImage, compile_coercion, lower_program, lower_repl_entry
 from agm.agl.lower.lowerer import _Lowerer
@@ -162,6 +162,11 @@ def _lower(source: str, *, validate: bool = True) -> ExecutableProgram:
         source_label="<test>",
         validate=validate,
     )
+
+
+def _function_body(desc: FunctionDescriptor) -> object:
+    assert isinstance(desc.impl, IrFunctionBody)
+    return desc.impl.body
 
 
 def _make_lowerer(checked: CheckedProgram, source: str) -> "_Lowerer":
@@ -1244,7 +1249,7 @@ class TestLowerFunctions:
         assert len(prog.functions) == 1
         # Verify the function body lowered to an IrTry with a bound handler
         fn_desc = next(iter(prog.functions.values()))
-        body = fn_desc.body
+        body = _function_body(fn_desc)
         if isinstance(body, IrBlock):
             ir_try = next((item for item in body.items if isinstance(item, IrTry)), None)
             assert ir_try is not None, "Expected an IrTry node in function body IrBlock"
@@ -1267,8 +1272,9 @@ class TestLowerFunctions:
         # The function body is a block: [IrPrint(...), IrArith(x + 1)]
         from agm.agl.ir.nodes import IrBlock
 
-        assert isinstance(fn_desc.body, IrBlock)
-        assert any(isinstance(item, IrPrint) for item in fn_desc.body.items)
+        body = _function_body(fn_desc)
+        assert isinstance(body, IrBlock)
+        assert any(isinstance(item, IrPrint) for item in body.items)
 
     def test_indirect_call_via_let_binding_lowers_to_indirect_call(self) -> None:
         """Calling a let-bound function reference lowers to IrIndirectCall."""
@@ -1479,7 +1485,7 @@ class TestLambdaLowering:
         fn_id = bind.value.function_id
         desc = prog.functions[fn_id]
         # Body is the param load (int -> int, no coercion needed since identity type)
-        assert desc.body is not None
+        assert _function_body(desc) is not None
 
     def test_lambda_body_result_coerced(self) -> None:
         """Lambda body is lowered with lower_coerced so int-to-decimal coercion is baked in."""
@@ -1492,8 +1498,9 @@ class TestLambdaLowering:
         fn_id = bind.value.function_id
         desc = prog.functions[fn_id]
         # The body must be an IrCoerce (int → decimal) wrapping an IrLoad
-        assert isinstance(desc.body, IrCoerce), (
-            f"Expected IrCoerce for int->decimal body, got {type(desc.body).__name__}"
+        body = _function_body(desc)
+        assert isinstance(body, IrCoerce), (
+            f"Expected IrCoerce for int->decimal body, got {type(body).__name__}"
         )
 
     def test_lambda_private_function_symbol(self) -> None:
@@ -1974,7 +1981,7 @@ class TestLambdaCapturePositive:
             for d in prog.functions.values()
             if prog.symbols[d.function_symbol].public_name == "make_fn"
         )
-        body = make_fn_desc.body
+        body = _function_body(make_fn_desc)
         assert isinstance(body, IrBlock)
         # Find the IrMakeClosure in the function body (the nested lambda)
         lambda_closure: IrMakeClosure | None = None
@@ -2012,7 +2019,7 @@ class TestLambdaCapturePositive:
             for d in prog.functions.values()
             if prog.symbols[d.function_symbol].public_name == "make_fn"
         )
-        body = make_fn_desc.body
+        body = _function_body(make_fn_desc)
         assert isinstance(body, IrBlock)
         lambda_closure = None
         for item in body.items:
@@ -2048,7 +2055,7 @@ class TestLambdaCapturePositive:
             for d in prog.functions.values()
             if prog.symbols[d.function_symbol].public_name == "make_fn"
         )
-        body = make_fn_desc.body
+        body = _function_body(make_fn_desc)
         assert isinstance(body, IrBlock)
         lambda_closure = None
         for item in body.items:
@@ -2402,7 +2409,7 @@ class TestIrMakeExceptionLowering:
             for d in prog.functions.values()
             if prog.symbols[d.function_symbol].public_name == "stop_fn"
         )
-        body = stop_desc.body
+        body = _function_body(stop_desc)
         # Indented function body is wrapped in an IrBlock; unwrap if needed.
         if isinstance(body, IrBlock):
             for item in body.items:
@@ -3140,7 +3147,7 @@ class TestRangeForDesugar:
             for d in prog.functions.values()
             if prog.symbols[d.function_symbol].public_name == "make_fn"
         )
-        body = make_fn_desc.body
+        body = _function_body(make_fn_desc)
         assert isinstance(body, IrBlock)
         # The nested lambda _g lowers to IrBind(_g, IrMakeClosure(...)).
         g_closure: IrMakeClosure | None = None

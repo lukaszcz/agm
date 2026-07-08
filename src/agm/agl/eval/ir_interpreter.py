@@ -117,7 +117,12 @@ from agm.agl.ir.operations import (
     ToJson,
     UnaryOp,
 )
-from agm.agl.ir.program import ExecutableProgram, ExternFunctionDescriptor, FunctionDescriptor
+from agm.agl.ir.program import (
+    ExecutableProgram,
+    ExternFunctionBody,
+    FunctionDescriptor,
+    IrFunctionBody,
+)
 from agm.agl.ir.validate import InvalidIrError
 from agm.agl.modules.ids import ModuleId
 from agm.agl.runtime.agents import AgentRegistry
@@ -512,6 +517,7 @@ class IrInterpreter:
     def _bind_and_invoke(
         self,
         desc: "FunctionDescriptor",
+        body: IrExpr,
         closure_val: IrClosureValue,
         bound_values: list[Value],
     ) -> Value:
@@ -530,7 +536,7 @@ class IrInterpreter:
         self._call_depth += 1
         try:
             try:
-                result = self._eval(desc.body)
+                result = self._eval(body)
             except _ReturnSignal as signal:
                 result = signal.value
         finally:
@@ -548,11 +554,7 @@ class IrInterpreter:
                     symbol=sym,
                     value=IrMakeClosure(function_id=fn_id, captures=()) as closure_node,
                 ):
-                    desc: "FunctionDescriptor | ExternFunctionDescriptor | None" = (
-                        self._program.functions.get(fn_id)
-                    )
-                    if desc is None:
-                        desc = self._program.externs.get(fn_id)
+                    desc = self._program.functions.get(fn_id)
                     if desc is None or desc.function_symbol != sym:
                         continue
                     value = self._eval(closure_node)
@@ -602,38 +604,40 @@ class IrInterpreter:
         AgL frame to recurse into).  Otherwise: depth check → evaluate
         arguments (``UseDefault`` uses a captures frame) → ``_bind_and_invoke``.
         """
-        extern_desc = self._program.externs.get(fn_id)
-        if extern_desc is not None:
-            extern_bound_values: list[Value] = []
-            for param, arg in zip(extern_desc.params, arguments, strict=True):
-                val = (
-                    self._eval_extern_default(param)
-                    if isinstance(arg, UseDefault)
-                    else self._eval(arg)
-                )
-                extern_bound_values.append(val)
-            return self._effects.eval_extern_call(extern_desc, extern_bound_values)
-
-        self._check_call_depth()
         desc = self._program.functions[fn_id]
-        closure_val = self._get_closure_for(fn_id)
+        match desc.impl:
+            case ExternFunctionBody() as extern:
+                extern_bound_values: list[Value] = []
+                for param, arg in zip(desc.params, arguments, strict=True):
+                    val = (
+                        self._eval_extern_default(param)
+                        if isinstance(arg, UseDefault)
+                        else self._eval(arg)
+                    )
+                    extern_bound_values.append(val)
+                return self._effects.eval_extern_call(desc.module_id, extern, extern_bound_values)
+            case IrFunctionBody(body=body):
+                self._check_call_depth()
+                closure_val = self._get_closure_for(fn_id)
 
-        bound_values: list[Value] = []
-        for param, arg in zip(desc.params, arguments, strict=True):
-            if isinstance(arg, UseDefault):
-                assert param.default is not None, (
-                    "UseDefault arg but param has no default (lowerer bug)"
-                )
-                self._frames.append(dict(closure_val.captures))
-                try:
-                    val = self._eval(param.default)
-                finally:
-                    self._frames.pop()
-            else:
-                val = self._eval(arg)
-            bound_values.append(val)
+                bound_values: list[Value] = []
+                for param, arg in zip(desc.params, arguments, strict=True):
+                    if isinstance(arg, UseDefault):
+                        assert param.default is not None, (
+                            "UseDefault arg but param has no default (lowerer bug)"
+                        )
+                        self._frames.append(dict(closure_val.captures))
+                        try:
+                            val = self._eval(param.default)
+                        finally:
+                            self._frames.pop()
+                    else:
+                        val = self._eval(arg)
+                    bound_values.append(val)
 
-        return self._bind_and_invoke(desc, closure_val, bound_values)
+                return self._bind_and_invoke(desc, body, closure_val, bound_values)
+            case other:  # pragma: no cover
+                assert_never(other)
 
     def _execute_indirect_call(
         self,
@@ -685,47 +689,48 @@ class IrInterpreter:
                 " expected IrClosureValue"
             )
 
-        extern_desc = self._program.externs.get(callee_val.function_id)
-        if extern_desc is not None:
-            extern_bound_values: list[Value] = []
-            for i, param in enumerate(extern_desc.params):
-                if i < len(arguments):
-                    val = self._eval(arguments[i])
-                elif param.default is not None:
-                    val = self._eval_extern_default(param)
-                else:
-                    raise InvalidIrError(
-                        f"IrIndirectCall: missing argument for parameter {i!r}"
-                        " and no default available (lowerer bug)"
-                    )
-                extern_bound_values.append(val)
-            return self._effects.eval_extern_call(extern_desc, extern_bound_values)
-
         desc = self._program.functions[callee_val.function_id]
+        match desc.impl:
+            case ExternFunctionBody() as extern:
+                extern_bound_values: list[Value] = []
+                for i, param in enumerate(desc.params):
+                    if i < len(arguments):
+                        val = self._eval(arguments[i])
+                    elif param.default is not None:
+                        val = self._eval_extern_default(param)
+                    else:
+                        raise InvalidIrError(
+                            f"IrIndirectCall: missing argument for parameter {i!r}"
+                            " and no default available (lowerer bug)"
+                        )
+                    extern_bound_values.append(val)
+                return self._effects.eval_extern_call(desc.module_id, extern, extern_bound_values)
+            case IrFunctionBody(body=body):
+                self._check_call_depth()
 
-        self._check_call_depth()
+                # Evaluate each positional argument in the CALLER frame (no coercion).
+                bound_values: list[Value] = []
+                for i, param in enumerate(desc.params):
+                    if i < len(arguments):
+                        val = self._eval(arguments[i])
+                    elif param.default is not None:
+                        # Defensive: evaluate default in a captures frame.
+                        captures_frame: Frame = dict(callee_val.captures)
+                        self._frames.append(captures_frame)
+                        try:
+                            val = self._eval(param.default)
+                        finally:
+                            self._frames.pop()
+                    else:
+                        raise InvalidIrError(
+                            f"IrIndirectCall: missing argument for parameter {i!r}"
+                            " and no default available (lowerer bug)"
+                        )
+                    bound_values.append(val)
 
-        # Evaluate each positional argument in the CALLER frame (no coercion).
-        bound_values: list[Value] = []
-        for i, param in enumerate(desc.params):
-            if i < len(arguments):
-                val = self._eval(arguments[i])
-            elif param.default is not None:
-                # Defensive: evaluate default in a captures frame.
-                captures_frame: Frame = dict(callee_val.captures)
-                self._frames.append(captures_frame)
-                try:
-                    val = self._eval(param.default)
-                finally:
-                    self._frames.pop()
-            else:
-                raise InvalidIrError(
-                    f"IrIndirectCall: missing argument for parameter {i!r}"
-                    " and no default available (lowerer bug)"
-                )
-            bound_values.append(val)
-
-        return self._bind_and_invoke(desc, callee_val, bound_values)
+                return self._bind_and_invoke(desc, body, callee_val, bound_values)
+            case other:  # pragma: no cover
+                assert_never(other)
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -820,11 +825,7 @@ class IrInterpreter:
     def _eval_initializer(self, node: IrExpr) -> Value:
         match node:
             case IrBind(symbol=sym, value=IrMakeClosure(function_id=fn_id)):
-                desc: "FunctionDescriptor | ExternFunctionDescriptor | None" = (
-                    self._program.functions.get(fn_id)
-                )
-                if desc is None:
-                    desc = self._program.externs.get(fn_id)
+                desc = self._program.functions.get(fn_id)
                 if desc is not None and desc.function_symbol == sym:
                     slot = self._frames[0].get(sym)
                     if slot is not None:
@@ -1309,11 +1310,10 @@ class IrInterpreter:
                     else:
                         val = slot.value if isinstance(slot, Cell) else slot
                         cap_slots.append((cap.symbol, val))
-                function_desc: "FunctionDescriptor | ExternFunctionDescriptor | None" = (
-                    self._program.functions.get(fn_id)
+                function_desc = self._program.functions.get(fn_id)
+                assert function_desc is not None, (
+                    f"IrMakeClosure references unknown function id {fn_id.value!r}"
                 )
-                if function_desc is None:
-                    function_desc = self._program.externs[fn_id]
                 return IrClosureValue(
                     function_id=fn_id,
                     captures=tuple(cap_slots),

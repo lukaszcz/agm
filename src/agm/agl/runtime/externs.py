@@ -364,8 +364,8 @@ def decode_boundary_value(
     Mirrors :func:`encode_boundary_value`'s recursion in the opposite
     direction, with exactly these tolerances: a Python ``int`` widens to a
     declared ``decimal``; ``bool`` is rejected where ``int``/``decimal`` is
-    declared (``bool`` is an ``int`` subclass); ``float`` is never accepted
-    anywhere; every nominal shape (record/exception field set, enum
+    declared (``bool`` is an ``int`` subclass); ``float`` is never accepted;
+    containers must be exact built-in ``list``/``dict`` instances; every nominal shape
     ``$case`` and its fields) is matched exactly (missing, extra, or
     misnamed fields and unknown variants are rejected).  A type-variable
     leaf requires a :class:`SealedHandle` carrying this call's token for
@@ -385,9 +385,9 @@ def decode_boundary_value(
                 raise BoundaryViolation(f"expected unit (None), got {_typename(obj)}")
             return UnitValue()
         case BoundaryList(element=elem_schema):
-            if not isinstance(obj, list):
+            if type(obj) is not list:
                 raise BoundaryViolation(f"expected a list, got {_typename(obj)}")
-            items: list[object] = obj
+            items = cast(list[object], obj)
             marker = _enter_container(items, active_containers, "list")
             try:
                 return ListValue(
@@ -401,9 +401,9 @@ def decode_boundary_value(
             finally:
                 active_containers.remove(marker)
         case BoundaryDict(value=val_schema):
-            if not isinstance(obj, dict):
+            if type(obj) is not dict:
                 raise BoundaryViolation(f"expected a dict, got {_typename(obj)}")
-            mapping: dict[object, object] = obj
+            mapping = cast(dict[object, object], obj)
             marker = _enter_container(mapping, active_containers, "dict")
             try:
                 entries: dict[str, Value] = {}
@@ -483,9 +483,9 @@ def decode_boundary_value(
 
 def _expect_object(obj: object, display_name: str) -> dict[str, object]:
     """Return *obj* as a ``str``-keyed dict, or raise ``BoundaryViolation``."""
-    if not isinstance(obj, dict):
+    if type(obj) is not dict:
         raise BoundaryViolation(f"expected an object for {display_name!r}, got {_typename(obj)}")
-    mapping: dict[object, object] = obj
+    mapping = cast(dict[object, object], obj)
     result: dict[str, object] = {}
     for k, v in mapping.items():
         if not isinstance(k, str):
@@ -562,7 +562,10 @@ def _decode_scalar(kind: ScalarKind, obj: object) -> Value:
         case ScalarKind.JSON:
             if not _is_json_shaped(obj):
                 raise BoundaryViolation(f"expected a JSON-shaped value, got {_typename(obj)}")
-            return JsonValue(copy.deepcopy(obj))
+            try:
+                return JsonValue(copy.deepcopy(obj))
+            except Exception as exc:
+                raise BoundaryViolation(f"could not copy JSON-shaped value: {exc}") from exc
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 
@@ -570,9 +573,10 @@ def _decode_scalar(kind: ScalarKind, obj: object) -> Value:
 def _is_json_shaped(obj: object, active: set[int] | None = None) -> bool:
     """Return whether *obj* lies in the closed JSON-shape domain.
 
-    ``dict``/``list``/``str``/``int``/:class:`~decimal.Decimal`/``bool``/
-    ``None`` recursively; anything else (a ``float``, a :class:`SealedHandle`,
-    an arbitrary object) is rejected.
+    Exact built-in ``dict``/``list`` plus ``str``/``int``/
+    :class:`~decimal.Decimal`/``bool``/``None`` recursively; anything else
+    (a ``float``, a :class:`SealedHandle`, an arbitrary object, or a
+    ``dict``/``list`` subclass) is rejected.
     """
     if active is None:
         active = set()
@@ -580,8 +584,8 @@ def _is_json_shaped(obj: object, active: set[int] | None = None) -> bool:
         return obj.is_finite()
     if obj is None or isinstance(obj, (bool, str, int)):
         return True
-    if isinstance(obj, list):
-        items: list[object] = obj
+    if type(obj) is list:
+        items = cast(list[object], obj)
         marker = id(items)
         if marker in active:
             return False
@@ -590,8 +594,8 @@ def _is_json_shaped(obj: object, active: set[int] | None = None) -> bool:
             return all(_is_json_shaped(e, active) for e in items)
         finally:
             active.remove(marker)
-    if isinstance(obj, dict):
-        mapping: dict[object, object] = obj
+    if type(obj) is dict:
+        mapping = cast(dict[object, object], obj)
         marker = id(mapping)
         if marker in active:
             return False
@@ -780,6 +784,13 @@ class ExternRegistry:
         except BoundaryViolation as exc:
             raise _extern_error(
                 function_name, f"return value violates contract: {exc}", trace_id, python_type=""
+            ) from exc
+        except Exception as exc:
+            raise _extern_error(
+                function_name,
+                f"return value validation failed: {exc}",
+                trace_id,
+                python_type=type(exc).__name__,
             ) from exc
 
 

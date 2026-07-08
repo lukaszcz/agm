@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import decimal
 import sys
+from collections.abc import Iterator
 from decimal import Decimal
 from pathlib import Path
 
@@ -742,6 +743,23 @@ class TestInvoke:
         registry = ExternRegistry()
         with pytest.raises(AglRaise) as excinfo:
             registry.invoke("f", contract, fn, [IntValue(1)], "trace-4")
+        exc = excinfo.value.exc
+        assert exc.display_name == "ExternError"
+        assert exc.fields["python_type"] == TextValue("")
+
+    def test_list_subclass_return_is_a_contract_violation(self) -> None:
+        contract = build_contract("extern def f() -> list[int]\n0")
+
+        class BadList(list[object]):
+            def __iter__(self) -> Iterator[object]:
+                raise RuntimeError("iteration should not escape")
+
+        def fn() -> object:
+            return BadList([1])
+
+        registry = ExternRegistry()
+        with pytest.raises(AglRaise) as excinfo:
+            registry.invoke("f", contract, fn, [], "trace-list-subclass")
         exc = excinfo.value.exc
         assert exc.display_name == "ExternError"
         assert exc.fields["python_type"] == TextValue("")

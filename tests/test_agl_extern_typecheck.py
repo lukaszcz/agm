@@ -479,6 +479,30 @@ class TestExternCallSiteRecording:
         assert sites[0].codec_name == "extern"
         assert sites[0].target_type == IntType()
 
+    def test_graph_mode_same_named_externs_from_different_modules_are_not_collapsed(
+        self, tmp_path: Path
+    ) -> None:
+        write_companion_file(tmp_path / "root", "left", "def f(x):\n    return x\n")
+        write_companion_file(tmp_path / "root", "right", "def f(x):\n    return x\n")
+        checked = check_extern_graph(
+            tmp_path,
+            {
+                "entry": (
+                    "import left as l\n"
+                    "import right as r\n"
+                    "let h: (int) -> int = if true => l::f | else => r::f\n"
+                    "h(1)"
+                ),
+                "left": "extern def f(x: int) -> int",
+                "right": "extern def f(x: int) -> int",
+            },
+        )
+        entry_module = checked.modules[checked.entry_id]
+        sites = [s for s in entry_module.call_sites if s.callee == "f"]
+        assert len(sites) == 2
+        assert {s.line for s in sites} == {4}
+        assert {s.target_type for s in sites} == {IntType()}
+
     def test_graph_mode_own_module_extern_call_recorded(self, tmp_path: Path) -> None:
         write_companion_file(tmp_path / "root", "lib.mod", "def f(x):\n    return x\n")
         checked = check_extern_graph(

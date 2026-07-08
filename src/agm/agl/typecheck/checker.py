@@ -42,10 +42,12 @@ from __future__ import annotations
 import keyword
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Literal, TypeGuard, assert_never
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
+from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.symbols import (
     BUILTIN_CALL_NAMES,
     BinderKind,
@@ -167,6 +169,19 @@ from agm.agl.typecheck.env import (
 # Built-in function names that user-defined defs may not shadow. Derived from
 # the single source of truth in ``scope.symbols`` so the two never drift.
 _BUILTIN_FUNC_NAMES: frozenset[str] = frozenset(BUILTIN_CALL_NAMES)
+
+
+@dataclass(frozen=True, slots=True)
+class _ExternTarget:
+    """Extern identity carried by first-class function provenance."""
+
+    name: str
+    result_type: Type
+    decl_node_id: int
+    module_id: ModuleId
+
+
+_ExternTargets = tuple[_ExternTarget, ...]
 
 
 _IndexLike = IndexAccess | IndexTarget
@@ -380,8 +395,8 @@ class _Checker:
         # Extern provenance for first-class function values.  A value can name
         # one or more externs (e.g. through a branch); when such a function
         # value is actually called, dry-run inventory records that call site.
-        self._extern_expr_targets: dict[int, tuple[tuple[str, Type], ...]] = {}
-        self._extern_binding_targets: dict[int, tuple[tuple[str, Type], ...]] = {}
+        self._extern_expr_targets: dict[int, _ExternTargets] = {}
+        self._extern_binding_targets: dict[int, _ExternTargets] = {}
         self._builtins = BuiltinCallChecker(self)
         self._constructors = ConstructorChecker(self)
         # Function return contexts. The top entry is either an annotated expected
@@ -389,7 +404,7 @@ class _Checker:
         # operand types in inference mode.
         self._return_expected_stack: list[Type | None] = []
         self._return_collected_stack: list[list[Type]] = []
-        self._return_extern_targets_stack: list[list[tuple[str, Type]]] = []
+        self._return_extern_targets_stack: list[list[_ExternTarget]] = []
 
     # ------------------------------------------------------------------
     # required-after-defaulted check (shared by def and lambda)
@@ -1283,7 +1298,7 @@ class _Checker:
         )
 
     def _set_extern_expr_targets(
-        self, node_id: int, targets: tuple[tuple[str, Type], ...]
+        self, node_id: int, targets: _ExternTargets
     ) -> None:
         """Record or clear extern provenance for a function-valued expression."""
         if targets:
@@ -1292,7 +1307,7 @@ class _Checker:
             self._extern_expr_targets.pop(node_id, None)
 
     def _set_extern_binding_targets(
-        self, node_id: int, targets: tuple[tuple[str, Type], ...]
+        self, node_id: int, targets: _ExternTargets
     ) -> None:
         """Record or clear extern provenance for a function-valued binding."""
         if targets:
@@ -1302,10 +1317,10 @@ class _Checker:
 
     @staticmethod
     def _merge_extern_targets(
-        *target_groups: Sequence[tuple[str, Type]],
-    ) -> tuple[tuple[str, Type], ...]:
+        *target_groups: Sequence[_ExternTarget],
+    ) -> _ExternTargets:
         """Merge extern provenance groups in source order, removing duplicates."""
-        merged: list[tuple[str, Type]] = []
+        merged: list[_ExternTarget] = []
         for targets in target_groups:
             for target in targets:
                 if target not in merged:
@@ -1314,19 +1329,19 @@ class _Checker:
 
     def _extern_targets_for_expr(
         self, expr: Expr, result_type: Type
-    ) -> tuple[tuple[str, Type], ...]:
+    ) -> _ExternTargets:
         """Return extern provenance for a function-valued expression result."""
         if not isinstance(result_type, FunctionType):
             return ()
         return self._extern_expr_targets.get(expr.node_id, ())
 
-    def _current_return_extern_targets(self) -> tuple[tuple[str, Type], ...]:
+    def _current_return_extern_targets(self) -> _ExternTargets:
         """Return merged extern provenance from the active return context."""
         if not self._return_extern_targets_stack:
             return ()
         return tuple(self._return_extern_targets_stack[-1])
 
-    def _record_return_extern_targets(self, targets: tuple[tuple[str, Type], ...]) -> None:
+    def _record_return_extern_targets(self, targets: _ExternTargets) -> None:
         """Accumulate returned function provenance for the active function/lambda."""
         if not targets or not self._return_extern_targets_stack:
             return
@@ -1337,7 +1352,7 @@ class _Checker:
 
     def _extern_targets_for_ref(
         self, ref: BindingRef, typ: Type
-    ) -> tuple[tuple[str, Type], ...]:
+    ) -> _ExternTargets:
         """Return extern call targets represented by a resolved value reference."""
         if ref.kind is BinderKind.function_binding and self._env.is_extern_node_id(
             ref.decl_node_id
@@ -1345,12 +1360,19 @@ class _Checker:
             assert isinstance(typ, FunctionType), (
                 f"extern binding {ref.name!r} has non-function type {typ!r}"
             )
-            return ((ref.name, typ.result),)
+            return (
+                _ExternTarget(
+                    name=ref.name,
+                    result_type=typ.result,
+                    decl_node_id=ref.decl_node_id,
+                    module_id=ref.module_id,
+                ),
+            )
         return self._extern_binding_targets.get(ref.decl_node_id, ())
 
     def _extern_targets_for_function_exprs(
         self, exprs: Sequence[Expr], result_type: Type
-    ) -> tuple[tuple[str, Type], ...]:
+    ) -> _ExternTargets:
         """Merge extern provenance from branches of a function-valued expression."""
         if not isinstance(result_type, FunctionType):
             return ()
@@ -1436,7 +1458,7 @@ class _Checker:
                     node,
                     node.callee.name,
                     expected=expected,
-                    callee_node_id=callee_ref.decl_node_id,
+                    callee_ref=callee_ref,
                     hole_indices=hole_indices,
                 )
             if (
@@ -1695,7 +1717,7 @@ class _Checker:
         func_name: str,
         *,
         expected: Type | None,
-        callee_node_id: int,
+        callee_ref: BindingRef,
         hole_indices: Mapping[int, int],
     ) -> Type:
         # Use the node-id-keyed lookup populated by the function-signature pre-pass
@@ -1704,7 +1726,7 @@ class _Checker:
         # where two modules define functions with identical names but different
         # signatures, which would cause the name-keyed table to return the wrong
         # signature for a qualified cross-module call.
-        sig = self._env.get_function_signature_by_node_id(callee_node_id)
+        sig = self._env.get_function_signature_by_node_id(callee_ref.decl_node_id)
         if sig is None:
             raise AglTypeError(
                 f"Cannot infer return type of function '{func_name}' before it is checked. "
@@ -1740,7 +1762,7 @@ class _Checker:
         # own-module AND imported (graph-mode) externs alike. A partial call
         # only builds a function value, so carry extern provenance forward and
         # record the eventual invocation site instead.
-        if self._env.is_extern_node_id(callee_node_id):
+        if self._env.is_extern_node_id(callee_ref.decl_node_id):
             extern_target_type = (
                 result_type.result
                 if hole_indices and isinstance(result_type, FunctionType)
@@ -1748,13 +1770,21 @@ class _Checker:
             )
             if hole_indices:
                 self._set_extern_expr_targets(
-                    node.node_id, ((func_name, extern_target_type),)
+                    node.node_id,
+                    (
+                        _ExternTarget(
+                            name=func_name,
+                            result_type=extern_target_type,
+                            decl_node_id=callee_ref.decl_node_id,
+                            module_id=callee_ref.module_id,
+                        ),
+                    ),
                 )
             else:
                 self._record_extern_call_site(node, func_name, extern_target_type)
         elif isinstance(result_type, FunctionType):
             self._set_extern_expr_targets(
-                node.node_id, self._extern_binding_targets.get(callee_node_id, ())
+                node.node_id, self._extern_binding_targets.get(callee_ref.decl_node_id, ())
             )
 
         return result_type
@@ -1815,12 +1845,20 @@ class _Checker:
         result_type = self._call_result_type(params, callee_type.result, binding, hole_indices)
         extern_targets = self._extern_expr_targets.get(node.callee.node_id, ())
         if extern_targets:
-            invocation_targets = tuple((callee, callee_type.result) for callee, _ in extern_targets)
+            invocation_targets = tuple(
+                _ExternTarget(
+                    name=target.name,
+                    result_type=callee_type.result,
+                    decl_node_id=target.decl_node_id,
+                    module_id=target.module_id,
+                )
+                for target in extern_targets
+            )
             if hole_indices:
                 self._set_extern_expr_targets(node.node_id, invocation_targets)
             else:
-                for callee, target_type in invocation_targets:
-                    self._record_extern_call_site(node, callee, target_type)
+                for target in invocation_targets:
+                    self._record_extern_call_site(node, target.name, target.result_type)
         return result_type
 
     # --- Lambda ---

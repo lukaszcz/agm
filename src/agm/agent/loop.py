@@ -164,6 +164,8 @@ def loop_env(tasks_dir: Path, *, task_file: Path | None = None) -> dict[str, str
     env["TASKS_DIR"] = str(tasks_dir)
     if task_file is not None:
         env["TASK_FILE"] = str(task_file)
+    else:
+        env.pop("TASK_FILE", None)
     return env
 
 

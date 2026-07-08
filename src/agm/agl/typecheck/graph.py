@@ -99,6 +99,7 @@ from agm.agl.typecheck.env import (
     GenericTypeDef,
     OutputContractSpec,
     ParamSpec,
+    PartialCallSpec,
     TypeEnvironment,
 )
 
@@ -149,6 +150,7 @@ class CheckedModule:
     type_env: TypeEnvironment
     source_text: str
     argument_bindings: ArgumentBindings
+    partial_calls: dict[int, PartialCallSpec]
 
 
 @dataclass(frozen=True, slots=True)
@@ -803,6 +805,7 @@ def _check_module(
         type_env=cp.type_env,
         source_text=source_text,
         argument_bindings=cp.argument_bindings,
+        partial_calls=cp.partial_calls,
     )
 
 

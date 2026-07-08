@@ -129,6 +129,29 @@ enum Option[T]
 let e: Option[int] = none          # T inferred from the annotation
 ```
 
+Partial application placeholders participate in the same inference. Non-hole
+arguments constrain type parameters first; if an expected function type is
+available, its parameter types constrain the placeholder positions and its
+result type constrains the call result. If any type parameter remains unknown,
+use `::[…]` to pin the instantiation explicitly:
+
+```agl
+def id[T](x: T) -> T = x
+
+def singleton[T](x: T) -> list[T] = [x]
+
+def map_one[A, B](f: (A) -> B, xs: list[A]) -> list[B] = [f(xs[0])]
+
+let keep_ints: (list[int]) -> list[int] = map_one(id, ?)
+print(keep_ints([5])[0])        # 5
+
+let make_single: (int) -> list[int] = singleton(?)
+print(make_single(7)[0])        # 7
+
+let make_text = singleton::[text](?)
+print(make_text("hi")[0])       # hi
+```
+
 ## Constructors as values; generic constructor values
 
 Record constructors and enum variants are **ordinary value bindings** (see

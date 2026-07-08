@@ -83,6 +83,7 @@ from agm.agl.syntax import (
     ParamDecl,
     ParamKind,
     PatternField,
+    Placeholder,
     Program,
     ProgramDecl,
     Raise,
@@ -1294,6 +1295,75 @@ class TestCalls:
         call = first(parse("f(1, 2,)"))
         assert isinstance(call, Call)
         assert len(call.args) == 2
+
+    def test_paren_call_bare_placeholders(self) -> None:
+        call = first(parse("f(?, x, ?)"))
+        assert isinstance(call, Call)
+        assert len(call.args) == 3
+        first_arg = call.args[0]
+        assert isinstance(first_arg, Placeholder)
+        assert first_arg.index is None
+        assert isinstance(call.args[1], VarRef)
+        third_arg = call.args[2]
+        assert isinstance(third_arg, Placeholder)
+        assert third_arg.index is None
+
+    def test_paren_call_numbered_placeholders(self) -> None:
+        call = first(parse("f(?2, x, ?1)"))
+        assert isinstance(call, Call)
+        assert len(call.args) == 3
+        first_arg = call.args[0]
+        assert isinstance(first_arg, Placeholder)
+        assert first_arg.index == 2
+        third_arg = call.args[2]
+        assert isinstance(third_arg, Placeholder)
+        assert third_arg.index == 1
+
+    def test_named_arg_placeholder_value(self) -> None:
+        call = first(parse("f(x = ?)"))
+        assert isinstance(call, Call)
+        assert len(call.named_args) == 1
+        bare = call.named_args[0].value
+        assert isinstance(bare, Placeholder)
+        assert bare.index is None
+
+        numbered = first(parse("f(x = ?2, y = ?1)"))
+        assert isinstance(numbered, Call)
+        assert len(numbered.named_args) == 2
+        x_value = numbered.named_args[0].value
+        y_value = numbered.named_args[1].value
+        assert isinstance(x_value, Placeholder)
+        assert isinstance(y_value, Placeholder)
+        assert x_value.index == 2
+        assert y_value.index == 1
+
+    def test_placeholder_parse_errors_outside_call_argument_position(self) -> None:
+        for src in ("f(? + 1)", "f ?", "?"):
+            with pytest.raises(AglSyntaxError, match="placeholder"):
+                parse(src)
+
+    def test_identifier_ending_in_question_mark_not_reported_as_placeholder(self) -> None:
+        """A name ending in ``?`` before an unrelated syntax error must not be
+        misclassified as a misplaced placeholder — ``?`` is a valid identifier
+        character (predicate names like ``empty?``)."""
+        for src in ("let y = foo?]", "x == empty?)"):
+            with pytest.raises(AglSyntaxError) as excinfo:
+                parse(src)
+            assert "placeholder" not in str(excinfo.value)
+
+    @pytest.mark.parametrize(
+        ("src", "match"),
+        [
+            ("f(?, ?1)", "mix"),
+            ("f(?1, ?3)", "gap"),
+            ("f(?1, ?1)", "repeat"),
+            ("f(?0)", "positive"),
+            ("f(?01)", "leading zero"),
+        ],
+    )
+    def test_placeholder_shape_errors(self, src: str, match: str) -> None:
+        with pytest.raises(AglSyntaxError, match=match):
+            parse(src)
 
     def test_unit_call(self) -> None:
         """f() with no args produces a Call with empty args (not a UnitLit)."""

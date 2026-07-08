@@ -70,8 +70,8 @@ and or not is in to downto by true false null
 
 **`as?`** is a single reserved keyword/token — the `?` is part of the
 lexeme. There is no whitespace permitted between `as` and `?`; with
-whitespace, `as` is the cast keyword and `?` starts a separate operator name.
-`as?` is always reserved and cannot be used as an identifier.
+whitespace, `as` is the cast keyword and `?` starts a separate placeholder
+spelling. `as?` is always reserved and cannot be used as an identifier.
 
 `agent` is reserved (it leads an `agent` declaration) but is accepted
 as a **field name** (record/enum field definitions, named constructor
@@ -168,8 +168,21 @@ Unicode punctuation or symbol characters, except AgL structural delimiters:
 parentheses, brackets, braces, `:`, `,`, `.`, `;`, quotes, `@`, `#`, and `_`.
 Exact reserved operator and punctuation tokens such as `=`, `==`, `!=`, `<`,
 `<=`, `>`, `>=`, `->`, `=>`, `:=`, `::`, `+`, `-`, `*`, `/`, `|`, `.`, `:`,
-and `@` keep their syntactic meaning. Non-reserved standalone runs such as
-`==>`, `>>`, `|>`, `<|`, `>=>`, `%$`, `%?`, `~`, and `⊕` are operator names.
+and `@` keep their syntactic meaning.
+
+The placeholder spellings `?` and `?<digits>` (for example `?1` and `?12`)
+are also reserved tokens. They are used only as whole call arguments for
+partial application ([Functions](functions.md#partial-application)). The
+numbered form requires the digits to be immediately adjacent: `?1` is one
+numbered placeholder token, while `? 1` is a bare `?` placeholder followed by
+an integer literal. A standalone `?` is therefore not available as a user
+operator name. Longer operator-name runs that merely contain `?`, such as
+`??`, `?=`, `%?`, and `>=>`, are still ordinary `OP_NAME` tokens, and
+word-starting identifiers containing `?` after the first character, such as
+`valid?` and `ask?`, are unaffected.
+
+Non-reserved standalone runs such as `==>`, `>>`, `|>`, `<|`, `>=>`, `%$`,
+`%?`, `~`, and `⊕` are operator names.
 
 AgL has two lexical classes of identifier: `NAME` and `OP_NAME`. Both are
 ordinary names in declaration and reference positions, so they can name
@@ -219,6 +232,11 @@ disambiguation.
 | `a + b` | `NAME "a"`, `PLUS "+"`, `NAME "b"` | spaces break the identifier, `+` is an operator |
 | `n*x` | `NAME "n*x"` | one identifier (`*` is not a delimiter) |
 | `foo"bar` | `NAME "foo\"bar"` | one identifier (`"` is not a delimiter) |
+| `valid?` | `NAME "valid?"` | one identifier (`?` is allowed after the first character) |
+| `?` | `PLACEHOLDER "?"` | reserved placeholder spelling, not an operator name |
+| `?1` | `PLACEHOLDER_NUM "?1"` | numbered placeholder; no whitespace before the digits |
+| `? 1` | `PLACEHOLDER "?"`, `INT "1"` | not a numbered placeholder |
+| `??` | `OP_NAME "??"` | longer `?`-containing operator names are unaffected |
 
 This mirrors a Lisp-like maximal-munch identifier rule: scan for as long as
 possible until a disallowed character.  Use spaces around operators when you

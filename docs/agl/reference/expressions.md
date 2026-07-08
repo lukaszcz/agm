@@ -270,9 +270,12 @@ function values stored in bindings:
 ```ebnf
 call_expr ::= postfix_expr type_args? "(" arg_list? ")"
 type_args ::= "::" "[" type_expr ("," type_expr)* "]"
-arg_list  ::= arg ("," arg)* ","?
-arg       ::= expr                  (* positional *)
-            | NAME "=" expr         (* named *)
+arg_list        ::= arg ("," arg)* ","?
+arg             ::= expr                         (* positional *)
+                  | placeholder_arg              (* positional hole *)
+                  | NAME "=" expr                (* named *)
+                  | NAME "=" placeholder_arg     (* named hole *)
+placeholder_arg ::= "?" | "?<digits>"
 ```
 
 **Single-argument sugar.** When there is exactly one positional argument and
@@ -296,9 +299,9 @@ With user-defined symbolic infix operators, `OP_NAME` after an expression is an
 operator position. To pass an operator-name value as a call argument, use
 parentheses: `print(>>)`.
 
-For details on named arguments, defaults, and function types, see
-[Functions](functions.md). For `ask`'s named parameters, see
-[Agent calls](agent-calls.md).
+For details on named arguments, defaults, function types, and partial
+application with placeholder arguments, see [Functions](functions.md). For
+`ask`'s named parameters, see [Agent calls](agent-calls.md).
 
 ## `print`
 

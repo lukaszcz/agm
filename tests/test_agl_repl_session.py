@@ -115,6 +115,18 @@ class TestPersistence:
         assert r.value is not None
         assert _int(r.value) == 8
 
+    def test_partial_application_closure_persists_into_next_entry(self) -> None:
+        s = ReplSession()
+
+        r1 = s.eval_entry("def add(x: int, y: int) -> int = x + y\nlet add1 = add(1, ?)")
+        assert r1.ok, r1.diagnostics
+        r2 = s.eval_entry("add1(2)")
+
+        assert r2.ok, r2.diagnostics
+        assert r2.kind == "expression"
+        assert r2.value is not None
+        assert _int(r2.value) == 3
+
 
 # ---------------------------------------------------------------------------
 # Standard library

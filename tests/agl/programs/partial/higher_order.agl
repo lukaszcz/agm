@@ -1,0 +1,24 @@
+# Partial applications flow directly into higher-order functions, including nested calls.
+param mode: text
+param base: int
+
+def add(a: int, b: int) -> int = a + b
+
+def apply_int(x: int, f: (int) -> int) -> int = f(x)
+
+def combine(f: (int) -> int, value: int) -> int = f(value) + value
+
+def choose(flag: bool, yes: (int) -> int, no: (int) -> int, value: int) -> int =
+  if flag => yes(value) else => no(value)
+
+if
+  | mode == "direct" =>
+      print(apply_int(base, add(?, 3)))
+      print(apply_int(base, add(3, ?)))
+  | mode == "nested" =>
+      let nested = combine(add(?, 1), ?)
+      print(nested(base))
+      print(combine(add(?, base), ?)(2))
+  | else =>
+      print(choose(base > 5, add(?, 10), add(?, 1), base))
+      print(choose(base < 5, add(10, ?), add(1, ?), base))

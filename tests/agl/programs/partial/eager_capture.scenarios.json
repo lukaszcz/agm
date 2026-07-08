@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "non_hole_evaluated_once",
+      "params": {"mode": "non_hole", "base": 0},
+      "expect": {"stdout": "1\n11\n21\n1\n"}
+    },
+    {
+      "name": "var_value_captured_before_mutation",
+      "params": {"mode": "var_value", "base": 10},
+      "expect": {"stdout": "11\n99\n"}
+    },
+    {
+      "name": "left_to_right_capture",
+      "params": {"mode": "order", "base": 7},
+      "expect": {"stdout": "1\n17\n18\n1\n"}
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+# Non-hole arguments and variable values are captured when the partial application is created.
+param mode: text
+param base: int
+
+var counter = 0
+var current = base
+
+def tick() -> int =
+  counter := counter + 1
+  counter
+
+def add(a: int, b: int) -> int = a + b
+
+def digits(a: int, b: int) -> int = a * 10 + b
+
+if
+  | mode == "non_hole" =>
+      let add_tick = add(?, tick())
+      print(counter)
+      print(add_tick(10))
+      print(add_tick(20))
+      print(counter)
+  | mode == "var_value" =>
+      let add_current = add(?, current)
+      current := 99
+      print(add_current(1))
+      print(current)
+  | else =>
+      let captured_order = digits(tick(), ?)
+      print(counter)
+      print(captured_order(base))
+      print(captured_order(base + 1))
+      print(counter)

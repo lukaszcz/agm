@@ -1,0 +1,26 @@
+# Value-call partial application covers let-bound functions, lambdas, and chaining.
+param mode: text
+param base: int
+
+def add(a: int, b: int) -> int = a + b
+
+def digits3(a: int, b: int, c: int) -> int = a * 100 + b * 10 + c
+
+let add_value: (int, int) -> int = add
+let lambda_value = fn(x: int, y: int) -> int => x * 10 + y
+let add_base = add_value(?, base)
+let lambda_left = lambda_value(?, base)
+let partial_digits = digits3(?, 1, ?)
+let finish_digits = partial_digits(?, base)
+
+if
+  | mode == "values" =>
+      print(add_base(3))
+      print(lambda_left(4))
+  | mode == "direct_chain" =>
+      print(add(?, 1)(base))
+      print(digits3(?, base, 9)(2))
+  | else =>
+      print(finish_digits(7))
+      let stored = add(?, 1)
+      print(stored(base))

@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "let_bound_function_and_lambda",
+      "params": {"mode": "values", "base": 6},
+      "expect": {"stdout": "9\n46\n"}
+    },
+    {
+      "name": "immediate_chaining",
+      "params": {"mode": "direct_chain", "base": 5},
+      "expect": {"stdout": "6\n259\n"}
+    },
+    {
+      "name": "partial_result_stored_then_called",
+      "params": {"mode": "stored", "base": 8},
+      "expect": {"stdout": "718\n9\n"}
+    }
+  ]
+}

@@ -7,10 +7,16 @@ public ``tokenize`` helper.  No scanner/layout internals are tested.
 from __future__ import annotations
 
 import pytest
-from lark.lexer import LexerState
+from lark.lexer import LexerState, TextSlice
 
 from agm.agl.diagnostics import Diagnostic
-from agm.agl.lexer import AglLexer, LexError, lex_tab_warnings, tokenize
+from agm.agl.lexer import (
+    AglLexer,
+    LexError,
+    lex_tab_warnings,
+    tab_warning_collector,
+    tokenize,
+)
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -331,6 +337,36 @@ class TestOperators:
     def test_maximal_munch_neq_vs_bang(self) -> None:
         result = tok("!=")
         assert result == [("NEQ", "!=")]
+
+
+class TestPlaceholderTokens:
+    def test_bare_question_is_placeholder(self) -> None:
+        assert tok("?") == [("PLACEHOLDER", "?")]
+
+    def test_numbered_placeholders_include_digit_run(self) -> None:
+        assert tok("?1 ?10 ?01 ?0") == [
+            ("PLACEHOLDER_NUM", "?1"),
+            ("PLACEHOLDER_NUM", "?10"),
+            ("PLACEHOLDER_NUM", "?01"),
+            ("PLACEHOLDER_NUM", "?0"),
+        ]
+
+    def test_space_prevents_numbered_placeholder(self) -> None:
+        assert tok("? 1") == [("PLACEHOLDER", "?"), ("INT", "1")]
+
+    def test_question_operator_names_still_work_when_longer(self) -> None:
+        assert tok("?? ?= -?") == [
+            ("OP_NAME", "??"),
+            ("OP_NAME", "?="),
+            ("OP_NAME", "-?"),
+        ]
+
+    def test_question_containing_identifiers_are_unchanged(self) -> None:
+        assert tok("valid?") == [("NAME", "valid?")]
+        assert tok("as?") == [("as?", "as?")]
+
+    def test_bare_question_is_not_op_name(self) -> None:
+        assert ("OP_NAME", "?") not in tok("?")
 
 
 class TestIndexBracketRemap:
@@ -1180,6 +1216,25 @@ class TestAglLexerClass:
         assert "EQ" in types
         assert "INT" in types
 
+    def test_agl_lexer_accepts_text_slice_state(self) -> None:
+        lexer = AglLexer(None)
+        state = LexerState(TextSlice("let x = 1", 0, 9))
+        result = list(lexer.lex(state, None))
+        assert [(t.type, str(t)) for t in result] == [
+            ("LET", "let"),
+            ("NAME", "x"),
+            ("EQ", "="),
+            ("INT", "1"),
+        ]
+
+    def test_tab_warning_collector_receives_lexer_warnings(self) -> None:
+        lexer = AglLexer(None)
+        state = LexerState("let\tx = 1")
+        with tab_warning_collector() as warnings:
+            list(lexer.lex(state, None))
+        assert len(warnings) == 1
+        assert warnings[0].line == 1
+
 
 class TestAgLSnippets:
     def test_let_declaration(self) -> None:
@@ -1223,6 +1278,19 @@ class TestAgLSnippets:
         assert "RSQB" in types
         assert "until" in types
         assert "true" in types
+
+    def test_do_suite_without_explicit_terminator_gets_done(self) -> None:
+        assert tok("do\n  pass") == [
+            ("do", "do"),
+            ("_INDENT", ""),
+            ("NAME", "pass"),
+            ("_DEDENT", ""),
+            ("done", "done"),
+        ]
+
+    def test_open_bracket_after_do_starts_inline_body(self) -> None:
+        result = tok("do(1)\n  pass")
+        assert ("done", "done") not in result
 
     def test_if_branch_statement(self) -> None:
         source = "if x =>\n  pass\n| else =>\n  pass"
@@ -2208,8 +2276,8 @@ class TestAsQuestionKeyword:
     def test_as_space_question_is_not_as_question(self) -> None:
         # `as ?` (spaced) is NOT the test operator: only the contiguous lexeme
         # `as?` is the keyword. With a space, `as` scans as the keyword and `?`
-        # scans as a separate operator name.
-        assert tok("as ?") == [("as", "as"), ("OP_NAME", "?")]
+        # scans as a placeholder token.
+        assert tok("as ?") == [("as", "as"), ("PLACEHOLDER", "?")]
         # And `as` followed by an ordinary word stays the keyword, not `as?`.
         assert lark_tok("as x") == [("AS", "as"), ("NAME", "x")]
 
@@ -2325,6 +2393,24 @@ class TestModuleSystemLexer:
         types = [t for t, _ in result]
         assert "MODQUAL" not in types
         assert "DCOLON" in types
+
+    def test_export_using_in_export_line(self) -> None:
+        result = tok("export foo using bar")
+        assert result == [
+            ("EXPORT", "export"),
+            ("MODPATH", "foo"),
+            ("USING", "using"),
+            ("NAME", "bar"),
+        ]
+
+    def test_export_hiding_in_export_line(self) -> None:
+        result = tok("export foo hiding bar")
+        assert result == [
+            ("EXPORT", "export"),
+            ("MODPATH", "foo"),
+            ("HIDING", "hiding"),
+            ("NAME", "bar"),
+        ]
 
     def test_import_in_lark_token_stream(self) -> None:
         # After remap, 'import' at item-start becomes IMPORT in the parser stream

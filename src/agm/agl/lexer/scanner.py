@@ -66,6 +66,8 @@ from agm.agl.lexer.tokens import (
     NEWLINE,
     OP_NAME,
     PIPE,
+    PLACEHOLDER,
+    PLACEHOLDER_NUM,
     PLUS,
     RBRACE,
     RPAR,
@@ -160,6 +162,7 @@ _RESERVED_OPERATOR_NAMES: dict[str, str] = {
     "-": MINUS,
     ":=": ASSIGN,
     "::": DCOLON,
+    "?": PLACEHOLDER,
     **_SINGLE_OPS,
 }
 
@@ -806,6 +809,18 @@ class _Scanner:
             return
         if ch == "'":
             yield from self._scan_template(start_pos, start_line, start_col, quote="'")
+            return
+
+        if ch == "?" and _is_ascii_digit(self._peek()):
+            while not self._at_end() and _is_ascii_digit(self._peek()):
+                self._advance()
+            yield self._make_token(
+                PLACEHOLDER_NUM,
+                self._src[start_pos:self._pos],
+                start_pos,
+                start_line,
+                start_col,
+            )
             return
 
         if _is_operator_name_char(ch):

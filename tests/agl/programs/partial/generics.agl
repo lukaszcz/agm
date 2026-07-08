@@ -1,0 +1,39 @@
+# Generic callees can use concrete arguments and expected function types to solve holes.
+param mode: text
+param n: int
+
+def id[T](x: T) -> T = x
+
+def singleton[T](x: T) -> list[T] = [x]
+
+def map_one[A, B](f: (A) -> B, xs: list[A]) -> list[B] = [f(xs[0])]
+
+def apply[A, B](x: A, f: (A) -> B) -> B = f(x)
+
+def tag[T](label: int, x: T) -> T = x
+
+if
+  | mode == "concrete" =>
+      # A generic callee with a fixed concrete-typed argument: the hole's type is
+      # solved from the expected function type while the bound `int` argument stays
+      # concrete.
+      let keep: (text) -> text = tag(n, ?)
+      print(keep("kept"))
+  | mode == "map" =>
+      let map_id: (list[int]) -> list[int] = map_one(id, ?)
+      let mapped = map_id([n])
+      print(mapped[0])
+      let map_render = map_one(fn(x: int) -> text => "v=${x}", ?)
+      let rendered = map_render([3])
+      print(rendered[0])
+  | mode == "expected" =>
+      let make_single: (int) -> list[int] = singleton(?)
+      let result = make_single(n)
+      print(result[0])
+      let int_id: (int) -> int = id(?)
+      print(int_id(n + 1))
+  | else =>
+      let apply_text: (text) -> text = apply(?, id)
+      print(apply_text("kept"))
+      let typed_map = map_one::[int, int](id::[int], ?)
+      print(typed_map([n + 2])[0])

@@ -221,6 +221,18 @@ class NamedArg:
 
 
 @dataclass(frozen=True, slots=True)
+class Placeholder:
+    """A call-argument placeholder.
+
+    ``index`` is ``None`` for a bare placeholder and 1-based for a numbered one.
+    """
+
+    index: int | None
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
 class BinaryOp:
     """A binary operation: ``left op right``."""
 
@@ -715,6 +727,7 @@ Expr = (
     | FieldAccess
     | IndexAccess
     | Template
+    | Placeholder
     | BinaryOp
     | UnaryNot
     | UnaryNeg

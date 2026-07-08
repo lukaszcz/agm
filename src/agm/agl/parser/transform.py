@@ -58,9 +58,15 @@ from agm.agl.syntax.types import (
 
 # Types used internally
 _NamedArgList = list[syntax.NamedArg]
-_ArgLists: TypeAlias = tuple[list[syntax.Expr], list[syntax.NamedArg]]
-_JuxtCall: TypeAlias = tuple[tuple[TypeExpr, ...], _ArgLists]
-_JuxtSuffix: TypeAlias = tuple[str, str] | tuple[str, syntax.Expr] | tuple[str, _JuxtCall]
+
+
+@dataclass(frozen=True, slots=True)
+class _RawPlaceholder:
+    """Transformer-internal placeholder argument before call-level validation."""
+
+    raw_digits: str | None
+    span: SourceSpan
+
 
 # ---------------------------------------------------------------------------
 # Transformer-internal marker sentinel (never leaks into the AST)
@@ -117,6 +123,21 @@ class _RawInfixChain:
     span: SourceSpan
 
 
+@dataclass(frozen=True, slots=True)
+class _RawNamedArg:
+    """Transformer-internal named argument whose value may be a placeholder."""
+
+    name: str
+    value: _RawPlaceholder
+    span: SourceSpan
+
+
+_RawPosArg: TypeAlias = syntax.Expr | _RawPlaceholder | _RawInfixChain
+_RawNamed: TypeAlias = syntax.NamedArg | _RawNamedArg
+_RawArgLists: TypeAlias = tuple[list[_RawPosArg], list[_RawNamed]]
+_ArgLists: TypeAlias = tuple[list[syntax.Expr], list[syntax.NamedArg]]
+_JuxtCall: TypeAlias = tuple[tuple[TypeExpr, ...], _ArgLists]
+_JuxtSuffix: TypeAlias = tuple[str, str] | tuple[str, syntax.Expr] | tuple[str, _JuxtCall]
 _RawItem: TypeAlias = syntax.Item | _RawInfixChain
 
 
@@ -1093,20 +1114,23 @@ class AstBuilder(Transformer):
         if isinstance(callee, syntax.TypeApply):
             type_args = callee.type_args
             callee = callee.expr
-        pos_args: list[syntax.Expr] = []
-        named_args: list[syntax.NamedArg] = []
+        raw_pos_args: list[_RawPosArg] = []
+        raw_named_args: list[_RawNamed] = []
         for a in args[1:]:
             if isinstance(a, tuple) and len(a) == 2 and isinstance(a[0], list):
-                pa, na = cast(tuple[list[syntax.Expr], list[syntax.NamedArg]], a)
-                pos_args = pa
-                named_args = na
+                pa, na = cast(_RawArgLists, a)
+                raw_pos_args = pa
+                raw_named_args = na
             # Tokens (LPAR, RPAR) and None are skipped
 
         span = self._span_from_meta(meta)
+        pos_args, named_args = self._finalize_call_args(
+            raw_pos_args, raw_named_args, call_span=span
+        )
         return syntax.Call(
             callee=callee,
-            args=tuple(pos_args),
-            named_args=tuple(named_args),
+            args=pos_args,
+            named_args=named_args,
             span=span,
             node_id=self._next_id(),
             type_args=type_args,
@@ -1217,13 +1241,20 @@ class AstBuilder(Transformer):
         index_expr = cast(syntax.Expr, next(a for a in args if _is_expr_node(a)))
         return ("index", index_expr)
 
-    def juxt_call_suffix(self, meta: Meta, args: _Args) -> _JuxtSuffix:
-        """juxt_suffix: LPAR arg_list? RPAR -> juxt_call_suffix."""
-        arg_lists: _ArgLists = ([], [])
+    def _juxt_finalized_arg_lists(self, meta: Meta, args: _Args) -> _ArgLists:
+        """Validate and finalize the raw arg-list under a juxtaposition call suffix."""
         for arg in args:
             if isinstance(arg, tuple) and len(arg) == 2 and isinstance(arg[0], list):
-                arg_lists = cast(_ArgLists, arg)
-        return ("call", ((), arg_lists))
+                raw_pos_args, raw_named_args = cast(_RawArgLists, arg)
+                final_pos, final_named = self._finalize_call_args(
+                    raw_pos_args, raw_named_args, call_span=self._span_from_meta(meta)
+                )
+                return ([*final_pos], [*final_named])
+        return ([], [])
+
+    def juxt_call_suffix(self, meta: Meta, args: _Args) -> _JuxtSuffix:
+        """juxt_suffix: LPAR arg_list? RPAR -> juxt_call_suffix."""
+        return ("call", ((), self._juxt_finalized_arg_lists(meta, args)))
 
     def juxt_typed_call_suffix(self, meta: Meta, args: _Args) -> _JuxtSuffix:
         """juxt_suffix: DCOLON LSQB type_arg_list RSQB LPAR arg_list? RPAR."""
@@ -1240,11 +1271,7 @@ class AstBuilder(Transformer):
                 (),
             ),
         )
-        arg_lists: _ArgLists = ([], [])
-        for arg in args:
-            if isinstance(arg, tuple) and len(arg) == 2 and isinstance(arg[0], list):
-                arg_lists = cast(_ArgLists, arg)
-        return ("typed_call", (type_args_val, arg_lists))
+        return ("typed_call", (type_args_val, self._juxt_finalized_arg_lists(meta, args)))
 
     def type_apply(self, meta: Meta, args: _Args) -> syntax.TypeApply:
         """Apply explicit type arguments to a value without calling it."""
@@ -1269,25 +1296,122 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
+    def _finalize_call_args(
+        self,
+        pos_args: list[_RawPosArg],
+        named_args: list[_RawNamed],
+        *,
+        call_span: SourceSpan,
+    ) -> tuple[tuple[syntax.Expr, ...], tuple[syntax.NamedArg, ...]]:
+        placeholders: list[_RawPlaceholder] = []
+        for arg in pos_args:
+            if isinstance(arg, _RawPlaceholder):
+                placeholders.append(arg)
+        for named_arg in named_args:
+            if isinstance(named_arg, _RawNamedArg) and isinstance(
+                named_arg.value, _RawPlaceholder
+            ):
+                placeholders.append(named_arg.value)
+
+        self._validate_placeholders(placeholders, call_span=call_span)
+
+        final_pos: list[syntax.Expr] = []
+        for arg in pos_args:
+            if isinstance(arg, _RawPlaceholder):
+                final_pos.append(self._build_placeholder(arg))
+            else:
+                final_pos.append(cast(syntax.Expr, arg))
+
+        final_named: list[syntax.NamedArg] = []
+        for named_arg in named_args:
+            if isinstance(named_arg, syntax.NamedArg):
+                final_named.append(named_arg)
+            else:
+                value = self._build_placeholder(named_arg.value)
+                final_named.append(
+                    syntax.NamedArg(
+                        name=named_arg.name,
+                        value=value,
+                        span=named_arg.span,
+                        node_id=self._next_id(),
+                    )
+                )
+        return (tuple(final_pos), tuple(final_named))
+
+    def _build_placeholder(self, raw: _RawPlaceholder) -> syntax.Placeholder:
+        index = int(raw.raw_digits) if raw.raw_digits is not None else None
+        return syntax.Placeholder(index=index, span=raw.span, node_id=self._next_id())
+
+    def _validate_placeholders(
+        self, placeholders: list[_RawPlaceholder], *, call_span: SourceSpan
+    ) -> None:
+        if not placeholders:
+            return
+
+        bare = [placeholder for placeholder in placeholders if placeholder.raw_digits is None]
+        numbered = [
+            placeholder for placeholder in placeholders if placeholder.raw_digits is not None
+        ]
+        for placeholder in numbered:
+            assert placeholder.raw_digits is not None
+            if placeholder.raw_digits == "0":
+                raise AglSyntaxError(
+                    "placeholder index must be positive.",
+                    span=placeholder.span,
+                )
+            if placeholder.raw_digits.startswith("0"):
+                raise AglSyntaxError(
+                    "placeholder index must not have a leading zero.",
+                    span=placeholder.span,
+                )
+        if bare and numbered:
+            raise AglSyntaxError(
+                "placeholder arguments cannot mix bare and numbered forms in one call.",
+                span=numbered[0].span,
+            )
+        if not numbered:
+            return
+
+        seen: dict[int, SourceSpan] = {}
+        for placeholder in numbered:
+            assert placeholder.raw_digits is not None
+            index = int(placeholder.raw_digits)
+            if index in seen:
+                raise AglSyntaxError(
+                    f"placeholder numbered index ?{index} is repeated.",
+                    span=placeholder.span,
+                )
+            seen[index] = placeholder.span
+        expected = set(range(1, len(numbered) + 1))
+        actual = set(seen)
+        if actual != expected:
+            missing = sorted(expected - actual)
+            detail = f" missing ?{missing[0]}." if missing else ""
+            raise AglSyntaxError(
+                "numbered placeholder arguments must not have a gap; "
+                f"use each index from ?1 to ?{len(numbered)} exactly once.{detail}",
+                span=call_span,
+            )
+
     # ------------------------------------------------------------------
     # Call arguments
     # ------------------------------------------------------------------
 
     def arg_list(
         self, meta: Meta, args: _Args
-    ) -> tuple[list[syntax.Expr], list[syntax.NamedArg]]:
+    ) -> _RawArgLists:
         """arg_list: arg (COMMA arg)* COMMA?
 
         Returns (pos_args, named_args) pair for the call builder.
         Duplicate named arg names are rejected with the span of the duplicate.
         Positional args after named args are rejected as a syntax error.
         """
-        pos_args: list[syntax.Expr] = []
-        named_args: list[syntax.NamedArg] = []
+        pos_args: list[_RawPosArg] = []
+        named_args: list[_RawNamed] = []
         seen_names: dict[str, SourceSpan] = {}
         seen_named = False
         for a in args:
-            if isinstance(a, syntax.NamedArg):
+            if isinstance(a, (syntax.NamedArg, _RawNamedArg)):
                 if a.name in seen_names:
                     raise AglSyntaxError(
                         f"duplicate argument {a.name!r}.",
@@ -1296,29 +1420,41 @@ class AstBuilder(Transformer):
                 seen_names[a.name] = a.span
                 named_args.append(a)
                 seen_named = True
-            elif a is not None and not isinstance(a, Token):
-                # pos_arg (transparent ?) — the expr itself
-                pos_expr = cast(syntax.Expr, a)
+            elif isinstance(a, _RawPlaceholder) or _is_expr_node(a):
+                pos_arg = cast(_RawPosArg, a)
                 if seen_named:
                     raise AglSyntaxError(
                         "positional argument after named argument is not allowed.",
-                        span=pos_expr.span,
+                        span=pos_arg.span,
                     )
-                pos_args.append(pos_expr)
+                pos_args.append(pos_arg)
         return (pos_args, named_args)
 
     def pos_arg(self, meta: Meta, args: _Args) -> syntax.Expr:
         """pos_arg: expr — transparent wrapper; return the expr."""
         return _find_expr(args)
 
-    def named_arg(self, meta: Meta, args: _Args) -> syntax.NamedArg:
-        """named_arg: field_name EQ expr"""
+    def placeholder_arg(self, meta: Meta, args: _Args) -> _RawPlaceholder:
+        """placeholder_arg: PLACEHOLDER | PLACEHOLDER_NUM"""
+        tok = next(a for a in args if isinstance(a, Token))
+        text = str(tok)
+        raw_digits = text[1:] if tok.type == "PLACEHOLDER_NUM" else None
+        return _RawPlaceholder(raw_digits=raw_digits, span=self._span_from_meta(meta))
+
+    def named_arg(self, meta: Meta, args: _Args) -> syntax.NamedArg | _RawNamedArg:
+        """named_arg: field_name EQ named_arg_value"""
         name_tok = _find_name_token(args)
-        val_expr = _find_expr(args[1:])
+        value = cast(
+            syntax.Expr | _RawPlaceholder | _RawInfixChain,
+            next(a for a in args[1:] if isinstance(a, _RawPlaceholder) or _is_expr_node(a)),
+        )
+        span = self._span_from_meta(meta)
+        if isinstance(value, _RawPlaceholder):
+            return _RawNamedArg(name=str(name_tok), value=value, span=span)
         return syntax.NamedArg(
             name=str(name_tok),
-            value=val_expr,
-            span=self._span_from_meta(meta),
+            value=cast(syntax.Expr, value),
+            span=span,
             node_id=self._next_id(),
         )
 

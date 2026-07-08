@@ -253,6 +253,7 @@ class GraphSession:
             function_signatures=entry.function_signatures,
             cast_specs=entry.cast_specs,
             argument_bindings=entry.argument_bindings,
+            partial_calls=entry.partial_calls,
         )
 
     def _inject_accumulated_imports(self, program: Program) -> Program:

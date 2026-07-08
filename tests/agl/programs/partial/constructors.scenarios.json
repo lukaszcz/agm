@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "records_and_generic_record",
+      "params": {"mode": "record", "base": 8},
+      "expect": {"stdout": "3\n8\nhi\n"}
+    },
+    {
+      "name": "enum_variants_and_qualified_constructor",
+      "params": {"mode": "enum", "base": 12},
+      "expect": {"stdout": "12\nbad\n"}
+    },
+    {
+      "name": "exception_constructor",
+      "params": {"mode": "exception", "base": 7},
+      "expect": {"stdout": "kapow\n7\n"}
+    }
+  ]
+}

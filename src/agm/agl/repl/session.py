@@ -763,6 +763,7 @@ class ReplSession:
             AgentDecl,
             ConfigDecl,
             EnumDef,
+            ExceptionDef,
             FuncDef,
             LetDecl,
             ParamDecl,
@@ -778,6 +779,7 @@ class ReplSession:
             AgentDecl,
             ConfigDecl,
             EnumDef,
+            ExceptionDef,
             FuncDef,
             LetDecl,
             ParamDecl,
@@ -806,12 +808,12 @@ class ReplSession:
         entry_type_names = frozenset(
             item.name
             for item in program.body.items
-            if isinstance(item, (RecordDef, EnumDef, TypeAlias))
+            if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias))
         )
         promoted_type_names = frozenset(
             item.name
             for item in program.body.items
-            if isinstance(item, (RecordDef, EnumDef, TypeAlias))
+            if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias))
             and _before_failure(item.span.end_offset)
         )
         unpromoted_type_names = entry_type_names - promoted_type_names

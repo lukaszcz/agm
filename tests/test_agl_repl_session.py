@@ -555,6 +555,23 @@ class TestFailureEffects:
         assert not s.eval_entry("After").ok
         assert not s.eval_entry("After(value = 3)").ok
 
+    def test_runtime_raise_does_not_promote_later_exception_type(self) -> None:
+        s = ReplSession()
+        result = s.eval_entry(
+            "let z: decimal = 1 / 0\nexception Later extends Exception\n  code: int"
+        )
+        assert not result.ok
+        assert not s.eval_entry("Later").ok
+        assert not s.eval_entry('Later(message = "m", code = 3)').ok
+
+    def test_runtime_raise_promotes_prior_exception_constructor(self) -> None:
+        s = ReplSession()
+        result = s.eval_entry(
+            "exception Before extends Exception\n  code: int\nlet z: decimal = 1 / 0"
+        )
+        assert not result.ok
+        assert s.eval_entry('Before(message = "m", code = 3)').ok
+
     def test_runtime_raise_preserves_prior_type_but_not_later_binding(self) -> None:
         s = ReplSession()
         result = s.eval_entry(

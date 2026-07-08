@@ -41,7 +41,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from typing import Literal, TypeGuard, assert_never, cast
+from typing import Literal, TypeGuard, assert_never
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
@@ -1031,15 +1031,8 @@ class _Checker:
 
     def _check_call(self, node: Call, *, expected: Type | None) -> Type:
         """Dispatch a Call node to the appropriate checker."""
-        if self._call_has_placeholder(node):
-            return self._check_partial_call(node, expected=expected)
-        return self._check_complete_call(node, expected=expected)
-
-    @staticmethod
-    def _call_has_placeholder(node: Call) -> bool:
-        return any(isinstance(arg, Placeholder) for arg in node.args) or any(
-            isinstance(arg.value, Placeholder) for arg in node.named_args
-        )
+        holes = self._partial_hole_indices(node)
+        return self._check_call_dispatch(node, expected=expected, hole_indices=holes)
 
     @staticmethod
     def _partial_hole_indices(node: Call) -> dict[int, int]:
@@ -1053,12 +1046,14 @@ class _Checker:
         return {hole.node_id: hole.index - 1 for hole in holes if hole.index is not None}
 
     @staticmethod
-    def _partial_call_function_type(
+    def _call_result_type(
         params: tuple[ParamSpec, ...],
         result: Type,
         binding: tuple[Expr | None, ...],
         hole_indices: Mapping[int, int],
-    ) -> FunctionType:
+    ) -> Type:
+        if not hole_indices:
+            return result
         hole_types: list[Type | None] = [None] * len(hole_indices)
         for spec, bound_expr in zip(params, binding):
             if isinstance(bound_expr, Placeholder):
@@ -1080,7 +1075,6 @@ class _Checker:
         callee_kind: Literal["declared", "constructor", "value"] = "declared",
     ) -> None:
         self._partial_calls[node.node_id] = PartialCallSpec(
-            arity=len(hole_indices),
             argument_holes=tuple(
                 hole_indices[expr.node_id] if isinstance(expr, Placeholder) else None
                 for expr in binding
@@ -1088,68 +1082,25 @@ class _Checker:
             callee_kind=callee_kind,
         )
 
-    def _check_bound_non_hole_call_args(
+    def _check_call_dispatch(
         self,
-        params: tuple[ParamSpec, ...],
-        binding: tuple[Expr | None, ...],
-    ) -> None:
-        for spec, bound_expr in zip(params, binding):
-            if bound_expr is None or isinstance(bound_expr, Placeholder):
-                continue
-            at = self._check_expr(bound_expr, expected=spec.type)
-            self._assert_assignable(at, spec.type, bound_expr.span)
-
-    def _check_partial_call(self, node: Call, *, expected: Type | None) -> Type:
-        if node.node_id in self._resolved.builtin_calls:
-            kind = self._resolved.builtin_calls[node.node_id]
-            builtin_name = next(name for name, value in BUILTIN_CALL_NAMES.items() if value is kind)
-            raise AglTypeError(
-                f"Cannot use placeholder arguments with special builtin '{builtin_name}'; "
-                "partial application is not supported.",
-                span=node.span,
-            )
-
-        if (
-            isinstance(node.callee, VarRef)
-            and node.callee.node_id in self._resolved.constructor_refs
-        ):
-            return self._constructors.check_partial_constructor_callee_call(
-                node, expected=expected
-            )
-        if (
-            isinstance(node.callee, VarRef)
-            and node.callee.node_id in self._resolved.qualified_constructor_refs
-        ):
-            if node.type_args:
-                raise self._qualified_constructor_typed_call_error(node.span)
-            return self._constructors.check_partial_qualified_constructor_callee_call(
-                node, expected=expected
-            )
-
-        if isinstance(node.callee, VarRef):
-            callee_ref = self._resolved.resolution.get(node.callee.node_id)
-            if callee_ref is not None and callee_ref.kind is BinderKind.function_binding:
-                return self._check_partial_declared_name_call(
-                    node,
-                    node.callee.name,
-                    expected=expected,
-                    callee_node_id=callee_ref.decl_node_id,
-                )
-            if (
-                callee_ref is not None
-                and callee_ref.kind is BinderKind.constructor_binding
-                and not callee_ref.module_id.is_entry
-            ):
-                return self._constructors.check_partial_cross_module_constructor_call(
-                    node, callee_ref, expected=expected
-                )
-
-        return self._check_partial_value_call(node, expected=expected)
-
-    def _check_complete_call(self, node: Call, *, expected: Type | None) -> Type:
+        node: Call,
+        *,
+        expected: Type | None,
+        hole_indices: Mapping[int, int],
+    ) -> Type:
         # Built-in?
         if node.node_id in self._resolved.builtin_calls:
             kind = self._resolved.builtin_calls[node.node_id]
+            if hole_indices:
+                builtin_name = next(
+                    name for name, value in BUILTIN_CALL_NAMES.items() if value is kind
+                )
+                raise AglTypeError(
+                    f"Cannot use placeholder arguments with special builtin '{builtin_name}'; "
+                    "partial application is not supported.",
+                    span=node.span,
+                )
             if kind == BuiltinKind.PRINT:
                 return self._builtins.check_print(node)
             if kind == BuiltinKind.RENDER:
@@ -1168,7 +1119,9 @@ class _Checker:
             isinstance(node.callee, VarRef)
             and node.callee.node_id in self._resolved.constructor_refs
         ):
-            return self._constructors.check_constructor_callee_call(node, expected=expected)
+            return self._constructors.check_constructor_callee_call(
+                node, expected=expected, hole_indices=hole_indices
+            )
         if (
             isinstance(node.callee, VarRef)
             and node.callee.node_id in self._resolved.qualified_constructor_refs
@@ -1176,7 +1129,7 @@ class _Checker:
             if node.type_args:
                 raise self._qualified_constructor_typed_call_error(node.span)
             return self._constructors.check_qualified_constructor_callee_call(
-                node, expected=expected
+                node, expected=expected, hole_indices=hole_indices
             )
 
         # Declared function or cross-module constructor by name?
@@ -1195,6 +1148,7 @@ class _Checker:
                     node.callee.name,
                     expected=expected,
                     callee_node_id=callee_ref.decl_node_id,
+                    hole_indices=hole_indices,
                 )
             if (
                 callee_ref is not None
@@ -1202,11 +1156,11 @@ class _Checker:
                 and not callee_ref.module_id.is_entry
             ):
                 return self._constructors.check_cross_module_constructor_call(
-                    node, callee_ref, expected=expected
+                    node, callee_ref, expected=expected, hole_indices=hole_indices
                 )
 
         # Value call (lambda or higher-order).
-        return self._check_value_call(node, expected=expected)
+        return self._check_value_call(node, expected=expected, hole_indices=hole_indices)
 
     # --- type-variable matching (one-sided unification) ---
 
@@ -1301,21 +1255,6 @@ class _Checker:
             if p not in subst:
                 raise AglTypeError(message_for(p), span=span)
 
-    def _result_hint(
-        self, result_template: Type, expected: Type | None, *, span: SourceSpan
-    ) -> dict[str, Type]:
-        """Advisory type-arg bindings derived from an expected result type.
-
-        Matched non-challenging against *result_template* so a surrounding
-        annotation (e.g. ``let b: Box[int] = …``) can give an argument literal a
-        concrete expected type before the arguments themselves are checked.
-        Empty when *expected* is absent or its shape does not match.
-        """
-        hint: dict[str, Type] = {}
-        if expected is not None:
-            self._match(result_template, expected, hint, span=span, challenge=False)
-        return hint
-
     # --- shared call-argument checker ---
 
     @staticmethod
@@ -1326,10 +1265,9 @@ class _Checker:
     ) -> tuple[Expr | None, ...]:
         """Bind a call's positional/named args against *params* (declaration order).
 
-        Shared by the concrete check (``_check_call_args``) and the generic
-        inference path, so a bare-name shorthand in named-only territory is always
-        matched to its parameter by NAME rather than by raw positional index.
-        Raises ``AglTypeError`` on any binding violation.
+        Shared by concrete checking and generic inference, so a bare-name shorthand
+        in named-only territory is always matched to its parameter by NAME rather
+        than by raw positional index. Raises ``AglTypeError`` on any binding violation.
         """
         return bind_call_args(
             params,
@@ -1339,53 +1277,34 @@ class _Checker:
             context_desc=f"call to '{func_name}'",
         )
 
-    def _check_call_args(
+    def _check_bound_call_args(
         self,
         params: tuple[ParamSpec, ...],
-        node: Call,
-        func_name: str,
+        binding: tuple[Expr | None, ...],
     ) -> None:
-        """Check positional and named arguments against a concrete parameter list.
-
-        Delegates to ``bind_arguments`` for arity / duplicate / unknown / missing /
-        positional-kind checks, then type-checks each bound expression against its
-        parameter type.  Raises ``AglTypeError`` on any violation.
-
-        The caller is responsible for re-checking positional arg expressions during
-        type-variable inference before calling this helper with the substituted params.
-        """
-        binding = self._bind_call_args(params, node, func_name)
-        # Record the binding and concrete parameter types for the lowerer.  The
-        # binding itself is type-independent, so the generic path's pre- and
-        # post-substitution calls produce the same tuple; the substituted parameter
-        # types are not, and drive call-site coercions during lowering.
-        self._function_call_bindings[node.node_id] = binding
-        self._function_call_param_types[node.node_id] = tuple(p.type for p in params)
-
-        # Type-check each bound expression.  A ``None`` binding means "use default";
-        # the default's type was checked at definition time, so skip it here.
         for spec, bound_expr in zip(params, binding):
-            if bound_expr is None:
+            if bound_expr is None or isinstance(bound_expr, Placeholder):
                 continue
             at = self._check_expr(bound_expr, expected=spec.type)
             self._assert_assignable(at, spec.type, bound_expr.span)
 
-    # --- partial declared-name call ---
-
-    def _partial_expected_hint(
+    def _finish_declared_call(
         self,
-        sig: FunctionSignature,
+        node: Call,
+        params: tuple[ParamSpec, ...],
+        result: Type,
         binding: tuple[Expr | None, ...],
         hole_indices: Mapping[int, int],
-        expected: Type | None,
-        *,
-        span: SourceSpan,
-    ) -> dict[str, Type]:
-        hint: dict[str, Type] = {}
-        self._match_partial_expected(sig, binding, hole_indices, expected, hint, span=span)
-        return hint
+    ) -> Type:
+        """Record direct-call side tables, check non-hole args, and build the result type."""
+        self._function_call_bindings[node.node_id] = binding
+        self._function_call_param_types[node.node_id] = tuple(p.type for p in params)
+        if hole_indices:
+            self._record_partial_call(node, binding, hole_indices)
+        self._check_bound_call_args(params, binding)
+        return self._call_result_type(params, result, binding, hole_indices)
 
-    def _match_partial_expected(
+    def _seed_generic_inference(
         self,
         sig: FunctionSignature,
         binding: tuple[Expr | None, ...],
@@ -1395,108 +1314,23 @@ class _Checker:
         *,
         span: SourceSpan,
     ) -> None:
+        if not hole_indices:
+            if expected is not None:
+                self._match(sig.result, expected, subst, span=span, challenge=False)
+            return
         if not isinstance(expected, FunctionType) or len(expected.params) != len(hole_indices):
             return
         hole_templates: list[Type | None] = [None] * len(hole_indices)
         for spec, bound_expr in zip(sig.params, binding):
             if isinstance(bound_expr, Placeholder):
                 hole_templates[hole_indices[bound_expr.node_id]] = spec.type
-        for template, concrete in zip(cast(list[Type], hole_templates), expected.params):
+        assert all(template is not None for template in hole_templates), (
+            "compiler bug: partial call hole was not bound to a parameter"
+        )
+        for template, concrete in zip(hole_templates, expected.params):
+            assert template is not None
             self._match(template, concrete, subst, span=span, challenge=False)
         self._match(sig.result, expected.result, subst, span=span, challenge=False)
-
-    def _check_partial_generic_declared_call(
-        self,
-        node: Call,
-        func_name: str,
-        sig: FunctionSignature,
-        binding: tuple[Expr | None, ...],
-        hole_indices: Mapping[int, int],
-        *,
-        expected: Type | None,
-    ) -> FunctionType:
-        subst: dict[str, Type]
-        if node.type_args:
-            if len(node.type_args) != len(sig.type_params):
-                raise AglTypeError(
-                    f"'{func_name}' requires {len(sig.type_params)} type argument(s), "
-                    f"but {len(node.type_args)} were supplied.",
-                    span=node.span,
-                )
-            subst = {
-                p: self._env.resolve_type_expr(
-                    ta, span=node.span, type_vars=self._current_type_vars
-                )
-                for p, ta in zip(sig.type_params, node.type_args)
-            }
-        else:
-            subst = {}
-            hint = self._partial_expected_hint(
-                sig, binding, hole_indices, expected, span=node.span
-            )
-            for spec, bound_expr in zip(sig.params, binding):
-                if bound_expr is not None and not isinstance(bound_expr, Placeholder):
-                    self._infer_arg(spec.type, bound_expr, subst, hint, span=bound_expr.span)
-            self._match_partial_expected(
-                sig, binding, hole_indices, expected, subst, span=node.span
-            )
-            self._require_all_solved(
-                sig.type_params,
-                subst,
-                span=node.span,
-                message_for=lambda p: (
-                    f"Cannot infer type argument '{p}' for call to '{func_name}'; "
-                    f"supply it explicitly via '{func_name}::[…]'. "
-                    f"ASCII fallback: '{func_name}::[...]'."
-                ),
-            )
-
-        sub_params = tuple(
-            ParamSpec(
-                name=p.name,
-                type=substitute(p.type, subst),
-                kind=p.kind,
-                has_default=p.has_default,
-            )
-            for p in sig.params
-        )
-        sub_result = substitute(sig.result, subst)
-        self._function_call_bindings[node.node_id] = binding
-        self._record_partial_call(node, binding, hole_indices)
-        self._check_bound_non_hole_call_args(sub_params, binding)
-        return self._partial_call_function_type(sub_params, sub_result, binding, hole_indices)
-
-    def _check_partial_declared_name_call(
-        self,
-        node: Call,
-        func_name: str,
-        *,
-        expected: Type | None,
-        callee_node_id: int,
-    ) -> FunctionType:
-        sig = self._env.get_function_signature_by_node_id(callee_node_id)
-        if sig is None:
-            raise AglTypeError(
-                f"Cannot infer return type of function '{func_name}' before it is checked. "
-                "Add a return type annotation.",
-                span=node.span,
-            )
-        hole_indices = self._partial_hole_indices(node)
-        binding = self._bind_call_args(sig.params, node, func_name)
-        if sig.type_params:
-            return self._check_partial_generic_declared_call(
-                node, func_name, sig, binding, hole_indices, expected=expected
-            )
-        if node.type_args:
-            raise AglTypeError(
-                f"'{func_name}' is not a generic function and does not accept "
-                f"type arguments.",
-                span=node.span,
-            )
-        self._function_call_bindings[node.node_id] = binding
-        self._record_partial_call(node, binding, hole_indices)
-        self._check_bound_non_hole_call_args(sig.params, binding)
-        return self._partial_call_function_type(sig.params, sig.result, binding, hole_indices)
 
     # --- generic declared-name call ---
 
@@ -1505,6 +1339,8 @@ class _Checker:
         node: Call,
         func_name: str,
         sig: FunctionSignature,
+        binding: tuple[Expr | None, ...],
+        hole_indices: Mapping[int, int],
         *,
         expected: Type | None,
     ) -> Type:
@@ -1526,23 +1362,17 @@ class _Checker:
         else:
             # --- Inference path ---
             subst = {}
-            # A hint from the expected result type lets annotation-requiring
-            # literals in argument position (e.g. an empty list) resolve.
-            hint = self._result_hint(sig.result, expected, span=node.span)
-            # Use bind_arguments to get the per-param binding in declaration order.
-            # This ensures that bare-name shorthands in named-only territory are
-            # matched to their param by NAME rather than by raw positional index.
-            # Any arity/unknown/missing error raised here propagates immediately —
-            # it is the same error _check_call_args (called below) would raise.
-            inf_binding = self._bind_call_args(sig.params, node, func_name)
-            # Infer type variables from each bound expression against its param's
-            # pre-substitution type (in declaration order).
-            for spec, bound_expr in zip(sig.params, inf_binding):
-                if bound_expr is not None:
+            # A hint from the expected result/produced-function type lets
+            # annotation-requiring literals in argument position resolve.
+            hint: dict[str, Type] = {}
+            self._seed_generic_inference(sig, binding, hole_indices, expected, hint, span=node.span)
+            for spec, bound_expr in zip(sig.params, binding):
+                if bound_expr is not None and not isinstance(bound_expr, Placeholder):
                     self._infer_arg(spec.type, bound_expr, subst, hint, span=bound_expr.span)
-            # Try to fill remaining unsolved vars from expected result type.
-            if expected is not None:
-                self._match(sig.result, expected, subst, span=node.span, challenge=False)
+            # Try to fill remaining unsolved vars from context.
+            self._seed_generic_inference(
+                sig, binding, hole_indices, expected, subst, span=node.span
+            )
             # Verify all type params were inferred.
             self._require_all_solved(
                 sig.type_params,
@@ -1566,10 +1396,7 @@ class _Checker:
         )
         sub_result = substitute(sig.result, subst)
 
-        # Validate arguments against the substituted parameter list.
-        self._check_call_args(sub_params, node, func_name)
-
-        return sub_result
+        return self._finish_declared_call(node, sub_params, sub_result, binding, hole_indices)
 
     # --- declared-name call ---
 
@@ -1580,6 +1407,7 @@ class _Checker:
         *,
         expected: Type | None,
         callee_node_id: int,
+        hole_indices: Mapping[int, int],
     ) -> Type:
         # Use the node-id-keyed lookup populated by the function-signature pre-pass
         # (graph mode) and by _preregister_funcdef (single-program mode).  Keying
@@ -1595,10 +1423,17 @@ class _Checker:
                 span=node.span,
             )
 
+        binding = self._bind_call_args(sig.params, node, func_name)
+
         # Dispatch to the generic path when the function has type parameters.
         if sig.type_params:
             return self._check_generic_declared_call(
-                node, func_name, sig, expected=expected
+                node,
+                func_name,
+                sig,
+                binding,
+                hole_indices,
+                expected=expected,
             )
 
         # Non-generic path: reject unexpected explicit type args.
@@ -1609,36 +1444,16 @@ class _Checker:
                 span=node.span,
             )
 
-        self._check_call_args(sig.params, node, func_name)
-        return sig.result
+        return self._finish_declared_call(node, sig.params, sig.result, binding, hole_indices)
 
     # --- value call (lambda / higher-order) ---
 
-    def _check_value_call(self, node: Call, *, expected: Type | None) -> Type:
-        if node.named_args:
-            raise AglTypeError(
-                "Named arguments are not allowed when calling a function value; "
-                "they are only allowed at declared-function call sites.",
-                span=node.span,
-            )
-        callee_type = self._check_expr(node.callee, expected=None)
-        if not isinstance(callee_type, FunctionType):
-            raise AglTypeError(
-                f"callee is not a function; got '{callee_type!r}'.",
-                span=node.callee.span,
-            )
-        if len(node.args) != len(callee_type.params):
-            raise AglTypeError(
-                f"Arity mismatch: function expects {len(callee_type.params)} argument(s), "
-                f"got {len(node.args)}.",
-                span=node.span,
-            )
-        for arg, ptype in zip(node.args, callee_type.params):
-            at = self._check_expr(arg, expected=ptype)
-            self._assert_assignable(at, ptype, arg.span)
-        return callee_type.result
+    def _check_value_call_head(self, node: Call) -> FunctionType:
+        """Validate a function-value call site and return the callee's function type.
 
-    def _check_partial_value_call(self, node: Call, *, expected: Type | None) -> FunctionType:
+        Rejects named arguments (accepted only at declared-function call sites),
+        requires the callee to be a function value, and checks positional arity.
+        """
         if node.named_args:
             raise AglTypeError(
                 "Named arguments are not allowed when calling a function value; "
@@ -1657,28 +1472,34 @@ class _Checker:
                 f"got {len(node.args)}.",
                 span=node.span,
             )
-        hole_indices = self._partial_hole_indices(node)
+        return callee_type
+
+    def _check_value_call(
+        self,
+        node: Call,
+        *,
+        expected: Type | None,
+        hole_indices: Mapping[int, int],
+    ) -> Type:
+        callee_type = self._check_value_call_head(node)
         binding: tuple[Expr | None, ...] = node.args
-        self._record_partial_call(node, binding, hole_indices, callee_kind="value")
+        if hole_indices:
+            self._record_partial_call(node, binding, hole_indices, callee_kind="value")
         for arg, ptype in zip(node.args, callee_type.params):
             if isinstance(arg, Placeholder):
                 continue
             at = self._check_expr(arg, expected=ptype)
             self._assert_assignable(at, ptype, arg.span)
-        return self._partial_call_function_type(
-            tuple(
-                ParamSpec(
-                    name=f"arg{index}",
-                    type=ptype,
-                    kind=ParamKind.STANDARD,
-                    has_default=False,
-                )
-                for index, ptype in enumerate(callee_type.params)
-            ),
-            callee_type.result,
-            binding,
-            hole_indices,
+        params = tuple(
+            ParamSpec(
+                name=f"arg{index}",
+                type=ptype,
+                kind=ParamKind.STANDARD,
+                has_default=False,
+            )
+            for index, ptype in enumerate(callee_type.params)
         )
+        return self._call_result_type(params, callee_type.result, binding, hole_indices)
 
     # --- Lambda ---
 

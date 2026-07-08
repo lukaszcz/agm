@@ -1225,17 +1225,20 @@ class AstBuilder(Transformer):
         index_expr = cast(syntax.Expr, next(a for a in args if _is_expr_node(a)))
         return ("index", index_expr)
 
-    def juxt_call_suffix(self, meta: Meta, args: _Args) -> _JuxtSuffix:
-        """juxt_suffix: LPAR arg_list? RPAR -> juxt_call_suffix."""
-        arg_lists: _ArgLists = ([], [])
+    def _juxt_finalized_arg_lists(self, meta: Meta, args: _Args) -> _ArgLists:
+        """Validate and finalize the raw arg-list under a juxtaposition call suffix."""
         for arg in args:
             if isinstance(arg, tuple) and len(arg) == 2 and isinstance(arg[0], list):
                 raw_pos_args, raw_named_args = cast(_RawArgLists, arg)
-                finalized = self._finalize_call_args(
+                final_pos, final_named = self._finalize_call_args(
                     raw_pos_args, raw_named_args, call_span=self._span_from_meta(meta)
                 )
-                arg_lists = ([*finalized[0]], [*finalized[1]])
-        return ("call", ((), arg_lists))
+                return ([*final_pos], [*final_named])
+        return ([], [])
+
+    def juxt_call_suffix(self, meta: Meta, args: _Args) -> _JuxtSuffix:
+        """juxt_suffix: LPAR arg_list? RPAR -> juxt_call_suffix."""
+        return ("call", ((), self._juxt_finalized_arg_lists(meta, args)))
 
     def juxt_typed_call_suffix(self, meta: Meta, args: _Args) -> _JuxtSuffix:
         """juxt_suffix: DCOLON LSQB type_arg_list RSQB LPAR arg_list? RPAR."""
@@ -1252,15 +1255,7 @@ class AstBuilder(Transformer):
                 (),
             ),
         )
-        arg_lists: _ArgLists = ([], [])
-        for arg in args:
-            if isinstance(arg, tuple) and len(arg) == 2 and isinstance(arg[0], list):
-                raw_pos_args, raw_named_args = cast(_RawArgLists, arg)
-                finalized = self._finalize_call_args(
-                    raw_pos_args, raw_named_args, call_span=self._span_from_meta(meta)
-                )
-                arg_lists = ([*finalized[0]], [*finalized[1]])
-        return ("typed_call", (type_args_val, arg_lists))
+        return ("typed_call", (type_args_val, self._juxt_finalized_arg_lists(meta, args)))
 
     def type_apply(self, meta: Meta, args: _Args) -> syntax.TypeApply:
         """Apply explicit type arguments to a value without calling it."""

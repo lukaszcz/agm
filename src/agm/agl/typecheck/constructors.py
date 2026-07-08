@@ -9,7 +9,7 @@ and delegates the constructor dispatch branches in ``_check_varref``,
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from typing import Literal, Protocol, cast
+from typing import Literal, Protocol
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.symbols import BindingRef, ConstructorRef, ResolvedProgram
@@ -45,8 +45,6 @@ class ConstructorCheckCtx(Protocol):
     _current_type_vars: frozenset[str]
     _constructor_call_bindings: dict[int, dict[str, Expr]]
 
-    @staticmethod
-    def _partial_hole_indices(node: Call) -> dict[int, int]: ...
 
     def _record_partial_call(
         self,
@@ -92,9 +90,6 @@ class ConstructorCheckCtx(Protocol):
         message_for: Callable[[str], str],
     ) -> None: ...
 
-    def _result_hint(
-        self, result_template: Type, expected: Type | None, *, span: SourceSpan
-    ) -> dict[str, Type]: ...
 
 
 # ---------------------------------------------------------------------------
@@ -370,16 +365,73 @@ class ConstructorChecker:
 
     # --- Generic constructor call (private helper) ---
 
+    def _generic_constructor_field_kinds(
+        self,
+        *,
+        owner_name: str,
+        variant: str | None,
+        gdef: GenericTypeDef | None,
+    ) -> tuple[tuple[str, ParamKind], ...]:
+        owner_module_id_for_kinds: ModuleId | None = (
+            gdef.template.module_id if gdef is not None else None
+        )
+        actual_name_for_kinds = (
+            gdef.template.name
+            if gdef is not None and isinstance(gdef.template, (RecordType, EnumType))
+            else owner_name
+        )
+        field_kinds = self._ctx._env.get_constructor_field_kinds(
+            actual_name_for_kinds, variant, module_id=owner_module_id_for_kinds
+        )
+        assert field_kinds is not None, (
+            f"compiler bug: no field-kinds for generic constructor '{owner_name}'"
+        )
+        return field_kinds
+
+    def _seed_generic_constructor_inference(
+        self,
+        sig: ConstructorSignature,
+        templates_by_name: Mapping[str, Type],
+        field_kinds: tuple[tuple[str, ParamKind], ...],
+        bound_exprs: Mapping[str, Expr],
+        hole_indices: Mapping[int, int],
+        expected: Type | None,
+        subst: dict[str, Type],
+        *,
+        span: SourceSpan,
+    ) -> None:
+        if not hole_indices:
+            if expected is not None:
+                self._ctx._match(
+                    sig.result_template, expected, subst, span=span, challenge=False
+                )
+            return
+        if not isinstance(expected, FunctionType) or len(expected.params) != len(hole_indices):
+            return
+        hole_templates: list[Type | None] = [None] * len(hole_indices)
+        for fname, _fkind in field_kinds:
+            bound_expr = bound_exprs[fname]
+            if isinstance(bound_expr, Placeholder):
+                hole_templates[hole_indices[bound_expr.node_id]] = templates_by_name[fname]
+        assert all(template is not None for template in hole_templates), (
+            "compiler bug: partial constructor hole was not bound to a field"
+        )
+        for template, concrete in zip(hole_templates, expected.params):
+            assert template is not None
+            self._ctx._match(template, concrete, subst, span=span, challenge=False)
+        self._ctx._match(sig.result_template, expected.result, subst, span=span, challenge=False)
+
     def _check_generic_constructor_call(
         self,
         *,
-        node_type_args: tuple[object, ...],
+        node_type_args: tuple[TypeExpr, ...],
         ctor_ref: ConstructorRef,
         positional: tuple[Expr, ...],
         named: tuple[NamedArg, ...],
         span: SourceSpan,
-        node_id: int,
+        node: Call,
         expected: Type | None,
+        hole_indices: Mapping[int, int],
         sig: ConstructorSignature | None = None,
         gdef: GenericTypeDef | None = None,
     ) -> Type:
@@ -399,6 +451,17 @@ class ConstructorChecker:
             "scope resolver should have caught unknown variants."
         )
 
+        field_kinds = self._generic_constructor_field_kinds(
+            owner_name=owner_name, variant=variant, gdef=gdef
+        )
+        bound_exprs = bind_constructor_args(
+            field_kinds,
+            positional,
+            named,
+            call_span=span,
+            context_desc=f"constructor '{owner_name}'",
+        )
+
         subst: dict[str, Type] = {}
 
         if node_type_args:
@@ -415,46 +478,37 @@ class ConstructorChecker:
                 )
                 subst[p] = resolved_arg
         else:
-            # Inference path: use bind_arguments to map positional and named args to
-            # field names, then infer type-parameter substitutions from the bound args.
-            # A hint from the expected result type lets annotation-requiring literals
-            # (e.g. an empty list field on `let b: Box[int] = Box(items: [])`) resolve
-            # before the field arguments are individually checked.
-            hint = self._ctx._result_hint(sig.result_template, expected, span=span)
-            # Look up field kinds from the registry.  For cross-module generic types
-            # the kinds come via the graph table (module_id from gdef.template.module_id).
-            owner_module_id_for_kinds: ModuleId | None = (
-                gdef.template.module_id if gdef is not None else None
+            # Inference path: infer type-parameter substitutions from non-hole
+            # arguments, using contextual result/produced-function type as a hint.
+            templates_by_name = dict(zip(sig.field_names, sig.field_templates))
+            hint: dict[str, Type] = {}
+            self._seed_generic_constructor_inference(
+                sig,
+                templates_by_name,
+                field_kinds,
+                bound_exprs,
+                hole_indices,
+                expected,
+                hint,
+                span=span,
             )
-            actual_name_for_kinds = (
-                gdef.template.name
-                if gdef is not None and isinstance(gdef.template, (RecordType, EnumType))
-                else owner_name
+            for fname, _fkind in field_kinds:
+                bound_expr = bound_exprs[fname]
+                if isinstance(bound_expr, Placeholder):
+                    continue
+                self._ctx._infer_arg(
+                    templates_by_name[fname], bound_expr, subst, hint, span=bound_expr.span
+                )
+            self._seed_generic_constructor_inference(
+                sig,
+                templates_by_name,
+                field_kinds,
+                bound_exprs,
+                hole_indices,
+                expected,
+                subst,
+                span=span,
             )
-            field_kinds_for_inf = self._ctx._env.get_constructor_field_kinds(
-                actual_name_for_kinds, variant, module_id=owner_module_id_for_kinds
-            )
-            assert field_kinds_for_inf is not None, (
-                f"compiler bug: no field-kinds for generic constructor '{owner_name}'"
-            )
-            # Bind positional and named args to field names via the shared helper.
-            # All fields are required (no defaults on constructors), so every slot is
-            # non-None after binding — the helper asserts this internally.
-            bound_by_name_inf = bind_constructor_args(
-                field_kinds_for_inf,
-                positional,
-                named,
-                call_span=span,
-                context_desc=f"constructor '{owner_name}'",
-            )
-            sig_templates_by_name = dict(zip(sig.field_names, sig.field_templates))
-            for fname, _fkind in field_kinds_for_inf:
-                bound_expr = bound_by_name_inf[fname]
-                field_template = sig_templates_by_name[fname]
-                self._ctx._infer_arg(field_template, bound_expr, subst, hint, span=bound_expr.span)
-            # Fill remaining unsolved from expected result type.
-            if expected is not None:
-                self._ctx._match(sig.result_template, expected, subst, span=span, challenge=False)
             # Verify all type params were solved.
             self._ctx._require_all_solved(
                 type_params,
@@ -474,22 +528,41 @@ class ConstructorChecker:
             )
         else:
             concrete_type = self._ctx._env.instantiate_nominal(owner_name, concrete_args, span=span)
-        # Validate the constructor call.
-        return self._check_constructor_call(
-            owner=concrete_type, variant=variant, positional=positional, named=named, span=span,
-            node_id=node_id,
+        assert isinstance(concrete_type, (RecordType, EnumType))
+        return self._finish_constructor_call(
+            owner=concrete_type,
+            variant=variant,
+            field_kinds=field_kinds,
+            bound_exprs=bound_exprs,
+            node=node,
+            hole_indices=hole_indices,
         )
 
-    # --- Partial constructor calls ---
+    # --- Constructor call helpers ---
+
+    def _constructor_fields_and_context(
+        self, owner: RecordType | EnumType | ExceptionType, variant: str | None
+    ) -> tuple[Mapping[str, Type], str]:
+        if isinstance(owner, EnumType):
+            assert variant is not None, "variant is required for EnumType"
+            return (
+                self._ctx._env.type_table.enum_variants(owner)[variant],
+                f"variant '{owner.name}.{variant}'",
+            )
+        if isinstance(owner, RecordType):
+            return self._ctx._env.type_table.record_fields(owner), f"constructor '{owner.name}'"
+        return self._ctx._env.type_table.exception_fields(owner), f"exception '{owner.name}'"
 
     @staticmethod
-    def _partial_constructor_function_type(
+    def _constructor_call_result_type(
         field_kinds: tuple[tuple[str, ParamKind], ...],
         field_types: Mapping[str, Type],
-        result: Type,
+        result: RecordType | EnumType | ExceptionType,
         bound_exprs: Mapping[str, Expr],
         hole_indices: Mapping[int, int],
-    ) -> FunctionType:
+    ) -> Type:
+        if not hole_indices:
+            return result
         hole_types: list[Type | None] = [None] * len(hole_indices)
         for fname, _fkind in field_kinds:
             bound_expr = bound_exprs[fname]
@@ -503,204 +576,44 @@ class ConstructorChecker:
             result=result,
         )
 
-    def _record_partial_constructor_call(
+    def _finish_constructor_call(
         self,
-        node: Call,
+        *,
+        owner: RecordType | EnumType | ExceptionType,
+        variant: str | None,
         field_kinds: tuple[tuple[str, ParamKind], ...],
-        bound_exprs: dict[str, Expr],
-        hole_indices: Mapping[int, int],
-    ) -> None:
-        binding: tuple[Expr | None, ...] = tuple(
-            bound_exprs[fname] for fname, _fkind in field_kinds
-        )
-        self._ctx._constructor_call_bindings[node.node_id] = bound_exprs
-        self._ctx._record_partial_call(
-            node, binding, hole_indices, callee_kind="constructor"
-        )
-
-    def _check_bound_non_hole_constructor_args(
-        self,
-        field_kinds: tuple[tuple[str, ParamKind], ...],
-        field_types: Mapping[str, Type],
         bound_exprs: Mapping[str, Expr],
-    ) -> None:
+        node: Call | None,
+        hole_indices: Mapping[int, int],
+    ) -> Type:
+        fields, _context_desc = self._constructor_fields_and_context(owner, variant)
+
+        if node is not None:
+            self._ctx._constructor_call_bindings[node.node_id] = dict(bound_exprs)
+            if hole_indices:
+                binding: tuple[Expr | None, ...] = tuple(
+                    bound_exprs[fname] for fname, _fkind in field_kinds
+                )
+                self._ctx._record_partial_call(
+                    node,
+                    binding,
+                    hole_indices,
+                    callee_kind="constructor",
+                )
+
+        # Type-check each user field (exceptions skip trace_id, which is excluded
+        # from field_kinds at registration time). Placeholder fields are checked
+        # when the produced function is invoked.
         for fname, _fkind in field_kinds:
+            expected_field_type = fields[fname]
             arg_expr = bound_exprs[fname]
             if isinstance(arg_expr, Placeholder):
                 continue
-            expected_field_type = field_types[fname]
             arg_type = self._ctx._check_expr(arg_expr, expected=expected_field_type)
             self._ctx._assert_assignable(arg_type, expected_field_type, arg_expr.span)
 
-    def _partial_expected_constructor_hint(
-        self,
-        sig: ConstructorSignature,
-        bound_exprs: Mapping[str, Expr],
-        hole_indices: Mapping[int, int],
-        expected: Type | None,
-        *,
-        span: SourceSpan,
-    ) -> dict[str, Type]:
-        hint: dict[str, Type] = {}
-        self._match_partial_constructor_expected(
-            sig, bound_exprs, hole_indices, expected, hint, span=span
-        )
-        return hint
-
-    def _match_partial_constructor_expected(
-        self,
-        sig: ConstructorSignature,
-        bound_exprs: Mapping[str, Expr],
-        hole_indices: Mapping[int, int],
-        expected: Type | None,
-        subst: dict[str, Type],
-        *,
-        span: SourceSpan,
-    ) -> None:
-        if not isinstance(expected, FunctionType) or len(expected.params) != len(hole_indices):
-            return
-        templates_by_name = dict(zip(sig.field_names, sig.field_templates))
-        hole_templates: list[Type | None] = [None] * len(hole_indices)
-        for fname in sig.field_names:
-            bound_expr = bound_exprs[fname]
-            if isinstance(bound_expr, Placeholder):
-                hole_templates[hole_indices[bound_expr.node_id]] = templates_by_name[fname]
-        for template, concrete in zip(cast(list[Type], hole_templates), expected.params):
-            self._ctx._match(template, concrete, subst, span=span, challenge=False)
-        self._ctx._match(sig.result_template, expected.result, subst, span=span, challenge=False)
-
-    def _check_partial_concrete_constructor_call(
-        self,
-        *,
-        node: Call,
-        owner: RecordType | EnumType | ExceptionType,
-        variant: str | None,
-    ) -> FunctionType:
-        if isinstance(owner, EnumType):
-            assert variant is not None, "variant is required for EnumType"
-            fields = self._ctx._env.type_table.enum_variants(owner)[variant]
-            context_desc = f"variant '{owner.name}.{variant}'"
-        elif isinstance(owner, RecordType):
-            fields = self._ctx._env.type_table.record_fields(owner)
-            context_desc = f"constructor '{owner.name}'"
-        else:
-            fields = self._ctx._env.type_table.exception_fields(owner)
-            context_desc = f"exception '{owner.name}'"
-
-        field_kinds = self._ctx._env.get_constructor_field_kinds_for_type(
-            owner, owner.name, variant
-        )
-        assert field_kinds is not None, (
-            f"compiler bug: no field-kinds registered for {context_desc}"
-        )
-        bound_exprs = bind_constructor_args(
-            field_kinds,
-            node.args,
-            node.named_args,
-            call_span=node.span,
-            context_desc=context_desc,
-        )
-        hole_indices = self._ctx._partial_hole_indices(node)
-        self._record_partial_constructor_call(node, field_kinds, bound_exprs, hole_indices)
-        self._check_bound_non_hole_constructor_args(field_kinds, fields, bound_exprs)
-        return self._partial_constructor_function_type(
+        return self._constructor_call_result_type(
             field_kinds, fields, owner, bound_exprs, hole_indices
-        )
-
-    def _check_partial_generic_constructor_call(
-        self,
-        *,
-        node_type_args: tuple[TypeExpr, ...],
-        ctor_ref: ConstructorRef,
-        positional: tuple[Expr, ...],
-        named: tuple[NamedArg, ...],
-        span: SourceSpan,
-        node: Call,
-        expected: Type | None,
-        sig: ConstructorSignature | None = None,
-        gdef: GenericTypeDef | None = None,
-    ) -> FunctionType:
-        owner_name = ctor_ref.owner_name
-        variant = ctor_ref.variant
-        type_params = ctor_ref.type_params
-        if sig is None:
-            sig = self._ctx._env.get_constructor_signature(owner_name, variant)
-        assert sig is not None, (
-            f"No constructor signature for {owner_name}.{variant!r}; "
-            "scope resolver should have caught unknown variants."
-        )
-
-        owner_module_id_for_kinds: ModuleId | None = (
-            gdef.template.module_id if gdef is not None else None
-        )
-        actual_name_for_kinds = (
-            gdef.template.name
-            if gdef is not None and isinstance(gdef.template, (RecordType, EnumType))
-            else owner_name
-        )
-        field_kinds = self._ctx._env.get_constructor_field_kinds(
-            actual_name_for_kinds, variant, module_id=owner_module_id_for_kinds
-        )
-        assert field_kinds is not None, (
-            f"compiler bug: no field-kinds for generic constructor '{owner_name}'"
-        )
-        bound_exprs = bind_constructor_args(
-            field_kinds,
-            positional,
-            named,
-            call_span=span,
-            context_desc=f"constructor '{owner_name}'",
-        )
-        hole_indices = self._ctx._partial_hole_indices(node)
-
-        subst: dict[str, Type] = {}
-        if node_type_args:
-            if len(node_type_args) != len(type_params):
-                raise AglTypeError(
-                    f"'{owner_name}' requires {len(type_params)} type argument(s), "
-                    f"but {len(node_type_args)} were supplied.",
-                    span=span,
-                )
-            for p, ta in zip(type_params, node_type_args):
-                subst[p] = self._ctx._env.resolve_type_expr(
-                    ta, span=span, type_vars=self._ctx._current_type_vars
-                )
-        else:
-            hint = self._partial_expected_constructor_hint(
-                sig, bound_exprs, hole_indices, expected, span=span
-            )
-            templates_by_name = dict(zip(sig.field_names, sig.field_templates))
-            for fname, _fkind in field_kinds:
-                bound_expr = bound_exprs[fname]
-                if not isinstance(bound_expr, Placeholder):
-                    self._ctx._infer_arg(
-                        templates_by_name[fname], bound_expr, subst, hint, span=bound_expr.span
-                    )
-            self._match_partial_constructor_expected(
-                sig, bound_exprs, hole_indices, expected, subst, span=span
-            )
-            self._ctx._require_all_solved(
-                type_params,
-                subst,
-                span=span,
-                message_for=lambda p: (
-                    f"Cannot infer type argument '{p}' for constructor '{owner_name}'; "
-                    f"supply it explicitly via '{owner_name}::[…]' or add a type annotation."
-                ),
-            )
-
-        concrete_args = tuple(subst[p] for p in type_params)
-        if gdef is not None:
-            concrete_type = self._ctx._env.instantiate_from_gdef(
-                owner_name, gdef, concrete_args, span=span
-            )
-        else:
-            concrete_type = self._ctx._env.instantiate_nominal(owner_name, concrete_args, span=span)
-        assert isinstance(concrete_type, (RecordType, EnumType))
-        return self._check_partial_concrete_constructor_call(
-            node=node,
-            owner=concrete_type,
-            variant=variant,
         )
 
     # --- Resolve constructor owner (public entry point) ---
@@ -850,9 +763,10 @@ class ConstructorChecker:
         positional: tuple[Expr, ...],
         named: tuple[NamedArg, ...],
         span: SourceSpan,
-        node_id: int,
+        node: Call,
         expected: Type | None = None,
-        type_args: tuple[object, ...] = (),
+        type_args: tuple[TypeExpr, ...] = (),
+        hole_indices: Mapping[int, int] | None = None,
     ) -> Type:
         """Validate and dispatch a qualified constructor (EnumName::variant)."""
         # Check if this is a generic enum type.
@@ -882,8 +796,9 @@ class ConstructorChecker:
                 positional=positional,
                 named=named,
                 span=span,
-                node_id=node_id,
+                node=node,
                 expected=expected,
+                hole_indices={} if hole_indices is None else hole_indices,
                 sig=sig,
                 gdef=gdef,
             )
@@ -898,7 +813,8 @@ class ConstructorChecker:
         )
         return self._check_constructor_call(
             owner=enum_type, variant=variant, positional=positional, named=named, span=span,
-            node_id=node_id,
+            node=node,
+            hole_indices=hole_indices,
         )
 
     # --- Cross-module constructor call (public entry point) ---
@@ -909,6 +825,7 @@ class ConstructorChecker:
         callee_ref: BindingRef,
         *,
         expected: Type | None = None,
+        hole_indices: Mapping[int, int] | None = None,
     ) -> Type:
         """Handle a Call whose callee is a cross-module constructor VarRef.
 
@@ -939,8 +856,9 @@ class ConstructorChecker:
                 positional=node.args,
                 named=node.named_args,
                 span=node.span,
-                node_id=node.node_id,
+                node=node,
                 expected=expected,
+                hole_indices={} if hole_indices is None else hole_indices,
                 sig=ctor_sig,
                 gdef=gdef,
             )
@@ -961,12 +879,18 @@ class ConstructorChecker:
         self._reject_abstract_exception_constructor(owner_type, node.span)
         return self._check_constructor_call(
             owner=owner_type, variant=None, positional=node.args, named=node.named_args,
-            span=node.span, node_id=node.node_id,
+            span=node.span, node=node, hole_indices=hole_indices,
         )
 
     # --- Unqualified constructor callee call (public entry point) ---
 
-    def check_constructor_callee_call(self, node: Call, *, expected: Type | None = None) -> Type:
+    def check_constructor_callee_call(
+        self,
+        node: Call,
+        *,
+        expected: Type | None = None,
+        hole_indices: Mapping[int, int] | None = None,
+    ) -> Type:
         """Handle a Call whose callee is an unqualified constructor VarRef."""
         assert isinstance(node.callee, VarRef)
         ctor_ref = self._ctx._resolved.constructor_refs[node.callee.node_id]
@@ -990,8 +914,9 @@ class ConstructorChecker:
                 positional=node.args,
                 named=node.named_args,
                 span=node.span,
-                node_id=node.node_id,
+                node=node,
                 expected=expected,
+                hole_indices={} if hole_indices is None else hole_indices,
                 sig=sig,
                 gdef=gdef,
             )
@@ -1005,125 +930,19 @@ class ConstructorChecker:
         self._reject_abstract_exception_constructor(owner, node.span)
         return self._check_constructor_call(
             owner=owner, variant=ctor_ref.variant, positional=node.args, named=node.named_args,
-            span=node.span, node_id=node.node_id,
+            span=node.span, node=node, hole_indices=hole_indices,
         )
 
     # --- Qualified constructor callee call (public entry point) ---
 
     def check_qualified_constructor_callee_call(
-        self, node: Call, *, expected: Type | None = None
-    ) -> Type:
-        """Handle a Call whose callee is a qualified constructor VarRef."""
-        assert isinstance(node.callee, VarRef)
-        owner_name, variant, owner_module_id = (
-            self._ctx._resolved.qualified_constructor_refs[node.callee.node_id]
-        )
-        type_args: tuple[object, ...] = ()
-        if (
-            node.callee.type_qualifier is not None
-            and node.callee.type_qualifier.type_args is not None
-        ):
-            type_args = node.callee.type_qualifier.type_args
-        return self._resolve_qualified_constructor_and_call(
-            owner_name=owner_name, variant=variant, owner_module_id=owner_module_id,
-            positional=node.args, named=node.named_args, span=node.span,
-            node_id=node.node_id, expected=expected, type_args=type_args,
-        )
-
-    # --- Partial constructor call public entry points ---
-
-    def check_partial_cross_module_constructor_call(
         self,
         node: Call,
-        callee_ref: BindingRef,
         *,
         expected: Type | None = None,
-    ) -> FunctionType:
-        """Handle a placeholder call to a cross-module constructor VarRef."""
-        assert isinstance(node.callee, VarRef)
-        gdef = self._ctx._env.get_generic_type_from_module(callee_ref.module_id, callee_ref.name)
-        if gdef is not None:
-            ctor_sig = self._ctx._env.get_ctor_sig_from_module(
-                callee_ref.module_id, callee_ref.name, None
-            )
-            assert ctor_sig is not None, (
-                f"GenericTypeDef '{callee_ref.name}' in '{callee_ref.module_id.dotted()}' "
-                "has no constructor signature in the graph table"
-            )
-            ctor_ref = ConstructorRef(
-                owner_name=callee_ref.name,
-                variant=None,
-                owner_decl_node_id=callee_ref.decl_node_id,
-                type_params=gdef.type_params,
-            )
-            return self._check_partial_generic_constructor_call(
-                node_type_args=node.type_args,
-                ctor_ref=ctor_ref,
-                positional=node.args,
-                named=node.named_args,
-                span=node.span,
-                node=node,
-                expected=expected,
-                sig=ctor_sig,
-                gdef=gdef,
-            )
-        if node.type_args:
-            raise AglTypeError(
-                f"'{callee_ref.name}' is not a generic type and does not accept "
-                "type arguments.",
-                span=node.span,
-            )
-        owner_type = self._ctx._env.resolve_type_by_module_id(callee_ref.module_id, callee_ref.name)
-        assert isinstance(owner_type, (RecordType, EnumType, ExceptionType)), (
-            f"constructor_binding for '{callee_ref.name}' in "
-            f"'{callee_ref.module_id.dotted()}' resolved to {type(owner_type).__name__}"
-        )
-        return self._check_partial_concrete_constructor_call(
-            node=node, owner=owner_type, variant=None
-        )
-
-    def check_partial_constructor_callee_call(
-        self, node: Call, *, expected: Type | None = None
-    ) -> FunctionType:
-        """Handle a placeholder call to an unqualified constructor VarRef."""
-        assert isinstance(node.callee, VarRef)
-        ctor_ref = self._ctx._resolved.constructor_refs[node.callee.node_id]
-        if ctor_ref.type_params:
-            gdef = None
-            sig = None
-            imported = self._ctx._env.get_open_imported_generic_type(ctor_ref.owner_name)
-            if imported is not None:
-                module_id, source_name, gdef = imported
-                sig = self._ctx._env.get_ctor_sig_from_module(
-                    module_id, source_name, ctor_ref.variant
-                )
-            return self._check_partial_generic_constructor_call(
-                node_type_args=node.type_args,
-                ctor_ref=ctor_ref,
-                positional=node.args,
-                named=node.named_args,
-                span=node.span,
-                node=node,
-                expected=expected,
-                sig=sig,
-                gdef=gdef,
-            )
-        if node.type_args:
-            raise AglTypeError(
-                f"'{ctor_ref.owner_name}' is not a generic constructor and does not accept "
-                "type arguments.",
-                span=node.span,
-            )
-        owner = self.resolve_constructor_owner(ctor_ref, node.span)
-        self._reject_abstract_exception_constructor(owner, node.span)
-        return self._check_partial_concrete_constructor_call(
-            node=node, owner=owner, variant=ctor_ref.variant
-        )
-
-    def check_partial_qualified_constructor_callee_call(
-        self, node: Call, *, expected: Type | None = None
-    ) -> FunctionType:
-        """Handle a placeholder call to a qualified constructor VarRef."""
+        hole_indices: Mapping[int, int] | None = None,
+    ) -> Type:
+        """Handle a Call whose callee is a qualified constructor VarRef."""
         assert isinstance(node.callee, VarRef)
         owner_name, variant, owner_module_id = (
             self._ctx._resolved.qualified_constructor_refs[node.callee.node_id]
@@ -1134,48 +953,13 @@ class ConstructorChecker:
             and node.callee.type_qualifier.type_args is not None
         ):
             type_args = node.callee.type_qualifier.type_args
-        gdef = (
-            self._ctx._env.get_generic_type_from_module(owner_module_id, owner_name)
-            if owner_module_id is not None
-            else self._ctx._env.get_generic_type(owner_name)
-        )
-        if gdef is not None:
-            sig = (
-                self._ctx._env.get_ctor_sig_from_module(owner_module_id, owner_name, variant)
-                if owner_module_id is not None
-                else self._ctx._env.get_constructor_signature(owner_name, variant)
-            )
-            assert sig is not None, (
-                f"Generic enum '{owner_name}' has no constructor signature for '{variant}'"
-            )
-            ctor_ref = ConstructorRef(
-                owner_name=owner_name,
-                variant=variant,
-                owner_decl_node_id=0,
-                type_params=gdef.type_params,
-            )
-            return self._check_partial_generic_constructor_call(
-                node_type_args=type_args,
-                ctor_ref=ctor_ref,
-                positional=node.args,
-                named=node.named_args,
-                span=node.span,
-                node=node,
-                expected=expected,
-                sig=sig,
-                gdef=gdef,
-            )
-        if type_args:
-            raise AglTypeError(
-                f"'{owner_name}::{variant}' is not a generic constructor and does not accept "
-                "type arguments.",
-                span=node.span,
-            )
-        enum_type = self._resolve_qualified_enum_owner(
-            owner_name, variant, node.span, owner_module_id=owner_module_id
-        )
-        return self._check_partial_concrete_constructor_call(
-            node=node, owner=enum_type, variant=variant
+        return self._resolve_qualified_constructor_and_call(
+            owner_name=owner_name, variant=variant, owner_module_id=owner_module_id,
+            positional=node.args, named=node.named_args, span=node.span,
+            node=node,
+            expected=expected,
+            type_args=type_args,
+            hole_indices=hole_indices,
         )
 
     # --- Constructor call validation (private helper) ---
@@ -1200,18 +984,10 @@ class ConstructorChecker:
         positional: tuple[Expr, ...],
         named: tuple[NamedArg, ...],
         span: SourceSpan,
-        node_id: int | None = None,
-    ) -> RecordType | EnumType | ExceptionType:
-        if isinstance(owner, EnumType):
-            assert variant is not None, "variant is required for EnumType"
-            fields = self._ctx._env.type_table.enum_variants(owner)[variant]
-            context_desc = f"variant '{owner.name}.{variant}'"
-        elif isinstance(owner, RecordType):
-            fields = self._ctx._env.type_table.record_fields(owner)
-            context_desc = f"constructor '{owner.name}'"
-        else:
-            fields = self._ctx._env.type_table.exception_fields(owner)
-            context_desc = f"exception '{owner.name}'"
+        node: Call | None = None,
+        hole_indices: Mapping[int, int] | None = None,
+    ) -> Type:
+        fields, context_desc = self._constructor_fields_and_context(owner, variant)
 
         # Get field kinds (excludes trace_id for exceptions). The env helper
         # owns the lookup convention (registered table for records/enums,
@@ -1229,18 +1005,11 @@ class ConstructorChecker:
         bound_exprs = bind_constructor_args(
             field_kinds, positional, named, call_span=span, context_desc=context_desc
         )
-
-        # Record the field→expr binding for the lowerer (call-position only; value
-        # position passes no node_id and is lowered without a binding lookup).
-        if node_id is not None:
-            self._ctx._constructor_call_bindings[node_id] = bound_exprs
-
-        # Type-check each user field (exceptions skip trace_id, which is excluded
-        # from field_kinds at registration time).
-        for fname, _fkind in field_kinds:
-            expected_field_type = fields[fname]
-            arg_expr = bound_exprs[fname]
-            arg_type = self._ctx._check_expr(arg_expr, expected=expected_field_type)
-            self._ctx._assert_assignable(arg_type, expected_field_type, arg_expr.span)
-
-        return owner
+        return self._finish_constructor_call(
+            owner=owner,
+            variant=variant,
+            field_kinds=field_kinds,
+            bound_exprs=bound_exprs,
+            node=node,
+            hole_indices={} if hole_indices is None else hole_indices,
+        )

@@ -269,13 +269,11 @@ class PartialCallSpec:
     """Checker-computed routing metadata for a call that produces a function.
 
     ``callee_kind`` identifies which lowering path the underlying call uses.
-    ``arity`` is the number of parameters on the produced function.
     ``argument_holes`` is ordered like the checked call binding for that callee;
     each item is the produced-function parameter index for a placeholder slot,
     or ``None`` for a supplied non-placeholder argument or a defaulted slot.
     """
 
-    arity: int
     argument_holes: tuple[int | None, ...]
     callee_kind: Literal["declared", "constructor", "value"] = "declared"
 

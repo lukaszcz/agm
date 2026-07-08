@@ -86,13 +86,11 @@ from agm.agl.semantics.types import (
     BoolType,
     DecimalType,
     DictType,
-    FunctionType,
     IntType,
     JsonType,
     ListType,
     RecordType,
     TextType,
-    Type,
     TypeVarType,
     UnitType,
 )
@@ -1698,31 +1696,6 @@ class TestPartialCallLowering:
         )
         with pytest.raises(AssertionError, match="placeholder"):
             lowerer.lower_expr(Placeholder(index=None, span=span, node_id=999_001))
-
-    def test_typevar_matching_covers_dict_function_and_nominal_shapes(self) -> None:
-        checked = _check("()")
-        lowerer = _make_lowerer(checked, "()")
-        subst: dict[str, Type] = {}
-        lowerer._match_typevars(
-            DictType(TypeVarType("T")),
-            DictType(IntType()),
-            subst,
-        )
-        assert subst == {"T": IntType()}
-        lowerer._match_typevars(
-            FunctionType(params=(TypeVarType("A"),), result=TypeVarType("A")),
-            FunctionType(params=(), result=IntType()),
-            subst,
-        )
-        assert subst == {"T": IntType()}
-        # Generic nominal handles match by name and recurse into their type args.
-        nominal_subst: dict[str, Type] = {}
-        lowerer._match_typevars(
-            RecordType("Box", type_args=(TypeVarType("B"),)),
-            RecordType("Box", type_args=(IntType(),)),
-            nominal_subst,
-        )
-        assert nominal_subst == {"B": IntType()}
 
 
 # ---------------------------------------------------------------------------

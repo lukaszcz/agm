@@ -156,9 +156,7 @@ from agm.agl.semantics.types import (
     RecordType,
     TextType,
     Type,
-    TypeVarType,
     UnitType,
-    substitute,
 )
 from agm.agl.syntax.nodes import (
     AgentDecl,
@@ -234,7 +232,6 @@ from agm.agl.type_schema import (
 )
 from agm.agl.typecheck.env import (
     CheckedProgram,
-    FunctionSignature,
     OutputContractSpec,
     PartialCallSpec,
 )
@@ -871,30 +868,6 @@ class _Lowerer:
             f"compiler bug: no node_type for node_id={node_id!r}"
         )
         return t
-
-    def _match_typevars(self, template: Type, concrete: Type, subst: dict[str, Type]) -> None:
-        """Best-effort one-sided match used to recover erased generic call types."""
-        if isinstance(template, TypeVarType):
-            subst.setdefault(template.name, concrete)
-            return
-        if isinstance(template, ListType) and isinstance(concrete, ListType):
-            self._match_typevars(template.elem, concrete.elem, subst)
-        elif isinstance(template, DictType) and isinstance(concrete, DictType):
-            self._match_typevars(template.value, concrete.value, subst)
-        elif isinstance(template, FunctionType) and isinstance(concrete, FunctionType):
-            if len(template.params) == len(concrete.params):
-                for template_param, concrete_param in zip(template.params, concrete.params):
-                    self._match_typevars(template_param, concrete_param, subst)
-                self._match_typevars(template.result, concrete.result, subst)
-        elif (
-            isinstance(template, (RecordType, EnumType))
-            and isinstance(concrete, (RecordType, EnumType))
-            and type(template) is type(concrete)
-            and template.name == concrete.name
-            and len(template.type_args) == len(concrete.type_args)
-        ):
-            for template_arg, concrete_arg in zip(template.type_args, concrete.type_args):
-                self._match_typevars(template_arg, concrete_arg, subst)
 
     # ------------------------------------------------------------------
     # Core lowering with optional coercion wrapping
@@ -1961,45 +1934,6 @@ class _Lowerer:
         # value-call sites, so only positional args exist here.
         return self._lower_indirect_call(call_node, nid, span)
 
-    def _direct_call_param_types(
-        self,
-        call_node: Call,
-        sig: FunctionSignature,
-        binding: tuple[Expr | None, ...],
-    ) -> tuple[Type, ...]:
-        """Resolve a partial declared-call's parameter types, substituting type vars.
-
-        Reached only from the partial-call lowering path (regular calls read the
-        checker's recorded ``function_param_types``), so the call node always has a
-        ``FunctionType`` node type and a recorded ``PartialCallSpec``.  Type-var
-        bindings come from explicit type arguments when present, otherwise from
-        matching hole and non-hole slots against the resulting closure's shape.
-        """
-        if not sig.type_params:
-            # No type variables to solve: the declared parameter types are already
-            # concrete, so skip the (no-op) matching pass entirely.
-            return tuple(spec.type for spec in sig.params)
-        subst: dict[str, Type] = {}
-        if call_node.type_args:
-            for param_name, type_arg in zip(sig.type_params, call_node.type_args):
-                subst[param_name] = self._checked.type_env.resolve_type_expr(type_arg)
-        else:
-            call_type = self._node_type(call_node.node_id)
-            assert isinstance(call_type, FunctionType)
-            partial_spec = self._checked.partial_calls.get(call_node.node_id)
-            assert partial_spec is not None
-            for spec, bound_expr, hole_index in zip(
-                sig.params, binding, partial_spec.argument_holes
-            ):
-                if isinstance(bound_expr, Placeholder):
-                    assert hole_index is not None
-                    self._match_typevars(spec.type, call_type.params[hole_index], subst)
-            self._match_typevars(sig.result, call_type.result, subst)
-            for spec, bound_expr in zip(sig.params, binding):
-                if bound_expr is not None and not isinstance(bound_expr, Placeholder):
-                    self._match_typevars(spec.type, self._node_type(bound_expr.node_id), subst)
-        return tuple(substitute(spec.type, subst) for spec in sig.params)
-
     def _lower_direct_call_with_args(
         self,
         *,
@@ -2265,10 +2199,8 @@ class _Lowerer:
         assert fn_id is not None, (
             f"compiler bug: no FunctionId for function decl_node_id={callee_ref.decl_node_id!r}"
         )
-        sig = self._checked.type_env.get_function_signature_by_node_id(callee_ref.decl_node_id)
-        assert sig is not None, f"compiler bug: no signature for function {callee_ref.name!r}"
         binding = self._checked.argument_bindings.function_calls[call_node.node_id]
-        target_types = self._direct_call_param_types(call_node, sig, binding)
+        target_types = self._checked.argument_bindings.function_param_types[call_node.node_id]
         arguments = self._partial_slot_loads(
             binding=binding,
             argument_holes=spec.argument_holes,

@@ -1793,7 +1793,6 @@ class TestPartialDeclaredCalls:
             'def f(x: int, y: text, z: bool) -> unit = ()\nlet g = f(?2, "ok", z = ?1)\ng'
         )
         assert checked.partial_calls[call.node_id] == PartialCallSpec(
-            arity=2,
             argument_holes=(1, None, 0),
         )
         assert checked.argument_bindings.function_calls[call.node_id][1] is not None
@@ -1861,7 +1860,6 @@ class TestPartialConstructorAndValueCalls:
             result=checked.type_env.get_type("Point"),
         )
         assert checked.partial_calls[call.node_id] == PartialCallSpec(
-            arity=3,
             argument_holes=(1, 2, 0),
             callee_kind="constructor",
         )
@@ -2065,7 +2063,7 @@ class TestPartialConstructorAndValueCalls:
             params=(IntType(),), result=IntType()
         )
         assert checked.partial_calls[from_value.node_id] == PartialCallSpec(
-            arity=1, argument_holes=(0, None), callee_kind="value"
+            argument_holes=(0, None), callee_kind="value"
         )
         assert checked.partial_calls[finish_digits.node_id].callee_kind == "value"
 

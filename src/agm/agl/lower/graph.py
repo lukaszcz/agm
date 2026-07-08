@@ -7,6 +7,9 @@ symbol/function/nominal table and per-module initializer sequences.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
+from agm.agl.ir.contracts import ContractPayload
 from agm.agl.ir.ids import NominalId, SourceId
 from agm.agl.ir.nodes import IrExpr
 from agm.agl.ir.program import (
@@ -36,6 +39,7 @@ def lower_graph(
     _link: _LinkState | None = None,
     _already_linked: frozenset[ModuleId] = frozenset(),
     _entry_source_text: str | None = None,
+    contract_payloads: Mapping[int, ContractPayload] | None = None,
 ) -> ExecutableProgram:
     """Lower a whole-graph :class:`~agm.agl.typecheck.graph.CheckedModuleGraph` to an
     :class:`~agm.agl.ir.program.ExecutableProgram`.
@@ -160,6 +164,7 @@ def lower_graph(
             _entry_source_text
             if mid.is_entry and _entry_source_text is not None
             else cm.source_text,
+            contract_payloads=contract_payloads,
         )
         module_lowerers[mid] = lowerer
         body = cm.resolved.program.body

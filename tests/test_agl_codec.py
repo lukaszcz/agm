@@ -3478,14 +3478,14 @@ class TestRegisterCodec:
         assert received[0].output_contract is not None
         assert received[0].output_contract.format_instructions == "LIST-INT-CUSTOM-FORMAT"
 
-    def test_custom_codec_receives_checked_type_and_table_from_ir_pipeline(self) -> None:
-        """Custom codecs see the real checked target type and TypeTable at execution time."""
+    def test_custom_codec_contract_materialized_before_ir_pipeline(self) -> None:
+        """Custom codecs see checked types before lowering; IR parse stays typeless."""
         from agm.agl.ir.ids import NominalId
 
         seen_contract_type: list[Type] = []
         seen_parse_type: list[Type] = []
         seen_contract_fields: list[Mapping[str, Type]] = []
-        seen_parse_fields: list[Mapping[str, Type]] = []
+        seen_parse_type_tables: list[TypeTable | None] = []
 
         class ShapeCodec:
             @property
@@ -3526,9 +3526,8 @@ class TestRegisterCodec:
                 type_table: TypeTable | None = None,
             ) -> ParseResult:
                 assert isinstance(target_type, RecordType)
-                assert type_table is not None
                 seen_parse_type.append(target_type)
-                seen_parse_fields.append(type_table.record_fields(target_type))
+                seen_parse_type_tables.append(type_table)
                 return ParseResult.success(
                     RecordValue(
                         nominal=NominalId(ENTRY_ID, target_type.name),
@@ -3554,15 +3553,12 @@ class TestRegisterCodec:
         assert seen_contract_type == [RecordType("Box")]
         assert seen_parse_type == [RecordType("Box")]
         assert seen_contract_fields == [{"value": IntType()}]
-        assert seen_parse_fields == [{"value": IntType()}]
+        assert seen_parse_type_tables == [None]
 
-    def test_custom_codec_ir_materialization_reconstructs_target_kinds(self) -> None:
-        """IR contract materialization gives custom codecs kind-correct placeholders."""
+    def test_custom_codec_ir_materialization_uses_request_payload_only(self) -> None:
+        """IR contract materialization does not call custom make_contract hooks."""
 
         class CaptureCodec:
-            def __init__(self) -> None:
-                self.seen: list[Type] = []
-
             @property
             def name(self) -> str:
                 return "capture"
@@ -3591,14 +3587,7 @@ class TestRegisterCodec:
             def make_contract(
                 self, type_ref: Type, type_table: TypeTable | None = None
             ) -> OutputContract:
-                self.seen.append(type_ref)
-                return OutputContract(
-                    target_type_label=repr(type_ref),
-                    codec=self,
-                    strict_json=None,
-                    format_instructions="",
-                    json_schema=None,
-                )
+                raise AssertionError("execution-time IR materialization must be typeless")
 
             def parse(
                 self,
@@ -3611,34 +3600,23 @@ class TestRegisterCodec:
             ) -> ParseResult:
                 return ParseResult.failure(raw)
 
-        codec = CaptureCodec()
-        cases = [
-            ("text", "text", TextType),
-            ("int", "int", IntType),
-            ("decimal", "decimal", DecimalType),
-            ("bool", "bool", BoolType),
-            ("json", "json", JsonType),
-            ("agent", "agent", AgentType),
-            ("list", "list[int]", ListType),
-            ("dict", "dict[text, int]", DictType),
-            ("record", "Issue", RecordType),
-            ("enum", "Result", EnumType),
-            ("", "unit", UnitType),
-        ]
-        for kind, label, expected_type in cases:
-            request = ContractRequest(
-                codec_name="capture",
-                strict_json=None,
-                json_schema=None,
-                decode=None,
-                target_type_label=label,
-                structured_exec=False,
-                format_instructions="",
-                target_type_kind=kind,
-            )
-            contract = materialize_ir_contract(request, {"capture": codec})
-            assert contract is not None
-            assert isinstance(codec.seen[-1], expected_type)
+        request = ContractRequest(
+            codec_name="capture",
+            strict_json=None,
+            json_schema='{"type": "integer"}',
+            decode=ScalarDecode(ScalarKind.INT),
+            target_type_label="int",
+            structured_exec=False,
+            format_instructions="compiled",
+            target_type_kind="int",
+        )
+
+        contract = materialize_ir_contract(request, {"capture": CaptureCodec()})
+
+        assert contract is not None
+        assert contract.format_instructions == "compiled"
+        assert contract.json_schema == {"type": "integer"}
+        assert contract.decode == ScalarDecode(ScalarKind.INT)
 
     def test_custom_codec_ir_materialization_falls_back_to_request_schema(self) -> None:
         """Custom IR materialization keeps compiled schema when the codec omits one."""
@@ -3691,7 +3669,7 @@ class TestRegisterCodec:
         contract = materialize_ir_contract(request, {"schema-less": SchemaLessCodec()})
 
         assert contract is not None
-        assert contract.format_instructions == "custom"
+        assert contract.format_instructions == "json"
         assert contract.json_schema == {"type": "object"}
 
     def test_custom_codec_ir_materialization_preserves_recursive_decode(self) -> None:
@@ -3712,15 +3690,7 @@ class TestRegisterCodec:
             def make_contract(
                 self, type_ref: Type, type_table: TypeTable | None = None
             ) -> OutputContract:
-                return OutputContract(
-                    target_type_label=repr(type_ref),
-                    codec=self,
-                    strict_json=False,
-                    format_instructions="recursive",
-                    json_schema={"$ref": "#/$defs/Node"},
-                    decode=RefDecode("Node"),
-                    defs=(("Node", ScalarDecode(ScalarKind.JSON)),),
-                )
+                raise AssertionError("execution-time IR materialization must be typeless")
 
             def parse(
                 self,
@@ -3736,12 +3706,13 @@ class TestRegisterCodec:
         request = ContractRequest(
             codec_name="recursive",
             strict_json=None,
-            json_schema=None,
-            decode=None,
+            json_schema='{"$ref": "#/$defs/Node"}',
+            decode=RefDecode("Node"),
             target_type_label="Node",
             structured_exec=False,
-            format_instructions="",
+            format_instructions="recursive",
             target_type_kind="record",
+            defs=(("Node", ScalarDecode(ScalarKind.JSON)),),
         )
 
         contract = materialize_ir_contract(request, {"recursive": RecursiveCodec()})

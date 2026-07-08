@@ -8,6 +8,7 @@ narrow ``GraphSessionCtx`` Protocol.  Must NOT import ``session`` (no cycle).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Protocol
 
 from agm.agl.diagnostics import Diagnostic
@@ -16,6 +17,7 @@ from agm.agl.repl.entry import EntryKind, EntryResult
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from agm.agl.ir.contracts import ContractPayload
     from agm.agl.ir.ids import Location
     from agm.agl.lower import LinkImage
     from agm.agl.modules.ids import ModuleId
@@ -141,7 +143,6 @@ class GraphSession:
         from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.modules.loader import build_repl_graph
         from agm.agl.parser import AglSyntaxError
-        from agm.agl.runtime.contract import materialize_contract
         from agm.agl.scope import AglScopeError
         from agm.agl.scope.graph import resolve_graph
         from agm.agl.typecheck import AglTypeError
@@ -211,13 +212,12 @@ class GraphSession:
         if pre_eval_result is not None:
             return pre_eval_result
 
-        # Materialize contracts (validation pass; the IR image rebuilds them below).
-        contract_errors: list[Diagnostic] = []
-        for spec in checked.contract_specs.values():
-            try:
-                materialize_contract(spec, host_env.codecs, checked.type_env.type_table)
-            except ValueError as exc:
-                contract_errors.append(Diagnostic(message=f"Contract error: {exc}", line=1))
+        from agm.agl.pipeline import _materialize_graph_custom_contract_payloads
+
+        contract_payloads, contract_errors = _materialize_graph_custom_contract_payloads(
+            cgraph,
+            host_env.codecs,
+        )
         if contract_errors:
             return self._ctx._fail(contract_errors, warnings)
 
@@ -234,6 +234,7 @@ class GraphSession:
             param_values=param_values,
             entry_program_name=entry_program_name,
             entry_active_config=entry_active_config,
+            contract_payloads=contract_payloads,
         )
 
     @staticmethod
@@ -306,6 +307,7 @@ class GraphSession:
         param_values: dict[str, Value],
         entry_program_name: str | None,
         entry_active_config: dict[str, object],
+        contract_payloads: Mapping[int, "ContractPayload"],
     ) -> EntryResult:
         """Lower and execute one graph-mode entry in the persistent IR image."""
         from agm.agl.eval.ir_interpreter import IrInterpreter
@@ -318,7 +320,11 @@ class GraphSession:
         from agm.agl.syntax.nodes import ImportDecl
 
         lowered = lower_repl_graph(
-            cgraph, image=self._ctx._link_image, source_text=text, validate=True
+            cgraph,
+            image=self._ctx._link_image,
+            source_text=text,
+            validate=True,
+            contract_payloads=contract_payloads,
         )
         ir_params = {
             param.symbol: param_values[param.public_name]

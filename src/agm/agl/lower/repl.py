@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
+from agm.agl.ir.contracts import ContractPayload
 from agm.agl.ir.ids import SourceId, SymbolId
 from agm.agl.ir.program import ExecutableProgram, SourceFile
 from agm.agl.ir.validate import validate_ir
@@ -59,6 +60,7 @@ def lower_repl_entry(
     source_text: str,
     source_label: str,
     validate: bool = False,
+    contract_payloads: Mapping[int, ContractPayload] | None = None,
 ) -> LoweredReplEntry:
     """Link one checked REPL entry into ``image`` without resetting any IDs."""
     link = image._state
@@ -68,7 +70,14 @@ def lower_repl_entry(
         display_name=source_label,
         normalized_text=normalize_newlines(source_text),
     )
-    lowerer = _Lowerer(checked_entry, link, ENTRY_ID, source_id, source_text)
+    lowerer = _Lowerer(
+        checked_entry,
+        link,
+        ENTRY_ID,
+        source_id,
+        source_text,
+        contract_payloads=contract_payloads,
+    )
     program = lowerer.lower()
     items = checked_entry.resolved.program.body.items
     last = items[-1]
@@ -88,6 +97,7 @@ def lower_repl_graph(
     image: LinkImage,
     source_text: str,
     validate: bool = False,
+    contract_payloads: Mapping[int, ContractPayload] | None = None,
 ) -> LoweredReplEntry:
     """Incrementally link a checked module graph into a REPL image."""
     from agm.agl.lower.graph import lower_graph
@@ -103,6 +113,7 @@ def lower_repl_graph(
         _link=image._state,
         _already_linked=frozenset(image._linked_modules),
         _entry_source_text=source_text,
+        contract_payloads=contract_payloads,
     )
     entry = checked_graph.modules[checked_graph.entry_id].resolved.program
     last = entry.body.items[-1]

@@ -174,7 +174,7 @@ def _call_custom_codec_parse(
         "schema": schema,
         "decode": host_contract.decode,
         "defs": dict(host_contract.defs),
-        "type_table": host_contract.type_table,
+        "type_table": None,
     }
     parse = cast(_FlexibleParse, host_contract.codec.parse)
     try:

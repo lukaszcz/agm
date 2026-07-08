@@ -13,6 +13,7 @@ types).  This module is the top-of-stack host façade that depends on both
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -37,17 +38,19 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from agm.agl.capabilities import HostCapabilities
+    from agm.agl.ir.contracts import ContractPayload
     from agm.agl.ir.program import ExecutableProgram
     from agm.agl.modules.roots import RootSet
     from agm.agl.runtime.agents import AgentRegistry
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.scope.graph import ResolvedModuleGraph
     from agm.agl.scope.symbols import ResolvedProgram
+    from agm.agl.semantics.type_table import TypeTable
     from agm.agl.semantics.values import ExceptionValue, Value
     from agm.agl.syntax.nodes import AgentDecl as AgentDeclNode
     from agm.agl.syntax.nodes import Program
     from agm.agl.typecheck.env import CheckedProgram as CheckedProgramType
-    from agm.agl.typecheck.env import TypeEnvironment
+    from agm.agl.typecheck.env import OutputContractSpec, TypeEnvironment
     from agm.agl.typecheck.graph import CheckedModuleGraph
 
 # Reserved agent names: cannot be registered by callers.
@@ -654,6 +657,19 @@ class PipelineDriver:
         # Collect warnings from typecheck.
         warnings.extend(checked.warnings)
 
+        contract_payloads, contract_errors = _materialize_custom_contract_payloads(
+            checked.contract_specs,
+            host_env.codecs,
+            checked.type_env.type_table,
+        )
+        if contract_errors:
+            return RunResult(
+                ok=False,
+                diagnostics=contract_errors,
+                error=None,
+                warnings=list(warnings),
+            )
+
         from agm.agl.lower import lower_program
 
         executable = lower_program(
@@ -661,6 +677,7 @@ class PipelineDriver:
             source_text=source,
             source_label="<entry>",
             validate=True,
+            contract_payloads=contract_payloads,
         )
 
         return self._execute_ir(
@@ -1158,9 +1175,25 @@ class PipelineDriver:
 
         warnings.extend(checked_graph.warnings)
 
+        contract_payloads, contract_errors = _materialize_graph_custom_contract_payloads(
+            checked_graph,
+            host_env.codecs,
+        )
+        if contract_errors:
+            return RunResult(
+                ok=False,
+                diagnostics=contract_errors,
+                error=None,
+                warnings=list(warnings),
+            )
+
         from agm.agl.lower import lower_graph
 
-        executable = lower_graph(checked_graph, validate=True)
+        executable = lower_graph(
+            checked_graph,
+            validate=True,
+            contract_payloads=contract_payloads,
+        )
 
         return self._execute_ir(
             executable,
@@ -1288,6 +1321,58 @@ def _collect_config_infos(
             )
     infos.sort(key=lambda info: (info.line, info.col))
     return tuple(infos)
+
+
+def _materialize_custom_contract_payloads(
+    specs: "Mapping[int, OutputContractSpec]",
+    codecs: "Mapping[str, OutputCodec]",
+    type_table: "TypeTable",
+) -> tuple[dict[int, "ContractPayload"], list[Diagnostic]]:
+    """Run custom codec contract hooks before lowering and keep only typeless data."""
+    from agm.agl.ir.contracts import ContractPayload
+    from agm.agl.runtime.codec import BUILTIN_CODEC_NAMES
+    from agm.agl.runtime.contract import materialize_contract
+
+    payloads: dict[int, ContractPayload] = {}
+    errors: list[Diagnostic] = []
+    for node_id, spec in specs.items():
+        if spec.codec_name in BUILTIN_CODEC_NAMES:
+            continue
+        try:
+            contract = materialize_contract(spec, codecs, type_table)
+            json_schema = (
+                None
+                if contract.json_schema is None
+                else json.dumps(contract.json_schema, sort_keys=True)
+            )
+        except (TypeError, ValueError) as exc:
+            errors.append(Diagnostic(message=f"Contract error: {exc}", line=1))
+            continue
+        payloads[node_id] = ContractPayload(
+            json_schema=json_schema,
+            decode=contract.decode,
+            format_instructions=contract.format_instructions,
+            defs=contract.defs,
+        )
+    return payloads, errors
+
+
+def _materialize_graph_custom_contract_payloads(
+    checked_graph: "CheckedModuleGraph",
+    codecs: "Mapping[str, OutputCodec]",
+) -> tuple[dict[int, "ContractPayload"], list[Diagnostic]]:
+    """Materialize custom contract payloads for every module in a checked graph."""
+    payloads: dict[int, "ContractPayload"] = {}
+    errors: list[Diagnostic] = []
+    for checked_module in checked_graph.modules.values():
+        module_payloads, module_errors = _materialize_custom_contract_payloads(
+            checked_module.contract_specs,
+            codecs,
+            checked_module.type_env.type_table,
+        )
+        payloads.update(module_payloads)
+        errors.extend(module_errors)
+    return payloads, errors
 
 
 def _run_typecheck(

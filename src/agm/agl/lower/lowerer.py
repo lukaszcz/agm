@@ -29,12 +29,12 @@ Dispatch uses structural ``match`` with a final ``assert_never`` arm.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import assert_never, cast
 
-from agm.agl.ir.contracts import ContractRequest, ConversionFailureMode, DecodeSchema
+from agm.agl.ir.contracts import ContractPayload, ContractRequest, ConversionFailureMode, DecodeSchema
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import (
     AutoTraceField,
@@ -319,6 +319,7 @@ class _Lowerer:
         module_id: ModuleId,
         source_id: SourceId,
         source_text: str,
+        contract_payloads: Mapping[int, ContractPayload] | None = None,
     ) -> None:
         self._checked = checked
         self._link = link
@@ -330,6 +331,9 @@ class _Lowerer:
         # and variant shapes for constructor lowering, nominal descriptors,
         # and contract/param schema derivation.
         self._type_table: TypeTable = checked.type_env.type_table
+        self._contract_payloads: Mapping[int, ContractPayload] = (
+            contract_payloads if contract_payloads is not None else {}
+        )
         self._return_expected_stack: list[Type] = []
 
     @contextmanager
@@ -413,9 +417,17 @@ class _Lowerer:
         return cid
 
     def _contract_payload_for_spec(
-        self, spec: OutputContractSpec
+        self, node_id: int, spec: OutputContractSpec
     ) -> tuple[str | None, str, DecodeSchema | None, tuple[tuple[str, DecodeSchema], ...]]:
         """Return JSON schema, instructions, decode root, and defs for a contract spec."""
+        materialized = self._contract_payloads.get(node_id)
+        if materialized is not None:
+            return (
+                materialized.json_schema,
+                materialized.format_instructions,
+                materialized.decode,
+                materialized.defs,
+            )
         if spec.codec_name != "json":
             return None, "", None, ()
         schema_dict, decode_plan = derive_schema_and_decode(spec.target_type, self._type_table)
@@ -2262,7 +2274,7 @@ class _Lowerer:
             )
         else:
             json_schema_str, fmt_instr, decode_schema, decode_defs = (
-                self._contract_payload_for_spec(spec)
+                self._contract_payload_for_spec(call_node.node_id, spec)
             )
             contract_req = ContractRequest(
                 codec_name=spec.codec_name,
@@ -2275,8 +2287,6 @@ class _Lowerer:
                 is_unit=False,
                 target_type_kind=spec.target_type.kind,
                 defs=decode_defs,
-                target_type=spec.target_type,
-                type_table=self._type_table,
             )
 
         contract_id = self._alloc_contract(contract_req)
@@ -2318,7 +2328,7 @@ class _Lowerer:
         assert spec is not None, "exec always has a contract spec after checking"
         structured_exec = spec.structured_exec
         json_schema_str, fmt_instr, decode_schema, decode_defs = (
-            self._contract_payload_for_spec(spec)
+            self._contract_payload_for_spec(call_node.node_id, spec)
         )
         contract_req = ContractRequest(
             codec_name=spec.codec_name,
@@ -2331,8 +2341,6 @@ class _Lowerer:
             is_unit=False,
             target_type_kind=spec.target_type.kind,
             defs=decode_defs,
-            target_type=spec.target_type,
-            type_table=self._type_table,
         )
 
         contract_id = self._alloc_contract(contract_req)
@@ -2809,6 +2817,7 @@ def lower_program(
     source_text: str,
     source_label: str,
     validate: bool = False,
+    contract_payloads: Mapping[int, ContractPayload] | None = None,
 ) -> ExecutableProgram:
     """Lower a single-module ``CheckedProgram`` to an ``ExecutableProgram``.
 
@@ -2825,7 +2834,14 @@ def lower_program(
     link.next_source += 1
     normalized = normalize_newlines(source_text)
     link.sources[source_id] = SourceFile(display_name=source_label, normalized_text=normalized)
-    lowerer = _Lowerer(checked, link, ENTRY_ID, source_id, source_text)
+    lowerer = _Lowerer(
+        checked,
+        link,
+        ENTRY_ID,
+        source_id,
+        source_text,
+        contract_payloads=contract_payloads,
+    )
     program = lowerer.lower()
     if validate:
         validate_ir(program)

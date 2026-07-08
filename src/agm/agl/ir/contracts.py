@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from agm.agl.ir.ids import NominalId
 
 __all__ = [
+    "ContractPayload",
     "ContractRequest",
     "ConversionFailureMode",
     "ConversionRecipe",
@@ -213,6 +214,21 @@ class ConversionRecipe:
 
 
 @dataclass(frozen=True, slots=True)
+class ContractPayload:
+    """Typeless materialized-codec payload embedded in a contract request.
+
+    Hosts may materialize custom codecs while checker types are still available
+    and pass only these immutable runtime fields into lowering.  The linked IR
+    never stores the checker ``Type`` or ``TypeTable`` used to derive them.
+    """
+
+    json_schema: str | None
+    decode: "DecodeSchema | None"
+    format_instructions: str
+    defs: "tuple[tuple[str, DecodeSchema], ...]" = ()
+
+
+@dataclass(frozen=True, slots=True)
 class ContractRequest:
     """Typeless contract descriptor for an ask/ask-request call site.
 
@@ -229,14 +245,9 @@ class ContractRequest:
                               ``None`` for the text codec.
     ``target_type_label``   — ``repr(target_type)`` stored for ``AgentParseError``
                               field text and failure-message formatting.
-    ``target_type_kind``    — semantic kind string (``int``, ``record``, …) used
-                              only by host custom-codec materialization.
-    ``target_type``         — optional opaque checker type object retained for
-                              host custom codecs that need full generic/nominal
-                              type shape; built-in codecs ignore it.
-    ``type_table``          — optional opaque checker type table retained for
-                              host custom codecs that need nominal field shapes;
-                              built-in codecs ignore it.
+    ``target_type_kind``    — semantic kind string (``int``, ``record``, …) kept
+                              as typeless compatibility metadata for legacy
+                              custom-codec parse hooks.
     ``structured_exec``     — ``True`` for structured exec; ``False`` for ``ask``.
     ``format_instructions`` — pre-computed format instructions string (empty for
                               text codec and unit-typed asks).
@@ -261,5 +272,3 @@ class ContractRequest:
     is_unit: bool = False
     target_type_kind: str = ""
     defs: "tuple[tuple[str, DecodeSchema], ...]" = ()
-    target_type: object | None = None
-    type_table: object | None = None

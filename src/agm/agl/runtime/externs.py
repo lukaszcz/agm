@@ -361,6 +361,7 @@ def decode_boundary_value(
     seals: Mapping[str, object],
     defs: Mapping[str, BoundarySchema] = _NO_DEFS,
     vault: _HandleVault = _DEFAULT_HANDLE_VAULT,
+    active_containers: set[int] | None = None,
 ) -> Value:
     """Strictly decode one Python return value against *schema*.
 
@@ -377,6 +378,9 @@ def decode_boundary_value(
     recursive return value decodes as a finite walk.  Raises
     :class:`BoundaryViolation` on any mismatch.
     """
+    if active_containers is None:
+        active_containers = set()
+
     match schema:
         case BoundaryScalar(kind=kind):
             return _decode_scalar(kind, obj)
@@ -388,45 +392,82 @@ def decode_boundary_value(
             if not isinstance(obj, list):
                 raise BoundaryViolation(f"expected a list, got {_typename(obj)}")
             items: list[object] = obj
-            return ListValue(
-                tuple(decode_boundary_value(elem_schema, e, seals, defs, vault) for e in items)
-            )
+            marker = _enter_container(items, active_containers, "list")
+            try:
+                return ListValue(
+                    tuple(
+                        decode_boundary_value(
+                            elem_schema, e, seals, defs, vault, active_containers
+                        )
+                        for e in items
+                    )
+                )
+            finally:
+                active_containers.remove(marker)
         case BoundaryDict(value=val_schema):
             if not isinstance(obj, dict):
                 raise BoundaryViolation(f"expected a dict, got {_typename(obj)}")
             mapping: dict[object, object] = obj
-            entries: dict[str, Value] = {}
-            for k, v in mapping.items():
-                if not isinstance(k, str):
-                    raise BoundaryViolation(f"dict key must be str, got {_typename(k)}")
-                entries[k] = decode_boundary_value(val_schema, v, seals, defs, vault)
-            return DictValue(entries=entries)
+            marker = _enter_container(mapping, active_containers, "dict")
+            try:
+                entries: dict[str, Value] = {}
+                for k, v in mapping.items():
+                    if not isinstance(k, str):
+                        raise BoundaryViolation(f"dict key must be str, got {_typename(k)}")
+                    entries[k] = decode_boundary_value(
+                        val_schema, v, seals, defs, vault, active_containers
+                    )
+                return DictValue(entries=entries)
+            finally:
+                active_containers.remove(marker)
         case BoundaryRecord(nominal=nominal, display_name=display_name, fields=fields):
-            obj_fields = _expect_object(obj, display_name)
-            _check_exact_fields(display_name, {fname for fname, _ in fields}, obj_fields)
-            record_fields = _decode_boundary_fields(fields, obj_fields, seals, defs, vault)
-            return RecordValue(nominal=nominal, display_name=display_name, fields=record_fields)
-        case BoundaryEnum(nominal=nominal, display_name=display_name, variants=variants):
-            obj_fields = _expect_object(obj, display_name)
-            case_val = obj_fields.get("$case")
-            if not isinstance(case_val, str):
-                raise BoundaryViolation(
-                    f"enum {display_name!r}: object must have a string '$case' field"
+            marker = _enter_container(obj, active_containers, display_name)
+            try:
+                obj_fields = _expect_object(obj, display_name)
+                _check_exact_fields(display_name, {fname for fname, _ in fields}, obj_fields)
+                record_fields = _decode_boundary_fields(
+                    fields, obj_fields, seals, defs, vault, active_containers
                 )
-            variant = next((v for v in variants if v.name == case_val), None)
-            if variant is None:
-                raise BoundaryViolation(f"enum {display_name!r}: unknown variant {case_val!r}")
-            expected = {fname for fname, _ in variant.fields} | {"$case"}
-            _check_exact_fields(f"{display_name}.{case_val}", expected, obj_fields)
-            payload = _decode_boundary_fields(variant.fields, obj_fields, seals, defs, vault)
-            return EnumValue(
-                nominal=nominal, display_name=display_name, variant=case_val, fields=payload
-            )
+                return RecordValue(
+                    nominal=nominal, display_name=display_name, fields=record_fields
+                )
+            finally:
+                active_containers.remove(marker)
+        case BoundaryEnum(nominal=nominal, display_name=display_name, variants=variants):
+            marker = _enter_container(obj, active_containers, display_name)
+            try:
+                obj_fields = _expect_object(obj, display_name)
+                case_val = obj_fields.get("$case")
+                if not isinstance(case_val, str):
+                    raise BoundaryViolation(
+                        f"enum {display_name!r}: object must have a string '$case' field"
+                    )
+                variant = next((v for v in variants if v.name == case_val), None)
+                if variant is None:
+                    raise BoundaryViolation(f"enum {display_name!r}: unknown variant {case_val!r}")
+                expected = {fname for fname, _ in variant.fields} | {"$case"}
+                _check_exact_fields(f"{display_name}.{case_val}", expected, obj_fields)
+                payload = _decode_boundary_fields(
+                    variant.fields, obj_fields, seals, defs, vault, active_containers
+                )
+                return EnumValue(
+                    nominal=nominal, display_name=display_name, variant=case_val, fields=payload
+                )
+            finally:
+                active_containers.remove(marker)
         case BoundaryException(nominal=nominal, display_name=display_name, fields=fields):
-            obj_fields = _expect_object(obj, display_name)
-            _check_exact_fields(display_name, {fname for fname, _ in fields}, obj_fields)
-            exc_fields = _decode_boundary_fields(fields, obj_fields, seals, defs, vault)
-            return ExceptionValue(nominal=nominal, display_name=display_name, fields=exc_fields)
+            marker = _enter_container(obj, active_containers, display_name)
+            try:
+                obj_fields = _expect_object(obj, display_name)
+                _check_exact_fields(display_name, {fname for fname, _ in fields}, obj_fields)
+                exc_fields = _decode_boundary_fields(
+                    fields, obj_fields, seals, defs, vault, active_containers
+                )
+                return ExceptionValue(
+                    nominal=nominal, display_name=display_name, fields=exc_fields
+                )
+            finally:
+                active_containers.remove(marker)
         case BoundarySealVar(var=var):
             if not isinstance(obj, SealedHandle):
                 raise BoundaryViolation(
@@ -439,7 +480,7 @@ def decode_boundary_value(
                 )
             return sealed_payload.value
         case BoundaryRef(key=key):
-            return decode_boundary_value(defs[key], obj, seals, defs, vault)
+            return decode_boundary_value(defs[key], obj, seals, defs, vault, active_containers)
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 
@@ -469,16 +510,28 @@ def _check_exact_fields(
         )
 
 
+def _enter_container(obj: object, active: set[int], label: str) -> int:
+    """Mark *obj* as active during decode, rejecting cyclic Python returns."""
+    marker = id(obj)
+    if marker in active:
+        raise BoundaryViolation(f"cyclic Python return value at {label}")
+    active.add(marker)
+    return marker
+
+
 def _decode_boundary_fields(
     fields: tuple[tuple[str, BoundarySchema], ...],
     obj_fields: Mapping[str, object],
     seals: Mapping[str, object],
     defs: Mapping[str, BoundarySchema],
     vault: _HandleVault,
+    active_containers: set[int],
 ) -> dict[str, Value]:
     """Decode a nominal payload's ordered fields through the boundary schema."""
     return {
-        fname: decode_boundary_value(fschema, obj_fields[fname], seals, defs, vault)
+        fname: decode_boundary_value(
+            fschema, obj_fields[fname], seals, defs, vault, active_containers
+        )
         for fname, fschema in fields
     }
 
@@ -518,23 +571,42 @@ def _decode_scalar(kind: ScalarKind, obj: object) -> Value:
             assert_never(unreachable)
 
 
-def _is_json_shaped(obj: object) -> bool:
+def _is_json_shaped(obj: object, active: set[int] | None = None) -> bool:
     """Return whether *obj* lies in the closed JSON-shape domain.
 
     ``dict``/``list``/``str``/``int``/:class:`~decimal.Decimal`/``bool``/
     ``None`` recursively; anything else (a ``float``, a :class:`SealedHandle`,
     an arbitrary object) is rejected.
     """
+    if active is None:
+        active = set()
     if isinstance(obj, Decimal):
         return obj.is_finite()
     if obj is None or isinstance(obj, (bool, str, int)):
         return True
     if isinstance(obj, list):
         items: list[object] = obj
-        return all(_is_json_shaped(e) for e in items)
+        marker = id(items)
+        if marker in active:
+            return False
+        active.add(marker)
+        try:
+            return all(_is_json_shaped(e, active) for e in items)
+        finally:
+            active.remove(marker)
     if isinstance(obj, dict):
         mapping: dict[object, object] = obj
-        return all(isinstance(k, str) and _is_json_shaped(v) for k, v in mapping.items())
+        marker = id(mapping)
+        if marker in active:
+            return False
+        active.add(marker)
+        try:
+            return all(
+                isinstance(k, str) and _is_json_shaped(v, active)
+                for k, v in mapping.items()
+            )
+        finally:
+            active.remove(marker)
     return False
 
 

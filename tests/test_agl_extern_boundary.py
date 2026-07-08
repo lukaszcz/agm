@@ -535,6 +535,13 @@ class TestDecodeJson:
         with pytest.raises(BoundaryViolation):
             decode_boundary_value(contract.result, Opaque(), {})
 
+    def test_rejects_cyclic_json_list(self) -> None:
+        contract = build_contract("extern def f(x: int) -> json\n0")
+        value: list[object] = []
+        value.append(value)
+        with pytest.raises(BoundaryViolation):
+            decode_boundary_value(contract.result, value, {})
+
     def test_rejects_sealed_handle(self) -> None:
         contract = build_contract("extern def f(x: int) -> json\n0")
         handle = _sealed_handle(IntValue(1), object())
@@ -712,6 +719,21 @@ class TestInvoke:
         registry = ExternRegistry()
         with pytest.raises(AglRaise) as excinfo:
             registry.invoke("f", contract, fn, [IntValue(1)], "trace-4")
+        exc = excinfo.value.exc
+        assert exc.display_name == "ExternError"
+        assert exc.fields["python_type"] == TextValue("")
+
+    def test_cyclic_python_return_becomes_extern_error(self) -> None:
+        contract = build_contract("extern def f() -> json\n0")
+
+        def fn() -> object:
+            value: list[object] = []
+            value.append(value)
+            return value
+
+        registry = ExternRegistry()
+        with pytest.raises(AglRaise) as excinfo:
+            registry.invoke("f", contract, fn, [], "trace-cycle")
         exc = excinfo.value.exc
         assert exc.display_name == "ExternError"
         assert exc.fields["python_type"] == TextValue("")

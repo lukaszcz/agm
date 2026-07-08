@@ -6501,6 +6501,59 @@ class TestOpen:
         assert wt.is_dir()
         assert (wt / "dev.txt").exists()
 
+    def test_open_missing_branch_with_missing_parent_errors(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env)
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+
+        result = run_agm(
+            ["open", "-p", "missing-parent", "feat/from-missing"],
+            env=env,
+            cwd=str(project),
+            check=False,
+        )
+
+        assert result.returncode != 0
+        assert "parent branch" in result.stderr
+        assert not (project / "worktrees" / "feat/from-missing").exists()
+
+    def test_open_missing_branch_with_remote_only_parent_keeps_target_branch_name(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        clone = tmp_path / "tmp-clone"
+        _git("clone", str(bare), str(clone), cwd=str(tmp_path), env=env)
+        _push_branch(clone, bare, "cloud-native", "cloud.txt", env)
+
+        project = _make_project(tmp_path, bare, env)
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+        missing_local_parent = _git(
+            "show-ref",
+            "--verify",
+            "--quiet",
+            "refs/heads/cloud-native",
+            cwd=project / "repo",
+            env=env,
+            check=False,
+        )
+        assert missing_local_parent.returncode != 0
+
+        run_agm(
+            ["open", "-p", "cloud-native", "tool-history-cloud-backend"],
+            env=env,
+            cwd=str(project),
+        )
+
+        wt = project / "worktrees" / "tool-history-cloud-backend"
+        assert _git("branch", "--show-current", cwd=wt, env=env).stdout.strip() == (
+            "tool-history-cloud-backend"
+        )
+        assert (wt / "cloud.txt").exists()
+
     def test_open_existing_branch_with_pane_count(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:

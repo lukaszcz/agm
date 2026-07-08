@@ -500,6 +500,78 @@ class TestWorktreeAdd:
         assert wt.is_dir()
         assert (wt / "dev.txt").exists()
 
+    def test_add_with_create_and_tag_start_point_uses_tag_content(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        repo = tmp_path / "repo"
+        _init_repo(repo, env)
+        (repo / "tagged.txt").write_text("tagged\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=repo, env=env, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "tagged commit", "-q"], cwd=repo, env=env, check=True
+        )
+        subprocess.run(["git", "tag", "v1"], cwd=repo, env=env, check=True)
+        (repo / "tagged.txt").unlink()
+        subprocess.run(["git", "add", "."], cwd=repo, env=env, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "remove tagged file", "-q"],
+            cwd=repo,
+            env=env,
+            check=True,
+        )
+
+        wt = tmp_path / "wt-from-tag"
+        worktree_add(repo, wt, "new-branch", create=True, start_point="v1", env=env)
+
+        assert wt.is_dir()
+        assert current_branch(wt, env=env) == "new-branch"
+        assert (wt / "tagged.txt").exists()
+
+    def test_add_with_create_and_remote_only_start_point_keeps_new_branch_name(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        source = tmp_path / "source"
+        _init_repo(source, env)
+        subprocess.run(
+            ["git", "checkout", "-b", "cloud-native", "-q"], cwd=source, env=env, check=True
+        )
+        (source / "cloud.txt").write_text("cloud\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=source, env=env, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "cloud commit", "-q"], cwd=source, env=env, check=True
+        )
+        bare = tmp_path / "origin.git"
+        subprocess.run(["git", "init", "--bare", str(bare)], env=env, check=True)
+        subprocess.run(
+            ["git", "remote", "add", "origin", str(bare)], cwd=source, env=env, check=True
+        )
+        subprocess.run(["git", "checkout", "main", "-q"], cwd=source, env=env, check=True)
+        subprocess.run(["git", "push", "-u", "origin", "main"], cwd=source, env=env, check=True)
+        subprocess.run(
+            ["git", "push", "-u", "origin", "cloud-native"], cwd=source, env=env, check=True
+        )
+        subprocess.run(
+            ["git", "symbolic-ref", "HEAD", "refs/heads/main"], cwd=bare, env=env, check=True
+        )
+        repo = tmp_path / "repo"
+        subprocess.run(["git", "clone", str(bare), str(repo)], env=env, check=True)
+        assert local_branch_exists(repo, "cloud-native", env=env) is False
+        assert remote_branch_exists(repo, "cloud-native", env=env) is True
+
+        wt = tmp_path / "wt-from-remote-parent"
+        worktree_add(
+            repo,
+            wt,
+            "tool-history-cloud-backend",
+            create=True,
+            start_point="cloud-native",
+            env=env,
+        )
+
+        assert wt.is_dir()
+        assert current_branch(wt, env=env) == "tool-history-cloud-backend"
+        assert (wt / "cloud.txt").exists()
+
 
 # ---------------------------------------------------------------------------
 # worktree_remove

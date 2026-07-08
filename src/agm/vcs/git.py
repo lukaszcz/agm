@@ -154,6 +154,21 @@ def local_branches(repo_dir: Path, *, env: dict[str, str] | None = None) -> list
     return sorted(line for line in output.splitlines() if line)
 
 
+def _worktree_create_start_point(
+    repo_dir: Path,
+    start_point: str,
+    *,
+    env: dict[str, str] | None = None,
+) -> str:
+    """Return the start point to pass when creating a worktree branch."""
+
+    if local_branch_exists(repo_dir, start_point, env=env):
+        return start_point
+    if remote_branch_exists(repo_dir, start_point, env=env):
+        return f"origin/{start_point}"
+    return start_point
+
+
 def worktree_add(
     repo_dir: Path,
     path: Path,
@@ -170,7 +185,7 @@ def worktree_add(
         args.extend(["-b", branch])
     args.append(str(path))
     if create and start_point is not None:
-        args.append(start_point)
+        args.append(_worktree_create_start_point(repo_dir, start_point, env=env))
     elif not create:
         args.append(branch)
     require_success(args, env=env)

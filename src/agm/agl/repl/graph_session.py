@@ -138,6 +138,7 @@ class GraphSession:
         from agm.agl.modules.errors import (
             AmbiguousModule,
             ImportEntryError,
+            MissingExternCompanion,
             ModuleNotFound,
             ModulePrefixNotFound,
         )
@@ -170,6 +171,7 @@ class GraphSession:
             AmbiguousModule,
             ModulePrefixNotFound,
             ImportEntryError,
+            MissingExternCompanion,
         ) as exc:
             return self._ctx._fail([exc.to_diagnostic()], tab_warnings)
         except Exception as exc:

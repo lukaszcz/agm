@@ -2218,6 +2218,17 @@ class TestExternRepl:
         assert r2.ok, r2.diagnostics
         assert _int(r2.value) == 10
 
+    def test_missing_companion_uses_loader_diagnostic(self, tmp_path: Path) -> None:
+        (tmp_path / "extlib.agl").write_text("extern def add_one(x: int) -> int\n")
+        s = self._make_session_with_root(tmp_path)
+
+        result = s.eval_entry("import extlib")
+
+        assert result.ok is False
+        assert result.diagnostics
+        assert "companion" in result.diagnostics[0].message.lower()
+        assert result.diagnostics[0].line == 1
+
     # -- One extern registry per session: a companion imports exactly once --
 
     def test_companion_imports_exactly_once_across_entries_and_imports(

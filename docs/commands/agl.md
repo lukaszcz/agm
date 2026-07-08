@@ -32,11 +32,11 @@ required.
 
 - the directory of `FILE` (or the working directory for `-c`),
 - the standard-library root (`~/.agm/stdlib` after `just install`, or the in-repo `stdlib/` for a source checkout; override with the `AGM_STDLIB` environment variable),
-- the global library root (`~/.agm/lib`, overridable via `[modules] lib_root` in config),
+- the global library root (`~/.agm/lib`, relocated with `AGM_HOME` and overridable via `[modules] lib_root` in config),
 - any roots declared under `[modules] roots` in any config layer,
 - any roots added with `-I`/`--module-path`.
 
-Set `AGM_HOME` to relocate the entire `~/.agm` directory (config, prompts, sandbox settings, and stdlib); set `AGM_STDLIB` to point only the standard-library root elsewhere.
+Set `AGM_HOME` to relocate the entire `~/.agm` directory (config, prompts, sandbox settings, global library, and stdlib); set `AGM_STDLIB` to point only the standard-library root elsewhere.
 
 A module name that resolves to exactly one file across all roots succeeds; zero files,
 or two or more distinct files, are static errors (exit 1 with a diagnostic).

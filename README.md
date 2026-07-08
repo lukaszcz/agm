@@ -190,7 +190,8 @@ hint, `--runner`, `[exec] runner`, `[loop] runner`, or `claude -p` (built-in def
 
 Programs can span multiple `.agl` files via the module system (`import utils.math`). `agm exec`
 searches the entry file's directory, the installed stdlib root (`~/.agm/stdlib`),
-`~/.agm/lib`, and any configured `[modules] roots` for imported modules.
+the global library root (`~/.agm/lib`, relocated by `AGM_HOME`), and any configured
+`[modules] roots` for imported modules.
 
 ```bash
 agm exec workflow.agl

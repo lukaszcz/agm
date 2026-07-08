@@ -7,14 +7,14 @@ against the right base.
 Config schema (in any of the layered ``config.toml`` files):
 
     [modules]
-    lib_root = "~/.agm/lib"   # optional; overrides the default library root
+    lib_root = "~/.agm/lib"   # optional; overrides the AGM_HOME-relative default
     roots = [                  # optional; additional search roots
         "/absolute/path",
         "relative/to/config",
     ]
 
 Layering follows the same order as all other AGM config:
-    home/.agm/config.toml  →  project config/config.toml  →  cwd/.agm/config.toml
+    AGM home config.toml  →  project config/config.toml  →  cwd/.agm/config.toml
 
 For ``lib_root``, later layers override earlier ones (last-write-wins).
 For ``roots``, entries from *all* layers are accumulated (union).
@@ -27,7 +27,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from agm.config.general import agm_path_candidates, config_file_candidates
+from agm.config.general import agm_home_dir, agm_path_candidates, config_file_candidates
 from agm.core.env import resolve_env
 from agm.core.toml import load_toml_file, toml_dict
 
@@ -98,7 +98,12 @@ def load_module_roots(
     return ModuleRootsConfig(lib_root=lib_root, extra=tuple(extra))
 
 
-def resolve_lib_root(mr_config: ModuleRootsConfig) -> Path:
+def resolve_lib_root(
+    mr_config: ModuleRootsConfig,
+    *,
+    home: Path | None = None,
+    env: Mapping[str, str] | None = None,
+) -> Path:
     """Resolve the ``lib_root`` from config into an absolute ``Path``.
 
     Expands ``~`` via :func:`os.path.expanduser` before checking whether the
@@ -116,13 +121,16 @@ def resolve_lib_root(mr_config: ModuleRootsConfig) -> Path:
     Path
         Resolved ``lib_root`` path (not yet canonicalized; ``assemble_roots``
         applies ``expanduser`` + ``resolve`` on its own paths).  When no
-        ``lib_root`` is configured, returns the expanded ``~/.agm/lib`` default.
+        ``lib_root`` is configured, returns the default AGM home ``lib``
+        directory, honouring ``AGM_HOME`` when *home* is supplied (or when the
+        process environment is consulted with the implicit ``Path.home()``).
     """
     if mr_config.lib_root is not None:
         raw_str, origin_dir = mr_config.lib_root
         raw_path = Path(os.path.expanduser(raw_str))
         return raw_path if raw_path.is_absolute() else origin_dir / raw_path
-    return Path(os.path.expanduser("~/.agm/lib"))
+    default_home = Path.home() if home is None else home
+    return agm_home_dir(home=default_home, env=env) / "lib"
 
 
 def _has_legacy_constructor_syntax(stdlib_root: Path) -> bool:

@@ -104,7 +104,7 @@ def run(args: ReplArgs) -> None:
         home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd
     )
     stdlib_root = resolve_stdlib_root(home=ctx.home)
-    lib_root = resolve_lib_root(mod_roots_cfg)
+    lib_root = resolve_lib_root(mod_roots_cfg, home=ctx.home)
 
     # Build the [exec] engine base for the four start-resolved engine keys
     # (runner, log, log-file, timeout) that the session uses as the config_base

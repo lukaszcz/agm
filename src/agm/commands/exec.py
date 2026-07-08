@@ -194,7 +194,7 @@ def run(args: ExecArgs) -> None:
 
     # Resolve the lib_root path.
     stdlib_root = resolve_stdlib_root(home=ctx.home)
-    resolved_lib_root = resolve_lib_root(mr_config)
+    resolved_lib_root = resolve_lib_root(mr_config, home=ctx.home)
 
     # The invocation root is the entry file's directory (for file exec) or
     # the cwd (for -c inline exec).

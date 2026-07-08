@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from agm.config.general import agm_home_dir, agm_path_candidates
-from agm.config.module_roots import resolve_stdlib_root
+from agm.config.module_roots import ModuleRootsConfig, resolve_lib_root, resolve_stdlib_root
 
 
 class TestAgmHomeDir:
@@ -48,6 +48,17 @@ class TestAgmPathCandidatesHonorHomeOverride:
         )
         assert override / "config.toml" in candidates
         assert home / ".agm" / "config.toml" not in candidates
+
+
+class TestResolveLibRootEnvOverride:
+    def test_agm_home_override_relocates_default_lib_root(self, tmp_path: Path) -> None:
+        home = tmp_path / "home"
+        override = tmp_path / "custom-agm"
+        cfg = ModuleRootsConfig(lib_root=None, extra=())
+
+        result = resolve_lib_root(cfg, home=home, env={"AGM_HOME": str(override)})
+
+        assert result == override / "lib"
 
 
 class TestResolveStdlibRootEnvOverride:

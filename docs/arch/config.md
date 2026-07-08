@@ -8,7 +8,7 @@ A config context locates the directories that contribute configuration. The proj
 
 ## Home Directory Overrides
 
-The AGM home directory defaults to `~/.agm` but is relocatable through the environment. `AGM_HOME` overrides the whole directory — config, prompts, sandbox settings, and the stdlib all resolve beneath it. `AGM_STDLIB` overrides just the AgL standard-library root, taking precedence over every other stdlib candidate. Both accept a leading `~`. These env overrides are the only way to redirect the home layer, since it is where `config.toml` itself lives; project and workspace layers remain path-discovered as usual.
+The AGM home directory defaults to `~/.agm` but is relocatable through the environment. `AGM_HOME` overrides the whole directory — config, prompts, sandbox settings, the AgL global library, and the stdlib all resolve beneath it. `AGM_STDLIB` overrides just the AgL standard-library root, taking precedence over every other stdlib candidate. Both accept a leading `~`. These env overrides are the only way to redirect the home layer, since it is where `config.toml` itself lives; project and workspace layers remain path-discovered as usual.
 
 ## Layering and Precedence
 

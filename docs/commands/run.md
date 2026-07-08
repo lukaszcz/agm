@@ -4,11 +4,12 @@
 |---|---|
 | `agm run [--no-sandbox] [--no-patch] [--memory LIMIT] [--swap LIMIT] [--no-memory-limit] [--no-swap-limit] [-f\|--file SETTINGS] COMMAND [ARGS...]` | Run a command directly or in an Anthropic Sandbox Runtime container |
 
-`agm run` config lookup:
+`agm run` config lookup merges all matching layers in order (later layers override earlier ones):
 
-1. `<install-prefix>/.agm/config.toml` when present, otherwise `$HOME/.agm/config.toml`
-2. `<project-config-dir>/config.toml`
-3. `./.agm/config.toml`
+1. `<install-prefix>/.agm/config.toml` when AGM is installed with one
+2. `$AGM_HOME/config.toml`, or `$HOME/.agm/config.toml` when `AGM_HOME` is unset
+3. `<project-config-dir>/config.toml`
+4. `./.agm/config.toml`
 
 `agm run` config keys:
 

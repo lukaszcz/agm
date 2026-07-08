@@ -204,7 +204,7 @@ A lambda is an ordinary expression and may appear anywhere an expression is
 accepted — in a binding, as a call argument, or in a list:
 
 ```agl
-let ops: list[(int) -> int] = [fn(x: int) => x + 1, fn(x: int) => x * 2]
+let ops: list[int -> int] = [fn(x: int) => x + 1, fn(x: int) => x * 2]
 ```
 
 When used in juxtaposition position (as the right operand of an operator or
@@ -246,7 +246,7 @@ def singleton[T](x: T) -> list[T] =
   single
 
 def via_lambda[A](x: A) -> A =
-  let g: (A) -> A = fn(y: A) -> A => y
+  let g: A -> A = fn(y: A) -> A => y
   g(x)
 ```
 
@@ -284,7 +284,7 @@ function type determines the type arguments:
 ```agl
 def id[T](x: T) -> T = x
 
-let f: (text) -> text = id      # T = text, fixed by the annotation
+let f: text -> text = id      # T = text, fixed by the annotation
 print(f("via value"))
 ```
 
@@ -413,22 +413,24 @@ A function value is called like any other call. The callee is an expression
 of function type:
 
 ```agl
-let g: (int) -> text = classify
+let g: int -> text = classify
 let label = g(7)               # positional call of a function value
 ```
 
 ## Function types
 
-The type of a function value is `(A, B, …) -> C` — a list of parameter
-types in parentheses, a `->`, and the result type:
+The type of a function value is `A -> B` for one parameter,
+`(A, B, …) -> C` for multiple parameters, and `() -> C` for no parameters.
+The arrow is right-associative, so `A -> B -> C` means `A -> (B -> C)`:
 
 ```ebnf
-func_type ::= "(" type_list? ")" "->" type_expr
+func_type ::= type_atom "->" type_expr
+            | "(" type_list? ")" "->" type_expr
 type_list ::= type_expr ("," type_expr)* ","?
 ```
 
 ```agl
-let f: (int) -> text = classify
+let f: int -> text = classify
 let g: (int, int) -> int = add
 let h: () -> bool = fn() => true
 ```

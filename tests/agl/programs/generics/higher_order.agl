@@ -6,14 +6,14 @@
 # annotation referencing that type variable (`via_lambda`), and a GENERIC enum
 # variant constructor bound as a first-class value, passed THROUGH the generic
 # HOF and called there under type erasure. A param chooses which transform runs.
-def apply[A, B](x: A, f: (A) -> B) -> B = f(x)
+def apply[A, B](x: A, f: A -> B) -> B = f(x)
 
-def twice[A](x: A, f: (A) -> A) -> A = f(f(x))
+def twice[A](x: A, f: A -> A) -> A = f(f(x))
 
 # A lambda inside a generic def annotating its parameter/return with the def's
 # own type variable `A`, plus a `let` annotation that references `A`.
 def via_lambda[A](x: A) -> A =
-  let g: (A) -> A = fn(y: A) -> A => y
+  let g: A -> A = fn(y: A) -> A => y
   g(x)
 
 enum Wrapper[T]
@@ -43,7 +43,7 @@ print(via_lambda("kept"))
 
 # A GENERIC enum variant constructor as a first-class value, passed THROUGH the
 # generic HOF and called there — `apply` builds `Wrapper(value: "hi")` at runtime.
-let w: (text) -> Wrapper[text] = wrap
+let w: text -> Wrapper[text] = wrap
 let boxed = apply("hi", w)
 case boxed of
   | wrap(value) => print "wrapped ${value}"
@@ -53,5 +53,5 @@ def loud(s: text) -> text = s + "!!!"
 def quiet(s: text) -> text = s
 
 let words = ["raw"]
-let transform: (text) -> text = if shout => loud else => quiet
+let transform: text -> text = if shout => loud else => quiet
 print(apply(words[0], transform))

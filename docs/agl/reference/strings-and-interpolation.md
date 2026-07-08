@@ -69,7 +69,7 @@ Function values and agent values render as opaque handles in templates:
 
 ```agl
 let f = fn(x: int) => x
-print "function is ${f}"   # function is <function: (int) -> ?>
+print "function is ${f}"   # function is <function: int -> ?>
 ```
 
 They still cannot be stored in a `json` slot or used where a JSON-shaped value

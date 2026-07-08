@@ -8,10 +8,10 @@ def label(n: int) -> text =
   "val=" + classify(n)
 
 # Higher-order: accept a function value and apply it.
-def apply(f: (int) -> text, n: int) -> text = f(n)
+def apply(f: int -> text, n: int) -> text = f(n)
 
 # Bind a named def to a typed let (first-class function value).
-let g: (int) -> text = classify
+let g: int -> text = classify
 
 # Lambda with explicit return type.
 let dbl = fn(x: int) -> int => x * 2

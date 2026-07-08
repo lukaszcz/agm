@@ -259,7 +259,7 @@ semantics are covered in [Strings and interpolation](strings-and-interpolation.m
 ```
 
 `->` is the **return/function-type arrow** (distinct from `=>`). It appears
-in function type annotations (`(int) -> text`), `def` return type annotations
+in function type annotations (`int -> text`), `def` return type annotations
 (`def f(x: int) -> text = …`), and `fn` lambda return types
 (`fn(x: int) -> text => …`). `=>` is the **branch/lambda-body arrow** — it
 separates a branch condition or pattern from its body.

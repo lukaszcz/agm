@@ -1017,7 +1017,7 @@ class _Checker:
                     raise AglTypeError(
                         f"Cannot infer type arguments for generic function '{ref.name}' "
                         f"used as a value; annotate the binding "
-                        f"(e.g. 'let f: (int) -> int = {ref.name}') or call it directly.",
+                        f"(e.g. 'let f: int -> int = {ref.name}') or call it directly.",
                         span=node.span,
                     )
                 assert isinstance(typ, FunctionType)

@@ -1778,6 +1778,33 @@ class TestImports:
 
         assert r2.value == IntValue(100), f"Expected 100, got {r2.value}"
 
+    def test_graph_entry_type_body_can_reference_prior_repl_type(
+        self, tmp_path: Path
+    ) -> None:
+        lib = tmp_path / "dummy.agl"
+        lib.write_text("def noop(n: int) -> int = n\n")
+        s = self._make_session_with_root(tmp_path)
+        r1 = s.eval_entry("record R\n  x: int")
+        assert r1.ok, r1.diagnostics
+
+        r2 = s.eval_entry("import dummy\nrecord Box\n  r: R\nBox(r = R(x = 1))")
+
+        assert r2.ok, r2.diagnostics
+
+    def test_graph_entry_function_signature_can_reference_prior_repl_type(
+        self, tmp_path: Path
+    ) -> None:
+        lib = tmp_path / "dummy.agl"
+        lib.write_text("def noop(n: int) -> int = n\n")
+        s = self._make_session_with_root(tmp_path)
+        r1 = s.eval_entry("record R\n  x: int")
+        assert r1.ok, r1.diagnostics
+
+        r2 = s.eval_entry("import dummy\ndef get_x(r: R) -> int = r.x\nget_x(R(x = 2))")
+
+        assert r2.ok, r2.diagnostics
+        assert _int(r2.value) == 2
+
     def test_import_error_rollback(self, tmp_path: Path) -> None:
         lib = tmp_path / "goodlib.agl"
         lib.write_text("def val() -> int = 99\n")

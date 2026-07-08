@@ -359,6 +359,7 @@ def _build_graph_type_table(
     resolved_graph: ResolvedModuleGraph,
     *,
     type_table: TypeTable | None = None,
+    entry_seed_env: TypeEnvironment | None = None,
 ) -> tuple[
     dict[tuple[ModuleId, str], Type],
     dict[tuple[ModuleId, str], GenericTypeDef],
@@ -407,6 +408,8 @@ def _build_graph_type_table(
     # per-module envs are transient header-only scaffolding and never
     # dual-write, so they keep their own private (default) tables.
     shared_type_table = type_table if type_table is not None else create_seeded_type_table()
+    if entry_seed_env is not None:
+        shared_type_table.merge_from(entry_seed_env.type_table)
 
     # Step A: register every declared name's handle for all modules.
     # For records/enums: register the handle in both the per-module env AND
@@ -416,6 +419,8 @@ def _build_graph_type_table(
 
     for mid, rmod in resolved_graph.modules.items():
         env = TypeEnvironment(module_id=mid)
+        if mid.is_entry and entry_seed_env is not None:
+            env.seed_from(entry_seed_env)
         # The builder is transient: it only collects headers into ``env``
         # (which bootstraps ``graph_type_table`` below).  Body resolution
         # uses the cross-module builders built later, not this one.
@@ -510,6 +515,8 @@ def _build_graph_type_table(
             module_id=mid,
             type_table=shared_type_table,
         )
+        if mid.is_entry and entry_seed_env is not None:
+            cross_env.seed_from(entry_seed_env)
         # Seed with own type shells so bare-name local refs resolve.
         for name, t in per_module_envs[mid].non_builtin_type_items():
             cross_env.register_type(name, t)
@@ -579,6 +586,7 @@ def _build_graph_func_sig_table(
     graph_type_table: dict[tuple[ModuleId, str], Type],
     graph_generic_table: dict[tuple[ModuleId, str], GenericTypeDef],
     graph_alias_table: dict[tuple[ModuleId, str], GenericAliasDef],
+    entry_seed_env: TypeEnvironment | None = None,
 ) -> dict[int, tuple[str, FunctionSignature, FunctionType]]:
     """Phase 2: compute function signatures for ALL top-level FuncDefs across all modules.
 
@@ -626,6 +634,8 @@ def _build_graph_func_sig_table(
             import_env=import_env,
             module_id=mid,
         )
+        if mid.is_entry and entry_seed_env is not None:
+            env.seed_from(entry_seed_env)
         for (t_mid, t_name), t in graph_type_table.items():
             if t_mid == mid:
                 env.register_type(t_name, t)
@@ -842,7 +852,11 @@ def check_graph(
         graph_alias_table,
         graph_ctor_sig_table,
         graph_ctor_field_kinds_table,
-    ) = _build_graph_type_table(resolved_graph, type_table=shared_type_table)
+    ) = _build_graph_type_table(
+        resolved_graph,
+        type_table=shared_type_table,
+        entry_seed_env=entry_seed_env,
+    )
 
     # Phase 2: build the graph-wide function-signature table.
     # Resolves parameter/return TypeExprs for every top-level FuncDef in every
@@ -850,7 +864,11 @@ def check_graph(
     # resolve), WITHOUT checking any function body.  Keyed by FuncDef.node_id
     #.
     graph_func_sig_table = _build_graph_func_sig_table(
-        resolved_graph, graph_type_table, graph_generic_table, graph_alias_table
+        resolved_graph,
+        graph_type_table,
+        graph_generic_table,
+        graph_alias_table,
+        entry_seed_env=entry_seed_env,
     )
 
     # Collect import envs for per-module checking.

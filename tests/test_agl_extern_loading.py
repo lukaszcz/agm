@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
+from agm.agl.diagnostics import Diagnostic
 from agm.agl.modules.errors import MissingExternCompanion
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.loader import load_graph
@@ -464,6 +465,36 @@ class TestOrdering:
         result = driver.run_prepared_graph(prepared)
         assert result.ok is False
         assert any("operand" in d.message.lower() for d in result.diagnostics)
+        assert not marker.exists()
+
+    def test_custom_contract_error_reported_before_any_companion_import(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        marker = tmp_path / "marker.txt"
+        write_module_file(tmp_path / "root", "lib.mod", "extern def f(x: int) -> int")
+        write_companion_file(
+            tmp_path / "root",
+            "lib.mod",
+            f"open({str(marker)!r}, 'w').write('imported')\n"
+            "def f(x):\n    return x\n",
+        )
+        monkeypatch.setattr(
+            "agm.agl.pipeline._materialize_graph_custom_contract_payloads",
+            lambda checked_graph, codecs: (
+                {},
+                [Diagnostic(message="Contract error: bad contract", line=1)],
+            ),
+        )
+        driver = PipelineDriver()
+        prepared = PipelineDriver.prepare_program(
+            "import lib.mod\nlib.mod::f(1)",
+            entry_path=None,
+            roots=_roots(tmp_path / "root"),
+            default_stdlib=False,
+        )
+        result = driver.run_prepared_graph(prepared)
+        assert result.ok is False
+        assert any("Contract error" in d.message for d in result.diagnostics)
         assert not marker.exists()
 
 

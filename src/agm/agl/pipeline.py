@@ -1094,10 +1094,25 @@ class PipelineDriver:
 
         warnings.extend(checked_graph.warnings)
 
+        contract_payloads, contract_errors = _materialize_graph_custom_contract_payloads(
+            checked_graph,
+            host_env.codecs,
+        )
+        if contract_errors:
+            return StartupConfigResult(
+                ok=False,
+                diagnostics=contract_errors,
+                error=None,
+                warnings=warnings,
+                checked_graph=checked_graph,
+            )
+
         # Extern companions: import and resolve every declared extern up front,
         # exactly as the normal run path does, so a startup config initializer
         # that calls an extern finds its loaded companion instead of tripping
-        # ExternRegistry.resolve's unguarded assert.
+        # ExternRegistry.resolve's unguarded assert. This is still after all
+        # static checks, including custom contract materialization, so companion
+        # top-level code cannot run before a static diagnostic is surfaced.
         extern_diagnostics = _wire_extern_registry(
             checked_graph=checked_graph,
             capabilities=capabilities,
@@ -1108,19 +1123,6 @@ class PipelineDriver:
             return StartupConfigResult(
                 ok=False,
                 diagnostics=extern_diagnostics,
-                error=None,
-                warnings=warnings,
-                checked_graph=checked_graph,
-            )
-
-        contract_payloads, contract_errors = _materialize_graph_custom_contract_payloads(
-            checked_graph,
-            host_env.codecs,
-        )
-        if contract_errors:
-            return StartupConfigResult(
-                ok=False,
-                diagnostics=contract_errors,
                 error=None,
                 warnings=warnings,
                 checked_graph=checked_graph,
@@ -1247,6 +1249,18 @@ class PipelineDriver:
 
         warnings.extend(checked_graph.warnings)
 
+        contract_payloads, contract_errors = _materialize_graph_custom_contract_payloads(
+            checked_graph,
+            host_env.codecs,
+        )
+        if contract_errors:
+            return RunResult(
+                ok=False,
+                diagnostics=contract_errors,
+                error=None,
+                warnings=list(warnings),
+            )
+
         if not check_only:
             # Extern (Python FFI) companions: import and resolve every declared
             # extern up front, gated by capability — fail-fast, before evaluation,
@@ -1266,18 +1280,6 @@ class PipelineDriver:
                     error=None,
                     warnings=warnings,
                 )
-
-        contract_payloads, contract_errors = _materialize_graph_custom_contract_payloads(
-            checked_graph,
-            host_env.codecs,
-        )
-        if contract_errors:
-            return RunResult(
-                ok=False,
-                diagnostics=contract_errors,
-                error=None,
-                warnings=list(warnings),
-            )
 
         from agm.agl.lower import lower_graph
 

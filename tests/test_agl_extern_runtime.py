@@ -776,7 +776,7 @@ class TestFirstClass:
         source = "extern def f(x: int) -> int\nprint(f)\n()\n"
         companion = "def f(x):\n    return x\n"
         _, output = evaluate_ir_with_externs(source, companion, tmp_path)
-        assert output.strip() == "<function: (int) -> int>"
+        assert output.strip() == "<function: int -> int>"
 
 
 # ---------------------------------------------------------------------------

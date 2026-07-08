@@ -25,6 +25,7 @@ from __future__ import annotations
 import itertools
 from collections.abc import Mapping
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from jsonschema import Draft202012Validator
@@ -40,6 +41,7 @@ from agm.agl.ir.contracts import (
 )
 from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.modules.roots import RootSet
 from agm.agl.runtime.agents import AgentFn, AgentRegistry
 from agm.agl.runtime.codec import JsonCodec, ParseResult, TextCodec
 from agm.agl.runtime.contract import OutputContract, materialize_contract, materialize_ir_contract
@@ -3326,6 +3328,84 @@ class TestRegisterCodec:
         assert isinstance(seen_parse_targets[0], RecordType)
         assert seen_parse_targets[0].name == "Box"
         assert seen_parse_targets[0].type_args == (IntType(),)
+
+    def test_custom_codec_dry_run_reports_materialized_schema(self) -> None:
+        class SchemaTextCodec:
+            @property
+            def name(self) -> str:
+                return "schema-text"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"text"})
+
+            def supports_type(self, t: Type) -> bool:
+                return isinstance(t, TextType)
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=None,
+                    format_instructions="SCHEMA-TEXT",
+                    json_schema={"type": "string"},
+                )
+
+            def parse(self, raw: str) -> ParseResult:
+                return ParseResult.success(TextValue(raw))
+
+        rt = PipelineDriver(default_agent=lambda req: "unused")
+        rt.register_codec(SchemaTextCodec())
+
+        result = rt.run('let y: text = ask("Q", format = "schema-text")\ny', check_only=True)
+
+        assert result.ok is True
+        assert len(result.call_sites) == 1
+        assert result.call_sites[0].has_schema is True
+
+    def test_graph_custom_codec_dry_run_reports_materialized_schema(self) -> None:
+        class SchemaTextCodec:
+            @property
+            def name(self) -> str:
+                return "graph-schema-text"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"text"})
+
+            def supports_type(self, t: Type) -> bool:
+                return isinstance(t, TextType)
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=None,
+                    format_instructions="GRAPH-SCHEMA-TEXT",
+                    json_schema={"type": "string"},
+                )
+
+            def parse(self, raw: str) -> ParseResult:
+                return ParseResult.success(TextValue(raw))
+
+        roots = RootSet(roots=frozenset({Path(__file__).resolve().parents[1] / "stdlib"}))
+        prepared = PipelineDriver.prepare_program(
+            'let y: text = ask("Q", format = "graph-schema-text")\ny',
+            entry_path=None,
+            roots=roots,
+        )
+        rt = PipelineDriver(default_agent=lambda req: "unused")
+        rt.register_codec(SchemaTextCodec())
+
+        result = rt.run_prepared_graph(prepared, check_only=True)
+
+        assert result.ok is True
+        assert len(result.call_sites) == 1
+        assert result.call_sites[0].has_schema is True
 
     def test_custom_codec_make_contract_keyword_only_type_table(self) -> None:
         """Custom make_contract hooks may request type_table as a keyword-only arg."""

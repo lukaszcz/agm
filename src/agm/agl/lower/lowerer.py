@@ -236,6 +236,16 @@ from agm.util.text import normalize_newlines
 __all__ = ["_LinkState", "lower_program"]
 
 
+def _contract_has_schema(
+    spec: OutputContractSpec | None,
+    payload: ContractPayload | None,
+) -> bool:
+    """Return whether a call-site contract carries a materialized schema."""
+    return spec is not None and (
+        spec.codec_name == "json" or (payload is not None and payload.json_schema is not None)
+    )
+
+
 def _add_builtin_nominals(
     nominals: dict[NominalId, NominalDescriptor], type_table: TypeTable
 ) -> None:
@@ -2790,9 +2800,9 @@ class _Lowerer:
                 callee=csr.callee,
                 codec_name=csr.codec_name,
                 target_type_label=repr(csr.target_type),
-                has_schema=(
-                    (_spec := self._checked.contract_specs.get(csr.node_id)) is not None
-                    and _spec.codec_name == "json"
+                has_schema=_contract_has_schema(
+                    self._checked.contract_specs.get(csr.node_id),
+                    self._contract_payloads.get(csr.node_id),
                 ),
                 parse_policy=csr.parse_policy,
                 line=csr.line,

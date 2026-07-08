@@ -22,7 +22,12 @@ from agm.agl.ir.program import (
     VariantDescriptor,
 )
 from agm.agl.ir.validate import validate_ir
-from agm.agl.lower.lowerer import _add_builtin_nominals, _LinkState, _Lowerer
+from agm.agl.lower.lowerer import (
+    _add_builtin_nominals,
+    _contract_has_schema,
+    _LinkState,
+    _Lowerer,
+)
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.semantics.types import EnumType, ExceptionType, RecordType
 from agm.agl.syntax.nodes import AgentDecl, FuncDef
@@ -212,13 +217,16 @@ def lower_graph(
     # Collect entry-module params (only the entry module contributes params).
     entry_lowerer = module_lowerers[checked_graph.entry_id]
     entry_cm = checked_graph.modules[checked_graph.entry_id]
+    payloads = contract_payloads if contract_payloads is not None else {}
     dry_run_inventory = tuple(
         DryRunEntry(
             callee=csr.callee,
             codec_name=csr.codec_name,
             target_type_label=repr(csr.target_type),
-            has_schema=entry_cm.contract_specs.get(csr.node_id) is not None
-            and entry_cm.contract_specs[csr.node_id].codec_name == "json",
+            has_schema=_contract_has_schema(
+                entry_cm.contract_specs.get(csr.node_id),
+                payloads.get(csr.node_id),
+            ),
             parse_policy=csr.parse_policy,
             line=csr.line,
             col=csr.col,

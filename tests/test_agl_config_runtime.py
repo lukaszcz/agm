@@ -259,6 +259,56 @@ class TestStartupConfigCollection:
         assert result.ok
         assert result.values["log"] == BoolValue(True)
 
+    def test_startup_config_graph_reports_custom_codec_contract_error(self) -> None:
+        class BadContractCodec:
+            @property
+            def name(self) -> str:
+                return "bad-contract"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"text"})
+
+            def supports_type(self, t: Type) -> bool:
+                return isinstance(t, TextType)
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                raise ValueError("boom")
+
+            def parse(self, raw: str) -> ParseResult:
+                return ParseResult.success(TextValue(raw))
+
+        rt = PipelineDriver()
+        rt.register_codec(BadContractCodec())
+        prepared = _prepare_graph(
+            'config runner = exec("printf startup", format = "bad-contract")\n'
+        )
+
+        result = rt.collect_startup_config_graph(prepared, names={"runner"})
+
+        assert not result.ok
+        assert result.diagnostics
+        assert result.checked_graph is not None
+
+    def test_startup_config_graph_reports_ir_contract_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from agm.agl.diagnostics import Diagnostic
+
+        def fail_ir_contracts(_executable: object, _codecs: object) -> object:
+            return {}, [Diagnostic(message="contract failed", line=1)]
+
+        monkeypatch.setattr("agm.agl.pipeline._materialize_ir_contracts", fail_ir_contracts)
+        prepared = _prepare_graph('config runner = "ok"\n')
+
+        result = PipelineDriver().collect_startup_config_graph(prepared, names={"runner"})
+
+        assert not result.ok
+        assert result.diagnostics
+        assert result.checked_graph is not None
+
     def test_startup_config_graph_materializes_custom_codec_contract(self) -> None:
         class SchemaTextCodec:
             @property

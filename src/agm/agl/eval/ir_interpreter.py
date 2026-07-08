@@ -573,6 +573,15 @@ class IrInterpreter:
                 )
             )
 
+    def _eval_default_in_frame(self, param: "IrFunctionParam", frame: Frame) -> Value:
+        """Evaluate an omitted argument's default expression in *frame*."""
+        assert param.default is not None, "arg omitted but param has no default (lowerer bug)"
+        self._frames.append(frame)
+        try:
+            return self._eval(param.default)
+        finally:
+            self._frames.pop()
+
     def _eval_extern_default(self, param: "IrFunctionParam") -> Value:
         """Evaluate an omitted extern argument's default expression.
 
@@ -581,14 +590,7 @@ class IrInterpreter:
         scope, mirroring how an ordinary closure's captures frame chains to
         module scope for its own defaults.
         """
-        assert param.default is not None, (
-            "extern arg omitted but param has no default (lowerer bug)"
-        )
-        self._frames.append({})
-        try:
-            return self._eval(param.default)
-        finally:
-            self._frames.pop()
+        return self._eval_default_in_frame(param, {})
 
     def _execute_direct_call(
         self,
@@ -622,17 +624,11 @@ class IrInterpreter:
 
                 bound_values: list[Value] = []
                 for param, arg in zip(desc.params, arguments, strict=True):
-                    if isinstance(arg, UseDefault):
-                        assert param.default is not None, (
-                            "UseDefault arg but param has no default (lowerer bug)"
-                        )
-                        self._frames.append(dict(closure_val.captures))
-                        try:
-                            val = self._eval(param.default)
-                        finally:
-                            self._frames.pop()
-                    else:
-                        val = self._eval(arg)
+                    val = (
+                        self._eval_default_in_frame(param, dict(closure_val.captures))
+                        if isinstance(arg, UseDefault)
+                        else self._eval(arg)
+                    )
                     bound_values.append(val)
 
                 return self._bind_and_invoke(desc, body, closure_val, bound_values)
@@ -715,12 +711,7 @@ class IrInterpreter:
                         val = self._eval(arguments[i])
                     elif param.default is not None:
                         # Defensive: evaluate default in a captures frame.
-                        captures_frame: Frame = dict(callee_val.captures)
-                        self._frames.append(captures_frame)
-                        try:
-                            val = self._eval(param.default)
-                        finally:
-                            self._frames.pop()
+                        val = self._eval_default_in_frame(param, dict(callee_val.captures))
                     else:
                         raise InvalidIrError(
                             f"IrIndirectCall: missing argument for parameter {i!r}"

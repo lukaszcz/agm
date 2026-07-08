@@ -202,10 +202,7 @@ def encode_boundary_value(
                 raise BoundaryViolation(
                     f"expected record {display_name!r}, got {_typename(value)}"
                 )
-            return {
-                fname: encode_boundary_value(fschema, value.fields[fname], seals, defs)
-                for fname, fschema in fields
-            }
+            return _encode_boundary_fields(fields, value.fields, seals, defs)
         case BoundaryEnum(display_name=display_name, variants=variants):
             if not isinstance(value, EnumValue):
                 raise BoundaryViolation(f"expected enum {display_name!r}, got {_typename(value)}")
@@ -215,28 +212,33 @@ def encode_boundary_value(
                     f"enum {display_name!r}: unknown variant {value.variant!r}"
                 )
             result: dict[str, object] = {"$case": value.variant}
-            result.update(
-                {
-                    fname: encode_boundary_value(fschema, value.fields[fname], seals, defs)
-                    for fname, fschema in variant.fields
-                }
-            )
+            result.update(_encode_boundary_fields(variant.fields, value.fields, seals, defs))
             return result
         case BoundaryException(display_name=display_name, fields=fields):
             if not isinstance(value, ExceptionValue):
                 raise BoundaryViolation(
                     f"expected exception {display_name!r}, got {_typename(value)}"
                 )
-            return {
-                fname: encode_boundary_value(fschema, value.fields[fname], seals, defs)
-                for fname, fschema in fields
-            }
+            return _encode_boundary_fields(fields, value.fields, seals, defs)
         case BoundarySealVar(var=var):
             return SealedHandle(value, seals[var])
         case BoundaryRef(key=key):
             return encode_boundary_value(defs[key], value, seals, defs)
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
+
+
+def _encode_boundary_fields(
+    fields: tuple[tuple[str, BoundarySchema], ...],
+    values: Mapping[str, Value],
+    seals: Mapping[str, object],
+    defs: Mapping[str, BoundarySchema],
+) -> dict[str, object]:
+    """Encode a nominal payload's ordered fields through the boundary schema."""
+    return {
+        fname: encode_boundary_value(fschema, values[fname], seals, defs)
+        for fname, fschema in fields
+    }
 
 
 def _encode_scalar(kind: ScalarKind, value: Value) -> object:
@@ -319,10 +321,7 @@ def decode_boundary_value(
         case BoundaryRecord(nominal=nominal, display_name=display_name, fields=fields):
             obj_fields = _expect_object(obj, display_name)
             _check_exact_fields(display_name, {fname for fname, _ in fields}, obj_fields)
-            record_fields = {
-                fname: decode_boundary_value(fschema, obj_fields[fname], seals, defs)
-                for fname, fschema in fields
-            }
+            record_fields = _decode_boundary_fields(fields, obj_fields, seals, defs)
             return RecordValue(nominal=nominal, display_name=display_name, fields=record_fields)
         case BoundaryEnum(nominal=nominal, display_name=display_name, variants=variants):
             obj_fields = _expect_object(obj, display_name)
@@ -336,20 +335,14 @@ def decode_boundary_value(
                 raise BoundaryViolation(f"enum {display_name!r}: unknown variant {case_val!r}")
             expected = {fname for fname, _ in variant.fields} | {"$case"}
             _check_exact_fields(f"{display_name}.{case_val}", expected, obj_fields)
-            payload = {
-                fname: decode_boundary_value(fschema, obj_fields[fname], seals, defs)
-                for fname, fschema in variant.fields
-            }
+            payload = _decode_boundary_fields(variant.fields, obj_fields, seals, defs)
             return EnumValue(
                 nominal=nominal, display_name=display_name, variant=case_val, fields=payload
             )
         case BoundaryException(nominal=nominal, display_name=display_name, fields=fields):
             obj_fields = _expect_object(obj, display_name)
             _check_exact_fields(display_name, {fname for fname, _ in fields}, obj_fields)
-            exc_fields = {
-                fname: decode_boundary_value(fschema, obj_fields[fname], seals, defs)
-                for fname, fschema in fields
-            }
+            exc_fields = _decode_boundary_fields(fields, obj_fields, seals, defs)
             return ExceptionValue(nominal=nominal, display_name=display_name, fields=exc_fields)
         case BoundarySealVar(var=var):
             if not isinstance(obj, SealedHandle):
@@ -390,6 +383,19 @@ def _check_exact_fields(
             f"{display_name!r}: field mismatch (expected {sorted(expected)}, "
             f"got {sorted(actual)})"
         )
+
+
+def _decode_boundary_fields(
+    fields: tuple[tuple[str, BoundarySchema], ...],
+    obj_fields: Mapping[str, object],
+    seals: Mapping[str, object],
+    defs: Mapping[str, BoundarySchema],
+) -> dict[str, Value]:
+    """Decode a nominal payload's ordered fields through the boundary schema."""
+    return {
+        fname: decode_boundary_value(fschema, obj_fields[fname], seals, defs)
+        for fname, fschema in fields
+    }
 
 
 def _decode_scalar(kind: ScalarKind, obj: object) -> Value:

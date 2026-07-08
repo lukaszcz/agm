@@ -557,6 +557,16 @@ class TestDecodeJson:
         with pytest.raises(BoundaryViolation):
             decode_boundary_value(contract.result, value, {})
 
+    def test_json_deepcopy_failure_is_boundary_violation(self) -> None:
+        contract = build_contract("extern def f(x: int) -> json\n0")
+
+        class BadStr(str):
+            def __reduce_ex__(self, protocol: int) -> object:
+                raise RuntimeError("copy failed")
+
+        with pytest.raises(BoundaryViolation):
+            decode_boundary_value(contract.result, BadStr("x"), {})
+
     def test_rejects_sealed_handle(self) -> None:
         contract = build_contract("extern def f(x: int) -> json\n0")
         handle = _sealed_handle(IntValue(1), object())
@@ -763,6 +773,23 @@ class TestInvoke:
         exc = excinfo.value.exc
         assert exc.display_name == "ExternError"
         assert exc.fields["python_type"] == TextValue("")
+
+    def test_unexpected_return_decode_exception_becomes_extern_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        contract = build_contract("extern def f() -> int\n0")
+
+        def boom(*args: object, **kwargs: object) -> object:
+            raise RuntimeError("decode exploded")
+
+        monkeypatch.setattr("agm.agl.runtime.externs.decode_boundary_value", boom)
+
+        registry = ExternRegistry()
+        with pytest.raises(AglRaise) as excinfo:
+            registry.invoke("f", contract, lambda: 1, [], "trace-decode-error")
+        exc = excinfo.value.exc
+        assert exc.display_name == "ExternError"
+        assert exc.fields["python_type"] == TextValue("RuntimeError")
 
     def test_cyclic_python_return_becomes_extern_error(self) -> None:
         contract = build_contract("extern def f() -> json\n0")

@@ -1337,18 +1337,15 @@ class _Checker:
 
     def _current_return_extern_targets(self) -> _ExternTargets:
         """Return merged extern provenance from the active return context."""
-        if not self._return_extern_targets_stack:
-            return ()
+        assert self._return_extern_targets_stack
         return tuple(self._return_extern_targets_stack[-1])
 
     def _record_return_extern_targets(self, targets: _ExternTargets) -> None:
         """Accumulate returned function provenance for the active function/lambda."""
-        if not targets or not self._return_extern_targets_stack:
+        if not targets:
             return
-        collected = self._return_extern_targets_stack[-1]
-        for target in targets:
-            if target not in collected:
-                collected.append(target)
+        assert self._return_extern_targets_stack
+        self._return_extern_targets_stack[-1].extend(targets)
 
     def _extern_targets_for_ref(
         self, ref: BindingRef, typ: Type

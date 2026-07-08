@@ -107,16 +107,21 @@ class TestFunctionType:
 
     def test_repr_one_param(self) -> None:
         f = FunctionType(params=(IntType(),), result=TextType())
-        assert repr(f) == "(int) -> text"
+        assert repr(f) == "int -> text"
 
     def test_repr_multiple_params(self) -> None:
         f = FunctionType(params=(IntType(), TextType()), result=BoolType())
         assert repr(f) == "(int, text) -> bool"
 
-    def test_repr_nested_function(self) -> None:
+    def test_repr_nested_function_param(self) -> None:
         inner = FunctionType(params=(IntType(),), result=IntType())
         outer = FunctionType(params=(inner,), result=TextType())
-        assert repr(outer) == "((int) -> int) -> text"
+        assert repr(outer) == "(int -> int) -> text"
+
+    def test_repr_nested_function_result_is_right_associative(self) -> None:
+        inner = FunctionType(params=(TextType(),), result=BoolType())
+        outer = FunctionType(params=(IntType(),), result=inner)
+        assert repr(outer) == "int -> text -> bool"
 
     def test_structural_equality_same(self) -> None:
         f1 = FunctionType(params=(IntType(), TextType()), result=BoolType())

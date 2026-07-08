@@ -136,8 +136,8 @@ A `def` inside a nested block is a static error. See
 - A `let` or `var` bound to a function value has a function type:
 
   ```agl
-  let double = fn(x: int) => x * 2   # double: (int) -> int
-  let f: (int) -> text = classify     # explicit function type annotation
+  let double = fn(x: int) => x * 2   # double: int -> int
+  let f: int -> text = classify     # explicit function type annotation
   ```
 
 ## `param` — declared program parameters
@@ -267,7 +267,7 @@ Record constructors and enum variants are normal bindings in the value
 namespace. They can be referenced bare, stored, and passed like any value:
 
 ```agl
-let mk: (int) -> Box[int] = Box   # the constructor as a first-class value
+let mk: int -> Box[int] = Box   # the constructor as a first-class value
 let one = mk(1)                    # called positionally, in field order
 ```
 

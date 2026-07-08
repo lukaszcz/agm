@@ -2441,7 +2441,7 @@ class TestFunctionAgentValueEcho:
 
         assert isinstance(r.value, IrClosureValue)
         rendered = render_value(r.value)
-        assert rendered == "<function: (int) -> int>"
+        assert rendered == "<function: int -> int>"
 
     def test_bare_def_name_echo_does_not_crash(self) -> None:
         """A bare function-name entry after a ``def`` echoes the surface form."""
@@ -2457,7 +2457,7 @@ class TestFunctionAgentValueEcho:
 
         assert isinstance(r.value, IrClosureValue)
         rendered = render_value(r.value)
-        assert rendered == "<function: (int) -> int>"
+        assert rendered == "<function: int -> int>"
 
     def test_bare_agent_name_echo_does_not_crash(self) -> None:
         """A bare agent-name entry echoes the surface form without crashing."""

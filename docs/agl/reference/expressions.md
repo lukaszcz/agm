@@ -188,7 +188,7 @@ in **declaration order**, since a function value has no named parameters
 ([Functions](functions.md)):
 
 ```agl
-let mk: (int) -> Box[int] = Box     # the constructor as a value
+let mk: int -> Box[int] = Box     # the constructor as a value
 let made = mk(1)                    # called positionally
 print made.value
 ```
@@ -196,7 +196,7 @@ print made.value
 This lets constructors be passed to higher-order functions:
 
 ```agl
-def apply[A, B](x: A, f: (A) -> B) -> B = f(x)
+def apply[A, B](x: A, f: A -> B) -> B = f(x)
 
 let built = apply(42, mk)           # mk applied inside a generic HOF
 print built.value

@@ -97,7 +97,7 @@ type arguments at the call site with the `::[…]` typed-call form, listing one
 argument per type parameter:
 
 ```agl
-def apply[A, B](x: A, f: (A) -> B) -> B = f(x)
+def apply[A, B](x: A, f: A -> B) -> B = f(x)
 record Box[T]
   value: T
 enum Option[T]
@@ -142,7 +142,7 @@ field order:
 record Box[T]
   value: T
 let direct: Box[int] = Box(value = 1)   # named, at the construction site
-let mk: (int) -> Box[int] = Box        # the constructor as a value
+let mk: int -> Box[int] = Box        # the constructor as a value
 let one = mk(1)                         # called positionally
 print one.value
 ```
@@ -156,8 +156,8 @@ def id[T](x: T) -> T = x
 record Box[T]
   value: T
 
-let f: (int) -> int = id               # annotation instantiates T = int
-let mk: (int) -> Box[int] = Box        # annotation instantiates T = int
+let f: int -> int = id               # annotation instantiates T = int
+let mk: int -> Box[int] = Box        # annotation instantiates T = int
 print(f(7))
 let made = mk(2)
 print made.value
@@ -167,10 +167,10 @@ Such a value behaves like any monomorphic function value afterwards — it can
 be passed to a higher-order function and called there:
 
 ```agl
-def apply[A, B](x: A, f: (A) -> B) -> B = f(x)
+def apply[A, B](x: A, f: A -> B) -> B = f(x)
 record Box[T]
   value: T
-let mk: (int) -> Box[int] = Box
+let mk: int -> Box[int] = Box
 let made = apply(42, mk)
 print made.value
 ```
@@ -187,7 +187,7 @@ enum Option[T]
   | none
   | some(value: T)
 
-let mk: (int) -> Option[int] = some::[int]   # ≡ fn (x: int) => some(x)
+let mk: int -> Option[int] = some::[int]   # ≡ fn (x: int) => some(x)
 let v = mk(7)
 let z: Option[int] = none::[int]            # nullary value, no call needed
 ```

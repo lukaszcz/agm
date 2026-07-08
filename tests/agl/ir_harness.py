@@ -150,7 +150,6 @@ def _prepare_extern_program(
         source_text=source,
         source_label="<extern-ir-test>",
         validate=True,
-        companion_path=companion_path,
     )
     registry = ExternRegistry()
     loaded: set[ModuleId] = set()

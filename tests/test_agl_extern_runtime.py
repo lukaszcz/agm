@@ -127,7 +127,6 @@ def _build_indirect_extern_call_program(tmp_path: Path, call_args: tuple[int, ..
             IrFunctionParam(symbol=SymbolId(5), default=IrConstInt(loc, 1)),
         ),
         contract=contract,
-        companion_path=companion_path,
     )
 
     symbols = {

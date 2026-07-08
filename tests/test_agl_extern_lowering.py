@@ -99,7 +99,6 @@ def _roots(*paths: Path) -> RootSet:
 def _lower_source(
     source: str,
     *,
-    companion_path: "Path | None" = None,
     validate: bool = True,
 ) -> ExecutableProgram:
     """Parse + resolve (file-backed, so `extern def` is allowed) + check + lower."""
@@ -110,9 +109,6 @@ def _lower_source(
         source_text=source,
         source_label="<extern-lowering-test>",
         validate=validate,
-        companion_path=(
-            companion_path if companion_path is not None else _PATH.with_suffix(".py")
-        ),
     )
 
 
@@ -135,22 +131,6 @@ class TestExternDescriptor:
         assert desc.result_label == "int"
         assert desc.param_labels == ("int",)
         assert len(desc.params) == 1
-
-    def test_companion_path_is_recorded_on_the_descriptor(self) -> None:
-        companion = Path("/virtual/some_companion.py")
-        executable = _lower_source(
-            "extern def f(x: int) -> int\nf(1)", companion_path=companion
-        )
-        assert _only_extern(executable).companion_path == companion
-
-    def test_companion_path_defaults_to_none_when_not_threaded(self) -> None:
-        source = "extern def f(x: int) -> int\nf(1)"
-        resolved = resolve(parse_program(source), origin_path=_PATH)
-        checked = check(resolved, _CAPS)
-        executable = lower_program(
-            checked, source_text=source, source_label="<t>", validate=True
-        )
-        assert _only_extern(executable).companion_path is None
 
     def test_contract_matches_the_declared_signature(self) -> None:
         executable = _lower_source("extern def f(x: int) -> int\nf(1)")
@@ -223,13 +203,11 @@ class TestGraphLowering:
             },
         )
         checked = check_graph(resolve_graph(graph), _CAPS)
-        companion_paths = {mid: lm.companion_path for mid, lm in graph.modules.items()}
-        executable = lower_graph(checked, validate=True, companion_paths=companion_paths)
+        executable = lower_graph(checked, validate=True)
 
         lib_mid = ModuleId.from_dotted("lib.mod")
         desc = _only_extern(executable)
         assert desc.module_id == lib_mid
-        assert desc.companion_path == companion_paths[lib_mid]
 
         entry_inits = executable.modules[executable.entry_module].initializers
         call = next(node for node in entry_inits if isinstance(node, IrDirectCall))

@@ -1322,17 +1322,20 @@ class IrInterpreter:
                     result_label=function_desc.result_label,
                 )
 
-            case IrDirectCall(function_id=fn_id, arguments=arguments):
+            case IrDirectCall() | IrIndirectCall():
+                # A call unwinding an AglRaise surfaces its own site's location
+                # when the error does not already carry a more specific span.
+                # Both call kinds share this defaulting; keeping it in one arm
+                # also avoids an extra Python stack frame per call, which the
+                # recursive hot path (see DEFAULT_MAX_CALL_DEPTH) cannot spare.
                 try:
-                    return self._execute_direct_call(fn_id, arguments, node.location)
-                except AglRaise as exc:
-                    if exc.span is None:
-                        exc.span = node.location
-                    raise
-
-            case IrIndirectCall(callee=callee_expr, arguments=arguments):
-                try:
-                    return self._execute_indirect_call(callee_expr, arguments, node.location)
+                    if isinstance(node, IrDirectCall):
+                        return self._execute_direct_call(
+                            node.function_id, node.arguments, node.location
+                        )
+                    return self._execute_indirect_call(
+                        node.callee, node.arguments, node.location
+                    )
                 except AglRaise as exc:
                     if exc.span is None:
                         exc.span = node.location

@@ -344,7 +344,6 @@ class GraphSession:
             image=self._ctx._link_image,
             source_text=text,
             validate=True,
-            companion_paths=companion_paths,
             contract_payloads=contract_payloads,
         )
         ir_params = {

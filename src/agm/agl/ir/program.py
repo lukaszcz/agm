@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from agm.agl.ir.contracts import ContractRequest, ExternContract, ParamDecoder
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
@@ -162,10 +161,6 @@ class ExternFunctionDescriptor:
     ``contract``       — the compiled boundary contract (argument encode
                           recipes + strict return decode), built from the
                           checked signature at lowering.
-    ``companion_path``  — canonical path of the Python file backing this
-                          extern's declaring module; ``None`` when the
-                          lowering entry point was not given one (the
-                          companion is then resolved by the caller instead).
     """
 
     function_id: FunctionId
@@ -176,7 +171,6 @@ class ExternFunctionDescriptor:
     contract: ExternContract
     param_labels: tuple[str, ...] = ()
     result_label: str = "?"
-    companion_path: Path | None = None
 
 
 # ---------------------------------------------------------------------------

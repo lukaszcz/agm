@@ -1089,6 +1089,25 @@ class PipelineDriver:
 
         warnings.extend(checked_graph.warnings)
 
+        # Extern companions: import and resolve every declared extern up front,
+        # exactly as the normal run path does, so a startup config initializer
+        # that calls an extern finds its loaded companion instead of tripping
+        # ExternRegistry.resolve's unguarded assert.
+        extern_diagnostics = _wire_extern_registry(
+            checked_graph=checked_graph,
+            capabilities=capabilities,
+            registry=host_env.extern_registry,
+            companion_paths=prepared.companion_paths,
+        )
+        if extern_diagnostics:
+            return StartupConfigResult(
+                ok=False,
+                diagnostics=extern_diagnostics,
+                error=None,
+                warnings=warnings,
+                checked_graph=checked_graph,
+            )
+
         contract_payloads, contract_errors = _materialize_graph_custom_contract_payloads(
             checked_graph,
             host_env.codecs,
@@ -1108,7 +1127,6 @@ class PipelineDriver:
         executable = lower_graph(
             checked_graph,
             validate=True,
-            companion_paths=prepared.companion_paths,
             contract_payloads=contract_payloads,
         )
         host_contracts, ir_contract_errors = _materialize_ir_contracts(
@@ -1259,7 +1277,6 @@ class PipelineDriver:
         executable = lower_graph(
             checked_graph,
             validate=True,
-            companion_paths=prepared.companion_paths,
             contract_payloads=contract_payloads,
         )
 

@@ -4,8 +4,9 @@ This module holds closed tagged-data descriptors that the lowerer compiles
 while checker types are still available, and that the evaluator executes
 WITHOUT any checker ``Type``.  It defines the cast/conversion descriptors
 (``ConversionRecipe`` and the ``DecodeSchema`` union) and the extern boundary
-contract (``BoundarySchema`` and ``ExternContract``); the boundary walkers
-that consume the contract at runtime arrive in future work.
+contract (``BoundarySchema`` and ``ExternContract``).  The boundary walkers
+that consume the contract at runtime live in ``runtime.externs``
+(``encode_boundary_value`` / ``decode_boundary_value``).
 
 Dependency rule: ``agm.agl.ir`` imports
 only stdlib + ``ir.ids`` / ``ir.operations`` + ``modules.ids``.  It imports

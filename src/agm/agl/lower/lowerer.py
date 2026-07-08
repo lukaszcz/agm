@@ -32,7 +32,6 @@ import json
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import assert_never, cast
 
 from agm.agl.ir.contracts import (
@@ -339,7 +338,6 @@ class _Lowerer:
         source_id: SourceId,
         source_text: str,
         *,
-        companion_path: Path | None = None,
         contract_payloads: Mapping[int, ContractPayload] | None = None,
     ) -> None:
         self._checked = checked
@@ -348,10 +346,6 @@ class _Lowerer:
         self._source_id = source_id
         self._source_text = normalize_newlines(source_text)
         self._params: list[IrParam] = []
-        # The canonical Python companion path for this module, when this
-        # lowering entry point was given one; embedded verbatim in every
-        # ExternFunctionDescriptor lowered from this module's `extern def`s.
-        self._companion_path = companion_path
         # Shared TypeTable built during checking; resolves record/enum field
         # and variant shapes for constructor lowering, nominal descriptors,
         # and contract/param schema derivation.
@@ -789,7 +783,6 @@ class _Lowerer:
             contract=build_extern_contract(sig, self._type_table),
             param_labels=param_labels,
             result_label=result_label,
-            companion_path=self._companion_path,
         )
         self._link.externs[fn_id] = desc
 
@@ -2908,7 +2901,6 @@ def lower_program(
     source_text: str,
     source_label: str,
     validate: bool = False,
-    companion_path: Path | None = None,
     contract_payloads: Mapping[int, ContractPayload] | None = None,
 ) -> ExecutableProgram:
     """Lower a single-module ``CheckedProgram`` to an ``ExecutableProgram``.
@@ -2917,10 +2909,6 @@ def lower_program(
     :param source_text: the normalised source text (used in the sources table).
     :param source_label: human-readable label for the source (display_name).
     :param validate: when ``True``, run ``validate_ir`` before returning.
-    :param companion_path: the canonical Python companion path for the module,
-        when known.  Only meaningful when *checked* was resolved with an
-        origin path (the only way a single-module program can declare an
-        ``extern def``); embedded in every lowered ``ExternFunctionDescriptor``.
     :returns: the linked ``ExecutableProgram`` ready for evaluation.
     :raises NotImplementedError: for unsupported AST nodes.
     :raises AssertionError: for missing checker side-table entries (compiler bugs).
@@ -2936,7 +2924,6 @@ def lower_program(
         ENTRY_ID,
         source_id,
         source_text,
-        companion_path=companion_path,
         contract_payloads=contract_payloads,
     )
     program = lowerer.lower()

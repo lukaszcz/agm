@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from agm.agl.ir.contracts import ContractPayload
 from agm.agl.ir.ids import NominalId, SourceId, SymbolId
@@ -122,16 +121,9 @@ def lower_repl_graph(
     image: LinkImage,
     source_text: str,
     validate: bool = False,
-    companion_paths: "Mapping[ModuleId, Path | None] | None" = None,
     contract_payloads: Mapping[int, ContractPayload] | None = None,
 ) -> LoweredReplEntry:
-    """Incrementally link a checked module graph into a REPL image.
-
-    ``companion_paths``, when given, threads each newly-linked module's
-    companion path (as recorded by the loader) into every extern lowered from
-    it; omitted (the default) when the caller has not loaded that metadata,
-    in which case such externs lower with ``companion_path=None``.
-    """
+    """Incrementally link a checked module graph into a REPL image."""
     from agm.agl.lower.graph import lower_graph
 
     # NOTE: ``image._linked_modules`` is intentionally NOT updated here. Linking
@@ -142,7 +134,6 @@ def lower_repl_graph(
     program = lower_graph(
         checked_graph,
         validate=validate,
-        companion_paths=companion_paths,
         _link=image._state,
         _already_linked=frozenset(image._linked_modules),
         _entry_source_text=source_text,

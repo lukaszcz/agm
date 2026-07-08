@@ -13,6 +13,8 @@ NOTE: No static-analysis suppression comments in this file.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from agm.agl.modules.ids import STD_CORE_ID
@@ -361,6 +363,51 @@ class TestStartupConfigCollection:
         assert not result.ok
         assert result.error is not None
         assert result.error.type_name == "Abort"
+
+    def test_startup_config_value_from_extern_wires_companion(self, tmp_path: Path) -> None:
+        from agm.agl.modules.roots import RootSet
+
+        entry_path = tmp_path / "prog.agl"
+        entry_path.write_text(
+            "extern def pick_runner() -> text\nconfig runner = pick_runner()\n"
+        )
+        (tmp_path / "prog.py").write_text('def pick_runner():\n    return "claude"\n')
+        prepared = PipelineDriver.prepare_program(
+            entry_path.read_text(),
+            entry_path=entry_path,
+            roots=RootSet(roots=frozenset({tmp_path})),
+            default_stdlib=False,
+        )
+
+        result = PipelineDriver().collect_startup_config_graph(prepared, names={"runner"})
+
+        assert result.ok, result.error or result.diagnostics
+        assert result.values["runner"] == TextValue("claude")
+
+    def test_startup_config_extern_wiring_failure_returns_diagnostic(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.modules.roots import RootSet
+
+        entry_path = tmp_path / "prog.agl"
+        entry_path.write_text(
+            "extern def pick_runner() -> text\nconfig runner = pick_runner()\n"
+        )
+        # Companion is present but does not define the declared extern, so
+        # wiring fails during the startup-config prepass.
+        (tmp_path / "prog.py").write_text("def other():\n    return 1\n")
+        prepared = PipelineDriver.prepare_program(
+            entry_path.read_text(),
+            entry_path=entry_path,
+            roots=RootSet(roots=frozenset({tmp_path})),
+            default_stdlib=False,
+        )
+
+        result = PipelineDriver().collect_startup_config_graph(prepared, names={"runner"})
+
+        assert not result.ok
+        assert result.diagnostics
+        assert result.checked_graph is not None
 
     def test_interpreter_collect_returns_empty_when_no_targets(self) -> None:
         interp = self._interpreter_for("let x = 1\nx\n")

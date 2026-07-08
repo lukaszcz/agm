@@ -344,7 +344,7 @@ def run(args: ExecArgs) -> None:
 
     shared_extern_registry = ExternRegistry()
     startup_values: dict[str, Value] = {}
-    if prepared.resolved_graph is not None:
+    if prepared.resolved_graph is not None and not dry_run.enabled():
         startup_runtime = PipelineDriver(
             default_loop_limit=resolved_loop_limit,
             default_strict_json=resolved_strict_json,

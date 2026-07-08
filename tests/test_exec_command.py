@@ -1454,6 +1454,37 @@ class TestExecFFI:
         assert "add_one" in captured.out
         assert not marker.exists()
 
+    def test_dry_run_skips_startup_config_extern_import_and_execution(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Source startup config must not import or call externs during --dry-run."""
+        from agm.core import dry_run
+
+        monkeypatch.setattr(dry_run, "_ENABLED", True)
+
+        marker = tmp_path / "marker.txt"
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "extern def choose_runner() -> text\n"
+            "config runner = choose_runner()\n"
+            "choose_runner()\n"
+        )
+        (tmp_path / "prog.py").write_text(
+            f"open({str(marker)!r}, 'a').write('imported')\n"
+            "def choose_runner():\n"
+            f"    open({str(marker)!r}, 'a').write('called')\n"
+            "    return 'echo'\n"
+        )
+
+        assert exec_command.run(_exec_args(agl_file)) is None
+        captured = capsys.readouterr()
+        assert "call-sites" in captured.out
+        assert "choose_runner" in captured.out
+        assert not marker.exists()
+
 
 class TestJsonParamsCLI:
     """--param with structured (record/list/decimal) types via JsonCodec."""

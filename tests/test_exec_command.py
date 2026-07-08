@@ -2366,6 +2366,33 @@ class TestExecStartupConfigPrepass:
         assert "warning: startup warning" in captured.err
         assert "AgL exception: Abort: boom" in captured.err
 
+    def test_startup_config_extern_shares_companion_state_with_run(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        count_file = tmp_path / "imports.txt"
+        agl_file.write_text(
+            "extern def runner_name() -> text\n"
+            "extern def import_count() -> int\n"
+            "config runner = runner_name()\n"
+            "print import_count()\n"
+        )
+        (tmp_path / "prog.py").write_text(
+            "from pathlib import Path\n"
+            f"_count_path = Path({str(count_file)!r})\n"
+            "_current = int(_count_path.read_text()) if _count_path.exists() else 0\n"
+            "_count_path.write_text(str(_current + 1))\n"
+            "def runner_name():\n"
+            "    return 'runner'\n"
+            "def import_count():\n"
+            "    return int(_count_path.read_text())\n"
+        )
+
+        exec_command.run(_exec_args_no_log(agl_file))
+
+        assert capsys.readouterr().out == "1\n"
+        assert count_file.read_text() == "1"
+
     def test_option_text_value_ignores_non_text_some_payload(self) -> None:
         from agm.agl.ir.ids import NominalId
         from agm.agl.modules.ids import STD_CORE_ID

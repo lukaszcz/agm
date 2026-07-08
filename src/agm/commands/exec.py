@@ -54,6 +54,7 @@ from agm.agl import PipelineDriver
 from agm.agl.diagnostics import format_diagnostic
 from agm.agl.modules.roots import assemble_roots
 from agm.agl.runtime.agents import runner_backed_agent_factory
+from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.runtime.params import (
     build_engine_config_base,
     convert_config_value,
@@ -342,6 +343,7 @@ def run(args: ExecArgs) -> None:
     else:
         resolved_timeout = config.timeout
 
+    shared_extern_registry = ExternRegistry()
     startup_values: dict[str, Value] = {}
     if prepared.resolved_graph is not None:
         startup_runtime = PipelineDriver(
@@ -349,6 +351,7 @@ def run(args: ExecArgs) -> None:
             default_strict_json=resolved_strict_json,
             default_agent=lambda _request: "",
             shell_exec_timeout=resolved_timeout,
+            extern_registry=shared_extern_registry,
         )
         startup_result = startup_runtime.collect_startup_config_graph(
             prepared,
@@ -461,6 +464,7 @@ def run(args: ExecArgs) -> None:
         default_agent=factory,
         shell_exec_timeout=resolved_timeout,
         default_call_depth_limit=resolved_call_depth_limit,
+        extern_registry=shared_extern_registry,
     )
 
     # Register every declared agent so the registered set equals the declared

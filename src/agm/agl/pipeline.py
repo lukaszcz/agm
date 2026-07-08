@@ -319,6 +319,11 @@ class PipelineDriver:
         this limit raises a ``RecursionError`` in the AgL program.  ``None``
         applies the canonical default (``IrInterpreter.DEFAULT_MAX_CALL_DEPTH``).
         Resolved by the caller as ``--max-call-depth`` > ``[exec] max-call-depth``.
+    extern_registry : ExternRegistry or None
+        Optional shared Python FFI registry. Hosts that perform a startup
+        config prepass before the real run pass the same registry to both
+        drivers so companion module imports and module state are shared across
+        one program invocation.
     """
 
     def __init__(
@@ -329,6 +334,7 @@ class PipelineDriver:
         default_agent: AgentFn | None = None,
         shell_exec_timeout: float | None = None,
         default_call_depth_limit: int | None = None,
+        extern_registry: "ExternRegistry | None" = None,
     ) -> None:
         self._default_strict_json = default_strict_json
         self._default_loop_limit = default_loop_limit
@@ -340,6 +346,7 @@ class PipelineDriver:
             else IrInterpreter.DEFAULT_MAX_CALL_DEPTH
         )
         self._agents: dict[str, AgentFn] = {}
+        self._extern_registry = extern_registry
         # Extra codecs registered by the host (beyond the built-ins).
         self._extra_codecs: dict[str, "OutputCodec"] = {}
         # Cached assembled environment: invariant between registrations, so the
@@ -414,6 +421,7 @@ class PipelineDriver:
             agents=self._agents,
             default_agent=self._default_agent,
             extra_codecs=self._extra_codecs,
+            extern_registry=self._extern_registry,
         )
         return self._host_env_cache
 
@@ -1344,8 +1352,9 @@ class PipelineDriver:
 
             from agm.agl.runtime.externs import ExternRegistry
 
+            self._extern_registry = ExternRegistry()
             self._host_env_cache = replace(
-                self._host_env_cache, extern_registry=ExternRegistry()
+                self._host_env_cache, extern_registry=self._extern_registry
             )
 
 
@@ -1644,6 +1653,7 @@ def assemble_host_environment(
     agents: dict[str, AgentFn],
     default_agent: AgentFn | None,
     extra_codecs: dict[str, "OutputCodec"],
+    extern_registry: "ExternRegistry | None" = None,
 ) -> HostEnvironment:
     """Assemble the shared host runtime environment from registrations.
 
@@ -1683,7 +1693,7 @@ def assemble_host_environment(
         registry=registry,
         capabilities=capabilities,
         codecs=all_codecs,
-        extern_registry=ExternRegistry(),
+        extern_registry=extern_registry if extern_registry is not None else ExternRegistry(),
     )
 
 

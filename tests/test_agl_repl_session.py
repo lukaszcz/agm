@@ -1147,8 +1147,16 @@ class TestContractError:
             raise ValueError("bad contract")
 
         monkeypatch.setattr(contract_mod, "materialize_contract", bad_materialize)
+        from agm.agl.runtime.codec import TextCodec
+
+        class BadCodec(TextCodec):
+            @property
+            def name(self) -> str:
+                return "bad"
+
         s = ReplSession(default_agent=CountingAgent("ok"))
-        r = s.eval_entry('let x = ask """hi"""')
+        s.register_codec(BadCodec())
+        r = s.eval_entry('let x = ask("hi", format = "bad")')
         assert not r.ok
         assert any("Contract error" in d.message for d in r.diagnostics)
         # Atomic: nothing promoted.
@@ -1960,12 +1968,20 @@ class TestImports:
             raise ValueError("bad contract")
 
         monkeypatch.setattr(contract_mod, "materialize_contract", bad_materialize)
+        from agm.agl.runtime.codec import TextCodec
+
+        class BadCodec(TextCodec):
+            @property
+            def name(self) -> str:
+                return "bad"
+
         lib = tmp_path / "mylib.agl"
         lib.write_text("def add(a: int, b: int) -> int = a + b\n")
         s = self._make_session_with_root(tmp_path)
-        # The ask() built-in produces a contract spec; trigger it in graph mode.
+        # The custom-format ask produces a pre-lower contract materialization error.
         s.register_agent("helper", CountingAgent("ok"))
-        r = s.eval_entry('import mylib\nagent helper\nask("hi", agent = helper)')
+        s.register_codec(BadCodec())
+        r = s.eval_entry('import mylib\nagent helper\nask("hi", agent = helper, format = "bad")')
         assert not r.ok
         assert any("Contract error" in d.message for d in r.diagnostics)
 

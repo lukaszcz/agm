@@ -3436,6 +3436,25 @@ class TestRunPreparedDefensivePaths:
         assert result.ok is False
         assert any("tc fail" in d.message for d in result.diagnostics)
 
+    def test_run_prepared_custom_contract_error(self) -> None:
+        """run_prepared exits early when custom pre-lower contract materialization fails."""
+        from unittest.mock import patch
+
+        from agm.agl.runtime.codec import TextCodec
+
+        class BadCodec(TextCodec):
+            @property
+            def name(self) -> str:
+                return "bad"
+
+        prepared = PipelineDriver.prepare('let r = ask("hi", format = "bad")\nr')
+        rt = PipelineDriver(default_agent=lambda req: "ok")
+        rt.register_codec(BadCodec())
+        with patch("agm.agl.runtime.contract.materialize_contract", side_effect=ValueError("bad")):
+            result = rt.run_prepared(prepared)
+        assert result.ok is False
+        assert any("Contract error" in d.message for d in result.diagnostics)
+
     def test_run_prepared_graph_contract_error(self, tmp_path: pathlib.Path) -> None:
         """run_prepared_graph exits early when an IR contract is invalid."""
         from unittest.mock import patch
@@ -3457,6 +3476,29 @@ class TestRunPreparedDefensivePaths:
         ):
             result = rt.run_prepared_graph(prepared)
         # A contract error yields a RunResult with ok=False and a contract diagnostic.
+        assert result.ok is False
+        assert any("Contract error" in d.message for d in result.diagnostics)
+
+    def test_run_prepared_graph_custom_contract_error(self) -> None:
+        """run_prepared_graph exits early when custom pre-lower materialization fails."""
+        from unittest.mock import patch
+
+        from agm.agl.modules.roots import RootSet
+        from agm.agl.runtime.codec import TextCodec
+
+        class BadCodec(TextCodec):
+            @property
+            def name(self) -> str:
+                return "bad"
+
+        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
+        prepared = PipelineDriver.prepare_program(
+            'let r = ask("hi", format = "bad")\nr', entry_path=None, roots=roots
+        )
+        rt = PipelineDriver(default_agent=lambda req: "ok")
+        rt.register_codec(BadCodec())
+        with patch("agm.agl.runtime.contract.materialize_contract", side_effect=ValueError("bad")):
+            result = rt.run_prepared_graph(prepared)
         assert result.ok is False
         assert any("Contract error" in d.message for d in result.diagnostics)
 

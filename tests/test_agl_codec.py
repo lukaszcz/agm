@@ -47,6 +47,7 @@ from agm.agl.scope import resolve
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import (
+    AgentType,
     BoolType,
     DecimalType,
     DictType,
@@ -58,6 +59,7 @@ from agm.agl.semantics.types import (
     TextType,
     Type,
     TypeVarType,
+    UnitType,
 )
 from agm.agl.semantics.values import (
     BoolValue,
@@ -3552,6 +3554,36 @@ class TestRegisterCodec:
         assert seen_parse_type == [RecordType("Box")]
         assert seen_contract_fields == [{"value": IntType()}]
         assert seen_parse_type_tables == [None]
+
+    def test_custom_codec_ir_placeholder_targets_are_kind_correct(self) -> None:
+        """Legacy custom parse target placeholders are reconstructed from typeless IR."""
+        from agm.agl.runtime.contract import _target_type_for_request
+
+        cases = [
+            ("text", "text", TextType),
+            ("int", "int", IntType),
+            ("decimal", "decimal", DecimalType),
+            ("bool", "bool", BoolType),
+            ("json", "json", JsonType),
+            ("agent", "agent", AgentType),
+            ("list", "list[int]", ListType),
+            ("dict", "dict[text, int]", DictType),
+            ("record", "Issue", RecordType),
+            ("enum", "Result", EnumType),
+            ("", "unit", UnitType),
+        ]
+        for kind, label, expected_type in cases:
+            request = ContractRequest(
+                codec_name="capture",
+                strict_json=None,
+                json_schema=None,
+                decode=None,
+                target_type_label=label,
+                structured_exec=False,
+                format_instructions="",
+                target_type_kind=kind,
+            )
+            assert isinstance(_target_type_for_request(request), expected_type)
 
     def test_custom_codec_ir_materialization_uses_request_payload_only(self) -> None:
         """IR contract materialization does not call custom make_contract hooks."""

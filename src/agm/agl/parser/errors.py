@@ -53,7 +53,12 @@ _STMT_STARTERS: frozenset[str] = frozenset(
 )
 
 _ELSE_BEFORE_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_])else\s*$")
-_PLACEHOLDER_BEFORE_TOKEN_RE = re.compile(r"\?[0-9]*\s*$")
+# A genuine placeholder token (`?` or `?N`) starts a fresh token, so it is only
+# ever preceded by whitespace, a structural delimiter (see the lexer's
+# ``_IDENT_STOP``), or the start of input.  The negative lookbehind excludes any
+# identifier-body character, so a name that merely ends in ``?`` (predicate names
+# like ``empty?`` or the ``as?`` keyword) does not masquerade as a placeholder.
+_PLACEHOLDER_BEFORE_TOKEN_RE = re.compile(r"(?<![^\s(){}\[\]:,.|;/@=])\?[0-9]*\s*$")
 
 
 class AglSyntaxError(AglError):

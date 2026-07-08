@@ -1,6 +1,11 @@
 {
   "scenarios": [
     {
+      "name": "concrete_arg_with_generic_hole",
+      "params": {"mode": "concrete", "n": 7},
+      "expect": {"stdout": "kept\n"}
+    },
+    {
       "name": "map_id_style",
       "params": {"mode": "map", "n": 9},
       "expect": {"stdout": "9\nv=3\n"}

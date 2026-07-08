@@ -1975,6 +1975,10 @@ class _Lowerer:
         bindings come from explicit type arguments when present, otherwise from
         matching hole and non-hole slots against the resulting closure's shape.
         """
+        if not sig.type_params:
+            # No type variables to solve: the declared parameter types are already
+            # concrete, so skip the (no-op) matching pass entirely.
+            return tuple(spec.type for spec in sig.params)
         subst: dict[str, Type] = {}
         if call_node.type_args:
             for param_name, type_arg in zip(sig.type_params, call_node.type_args):

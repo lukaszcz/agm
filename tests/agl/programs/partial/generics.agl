@@ -10,7 +10,15 @@ def map_one[A, B](f: (A) -> B, xs: list[A]) -> list[B] = [f(xs[0])]
 
 def apply[A, B](x: A, f: (A) -> B) -> B = f(x)
 
+def tag[T](label: int, x: T) -> T = x
+
 if
+  | mode == "concrete" =>
+      # A generic callee with a fixed concrete-typed argument: the hole's type is
+      # solved from the expected function type while the bound `int` argument stays
+      # concrete.
+      let keep: (text) -> text = tag(n, ?)
+      print(keep("kept"))
   | mode == "map" =>
       let map_id: (list[int]) -> list[int] = map_one(id, ?)
       let mapped = map_id([n])

@@ -542,17 +542,9 @@ class ConstructorChecker:
         span: SourceSpan,
     ) -> dict[str, Type]:
         hint: dict[str, Type] = {}
-        if not isinstance(expected, FunctionType) or len(expected.params) != len(hole_indices):
-            return hint
-        templates_by_name = dict(zip(sig.field_names, sig.field_templates))
-        hole_templates: list[Type | None] = [None] * len(hole_indices)
-        for fname in sig.field_names:
-            bound_expr = bound_exprs[fname]
-            if isinstance(bound_expr, Placeholder):
-                hole_templates[hole_indices[bound_expr.node_id]] = templates_by_name[fname]
-        for template, concrete in zip(cast(list[Type], hole_templates), expected.params):
-            self._ctx._match(template, concrete, hint, span=span, challenge=False)
-        self._ctx._match(sig.result_template, expected.result, hint, span=span, challenge=False)
+        self._match_partial_constructor_expected(
+            sig, bound_exprs, hole_indices, expected, hint, span=span
+        )
         return hint
 
     def _match_partial_constructor_expected(

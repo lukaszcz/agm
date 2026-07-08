@@ -1342,6 +1342,15 @@ class TestCalls:
             with pytest.raises(AglSyntaxError, match="placeholder"):
                 parse(src)
 
+    def test_identifier_ending_in_question_mark_not_reported_as_placeholder(self) -> None:
+        """A name ending in ``?`` before an unrelated syntax error must not be
+        misclassified as a misplaced placeholder — ``?`` is a valid identifier
+        character (predicate names like ``empty?``)."""
+        for src in ("let y = foo?]", "x == empty?)"):
+            with pytest.raises(AglSyntaxError) as excinfo:
+                parse(src)
+            assert "placeholder" not in str(excinfo.value)
+
     @pytest.mark.parametrize(
         ("src", "match"),
         [

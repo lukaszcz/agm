@@ -1382,15 +1382,7 @@ class _Checker:
         span: SourceSpan,
     ) -> dict[str, Type]:
         hint: dict[str, Type] = {}
-        if not isinstance(expected, FunctionType) or len(expected.params) != len(hole_indices):
-            return hint
-        hole_templates: list[Type | None] = [None] * len(hole_indices)
-        for spec, bound_expr in zip(sig.params, binding):
-            if isinstance(bound_expr, Placeholder):
-                hole_templates[hole_indices[bound_expr.node_id]] = spec.type
-        for template, concrete in zip(cast(list[Type], hole_templates), expected.params):
-            self._match(template, concrete, hint, span=span, challenge=False)
-        self._match(sig.result, expected.result, hint, span=span, challenge=False)
+        self._match_partial_expected(sig, binding, hole_indices, expected, hint, span=span)
         return hint
 
     def _match_partial_expected(

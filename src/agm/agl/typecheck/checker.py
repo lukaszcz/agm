@@ -389,6 +389,7 @@ class _Checker:
         # operand types in inference mode.
         self._return_expected_stack: list[Type | None] = []
         self._return_collected_stack: list[list[Type]] = []
+        self._return_extern_targets_stack: list[list[tuple[str, Type]]] = []
 
     # ------------------------------------------------------------------
     # required-after-defaulted check (shared by def and lambda)
@@ -591,6 +592,10 @@ class _Checker:
             item_type = self._check_item(item, expected=expected if item is last else None)
             if item is last:
                 result_type = item_type
+        if isinstance(last, Expr):
+            self._set_extern_expr_targets(
+                block.node_id, self._extern_targets_for_expr(last, result_type)
+            )
         return result_type
 
     def _check_item(self, item: Item, *, expected: Type | None) -> Type:
@@ -638,9 +643,11 @@ class _Checker:
         collected: list[Type] = []
         self._return_expected_stack.append(expected)
         self._return_collected_stack.append(collected)
+        self._return_extern_targets_stack.append([])
         try:
             yield collected
         finally:
+            self._return_extern_targets_stack.pop()
             self._return_collected_stack.pop()
             self._return_expected_stack.pop()
 
@@ -683,10 +690,13 @@ class _Checker:
             assert node.body is not None
             with self._return_context(sig.result):
                 body_type = self._check_expr(node.body, expected=sig.result)
+                return_targets = self._current_return_extern_targets()
             if not isinstance(body_type, BottomType):
                 self._assert_assignable(body_type, sig.result, node.span)
             targets = (
-                self._extern_expr_targets.get(node.body.node_id, ())
+                self._merge_extern_targets(
+                    self._extern_targets_for_expr(node.body, body_type), return_targets
+                )
                 if isinstance(sig.result, FunctionType)
                 else ()
             )
@@ -711,6 +721,7 @@ class _Checker:
                     self._assert_assignable(def_type, spec.type, p.span)
             with self._return_context(None) as collected:
                 body_type = self._check_expr(node.body, expected=None)
+                return_targets = self._current_return_extern_targets()
             if isinstance(body_type, BottomType) and not collected:
                 raise AglTypeError(
                     f"Cannot infer return type of function '{node.name}': body always raises. "
@@ -734,6 +745,14 @@ class _Checker:
                 params=tuple(p.type for p in sig.params), result=result_type
             )
             self._register_funcdef_signature(node, inferred_sig, inferred_type)
+            targets = (
+                self._merge_extern_targets(
+                    self._extern_targets_for_expr(node.body, body_type), return_targets
+                )
+                if isinstance(result_type, FunctionType)
+                else ()
+            )
+            self._set_extern_binding_targets(node.node_id, targets)
         finally:
             self._current_type_vars = old_type_vars
 
@@ -1281,6 +1300,41 @@ class _Checker:
         else:
             self._extern_binding_targets.pop(node_id, None)
 
+    @staticmethod
+    def _merge_extern_targets(
+        *target_groups: Sequence[tuple[str, Type]],
+    ) -> tuple[tuple[str, Type], ...]:
+        """Merge extern provenance groups in source order, removing duplicates."""
+        merged: list[tuple[str, Type]] = []
+        for targets in target_groups:
+            for target in targets:
+                if target not in merged:
+                    merged.append(target)
+        return tuple(merged)
+
+    def _extern_targets_for_expr(
+        self, expr: Expr, result_type: Type
+    ) -> tuple[tuple[str, Type], ...]:
+        """Return extern provenance for a function-valued expression result."""
+        if not isinstance(result_type, FunctionType):
+            return ()
+        return self._extern_expr_targets.get(expr.node_id, ())
+
+    def _current_return_extern_targets(self) -> tuple[tuple[str, Type], ...]:
+        """Return merged extern provenance from the active return context."""
+        if not self._return_extern_targets_stack:
+            return ()
+        return tuple(self._return_extern_targets_stack[-1])
+
+    def _record_return_extern_targets(self, targets: tuple[tuple[str, Type], ...]) -> None:
+        """Accumulate returned function provenance for the active function/lambda."""
+        if not targets or not self._return_extern_targets_stack:
+            return
+        collected = self._return_extern_targets_stack[-1]
+        for target in targets:
+            if target not in collected:
+                collected.append(target)
+
     def _extern_targets_for_ref(
         self, ref: BindingRef, typ: Type
     ) -> tuple[tuple[str, Type], ...]:
@@ -1300,12 +1354,9 @@ class _Checker:
         """Merge extern provenance from branches of a function-valued expression."""
         if not isinstance(result_type, FunctionType):
             return ()
-        merged: list[tuple[str, Type]] = []
-        for expr in exprs:
-            for target in self._extern_expr_targets.get(expr.node_id, ()):
-                if target not in merged:
-                    merged.append(target)
-        return tuple(merged)
+        return self._merge_extern_targets(
+            *(self._extern_expr_targets.get(expr.node_id, ()) for expr in exprs)
+        )
 
     def _record_extern_call_site(self, node: Call, callee: str, target_type: Type) -> None:
         self._call_sites.append(
@@ -1939,10 +1990,17 @@ class _Checker:
     def _check_try(self, node: Try, *, expected: Type | None) -> Type:
         body_type = self._check_expr(node.body, expected=expected)
         handler_types: list[Type] = [body_type]
+        handler_bodies: list[Expr] = []
         for clause in node.handlers:
             ht = self._check_catch_clause(clause, expected=expected)
             handler_types.append(ht)
-        return self._unify_branch_types(handler_types, node.span, "Try expression")
+            handler_bodies.append(clause.body)
+        result = self._unify_branch_types(handler_types, node.span, "Try expression")
+        self._set_extern_expr_targets(
+            node.node_id,
+            self._extern_targets_for_function_exprs((node.body, *handler_bodies), result),
+        )
+        return result
 
     def _check_catch_clause(self, clause: CatchClause, *, expected: Type | None) -> Type:
         if clause.exc_type is None or clause.exc_type == "_":
@@ -1985,6 +2043,13 @@ class _Checker:
             if node.value is None
             else self._check_expr(node.value, expected=expected)
         )
+        targets = (
+            self._extern_targets_for_expr(node.value, value_type)
+            if node.value is not None
+            else ()
+        )
+        self._set_extern_expr_targets(node.node_id, targets)
+        self._record_return_extern_targets(targets)
         if expected is None:
             self._return_collected_stack[-1].append(value_type)
         else:

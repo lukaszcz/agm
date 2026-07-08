@@ -421,6 +421,49 @@ class TestExternCallSiteRecording:
         assert {s.line for s in sites} == {10}
         assert {s.target_type for s in sites} == {IntType()}
 
+    def test_function_valued_block_extern_call_recorded_at_invocation(self) -> None:
+        source = (
+            "extern def inc(x: int) -> int\n"
+            "def choose() -> (int) -> int\n"
+            "  let ignored = 1\n"
+            "  inc\n"
+            "let h = choose()\n"
+            "h(1)"
+        )
+        cp = check_extern(source)
+        sites = [s for s in cp.call_sites if s.callee == "inc"]
+        assert len(sites) == 1
+        assert sites[0].line == 6
+        assert sites[0].target_type == IntType()
+
+    def test_function_valued_try_extern_call_recorded_at_invocation(self) -> None:
+        source = (
+            "extern def inc(x: int) -> int\n"
+            "extern def dec(x: int) -> int\n"
+            "def choose() -> (int) -> int = try inc catch _ => dec\n"
+            "let h = choose()\n"
+            "h(1)"
+        )
+        cp = check_extern(source)
+        sites = [s for s in cp.call_sites if s.callee in {"inc", "dec"}]
+        assert {s.callee for s in sites} == {"inc", "dec"}
+        assert {s.line for s in sites} == {5}
+        assert {s.target_type for s in sites} == {IntType()}
+
+    def test_function_valued_return_extern_call_recorded_at_invocation(self) -> None:
+        source = (
+            "extern def inc(x: int) -> int\n"
+            "def choose() -> (int) -> int\n"
+            "  return inc\n"
+            "let h = choose()\n"
+            "h(1)"
+        )
+        cp = check_extern(source)
+        sites = [s for s in cp.call_sites if s.callee == "inc"]
+        assert len(sites) == 1
+        assert sites[0].line == 5
+        assert sites[0].target_type == IntType()
+
     def test_graph_mode_imported_extern_call_recorded(self, tmp_path: Path) -> None:
         write_companion_file(tmp_path / "root", "lib.mod", "def f(x):\n    return x\n")
         checked = check_extern_graph(

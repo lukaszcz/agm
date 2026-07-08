@@ -587,6 +587,19 @@ class TestSealing:
         with pytest.raises(BoundaryViolation):
             decode_boundary_value(contract.result, 5, seals)
 
+    def test_decode_rejects_uninitialized_handle_instance(self) -> None:
+        contract = build_contract("extern def identity[T](x: T) -> T\n0", fn_name="identity")
+        forged = object.__new__(SealedHandle)
+        with pytest.raises(BoundaryViolation):
+            decode_boundary_value(contract.result, forged, {"T": object()})
+
+    def test_decode_rejects_unmapped_handle_id(self) -> None:
+        contract = build_contract("extern def identity[T](x: T) -> T\n0", fn_name="identity")
+        forged = object.__new__(SealedHandle)
+        object.__setattr__(forged, "_SealedHandle__id", -1)
+        with pytest.raises(BoundaryViolation):
+            decode_boundary_value(contract.result, forged, {"T": object()})
+
     def test_public_constructor_cannot_forge_handle(self) -> None:
         with pytest.raises(TypeError):
             SealedHandle(IntValue(1), object())

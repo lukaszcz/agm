@@ -350,8 +350,8 @@ def run(args: ExecArgs) -> None:
             default_strict_json=resolved_strict_json,
             default_agent=lambda _request: "",
             shell_exec_timeout=resolved_timeout,
-            extern_registry=shared_extern_registry,
         )
+        startup_runtime.share_extern_registry(shared_extern_registry)
         startup_result = startup_runtime.collect_startup_config_graph(
             prepared,
             names={"runner", "log", "log-file"},
@@ -463,8 +463,8 @@ def run(args: ExecArgs) -> None:
         default_agent=factory,
         shell_exec_timeout=resolved_timeout,
         default_call_depth_limit=resolved_call_depth_limit,
-        extern_registry=shared_extern_registry,
     )
+    runtime.share_extern_registry(shared_extern_registry)
 
     # Register every declared agent so the registered set equals the declared
     # set: reconciliation always passes; config-only agents the source never

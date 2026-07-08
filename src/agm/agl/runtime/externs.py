@@ -395,12 +395,12 @@ def decode_boundary_value(
                 raise BoundaryViolation(
                     f"expected a sealed handle for type variable {var!r}, got {_typename(obj)}"
                 )
-            payload = _open_sealed_handle(obj)
-            if payload.seal is not seals.get(var):
+            sealed_payload = _open_sealed_handle(obj)
+            if sealed_payload.seal is not seals.get(var):
                 raise BoundaryViolation(
                     f"handle does not carry this call's seal for type variable {var!r}"
                 )
-            return payload.value
+            return sealed_payload.value
         case BoundaryRef(key=key):
             return decode_boundary_value(defs[key], obj, seals, defs)
         case _ as unreachable:  # pragma: no cover

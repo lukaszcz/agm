@@ -391,6 +391,17 @@ class TestExternCallSiteRecording:
         assert {s.line for s in sites} == {4}
         assert {s.target_type for s in sites} == {IntType()}
 
+    def test_function_valued_if_deduplicates_same_extern_target(self) -> None:
+        source = (
+            "extern def f(x: int) -> int\n"
+            "let h: (int) -> int = if true => f | else => f\n"
+            "h(1)"
+        )
+        cp = check_extern(source)
+        sites = [s for s in cp.call_sites if s.callee == "f"]
+        assert len(sites) == 1
+        assert sites[0].line == 3
+
     def test_function_valued_case_extern_call_recorded_at_invocation(self) -> None:
         source = (
             "enum Choice\n"

@@ -746,6 +746,19 @@ class TestPipelineDriverProperties:
 class TestResetExternRegistry:
     """``PipelineDriver.reset_extern_registry`` — the ``ReplSession.reset()`` seam."""
 
+    def test_share_registry_replaces_cached_registry_only(self) -> None:
+        from agm.agl.runtime.externs import ExternRegistry
+
+        rt = PipelineDriver()
+        env_before = rt.host_environment()
+        shared = ExternRegistry()
+        rt.share_extern_registry(shared)
+        env_after = rt.host_environment()
+        assert env_after.extern_registry is shared
+        assert env_after.registry is env_before.registry
+        assert env_after.capabilities is env_before.capabilities
+        assert env_after.codecs is env_before.codecs
+
     def test_noop_before_the_host_environment_is_ever_assembled(self) -> None:
         # Nothing cached yet: resetting must not crash, and a later
         # ``host_environment()`` call still works normally afterward.

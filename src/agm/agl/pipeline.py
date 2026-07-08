@@ -1318,6 +1318,22 @@ class PipelineDriver:
         """Maximum call depth for recursive functions."""
         return self._default_call_depth_limit
 
+    def share_extern_registry(self, extern_registry: "ExternRegistry") -> None:
+        """Use *extern_registry* for subsequent extern companion wiring.
+
+        Hosts call this when two driver instances are phases of one program
+        invocation, such as ``agm exec`` startup-config evaluation followed by
+        the real run. Agent and codec registrations are preserved; any cached
+        host environment is refreshed with the shared registry.
+        """
+        self._extern_registry = extern_registry
+        if self._host_env_cache is not None:
+            from dataclasses import replace
+
+            self._host_env_cache = replace(
+                self._host_env_cache, extern_registry=extern_registry
+            )
+
     def update_defaults(
         self,
         *,

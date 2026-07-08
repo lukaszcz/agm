@@ -151,6 +151,11 @@ def derive_schema(typ: Type, type_table: TypeTable) -> dict[str, object]:
         JSON schema at all (callers are expected to reject such types before
         calling this function — see ``TypeTable.has_finite_schema``).
     """
+    if isinstance(typ, ExceptionType):
+        raise TypeError(
+            f"ExceptionType {typ.name!r} has no JSON Schema; exceptions are not "
+            "wire-serialised by the JSON codec."
+        )
     _require_finite_schema(typ, type_table, "derive a JSON Schema")
     plan = _plan_schema(typ, type_table)
     return _emit_schema_with_plan(typ, type_table, plan)
@@ -201,6 +206,11 @@ def derive_schema_and_decode(
     :func:`build_param_decoder`, ``JsonCodec.make_contract``) rather than
     calling the two public functions in sequence.
     """
+    if isinstance(typ, ExceptionType):
+        raise TypeError(
+            f"ExceptionType {typ.name!r} has no JSON Schema; exceptions are not "
+            "wire-serialised by the JSON codec."
+        )
     _require_finite_schema(typ, type_table, "derive a JSON Schema/decode plan")
     plan = _plan_schema(typ, type_table)
     return _emit_schema_with_plan(typ, type_table, plan), _build_decode_plan(typ, type_table, plan)

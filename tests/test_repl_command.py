@@ -8,7 +8,7 @@ Covers:
   config/defaults; there is no pre-seed CLI option);
 - ``repl.run`` resolves ``[exec]`` config, builds a session, and hands off to
   ``run_console`` (mocked) with the echo flag and a history path derived from
-  the config-context home.
+  AGM home.
 """
 
 from __future__ import annotations
@@ -228,7 +228,22 @@ class TestReplRun:
         assert isinstance(call["session"], ReplSession)
         assert call["echo"] is True
         assert call["check_only"] is False  # not a dry-run by default
-        assert call["history_path"] == home / "repl_history"
+        assert call["history_path"] == home / ".agm" / "repl_history"
+
+    def test_history_path_uses_agm_home_override(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        _isolated_home(monkeypatch, tmp_path / "home")
+        agm_home = tmp_path / "relocated-agm"
+        monkeypatch.setenv("AGM_HOME", str(agm_home))
+
+        repl_command.run(_args())
+
+        call = fake_console[0]
+        assert call["history_path"] == agm_home / "repl_history"
 
     def test_max_iters_flows_into_session_valve(
         self,

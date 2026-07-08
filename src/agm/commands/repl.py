@@ -34,6 +34,7 @@ from agm.agl.semantics.values import Value
 from agm.cli_support.args import ReplArgs
 from agm.config.context import current_config_context
 from agm.config.general import (
+    agm_home_dir,
     exec_config_from_merged,
     load_merged_config,
     load_program_config,
@@ -146,7 +147,7 @@ def run(args: ReplArgs) -> None:
         configured_roots=mod_roots_cfg.extra,
     )
 
-    history_path = ctx.home / "repl_history"
+    history_path = agm_home_dir(home=ctx.home) / "repl_history"
 
     # ``--dry-run`` means type-check only in the REPL: every entry runs the full
     # static pipeline but is never evaluated, so no agent/exec calls fire and no

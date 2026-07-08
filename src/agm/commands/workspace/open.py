@@ -53,7 +53,25 @@ def branch_path(proj_dir: Path, branch: str) -> Path:
     )
 
 
+def require_parent_start_point(project_dir: Path, parent: str | None) -> str | None:
+    """Return the new workspace start point, validating an explicit parent branch."""
 
+    start_point = parent_config_branch(project_dir, parent)
+    if start_point is None:
+        return None
+    if branch_exists(project_repo_dir(project_dir), start_point):
+        return start_point
+    print(f"error: parent branch '{start_point}' does not exist", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def warn_parent_ignored_for_existing_branch(branch: str) -> None:
+    """Warn that --parent has no effect when the target branch already exists."""
+
+    print(
+        f"warning: branch '{branch}' already exists; ignoring --parent",
+        file=sys.stderr,
+    )
 
 
 def create_configured_workspace_session(
@@ -150,9 +168,9 @@ def create_workspace(
     current = Path.cwd() if cwd is None else cwd.resolve()
     validate_pane_count(pane_count)
     proj_dir = require_current_project_dir(current)
+    start_point = require_parent_start_point(proj_dir, parent)
     repo_path = branch_path(proj_dir, branch)
     mkdir(repo_path, parents=True, exist_ok=True)
-    start_point = parent_config_branch(proj_dir, parent)
     ensure_dependency_configs_for_branch(
         project_dir=proj_dir,
         branch=branch,
@@ -191,11 +209,13 @@ def checkout_workspace(
     current = Path.cwd() if cwd is None else cwd.resolve()
     validate_pane_count(pane_count)
     proj_dir = require_current_project_dir(current)
+    start_point = require_parent_start_point(proj_dir, parent)
     repo_path = branch_path(proj_dir, branch)
     mkdir(repo_path, parents=True, exist_ok=True)
     ensure_dependency_configs_for_branch(
-        project_dir=proj_dir, branch=branch,
-        parent_branch=parent_config_branch(proj_dir, parent),
+        project_dir=proj_dir,
+        branch=branch,
+        parent_branch=start_point,
     )
     env = load_workspace_env(proj_dir, branch, workspace_dir=repo_path)
     ensure_worktree(
@@ -241,13 +261,21 @@ def open_or_create_workspace(
 
     git_helpers.fetch(repo_dir)
     if has_expected_worktree(proj_dir, branch):
+        if parent is not None:
+            print(
+                f"error: workspace for branch '{branch}' already exists; cannot use --parent",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
         open_workspace(detached=detached, pane_count=pane_count, branch=branch, cwd=current)
         return
     if branch_exists(repo_dir, branch):
+        if parent is not None:
+            warn_parent_ignored_for_existing_branch(branch)
         checkout_workspace(
             detached=detached,
             pane_count=pane_count,
-            parent=parent,
+            parent=None,
             branch=branch,
             cwd=current,
         )

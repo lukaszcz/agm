@@ -175,7 +175,9 @@ def _call_make_contract(
 
 
 def _target_type_for_request(request: ContractRequest) -> Type:
-    """Return an erased placeholder target for legacy custom-codec parse hooks."""
+    """Return the checked target type for legacy custom-codec parse hooks."""
+    if request.target_type is not None:
+        return cast(Type, request.target_type)
     kind = request.target_type_kind or request.target_type_label
     if kind == "text":
         return TextType()

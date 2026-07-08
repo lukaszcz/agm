@@ -2291,6 +2291,7 @@ class _Lowerer:
                 format_instructions=fmt_instr,
                 is_unit=False,
                 target_type_kind=spec.target_type.kind,
+                target_type=spec.target_type,
                 defs=decode_defs,
             )
 
@@ -2345,6 +2346,7 @@ class _Lowerer:
             format_instructions=fmt_instr,
             is_unit=False,
             target_type_kind=spec.target_type.kind,
+            target_type=spec.target_type,
             defs=decode_defs,
         )
 

@@ -248,6 +248,10 @@ class ContractRequest:
     ``target_type_kind``    — semantic kind string (``int``, ``record``, …) kept
                               as typeless compatibility metadata for legacy
                               custom-codec parse hooks.
+    ``target_type``         — opaque checker type retained only for legacy custom
+                              codecs whose ``parse`` hook still accepts a
+                              positional target type. Runtime-neutral code must
+                              not inspect it.
     ``structured_exec``     — ``True`` for structured exec; ``False`` for ``ask``.
     ``format_instructions`` — pre-computed format instructions string (empty for
                               text codec and unit-typed asks).
@@ -271,4 +275,5 @@ class ContractRequest:
     format_instructions: str
     is_unit: bool = False
     target_type_kind: str = ""
+    target_type: object | None = None
     defs: "tuple[tuple[str, DecodeSchema], ...]" = ()

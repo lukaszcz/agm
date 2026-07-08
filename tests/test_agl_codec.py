@@ -38,6 +38,7 @@ from agm.agl.ir.contracts import (
     ScalarDecode,
     ScalarKind,
 )
+from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.runtime.agents import AgentFn, AgentRegistry
 from agm.agl.runtime.codec import JsonCodec, ParseResult, TextCodec
@@ -3272,6 +3273,59 @@ class TestRegisterCodec:
         assert result.bindings["y"] == IntValue(11)
         assert seen_contract_targets == ["int", "int"]
         assert seen_parse_targets == ["int"]
+
+    def test_legacy_parse_signature_receives_concrete_generic_target_type(self) -> None:
+        seen_parse_targets: list[Type] = []
+
+        class LegacyBoxCodec:
+            @property
+            def name(self) -> str:
+                return "legacy-box"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"record"})
+
+            def supports_type(self, t: Type) -> bool:
+                return isinstance(t, RecordType)
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=None,
+                    format_instructions="LEGACY-BOX",
+                    json_schema=None,
+                )
+
+            def parse(self, raw: str, target_type: Type) -> ParseResult:
+                seen_parse_targets.append(target_type)
+                return ParseResult.success(
+                    RecordValue(
+                        nominal=NominalId(ENTRY_ID, "Box"),
+                        display_name="Box",
+                        fields={"value": IntValue(int(raw))},
+                    )
+                )
+
+        rt = PipelineDriver(default_agent=lambda req: "12")
+        rt.register_codec(LegacyBoxCodec())
+        result = rt.run(
+            'record Box[T]\n  value: T\nlet y: Box[int] = ask("Q", format = "legacy-box")\ny.value'
+        )
+
+        assert result.ok is True
+        assert result.bindings["y"] == RecordValue(
+            nominal=NominalId(ENTRY_ID, "Box"),
+            display_name="Box",
+            fields={"value": IntValue(12)},
+        )
+        assert len(seen_parse_targets) == 1
+        assert isinstance(seen_parse_targets[0], RecordType)
+        assert seen_parse_targets[0].name == "Box"
+        assert seen_parse_targets[0].type_args == (IntType(),)
 
     def test_custom_codec_make_contract_keyword_only_type_table(self) -> None:
         """Custom make_contract hooks may request type_table as a keyword-only arg."""

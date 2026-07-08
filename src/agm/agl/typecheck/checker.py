@@ -685,6 +685,12 @@ class _Checker:
                 body_type = self._check_expr(node.body, expected=sig.result)
             if not isinstance(body_type, BottomType):
                 self._assert_assignable(body_type, sig.result, node.span)
+            targets = (
+                self._extern_expr_targets.get(node.body.node_id, ())
+                if isinstance(sig.result, FunctionType)
+                else ()
+            )
+            self._set_extern_binding_targets(node.node_id, targets)
         finally:
             self._current_type_vars = old_type_vars
 
@@ -1695,6 +1701,10 @@ class _Checker:
                 )
             else:
                 self._record_extern_call_site(node, func_name, extern_target_type)
+        elif isinstance(result_type, FunctionType):
+            self._set_extern_expr_targets(
+                node.node_id, self._extern_binding_targets.get(callee_node_id, ())
+            )
 
         return result_type
 

@@ -218,21 +218,24 @@ def lower_graph(
     entry_lowerer = module_lowerers[checked_graph.entry_id]
     entry_cm = checked_graph.modules[checked_graph.entry_id]
     payloads = contract_payloads if contract_payloads is not None else {}
-    dry_run_inventory = tuple(
-        DryRunEntry(
-            callee=csr.callee,
-            codec_name=csr.codec_name,
-            target_type_label=repr(csr.target_type),
-            has_schema=_contract_has_schema(
-                entry_cm.contract_specs.get(csr.node_id),
-                payloads.get(csr.node_id),
-            ),
-            parse_policy=csr.parse_policy,
-            line=csr.line,
-            col=csr.col,
-        )
-        for csr in entry_cm.call_sites
-    )
+    dry_run_entries: list[DryRunEntry] = []
+    for cm in checked_graph.modules.values():
+        for csr in cm.call_sites:
+            dry_run_entries.append(
+                DryRunEntry(
+                    callee=csr.callee,
+                    codec_name=csr.codec_name,
+                    target_type_label=repr(csr.target_type),
+                    has_schema=_contract_has_schema(
+                        cm.contract_specs.get(csr.node_id),
+                        payloads.get(csr.node_id),
+                    ),
+                    parse_policy=csr.parse_policy,
+                    line=csr.line,
+                    col=csr.col,
+                )
+            )
+    dry_run_inventory = tuple(dry_run_entries)
     program = ExecutableProgram(
         entry_module=checked_graph.entry_id,
         modules=executable_modules,

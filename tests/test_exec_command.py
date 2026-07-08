@@ -1485,6 +1485,60 @@ class TestExecFFI:
         assert "choose_runner" in captured.out
         assert not marker.exists()
 
+    def test_dry_run_lists_extern_call_from_imported_module(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from agm.core import dry_run
+
+        monkeypatch.setattr(dry_run, "_ENABLED", True)
+
+        marker = tmp_path / "marker.txt"
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("import mylib\nmylib::run()\n")
+        (tmp_path / "mylib.agl").write_text(
+            "extern def from_lib(x: int) -> int\n"
+            "def run() -> int = from_lib(1)\n"
+        )
+        (tmp_path / "mylib.py").write_text(
+            f"open({str(marker)!r}, 'a').write('imported')\n"
+            "def from_lib(x):\n    return x\n"
+        )
+
+        assert exec_command.run(_exec_args(agl_file)) is None
+        captured = capsys.readouterr()
+        assert "from_lib" in captured.out
+        assert not marker.exists()
+
+    def test_dry_run_lists_extern_returned_from_ordinary_function(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from agm.core import dry_run
+
+        monkeypatch.setattr(dry_run, "_ENABLED", True)
+
+        marker = tmp_path / "marker.txt"
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "extern def chosen(x: int) -> int\n"
+            "def choose() -> int -> int = chosen\n"
+            "choose()(1)\n"
+        )
+        (tmp_path / "prog.py").write_text(
+            f"open({str(marker)!r}, 'a').write('imported')\n"
+            "def chosen(x):\n    return x\n"
+        )
+
+        assert exec_command.run(_exec_args(agl_file)) is None
+        captured = capsys.readouterr()
+        assert "chosen" in captured.out
+        assert not marker.exists()
+
 
 class TestJsonParamsCLI:
     """--param with structured (record/list/decimal) types via JsonCodec."""

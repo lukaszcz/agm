@@ -339,12 +339,20 @@ def _agm_install(tmp_path_factory: pytest.TempPathFactory) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     venv = tmp_path_factory.mktemp("agm-install") / "venv"
     subprocess.run(
-        ["uv", "venv", str(venv), "--python", "3.12"],
+        ["uv", "venv", str(venv), "--python", "3.12", "--offline"],
         check=True,
         capture_output=True,
     )
     subprocess.run(
-        ["uv", "pip", "install", "--python", str(venv / "bin" / "python"), str(repo_root)],
+        [
+            "uv",
+            "pip",
+            "install",
+            "--python",
+            str(venv / "bin" / "python"),
+            "--offline",
+            str(repo_root),
+        ],
         check=True,
         capture_output=True,
     )

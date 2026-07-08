@@ -11,6 +11,7 @@ and the three ``invoke`` failure classes.
 
 from __future__ import annotations
 
+import decimal
 import sys
 from decimal import Decimal
 from pathlib import Path
@@ -18,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
+from agm.agl.eval._decimal import AGL_DECIMAL_CONTEXT
 from agm.agl.ir.contracts import (
     BoundaryEnum,
     BoundaryException,
@@ -657,6 +659,19 @@ class TestInvoke:
         registry = ExternRegistry()
         result = registry.invoke("identity", contract, fn, [IntValue(42)], "trace-2")
         assert result == IntValue(42)
+
+    def test_companion_decimal_context_mutation_is_isolated(self) -> None:
+        contract = build_contract("extern def f() -> int\n0")
+
+        def fn() -> int:
+            decimal.getcontext().prec = 2
+            return 1
+
+        registry = ExternRegistry()
+        with decimal.localcontext(AGL_DECIMAL_CONTEXT):
+            result = registry.invoke("f", contract, fn, [], "trace-decimal")
+            assert result == IntValue(1)
+            assert decimal.getcontext().prec == AGL_DECIMAL_CONTEXT.prec
 
     def test_python_exception_becomes_extern_error_with_class_name(self) -> None:
         contract = build_contract("extern def f(x: int) -> int\n0")

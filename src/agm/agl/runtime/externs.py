@@ -21,6 +21,7 @@ several externs.
 from __future__ import annotations
 
 import copy
+import decimal
 import importlib.util
 import itertools
 import sys
@@ -657,7 +658,8 @@ class ExternRegistry:
             ) from exc
 
         try:
-            result = fn(*encoded_args)
+            with decimal.localcontext():
+                result = fn(*encoded_args)
         except Exception as exc:
             raise _extern_error(
                 function_name,

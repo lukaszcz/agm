@@ -685,6 +685,18 @@ class TestInvoke:
 
 
 class TestExternRegistryMisuse:
+    def test_entry_companion_synthetic_name_is_valid(self, tmp_path: Path) -> None:
+        from agm.agl.modules.ids import ENTRY_ID
+
+        companion = tmp_path / "entry.py"
+        companion.write_text("captured_name = __name__\n")
+        registry = ExternRegistry()
+
+        module = registry.load_companion(ENTRY_ID, companion)
+
+        assert getattr(module, "captured_name") == "agm_agl_extern_companion__entry__0"
+        assert "\x00" not in module.__name__
+
     def test_resolve_before_load_companion_is_a_programming_error(self) -> None:
         from agm.agl.modules.ids import ModuleId
 

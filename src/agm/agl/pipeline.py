@@ -1567,7 +1567,7 @@ def _wire_extern_registry(
         if mid not in loaded_modules:
             companion_path = companion_paths.get(mid)
             assert companion_path is not None, (
-                f"module {mid.dotted()!r} declares extern {name!r} but has no "
+                f"module {mid.display()!r} declares extern {name!r} but has no "
                 "companion path recorded by the loader"
             )
             try:

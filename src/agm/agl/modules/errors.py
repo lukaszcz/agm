@@ -33,7 +33,7 @@ class ModuleNotFound(AglError):
     ) -> None:
         roots_str = ", ".join(str(r) for r in searched_roots)
         msg = (
-            f"module '{module_id.dotted()}' not found; "
+            f"module '{module_id.display()}' not found; "
             f"searched roots: [{roots_str}]"
         )
         super().__init__(msg, span=span)
@@ -59,7 +59,7 @@ class AmbiguousModule(AglError):
     ) -> None:
         candidates_str = ", ".join(str(c) for c in candidates)
         msg = (
-            f"module '{module_id.dotted()}' is ambiguous; "
+            f"module '{module_id.display()}' is ambiguous; "
             f"found in multiple roots: [{candidates_str}]"
         )
         super().__init__(msg, span=span)
@@ -104,7 +104,7 @@ class MissingExternCompanion(AglError):
         span: SourceSpan | None = None,
     ) -> None:
         msg = (
-            f"module '{module_id.dotted()}' declares an extern function but its "
+            f"module '{module_id.display()}' declares an extern function but its "
             f"companion file '{companion_path}' does not exist"
         )
         super().__init__(msg, span=span)
@@ -129,7 +129,7 @@ class ImportEntryError(AglError):
         span: SourceSpan | None = None,
     ) -> None:
         msg = (
-            f"cannot import '{module_id.dotted()}': "
+            f"cannot import '{module_id.display()}': "
             f"it resolves to the entry file '{entry_path}'"
         )
         super().__init__(msg, span=span)

@@ -87,7 +87,7 @@ class ExternImportError(AglError):
     """
 
     def __init__(self, module_id: ModuleId, message: str) -> None:
-        super().__init__(f"module {module_id.dotted()!r}: {message}")
+        super().__init__(f"module {module_id.display()!r}: {message}")
         self.module_id = module_id
 
 
@@ -100,7 +100,7 @@ class ExternResolutionError(AglError):
 
     def __init__(self, module_id: ModuleId, name: str) -> None:
         super().__init__(
-            f"module {module_id.dotted()!r} extern {name!r}: companion has no "
+            f"module {module_id.display()!r} extern {name!r}: companion has no "
             "callable attribute of that name"
         )
         self.module_id = module_id
@@ -506,7 +506,7 @@ class ExternRegistry:
             return cached
 
         synthetic_name = (
-            f"agm_agl_extern_companion__{module_id.dotted().replace('.', '_')}"
+            f"agm_agl_extern_companion__{module_id.synthetic_name_component()}"
             f"__{len(self._by_path)}"
         )
         spec = importlib.util.spec_from_file_location(synthetic_name, canonical)
@@ -560,7 +560,7 @@ class ExternRegistry:
 
         module = self._by_module.get(module_id)
         assert module is not None, (
-            f"module {module_id.dotted()!r} has no loaded companion; "
+            f"module {module_id.display()!r} has no loaded companion; "
             "load_companion must be called before resolve"
         )
         if not hasattr(module, name):

@@ -46,6 +46,18 @@ class ModuleId:
         """Return the dotted logical name, e.g. ``"foo.bar.baz"``."""
         return ".".join(self.segments)
 
+    def display(self) -> str:
+        """Return a user-facing module label that never exposes sentinel bytes."""
+        if self.is_entry:
+            return "<entry>"
+        return self.dotted()
+
+    def synthetic_name_component(self) -> str:
+        """Return a Python-identifier-safe component for synthetic host names."""
+        if self.is_entry:
+            return "entry"
+        return "_".join(self.segments)
+
     def relpath(self) -> str:
         """Return the os-independent relative file path, e.g. ``"foo/bar/baz.agl"``.
 

@@ -11,7 +11,12 @@ import pytest
 if TYPE_CHECKING:
     from agm.agl.syntax.nodes import Program
 
-from agm.agl.modules.errors import AmbiguousModule, ImportEntryError, ModuleNotFound
+from agm.agl.modules.errors import (
+    AmbiguousModule,
+    ImportEntryError,
+    MissingExternCompanion,
+    ModuleNotFound,
+)
 from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
 from agm.agl.modules.loader import LoadedModule, ModuleGraph, build_repl_graph, load_graph
 from agm.agl.modules.roots import RootSet
@@ -582,6 +587,20 @@ class TestFileBasedEntry:
                 assert mod.path is None  # inline entry
             else:
                 assert mod.path is not None
+
+    def test_missing_entry_companion_diagnostic_does_not_expose_sentinel(
+        self, tmp_path: Path
+    ) -> None:
+        entry_file = tmp_path / "prog.agl"
+        source = "extern def f(x: int) -> int\n()"
+        entry_file.write_text(source)
+
+        with pytest.raises(MissingExternCompanion) as exc_info:
+            load_graph(source, entry_path=entry_file, roots=_roots(tmp_path))
+
+        message = str(exc_info.value)
+        assert "<entry>" in message
+        assert "\x00" not in message
 
 
 # ---------------------------------------------------------------------------

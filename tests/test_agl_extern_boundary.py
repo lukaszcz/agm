@@ -11,6 +11,7 @@ and the three ``invoke`` failure classes.
 
 from __future__ import annotations
 
+import sys
 from decimal import Decimal
 from pathlib import Path
 
@@ -696,6 +697,26 @@ class TestExternRegistryMisuse:
 
         assert getattr(module, "captured_name") == "agm_agl_extern_companion__entry__0"
         assert "\x00" not in module.__name__
+
+    def test_companion_may_remove_its_synthetic_module_during_import(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.modules.ids import ModuleId
+
+        companion = tmp_path / "lib.py"
+        companion.write_text(
+            "import sys\n"
+            "del sys.modules[__name__]\n"
+            "def f():\n"
+            "    return 1\n"
+        )
+        registry = ExternRegistry()
+        module_id = ModuleId.from_dotted("lib")
+
+        module = registry.load_companion(module_id, companion)
+
+        assert registry.resolve(module_id, "f")() == 1
+        assert module.__name__ not in sys.modules
 
     def test_resolve_before_load_companion_is_a_programming_error(self) -> None:
         from agm.agl.modules.ids import ModuleId

@@ -525,7 +525,7 @@ class ExternRegistry:
                 module_id, f"companion {canonical} failed to import: {exc}"
             ) from exc
         finally:
-            del sys.modules[synthetic_name]
+            sys.modules.pop(synthetic_name, None)
 
         self._by_path[canonical] = module
         self._bind_module(module_id, module)

@@ -2545,6 +2545,20 @@ class TestSchemaExceptionType:
         with pytest.raises(TypeError, match="ExceptionType"):
             derive_schema(ExceptionType(name="Boom"), type_table_for())
 
+    def test_record_containing_exception_type_raises_type_error(self) -> None:
+        from agm.agl.semantics.types import EXCEPTION_BASE, ExceptionType
+
+        boom = ExceptionType(name="Boom")
+        boom_def = TypeDef(
+            kind="exception",
+            name="Boom",
+            module_id=ENTRY_ID,
+            base=(EXCEPTION_BASE.module_id, EXCEPTION_BASE.name),
+        )
+        box, box_def = record_type("Box", {"boom": boom})
+        with pytest.raises(TypeError, match="ExceptionType"):
+            derive_schema(box, type_table_for(boom_def, box_def))
+
 
 # ---------------------------------------------------------------------------
 # 15. Coverage: fenced malformed JSON (repair within fence)

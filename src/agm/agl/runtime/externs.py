@@ -192,10 +192,7 @@ class _HandleVault:
     def make(self, value: Value, seal: object) -> SealedHandle:
         """Mint a sealed handle and retain its payload in this vault."""
         rendered = render_value(value)
-        try:
-            value_hash = hash(value)
-        except TypeError:
-            value_hash = id(value)
+        value_hash = hash(value)
         eq_key = (type(value), value_hash, rendered)
         handle = SealedHandle(
             _factory_key=_HANDLE_FACTORY_KEY,

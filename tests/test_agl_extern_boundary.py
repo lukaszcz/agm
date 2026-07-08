@@ -382,6 +382,13 @@ class TestDecodeContainers:
         with pytest.raises(BoundaryViolation):
             decode_boundary_value(contract.result, "not a list", {})
 
+    def test_cyclic_list_rejected(self) -> None:
+        contract = build_contract("extern def f(x: int) -> list[json]\n0")
+        value: list[object] = []
+        value.append(value)
+        with pytest.raises(BoundaryViolation):
+            decode_boundary_value(contract.result, value, {})
+
     def test_dict(self) -> None:
         contract = build_contract("extern def f(x: int) -> dict[text, int]\n0")
         assert decode_boundary_value(contract.result, {"a": 1}, {}) == DictValue(
@@ -542,6 +549,13 @@ class TestDecodeJson:
         with pytest.raises(BoundaryViolation):
             decode_boundary_value(contract.result, value, {})
 
+    def test_rejects_cyclic_json_dict(self) -> None:
+        contract = build_contract("extern def f(x: int) -> json\n0")
+        value: dict[str, object] = {}
+        value["self"] = value
+        with pytest.raises(BoundaryViolation):
+            decode_boundary_value(contract.result, value, {})
+
     def test_rejects_sealed_handle(self) -> None:
         contract = build_contract("extern def f(x: int) -> json\n0")
         handle = _sealed_handle(IntValue(1), object())
@@ -599,6 +613,13 @@ class TestSealing:
         forged = object.__new__(SealedHandle)
         with pytest.raises(BoundaryViolation):
             decode_boundary_value(contract.result, forged, {"T": object()})
+
+    def test_uninitialized_handle_special_methods_are_defensive(self) -> None:
+        forged = object.__new__(SealedHandle)
+        assert forged != _sealed_handle(IntValue(1), object())
+        with pytest.raises(TypeError):
+            hash(forged)
+        assert repr(forged) == "<sealed handle>"
 
     def test_decode_rejects_handle_with_forged_public_shape(self) -> None:
         contract = build_contract("extern def identity[T](x: T) -> T\n0", fn_name="identity")

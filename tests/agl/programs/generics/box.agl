@@ -2,11 +2,11 @@
 # with an explicit `Box::[…]` override, field access, nesting (`Box[Box[int]]`),
 # and erasure — the SAME generic mechanism builds `Box[int]` and `Box[text]`
 # from one definition at runtime. The generic constructor is bound as a
-# first-class value (annotated `(int) -> Box[int]`) and then passed THROUGH a
+# first-class value (annotated `int -> Box[int]`) and then passed THROUGH a
 # generic higher-order function and called there, building `Box[int]` at runtime
 # under type erasure. A host param drives the int payload so two distinct runtime
 # values exercise the same generic body (demonstrating erasure).
-def apply[A, B](x: A, f: (A) -> B) -> B = f(x)
+def apply[A, B](x: A, f: A -> B) -> B = f(x)
 
 record Box[T]
   value: T
@@ -31,6 +31,6 @@ print nested.value.value
 
 # The generic constructor as a first-class value, passed THROUGH a generic HOF
 # and called there — `apply` builds `Box(value = n)` at runtime via erasure.
-let mk: (int) -> Box[int] = Box
+let mk: int -> Box[int] = Box
 let made = apply(n, mk)
 print made.value

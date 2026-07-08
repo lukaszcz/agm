@@ -39,7 +39,7 @@ print(t.weight)
 print(id::[int](9))
 
 # Generic `def` as a first-class value: the expected type instantiates `T`.
-let f: (text) -> text = id
+let f: text -> text = id
 print(f("via value"))
 
 # The type-variable `let` annotation in action, instantiated at int and text.

@@ -303,8 +303,7 @@ class FunctionType:
         return "function"
 
     def __repr__(self) -> str:
-        param_str = ", ".join(repr(p) for p in self.params)
-        return f"({param_str}) -> {self.result!r}"
+        return _format_function_type(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -368,6 +367,25 @@ Type = (
     | BottomType
     | TypeVarType
 )
+
+
+def _format_type(typ: Type, *, parenthesize_function: bool = False) -> str:
+    if isinstance(typ, FunctionType):
+        rendered = _format_function_type(typ)
+        if parenthesize_function:
+            return f"({rendered})"
+        return rendered
+    return repr(typ)
+
+
+def _format_function_type(typ: FunctionType) -> str:
+    if not typ.params:
+        params = "()"
+    elif len(typ.params) == 1:
+        params = _format_type(typ.params[0], parenthesize_function=True)
+    else:
+        params = f"({', '.join(_format_type(param) for param in typ.params)})"
+    return f"{params} -> {_format_type(typ.result)}"
 
 
 # ---------------------------------------------------------------------------

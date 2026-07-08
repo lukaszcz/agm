@@ -113,6 +113,39 @@ def _render_sequence(
     return f"{open_token}\n{body}\n{close_indent}{close_token}"
 
 
+def _has_top_level_arrow(label: str) -> bool:
+    square_depth = 0
+    paren_depth = 0
+    for index, char in enumerate(label):
+        if char == "[":
+            square_depth += 1
+        elif char == "]" and square_depth > 0:
+            square_depth -= 1
+        elif char == "(":
+            paren_depth += 1
+        elif char == ")" and paren_depth > 0:
+            paren_depth -= 1
+        elif (
+            char == "-"
+            and square_depth == 0
+            and paren_depth == 0
+            and label[index : index + 2] == "->"
+        ):
+            return True
+    return False
+
+
+def _render_function_signature(param_labels: tuple[str, ...], result_label: str) -> str:
+    if not param_labels:
+        params = "()"
+    elif len(param_labels) == 1:
+        param = param_labels[0]
+        params = f"({param})" if _has_top_level_arrow(param) else param
+    else:
+        params = f"({', '.join(param_labels)})"
+    return f"{params} -> {result_label}"
+
+
 def _render(value: Value, *, pretty: bool, quote_strings: bool, top_level: bool, level: int) -> str:
     if isinstance(value, TextValue):
         if top_level and not quote_strings:
@@ -137,7 +170,8 @@ def _render(value: Value, *, pretty: bool, quote_strings: bool, top_level: bool,
 
     if isinstance(value, IrClosureValue):
         param_labels = value.param_labels or ("?",) * value.arity
-        return f"<function: ({', '.join(param_labels)}) -> {value.result_label}>"
+        signature = _render_function_signature(param_labels, value.result_label)
+        return f"<function: {signature}>"
 
     if isinstance(value, JsonValue):
         rendered = dumps_exact(value_to_json_obj(value), indent=2 if pretty else None)

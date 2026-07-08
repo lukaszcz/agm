@@ -19,7 +19,7 @@ decimal
 list[T]
 dict[text, T]
 agent
-(A) -> B
+() -> B
 A -> B
 (A, B, …) -> C
 ```
@@ -159,7 +159,7 @@ built-ins), not of function value types. The value type is purely positional.
 
 Function values have **opaque rendering, no JSON encoding, and no equality**.
 A function value can be rendered, interpolated, or printed as an opaque handle
-such as `<function: (int) -> int>`, but cannot be stored in a `json` slot or
+such as `<function: int -> int>`, but cannot be stored in a `json` slot or
 compared with `=`. These restrictions exist because function values are
 capability handles, not data.
 
@@ -725,7 +725,7 @@ A comparison involving one of these types is a static error. This rule is
 **transitive**: a `list`, `dict`, `record`, `enum`, or `exception` that (at
 any depth) contains a function, agent, or `unit` value likewise has no
 equality and cannot be used with `==`/`!=`. For example, comparing two
-`list[(int) -> int]` values with `==` is a static error, as is a
+`list[int -> int]` values with `==` is a static error, as is a
 `record` with an `agent` field compared with `==`.
 
 See [Expressions](expressions.md) for the operator rules and

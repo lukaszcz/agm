@@ -1157,6 +1157,54 @@ class TestRenderValue:
         assert isinstance(closure, IrClosureValue)
         assert render_value(closure) == "<function: (int, int) -> int>"
 
+    def test_closure_single_arg_omits_arg_parentheses(self) -> None:
+        """A single-parameter closure renders as ``<function: A -> T>``."""
+        from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import IrClosureValue
+
+        rt = PipelineDriver()
+        result = rt.run("let f = fn(x: int) -> int => x + 1\nf\n")
+        assert result.ok is True
+        closure = result.bindings["f"]
+        assert isinstance(closure, IrClosureValue)
+        assert render_value(closure) == "<function: int -> int>"
+
+    def test_closure_function_arg_parenthesized(self) -> None:
+        """A function-typed parameter stays parenthesized for unambiguous rendering."""
+        from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import IrClosureValue
+
+        rt = PipelineDriver()
+        result = rt.run("let f = fn(g: int -> int) -> int => g(1)\nf\n")
+        assert result.ok is True
+        closure = result.bindings["f"]
+        assert isinstance(closure, IrClosureValue)
+        assert render_value(closure) == "<function: (int -> int) -> int>"
+
+    def test_closure_multi_param_function_arg_parenthesized(self) -> None:
+        """A single multi-parameter function argument keeps both required paren pairs."""
+        from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import IrClosureValue
+
+        rt = PipelineDriver()
+        result = rt.run("let f = fn(g: (int, int) -> int) -> int => g(1, 2)\nf\n")
+        assert result.ok is True
+        closure = result.bindings["f"]
+        assert isinstance(closure, IrClosureValue)
+        assert render_value(closure) == "<function: ((int, int) -> int) -> int>"
+
+    def test_closure_container_arg_with_nested_function_omits_outer_parentheses(self) -> None:
+        """Only top-level arrows force parentheses around a single parameter label."""
+        from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import IrClosureValue
+
+        rt = PipelineDriver()
+        result = rt.run("let f = fn(gs: list[int -> int]) -> int => 0\nf\n")
+        assert result.ok is True
+        closure = result.bindings["f"]
+        assert isinstance(closure, IrClosureValue)
+        assert render_value(closure) == "<function: list[int -> int] -> int>"
+
     def test_closure_zero_arity_renders_correctly(self) -> None:
         """A zero-parameter closure renders as ``<function: () -> T>``."""
         from agm.agl.runtime.render import render_value

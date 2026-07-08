@@ -126,9 +126,9 @@ from agm.agl.semantics.types import (
 from agm.agl.typecheck.env import FunctionSignature
 from agm.util.graph import sccs
 
-# A concrete record/enum instantiation — a graph node in the instantiation
-# graph below. Equality/hash are handle equality (module_id, name, type_args).
-Instantiation = RecordType | EnumType
+# A concrete nominal instantiation — a graph node in the instantiation graph
+# below. Record/enum equality includes type_args; exceptions are non-generic.
+Instantiation = RecordType | EnumType | ExceptionType
 
 
 def derive_schema(typ: Type, type_table: TypeTable) -> dict[str, object]:
@@ -366,7 +366,7 @@ def _instantiation_graph(
 ) -> tuple[tuple[Instantiation, ...], dict[Instantiation, frozenset[Instantiation]]]:
     """Breadth-first expand the concrete record/enum instantiation graph reachable from *roots*.
 
-    Nodes are concrete ``RecordType``/``EnumType`` handles (memoized on handle
+    Nodes are concrete ``RecordType``/``EnumType``/``ExceptionType`` handles (memoized on handle
     equality); an edge from a node to another is a nominal handle occurring
     anywhere in the node's OWN substituted fields/variants (including nested
     under ``list``/``dict``, or in another reference's own type arguments —
@@ -384,7 +384,7 @@ def _instantiation_graph(
         ref
         for root in roots
         for ref in type_table.schema_relevant_nominal_references(root)
-        if isinstance(ref, (RecordType, EnumType))
+        if isinstance(ref, (RecordType, EnumType, ExceptionType))
     )
     while queue:
         handle = queue.popleft()
@@ -408,23 +408,26 @@ def _direct_neighbours(handle: Instantiation, type_table: TypeTable) -> frozense
     """Return every concrete instantiation named anywhere in *handle*'s own fields/variants."""
     if isinstance(handle, RecordType):
         field_types: list[Type] = list(type_table.record_fields(handle).values())
-    else:
+    elif isinstance(handle, EnumType):
         field_types = [
             ftype
             for vfields in type_table.enum_variants(handle).values()
             for ftype in vfields.values()
         ]
+    else:
+        field_types = list(type_table.exception_fields(handle).values())
     return frozenset(
         ref
         for ftype in field_types
         for ref in type_table.schema_relevant_nominal_references(ftype)
-        if isinstance(ref, (RecordType, EnumType))
+        if isinstance(ref, (RecordType, EnumType, ExceptionType))
     )
 
 
 def _instantiation_sort_key(handle: Instantiation) -> tuple[object, ...]:
     """Deterministic sort key for :func:`~agm.util.graph.sccs` — never Python object identity."""
-    return (handle.module_id.segments, handle.name, tuple(repr(arg) for arg in handle.type_args))
+    type_args = handle.type_args if isinstance(handle, (RecordType, EnumType)) else ()
+    return (handle.module_id.segments, handle.name, tuple(repr(arg) for arg in type_args))
 
 
 # JSON-Schema-safe `$defs` key characters: letters, digits, ``_``, ``.``,
@@ -435,9 +438,13 @@ _UNSAFE_KEY_CHARS = re.compile(r"[^A-Za-z0-9_.-]+")
 
 def _bare_display(handle: Instantiation, type_table: TypeTable | None = None) -> str:
     """*handle*'s display form WITHOUT its module qualifier (bare name[, args])."""
-    type_args = handle.type_args
-    if type_table is not None:
-        type_args = type_table.schema_relevant_type_args(handle)
+    type_args: tuple[Type, ...] = ()
+    if isinstance(handle, (RecordType, EnumType)):
+        type_args = (
+            type_table.schema_relevant_type_args(handle)
+            if type_table is not None
+            else handle.type_args
+        )
     if type_args:
         args = ", ".join(repr(arg) for arg in type_args)
         return f"{handle.name}[{args}]"
@@ -662,12 +669,15 @@ def build_extern_contract(sig: FunctionSignature, type_table: TypeTable) -> Exte
 def _emit_boundary(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -> BoundarySchema:
     """Emit *typ*'s boundary schema, ``BoundaryRef``-ing it out if it is recursive.
 
-    Mirrors :func:`_emit_decode`: a recursive record/enum instantiation becomes
+    Mirrors :func:`_emit_decode`: a recursive record/enum/exception instantiation becomes
     a ``BoundaryRef`` into the shared ``defs`` table; everything else is emitted
     inline by :func:`_emit_boundary_body`.
     """
     schema_type = type_table.canonical_schema_type(typ)
-    if isinstance(schema_type, (RecordType, EnumType)) and schema_type in plan.recursive:
+    if (
+        isinstance(schema_type, (RecordType, EnumType, ExceptionType))
+        and schema_type in plan.recursive
+    ):
         return BoundaryRef(plan.keys[schema_type])
     return _emit_boundary_body(schema_type, type_table, plan)
 

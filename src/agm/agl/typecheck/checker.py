@@ -322,8 +322,11 @@ def _contains_banned_extern_type(
                 for ft in vfields.values()
             )
         case ExceptionType():
+            if t in _seen:
+                return False
+            seen = _seen | {t}
             return any(
-                _contains_banned_extern_type(ft, type_table, _seen)
+                _contains_banned_extern_type(ft, type_table, seen)
                 for ft in type_table.exception_fields(t).values()
             )
         case (

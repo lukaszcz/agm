@@ -322,6 +322,20 @@ class TestRecursiveTypes:
         assert param_schema.key == contract.result.key
         assert len(contract.defs) == 1
 
+    def test_recursive_exception_crosses_as_boundary_ref(self) -> None:
+        source = (
+            "exception Wrapped extends Exception\n  causes: list[Wrapped]\n"
+            "extern def f(e: Wrapped) -> Wrapped\n0"
+        )
+        contract = build_contract(source)
+        param_schema = contract.params[0].schema
+        assert isinstance(param_schema, BoundaryRef)
+        assert isinstance(contract.result, BoundaryRef)
+        assert param_schema.key == contract.result.key
+        body = dict(contract.defs)[param_schema.key]
+        assert isinstance(body, BoundaryException)
+        assert body.fields[-1] == ("causes", BoundaryList(BoundaryRef(param_schema.key)))
+
     def test_non_finite_schema_param_rejected(self) -> None:
         with pytest.raises(AglTypeError) as exc:
             build_contract(_PERFECT + "extern def f(p: Perfect[int]) -> int\n0")

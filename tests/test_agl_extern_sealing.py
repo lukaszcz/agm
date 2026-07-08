@@ -176,6 +176,18 @@ class TestHandleEqualityHashReprInPython:
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
         assert result["r"] == BoolValue(True)
 
+    def test_companion_compares_equal_dict_handles_with_different_render_order(
+        self, tmp_path: Path
+    ) -> None:
+        source = (
+            "extern def same[T](a: T, b: T) -> bool\n"
+            'let r = same({"a": 1, "b": 2}, {"b": 2, "a": 1})\n'
+            "r\n"
+        )
+        companion = "def same(a, b):\n    return a == b\n"
+        result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+        assert result["r"] == BoolValue(True)
+
 
 # ---------------------------------------------------------------------------
 # Sealing violations: every one an ExternError catchable in AgL

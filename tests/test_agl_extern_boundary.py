@@ -624,8 +624,10 @@ class TestSealing:
     def test_decode_rejects_handle_with_forged_public_shape(self) -> None:
         contract = build_contract("extern def identity[T](x: T) -> T\n0", fn_name="identity")
         forged = object.__new__(SealedHandle)
-        object.__setattr__(forged, "_SealedHandle__eq_key", (IntValue, 1, "1"))
-        object.__setattr__(forged, "_SealedHandle__hash_value", hash((IntValue, 1, "1")))
+        object.__setattr__(forged, "_SealedHandle__eq_key", (IntValue, IntValue(1)))
+        object.__setattr__(
+            forged, "_SealedHandle__hash_value", hash((IntValue, IntValue(1)))
+        )
         object.__setattr__(forged, "_SealedHandle__repr_value", "1")
         with pytest.raises(BoundaryViolation):
             decode_boundary_value(contract.result, forged, {"T": object()})

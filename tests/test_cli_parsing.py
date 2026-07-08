@@ -2037,6 +2037,13 @@ class TestParserHelpers:
         result = output.getvalue()
         assert "agm open" in result
 
+    def test_exec_help_lists_current_engine_options(self) -> None:
+        output = io.StringIO()
+        parser_helpers.print_help_for_command_path(["exec"], file=output)
+        result = output.getvalue()
+        for option in ("--max-iters", "--timeout", "--no-timeout", "--no-log-file"):
+            assert option in result
+
     def test_print_command_help_with_file_param(self) -> None:
         output = io.StringIO()
         parser_helpers.print_command_help("open", file=output)

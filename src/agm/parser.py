@@ -492,8 +492,11 @@ _HELP_TEXTS: dict[str, str] = {
               Create the session with PANES panes.
     """),
     "exec": textwrap.dedent("""\
-        agm exec [--strict-json|--no-strict-json] [--max-call-depth N] [--runner COMMAND]
-                 [--log|--log-file PATH|--no-log] [--no-stdlib] [-I DIR]...
+        agm exec [--strict-json|--no-strict-json] [--max-iters N]
+                 [--max-call-depth N] [--runner COMMAND]
+                 [--timeout DURATION|--no-timeout]
+                 [--log|--log-file PATH|--no-log] [--no-log-file]
+                 [--no-stdlib] [-I DIR]...
                  (FILE | -c COMMAND) [--PARAM VALUE]...
 
         Execute an AgL (Agent Language) workflow program from FILE, or from
@@ -512,13 +515,21 @@ _HELP_TEXTS: dict[str, str] = {
           -c, --command COMMAND  Execute the program given as COMMAND instead of FILE.
           --strict-json         Require bare JSON output from agents (no recovery).
           --no-strict-json      Use lenient JSON recovery (default).
+          --max-iters N         Cap unbounded loops; off by default (CLI > source > config).
           --max-call-depth N    Override the maximum recursion call depth
                                 (CLI > config).
           --runner COMMAND      Override the default agent runner command.
+          --timeout DURATION    Override the shell-exec timeout and bind config timeout
+                                to some(DURATION). Mutually exclusive with --no-timeout.
+          --no-timeout          Remove any configured shell-exec timeout and bind
+                                config timeout to none. Mutually exclusive with --timeout.
           --log                 Enable trace logging (auto timestamped path).
           --log-file PATH       Write trace log to PATH.
+          --no-log-file         Clear the source-level log-file binding only; use
+                                --no-log to disable tracing entirely.
           --no-log              Disable trace logging (overrides source/config).
           --log, --log-file, and --no-log are mutually exclusive.
+          --log-file and --no-log-file are mutually exclusive.
           --no-stdlib           Do not automatically open std.core in the entry module.
           -I DIR, --module-path DIR
                                 Add DIR as an additional module search root

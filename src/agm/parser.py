@@ -418,7 +418,8 @@ _HELP_TEXTS: dict[str, str] = {
 
         Command config:
           <install-prefix>/.agm/config.toml is loaded first, then
-          $HOME/.agm/config.toml, followed by the
+          the AGM home config ($AGM_HOME/config.toml, or
+          $HOME/.agm/config.toml when AGM_HOME is unset), followed by the
           project config.toml and ./.agm/config.toml.
           [run.<command>] alias = "<other-command>" makes
           "agm run <command>" execute <other-command> instead.
@@ -455,8 +456,10 @@ _HELP_TEXTS: dict[str, str] = {
                        exists there; otherwise try the aliased command's
                        settings file, then fall back to default.json.
                        Then merge the existing files in this order:
-                         1. $HOME/.agm/sandbox/<command>.json
-                            fallback: $HOME/.agm/sandbox/default.json
+                         1. $AGM_HOME/sandbox/<command>.json
+                            (or $HOME/.agm/sandbox/<command>.json when unset)
+                            fallback: $AGM_HOME/sandbox/default.json
+                            (or $HOME/.agm/sandbox/default.json when unset)
                          2. the project sandbox config directory
                          3. ./.sandbox/<command>.json
                             fallback: ./.sandbox/default.json

@@ -34,7 +34,7 @@ Sandbox settings resolution:
 - if that file does not exist there, AGM tries the aliased command name's settings file
 - if neither exists, AGM falls back to `default.json`
 - AGM merges matching files in this order:
-  1. `$HOME/.agm/sandbox/`
+  1. `$AGM_HOME/sandbox/` (or `$HOME/.agm/sandbox/` when `AGM_HOME` is unset)
   2. the project sandbox config directory
   3. `./.sandbox/`
 - later files are merged over earlier ones

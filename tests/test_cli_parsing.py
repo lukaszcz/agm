@@ -1662,6 +1662,11 @@ class TestHelp:
         assert result.exit_code != 0
         assert "unknown command" in result.output
 
+    def test_run_help_mentions_agm_home_relocation(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["help", "run"])
+        assert result.exit_code == 0
+        assert "AGM_HOME" in result.stdout
+
 
 class TestTopLevel:
     def test_no_command(self, runner: CliRunner) -> None:

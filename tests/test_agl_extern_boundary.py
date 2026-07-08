@@ -383,7 +383,7 @@ class TestDecodeContainers:
             decode_boundary_value(contract.result, "not a list", {})
 
     def test_cyclic_list_rejected(self) -> None:
-        contract = build_contract("extern def f(x: int) -> list[json]\n0")
+        contract = build_contract("extern def f(x: int) -> list[list[int]]\n0")
         value: list[object] = []
         value.append(value)
         with pytest.raises(BoundaryViolation):

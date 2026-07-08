@@ -34,7 +34,12 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import assert_never, cast
 
-from agm.agl.ir.contracts import ContractPayload, ContractRequest, ConversionFailureMode, DecodeSchema
+from agm.agl.ir.contracts import (
+    ContractPayload,
+    ContractRequest,
+    ConversionFailureMode,
+    DecodeSchema,
+)
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import (
     AutoTraceField,

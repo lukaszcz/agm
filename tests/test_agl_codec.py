@@ -47,7 +47,6 @@ from agm.agl.scope import resolve
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import (
-    AgentType,
     BoolType,
     DecimalType,
     DictType,
@@ -59,7 +58,6 @@ from agm.agl.semantics.types import (
     TextType,
     Type,
     TypeVarType,
-    UnitType,
 )
 from agm.agl.semantics.values import (
     BoolValue,

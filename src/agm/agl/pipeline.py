@@ -741,11 +741,7 @@ class PipelineDriver:
         # [check_only] --dry-run stop: the full static pipeline, param
         # validation, and contract materialization have all succeeded.  Stop
         # before executing any statement — no program output, no evaluation
-        # side effects, and no trace is written.  Extern companion modules are
-        # NOT covered by this stop: they already imported during loading
-        # (eager, fail-fast, before this point is ever reached), so a broken
-        # companion still fails a dry run.  Only invoking an extern's Python
-        # callable is skipped, like every other statement.
+        # side effects, no extern companion imports, and no trace is written.
         # ----------------------------------------------------------------
         if check_only:
             inventory = _build_call_inventory_from_ir(executable.dry_run_inventory)
@@ -1243,23 +1239,25 @@ class PipelineDriver:
 
         warnings.extend(checked_graph.warnings)
 
-        # Extern (Python FFI) companions: import and resolve every declared
-        # extern up front, gated by capability — fail-fast, before evaluation,
-        # and after every static pass (so a static error elsewhere is reported
-        # instead, with no companion import side effect).
-        extern_diagnostics = _wire_extern_registry(
-            checked_graph=checked_graph,
-            capabilities=capabilities,
-            registry=host_env.extern_registry,
-            companion_paths=prepared.companion_paths,
-        )
-        if extern_diagnostics:
-            return RunResult(
-                ok=False,
-                diagnostics=extern_diagnostics,
-                error=None,
-                warnings=warnings,
+        if not check_only:
+            # Extern (Python FFI) companions: import and resolve every declared
+            # extern up front, gated by capability — fail-fast, before evaluation,
+            # and after every static pass (so a static error elsewhere is reported
+            # instead, with no companion import side effect). Dry-run stops before
+            # this host-side import step to preserve its no-side-effects contract.
+            extern_diagnostics = _wire_extern_registry(
+                checked_graph=checked_graph,
+                capabilities=capabilities,
+                registry=host_env.extern_registry,
+                companion_paths=prepared.companion_paths,
             )
+            if extern_diagnostics:
+                return RunResult(
+                    ok=False,
+                    diagnostics=extern_diagnostics,
+                    error=None,
+                    warnings=warnings,
+                )
 
         contract_payloads, contract_errors = _materialize_graph_custom_contract_payloads(
             checked_graph,

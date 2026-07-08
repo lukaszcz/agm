@@ -1427,13 +1427,13 @@ class TestExecFFI:
         captured = capsys.readouterr()
         assert captured.out == "42\n"
 
-    def test_dry_run_lists_the_extern_call_site_without_running_it(
+    def test_dry_run_lists_the_extern_call_site_without_importing_companion(
         self,
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """--dry-run's inventory lists the extern call site; the callable never runs."""
+        """--dry-run's inventory lists extern calls without companion side effects."""
         from agm.core import dry_run
 
         monkeypatch.setattr(dry_run, "_ENABLED", True)
@@ -1442,7 +1442,9 @@ class TestExecFFI:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text("extern def add_one(x: int) -> int\nadd_one(41)\n")
         (tmp_path / "prog.py").write_text(
-            f"def add_one(x):\n    open({str(marker)!r}, 'a').write('called')\n"
+            f"open({str(marker)!r}, 'a').write('imported')\n"
+            "def add_one(x):\n"
+            f"    open({str(marker)!r}, 'a').write('called')\n"
             "    return x + 1\n"
         )
 
@@ -1450,9 +1452,6 @@ class TestExecFFI:
         captured = capsys.readouterr()
         assert "call-sites" in captured.out
         assert "add_one" in captured.out
-        # The companion module still imports (fail-fast even under --dry-run),
-        # but the call itself — a side effect inside the extern's body — never
-        # runs during a dry run.
         assert not marker.exists()
 
 

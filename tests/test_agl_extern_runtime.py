@@ -978,7 +978,10 @@ class TestDryRun:
         write_companion_file(
             root,
             "lib.mod",
-            f"def f(x):\n    open({str(marker)!r}, 'a').write('called')\n    return x + 1\n",
+            f"open({str(marker)!r}, 'a').write('imported')\n"
+            "def f(x):\n"
+            f"    open({str(marker)!r}, 'a').write('called')\n"
+            "    return x + 1\n",
         )
         driver = PipelineDriver()
         prepared = PipelineDriver.prepare_program(
@@ -990,12 +993,9 @@ class TestDryRun:
         result = driver.run_prepared_graph(prepared, check_only=True)
         assert result.ok is True
         assert [cs.callee for cs in result.call_sites] == ["f"]
-        # The companion module IMPORTS (fail-fast on a broken companion even
-        # in dry-run), but calling ``f`` — a side effect inside its body —
-        # never runs during a dry-run.
         assert not marker.exists()
 
-    def test_dry_run_still_fails_fast_on_a_broken_companion(self, tmp_path: Path) -> None:
+    def test_dry_run_does_not_import_a_broken_companion(self, tmp_path: Path) -> None:
         root = tmp_path / "root"
         write_module_file(root, "lib.mod", "extern def f(x: int) -> int")
         write_companion_file(root, "lib.mod", "raise RuntimeError('broken')\n")
@@ -1007,7 +1007,8 @@ class TestDryRun:
             default_stdlib=False,
         )
         result = driver.run_prepared_graph(prepared, check_only=True)
-        assert result.ok is False
+        assert result.ok is True
+        assert [cs.callee for cs in result.call_sites] == ["f"]
 
 
 # ---------------------------------------------------------------------------

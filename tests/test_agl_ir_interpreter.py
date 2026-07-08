@@ -2041,11 +2041,12 @@ class TestIrExec:
         from agm.agl.ir.contracts import ContractRequest
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.nodes import IrExec
+        from agm.agl.semantics.type_table import create_seeded_type_table
         from agm.agl.semantics.types import IntType
         from agm.agl.type_schema import build_decode_schema
 
         cid = ContractId(value=0)
-        decode_schema = build_decode_schema(IntType())
+        decode_schema = build_decode_schema(IntType(), create_seeded_type_table()).root
         contract = ContractRequest(
             codec_name="json",
             strict_json=False,
@@ -2144,6 +2145,7 @@ class TestIrExec:
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.nodes import IrExec
         from agm.agl.semantics.exceptions import AglRaise
+        from agm.agl.semantics.type_table import create_seeded_type_table
         from agm.agl.semantics.types import IntType
         from agm.agl.type_schema import build_decode_schema
         from agm.core.process import ProcessCaptureResult
@@ -2179,7 +2181,7 @@ class TestIrExec:
             )
 
         cid = ContractId(value=0)
-        decode_schema = build_decode_schema(IntType())
+        decode_schema = build_decode_schema(IntType(), create_seeded_type_table()).root
         contract = ContractRequest(
             codec_name="json",
             strict_json=False,
@@ -2221,6 +2223,7 @@ class TestIrExec:
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.nodes import IrExec
         from agm.agl.semantics.exceptions import AglRaise
+        from agm.agl.semantics.type_table import create_seeded_type_table
         from agm.agl.semantics.types import IntType
         from agm.agl.type_schema import build_decode_schema
         from agm.core.process import ProcessCaptureResult
@@ -2256,7 +2259,7 @@ class TestIrExec:
             )
 
         cid = ContractId(value=0)
-        decode_schema = build_decode_schema(IntType())
+        decode_schema = build_decode_schema(IntType(), create_seeded_type_table()).root
         contract = ContractRequest(
             codec_name="json",
             strict_json=False,
@@ -2296,6 +2299,7 @@ class TestIrExec:
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.nodes import IrExec
         from agm.agl.semantics.exceptions import AglRaise
+        from agm.agl.semantics.type_table import create_seeded_type_table
         from agm.agl.semantics.types import IntType
         from agm.agl.type_schema import build_decode_schema
         from agm.core.process import ProcessCaptureResult
@@ -2319,7 +2323,7 @@ class TestIrExec:
             )
 
         cid = ContractId(value=0)
-        decode_schema = build_decode_schema(IntType())
+        decode_schema = build_decode_schema(IntType(), create_seeded_type_table()).root
         contract = ContractRequest(
             codec_name="json",
             strict_json=True,

@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "single_leaf",
+      "params": {"n": 0},
+      "expect": {"stdout": "1\n60\n"}
+    },
+    {
+      "name": "several_nodes",
+      "params": {"n": 3},
+      "expect": {"stdout": "4\n60\n"}
+    },
+    {
+      "name": "deeper_tree",
+      "params": {"n": 5},
+      "expect": {"stdout": "6\n60\n"}
+    }
+  ]
+}

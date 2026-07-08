@@ -16,8 +16,9 @@ NOT allowed: ``agm.agl.syntax``, ``agm.agl.scope``, ``agm.agl.typecheck``.
 from __future__ import annotations
 
 import decimal
+import inspect
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, assert_never
+from typing import TYPE_CHECKING, Protocol, assert_never, cast
 
 from agm.agl.eval._decimal import AGL_DECIMAL_CONTEXT
 from agm.agl.eval.arith import (
@@ -36,7 +37,7 @@ from agm.agl.eval.conversions import AglCastConversion, run_recipe
 from agm.agl.eval.effects import EffectHandlers
 from agm.agl.eval.indexing import AglIndexOutOfRange, AglMissingKey, index_get, index_set
 from agm.agl.eval.matching import make_match_error as _make_match_error
-from agm.agl.ir.contracts import ConversionFailureMode
+from agm.agl.ir.contracts import ContractRequest, ConversionFailureMode
 from agm.agl.ir.ids import ContractId, FunctionId, Location, SymbolId
 from agm.agl.ir.nodes import (
     AutoTraceField,
@@ -155,6 +156,49 @@ if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract
 
 __all__ = ["IrInterpreter", "_apply_coercion", "_make_exc_value"]
+
+
+class _FlexibleParse(Protocol):
+    def __call__(self, *args: object, **kwargs: object) -> ParseResult: ...
+
+
+def _call_custom_codec_parse(
+    host_contract: "OutputContract",
+    request: ContractRequest,
+    raw: str,
+    *,
+    effective_strict: bool,
+    schema: dict[str, object] | None,
+) -> ParseResult:
+    """Call a custom codec parse hook, accepting legacy signatures."""
+    kwargs: dict[str, object] = {
+        "strict_json": effective_strict,
+        "schema": schema,
+        "decode": host_contract.decode,
+        "defs": dict(host_contract.defs),
+        "type_table": None,
+    }
+    parse = cast(_FlexibleParse, host_contract.codec.parse)
+    try:
+        params = inspect.signature(host_contract.codec.parse).parameters
+    except (TypeError, ValueError):
+        return parse(raw, **kwargs)
+
+    accepts_var_kw = any(param.kind.name == "VAR_KEYWORD" for param in params.values())
+    accepted_kwargs = {
+        name: value for name, value in kwargs.items() if accepts_var_kw or name in params
+    }
+    positional = [
+        param
+        for param in params.values()
+        if param.kind.name in {"POSITIONAL_ONLY", "POSITIONAL_OR_KEYWORD"}
+    ]
+    accepts_varargs = any(param.kind.name == "VAR_POSITIONAL" for param in params.values())
+    if accepts_varargs or len(positional) >= 2:
+        from agm.agl.runtime.contract import _target_type_for_request
+
+        return parse(raw, _target_type_for_request(request), **accepted_kwargs)
+    return parse(raw, **accepted_kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -346,10 +390,11 @@ class IrInterpreter:
             if isinstance(host_contract.json_schema, dict)
             else None
         )
-        return host_contract.codec.parse(
+        return _call_custom_codec_parse(
+            host_contract,
+            contract,
             raw,
-            host_contract.target_type,
-            strict_json=effective_strict,
+            effective_strict=effective_strict,
             schema=schema,
         )
 
@@ -1152,10 +1197,7 @@ class IrInterpreter:
                     return self._eval(body_expr)
                 except AglRaise as exc:
                     for handler in handlers:
-                        if (
-                            handler.display_name is None
-                            or handler.display_name == exc.exc.display_name
-                        ):
+                        if handler.nominal is None or handler.nominal == exc.exc.nominal:
                             if handler.symbol is not None:
                                 self._frame[handler.symbol] = exc.exc
                             return self._eval(handler.body)

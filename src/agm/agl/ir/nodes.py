@@ -497,7 +497,9 @@ class IrMakeEnum:
 class IrMakeException:
     """IR exception construction: ``ExcName(field: expr, ...)``.
 
-    ``nominal`` — the ``NominalId`` of the exception type (uses PRELUDE_ID).
+    ``nominal`` — the ``NominalId`` of the exception type (``module_id`` is
+        ``PRELUDE_ID`` for a built-in exception; a user-declared exception is
+        stamped with its declaring module's id).
     ``display_name`` — user-facing exception type name.
     ``fields`` — declaration-order tuple of ``(field_name, slot)`` where
         ``slot`` is either a coerced ``IrExpr`` (explicitly provided by the
@@ -627,10 +629,11 @@ class IrReturn:
 class IrCatchHandler:
     """A single catch handler in an ``IrTry`` node.
 
-    ``nominal`` and ``display_name`` together identify the exception type:
+    ``nominal`` identifies the exception type and ``display_name`` is rendering
+    metadata:
     - ``nominal=None, display_name=None`` — catch-all (catches everything).
-    - ``nominal`` set, ``display_name`` set — specific match by ``display_name``
-      string equality against ``ExceptionValue.display_name`` (legacy semantics).
+    - ``nominal`` set, ``display_name`` set — specific exact match by
+      module-qualified ``ExceptionValue.nominal``.
 
     ``symbol`` is the ``SymbolId`` of the binding variable when the handler
     declares one (``catch SomeError e => ...``); ``None`` otherwise.  The
@@ -653,8 +656,8 @@ class IrTry:
     Semantics mirror legacy ``_eval_try``:
     - Evaluate ``body``; if it completes normally, return its value.
     - On ``AglRaise``, iterate ``handlers`` in order; the first handler that
-      matches (catch-all when ``display_name is None``; specific when
-      ``display_name == exc.display_name``) wins.
+      matches (catch-all when ``nominal is None``; specific when
+      ``nominal == exc.nominal``) wins.
     - If a handler matches and ``handler.symbol`` is not ``None``, bind the
       caught ``ExceptionValue`` in the current frame under that symbol.
     - Evaluate the handler's ``body`` and return its value.

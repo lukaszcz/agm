@@ -7,7 +7,7 @@ renderer names, and returns a ``CheckedProgram``.
 Rules implemented
 -----------------
 1.  Type declaration validation: duplicate names, unknown referenced types,
-    recursive records/enums, alias cycles, and built-in-name shadowing.
+    uninhabitable recursive records/enums, alias cycles, and built-in-name shadowing.
 2.  Function declarations: parameter/return types resolved; ordering enforced
     (required before defaulted); FunctionSignature registered.
 3.  Binding type inference:
@@ -53,6 +53,7 @@ from agm.agl.scope.symbols import (
     BuiltinKind,
     ResolvedProgram,
 )
+from agm.agl.semantics.type_table import TypeTable, comparable_types
 from agm.agl.semantics.types import (
     AgentType,
     BoolType,
@@ -73,7 +74,6 @@ from agm.agl.semantics.types import (
     TypeVarType,
     UnitType,
     cast_classification,
-    comparable_types,
     contains_type_var,
     is_assignable,
     substitute,
@@ -199,7 +199,7 @@ def _builtin_function_signature(name: str) -> FunctionSignature | None:
                     _std_param("strict_json", BoolType(), has_default=True),
                     _std_param(
                         "on_parse_error",
-                        EnumType(name="ParsePolicy", variants={}),
+                        EnumType(name="ParsePolicy"),
                         has_default=True,
                     ),
                 ),
@@ -209,12 +209,12 @@ def _builtin_function_signature(name: str) -> FunctionSignature | None:
         case "ask-request":
             return FunctionSignature(
                 params=(_std_param("prompt", TextType()),),
-                result=RecordType(name="AgentRequest", fields={}),
+                result=RecordType(name="AgentRequest"),
             )
         case "exec":
             return FunctionSignature(
                 params=(_std_param("command", TextType()),),
-                result=RecordType(name="ExecResult", fields={}),
+                result=RecordType(name="ExecResult"),
             )
         case _:
             return None
@@ -277,34 +277,53 @@ def _validate_extern_name(name: str, span: SourceSpan) -> None:
         )
 
 
-def _contains_banned_extern_type(t: Type) -> bool:
+def _contains_banned_extern_type(
+    t: Type, type_table: TypeTable, _seen: frozenset[Type] = frozenset()
+) -> bool:
     """Return ``True`` if *t* contains a function or agent type anywhere.
 
     The FFI is a pure data boundary: function and agent values can never cross
     it, so they are static errors anywhere in an extern's parameter or return
     types, including nested inside ``list``/``dict``/record/enum
     instantiations.  Type variables are permitted at any depth — dynamic
-    sealing keeps values at those positions opaque.
+    sealing keeps values at those positions opaque.  Record/enum field and
+    variant shapes are resolved through *type_table*; *_seen* tracks the
+    nominal instantiations already on the current path so a recursive type
+    (e.g. a self-referential record) is examined once rather than forever.
     """
     match t:
         case FunctionType() | AgentType():
             return True
         case ListType():
-            return _contains_banned_extern_type(t.elem)
+            return _contains_banned_extern_type(t.elem, type_table, _seen)
         case DictType():
-            return _contains_banned_extern_type(t.value)
+            return _contains_banned_extern_type(t.value, type_table, _seen)
         case RecordType():
-            return any(_contains_banned_extern_type(ta) for ta in t.type_args) or any(
-                _contains_banned_extern_type(ft) for ft in t.fields.values()
+            if t in _seen:
+                return False
+            seen = _seen | {t}
+            return any(
+                _contains_banned_extern_type(ta, type_table, seen) for ta in t.type_args
+            ) or any(
+                _contains_banned_extern_type(ft, type_table, seen)
+                for ft in type_table.record_fields(t).values()
             )
         case EnumType():
-            return any(_contains_banned_extern_type(ta) for ta in t.type_args) or any(
-                _contains_banned_extern_type(ft)
-                for vfields in t.variants.values()
+            if t in _seen:
+                return False
+            seen = _seen | {t}
+            return any(
+                _contains_banned_extern_type(ta, type_table, seen) for ta in t.type_args
+            ) or any(
+                _contains_banned_extern_type(ft, type_table, seen)
+                for vfields in type_table.enum_variants(t).values()
                 for ft in vfields.values()
             )
         case ExceptionType():
-            return any(_contains_banned_extern_type(ft) for ft in t.fields.values())
+            return any(
+                _contains_banned_extern_type(ft, type_table, _seen)
+                for ft in type_table.exception_fields(t).values()
+            )
         case (
             TextType() | JsonType() | BoolType() | IntType() | DecimalType()
             | UnitType() | BottomType() | TypeVarType()
@@ -349,6 +368,7 @@ class _Checker:
         # Argument bindings computed during the check, reused by the lowerer so it
         # never re-binds.  Keyed by Call/Pattern node_id (see ``ArgumentBindings``).
         self._function_call_bindings: dict[int, tuple[Expr | None, ...]] = {}
+        self._function_call_param_types: dict[int, tuple[Type, ...]] = {}
         self._constructor_call_bindings: dict[int, dict[str, Expr]] = {}
         self._constructor_pattern_bindings: dict[int, tuple[tuple[str, Pattern], ...]] = {}
         self._builtins = BuiltinCallChecker(self)
@@ -435,15 +455,36 @@ class _Checker:
         self._check_required_after_defaulted(node.params)
 
     def _validate_extern_signature(self, node: FuncDef, sig: FunctionSignature) -> None:
-        """Reject a function or agent type anywhere in an extern's signature."""
+        """Reject types that cannot cross the Python boundary in an extern's signature.
+
+        Two kinds are rejected: a function or agent type anywhere (opaque values
+        that can never marshal across the FFI), and a type with no finite schema
+        (its recursive instantiations never close, so its boundary schema — like
+        its JSON schema — cannot be built). A finite recursive type is allowed:
+        it crosses as a ``BoundaryRef`` graph.
+        """
+        type_table = self._env.type_table
+        # Finite-schema is checked BEFORE the banned-type walk: a type whose
+        # instantiations never close (growing polymorphic recursion) has an
+        # infinite structure, and ``_contains_banned_extern_type`` walks that
+        # structure — its cycle guard only catches repeated instantiations, not
+        # ever-growing ones. ``no_finite_schema_message`` works at the
+        # declaration level and always terminates, so it rejects such a type
+        # first, leaving the banned-type walk only finite closures to traverse.
         for p, spec in zip(node.params, sig.params):
-            if _contains_banned_extern_type(spec.type):
+            message = type_table.no_finite_schema_message(spec.type, use="an extern parameter type")
+            if message is not None:
+                raise AglTypeError(message, span=p.span)
+            if _contains_banned_extern_type(spec.type, type_table):
                 raise AglTypeError(
                     f"extern function '{node.name}' parameter '{p.name}' has a "
                     "function or agent type, which cannot cross the Python boundary.",
                     span=p.span,
                 )
-        if _contains_banned_extern_type(sig.result):
+        message = type_table.no_finite_schema_message(sig.result, use="an extern return type")
+        if message is not None:
+            raise AglTypeError(message, span=node.span)
+        if _contains_banned_extern_type(sig.result, type_table):
             raise AglTypeError(
                 f"extern function '{node.name}' has a return type containing a "
                 "function or agent type, which cannot cross the Python boundary.",
@@ -497,9 +538,9 @@ class _Checker:
 
     def check_program(self, program: Program) -> None:
         """Type-check the entire program."""
-        # Pre-pass: register all FuncDef signatures so calls can reference them
-        # in declaration order (mutual forward references are not supported but
-        # order-independence within the block is).
+        # Pre-pass: register all FuncDef signatures before any body is checked,
+        # so a call may reference any top-level function regardless of
+        # declaration order, including mutually recursive pairs.
         for item in program.body.items:
             if isinstance(item, FuncDef):
                 self._preregister_funcdef(item)
@@ -688,7 +729,61 @@ class _Checker:
                 declared_type = val_type
         else:
             declared_type = ann_type if ann_type is not None else TextType()
+        # A non-text param round-trips through the JSON boundary (schema +
+        # decode) at lowering time (see ``type_schema.build_param_decoder``).
+        # Reject both kinds of non-decodable type here rather than crashing at
+        # lowering: infinite instantiation closures have no finite schema, and
+        # opaque/non-data values (unit, agent, functions, exceptions, …) have no
+        # JSON wire representation at all. Text params are taken verbatim.
+        if not isinstance(declared_type, TextType):
+            message = self._env.type_table.no_finite_schema_message(
+                declared_type, use="a parameter type"
+            )
+            if message is not None:
+                raise AglTypeError(message, span=stmt.span)
+            if not self._type_is_wire_serializable(declared_type):
+                raise AglTypeError(
+                    f"Param type '{declared_type!r}' cannot be decoded from JSON; "
+                    "use text or a JSON-serializable data type.",
+                    span=stmt.span,
+                )
         self._env.set_binding_type(stmt.node_id, declared_type)
+
+    def _type_is_wire_serializable(self, typ: Type) -> bool:
+        """Return whether *typ* can be decoded from a JSON/schema boundary."""
+        return self._wire_type_is_serializable(typ, seen=frozenset())
+
+    def _wire_type_is_serializable(self, typ: Type, *, seen: frozenset[Type]) -> bool:
+        schema_type = self._env.type_table.canonical_schema_type(typ)
+        if isinstance(schema_type, (TextType, JsonType, BoolType, IntType, DecimalType)):
+            return True
+        if isinstance(schema_type, ListType):
+            return self._wire_type_is_serializable(schema_type.elem, seen=seen)
+        if isinstance(schema_type, DictType):
+            return self._wire_type_is_serializable(schema_type.value, seen=seen)
+        if isinstance(schema_type, RecordType):
+            if schema_type in seen:
+                return True
+            next_seen = seen | {schema_type}
+            return all(
+                self._wire_type_is_serializable(field_type, seen=next_seen)
+                for field_type in self._env.type_table.record_fields(schema_type).values()
+            )
+        if isinstance(schema_type, EnumType):
+            if schema_type in seen:
+                return True
+            next_seen = seen | {schema_type}
+            return all(
+                self._wire_type_is_serializable(field_type, seen=next_seen)
+                for variant_fields in self._env.type_table.enum_variants(schema_type).values()
+                for field_type in variant_fields.values()
+            )
+        if isinstance(
+            schema_type,
+            (ExceptionType, UnitType, AgentType, FunctionType, BottomType, TypeVarType),
+        ):
+            return False
+        assert_never(schema_type)  # pragma: no cover
 
     def _check_config(self, stmt: ConfigDecl) -> None:
         """Check a ``config`` declaration against the engine-key registry.
@@ -1039,6 +1134,26 @@ class _Checker:
                 f"cannot cast '{source_type!r}' to '{target_type!r}'.",
                 span=node.span,
             )
+        # Only a FALLIBLE cast derives a JSON schema at lowering time
+        # (TOTAL_RENDER/TOTAL_JSON/TOTAL_NOOP never do) — and it may need one
+        # not just for a bare record/enum target but for a composite target
+        # containing one (e.g. list[Perfect[int]], dict[text, Perfect[int]]).
+        # A type whose reachable instantiation closure is infinite has no
+        # finite schema to derive, so reject it here rather than crashing at
+        # lowering. no_finite_schema_message returns None for scalar/finite
+        # targets, so this is a safe no-op for every other FALLIBLE cast.
+        if kind == CastKind.FALLIBLE:
+            message = self._env.type_table.no_finite_schema_message(
+                target_type, use="a cast target"
+            )
+            if message is not None:
+                raise AglTypeError(message, span=node.span)
+            if not self._type_is_wire_serializable(target_type):
+                raise AglTypeError(
+                    f"Cast target '{target_type!r}' is not JSON-serializable; "
+                    "use a JSON-serializable data type.",
+                    span=node.span,
+                )
         self._cast_specs[node.node_id] = CastSpec(target_type=target_type, kind=kind)
         return BoolType() if node.test_only else target_type
 
@@ -1155,6 +1270,7 @@ class _Checker:
             isinstance(template, (RecordType, EnumType))
             and isinstance(concrete, (RecordType, EnumType))
             and type(template) is type(concrete)
+            and template.module_id == concrete.module_id
             and template.name == concrete.name
             and len(template.type_args) == len(concrete.type_args)
         ):
@@ -1253,9 +1369,12 @@ class _Checker:
         type-variable inference before calling this helper with the substituted params.
         """
         binding = self._bind_call_args(params, node, func_name)
-        # Record the binding for the lowerer (binding is type-independent, so the
-        # generic path's pre- and post-substitution calls produce the same tuple).
+        # Record the binding and concrete parameter types for the lowerer.  The
+        # binding itself is type-independent, so the generic path's pre- and
+        # post-substitution calls produce the same tuple; the substituted parameter
+        # types are not, and drive call-site coercions during lowering.
         self._function_call_bindings[node.node_id] = binding
+        self._function_call_param_types[node.node_id] = tuple(p.type for p in params)
 
         # Type-check each bound expression.  A ``None`` binding means "use default";
         # the default's type was checked at definition time, so skip it here.
@@ -1732,7 +1851,7 @@ class _Checker:
             if not (
                 isinstance(left_type, BottomType)
                 or isinstance(right_type, BottomType)
-                or comparable_types(left_type, right_type)
+                or comparable_types(left_type, right_type, self._env.type_table)
             ):
                 raise AglTypeError(
                     f"Equality operands must have the same type; "
@@ -1946,7 +2065,7 @@ class _Checker:
             enum_type=expr_type,
             span=node.span,
         )
-        if node.variant not in expr_type.variants:
+        if node.variant not in self._env.type_table.enum_variants(expr_type):
             raise AglTypeError(
                 f"Variant '{node.variant}' does not belong to enum '{expr_type.name}'.",
                 span=node.span,
@@ -2081,19 +2200,21 @@ class _Checker:
                 span=node.span,
             )
         if isinstance(obj_type, ExceptionType):
-            if node.field not in obj_type.fields:
+            exc_fields = self._env.type_table.exception_fields(obj_type)
+            if node.field not in exc_fields:
                 raise AglTypeError(
                     f"Exception type '{obj_type.name}' has no field '{node.field}'.",
                     span=node.span,
                 )
-            return obj_type.fields[node.field]
+            return exc_fields[node.field]
         if isinstance(obj_type, RecordType):
-            if node.field not in obj_type.fields:
+            record_fields = self._env.type_table.record_fields(obj_type)
+            if node.field not in record_fields:
                 raise AglTypeError(
                     f"Record '{obj_type.name}' has no field '{node.field}'.",
                     span=node.span,
                 )
-            return obj_type.fields[node.field]
+            return record_fields[node.field]
         raise AglTypeError(
             f"Field access requires a record or exception value; got '{obj_type!r}'.",
             span=node.span,
@@ -2223,7 +2344,7 @@ class _Checker:
             pass
         elif isinstance(pattern, LiteralPattern):
             lit_type = self._check_expr(pattern.literal, expected=None)
-            if not comparable_types(lit_type, subj_type):
+            if not comparable_types(lit_type, subj_type, self._env.type_table):
                 raise AglTypeError(
                     f"Literal pattern of type '{lit_type!r}' is incompatible with "
                     f"scrutinee of type '{subj_type!r}'.",
@@ -2253,13 +2374,14 @@ class _Checker:
                 span=pattern.span,
             )
             variant_name = pattern.name
-            if variant_name not in subj_type.variants:
+            enum_variants = self._env.type_table.enum_variants(subj_type)
+            if variant_name not in enum_variants:
                 raise AglTypeError(
                     f"Variant '{variant_name}' does not belong to enum "
                     f"'{subj_type.name}'.",
                     span=pattern.span,
                 )
-            vfields = subj_type.variants[variant_name]
+            vfields = enum_variants[variant_name]
 
             # Retrieve the registered field kinds for this variant constructor.
             field_kinds = self._env.get_constructor_field_kinds(
@@ -2301,12 +2423,13 @@ class _Checker:
                 f"non-enum type '{subj_type!r}'.",
                 span=pattern.span,
             )
-        if pattern.name not in subj_type.variants:
+        enum_variants = self._env.type_table.enum_variants(subj_type)
+        if pattern.name not in enum_variants:
             raise AglTypeError(
                 f"Variant '{pattern.name}' does not belong to enum '{subj_type.name}'.",
                 span=pattern.span,
             )
-        if subj_type.variants[pattern.name]:
+        if enum_variants[pattern.name]:
             raise AglTypeError(
                 f"'{pattern.name}' is a variant of enum '{subj_type.name}' that has "
                 f"fields, so a bare name cannot match it. Write '{pattern.name}(...)' "
@@ -2334,7 +2457,9 @@ class _Checker:
                 f"unexpected pattern kind on enum scrutinee: {type(pattern).__name__}"
             )
             covered.add(pattern.name)
-        missing = [name for name in subj_type.variants if name not in covered]
+        missing = [
+            name for name in self._env.type_table.enum_variants(subj_type) if name not in covered
+        ]
         if not missing:
             return
         self._warnings.append(
@@ -2428,6 +2553,7 @@ class _Checker:
             cast_specs=self._cast_specs,
             argument_bindings=ArgumentBindings(
                 function_calls=self._function_call_bindings,
+                function_param_types=self._function_call_param_types,
                 constructor_calls=self._constructor_call_bindings,
                 constructor_patterns=self._constructor_pattern_bindings,
             ),

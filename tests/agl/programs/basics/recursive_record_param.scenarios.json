@@ -1,0 +1,28 @@
+{
+  "scenarios": [
+    {
+      "name": "flat_category",
+      "params": {"root": {"name": "Root", "subcategories": []}},
+      "expect": {"stdout": "Root\n1\n"}
+    },
+    {
+      "name": "nested_category",
+      "params": {
+        "root": {
+          "name": "Root",
+          "subcategories": [
+            {"name": "Child", "subcategories": [{"name": "Grandchild", "subcategories": []}]}
+          ]
+        }
+      },
+      "expect": {"stdout": "Root\n3\n"}
+    },
+    {
+      "name": "invalid_param_json_host_error",
+      "params": {
+        "root": {"name": "Root", "subcategories": [{"subcategories": []}]}
+      },
+      "expect": {"host_error": {"message_contains": ["root"]}}
+    }
+  ]
+}

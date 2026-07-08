@@ -60,6 +60,8 @@ class BuiltinCheckCtx(Protocol):
         self, value_type: Type, target_type: Type, span: SourceSpan
     ) -> None: ...
 
+    def _type_is_wire_serializable(self, typ: Type) -> bool: ...
+
 
 # ---------------------------------------------------------------------------
 # Collaborator class
@@ -241,6 +243,9 @@ class BuiltinCallChecker:
             codec_name, effective_strict, parse_policy_str = self._resolve_parse_options(
                 node, target_type, named
             )
+            self._check_schema_compilable(
+                target_type, codec_name, node.span, use="an agent output type"
+            )
             spec = OutputContractSpec(
                 target_type=target_type,
                 codec_name=codec_name,
@@ -332,6 +337,9 @@ class BuiltinCallChecker:
             codec_name, effective_strict, parse_policy_str = self._resolve_parse_options(
                 node, target_type, named
             )
+            self._check_schema_compilable(
+                target_type, codec_name, node.span, use="an exec output type"
+            )
             spec = OutputContractSpec(
                 target_type=target_type,
                 codec_name=codec_name,
@@ -389,6 +397,29 @@ class BuiltinCallChecker:
             tv = next(iter(free_type_vars(target_type)))
             raise AglTypeError(
                 f"agent/exec target type cannot contain a type variable ('{tv}').",
+                span=span,
+            )
+
+    def _check_schema_compilable(
+        self, target_type: Type, codec_name: str, span: SourceSpan, *, use: str
+    ) -> None:
+        """Reject *target_type* if lowering will schema-compile it but cannot.
+
+        Shared by ``ask``/``ask-request`` (via ``_finish_ask_like``) and
+        ``exec``. The lowerer derives schema/decode metadata only for the
+        built-in JSON codec, so custom codecs are responsible for their own
+        output format and parsing behavior. Text (and unit/structured-exec)
+        outputs do not build a schema.
+        """
+        if codec_name != "json":
+            return
+        message = self._ctx._env.type_table.no_finite_schema_message(target_type, use=use)
+        if message is not None:
+            raise AglTypeError(message, span=span)
+        if not self._ctx._type_is_wire_serializable(target_type):
+            raise AglTypeError(
+                f"{use.capitalize()} '{target_type!r}' is not JSON-serializable; "
+                "use a JSON-serializable data type.",
                 span=span,
             )
 

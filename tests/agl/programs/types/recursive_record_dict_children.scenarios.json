@@ -1,0 +1,25 @@
+{
+  "scenarios": [
+    {
+      "name": "with_grandchild",
+      "params": {"root_name": "root", "child_name": "child", "include_grandchild": true},
+      "expect": {
+        "stdout": "4\nroot > child > leaf > second\n1\nempty\n"
+      }
+    },
+    {
+      "name": "without_grandchild",
+      "params": {"root_name": "root", "child_name": "child", "include_grandchild": false},
+      "expect": {
+        "stdout": "3\nroot > child > second\n1\nempty\n"
+      }
+    },
+    {
+      "name": "different_names",
+      "params": {"root_name": "electronics", "child_name": "phones", "include_grandchild": true},
+      "expect": {
+        "stdout": "4\nelectronics > phones > leaf > second\n1\nempty\n"
+      }
+    }
+  ]
+}

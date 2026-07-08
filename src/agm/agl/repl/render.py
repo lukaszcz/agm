@@ -115,15 +115,15 @@ def _render_check_only(result: "EntryResult") -> str | None:
         if result.type_display is not None:
             return format_type_text_echo_for_repl(result.type_display)
         assert result.value_type is not None
-        return format_type_echo_for_repl(result.value_type)
+        return format_type_echo_for_repl(result.value_type, result.type_table)
     if result.kind == "expression":
         # A bare expression always carries a checked type on success.
         assert result.value_type is not None
-        return f": {format_type_for_repl(result.value_type)}"
+        return f": {format_type_for_repl(result.value_type, result.type_table)}"
     if result.kind == "binding":
         assert result.name is not None
         assert result.value_type is not None
-        return f"{result.name} : {format_type_for_repl(result.value_type)}"
+        return f"{result.name} : {format_type_for_repl(result.value_type, result.type_table)}"
     if result.kind == "declaration":
         assert result.name is not None
         return f"{result.name} declared"
@@ -147,7 +147,7 @@ def _render_echo(result: "EntryResult") -> str | None:
         if result.type_display is not None:
             return format_type_text_echo_for_repl(result.type_display)
         assert result.value_type is not None
-        return format_type_echo_for_repl(result.value_type)
+        return format_type_echo_for_repl(result.value_type, result.type_table)
     if result.kind == "expression":
         # A bare expression always carries a value and type on success.
         assert result.value is not None

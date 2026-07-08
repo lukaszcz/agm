@@ -23,19 +23,34 @@ Covers (per the AgL DSL contract):
 from __future__ import annotations
 
 import itertools
+from collections.abc import Mapping
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from agm.agl import PipelineDriver
 from agm.agl.capabilities import HostCapabilities
+from agm.agl.ir.contracts import (
+    ContractRequest,
+    DecodeSchema,
+    RefDecode,
+    ScalarDecode,
+    ScalarKind,
+)
+from agm.agl.ir.ids import NominalId
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.modules.roots import RootSet
 from agm.agl.runtime.agents import AgentFn, AgentRegistry
 from agm.agl.runtime.codec import JsonCodec, ParseResult, TextCodec
-from agm.agl.runtime.contract import OutputContract, materialize_contract
+from agm.agl.runtime.contract import OutputContract, materialize_contract, materialize_ir_contract
 from agm.agl.runtime.request import AgentRequest
 from agm.agl.scope import resolve
 from agm.agl.semantics.exceptions import AglRaise
+from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import (
+    AgentType,
     BoolType,
     DecimalType,
     DictType,
@@ -46,6 +61,8 @@ from agm.agl.semantics.types import (
     RecordType,
     TextType,
     Type,
+    TypeVarType,
+    UnitType,
 )
 from agm.agl.semantics.values import (
     BoolValue,
@@ -65,10 +82,10 @@ from agm.agl.syntax.nodes import (
     TemplateSegment,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.type_schema import derive_schema
+from agm.agl.type_schema import build_decode_schema, derive_schema
 from agm.agl.typecheck import check
 from agm.agl.typecheck.env import CheckedProgram, OutputContractSpec
-from tests._agl_helpers import ambient_agents_for
+from tests._agl_helpers import ambient_agents_for, enum_type, record_type, type_table_for
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -85,33 +102,73 @@ def _sp() -> SourceSpan:
     return SourceSpan(1, 1, 1, 5, 0, 4)
 
 
+_ISSUE_TYPE, _ISSUE_TYPEDEF = record_type(
+    "Issue",
+    {"title": TextType(), "severity": IntType(), "description": TextType()},
+)
+_REVIEW_TYPE, _REVIEW_TYPEDEF = enum_type(
+    "Review",
+    {"Pass": {}, "Fail": {"issues": ListType(elem=TextType())}},
+)
+# Shared table pre-seeded with the two ad-hoc composite shapes reused across
+# most of this suite (see ``_make_issue_type``/``_make_review_type``); tests
+# that build a different ad-hoc type pass their own table explicitly.
+_DEFAULT_TABLE = type_table_for(_ISSUE_TYPEDEF, _REVIEW_TYPEDEF)
+
+
 def _make_issue_type() -> RecordType:
     """A three-field record: title: text, severity: int, description: text."""
-    return RecordType(
-        name="Issue",
-        fields={
-            "title": TextType(),
-            "severity": IntType(),
-            "description": TextType(),
-        },
-    )
+    return _ISSUE_TYPE
 
 
 def _make_review_type() -> EnumType:
     """enum Review | Pass | Fail(issues: list[text])"""
-    return EnumType(
-        name="Review",
-        variants={
-            "Pass": {},
-            "Fail": {"issues": ListType(elem=TextType())},
-        },
-    )
+    return _REVIEW_TYPE
 
 
-def _make_contract_for(typ: Type) -> OutputContract:
-    """Build an OutputContract for a type via JsonCodec.make_contract."""
+def _make_contract_for(typ: Type, table: TypeTable | None = None) -> OutputContract:
+    """Build an OutputContract for a type via JsonCodec.make_contract.
+
+    *table* defaults to :data:`_DEFAULT_TABLE` (the ad-hoc Issue/Review
+    shapes); callers using a different ad-hoc type must pass their own table
+    (built via ``tests._agl_helpers.type_table_for``) since *typ* is
+    constructed directly rather than through the real type builder.
+    """
     codec = JsonCodec()
-    return codec.make_contract(typ)
+    return codec.make_contract(typ, table if table is not None else _DEFAULT_TABLE)
+
+
+def _parse_typed(
+    codec: JsonCodec,
+    raw: str,
+    typ: Type,
+    *,
+    strict_json: bool = False,
+    schema: dict[str, object] | None = None,
+    table: TypeTable | None = None,
+) -> ParseResult:
+    """Call ``codec.parse`` with the schema/decode derived from *typ*.
+
+    Production code never derives schema/decode from a checker ``Type`` at
+    parse time (the IR evaluator always has the contract-carried
+    ``json_schema``/``decode`` on hand); this test-only helper exists so the
+    (still very readable) bulk of this suite can keep expressing expectations
+    in terms of a ``Type`` rather than hand-building a schema dict and a
+    ``DecodeSchema`` at every call site.  *schema*, when given, overrides only
+    the derived schema (mirrors ``JsonCodec.make_contract`` computing schema
+    and decode once and threading both into ``parse``); ``decode`` is always
+    built from *typ* and cannot be overridden.  *table* defaults to
+    :data:`_DEFAULT_TABLE` (see :func:`_make_contract_for`).
+    """
+    table = table if table is not None else _DEFAULT_TABLE
+    decode_plan = build_decode_schema(typ, table)
+    return codec.parse(
+        raw,
+        strict_json=strict_json,
+        schema=schema if schema is not None else derive_schema(typ, table),
+        decode=decode_plan.root,
+        defs=dict(decode_plan.defs),
+    )
 
 
 def _variant_schema_for_case(schema: dict[str, object], case: str) -> dict[str, object]:
@@ -159,9 +216,7 @@ def _check_program_with_json(body: tuple[Item, ...]) -> CheckedProgram:
         has_default_agent=True,
         codec_kinds={
             "text": frozenset({"text"}),
-            "json": frozenset(
-                {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
-            ),
+            "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
         },
     )
     return check(resolved, caps)
@@ -305,52 +360,52 @@ def _enum_def(name: str, *variants: ast.VariantDef) -> ast.EnumDef:
 
 class TestDeriveSchema:
     def test_text_type(self) -> None:
-        schema = derive_schema(TextType())
+        schema = derive_schema(TextType(), type_table_for())
         assert schema == {"type": "string"}
 
     def test_int_type(self) -> None:
-        schema = derive_schema(IntType())
+        schema = derive_schema(IntType(), type_table_for())
         assert schema == {"type": "integer"}
 
     def test_decimal_type(self) -> None:
-        schema = derive_schema(DecimalType())
+        schema = derive_schema(DecimalType(), type_table_for())
         assert schema == {"type": "number"}
 
     def test_bool_type(self) -> None:
-        schema = derive_schema(BoolType())
+        schema = derive_schema(BoolType(), type_table_for())
         assert schema == {"type": "boolean"}
 
     def test_json_type_is_permissive(self) -> None:
         # json type accepts anything: {}
-        schema = derive_schema(JsonType())
+        schema = derive_schema(JsonType(), type_table_for())
         assert schema == {}
 
     def test_list_of_text(self) -> None:
-        schema = derive_schema(ListType(elem=TextType()))
+        schema = derive_schema(ListType(elem=TextType()), type_table_for())
         assert schema == {"type": "array", "items": {"type": "string"}}
 
     def test_list_of_int(self) -> None:
-        schema = derive_schema(ListType(elem=IntType()))
+        schema = derive_schema(ListType(elem=IntType()), type_table_for())
         assert schema == {"type": "array", "items": {"type": "integer"}}
 
     def test_list_nested(self) -> None:
-        schema = derive_schema(ListType(elem=ListType(elem=BoolType())))
+        schema = derive_schema(ListType(elem=ListType(elem=BoolType())), type_table_for())
         assert schema == {
             "type": "array",
             "items": {"type": "array", "items": {"type": "boolean"}},
         }
 
     def test_dict_of_text(self) -> None:
-        schema = derive_schema(DictType(value=TextType()))
+        schema = derive_schema(DictType(value=TextType()), type_table_for())
         assert schema == {"type": "object", "additionalProperties": {"type": "string"}}
 
     def test_dict_of_int(self) -> None:
-        schema = derive_schema(DictType(value=IntType()))
+        schema = derive_schema(DictType(value=IntType()), type_table_for())
         assert schema == {"type": "object", "additionalProperties": {"type": "integer"}}
 
     def test_record_schema(self) -> None:
         issue_type = _make_issue_type()
-        schema = derive_schema(issue_type)
+        schema = derive_schema(issue_type, _DEFAULT_TABLE)
         assert schema == {
             "type": "object",
             "additionalProperties": False,
@@ -363,19 +418,16 @@ class TestDeriveSchema:
         }
 
     def test_record_required_has_all_fields(self) -> None:
-        typ = RecordType(
-            name="Pair",
-            fields={"a": IntType(), "b": TextType()},
-        )
-        schema = derive_schema(typ)
+        typ, typedef = record_type("Pair", {"a": IntType(), "b": TextType()})
+        schema = derive_schema(typ, type_table_for(typedef))
         required = schema["required"]
         assert isinstance(required, list)
         assert set(required) == {"a", "b"}
 
     def test_record_nested_record(self) -> None:
-        inner = RecordType(name="Inner", fields={"x": IntType()})
-        outer = RecordType(name="Outer", fields={"inner": inner})
-        schema = derive_schema(outer)
+        inner, inner_def = record_type("Inner", {"x": IntType()})
+        outer, outer_def = record_type("Outer", {"inner": inner})
+        schema = derive_schema(outer, type_table_for(outer_def, inner_def))
         properties = schema["properties"]
         assert isinstance(properties, dict)
         assert properties["inner"] == {
@@ -386,8 +438,8 @@ class TestDeriveSchema:
         }
 
     def test_enum_schema_pass_only(self) -> None:
-        typ = EnumType(name="Status", variants={"Done": {}})
-        schema = derive_schema(typ)
+        typ, typedef = enum_type("Status", {"Done": {}})
+        schema = derive_schema(typ, type_table_for(typedef))
         assert schema == {
             "oneOf": [
                 {
@@ -400,7 +452,8 @@ class TestDeriveSchema:
         }
 
     def test_enum_schema_review(self) -> None:
-        schema = derive_schema(_make_review_type())
+        review_type = _make_review_type()
+        schema = derive_schema(review_type, _DEFAULT_TABLE)
         assert schema == {
             "oneOf": [
                 {
@@ -422,8 +475,8 @@ class TestDeriveSchema:
         }
 
     def test_enum_nullary_variant_has_only_case_field(self) -> None:
-        typ = EnumType(name="E", variants={"A": {}, "B": {"x": IntType()}})
-        schema = derive_schema(typ)
+        typ, typedef = enum_type("E", {"A": {}, "B": {"x": IntType()}})
+        schema = derive_schema(typ, type_table_for(typedef))
         # First variant (A) should have only $case in required.
         a_schema = _variant_schema_for_case(schema, "A")
         required_a = a_schema["required"]
@@ -431,12 +484,597 @@ class TestDeriveSchema:
         assert required_a == ["$case"]
 
     def test_enum_payload_variant_has_case_plus_fields(self) -> None:
-        typ = EnumType(name="E", variants={"A": {}, "B": {"x": IntType()}})
-        schema = derive_schema(typ)
+        typ, typedef = enum_type("E", {"A": {}, "B": {"x": IntType()}})
+        schema = derive_schema(typ, type_table_for(typedef))
         b_schema = _variant_schema_for_case(schema, "B")
         required_b = b_schema["required"]
         assert isinstance(required_b, list)
         assert set(required_b) == {"$case", "x"}
+
+
+# ---------------------------------------------------------------------------
+# 1b. Recursive `$defs`/`$ref` schema emission
+# ---------------------------------------------------------------------------
+
+
+# The exact inline body of the `Tree` `$defs` entry shared by several tests
+# below: `enum Tree | Leaf | Node(value: int, left: Tree, right: Tree)`, whose
+# `left`/`right` fields are $ref'd back to Tree itself (a self-loop).
+_TREE_DEFS_BODY: dict[str, object] = {
+    "oneOf": [
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["$case"],
+            "properties": {"$case": {"const": "Leaf"}},
+        },
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["$case", "value", "left", "right"],
+            "properties": {
+                "$case": {"const": "Node"},
+                "value": {"type": "integer"},
+                "left": {"$ref": "#/$defs/Tree"},
+                "right": {"$ref": "#/$defs/Tree"},
+            },
+        },
+    ]
+}
+
+
+def _tree_type_and_def() -> tuple[EnumType, TypeDef]:
+    """``enum Tree | Leaf | Node(value: int, left: Tree, right: Tree)``."""
+    tree_ref = EnumType(name="Tree")
+    return enum_type(
+        "Tree",
+        {
+            "Leaf": {},
+            "Node": {"value": IntType(), "left": tree_ref, "right": tree_ref},
+        },
+    )
+
+
+class TestRecursiveSchemaDerivation:
+    """`$defs`/`$ref` emission over the concrete instantiation graph (golden schemas)."""
+
+    def test_recursive_enum_root_is_ref_with_defs(self) -> None:
+        # Root-is-recursive shape: the root itself is `$ref`'d, and the
+        # `$defs` entry holds the real (self-referencing) body.
+        tree, tree_def = _tree_type_and_def()
+        schema = derive_schema(tree, type_table_for(tree_def))
+        assert schema == {"$ref": "#/$defs/Tree", "$defs": {"Tree": _TREE_DEFS_BODY}}
+
+    def test_list_guarded_recursive_record_is_ref_with_defs(self) -> None:
+        category, category_def = record_type(
+            "Category",
+            {"name": TextType(), "subcategories": ListType(RecordType(name="Category"))},
+        )
+        schema = derive_schema(category, type_table_for(category_def))
+        assert schema == {
+            "$ref": "#/$defs/Category",
+            "$defs": {
+                "Category": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["name", "subcategories"],
+                    "properties": {
+                        "name": {"type": "string"},
+                        "subcategories": {
+                            "type": "array",
+                            "items": {"$ref": "#/$defs/Category"},
+                        },
+                    },
+                }
+            },
+        }
+
+    def test_non_recursive_wrapper_inlined_recursive_field_in_defs(self) -> None:
+        # Only PART of the graph is recursive: `Wrapper` itself has no cycle
+        # (it is inlined normally), but its `root: Tree` field is $ref'd and
+        # `Tree` gets the only `$defs` entry.
+        tree, tree_def = _tree_type_and_def()
+        wrapper, wrapper_def = record_type("Wrapper", {"root": tree, "label": TextType()})
+        schema = derive_schema(wrapper, type_table_for(wrapper_def, tree_def))
+        assert schema == {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["root", "label"],
+            "properties": {
+                "root": {"$ref": "#/$defs/Tree"},
+                "label": {"type": "string"},
+            },
+            "$defs": {"Tree": _TREE_DEFS_BODY},
+        }
+
+    def test_mutual_record_enum_pair_gets_two_defs_entries(self) -> None:
+        # record A { b: B } / enum B { Nil, Cons(a: A) }: A and B form one
+        # mutual cycle, so BOTH get their own `$defs` entry.
+        a, a_def = record_type("A", {"b": EnumType(name="B")})
+        b, b_def = enum_type("B", {"Nil": {}, "Cons": {"a": RecordType(name="A")}})
+        schema = derive_schema(a, type_table_for(a_def, b_def))
+        assert schema == {
+            "$ref": "#/$defs/A",
+            "$defs": {
+                "A": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["b"],
+                    "properties": {"b": {"$ref": "#/$defs/B"}},
+                },
+                "B": {
+                    "oneOf": [
+                        {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["$case"],
+                            "properties": {"$case": {"const": "Nil"}},
+                        },
+                        {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["$case", "a"],
+                            "properties": {
+                                "$case": {"const": "Cons"},
+                                "a": {"$ref": "#/$defs/A"},
+                            },
+                        },
+                    ]
+                },
+            },
+        }
+
+    def test_generic_instantiations_get_distinct_keys(self) -> None:
+        # Tree[int] and Tree[text] — two distinct concrete instantiations of
+        # the SAME generic declaration — get distinct, non-colliding keys.
+        tree_def = TypeDef(
+            kind="enum",
+            name="Tree",
+            module_id=ENTRY_ID,
+            type_params=("T",),
+            variants=(
+                ("Leaf", ()),
+                (
+                    "Node",
+                    (
+                        ("value", TypeVarType("T")),
+                        ("left", EnumType(name="Tree", type_args=(TypeVarType("T"),))),
+                        ("right", EnumType(name="Tree", type_args=(TypeVarType("T"),))),
+                    ),
+                ),
+            ),
+        )
+        tree_int = EnumType(name="Tree", type_args=(IntType(),))
+        tree_text = EnumType(name="Tree", type_args=(TextType(),))
+        wrapper, wrapper_def = record_type("Holder", {"a": tree_int, "b": tree_text})
+        schema = derive_schema(wrapper, type_table_for(wrapper_def, tree_def))
+        defs = schema["$defs"]
+        assert isinstance(defs, dict)
+        assert set(defs.keys()) == {"Tree_int", "Tree_text"}
+        properties = schema["properties"]
+        assert isinstance(properties, dict)
+        assert properties["a"] == {"$ref": "#/$defs/Tree_int"}
+        assert properties["b"] == {"$ref": "#/$defs/Tree_text"}
+
+    def test_cross_module_same_name_gets_qualified_keys(self) -> None:
+        mod_a = ModuleId.from_dotted("mod_a")
+        mod_b = ModuleId.from_dotted("mod_b")
+        tree_a, tree_a_def = enum_type(
+            "Tree",
+            {"Leaf": {}, "Node": {"next": EnumType(name="Tree", module_id=mod_a)}},
+            module_id=mod_a,
+        )
+        tree_b, tree_b_def = enum_type(
+            "Tree",
+            {"Leaf": {}, "Node": {"next": EnumType(name="Tree", module_id=mod_b)}},
+            module_id=mod_b,
+        )
+        wrapper, wrapper_def = record_type("Holder", {"a": tree_a, "b": tree_b})
+        schema = derive_schema(wrapper, type_table_for(wrapper_def, tree_a_def, tree_b_def))
+        defs = schema["$defs"]
+        assert isinstance(defs, dict)
+        assert set(defs.keys()) == {"mod_a.Tree", "mod_b.Tree"}
+        properties = schema["properties"]
+        assert isinstance(properties, dict)
+        assert properties["a"] == {"$ref": "#/$defs/mod_a.Tree"}
+        assert properties["b"] == {"$ref": "#/$defs/mod_b.Tree"}
+
+    def test_non_recursive_schema_has_no_defs_key(self) -> None:
+        # Non-recursive output stays byte-identical to a plain inlining
+        # derivation: no `$defs` key at all.
+        inner, inner_def = record_type("Inner", {"x": IntType()})
+        outer, outer_def = record_type("Outer", {"inner": inner})
+        schema = derive_schema(outer, type_table_for(outer_def, inner_def))
+        assert "$defs" not in schema
+
+    def test_phantom_recursive_argument_growth_refs_same_defs_entry(self) -> None:
+        recursive = RecordType("R", type_args=(ListType(TypeVarType("T")),), module_id=ENTRY_ID)
+        root = RecordType("R", type_args=(IntType(),), module_id=ENTRY_ID)
+        r_def = TypeDef(
+            kind="record",
+            name="R",
+            module_id=ENTRY_ID,
+            type_params=("T",),
+            fields=(("children", ListType(recursive)),),
+        )
+        schema = derive_schema(root, type_table_for(r_def))
+        assert schema == {
+            "$ref": "#/$defs/R",
+            "$defs": {
+                "R": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["children"],
+                    "properties": {
+                        "children": {"type": "array", "items": {"$ref": "#/$defs/R"}}
+                    },
+                }
+            },
+        }
+
+    def test_raises_for_infinite_closure_root(self) -> None:
+        pair_def = TypeDef(
+            kind="record",
+            name="Pair",
+            module_id=ENTRY_ID,
+            type_params=("A", "B"),
+            fields=(("first", TypeVarType("A")), ("second", TypeVarType("B"))),
+        )
+        perfect_def = TypeDef(
+            kind="enum",
+            name="Perfect",
+            module_id=ENTRY_ID,
+            type_params=("T",),
+            variants=(
+                ("Single", (("value", TypeVarType("T")),)),
+                (
+                    "Succ",
+                    (
+                        (
+                            "next",
+                            EnumType(
+                                name="Perfect",
+                                type_args=(
+                                    RecordType(
+                                        name="Pair",
+                                        type_args=(TypeVarType("T"), TypeVarType("T")),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        table = type_table_for(pair_def, perfect_def)
+        perfect_int = EnumType(name="Perfect", type_args=(IntType(),))
+        with pytest.raises(TypeError, match="no finite schema"):
+            derive_schema(perfect_int, table)
+
+    def test_assign_defs_keys_breaks_residual_collision_with_numeric_suffix(self) -> None:
+        # Three handles whose bare display forms all sanitize to the
+        # identical string despite being genuinely distinct instantiations
+        # (`X[A_B]`, `X[A, B]`, and the plain type `X_A_B` all sanitize to
+        # `X_A_B`), all in the entry module (so module-qualification cannot
+        # disambiguate them): the numeric suffix is the final,
+        # always-available disambiguator, tried incrementally until free.
+        from agm.agl.type_schema import _assign_defs_keys
+
+        h1 = RecordType("X", type_args=(RecordType("A_B", module_id=ENTRY_ID),), module_id=ENTRY_ID)
+        h2 = RecordType(
+            "X",
+            type_args=(RecordType("A", module_id=ENTRY_ID), RecordType("B", module_id=ENTRY_ID)),
+            module_id=ENTRY_ID,
+        )
+        h3 = RecordType("X_A_B", module_id=ENTRY_ID)
+        keys = _assign_defs_keys((h1, h2, h3))
+        assert keys[h1] == "X_A_B"
+        assert keys[h2] == "X_A_B_2"
+        assert keys[h3] == "X_A_B_3"
+
+    def test_defs_key_order_is_deterministic_for_mutually_recursive_hub(self) -> None:
+        # Hub has three direct neighbours (Alpha, Mike, Zulu) discovered off
+        # ONE frozenset — a Python-hash-ordered set, not a sequence — and each
+        # of them loops back to Hub, putting all four in one mutually
+        # recursive component. The BFS queue extension that discovers Alpha/
+        # Mike/Zulu must sort them deterministically (by declaration key), or
+        # this order — and hence $defs dict insertion order — would vary with
+        # PYTHONHASHSEED. Field order is deliberately NOT alphabetical, so a
+        # test that only reproduced field order would not catch a
+        # frozenset-iteration-order regression.
+        hub_handle = RecordType("Hub", module_id=ENTRY_ID)
+        alpha, alpha_def = record_type("Alpha", {"back": hub_handle})
+        mike, mike_def = record_type("Mike", {"back": hub_handle})
+        zulu, zulu_def = record_type("Zulu", {"back": hub_handle})
+        hub, hub_def = record_type("Hub", {"a": zulu, "b": alpha, "c": mike})
+        table = type_table_for(hub_def, alpha_def, mike_def, zulu_def)
+        schema = derive_schema(hub, table)
+        defs = schema["$defs"]
+        assert isinstance(defs, dict)
+        assert list(defs.keys()) == ["Hub", "Alpha", "Mike", "Zulu"]
+
+
+# ---------------------------------------------------------------------------
+# 1b-bis. RefDecode/DecodePlan emission — mirrors TestRecursiveSchemaDerivation's
+# matrix; keys must match derive_schema's own $defs keys one-to-one.
+# ---------------------------------------------------------------------------
+
+
+class TestRecursiveDecodeDerivation:
+    """build_decode_schema goldens over the same matrix as the schema goldens."""
+
+    def test_recursive_enum_root_is_refdecode_with_defs(self) -> None:
+        from agm.agl.ir.contracts import (
+            DecodePlan,
+            EnumDecode,
+            RefDecode,
+            ScalarDecode,
+            ScalarKind,
+            VariantDecode,
+        )
+        from agm.agl.ir.ids import NominalId
+
+        tree, tree_def = _tree_type_and_def()
+        plan = build_decode_schema(tree, type_table_for(tree_def))
+        tree_body = EnumDecode(
+            nominal=NominalId(ENTRY_ID, "Tree"),
+            display_name="Tree",
+            variants=(
+                VariantDecode(name="Leaf", fields=()),
+                VariantDecode(
+                    name="Node",
+                    fields=(
+                        ("value", ScalarDecode(ScalarKind.INT)),
+                        ("left", RefDecode("Tree")),
+                        ("right", RefDecode("Tree")),
+                    ),
+                ),
+            ),
+        )
+        assert plan == DecodePlan(root=RefDecode("Tree"), defs=(("Tree", tree_body),))
+
+    def test_list_guarded_recursive_record_is_refdecode_with_defs(self) -> None:
+        from agm.agl.ir.contracts import (
+            DecodePlan,
+            ListDecode,
+            RecordDecode,
+            RefDecode,
+            ScalarDecode,
+            ScalarKind,
+        )
+        from agm.agl.ir.ids import NominalId
+
+        category, category_def = record_type(
+            "Category",
+            {"name": TextType(), "subcategories": ListType(RecordType(name="Category"))},
+        )
+        plan = build_decode_schema(category, type_table_for(category_def))
+        category_body = RecordDecode(
+            nominal=NominalId(ENTRY_ID, "Category"),
+            display_name="Category",
+            fields=(
+                ("name", ScalarDecode(ScalarKind.TEXT)),
+                ("subcategories", ListDecode(RefDecode("Category"))),
+            ),
+        )
+        assert plan == DecodePlan(root=RefDecode("Category"), defs=(("Category", category_body),))
+
+    def test_non_recursive_wrapper_inlined_recursive_field_in_defs(self) -> None:
+        from agm.agl.ir.contracts import (
+            EnumDecode,
+            RecordDecode,
+            RefDecode,
+            ScalarDecode,
+            ScalarKind,
+        )
+        from agm.agl.ir.ids import NominalId
+
+        tree, tree_def = _tree_type_and_def()
+        wrapper, wrapper_def = record_type("Wrapper", {"root": tree, "label": TextType()})
+        plan = build_decode_schema(wrapper, type_table_for(wrapper_def, tree_def))
+        assert plan.root == RecordDecode(
+            nominal=NominalId(ENTRY_ID, "Wrapper"),
+            display_name="Wrapper",
+            fields=(
+                ("root", RefDecode("Tree")),
+                ("label", ScalarDecode(ScalarKind.TEXT)),
+            ),
+        )
+        assert [key for key, _ in plan.defs] == ["Tree"]
+        tree_body = dict(plan.defs)["Tree"]
+        assert isinstance(tree_body, EnumDecode)
+
+    def test_mutual_record_enum_pair_gets_two_defs_entries(self) -> None:
+        from agm.agl.ir.contracts import (
+            DecodePlan,
+            EnumDecode,
+            RecordDecode,
+            RefDecode,
+            VariantDecode,
+        )
+        from agm.agl.ir.ids import NominalId
+
+        a, a_def = record_type("A", {"b": EnumType(name="B")})
+        b, b_def = enum_type("B", {"Nil": {}, "Cons": {"a": RecordType(name="A")}})
+        plan = build_decode_schema(a, type_table_for(a_def, b_def))
+        a_body = RecordDecode(
+            nominal=NominalId(ENTRY_ID, "A"), display_name="A", fields=(("b", RefDecode("B")),)
+        )
+        b_body = EnumDecode(
+            nominal=NominalId(ENTRY_ID, "B"),
+            display_name="B",
+            variants=(
+                VariantDecode(name="Nil", fields=()),
+                VariantDecode(name="Cons", fields=(("a", RefDecode("A")),)),
+            ),
+        )
+        assert plan == DecodePlan(root=RefDecode("A"), defs=(("A", a_body), ("B", b_body)))
+
+    def test_generic_instantiations_get_distinct_keys_matching_schema(self) -> None:
+        tree_def = TypeDef(
+            kind="enum",
+            name="Tree",
+            module_id=ENTRY_ID,
+            type_params=("T",),
+            variants=(
+                ("Leaf", ()),
+                (
+                    "Node",
+                    (
+                        ("value", TypeVarType("T")),
+                        ("left", EnumType(name="Tree", type_args=(TypeVarType("T"),))),
+                        ("right", EnumType(name="Tree", type_args=(TypeVarType("T"),))),
+                    ),
+                ),
+            ),
+        )
+        tree_int = EnumType(name="Tree", type_args=(IntType(),))
+        tree_text = EnumType(name="Tree", type_args=(TextType(),))
+        wrapper, wrapper_def = record_type("Holder", {"a": tree_int, "b": tree_text})
+        table = type_table_for(wrapper_def, tree_def)
+        schema = derive_schema(wrapper, table)
+        plan = build_decode_schema(wrapper, table)
+        schema_defs = schema["$defs"]
+        assert isinstance(schema_defs, dict)
+        # The decode $defs keys are EXACTLY the schema's own $defs keys.
+        decode_keys = {key for key, _ in plan.defs}
+        assert decode_keys == set(schema_defs.keys()) == {"Tree_int", "Tree_text"}
+
+    def test_non_recursive_decode_output_unchanged(self) -> None:
+        """Spot-check: non-recursive DecodePlan has empty defs (representation-identical)."""
+        from agm.agl.ir.contracts import DecodePlan, RecordDecode, ScalarDecode, ScalarKind
+        from agm.agl.ir.ids import NominalId
+
+        inner, inner_def = record_type("Inner", {"x": IntType()})
+        outer, outer_def = record_type("Outer", {"inner": inner})
+        plan = build_decode_schema(outer, type_table_for(outer_def, inner_def))
+        assert plan == DecodePlan(
+            root=RecordDecode(
+                nominal=NominalId(ENTRY_ID, "Outer"),
+                display_name="Outer",
+                fields=(
+                    (
+                        "inner",
+                        RecordDecode(
+                            nominal=NominalId(ENTRY_ID, "Inner"),
+                            display_name="Inner",
+                            fields=(("x", ScalarDecode(ScalarKind.INT)),),
+                        ),
+                    ),
+                ),
+            ),
+            defs=(),
+        )
+
+    def test_raises_for_infinite_closure_root(self) -> None:
+        pair_def = TypeDef(
+            kind="record",
+            name="Pair",
+            module_id=ENTRY_ID,
+            type_params=("A", "B"),
+            fields=(("first", TypeVarType("A")), ("second", TypeVarType("B"))),
+        )
+        perfect_def = TypeDef(
+            kind="enum",
+            name="Perfect",
+            module_id=ENTRY_ID,
+            type_params=("T",),
+            variants=(
+                ("Single", (("value", TypeVarType("T")),)),
+                (
+                    "Succ",
+                    (
+                        (
+                            "next",
+                            EnumType(
+                                name="Perfect",
+                                type_args=(
+                                    RecordType(
+                                        name="Pair",
+                                        type_args=(TypeVarType("T"), TypeVarType("T")),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        table = type_table_for(pair_def, perfect_def)
+        perfect_int = EnumType(name="Perfect", type_args=(IntType(),))
+        with pytest.raises(TypeError, match="no finite schema"):
+            build_decode_schema(perfect_int, table)
+
+    def test_derive_schema_and_decode_shares_one_plan_and_matches_separate_calls(self) -> None:
+        """derive_schema_and_decode matches (derive_schema(...), build_decode_schema(...))."""
+        from agm.agl.type_schema import derive_schema_and_decode
+
+        tree, tree_def = _tree_type_and_def()
+        table = type_table_for(tree_def)
+        schema, plan = derive_schema_and_decode(tree, table)
+        assert schema == derive_schema(tree, table)
+        assert plan == build_decode_schema(tree, table)
+
+
+# ---------------------------------------------------------------------------
+# 1c. Recursive schema validator round-trip (JSON Schema validation only;
+# TestRecursiveDecodeDerivation below covers build_decode_schema/JsonCodec.parse
+# for a recursive type)
+# ---------------------------------------------------------------------------
+
+
+class TestRecursiveSchemaValidatorRoundtrip:
+    def test_accepts_nested_tree_payload(self) -> None:
+        tree, tree_def = _tree_type_and_def()
+        schema = derive_schema(tree, type_table_for(tree_def))
+        validator = Draft202012Validator(schema)
+        payload = {
+            "$case": "Node",
+            "value": 1,
+            "left": {"$case": "Leaf"},
+            "right": {
+                "$case": "Node",
+                "value": 2,
+                "left": {"$case": "Leaf"},
+                "right": {"$case": "Leaf"},
+            },
+        }
+        assert validator.is_valid(payload)
+
+    def test_rejects_missing_required_field_two_levels_deep(self) -> None:
+        tree, tree_def = _tree_type_and_def()
+        schema = derive_schema(tree, type_table_for(tree_def))
+        validator = Draft202012Validator(schema)
+        payload = {
+            "$case": "Node",
+            "value": 1,
+            "left": {"$case": "Leaf"},
+            # Missing "value" two levels deep inside "right.left"... actually
+            # inside "right" itself (a Node missing its required "value").
+            "right": {
+                "$case": "Node",
+                "left": {"$case": "Leaf"},
+                "right": {"$case": "Leaf"},
+            },
+        }
+        assert not validator.is_valid(payload)
+
+    def test_rejects_wrong_case_tag_in_nested_variant(self) -> None:
+        tree, tree_def = _tree_type_and_def()
+        schema = derive_schema(tree, type_table_for(tree_def))
+        validator = Draft202012Validator(schema)
+        payload = {
+            "$case": "Node",
+            "value": 1,
+            "left": {"$case": "Leaf"},
+            "right": {
+                "$case": "Bogus",
+                "value": 2,
+                "left": {"$case": "Leaf"},
+                "right": {"$case": "Leaf"},
+            },
+        }
+        assert not validator.is_valid(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -489,96 +1127,101 @@ class TestLenientParsing:
 
     def test_bare_integer(self) -> None:
         codec = self._codec()
-        result = codec.parse("5", IntType(), strict_json=False)
+        result = _parse_typed(codec, "5", IntType(), strict_json=False)
         assert result.ok is True
         assert result.value == IntValue(5)
 
     def test_bare_json_object(self) -> None:
         codec = self._codec()
         typ = JsonType()
-        result = codec.parse('{"k": 1}', typ, strict_json=False)
+        result = _parse_typed(codec, '{"k": 1}', typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
 
     def test_fenced_json_block_extracted(self) -> None:
         codec = self._codec()
-        result = codec.parse("```json\n5\n```", IntType(), strict_json=False)
+        result = _parse_typed(codec, "```json\n5\n```", IntType(), strict_json=False)
         assert result.ok is True
         assert result.value == IntValue(5)
 
     def test_fenced_json_object_extracted(self) -> None:
         codec = self._codec()
         typ = JsonType()
-        result = codec.parse('```json\n{"k": 1}\n```', typ, strict_json=False)
+        result = _parse_typed(codec, '```json\n{"k": 1}\n```', typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
 
     def test_prose_wrapped_json_extracted(self) -> None:
         codec = self._codec()
         typ = JsonType()
-        result = codec.parse('Here you go:\n[1, 2]', typ, strict_json=False)
+        result = _parse_typed(codec, "Here you go:\n[1, 2]", typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
 
     def test_prose_and_fence(self) -> None:
         codec = self._codec()
-        result = codec.parse(
-            "Sure thing!\n```json\n5\n```", IntType(), strict_json=False
-        )
+        result = _parse_typed(codec, "Sure thing!\n```json\n5\n```", IntType(), strict_json=False)
         assert result.ok is True
         assert result.value == IntValue(5)
 
     def test_trailing_comma_repaired(self) -> None:
         codec = self._codec()
         typ = JsonType()
-        result = codec.parse('{"k": 1,}', typ, strict_json=False)
+        result = _parse_typed(codec, '{"k": 1,}', typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
 
     def test_single_quoted_keys_repaired(self) -> None:
         codec = self._codec()
         typ = JsonType()
-        result = codec.parse("{'k': 1}", typ, strict_json=False)
+        result = _parse_typed(codec, "{'k': 1}", typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
 
     def test_gibberish_fails(self) -> None:
         codec = self._codec()
-        result = codec.parse("complete gibberish, no number here", IntType(), strict_json=False)
+        result = _parse_typed(
+            codec, "complete gibberish, no number here", IntType(), strict_json=False
+        )
         assert result.ok is False
         assert result.value is None
 
     def test_bare_bool_recovered_from_prose(self) -> None:
         """Lenient recovery pulls a bare ``false`` keyword out of prose."""
         codec = self._codec()
-        result = codec.parse("The flag is:\nfalse", BoolType(), strict_json=False)
+        result = _parse_typed(codec, "The flag is:\nfalse", BoolType(), strict_json=False)
         assert result.ok is True
         assert result.value == BoolValue(False)
 
     def test_bare_null_recovered_from_prose(self) -> None:
         codec = self._codec()
-        result = codec.parse("Answer: null", JsonType(), strict_json=False)
+        result = _parse_typed(codec, "Answer: null", JsonType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
         assert result.value.raw is None
 
     def test_bare_number_recovered_from_prose(self) -> None:
         codec = self._codec()
-        result = codec.parse("the count is 42 items", IntType(), strict_json=False)
+        result = _parse_typed(codec, "the count is 42 items", IntType(), strict_json=False)
         assert result.ok is True
         assert result.value == IntValue(42)
 
     def test_keyword_substring_not_falsely_recovered(self) -> None:
         """``nullable`` must not be mistaken for a bare ``null`` token."""
         codec = self._codec()
-        result = codec.parse("the config is nullable here", BoolType(), strict_json=False)
+        result = _parse_typed(codec, "the config is nullable here", BoolType(), strict_json=False)
         assert result.ok is False
 
     def test_two_bare_scalars_in_prose_are_ambiguous(self) -> None:
         codec = self._codec()
-        result = codec.parse("maybe true or maybe false", BoolType(), strict_json=False)
+        result = _parse_typed(codec, "maybe true or maybe false", BoolType(), strict_json=False)
         assert result.ok is False
         assert "multiple JSON values" in result.error_msg
+
+    def test_ref_decode_without_defs_raises_clear_value_error(self) -> None:
+        codec = self._codec()
+        with pytest.raises(ValueError, match="defs.*RefDecode"):
+            codec.parse("{}", schema={}, decode=RefDecode("Node"))
 
 
 # ---------------------------------------------------------------------------
@@ -594,44 +1237,44 @@ class TestStrictParsing:
 
     def test_bare_integer_accepted(self) -> None:
         codec = self._codec()
-        result = codec.parse("5", IntType(), strict_json=True)
+        result = _parse_typed(codec, "5", IntType(), strict_json=True)
         assert result.ok is True
         assert result.value == IntValue(5)
 
     def test_whitespace_around_bare_integer_accepted(self) -> None:
         codec = self._codec()
-        result = codec.parse("  5  ", IntType(), strict_json=True)
+        result = _parse_typed(codec, "  5  ", IntType(), strict_json=True)
         assert result.ok is True
         assert result.value == IntValue(5)
 
     def test_fenced_value_rejected(self) -> None:
         codec = self._codec()
-        result = codec.parse("```json\n5\n```", IntType(), strict_json=True)
+        result = _parse_typed(codec, "```json\n5\n```", IntType(), strict_json=True)
         assert result.ok is False
 
     def test_trailing_prose_rejected(self) -> None:
         codec = self._codec()
-        result = codec.parse("5\nThat is my final answer.", IntType(), strict_json=True)
+        result = _parse_typed(codec, "5\nThat is my final answer.", IntType(), strict_json=True)
         assert result.ok is False
 
     def test_single_quotes_rejected(self) -> None:
         codec = self._codec()
-        result = codec.parse("{'k': 1}", JsonType(), strict_json=True)
+        result = _parse_typed(codec, "{'k': 1}", JsonType(), strict_json=True)
         assert result.ok is False
 
     def test_trailing_comma_rejected(self) -> None:
         codec = self._codec()
-        result = codec.parse('{"k": 1,}', JsonType(), strict_json=True)
+        result = _parse_typed(codec, '{"k": 1,}', JsonType(), strict_json=True)
         assert result.ok is False
 
     def test_bare_object_accepted(self) -> None:
         codec = self._codec()
-        result = codec.parse('{"k": 1}', JsonType(), strict_json=True)
+        result = _parse_typed(codec, '{"k": 1}', JsonType(), strict_json=True)
         assert result.ok is True
 
     def test_fenced_object_rejected(self) -> None:
         codec = self._codec()
-        result = codec.parse('```json\n{"k": 1}\n```', JsonType(), strict_json=True)
+        result = _parse_typed(codec, '```json\n{"k": 1}\n```', JsonType(), strict_json=True)
         assert result.ok is False
 
 
@@ -645,22 +1288,24 @@ class TestDecimalExactness:
 
     def test_decimal_stays_decimal_in_lenient(self) -> None:
         codec = JsonCodec()
-        result = codec.parse("1.5", DecimalType(), strict_json=False)
+        result = _parse_typed(codec, "1.5", DecimalType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, DecimalValue)
         assert result.value.value == Decimal("1.5")
 
     def test_decimal_stays_decimal_in_strict(self) -> None:
         codec = JsonCodec()
-        result = codec.parse("1.5", DecimalType(), strict_json=True)
+        result = _parse_typed(codec, "1.5", DecimalType(), strict_json=True)
         assert result.ok is True
         assert isinstance(result.value, DecimalValue)
         assert result.value.value == Decimal("1.5")
 
     def test_decimal_in_record_field(self) -> None:
         codec = JsonCodec()
-        typ = RecordType(name="Foo", fields={"w": DecimalType()})
-        result = codec.parse('{"w": 1.5}', typ, strict_json=False)
+        typ, typedef = record_type("Foo", {"w": DecimalType()})
+        result = _parse_typed(
+            codec, '{"w": 1.5}', typ, strict_json=False, table=type_table_for(typedef)
+        )
         assert result.ok is True
         assert isinstance(result.value, RecordValue)
         w = result.value.fields["w"]
@@ -669,20 +1314,20 @@ class TestDecimalExactness:
 
     def test_decimal_from_fenced_stays_exact(self) -> None:
         codec = JsonCodec()
-        result = codec.parse("```json\n1.5\n```", DecimalType(), strict_json=False)
+        result = _parse_typed(codec, "```json\n1.5\n```", DecimalType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, DecimalValue)
         assert result.value.value == Decimal("1.5")
 
     def test_decimal_not_float(self) -> None:
         codec = JsonCodec()
-        result = codec.parse("1.5", DecimalType(), strict_json=False)
+        result = _parse_typed(codec, "1.5", DecimalType(), strict_json=False)
         assert isinstance(result.value, DecimalValue)
         assert not isinstance(result.value.value, float)
 
     def test_int_widened_to_decimal_when_target_says_decimal(self) -> None:
         codec = JsonCodec()
-        result = codec.parse("3", DecimalType(), strict_json=False)
+        result = _parse_typed(codec, "3", DecimalType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, DecimalValue)
         assert result.value.value == Decimal("3")
@@ -691,7 +1336,7 @@ class TestDecimalExactness:
         # Bare valid JSON is parsed directly (no json-repair), so Decimal precision
         # is fully preserved by json.loads(parse_float=Decimal).
         codec = JsonCodec()
-        result = codec.parse("1.23456789012345678901", DecimalType(), strict_json=False)
+        result = _parse_typed(codec, "1.23456789012345678901", DecimalType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, DecimalValue)
         assert result.value.value == Decimal("1.23456789012345678901")
@@ -699,8 +1344,10 @@ class TestDecimalExactness:
     def test_decimal_in_repaired_json(self) -> None:
         """Decimal exactness through json-repair path (single-quote input)."""
         codec = JsonCodec()
-        typ = RecordType(name="Foo", fields={"w": DecimalType()})
-        result = codec.parse("{'w': 1.5}", typ, strict_json=False)
+        typ, typedef = record_type("Foo", {"w": DecimalType()})
+        result = _parse_typed(
+            codec, "{'w': 1.5}", typ, strict_json=False, table=type_table_for(typedef)
+        )
         assert result.ok is True
         assert isinstance(result.value, RecordValue)
         w = result.value.fields["w"]
@@ -716,26 +1363,26 @@ class TestDecimalExactness:
 class TestTypedValueConstruction:
     def test_int_value(self) -> None:
         codec = JsonCodec()
-        result = codec.parse("42", IntType(), strict_json=False)
+        result = _parse_typed(codec, "42", IntType(), strict_json=False)
         assert result.ok is True
         assert result.value == IntValue(42)
 
     def test_bool_value_true(self) -> None:
         codec = JsonCodec()
-        result = codec.parse("true", BoolType(), strict_json=False)
+        result = _parse_typed(codec, "true", BoolType(), strict_json=False)
         assert result.ok is True
         assert result.value == BoolValue(True)
 
     def test_bool_value_false(self) -> None:
         codec = JsonCodec()
-        result = codec.parse("false", BoolType(), strict_json=False)
+        result = _parse_typed(codec, "false", BoolType(), strict_json=False)
         assert result.ok is True
         assert result.value == BoolValue(False)
 
     def test_list_of_text(self) -> None:
         codec = JsonCodec()
         typ = ListType(elem=TextType())
-        result = codec.parse('["a", "b"]', typ, strict_json=False)
+        result = _parse_typed(codec, '["a", "b"]', typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, ListValue)
         assert result.value.elements == (TextValue("a"), TextValue("b"))
@@ -743,7 +1390,7 @@ class TestTypedValueConstruction:
     def test_list_of_int(self) -> None:
         codec = JsonCodec()
         typ = ListType(elem=IntType())
-        result = codec.parse('[1, 2, 3]', typ, strict_json=False)
+        result = _parse_typed(codec, "[1, 2, 3]", typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, ListValue)
         assert result.value.elements == (IntValue(1), IntValue(2), IntValue(3))
@@ -751,7 +1398,7 @@ class TestTypedValueConstruction:
     def test_dict_of_text(self) -> None:
         codec = JsonCodec()
         typ = DictType(value=TextType())
-        result = codec.parse('{"a": "hello"}', typ, strict_json=False)
+        result = _parse_typed(codec, '{"a": "hello"}', typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, DictValue)
         assert result.value.entries == {"a": TextValue("hello")}
@@ -760,7 +1407,7 @@ class TestTypedValueConstruction:
         codec = JsonCodec()
         typ = _make_issue_type()
         raw = '{"title": "Bug", "severity": 5, "description": "Oh no"}'
-        result = codec.parse(raw, typ, strict_json=False)
+        result = _parse_typed(codec, raw, typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, RecordValue)
         assert result.value.display_name == "Issue"
@@ -771,7 +1418,7 @@ class TestTypedValueConstruction:
     def test_enum_nullary_variant(self) -> None:
         codec = JsonCodec()
         typ = _make_review_type()
-        result = codec.parse('{"$case": "Pass"}', typ, strict_json=False)
+        result = _parse_typed(codec, '{"$case": "Pass"}', typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, EnumValue)
         assert result.value.display_name == "Review"
@@ -782,7 +1429,7 @@ class TestTypedValueConstruction:
         codec = JsonCodec()
         typ = _make_review_type()
         raw = '{"$case": "Fail", "issues": ["a", "b"]}'
-        result = codec.parse(raw, typ, strict_json=False)
+        result = _parse_typed(codec, raw, typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, EnumValue)
         assert result.value.variant == "Fail"
@@ -792,16 +1439,18 @@ class TestTypedValueConstruction:
 
     def test_json_value_wraps_raw(self) -> None:
         codec = JsonCodec()
-        result = codec.parse('{"a": 1}', JsonType(), strict_json=False)
+        result = _parse_typed(codec, '{"a": 1}', JsonType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
 
     def test_nested_record(self) -> None:
         codec = JsonCodec()
-        inner = RecordType(name="Inner", fields={"x": IntType()})
-        outer = RecordType(name="Outer", fields={"inner": inner, "n": IntType()})
+        inner, inner_def = record_type("Inner", {"x": IntType()})
+        outer, outer_def = record_type("Outer", {"inner": inner, "n": IntType()})
         raw = '{"inner": {"x": 7}, "n": 3}'
-        result = codec.parse(raw, outer, strict_json=False)
+        result = _parse_typed(
+            codec, raw, outer, strict_json=False, table=type_table_for(outer_def, inner_def)
+        )
         assert result.ok is True
         assert isinstance(result.value, RecordValue)
         inner_val = result.value.fields["inner"]
@@ -810,8 +1459,10 @@ class TestTypedValueConstruction:
 
     def test_list_in_record_field(self) -> None:
         codec = JsonCodec()
-        typ = RecordType(name="Doc", fields={"tags": ListType(elem=TextType())})
-        result = codec.parse('{"tags": ["x", "y"]}', typ, strict_json=False)
+        typ, typedef = record_type("Doc", {"tags": ListType(elem=TextType())})
+        result = _parse_typed(
+            codec, '{"tags": ["x", "y"]}', typ, strict_json=False, table=type_table_for(typedef)
+        )
         assert result.ok is True
         assert isinstance(result.value, RecordValue)
         tags = result.value.fields["tags"]
@@ -829,7 +1480,7 @@ class TestSchemaValidationErrors:
         codec = JsonCodec()
         typ = _make_issue_type()
         # missing severity and description
-        result = codec.parse('{"title": "Bug"}', typ, strict_json=False)
+        result = _parse_typed(codec, '{"title": "Bug"}', typ, strict_json=False)
         assert result.ok is False
         assert result.value is None
 
@@ -837,43 +1488,43 @@ class TestSchemaValidationErrors:
         codec = JsonCodec()
         typ = _make_issue_type()
         raw = '{"title": "Bug", "severity": 1, "description": "x", "extra": true}'
-        result = codec.parse(raw, typ, strict_json=False)
+        result = _parse_typed(codec, raw, typ, strict_json=False)
         assert result.ok is False
 
     def test_wrong_type_fails(self) -> None:
         codec = JsonCodec()
         typ = _make_issue_type()
         raw = '{"title": "Bug", "severity": "high", "description": "x"}'
-        result = codec.parse(raw, typ, strict_json=False)
+        result = _parse_typed(codec, raw, typ, strict_json=False)
         assert result.ok is False
 
     def test_bad_case_tag_fails(self) -> None:
         codec = JsonCodec()
         typ = _make_review_type()
-        result = codec.parse('{"$case": "Unknown"}', typ, strict_json=False)
+        result = _parse_typed(codec, '{"$case": "Unknown"}', typ, strict_json=False)
         assert result.ok is False
 
     def test_missing_case_field_fails(self) -> None:
         codec = JsonCodec()
         typ = _make_review_type()
-        result = codec.parse('{"issues": ["x"]}', typ, strict_json=False)
+        result = _parse_typed(codec, '{"issues": ["x"]}', typ, strict_json=False)
         assert result.ok is False
 
     def test_enum_missing_payload_field_fails(self) -> None:
         codec = JsonCodec()
         typ = _make_review_type()
         # Fail variant but missing issues
-        result = codec.parse('{"$case": "Fail"}', typ, strict_json=False)
+        result = _parse_typed(codec, '{"$case": "Fail"}', typ, strict_json=False)
         assert result.ok is False
 
     def test_failure_result_has_no_value(self) -> None:
         codec = JsonCodec()
-        result = codec.parse('{}', _make_issue_type(), strict_json=False)
+        result = _parse_typed(codec, "{}", _make_issue_type(), strict_json=False)
         assert result.value is None
 
     def test_failure_result_has_error_msg(self) -> None:
         codec = JsonCodec()
-        result = codec.parse('{}', _make_issue_type(), strict_json=False)
+        result = _parse_typed(codec, "{}", _make_issue_type(), strict_json=False)
         assert result.error_msg
         assert isinstance(result.error_msg, str)
 
@@ -891,7 +1542,7 @@ class TestStructuredValidationErrors:
 
     def test_missing_field_category(self) -> None:
         codec = JsonCodec()
-        result = codec.parse('{"title": "Bug"}', _make_issue_type(), strict_json=False)
+        result = _parse_typed(codec, '{"title": "Bug"}', _make_issue_type(), strict_json=False)
         assert result.ok is False
         assert "missing_field" in self._categories(result)
         missing = [e for e in result.errors if e.category == "missing_field"]
@@ -900,7 +1551,7 @@ class TestStructuredValidationErrors:
     def test_unknown_field_category(self) -> None:
         codec = JsonCodec()
         raw = '{"title": "Bug", "severity": 1, "description": "x", "extra": true}'
-        result = codec.parse(raw, _make_issue_type(), strict_json=False)
+        result = _parse_typed(codec, raw, _make_issue_type(), strict_json=False)
         assert result.ok is False
         assert self._categories(result) == ["unknown_field"]
         # The opaque jsonschema phrasing must not leak verbatim as the category.
@@ -909,7 +1560,7 @@ class TestStructuredValidationErrors:
     def test_wrong_type_category(self) -> None:
         codec = JsonCodec()
         raw = '{"title": "Bug", "severity": "high", "description": "x"}'
-        result = codec.parse(raw, _make_issue_type(), strict_json=False)
+        result = _parse_typed(codec, raw, _make_issue_type(), strict_json=False)
         assert result.ok is False
         wrong = [e for e in result.errors if e.category == "wrong_type"]
         assert wrong
@@ -918,7 +1569,7 @@ class TestStructuredValidationErrors:
 
     def test_bad_case_unknown_variant(self) -> None:
         codec = JsonCodec()
-        result = codec.parse('{"$case": "Nope"}', _make_review_type(), strict_json=False)
+        result = _parse_typed(codec, '{"$case": "Nope"}', _make_review_type(), strict_json=False)
         assert result.ok is False
         assert self._categories(result) == ["bad_case"]
         msg = result.errors[0].message
@@ -929,7 +1580,7 @@ class TestStructuredValidationErrors:
 
     def test_bad_case_missing_tag(self) -> None:
         codec = JsonCodec()
-        result = codec.parse('{"issues": ["x"]}', _make_review_type(), strict_json=False)
+        result = _parse_typed(codec, '{"issues": ["x"]}', _make_review_type(), strict_json=False)
         assert result.ok is False
         assert self._categories(result) == ["bad_case"]
         assert result.errors[0].field == "$case"
@@ -938,7 +1589,7 @@ class TestStructuredValidationErrors:
     def test_enum_missing_payload_field_is_missing_field(self) -> None:
         codec = JsonCodec()
         # Fail variant requires "issues".
-        result = codec.parse('{"$case": "Fail"}', _make_review_type(), strict_json=False)
+        result = _parse_typed(codec, '{"$case": "Fail"}', _make_review_type(), strict_json=False)
         assert result.ok is False
         assert self._categories(result) == ["missing_field"]
         assert result.errors[0].field == "issues"
@@ -946,7 +1597,9 @@ class TestStructuredValidationErrors:
 
     def test_enum_unknown_payload_field_is_unknown_field(self) -> None:
         codec = JsonCodec()
-        result = codec.parse('{"$case": "Pass", "junk": 1}', _make_review_type(), strict_json=False)
+        result = _parse_typed(
+            codec, '{"$case": "Pass", "junk": 1}', _make_review_type(), strict_json=False
+        )
         assert result.ok is False
         assert self._categories(result) == ["unknown_field"]
         assert result.errors[0].field == "junk"
@@ -954,8 +1607,14 @@ class TestStructuredValidationErrors:
     def test_nested_enum_wrong_type_path(self) -> None:
         """Type-directed enum resolution works under a record field path."""
         codec = JsonCodec()
-        typ = RecordType(name="Wrapper", fields={"review": _make_review_type()})
-        result = codec.parse('{"review": {"$case": "Bogus"}}', typ, strict_json=False)
+        typ, typedef = record_type("Wrapper", {"review": _make_review_type()})
+        result = _parse_typed(
+            codec,
+            '{"review": {"$case": "Bogus"}}',
+            typ,
+            strict_json=False,
+            table=type_table_for(typedef, _REVIEW_TYPEDEF),
+        )
         assert result.ok is False
         assert self._categories(result) == ["bad_case"]
         assert "Bogus" in result.errors[0].message
@@ -963,14 +1622,16 @@ class TestStructuredValidationErrors:
     def test_success_has_no_errors(self) -> None:
         codec = JsonCodec()
         raw = '{"title": "Bug", "severity": 1, "description": "x"}'
-        result = codec.parse(raw, _make_issue_type(), strict_json=False)
+        result = _parse_typed(codec, raw, _make_issue_type(), strict_json=False)
         assert result.ok is True
         assert result.errors == ()
 
     def test_non_validation_failure_has_no_errors(self) -> None:
         """A failure to extract any JSON is not a schema-validation error."""
         codec = JsonCodec()
-        result = codec.parse("complete gibberish ###", _make_issue_type(), strict_json=False)
+        result = _parse_typed(
+            codec, "complete gibberish ###", _make_issue_type(), strict_json=False
+        )
         assert result.ok is False
         assert result.errors == ()
 
@@ -1088,33 +1749,33 @@ class TestValidationErrorsThroughRuntime:
 class TestMultiValueAmbiguity:
     def test_two_objects_rejected(self) -> None:
         codec = JsonCodec()
-        result = codec.parse('{"a":1} {"b":2}', JsonType(), strict_json=False)
+        result = _parse_typed(codec, '{"a":1} {"b":2}', JsonType(), strict_json=False)
         assert result.ok is False
         assert "multiple JSON values" in result.error_msg
 
     def test_two_objects_newline_separated_rejected(self) -> None:
         codec = JsonCodec()
-        result = codec.parse('{"a":1}\n{"b":2}', JsonType(), strict_json=False)
+        result = _parse_typed(codec, '{"a":1}\n{"b":2}', JsonType(), strict_json=False)
         assert result.ok is False
         assert "multiple JSON values" in result.error_msg
 
     def test_text_then_single_object_recovers(self) -> None:
         codec = JsonCodec()
-        result = codec.parse('text then {"a": 1}', JsonType(), strict_json=False)
+        result = _parse_typed(codec, 'text then {"a": 1}', JsonType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
         assert result.value.raw == {"a": 1}
 
     def test_bare_array_parses(self) -> None:
         codec = JsonCodec()
-        result = codec.parse('[1, 2]', JsonType(), strict_json=False)
+        result = _parse_typed(codec, "[1, 2]", JsonType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
         assert result.value.raw == [1, 2]
 
     def test_fenced_array_parses(self) -> None:
         codec = JsonCodec()
-        result = codec.parse('```json\n[1, 2]\n```', JsonType(), strict_json=False)
+        result = _parse_typed(codec, "```json\n[1, 2]\n```", JsonType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
         assert result.value.raw == [1, 2]
@@ -1122,35 +1783,35 @@ class TestMultiValueAmbiguity:
     def test_prose_wrapped_array_recovers(self) -> None:
         """A genuine single array wrapped in prose is recovered (not ambiguous)."""
         codec = JsonCodec()
-        result = codec.parse('Here you go:\n[1, 2]', JsonType(), strict_json=False)
+        result = _parse_typed(codec, "Here you go:\n[1, 2]", JsonType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
         assert result.value.raw == [1, 2]
 
     def test_ambiguous_inside_fence_rejected(self) -> None:
         codec = JsonCodec()
-        result = codec.parse('```json\n{"a":1} {"b":2}\n```', JsonType(), strict_json=False)
+        result = _parse_typed(codec, '```json\n{"a":1} {"b":2}\n```', JsonType(), strict_json=False)
         assert result.ok is False
         assert "multiple JSON values" in result.error_msg
 
     def test_two_objects_with_inner_array_rejected(self) -> None:
         """``{"a": [1]} {"b": 2}`` is ambiguous despite the inner ``[``."""
         codec = JsonCodec()
-        result = codec.parse('{"a": [1]} {"b": 2}', JsonType(), strict_json=False)
+        result = _parse_typed(codec, '{"a": [1]} {"b": 2}', JsonType(), strict_json=False)
         assert result.ok is False
         assert "multiple JSON values" in result.error_msg
 
     def test_two_values_with_escaped_bracket_string_rejected(self) -> None:
         """a bracket inside an escaped string does not hide the second value."""
         codec = JsonCodec()
-        result = codec.parse('{"a": "[x]"} {"b": 2}', JsonType(), strict_json=False)
+        result = _parse_typed(codec, '{"a": "[x]"} {"b": 2}', JsonType(), strict_json=False)
         assert result.ok is False
         assert "multiple JSON values" in result.error_msg
 
     def test_single_object_with_inner_array_recovers(self) -> None:
         """a single object containing an array is one value (not ambiguous)."""
         codec = JsonCodec()
-        result = codec.parse('{"a": [1, 2]}', JsonType(), strict_json=False)
+        result = _parse_typed(codec, '{"a": [1, 2]}', JsonType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
         assert result.value.raw == {"a": [1, 2]}
@@ -1214,12 +1875,13 @@ class TestMakeContract:
 
     def test_materialize_contract_with_json_codec(self) -> None:
         codec = JsonCodec()
+        issue_type = _make_issue_type()
         spec = OutputContractSpec(
-            target_type=_make_issue_type(),
+            target_type=issue_type,
             codec_name="json",
             strict_json=False,
         )
-        contract = materialize_contract(spec, {"json": codec, "text": TextCodec()})
+        contract = materialize_contract(spec, {"json": codec, "text": TextCodec()}, _DEFAULT_TABLE)
         assert isinstance(contract.codec, JsonCodec)
         assert contract.json_schema is not None
 
@@ -1249,9 +1911,7 @@ class TestPipelineDriverWireUp:
     def test_json_target_type_accepted_via_direct_ast(self) -> None:
         """A call targeting json type should pass type checking and execute."""
         let_x = _let("x", _ask_call("Get data."), type_ann=_json_ty())
-        scope = _run_with_json_codec(
-            (let_x,), default_agent=lambda req: '{"x": 1}'
-        )
+        scope = _run_with_json_codec((let_x,), default_agent=lambda req: '{"x": 1}')
         x = scope.snapshot()["x"]
         assert isinstance(x, JsonValue)
 
@@ -1262,9 +1922,7 @@ class TestPipelineDriverWireUp:
 
     def test_bool_target_accepted(self) -> None:
         let_b = _let("b", _ask_call("Is it true?"), type_ann=_bool_ty())
-        scope = _run_with_json_codec(
-            (let_b,), default_agent=lambda req: "true"
-        )
+        scope = _run_with_json_codec((let_b,), default_agent=lambda req: "true")
         assert scope.snapshot()["b"] == BoolValue(True)
 
     def test_decimal_target_accepted(self) -> None:
@@ -1322,9 +1980,7 @@ class TestPipelineDriverWireUp:
             _ask_call("List items."),
             type_ann=_list_ty(_text_ty()),
         )
-        scope = _run_with_json_codec(
-            (let_xs,), default_agent=lambda req: '["a", "b"]'
-        )
+        scope = _run_with_json_codec((let_xs,), default_agent=lambda req: '["a", "b"]')
         xs = scope.snapshot()["xs"]
         assert isinstance(xs, ListValue)
         assert xs.elements == (TextValue("a"), TextValue("b"))
@@ -1335,9 +1991,7 @@ class TestPipelineDriverWireUp:
             _ask_call("Dict."),
             type_ann=_dict_ty(_text_ty()),
         )
-        scope = _run_with_json_codec(
-            (let_d,), default_agent=lambda req: '{"k": "v"}'
-        )
+        scope = _run_with_json_codec((let_d,), default_agent=lambda req: '{"k": "v"}')
         d = scope.snapshot()["d"]
         assert isinstance(d, DictValue)
         assert d.entries == {"k": TextValue("v")}
@@ -1447,9 +2101,9 @@ class TestPipelineDriverWireUp:
         json_codec = JsonCodec()
         kinds = {
             text_codec.name: frozenset({"text"}),
-            json_codec.name: frozenset({
-                "json", "record", "enum", "list", "dict", "int", "decimal", "bool"
-            }),
+            json_codec.name: frozenset(
+                {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
+            ),
         }
         caps = HostCapabilities(
             codec_kinds=kinds,
@@ -1469,14 +2123,20 @@ class TestPipelineDriverWireUp:
 class TestCaseDispatch:
     def test_correct_case_dispatched(self) -> None:
         codec = JsonCodec()
-        typ = EnumType(
-            name="Status",
-            variants={
+        typ, typedef = enum_type(
+            "Status",
+            {
                 "Done": {},
                 "Running": {"progress": IntType()},
             },
         )
-        result = codec.parse('{"$case": "Running", "progress": 50}', typ, strict_json=False)
+        result = _parse_typed(
+            codec,
+            '{"$case": "Running", "progress": 50}',
+            typ,
+            strict_json=False,
+            table=type_table_for(typedef),
+        )
         assert result.ok is True
         assert isinstance(result.value, EnumValue)
         assert result.value.variant == "Running"
@@ -1484,20 +2144,26 @@ class TestCaseDispatch:
 
     def test_bad_case_fails(self) -> None:
         codec = JsonCodec()
-        typ = EnumType(name="Status", variants={"Done": {}})
-        result = codec.parse('{"$case": "Exploded"}', typ, strict_json=False)
+        typ, typedef = enum_type("Status", {"Done": {}})
+        result = _parse_typed(
+            codec, '{"$case": "Exploded"}', typ, strict_json=False, table=type_table_for(typedef)
+        )
         assert result.ok is False
 
     def test_missing_case_tag_fails(self) -> None:
         codec = JsonCodec()
-        typ = EnumType(name="Status", variants={"Done": {}})
-        result = codec.parse('{"done": true}', typ, strict_json=False)
+        typ, typedef = enum_type("Status", {"Done": {}})
+        result = _parse_typed(
+            codec, '{"done": true}', typ, strict_json=False, table=type_table_for(typedef)
+        )
         assert result.ok is False
 
     def test_nullary_enum_no_extra_fields(self) -> None:
         codec = JsonCodec()
-        typ = EnumType(name="Status", variants={"Done": {}})
-        result = codec.parse('{"$case": "Done"}', typ, strict_json=False)
+        typ, typedef = enum_type("Status", {"Done": {}})
+        result = _parse_typed(
+            codec, '{"$case": "Done"}', typ, strict_json=False, table=type_table_for(typedef)
+        )
         assert result.ok is True
         assert isinstance(result.value, EnumValue)
         assert result.value.fields == {}
@@ -1511,14 +2177,14 @@ class TestCaseDispatch:
 class TestNormalizedRaw:
     def test_lenient_sets_normalized_raw_when_extraction_occurred(self) -> None:
         codec = JsonCodec()
-        result = codec.parse("```json\n5\n```", IntType(), strict_json=False)
+        result = _parse_typed(codec, "```json\n5\n```", IntType(), strict_json=False)
         assert result.ok is True
         # normalized_raw should be the extracted/repaired JSON text
         assert result.normalized_raw is not None
 
     def test_bare_json_normalized_raw(self) -> None:
         codec = JsonCodec()
-        result = codec.parse("5", IntType(), strict_json=False)
+        result = _parse_typed(codec, "5", IntType(), strict_json=False)
         assert result.ok is True
         # Even bare JSON has a normalized_raw
         assert result.normalized_raw is not None
@@ -1527,7 +2193,7 @@ class TestNormalizedRaw:
         """a fenced-but-schema-invalid response still exposes the recovered text."""
         codec = JsonCodec()
         # Fenced JSON that is valid JSON but the wrong shape for an int target.
-        result = codec.parse('```json\n"oops"\n```', IntType(), strict_json=False)
+        result = _parse_typed(codec, '```json\n"oops"\n```', IntType(), strict_json=False)
         assert result.ok is False
         # The recovered (normalized) JSON text is threaded through the failure,
         # distinct from the fenced raw response.
@@ -1539,7 +2205,7 @@ class TestNormalizedRaw:
         # 1.5 passes a decimal schema check but cannot convert to an int Value;
         # exercises the conversion-failure branch.  Use a shape jsonschema lets
         # through but _json_to_value rejects: a float for an int via repair.
-        result = codec.parse("not json at all", IntType(), strict_json=False)
+        result = _parse_typed(codec, "not json at all", IntType(), strict_json=False)
         assert result.ok is False
 
 
@@ -1570,8 +2236,10 @@ issue
     def test_enum_param_parsed_from_json_string(self) -> None:
         """Enum can be parsed via JsonCodec from a JSON string."""
         codec = JsonCodec()
-        typ = EnumType(name="Status", variants={"Done": {}, "Pending": {}})
-        result = codec.parse('{"$case": "Done"}', typ, strict_json=False)
+        typ, typedef = enum_type("Status", {"Done": {}, "Pending": {}})
+        result = _parse_typed(
+            codec, '{"$case": "Done"}', typ, strict_json=False, table=type_table_for(typedef)
+        )
         assert result.ok is True
         assert isinstance(result.value, EnumValue)
         assert result.value.variant == "Done"
@@ -1589,7 +2257,7 @@ issue
         from agm.agl.runtime.params import convert_param_value
         from agm.agl.semantics.values import IntValue, ListValue
 
-        result = convert_param_value("xs", [1, 2, 3], ListType(elem=IntType()))
+        result = convert_param_value("xs", [1, 2, 3], ListType(elem=IntType()), type_table_for())
         assert isinstance(result, ListValue)
         assert result.elements == (IntValue(1), IntValue(2), IntValue(3))
 
@@ -1598,17 +2266,21 @@ issue
         from agm.agl.runtime.params import convert_param_value
 
         with pytest.raises(ValueError, match="JSON"):
-            convert_param_value("xs", object(), ListType(elem=IntType()))
+            convert_param_value("xs", object(), ListType(elem=IntType()), type_table_for())
 
     def test_invalid_structured_param_raises(self) -> None:
         """A JSON string that fails schema validation for the declared type raises."""
         from agm.agl.runtime.params import convert_param_value
 
         with pytest.raises(ValueError, match="could not parse"):
+            issue_type, issue_def = record_type(
+                "Issue", {"title": TextType(), "severity": IntType()}
+            )
             convert_param_value(
                 "issue",
                 '{"title": "Bug"}',  # missing severity
-                RecordType(name="Issue", fields={"title": TextType(), "severity": IntType()}),
+                issue_type,
+                type_table_for(issue_def),
             )
 
     def test_unsupported_type_in_convert_param_value_raises(self) -> None:
@@ -1617,7 +2289,7 @@ issue
         from agm.agl.semantics.types import ExceptionType
 
         with pytest.raises(ValueError, match="unsupported type"):
-            convert_param_value("e", "val", ExceptionType(name="Boom"))
+            convert_param_value("e", "val", ExceptionType(name="Boom"), type_table_for())
 
     def test_structured_param_is_strict_no_repair(self) -> None:
         """host --param values are parsed strictly; typos are NOT repaired.
@@ -1629,10 +2301,14 @@ issue
         from agm.agl.runtime.params import convert_param_value
 
         with pytest.raises(ValueError, match="JSON parse error"):
+            issue_type, issue_def = record_type(
+                "Issue", {"title": TextType(), "severity": IntType()}
+            )
             convert_param_value(
                 "issue",
                 '{"title": "Bug", "severity": 5,}',  # trailing comma typo
-                RecordType(name="Issue", fields={"title": TextType(), "severity": IntType()}),
+                issue_type,
+                type_table_for(issue_def),
             )
 
     def test_structured_param_rejects_fenced_json(self) -> None:
@@ -1644,6 +2320,7 @@ issue
                 "tags",
                 "```json\n[1, 2]\n```",
                 ListType(elem=IntType()),
+                type_table_for(),
             )
 
 
@@ -1654,9 +2331,6 @@ issue
 
 class TestDecodeValueErrorBranches:
     """Cover the ValueError branches inside decode_value / _decode_scalar."""
-
-    def _parse(self, raw: str, typ: Type) -> ParseResult:
-        return JsonCodec().parse(raw, typ, strict_json=False)
 
     def test_text_type_got_non_string(self) -> None:
         from agm.agl.ir.contracts import ScalarDecode, ScalarKind
@@ -1822,21 +2496,21 @@ class TestDecodeValueErrorBranches:
         ``{"type": "integer"}`` accepts ``1.0``.
         """
         codec = JsonCodec()
-        result = codec.parse("1.0", IntType(), strict_json=False)
+        result = _parse_typed(codec, "1.0", IntType(), strict_json=False)
         assert result.ok is True
         assert result.value == IntValue(1)
 
     def test_integral_decimal_to_int_strict(self) -> None:
         """integral-Decimal normalization also applies on the strict path."""
         codec = JsonCodec()
-        result = codec.parse("1.0", IntType(), strict_json=True)
+        result = _parse_typed(codec, "1.0", IntType(), strict_json=True)
         assert result.ok is True
         assert result.value == IntValue(1)
 
     def test_non_integral_decimal_rejected_for_int(self) -> None:
         """``1.5`` still fails an int target (not integral)."""
         codec = JsonCodec()
-        result = codec.parse("1.5", IntType(), strict_json=False)
+        result = _parse_typed(codec, "1.5", IntType(), strict_json=False)
         assert result.ok is False
         assert result.value is None
         assert any(e.category == "wrong_type" for e in result.errors)
@@ -1849,7 +2523,7 @@ class TestDecodeValueErrorBranches:
         value equals ``1`` exactly == Decimal('1.0')``).
         """
         codec = JsonCodec()
-        result = codec.parse("1.0", DecimalType(), strict_json=False)
+        result = _parse_typed(codec, "1.0", DecimalType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, DecimalValue)
         # Value exactness: numerically equal to both 1 and 1.0.
@@ -1869,7 +2543,7 @@ class TestSchemaExceptionType:
         from agm.agl.semantics.types import ExceptionType
 
         with pytest.raises(TypeError, match="ExceptionType"):
-            derive_schema(ExceptionType(name="Boom"))
+            derive_schema(ExceptionType(name="Boom"), type_table_for())
 
 
 # ---------------------------------------------------------------------------
@@ -1884,14 +2558,14 @@ class TestFencedMalformedJson:
         codec = JsonCodec()
         # Fenced content with single-quoted keys — json-repair fixes it.
         raw = "```json\n{'k': 1}\n```"
-        result = codec.parse(raw, JsonType(), strict_json=False)
+        result = _parse_typed(codec, raw, JsonType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
 
     def test_fenced_trailing_comma_repaired(self) -> None:
         codec = JsonCodec()
-        raw = "```json\n{\"a\": 1,}\n```"
-        result = codec.parse(raw, JsonType(), strict_json=False)
+        raw = '```json\n{"a": 1,}\n```'
+        result = _parse_typed(codec, raw, JsonType(), strict_json=False)
         assert result.ok is True
 
 
@@ -1906,7 +2580,7 @@ class TestLenientParseAfterRepair:
     def test_schema_validation_failure_message(self) -> None:
         # Passing a string for an int target fails schema validation.
         codec = JsonCodec()
-        result = codec.parse('"not an int"', IntType(), strict_json=False)
+        result = _parse_typed(codec, '"not an int"', IntType(), strict_json=False)
         assert result.ok is False
         assert "Schema validation failed" in result.error_msg
 
@@ -1931,7 +2605,7 @@ class TestFencedRepairFallback:
         # Fenced block with gibberish that repairs to "" or empty.
         # The outer prose has the real JSON.
         raw = "Here is the value: 42 ```json\n\n```"
-        result = codec.parse(raw, IntType(), strict_json=False)
+        result = _parse_typed(codec, raw, IntType(), strict_json=False)
         assert result.ok
         assert result.value == IntValue(42)
         assert result.normalized_raw == "42"
@@ -1945,7 +2619,7 @@ class TestFencedRepairFallback:
         codec = JsonCodec()
         # Patch _extract_json_text to return a string that is NOT valid JSON.
         with patch.object(codec_module, "_extract_json_text", return_value="{broken"):
-            result = codec.parse("anything", IntType(), strict_json=False)
+            result = _parse_typed(codec, "anything", IntType(), strict_json=False)
         assert result.ok is False
         assert "JSON parse failed after repair attempt" in result.error_msg
 
@@ -1961,39 +2635,53 @@ class TestValidationMappingCoverage:
     def test_trailing_comma_array_recovers_not_ambiguous(self) -> None:
         """A repaired array whose candidate already starts with '[' is not ambiguous."""
         codec = JsonCodec()
-        result = codec.parse("[1, 2,]", JsonType(), strict_json=False)
+        result = _parse_typed(codec, "[1, 2,]", JsonType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, JsonValue)
         assert result.value.raw == [1, 2]
 
     def test_enum_two_field_variant_reports_first_missing(self) -> None:
         codec = JsonCodec()
-        typ = EnumType(name="E", variants={"V": {"a": IntType(), "b": IntType()}})
+        typ, typedef = enum_type("E", {"V": {"a": IntType(), "b": IntType()}})
         # "a" present, "b" missing → loop skips a, reports b.
-        result = codec.parse('{"$case": "V", "a": 1}', typ, strict_json=False)
+        result = _parse_typed(
+            codec, '{"$case": "V", "a": 1}', typ, strict_json=False, table=type_table_for(typedef)
+        )
         assert result.ok is False
         assert result.errors[0].category == "missing_field"
         assert result.errors[0].field == "b"
 
     def test_enum_non_object_instance_is_bad_case(self) -> None:
         codec = JsonCodec()
-        typ = EnumType(name="E", variants={"A": {}})
-        result = codec.parse("42", typ, strict_json=False)
+        typ, typedef = enum_type("E", {"A": {}})
+        result = _parse_typed(codec, "42", typ, strict_json=False, table=type_table_for(typedef))
         assert result.ok is False
         assert result.errors[0].category == "bad_case"
 
     def test_list_nested_enum_bad_case(self) -> None:
         codec = JsonCodec()
-        enum = EnumType(name="E", variants={"A": {}, "B": {"x": IntType()}})
-        result = codec.parse('[{"$case": "Z"}]', ListType(elem=enum), strict_json=False)
+        enum, enum_def = enum_type("E", {"A": {}, "B": {"x": IntType()}})
+        result = _parse_typed(
+            codec,
+            '[{"$case": "Z"}]',
+            ListType(elem=enum),
+            strict_json=False,
+            table=type_table_for(enum_def),
+        )
         assert result.ok is False
         assert result.errors[0].category == "bad_case"
         assert result.errors[0].path == "$[0]"
 
     def test_dict_nested_enum_bad_case(self) -> None:
         codec = JsonCodec()
-        enum = EnumType(name="E", variants={"A": {}, "B": {"x": IntType()}})
-        result = codec.parse('{"k": {"$case": "Z"}}', DictType(value=enum), strict_json=False)
+        enum, enum_def = enum_type("E", {"A": {}, "B": {"x": IntType()}})
+        result = _parse_typed(
+            codec,
+            '{"k": {"$case": "Z"}}',
+            DictType(value=enum),
+            strict_json=False,
+            table=type_table_for(enum_def),
+        )
         assert result.ok is False
         assert result.errors[0].category == "bad_case"
         assert result.errors[0].path == "$.k"
@@ -2061,19 +2749,40 @@ class TestValidationMappingCoverage:
     def test_find_enum_decode_at_path_unknown_record_field(self) -> None:
         """_find_enum_decode_at_path returns None when path names unknown field."""
         from agm.agl.runtime.codec import _find_enum_decode_at_path
-        from agm.agl.type_schema import build_decode_schema
 
-        rec = RecordType(name="R", fields={"a": IntType()})
-        decode = build_decode_schema(rec)
+        rec, rec_def = record_type("R", {"a": IntType()})
+        decode = build_decode_schema(rec, type_table_for(rec_def)).root
         assert _find_enum_decode_at_path(decode, ["missing"]) is None
 
     def test_find_enum_decode_at_path_scalar_with_remaining_path(self) -> None:
         """_find_enum_decode_at_path returns None when path descends past a scalar."""
         from agm.agl.runtime.codec import _find_enum_decode_at_path
-        from agm.agl.type_schema import build_decode_schema
 
-        decode = build_decode_schema(IntType())
+        decode = build_decode_schema(IntType(), type_table_for()).root
         assert _find_enum_decode_at_path(decode, ["deeper"]) is None
+
+    def test_find_enum_decode_at_path_unresolvable_ref_returns_none(self) -> None:
+        """An unresolvable RefDecode (unknown key) fails soft: no crash, no match found.
+
+        Classification walkers only refine an already-failed validation's
+        message; an inconsistent contract must never turn that into a crash.
+        """
+        from agm.agl.ir.contracts import RefDecode
+        from agm.agl.runtime.codec import _find_enum_decode_at_path
+
+        assert _find_enum_decode_at_path(RefDecode("NoSuchKey"), [], {}) is None
+
+    def test_find_enum_decode_at_path_resolves_recursive_ref_to_enum(self) -> None:
+        """A root RefDecode that DOES resolve reaches the EnumDecode it points to."""
+        from agm.agl.ir.contracts import RefDecode
+        from agm.agl.runtime.codec import _find_enum_decode_at_path
+
+        tree, tree_def = _tree_type_and_def()
+        plan = build_decode_schema(tree, type_table_for(tree_def))
+        assert plan.root == RefDecode("Tree")
+        defs = dict(plan.defs)
+        found = _find_enum_decode_at_path(plan.root, [], defs)
+        assert found is defs["Tree"]
 
     def test_classify_enum_failure_no_enum_decode_at_path(self) -> None:
         """_classify_enum_failure: _find_enum_decode_at_path returns None → bad_case fallback."""
@@ -2113,7 +2822,8 @@ class TestMakeContractNoTypeEnv:
 
     def test_json_codec_make_contract_no_env(self) -> None:
         codec = JsonCodec()
-        contract = codec.make_contract(_make_issue_type())
+        issue_type = _make_issue_type()
+        contract = codec.make_contract(issue_type, _DEFAULT_TABLE)
         assert contract.json_schema is not None
 
     def test_materialize_contract_no_longer_constructs_type_env(self) -> None:
@@ -2121,91 +2831,144 @@ class TestMakeContractNoTypeEnv:
         from agm.agl.runtime.contract import materialize_contract
         from agm.agl.typecheck.env import OutputContractSpec
 
+        issue_type = _make_issue_type()
         spec = OutputContractSpec(
-            target_type=_make_issue_type(),
+            target_type=issue_type,
             codec_name="json",
             strict_json=False,
         )
         # If TypeEnvironment() were still constructed it would not fail, but we
         # verify the contract comes out correctly to confirm the wire-up works.
-        contract = materialize_contract(spec, {"json": JsonCodec(), "text": TextCodec()})
+        contract = materialize_contract(
+            spec, {"json": JsonCodec(), "text": TextCodec()}, _DEFAULT_TABLE
+        )
         assert contract.json_schema is not None
 
 
 class TestSchemaPrecomputedInParse:
-    """CARRY-IN 2: parse() accepts a precomputed schema; runtime-side callers pass it."""
+    """parse() takes an explicit schema + decode; it never derives them from a Type.
+
+    Production code (the IR evaluator) always has the contract-carried
+    ``json_schema``/``decode`` on hand and passes them straight through — this
+    class verifies parsing behaves identically whether the schema instance is
+    freshly derived or the one held by a materialized contract, and that
+    omitting either input is a hard error rather than a silent re-derivation.
+    """
 
     def test_parse_with_precomputed_schema_succeeds(self) -> None:
         codec = JsonCodec()
         typ = _make_issue_type()
-        from agm.agl.type_schema import derive_schema
-        schema = derive_schema(typ)
+        table = _DEFAULT_TABLE
+        schema = derive_schema(typ, table)
+        decode = build_decode_schema(typ, table).root
         raw = '{"title": "Bug", "severity": 5, "description": "A bug"}'
-        result = codec.parse(raw, typ, strict_json=False, schema=schema)
+        result = codec.parse(raw, strict_json=False, schema=schema, decode=decode)
         assert result.ok is True
 
     def test_parse_with_precomputed_schema_validation_failure(self) -> None:
         codec = JsonCodec()
         typ = _make_issue_type()
-        from agm.agl.type_schema import derive_schema
-        schema = derive_schema(typ)
-        # Missing required fields → schema validation fails even with precomputed schema.
-        result = codec.parse('{"title": "Bug"}', typ, strict_json=False, schema=schema)
+        table = _DEFAULT_TABLE
+        schema = derive_schema(typ, table)
+        decode = build_decode_schema(typ, table).root
+        # Missing required fields → schema validation fails even with a precomputed schema.
+        result = codec.parse('{"title": "Bug"}', strict_json=False, schema=schema, decode=decode)
         assert result.ok is False
         assert result.errors
 
     def test_parse_with_precomputed_schema_matches_derived(self) -> None:
-        """parse(schema=precomputed) is observably equivalent to parse().
+        """parse(schema=materialized contract's schema) matches parse(schema=freshly derived).
 
-        Passing the materialized schema is an optimization, never a behavior
-        change: the parse outcome (ok/value/errors) must be identical to letting
-        the codec derive the schema itself, on both the success and the
-        validation-failure path.
+        The contract's schema and a freshly derived schema are the same JSON
+        Schema, produced by the same function — passing either must yield an
+        identical parse outcome (ok/value/errors).
         """
         codec = JsonCodec()
-        typ = RecordType(name="Issue", fields={"title": TextType(), "severity": IntType()})
-        schema = codec.make_contract(typ).json_schema
-        assert isinstance(schema, dict)
+        typ, typedef = record_type("Issue", {"title": TextType(), "severity": IntType()})
+        table = type_table_for(typedef)
+        contract_schema = codec.make_contract(typ, table).json_schema
+        assert isinstance(contract_schema, dict)
+        fresh_schema = derive_schema(typ, table)
+        decode = build_decode_schema(typ, table).root
 
         good = '{"title": "x", "severity": 1}'
         bad = '{"title": "x"}'  # missing required field
         for raw in (good, bad):
-            with_schema = codec.parse(raw, typ, strict_json=False, schema=schema)
-            without = codec.parse(raw, typ, strict_json=False)
-            assert with_schema.ok == without.ok
-            assert with_schema.value == without.value
-            assert [e.message for e in with_schema.errors] == [
-                e.message for e in without.errors
+            with_contract_schema = codec.parse(
+                raw, strict_json=False, schema=contract_schema, decode=decode
+            )
+            with_fresh_schema = codec.parse(
+                raw, strict_json=False, schema=fresh_schema, decode=decode
+            )
+            assert with_contract_schema.ok == with_fresh_schema.ok
+            assert with_contract_schema.value == with_fresh_schema.value
+            assert [e.message for e in with_contract_schema.errors] == [
+                e.message for e in with_fresh_schema.errors
             ]
 
     def test_contract_json_schema_reused_across_parses(self) -> None:
-        """the contract's json_schema object is the one threaded into parse.
+        """the contract's json_schema/decode are the objects threaded into parse.
 
-        Observable identity reuse: the schema object the codec materializes on
-        the contract is the same object accepted by ``parse(schema=...)`` — so
-        the interpreter passing ``contract.json_schema`` reuses it rather than
-        re-deriving (BONUS).  We verify it parses correctly and that the schema
-        is a concrete materialized dict.
+        Observable identity reuse: the schema/decode the codec materializes on
+        the contract are the same objects accepted by ``parse(...)`` — the
+        interpreter passes ``contract.json_schema``/``contract.decode``
+        straight through rather than re-deriving them.
         """
         codec = JsonCodec()
-        typ = RecordType(name="Issue", fields={"title": TextType(), "severity": IntType()})
-        contract = codec.make_contract(typ)
+        typ, typedef = record_type("Issue", {"title": TextType(), "severity": IntType()})
+        contract = codec.make_contract(typ, type_table_for(typedef))
         schema = contract.json_schema
+        decode = contract.decode
         assert isinstance(schema, dict)
+        assert decode is not None
         raw = '{"title": "x", "severity": 1}'
-        # Reuse the very same schema object on repeated parses.
+        # Reuse the very same schema/decode objects on repeated parses.
         for _ in range(3):
-            result = codec.parse(raw, typ, strict_json=False, schema=schema)
+            result = codec.parse(raw, strict_json=False, schema=schema, decode=decode)
             assert result.ok is True
             # Identity: contract still holds the same schema object.
             assert contract.json_schema is schema
 
-    def test_parse_without_schema_still_works(self) -> None:
-        """parse() without schema= falls back to deriving it (backward compat)."""
+    def test_parse_accepts_contract_defs_tuple(self) -> None:
+        """Direct JsonCodec callers may pass OutputContract.defs without converting it."""
         codec = JsonCodec()
-        result = codec.parse("42", IntType(), strict_json=False)
+        tree, tree_def = _tree_type_and_def()
+        contract = codec.make_contract(tree, type_table_for(tree_def))
+        schema = contract.json_schema
+        assert isinstance(schema, dict)
+        assert contract.decode is not None
+
+        result = codec.parse(
+            '{"$case": "Leaf"}',
+            strict_json=False,
+            schema=schema,
+            decode=contract.decode,
+            defs=contract.defs,
+        )
+
         assert result.ok is True
-        assert result.value == IntValue(42)
+
+    def test_parse_without_schema_raises(self) -> None:
+        """parse() with schema=None raises: no derivation fallback from a Type."""
+        codec = JsonCodec()
+        with pytest.raises(ValueError, match="schema and decode"):
+            codec.parse(
+                "42",
+                strict_json=False,
+                schema=None,
+                decode=build_decode_schema(IntType(), type_table_for()).root,
+            )
+
+    def test_parse_without_decode_raises(self) -> None:
+        """parse() with decode=None raises: no derivation fallback from a Type."""
+        codec = JsonCodec()
+        with pytest.raises(ValueError, match="schema and decode"):
+            codec.parse(
+                "42",
+                strict_json=False,
+                schema=derive_schema(IntType(), type_table_for()),
+                decode=None,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -2239,6 +3002,7 @@ class TestCodecSupportedKinds:
             RecordType,
             TextType,
         )
+
         kind_to_type: dict[str, Type] = {
             "text": TextType(),
             "int": IntType(),
@@ -2247,8 +3011,8 @@ class TestCodecSupportedKinds:
             "json": JsonType(),
             "list": ListType(elem=TextType()),
             "dict": DictType(value=TextType()),
-            "record": RecordType(name="R", fields={}),
-            "enum": EnumType(name="E", variants={}),
+            "record": RecordType(name="R"),
+            "enum": EnumType(name="E"),
         }
         for codec in (TextCodec(), JsonCodec()):
             for kind in codec.supported_kinds:
@@ -2269,11 +3033,13 @@ class TestRegisterCodec:
     def _make_custom_codec(self) -> TextCodec:
         """A minimal custom codec (reuses TextCodec but with a different name for testing)."""
         import copy
+
         codec = copy.copy(TextCodec())
         return codec
 
     def test_register_codec_accepted(self, capsys: pytest.CaptureFixture[str]) -> None:
         from agm.agl.runtime.codec import TextCodec as TC
+
         rt = PipelineDriver(default_agent=lambda request: "response")
 
         class AltTextCodec(TC):
@@ -2310,16 +3076,16 @@ class TestRegisterCodec:
             def supports_type(self, t: Type) -> bool:
                 return False
 
-            def make_contract(self, type_ref: Type) -> OC:
+            def make_contract(self, type_ref: Type, type_table: TypeTable | None = None) -> OC:
                 raise NotImplementedError
 
             def parse(
                 self,
                 raw: str,
-                target_type: Type,
                 *,
                 strict_json: bool = False,
                 schema: dict[str, object] | None = None,
+                decode: DecodeSchema | None = None,
             ) -> PR:
                 raise NotImplementedError
 
@@ -2360,12 +3126,16 @@ class TestRegisterCodec:
 
             def supports_type(self, t: Type) -> bool:
                 from agm.agl.semantics.types import TextType as TT
+
                 return isinstance(t, TT)
 
-            def make_contract(self, type_ref: Type) -> "OutputContract":
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> "OutputContract":
                 from agm.agl.runtime.contract import OutputContract
+
                 return OutputContract(
-                    target_type=type_ref,
+                    target_type_label=repr(type_ref),
                     codec=self,
                     strict_json=None,
                     format_instructions="TAGCODEC-INSTRUCTIONS",
@@ -2375,12 +3145,14 @@ class TestRegisterCodec:
             def parse(
                 self,
                 raw: str,
-                target_type: Type,
                 *,
                 strict_json: bool = False,
                 schema: dict[str, object] | None = None,
+                decode: DecodeSchema | None = None,
+                defs: dict[str, DecodeSchema] | None = None,
             ) -> "ParseResult":
                 from agm.agl.runtime.codec import ParseResult
+
                 # Distinctive transform proving THIS codec parsed the output.
                 return ParseResult.success(TextValue(f"PARSED::{raw}"))
 
@@ -2399,10 +3171,940 @@ class TestRegisterCodec:
         assert result.bindings["y"] == TextValue("PARSED::hello")
         # make_contract() ran: its format instructions reached the agent.
         assert received[0].output_contract is not None
-        assert (
-            received[0].output_contract.format_instructions
-            == "TAGCODEC-INSTRUCTIONS"
+        assert received[0].output_contract.format_instructions == "TAGCODEC-INSTRUCTIONS"
+
+    def test_custom_int_codec_sees_int_target_and_old_parse_signature_works(self) -> None:
+        """Custom codecs get a kind-correct target and may omit the newer defs keyword."""
+
+        seen_targets: list[str] = []
+
+        class IntCodec:
+            @property
+            def name(self) -> str:
+                return "intcodec"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"int"})
+
+            def supports_type(self, t: Type) -> bool:
+                return isinstance(t, IntType)
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                seen_targets.append(repr(type_ref))
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=None,
+                    format_instructions="INTCODEC-INSTRUCTIONS",
+                    json_schema=None,
+                )
+
+            def parse(
+                self,
+                raw: str,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
+                decode: DecodeSchema | None = None,
+            ) -> ParseResult:
+                return ParseResult.success(IntValue(int(raw)))
+
+        rt = PipelineDriver(default_agent=lambda req: "7")
+        rt.register_codec(IntCodec())
+        result = rt.run('let y: int = ask("Q", format = "intcodec")\ny')
+        assert result.ok is True
+        assert result.bindings["y"] == IntValue(7)
+        assert seen_targets == ["int"]
+
+    def test_legacy_custom_codec_contract_and_parse_signatures_work(self) -> None:
+        """Custom codecs may use make_contract(type) and parse(raw, target_type, ...)."""
+
+        seen_contract_targets: list[str] = []
+        seen_parse_targets: list[str] = []
+
+        class LegacyCodec:
+            @property
+            def name(self) -> str:
+                return "legacy-int"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"int"})
+
+            def supports_type(self, t: Type) -> bool:
+                return isinstance(t, IntType)
+
+            def make_contract(self, type_ref: Type) -> OutputContract:
+                seen_contract_targets.append(repr(type_ref))
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=None,
+                    format_instructions="LEGACY",
+                    json_schema=None,
+                )
+
+            def parse(
+                self,
+                raw: str,
+                target_type: Type,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
+                decode: DecodeSchema | None = None,
+            ) -> ParseResult:
+                seen_parse_targets.append(repr(target_type))
+                return ParseResult.success(IntValue(int(raw)))
+
+        rt = PipelineDriver(default_agent=lambda req: "11")
+        rt.register_codec(LegacyCodec())
+        result = rt.run('let y: int = ask("Q", format = "legacy-int")\ny')
+
+        from agm.agl.runtime.contract import materialize_contract
+        from agm.agl.typecheck.env import OutputContractSpec
+
+        materialize_contract(
+            OutputContractSpec(IntType(), "legacy-int", strict_json=None),
+            {"legacy-int": LegacyCodec()},
         )
+
+        assert result.ok is True
+        assert result.bindings["y"] == IntValue(11)
+        assert seen_contract_targets == ["int", "int"]
+        assert seen_parse_targets == ["int"]
+
+    def test_legacy_parse_signature_receives_concrete_generic_target_type(self) -> None:
+        seen_parse_targets: list[Type] = []
+
+        class LegacyBoxCodec:
+            @property
+            def name(self) -> str:
+                return "legacy-box"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"record"})
+
+            def supports_type(self, t: Type) -> bool:
+                return isinstance(t, RecordType)
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=None,
+                    format_instructions="LEGACY-BOX",
+                    json_schema=None,
+                )
+
+            def parse(self, raw: str, target_type: Type) -> ParseResult:
+                seen_parse_targets.append(target_type)
+                return ParseResult.success(
+                    RecordValue(
+                        nominal=NominalId(ENTRY_ID, "Box"),
+                        display_name="Box",
+                        fields={"value": IntValue(int(raw))},
+                    )
+                )
+
+        rt = PipelineDriver(default_agent=lambda req: "12")
+        rt.register_codec(LegacyBoxCodec())
+        result = rt.run(
+            'record Box[T]\n  value: T\nlet y: Box[int] = ask("Q", format = "legacy-box")\ny.value'
+        )
+
+        assert result.ok is True
+        assert result.bindings["y"] == RecordValue(
+            nominal=NominalId(ENTRY_ID, "Box"),
+            display_name="Box",
+            fields={"value": IntValue(12)},
+        )
+        assert len(seen_parse_targets) == 1
+        assert isinstance(seen_parse_targets[0], RecordType)
+        assert seen_parse_targets[0].name == "Box"
+        assert seen_parse_targets[0].type_args == (IntType(),)
+
+    def test_custom_codec_dry_run_reports_materialized_schema(self) -> None:
+        class SchemaTextCodec:
+            @property
+            def name(self) -> str:
+                return "schema-text"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"text"})
+
+            def supports_type(self, t: Type) -> bool:
+                return isinstance(t, TextType)
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=None,
+                    format_instructions="SCHEMA-TEXT",
+                    json_schema={"type": "string"},
+                )
+
+            def parse(self, raw: str) -> ParseResult:
+                return ParseResult.success(TextValue(raw))
+
+        rt = PipelineDriver(default_agent=lambda req: "unused")
+        rt.register_codec(SchemaTextCodec())
+
+        result = rt.run('let y: text = ask("Q", format = "schema-text")\ny', check_only=True)
+
+        assert result.ok is True
+        assert len(result.call_sites) == 1
+        assert result.call_sites[0].has_schema is True
+
+    def test_graph_custom_codec_dry_run_reports_materialized_schema(self) -> None:
+        class SchemaTextCodec:
+            @property
+            def name(self) -> str:
+                return "graph-schema-text"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"text"})
+
+            def supports_type(self, t: Type) -> bool:
+                return isinstance(t, TextType)
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=None,
+                    format_instructions="GRAPH-SCHEMA-TEXT",
+                    json_schema={"type": "string"},
+                )
+
+            def parse(self, raw: str) -> ParseResult:
+                return ParseResult.success(TextValue(raw))
+
+        roots = RootSet(roots=frozenset({Path(__file__).resolve().parents[1] / "stdlib"}))
+        prepared = PipelineDriver.prepare_program(
+            'let y: text = ask("Q", format = "graph-schema-text")\ny',
+            entry_path=None,
+            roots=roots,
+        )
+        rt = PipelineDriver(default_agent=lambda req: "unused")
+        rt.register_codec(SchemaTextCodec())
+
+        result = rt.run_prepared_graph(prepared, check_only=True)
+
+        assert result.ok is True
+        assert len(result.call_sites) == 1
+        assert result.call_sites[0].has_schema is True
+
+    def test_custom_codec_make_contract_keyword_only_type_table(self) -> None:
+        """Custom make_contract hooks may request type_table as a keyword-only arg."""
+
+        seen_tables: list[TypeTable | None] = []
+        table = type_table_for(_ISSUE_TYPEDEF)
+
+        class KeywordOnlyCodec:
+            @property
+            def name(self) -> str:
+                return "kw-only-contract"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"record"})
+
+            def supports_type(self, t: Type) -> bool:
+                return isinstance(t, RecordType)
+
+            def make_contract(
+                self, type_ref: Type, *, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                seen_tables.append(type_table)
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=None,
+                    format_instructions="KW-ONLY",
+                    json_schema=None,
+                )
+
+            def parse(
+                self,
+                raw: str,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
+                decode: DecodeSchema | None = None,
+                defs: Mapping[str, DecodeSchema] | None = None,
+            ) -> ParseResult:
+                return ParseResult.failure(raw)
+
+        contract = materialize_contract(
+            OutputContractSpec(_ISSUE_TYPE, "kw-only-contract", strict_json=None),
+            {"kw-only-contract": KeywordOnlyCodec()},
+            table,
+        )
+
+        assert contract.format_instructions == "KW-ONLY"
+        assert seen_tables == [table]
+
+    def test_custom_codec_make_contract_positional_only_type_table(self) -> None:
+        """Custom make_contract hooks may accept type_table positionally only."""
+
+        seen_tables: list[TypeTable | None] = []
+        table = type_table_for(_ISSUE_TYPEDEF)
+
+        class PositionalOnlyCodec:
+            @property
+            def name(self) -> str:
+                return "pos-only-contract"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"record"})
+
+            def supports_type(self, t: Type) -> bool:
+                return isinstance(t, RecordType)
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None, /
+            ) -> OutputContract:
+                seen_tables.append(type_table)
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=None,
+                    format_instructions="POS-ONLY",
+                    json_schema=None,
+                )
+
+            def parse(
+                self,
+                raw: str,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
+                decode: DecodeSchema | None = None,
+                defs: Mapping[str, DecodeSchema] | None = None,
+            ) -> ParseResult:
+                return ParseResult.failure(raw)
+
+        contract = materialize_contract(
+            OutputContractSpec(_ISSUE_TYPE, "pos-only-contract", strict_json=None),
+            {"pos-only-contract": PositionalOnlyCodec()},
+            table,
+        )
+
+        assert contract.format_instructions == "POS-ONLY"
+        assert seen_tables == [table]
+
+    def test_custom_codec_make_contract_signature_probe_fallback(self) -> None:
+        """Compatibility still works if a callable make_contract has no inspectable signature."""
+
+        class ContractCallable:
+            __signature__ = object()
+
+            def __call__(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=codec,
+                    strict_json=None,
+                    format_instructions="fallback",
+                    json_schema=None,
+                )
+
+        class FallbackCodec:
+            make_contract = ContractCallable()
+
+            @property
+            def name(self) -> str:
+                return "fallback-contract"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"int"})
+
+            def supports_type(self, t: Type) -> bool:
+                return isinstance(t, IntType)
+
+            def parse(
+                self,
+                raw: str,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
+                decode: DecodeSchema | None = None,
+                defs: Mapping[str, DecodeSchema] | None = None,
+            ) -> ParseResult:
+                return ParseResult.failure(raw)
+
+        codec = FallbackCodec()
+        contract = materialize_contract(
+            OutputContractSpec(IntType(), "fallback-contract", strict_json=None),
+            {"fallback-contract": codec},
+        )
+
+        assert contract.format_instructions == "fallback"
+
+    def test_custom_structured_codec_uses_own_contract_instructions(self) -> None:
+        """Structured custom codecs keep their own instructions instead of JSON schema text."""
+
+        seen_decode: list[DecodeSchema | None] = []
+        received: list[AgentRequest] = []
+
+        class ListIntCodec:
+            @property
+            def name(self) -> str:
+                return "list-int-codec"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"list"})
+
+            def supports_type(self, t: Type) -> bool:
+                return isinstance(t, ListType)
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=None,
+                    format_instructions="LIST-INT-CUSTOM-FORMAT",
+                    json_schema=None,
+                )
+
+            def parse(
+                self,
+                raw: str,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
+                decode: DecodeSchema | None = None,
+                defs: Mapping[str, DecodeSchema] | None = None,
+            ) -> ParseResult:
+                seen_decode.append(decode)
+                return ParseResult.success(ListValue((IntValue(int(raw)),)))
+
+        def agent(req: AgentRequest) -> str:
+            received.append(req)
+            return "3"
+
+        rt = PipelineDriver(default_agent=agent)
+        rt.register_codec(ListIntCodec())
+        result = rt.run('let xs: list[int] = ask("Q", format = "list-int-codec")\nxs')
+
+        assert result.ok is True
+        assert result.bindings["xs"] == ListValue((IntValue(3),))
+        assert seen_decode == [None]
+        assert received[0].output_contract is not None
+        assert received[0].output_contract.format_instructions == "LIST-INT-CUSTOM-FORMAT"
+
+    def test_custom_codec_contract_materialized_before_ir_pipeline(self) -> None:
+        """Custom codecs see checked types before lowering; IR parse stays typeless."""
+        from agm.agl.ir.ids import NominalId
+
+        seen_contract_type: list[Type] = []
+        seen_parse_type: list[Type] = []
+        seen_contract_fields: list[Mapping[str, Type]] = []
+        seen_parse_type_tables: list[TypeTable | None] = []
+
+        class ShapeCodec:
+            @property
+            def name(self) -> str:
+                return "shape"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"record"})
+
+            def supports_type(self, t: Type) -> bool:
+                return isinstance(t, RecordType)
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                assert isinstance(type_ref, RecordType)
+                assert type_table is not None
+                seen_contract_type.append(type_ref)
+                seen_contract_fields.append(type_table.record_fields(type_ref))
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=None,
+                    format_instructions="shape",
+                    json_schema=None,
+                )
+
+            def parse(
+                self,
+                raw: str,
+                target_type: Type,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
+                decode: DecodeSchema | None = None,
+                defs: Mapping[str, DecodeSchema] | None = None,
+                type_table: TypeTable | None = None,
+            ) -> ParseResult:
+                assert isinstance(target_type, RecordType)
+                seen_parse_type.append(target_type)
+                seen_parse_type_tables.append(type_table)
+                return ParseResult.success(
+                    RecordValue(
+                        nominal=NominalId(ENTRY_ID, target_type.name),
+                        display_name=target_type.name,
+                        fields={"value": IntValue(int(raw))},
+                    )
+                )
+
+        rt = PipelineDriver(default_agent=lambda req: "5")
+        rt.register_codec(ShapeCodec())
+        result = rt.run(
+            "record Box\n  value: int\n"
+            'let box: Box = ask("Q", format = "shape")\n'
+            "box"
+        )
+
+        assert result.ok is True
+        assert result.bindings["box"] == RecordValue(
+            nominal=NominalId(ENTRY_ID, "Box"),
+            display_name="Box",
+            fields={"value": IntValue(5)},
+        )
+        assert seen_contract_type == [RecordType("Box")]
+        assert seen_parse_type == [RecordType("Box")]
+        assert seen_contract_fields == [{"value": IntType()}]
+        assert seen_parse_type_tables == [None]
+
+    def test_custom_codec_ir_placeholder_targets_are_kind_correct(self) -> None:
+        """Legacy custom parse target placeholders are reconstructed from typeless IR."""
+        from agm.agl.runtime.contract import _target_type_for_request
+
+        cases = [
+            ("text", "text", TextType),
+            ("int", "int", IntType),
+            ("decimal", "decimal", DecimalType),
+            ("bool", "bool", BoolType),
+            ("json", "json", JsonType),
+            ("agent", "agent", AgentType),
+            ("list", "list[int]", ListType),
+            ("dict", "dict[text, int]", DictType),
+            ("record", "Issue", RecordType),
+            ("enum", "Result", EnumType),
+            ("", "unit", UnitType),
+        ]
+        for kind, label, expected_type in cases:
+            request = ContractRequest(
+                codec_name="capture",
+                strict_json=None,
+                json_schema=None,
+                decode=None,
+                target_type_label=label,
+                structured_exec=False,
+                format_instructions="",
+                target_type_kind=kind,
+            )
+            assert isinstance(_target_type_for_request(request), expected_type)
+
+    def test_custom_codec_ir_materialization_uses_request_payload_only(self) -> None:
+        """IR contract materialization does not call custom make_contract hooks."""
+
+        class CaptureCodec:
+            @property
+            def name(self) -> str:
+                return "capture"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset(
+                    {
+                        "text",
+                        "int",
+                        "decimal",
+                        "bool",
+                        "json",
+                        "agent",
+                        "list",
+                        "dict",
+                        "record",
+                        "enum",
+                        "unit",
+                    }
+                )
+
+            def supports_type(self, t: Type) -> bool:
+                return True
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                raise AssertionError("execution-time IR materialization must be typeless")
+
+            def parse(
+                self,
+                raw: str,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
+                decode: DecodeSchema | None = None,
+                defs: Mapping[str, DecodeSchema] | None = None,
+            ) -> ParseResult:
+                return ParseResult.failure(raw)
+
+        request = ContractRequest(
+            codec_name="capture",
+            strict_json=None,
+            json_schema='{"type": "integer"}',
+            decode=ScalarDecode(ScalarKind.INT),
+            target_type_label="int",
+            structured_exec=False,
+            format_instructions="compiled",
+            target_type_kind="int",
+        )
+
+        contract = materialize_ir_contract(request, {"capture": CaptureCodec()})
+
+        assert contract is not None
+        assert contract.format_instructions == "compiled"
+        assert contract.json_schema == {"type": "integer"}
+        assert contract.decode == ScalarDecode(ScalarKind.INT)
+
+    def test_custom_codec_ir_materialization_falls_back_to_request_schema(self) -> None:
+        """Custom IR materialization keeps compiled schema when the codec omits one."""
+
+        class SchemaLessCodec:
+            @property
+            def name(self) -> str:
+                return "schema-less"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"record"})
+
+            def supports_type(self, t: Type) -> bool:
+                return True
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=None,
+                    format_instructions="custom",
+                    json_schema=None,
+                )
+
+            def parse(
+                self,
+                raw: str,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
+                decode: DecodeSchema | None = None,
+                defs: Mapping[str, DecodeSchema] | None = None,
+            ) -> ParseResult:
+                return ParseResult.failure(raw)
+
+        request = ContractRequest(
+            codec_name="schema-less",
+            strict_json=None,
+            json_schema='{"type": "object"}',
+            decode=None,
+            target_type_label="Node",
+            structured_exec=False,
+            format_instructions="json",
+            target_type_kind="record",
+        )
+
+        contract = materialize_ir_contract(request, {"schema-less": SchemaLessCodec()})
+
+        assert contract is not None
+        assert contract.format_instructions == "json"
+        assert contract.json_schema == {"type": "object"}
+
+    def test_custom_codec_ir_materialization_preserves_recursive_decode(self) -> None:
+        """Execution-time custom contracts keep codec-provided decode metadata."""
+
+        class RecursiveCodec:
+            @property
+            def name(self) -> str:
+                return "recursive"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"record"})
+
+            def supports_type(self, t: Type) -> bool:
+                return True
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                raise AssertionError("execution-time IR materialization must be typeless")
+
+            def parse(
+                self,
+                raw: str,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
+                decode: DecodeSchema | None = None,
+                defs: Mapping[str, DecodeSchema] | None = None,
+            ) -> ParseResult:
+                return ParseResult.failure(raw)
+
+        request = ContractRequest(
+            codec_name="recursive",
+            strict_json=None,
+            json_schema='{"$ref": "#/$defs/Node"}',
+            decode=RefDecode("Node"),
+            target_type_label="Node",
+            structured_exec=False,
+            format_instructions="recursive",
+            target_type_kind="record",
+            defs=(("Node", ScalarDecode(ScalarKind.JSON)),),
+        )
+
+        contract = materialize_ir_contract(request, {"recursive": RecursiveCodec()})
+
+        assert contract is not None
+        assert contract.decode == RefDecode("Node")
+        assert contract.defs == (("Node", ScalarDecode(ScalarKind.JSON)),)
+
+    def test_custom_codec_parse_receives_recursive_defs(self) -> None:
+        """The IR interpreter passes custom contract defs through to parse()."""
+        from agm.agl.eval.ir_interpreter import IrInterpreter
+        from agm.agl.ir.ids import ContractId
+        from agm.agl.ir.program import ExecutableModule, ExecutableProgram
+
+        seen_defs: Mapping[str, DecodeSchema] | None = None
+
+        class DefsCaptureCodec:
+            @property
+            def name(self) -> str:
+                return "capture-defs"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"record"})
+
+            def supports_type(self, t: Type) -> bool:
+                return True
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=False,
+                    format_instructions="",
+                    json_schema={},
+                )
+
+            def parse(
+                self,
+                raw: str,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
+                decode: DecodeSchema | None = None,
+                defs: Mapping[str, DecodeSchema] | None = None,
+            ) -> ParseResult:
+                nonlocal seen_defs
+                seen_defs = defs
+                return ParseResult.success(JsonValue({"ok": True}))
+
+        contract_id = ContractId(0)
+        request = ContractRequest(
+            codec_name="capture-defs",
+            strict_json=False,
+            json_schema=None,
+            decode=None,
+            target_type_label="Node",
+            structured_exec=False,
+            format_instructions="",
+            target_type_kind="record",
+        )
+        defs = (("Node", ScalarDecode(ScalarKind.JSON)),)
+        host_contract = OutputContract(
+            target_type_label="Node",
+            codec=DefsCaptureCodec(),
+            strict_json=False,
+            format_instructions="",
+            json_schema={},
+            decode=RefDecode("Node"),
+            defs=defs,
+        )
+        program = ExecutableProgram(
+            entry_module=ENTRY_ID,
+            modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=())},
+            symbols={},
+            nominals={},
+            sources={},
+            contracts={contract_id: request},
+        )
+        interpreter = IrInterpreter(program, host_contracts={contract_id: host_contract})
+
+        result = interpreter._parse_host_output("{}", contract_id, effective_strict=False)
+
+        assert result.ok
+        assert seen_defs == dict(defs)
+
+    def test_custom_codec_parse_signature_probe_fallback(self) -> None:
+        """Compatibility still works if a callable parse hook has no inspectable signature."""
+        from agm.agl.eval.ir_interpreter import IrInterpreter
+        from agm.agl.ir.ids import ContractId
+        from agm.agl.ir.program import ExecutableModule, ExecutableProgram
+
+        class ParseCallable:
+            __signature__ = object()
+
+            def __call__(self, raw: str, **kwargs: object) -> ParseResult:
+                return ParseResult.success(TextValue(f"fallback::{raw}"))
+
+        class FallbackCodec:
+            parse = ParseCallable()
+
+            @property
+            def name(self) -> str:
+                return "fallback-parse"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"text"})
+
+            def supports_type(self, t: Type) -> bool:
+                return isinstance(t, TextType)
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=None,
+                    format_instructions="",
+                    json_schema=None,
+                )
+
+        contract_id = ContractId(0)
+        request = ContractRequest(
+            codec_name="fallback-parse",
+            strict_json=False,
+            json_schema=None,
+            decode=None,
+            target_type_label="text",
+            structured_exec=False,
+            format_instructions="",
+            target_type_kind="text",
+        )
+        host_contract = OutputContract(
+            target_type_label="text",
+            codec=FallbackCodec(),
+            strict_json=False,
+            format_instructions="",
+            json_schema={},
+        )
+        program = ExecutableProgram(
+            entry_module=ENTRY_ID,
+            modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=())},
+            symbols={},
+            nominals={},
+            sources={},
+            contracts={contract_id: request},
+        )
+        interpreter = IrInterpreter(program, host_contracts={contract_id: host_contract})
+
+        result = interpreter._parse_host_output("ok", contract_id, effective_strict=False)
+
+        assert result.ok
+        assert result.value == TextValue("fallback::ok")
+
+    def test_custom_codec_parse_type_error_propagates(self) -> None:
+        """Only old parse signatures are retried; codec TypeError bugs still propagate."""
+        from agm.agl.eval.ir_interpreter import IrInterpreter
+        from agm.agl.ir.ids import ContractId
+        from agm.agl.ir.program import ExecutableModule, ExecutableProgram
+
+        class BrokenCodec:
+            @property
+            def name(self) -> str:
+                return "broken"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"record"})
+
+            def supports_type(self, t: Type) -> bool:
+                return True
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=False,
+                    format_instructions="",
+                    json_schema={},
+                )
+
+            def parse(
+                self,
+                raw: str,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
+                decode: DecodeSchema | None = None,
+                defs: Mapping[str, DecodeSchema] | None = None,
+            ) -> ParseResult:
+                raise TypeError("codec parse bug")
+
+        contract_id = ContractId(0)
+        request = ContractRequest(
+            codec_name="broken",
+            strict_json=False,
+            json_schema=None,
+            decode=None,
+            target_type_label="Node",
+            structured_exec=False,
+            format_instructions="",
+            target_type_kind="record",
+        )
+        host_contract = OutputContract(
+            target_type_label="Node",
+            codec=BrokenCodec(),
+            strict_json=False,
+            format_instructions="",
+            json_schema={},
+        )
+        program = ExecutableProgram(
+            entry_module=ENTRY_ID,
+            modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=())},
+            symbols={},
+            nominals={},
+            sources={},
+            contracts={contract_id: request},
+        )
+        interpreter = IrInterpreter(program, host_contracts={contract_id: host_contract})
+
+        with pytest.raises(TypeError, match="codec parse bug"):
+            interpreter._parse_host_output("{}", contract_id, effective_strict=False)
 
 
 class TestRuntimeBuildsCodecKinds:

@@ -20,7 +20,7 @@ Some tests guard architectural properties rather than feature behavior:
 
 ## Agents in Tests
 
-Real agents (claude, codex, and other runners) are never invoked in tests; agent and shell boundaries are always mocked. This keeps the suite deterministic and offline. Tests are also written to survive concurrent and cross-worktree runs — no hardcoded temp paths, and interrupt tests restore default signal handling.
+Real agents (claude, codex, and other runners) are never invoked in tests; agent and shell boundaries are always mocked. This keeps the suite deterministic and offline. The command e2e harness installs AGM into a temporary venv through `uv` in offline mode, so missing cached package artifacts fail as local setup problems instead of reaching the network. Tests are also written to survive concurrent and cross-worktree runs — no hardcoded temp paths, and interrupt tests restore default signal handling.
 
 ## Code Entry Points
 

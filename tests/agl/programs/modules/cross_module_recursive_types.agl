@@ -1,0 +1,25 @@
+# Modules: a recursive type cycle spanning two library modules (tree_a's
+# NodeA <-> tree_b's NodeB), used from the entry program.
+import tree_a
+import tree_b
+
+param v: int
+param tag: text
+
+def sum_a(n: NodeA) -> int =
+  case n of
+    | LeafA() => 0
+    | BranchA(value, child) => value + sum_b(child)
+
+def sum_b(n: NodeB) -> int =
+  var total: int = 0
+  for c in n.children do
+    total := total + sum_a(c)
+  total
+
+let leaf = LeafA()
+let child_group = NodeB(tag = tag, children = [leaf])
+let branch = BranchA(value = v, child = child_group)
+
+print sum_a(branch)
+print child_group.tag

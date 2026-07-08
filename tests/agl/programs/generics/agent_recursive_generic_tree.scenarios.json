@@ -1,0 +1,48 @@
+{
+  "scenarios": [
+    {
+      "name": "lenient_chatty_response_uses_instantiation_specific_defs_key",
+      "agents": {
+        "builder": [
+          "Here you go:\n```json\n{\"$case\": \"Node\", \"value\": 3, \"left\": {\"$case\": \"Leaf\"}, \"right\": {\"$case\": \"Leaf\"}}\n```"
+        ]
+      },
+      "expect": {
+        "stdout": "3\n",
+        "calls": {"builder": 1},
+        "prompts": [
+          {
+            "agent": "builder", "call": 0,
+            "schema_contains": ["Tree_int", "$ref", "$defs"]
+          }
+        ]
+      }
+    },
+    {
+      "name": "strict_json_mode",
+      "runtime": {"default_strict_json": true},
+      "agents": {
+        "builder": [
+          "{\"$case\": \"Node\", \"value\": 7, \"left\": {\"$case\": \"Leaf\"}, \"right\": {\"$case\": \"Leaf\"}}"
+        ]
+      },
+      "expect": {
+        "stdout": "7\n",
+        "calls": {"builder": 1}
+      }
+    },
+    {
+      "name": "retry_recovers_after_invalid_first_attempt",
+      "agents": {
+        "builder": [
+          "not json at all",
+          "{\"$case\": \"Node\", \"value\": 4, \"left\": {\"$case\": \"Leaf\"}, \"right\": {\"$case\": \"Leaf\"}}"
+        ]
+      },
+      "expect": {
+        "stdout": "4\n",
+        "calls": {"builder": 2}
+      }
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+# A recursive enum crossing the Python FFI in both directions: `build_tree`
+# constructs a nested Tree in the companion (decode: Python dict -> AgL value,
+# resolved through the contract's shared BoundaryRef defs) and `sum_tree`
+# consumes an AgL-built Tree in the companion (encode: AgL value -> Python).
+# The Leaf base-case variant keeps Tree's boundary schema finite.
+enum Tree
+  | Leaf(value: int)
+  | Node(left: Tree, right: Tree)
+
+extern def build_tree(n: int) -> Tree
+extern def sum_tree(t: Tree) -> int
+
+param n: int
+
+let built = build_tree(n)
+print sum_tree(built)
+
+let manual = Node(
+  left = Leaf(value = 10),
+  right = Node(left = Leaf(value = 20), right = Leaf(value = 30)),
+)
+print sum_tree(manual)

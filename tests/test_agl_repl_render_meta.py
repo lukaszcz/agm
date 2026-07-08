@@ -503,10 +503,14 @@ class TestType:
         assert outcome.text == "record Point\n  x: int\n  y: text"
 
     def test_empty_record_type_display_uses_empty_constructor_form(self) -> None:
+        from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.repl.type_display import format_type_for_repl
+        from agm.agl.semantics.type_table import TypeDef, TypeTable
         from agm.agl.semantics.types import RecordType
 
-        assert format_type_for_repl(RecordType(name="Empty", fields={})) == "record Empty()"
+        table = TypeTable()
+        table.register(TypeDef(kind="record", name="Empty", module_id=ENTRY_ID))
+        assert format_type_for_repl(RecordType(name="Empty"), table) == "record Empty()"
 
     def test_type_empty_arg_gives_usage(self) -> None:
         outcome = meta_mod.dispatch_meta(":type", _session_ctx())

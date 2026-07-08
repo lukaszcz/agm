@@ -50,6 +50,7 @@ from agm.agl.ir import (
     UseDefault,
 )
 from agm.agl.ir.contracts import (
+    BoundaryRef,
     BoundaryScalar,
     BoundarySchema,
     BoundarySealVar,
@@ -288,6 +289,7 @@ def _extern_contract(
     type_params: tuple[str, ...] = (),
     n_params: int = 1,
     result: "BoundarySchema | None" = None,
+    defs: "tuple[tuple[str, BoundarySchema], ...]" = (),
 ) -> ExternContract:
     return ExternContract(
         params=tuple(
@@ -297,6 +299,7 @@ def _extern_contract(
         result=result if result is not None else BoundaryScalar(ScalarKind.INT),
         type_params=type_params,
         result_label="int",
+        defs=defs,
     )
 
 
@@ -449,6 +452,29 @@ class TestValidatorNegatives:
         bad = _extern_desc(contract=_extern_contract(result=BoundarySealVar("T")))
         with pytest.raises(InvalidIrError, match="T"):
             validate_ir(_make_program(externs={FN_EXT: bad}))
+
+    def test_boundaryref_to_unknown_defs_key_is_rejected(self) -> None:
+        bad = _extern_desc(contract=_extern_contract(result=BoundaryRef("missing")))
+        with pytest.raises(InvalidIrError, match="unknown defs key"):
+            validate_ir(_make_program(externs={FN_EXT: bad}))
+
+    def test_boundaryref_cycle_is_rejected(self) -> None:
+        # A defs key that only refs itself never reaches a body.
+        contract = _extern_contract(
+            result=BoundaryRef("a"), defs=(("a", BoundaryRef("a")),)
+        )
+        with pytest.raises(InvalidIrError, match="cycle"):
+            validate_ir(_make_program(externs={FN_EXT: _extern_desc(contract=contract)}))
+
+    def test_duplicate_defs_key_is_rejected(self) -> None:
+        contract = _extern_contract(
+            defs=(
+                ("a", BoundaryScalar(ScalarKind.INT)),
+                ("a", BoundaryScalar(ScalarKind.INT)),
+            )
+        )
+        with pytest.raises(InvalidIrError, match="duplicate"):
+            validate_ir(_make_program(externs={FN_EXT: _extern_desc(contract=contract)}))
 
     def test_direct_call_arg_count_mismatch_against_extern_is_rejected(self) -> None:
         call = IrDirectCall(location=LOC, function_id=FN_EXT, arguments=())

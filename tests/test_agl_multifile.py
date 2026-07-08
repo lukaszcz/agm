@@ -66,6 +66,35 @@ def _run_graph(
 # ---------------------------------------------------------------------------
 
 
+def test_specific_catch_uses_module_qualified_exception_identity(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A same-named local catch must not catch a distinct imported exception."""
+    lib_dir = tmp_path / "lib"
+    lib_dir.mkdir()
+    (lib_dir / "lib.agl").write_text(
+        "exception Boom extends Exception\n"
+        "  detail: text\n"
+    )
+
+    source = """\
+import lib
+exception Boom extends Exception
+  code: int
+try
+  raise lib::Boom(message = "lib", detail = "from lib")
+catch Boom =>
+  print "wrong"
+catch _ =>
+  print "ok"
+"""
+    result = _run_graph(source, roots_dirs=[lib_dir])
+
+    assert result.ok is True
+    captured = capsys.readouterr()
+    assert captured.out == "ok\n"
+
+
 class TestWildcardImport:
     """import utils.* brings all modules from utils/ into scope."""
 

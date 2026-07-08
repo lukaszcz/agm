@@ -29,13 +29,18 @@ Dispatch uses structural ``match`` with a final ``assert_never`` arm.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import assert_never, cast
 
-from agm.agl.ir.contracts import ContractRequest, ConversionFailureMode
+from agm.agl.ir.contracts import (
+    ContractPayload,
+    ContractRequest,
+    ConversionFailureMode,
+    DecodeSchema,
+)
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import (
     AutoTraceField,
@@ -136,6 +141,7 @@ from agm.agl.lower.coercions import compile_coercion
 from agm.agl.lower.conversions import compile_recipe
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CORE_ID, ModuleId
 from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind
+from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPES,
@@ -221,21 +227,37 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import (
-    build_decode_schema,
     build_extern_contract,
     build_format_instructions,
     build_param_decoder,
-    derive_schema,
+    derive_schema_and_decode,
 )
-from agm.agl.typecheck.env import CheckedProgram, FunctionSignature
+from agm.agl.typecheck.env import CheckedProgram, FunctionSignature, OutputContractSpec
 from agm.agl.typecheck.graph import CheckedModule
 from agm.util.text import normalize_newlines
 
 __all__ = ["_LinkState", "lower_program"]
 
 
-def _add_builtin_nominals(nominals: dict[NominalId, NominalDescriptor]) -> None:
-    """Register built-in prelude and exception nominal descriptors."""
+def _contract_has_schema(
+    spec: OutputContractSpec | None,
+    payload: ContractPayload | None,
+) -> bool:
+    """Return whether a call-site contract carries a materialized schema."""
+    return spec is not None and (
+        spec.codec_name == "json" or (payload is not None and payload.json_schema is not None)
+    )
+
+
+def _add_builtin_nominals(
+    nominals: dict[NominalId, NominalDescriptor], type_table: TypeTable
+) -> None:
+    """Register built-in prelude and exception nominal descriptors.
+
+    Record/enum field and variant names, and exception field names, are all
+    resolved through *type_table* (every built-in prelude and exception type
+    is seeded into every table by ``create_seeded_type_table``).
+    """
     for name, typ in BUILTIN_PRELUDE_TYPES.items():
         nominal = NominalId(PRELUDE_ID, name)
         if isinstance(typ, RecordType):
@@ -243,7 +265,7 @@ def _add_builtin_nominals(nominals: dict[NominalId, NominalDescriptor]) -> None:
                 nominal=nominal,
                 display_name=name,
                 kind=NominalKind.RECORD,
-                fields=tuple(typ.fields.keys()),
+                fields=tuple(type_table.record_fields(typ).keys()),
                 variants=(),
             )
             continue
@@ -255,7 +277,7 @@ def _add_builtin_nominals(nominals: dict[NominalId, NominalDescriptor]) -> None:
             fields=(),
             variants=tuple(
                 VariantDescriptor(vname, tuple(vfields.keys()))
-                for vname, vfields in enum_type.variants.items()
+                for vname, vfields in type_table.enum_variants(enum_type).items()
             ),
         )
 
@@ -265,7 +287,7 @@ def _add_builtin_nominals(nominals: dict[NominalId, NominalDescriptor]) -> None:
             nominal=nominal,
             display_name=exc_name,
             kind=NominalKind.EXCEPTION,
-            fields=tuple(exc_type.fields.keys()),
+            fields=tuple(type_table.exception_fields(exc_type).keys()),
             variants=(),
         )
 
@@ -318,6 +340,7 @@ class _Lowerer:
         source_text: str,
         *,
         companion_path: Path | None = None,
+        contract_payloads: Mapping[int, ContractPayload] | None = None,
     ) -> None:
         self._checked = checked
         self._link = link
@@ -329,6 +352,13 @@ class _Lowerer:
         # lowering entry point was given one; embedded verbatim in every
         # ExternFunctionDescriptor lowered from this module's `extern def`s.
         self._companion_path = companion_path
+        # Shared TypeTable built during checking; resolves record/enum field
+        # and variant shapes for constructor lowering, nominal descriptors,
+        # and contract/param schema derivation.
+        self._type_table: TypeTable = checked.type_env.type_table
+        self._contract_payloads: Mapping[int, ContractPayload] = (
+            contract_payloads if contract_payloads is not None else {}
+        )
         self._return_expected_stack: list[Type] = []
 
     @contextmanager
@@ -410,6 +440,28 @@ class _Lowerer:
         self._link.next_contract += 1
         self._link.contracts[cid] = request
         return cid
+
+    def _contract_payload_for_spec(
+        self, node_id: int, spec: OutputContractSpec
+    ) -> tuple[str | None, str, DecodeSchema | None, tuple[tuple[str, DecodeSchema], ...]]:
+        """Return JSON schema, instructions, decode root, and defs for a contract spec."""
+        materialized = self._contract_payloads.get(node_id)
+        if materialized is not None:
+            return (
+                materialized.json_schema,
+                materialized.format_instructions,
+                materialized.decode,
+                materialized.defs,
+            )
+        if spec.codec_name != "json":
+            return None, "", None, ()
+        schema_dict, decode_plan = derive_schema_and_decode(spec.target_type, self._type_table)
+        return (
+            json.dumps(schema_dict),
+            build_format_instructions(schema_dict),
+            decode_plan.root,
+            decode_plan.defs,
+        )
 
     def _prealloc_funcdef(self, funcdef: "FuncDef") -> None:
         """Pre-allocate SymbolId and FunctionId for a top-level FuncDef."""
@@ -734,7 +786,7 @@ class _Lowerer:
             module_id=self._module_id,
             name=funcdef.name,
             params=ir_params,
-            contract=build_extern_contract(sig),
+            contract=build_extern_contract(sig, self._type_table),
             param_labels=param_labels,
             result_label=result_label,
             companion_path=self._companion_path,
@@ -891,7 +943,7 @@ class _Lowerer:
         """
         ir = self.lower_expr(node)
         own_type = self._node_type(node.node_id)
-        op = compile_coercion(own_type, expected)
+        op = compile_coercion(own_type, expected, self._type_table)
         if op is None:
             return ir
         return IrCoerce(location=self._loc(node.span), value=ir, operation=op)
@@ -1057,7 +1109,9 @@ class _Lowerer:
             case Cast(expr=operand, test_only=test_only, span=span, node_id=nid):
                 spec = self._checked.cast_specs[nid]
                 source_type = self._node_type(operand.node_id)
-                recipe = compile_recipe(source_type, spec.target_type, spec.kind)
+                recipe = compile_recipe(
+                    source_type, spec.target_type, spec.kind, self._type_table
+                )
                 inner = self.lower_expr(operand)
                 if not test_only:
                     return IrConvert(
@@ -1765,8 +1819,8 @@ class _Lowerer:
     ) -> tuple[NominalId, str]:
         """Return (NominalId, display_name) for a constructor owner by name.
 
-        For exceptions the nominal uses PRELUDE_ID; for records/enums it uses
-        the type's own module_id (which equals ENTRY_ID for single-module programs).
+        Uses the resolved type's own ``module_id`` (which equals ``ENTRY_ID``
+        for single-module programs and ``PRELUDE_ID`` for built-ins).
         """
         typ = (
             self._checked.type_env.resolve_type_by_module_id(owner_module, owner_name)
@@ -1779,7 +1833,7 @@ class _Lowerer:
             return NominalId(typ.module_id, typ.name), typ.name
         if isinstance(typ, ExceptionType):  # pragma: no cover
             # Exception constructors as first-class values are rejected by the checker.
-            return NominalId(PRELUDE_ID, typ.name), typ.name
+            return NominalId(typ.module_id, typ.name), typ.name
         # Fallback for generic types: get from GenericTypeDef template.  # pragma: no cover
         gdef = (
             self._checked.type_env.get_generic_type_from_module(owner_module, owner_name)
@@ -1937,20 +1991,16 @@ class _Lowerer:
             f"compiler bug: no FunctionId for function decl_node_id={callee_ref.decl_node_id!r}"
         )
 
-        sig = self._checked.type_env.get_function_signature_by_node_id(callee_ref.decl_node_id)
-        assert sig is not None, (
-            f"compiler bug: no signature for function {callee_ref.name!r}"
-        )
-
         # The checker already bound the call; reuse its result (never re-bind).
         binding = self._checked.argument_bindings.function_calls[result_node_id]
 
+        param_types = self._checked.argument_bindings.function_param_types[result_node_id]
         ir_args: list[IrExpr | UseDefault] = []
-        for i, (spec, bound_expr) in enumerate(zip(sig.params, binding)):
+        for i, (param_type, bound_expr) in enumerate(zip(param_types, binding)):
             if bound_expr is None:
                 ir_args.append(UseDefault(param_index=i))
             else:
-                ir_args.append(self.lower_coerced(bound_expr, spec.type))
+                ir_args.append(self.lower_coerced(bound_expr, param_type))
 
         return IrDirectCall(
             location=self._loc(span),
@@ -2027,9 +2077,11 @@ class _Lowerer:
 
         if isinstance(typ, RecordType):
             nominal = NominalId(typ.module_id, typ.name)
-            # Build fields in declaration order from typ.fields.
+            # Build fields in declaration order via the shared TypeTable (its
+            # TypeDef stores fields as a declaration-ordered tuple).
+            fields_map = self._type_table.record_fields(typ)
             ir_fields: list[tuple[str, IrExpr]] = []
-            for fname, ftype in typ.fields.items():
+            for fname, ftype in fields_map.items():
                 ir_fields.append((fname, self.lower_coerced(arg_exprs[fname], ftype)))
             return IrMakeRecord(
                 location=loc,
@@ -2039,11 +2091,11 @@ class _Lowerer:
             )
 
         if isinstance(typ, ExceptionType):
-            nominal = NominalId(PRELUDE_ID, typ.name)
+            nominal = NominalId(typ.module_id, typ.name)
             # ONE trace id allocation sentinel per construction (auto-fill any
             # declared field not present in arg_exprs).
             exc_fields: list[tuple[str, IrExpr | AutoTraceField]] = []
-            for fname, ftype in typ.fields.items():
+            for fname, ftype in self._type_table.exception_fields(typ).items():
                 if fname in arg_exprs:
                     exc_fields.append((fname, self.lower_coerced(arg_exprs[fname], ftype)))
                 else:
@@ -2058,7 +2110,7 @@ class _Lowerer:
         if isinstance(typ, EnumType):
             assert variant is not None, "compiler bug: enum constructor must have variant"
             nominal = NominalId(typ.module_id, typ.name)
-            variant_fields = typ.variants.get(variant, {})
+            variant_fields = self._type_table.enum_variants(typ).get(variant, {})
             enum_fields: list[tuple[str, IrExpr]] = []
             for fname, ftype in variant_fields.items():
                 # The checker enforces all variant fields are present in arg_exprs.
@@ -2162,14 +2214,22 @@ class _Lowerer:
 
     def _lower_catch_clause(self, clause: "CatchClause") -> IrCatchHandler:
         """Lower a ``CatchClause`` to an ``IrCatchHandler``."""
-        # Determine nominal + display_name.
+        # Determine nominal + display_name.  ``nominal`` must name the resolved
+        # exception's *real* module-qualified identity (built-in, entry, or a
+        # library module for a cross-module exception) because specific catches
+        # match exactly by ``ExceptionValue.nominal`` at runtime.
         exc_type = clause.exc_type
         if exc_type is None or exc_type == "_" or exc_type == "Exception":
             nominal: NominalId | None = None
             display_name: str | None = None
         else:
-            nominal = NominalId(PRELUDE_ID, exc_type)
-            display_name = exc_type
+            resolved = self._checked.type_env.resolve_named_type(exc_type)
+            assert isinstance(resolved, ExceptionType), (
+                f"compiler bug: catch clause type {exc_type!r} did not resolve "
+                "to an ExceptionType"
+            )
+            nominal = NominalId(resolved.module_id, resolved.name)
+            display_name = resolved.name
 
         # Allocate a SymbolId for the binding variable when present.
         # public=False: catch-clause binders are not top-level exported names.
@@ -2296,18 +2356,12 @@ class _Lowerer:
                 structured_exec=structured_exec,
                 format_instructions="",
                 is_unit=True,
+                target_type_kind="unit",
             )
         else:
-            # Build format_instructions and json_schema from the spec.
-            if spec.codec_name == "json":
-                schema_dict = derive_schema(spec.target_type)
-                json_schema_str: str | None = json.dumps(schema_dict)
-                fmt_instr = build_format_instructions(schema_dict)
-                decode_schema = build_decode_schema(spec.target_type)
-            else:
-                json_schema_str = None
-                fmt_instr = ""
-                decode_schema = None
+            json_schema_str, fmt_instr, decode_schema, decode_defs = (
+                self._contract_payload_for_spec(call_node.node_id, spec)
+            )
             contract_req = ContractRequest(
                 codec_name=spec.codec_name,
                 strict_json=spec.strict_json,
@@ -2317,6 +2371,9 @@ class _Lowerer:
                 structured_exec=structured_exec,
                 format_instructions=fmt_instr,
                 is_unit=False,
+                target_type_kind=spec.target_type.kind,
+                target_type=spec.target_type,
+                defs=decode_defs,
             )
 
         contract_id = self._alloc_contract(contract_req)
@@ -2357,15 +2414,9 @@ class _Lowerer:
         spec = self._checked.contract_specs.get(call_node.node_id)
         assert spec is not None, "exec always has a contract spec after checking"
         structured_exec = spec.structured_exec
-        if spec.codec_name == "json":
-            schema_dict = derive_schema(spec.target_type)
-            json_schema_str: str | None = json.dumps(schema_dict)
-            fmt_instr = build_format_instructions(schema_dict)
-            decode_schema = build_decode_schema(spec.target_type)
-        else:
-            json_schema_str = None
-            fmt_instr = ""
-            decode_schema = None
+        json_schema_str, fmt_instr, decode_schema, decode_defs = (
+            self._contract_payload_for_spec(call_node.node_id, spec)
+        )
         contract_req = ContractRequest(
             codec_name=spec.codec_name,
             strict_json=spec.strict_json,
@@ -2375,6 +2426,9 @@ class _Lowerer:
             structured_exec=structured_exec,
             format_instructions=fmt_instr,
             is_unit=False,
+            target_type_kind=spec.target_type.kind,
+            target_type=spec.target_type,
+            defs=decode_defs,
         )
 
         contract_id = self._alloc_contract(contract_req)
@@ -2531,7 +2585,7 @@ class _Lowerer:
             required=(param.default is None),
             default=default_ir,
             location=self._loc(param.span),
-            external_decoder=build_param_decoder(binding_type),
+            external_decoder=build_param_decoder(binding_type, self._type_table),
         )
         self._params.append(ir_param)
 
@@ -2692,10 +2746,15 @@ class _Lowerer:
         """Populate ``self._link.nominals`` with all user-declared and built-in nominals.
 
         Adds:
-        - All user-declared record/enum nominals from the entry module's type env.
+        - All user-declared record/enum/exception nominals from the entry
+          module's type env.
         - All built-in prelude record/enum and exception descriptors keyed by
           NominalId(PRELUDE_ID, name).
+
+        Field, variant, and exception-field names are resolved through the
+        shared ``TypeTable`` rather than any embedded map on the handle.
         """
+        table = self._type_table
         # User-declared nominals for this lowering unit.
         for name, typ in self._checked.type_env.non_builtin_type_items():
             if isinstance(typ, RecordType):
@@ -2704,14 +2763,14 @@ class _Lowerer:
                     nominal=nominal,
                     display_name=name,
                     kind=NominalKind.RECORD,
-                    fields=tuple(typ.fields.keys()),
+                    fields=tuple(table.record_fields(typ).keys()),
                     variants=(),
                 )
             elif isinstance(typ, EnumType):
                 nominal = NominalId(typ.module_id, name)
                 variants = tuple(
                     VariantDescriptor(name=vname, fields=tuple(vfields.keys()))
-                    for vname, vfields in typ.variants.items()
+                    for vname, vfields in table.enum_variants(typ).items()
                 )
                 self._link.nominals[nominal] = NominalDescriptor(
                     nominal=nominal,
@@ -2720,30 +2779,43 @@ class _Lowerer:
                     fields=(),
                     variants=variants,
                 )
-            elif isinstance(typ, ExceptionType):  # pragma: no cover
-                # User-declared exceptions are not supported by the current grammar.
-                # Reserved for a future grammar extension.
-                nominal = NominalId(PRELUDE_ID, name)  # pragma: no cover
-                self._link.nominals[nominal] = NominalDescriptor(  # pragma: no cover
+            elif isinstance(typ, ExceptionType):
+                nominal = NominalId(typ.module_id, name)
+                self._link.nominals[nominal] = NominalDescriptor(
                     nominal=nominal,
                     display_name=name,
                     kind=NominalKind.EXCEPTION,
-                    fields=tuple(typ.fields.keys()),
+                    fields=tuple(table.exception_fields(typ).keys()),
                     variants=(),
+                )
+            else:  # pragma: no cover
+                # non_builtin_type_items() only ever yields Record/Enum/Exception
+                # handles for a non-generic user declaration (generics live in a
+                # separate table, aliases are never registered into _types).
+                raise AssertionError(
+                    f"compiler bug: non-nominal type {typ!r} for {name!r} in "
+                    "non_builtin_type_items()"
                 )
 
         # Generic definitions are stored separately from the ordinary type
         # namespace. Runtime nominal identity erases type arguments, so one
         # descriptor per generic declaration is sufficient for every instance.
+        # Field/variant NAMES are read directly off the registered TypeDef
+        # template (never instantiated — a generic template has no concrete
+        # type_args to substitute).
         for name, generic in self._checked.type_env.all_generic_types().items():
             typ = generic.template
             nominal = NominalId(typ.module_id, name)
+            typedef = table.get(typ.module_id, name)
+            assert typedef is not None, (
+                f"compiler bug: generic type {name!r} has no TypeDef registered"
+            )
             if isinstance(typ, RecordType):
                 self._link.nominals[nominal] = NominalDescriptor(
                     nominal=nominal,
                     display_name=name,
                     kind=NominalKind.RECORD,
-                    fields=tuple(typ.fields),
+                    fields=tuple(fname for fname, _ in typedef.fields),
                 )
             else:
                 self._link.nominals[nominal] = NominalDescriptor(
@@ -2751,12 +2823,12 @@ class _Lowerer:
                     display_name=name,
                     kind=NominalKind.ENUM,
                     variants=tuple(
-                        VariantDescriptor(vname, tuple(vfields))
-                        for vname, vfields in typ.variants.items()
+                        VariantDescriptor(vname, tuple(fname for fname, _ in vfields))
+                        for vname, vfields in typedef.variants
                     ),
                 )
 
-        _add_builtin_nominals(self._link.nominals)
+        _add_builtin_nominals(self._link.nominals, table)
 
     def lower(self) -> ExecutableProgram:
         """Lower the checked program to an ``ExecutableProgram``."""
@@ -2801,9 +2873,9 @@ class _Lowerer:
                 callee=csr.callee,
                 codec_name=csr.codec_name,
                 target_type_label=repr(csr.target_type),
-                has_schema=(
-                    (_spec := self._checked.contract_specs.get(csr.node_id)) is not None
-                    and _spec.codec_name == "json"
+                has_schema=_contract_has_schema(
+                    self._checked.contract_specs.get(csr.node_id),
+                    self._contract_payloads.get(csr.node_id),
                 ),
                 parse_policy=csr.parse_policy,
                 line=csr.line,
@@ -2837,6 +2909,7 @@ def lower_program(
     source_label: str,
     validate: bool = False,
     companion_path: Path | None = None,
+    contract_payloads: Mapping[int, ContractPayload] | None = None,
 ) -> ExecutableProgram:
     """Lower a single-module ``CheckedProgram`` to an ``ExecutableProgram``.
 
@@ -2858,7 +2931,13 @@ def lower_program(
     normalized = normalize_newlines(source_text)
     link.sources[source_id] = SourceFile(display_name=source_label, normalized_text=normalized)
     lowerer = _Lowerer(
-        checked, link, ENTRY_ID, source_id, source_text, companion_path=companion_path
+        checked,
+        link,
+        ENTRY_ID,
+        source_id,
+        source_text,
+        companion_path=companion_path,
+        contract_payloads=contract_payloads,
     )
     program = lowerer.lower()
     if validate:

@@ -81,7 +81,7 @@ def build_contract(source: str, fn_name: str = "f") -> ExternContract:
     resolved = resolve(parse_program(source), origin_path=_PATH)
     cp = check(resolved, _CAPS)
     sig = cp.function_signatures[fn_name]
-    return build_extern_contract(sig)
+    return build_extern_contract(sig, cp.type_env.type_table)
 
 
 def _nominal(schema: BoundarySchema) -> NominalId:

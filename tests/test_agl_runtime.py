@@ -27,6 +27,7 @@ from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
 from agm.agl.pipeline import RunResult
 from agm.agl.runtime import AgentRequest
 from agm.agl.semantics.types import Type
+from tests._agl_helpers import type_table_for
 
 if TYPE_CHECKING:
     from agm.agl.runtime.codec import OutputCodec
@@ -117,8 +118,7 @@ class TestRegisterAgent:
 
         rt.register_agent("my_agent", my_agent)
         result = rt.run(
-            'agent my_agent\nlet answer = ask("meaningful prompt", agent = my_agent)\n'
-            "print answer"
+            'agent my_agent\nlet answer = ask("meaningful prompt", agent = my_agent)\nprint answer'
         )
 
         assert result.ok
@@ -330,7 +330,7 @@ class TestInputValidationRuntime:
         assert missing[0].line == 3
 
     def test_invalid_typed_param_reports_declaration_line(self) -> None:
-        """ parity: the type-invalid diagnostic already reports the line."""
+        """parity: the type-invalid diagnostic already reports the line."""
         rt = PipelineDriver()
         src = "let a = 1\nlet b = 2\nparam n: int\nprint n"
         result = rt.run(src, param_values={"n": "five"})
@@ -469,9 +469,7 @@ class TestUncaughtAgentCallErrorSpan:
                 cause="spawn_failure", exit_code=None, stderr_tail="boom", elapsed=0.0
             )
 
-        monkeypatch.setattr(
-            exec_mod, "runner_backed_agent_factory", lambda **_: failing_agent
-        )
+        monkeypatch.setattr(exec_mod, "runner_backed_agent_factory", lambda **_: failing_agent)
         args = ExecArgs(
             file=str(agl_file),
             param_tokens=[],
@@ -543,8 +541,12 @@ class TestRunResultType:
 class TestSourceSpan:
     def test_source_span_attributes(self) -> None:
         span = SourceSpan(
-            start_line=1, start_col=1, end_line=1, end_col=11,
-            start_offset=0, end_offset=10,
+            start_line=1,
+            start_col=1,
+            end_line=1,
+            end_col=11,
+            start_offset=0,
+            end_offset=10,
         )
         assert span.start_line == 1
         assert span.start_col == 1
@@ -561,8 +563,12 @@ class TestAglError:
 
     def test_agl_error_with_span(self) -> None:
         span = SourceSpan(
-            start_line=5, start_col=3, end_line=5, end_col=12,
-            start_offset=40, end_offset=49,
+            start_line=5,
+            start_col=3,
+            end_line=5,
+            end_col=12,
+            start_offset=40,
+            end_offset=49,
         )
         err = AglError("type error", span=span)
         diag = err.to_diagnostic()
@@ -574,8 +580,12 @@ class TestAglError:
 
     def test_agl_error_span_attribute(self) -> None:
         span = SourceSpan(
-            start_line=2, start_col=1, end_line=2, end_col=5,
-            start_offset=10, end_offset=14,
+            start_line=2,
+            start_col=1,
+            end_line=2,
+            end_col=5,
+            start_offset=10,
+            end_offset=14,
         )
         err = AglError("test", span=span)
         assert err.span is span
@@ -840,20 +850,16 @@ class TestDecimalSerialization:
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         rt = PipelineDriver()
-        result = rt.run(
-            'param data: json\nprint data', param_values={"data": '{"a": 1.5}'}
-        )
+        result = rt.run("param data: json\nprint data", param_values={"data": '{"a": 1.5}'})
         assert result.ok is True
         captured = capsys.readouterr()
         assert "1.5" in captured.out
         # No binary-float artifacts (e.g. 1.5000000000000002).
         assert "1.5000" not in captured.out
 
-    def test_decimal_value_prints_exact_text(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_decimal_value_prints_exact_text(self, capsys: pytest.CaptureFixture[str]) -> None:
         rt = PipelineDriver()
-        result = rt.run('let x = 0.1\nprint x')
+        result = rt.run("let x = 0.1\nprint x")
         assert result.ok is True
         captured = capsys.readouterr()
         assert captured.out.strip() == "0.1"
@@ -880,9 +886,7 @@ class TestDecimalSerialization:
 class TestWarningsThreadedOnFailurePaths:
     """typecheck warnings survive param-validation failure paths."""
 
-    def test_warning_and_missing_param_both_visible(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_warning_and_missing_param_both_visible(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Inject a checker warning through the
         # CheckedProgram the runtime threads from ``check``.  This exercises the
         # real failure path (missing param) while a warning is present.
@@ -964,15 +968,11 @@ class TestAgentRegistryDispatch:
 class TestParamBindingInvariant:
     """The runtime relies on the checker recording every param's binding type."""
 
-    def test_missing_binding_type_is_internal_error(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_missing_binding_type_is_internal_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from agm.agl.typecheck.env import TypeEnvironment
 
         # Force the checker invariant to be violated: no recorded binding type.
-        monkeypatch.setattr(
-            TypeEnvironment, "get_binding_type", lambda self, node_id: None
-        )
+        monkeypatch.setattr(TypeEnvironment, "get_binding_type", lambda self, node_id: None)
 
         rt = PipelineDriver()
         with pytest.raises(AssertionError, match="binding type"):
@@ -999,11 +999,11 @@ class TestCapabilitiesBuiltFromRegistrations:
         result = rt.run('ask "hi"')
         assert result.ok is True
 
-
     def test_register_codec_before_run_extends_capabilities(self) -> None:
         """A custom codec registered before run() makes its kinds available to typecheck."""
         from agm.agl.runtime.codec import ParseResult, TextCodec
         from agm.agl.runtime.contract import OutputContract
+        from agm.agl.semantics.type_table import TypeTable
         from agm.agl.semantics.types import TextType
         from agm.agl.semantics.values import TextValue as TV
 
@@ -1019,9 +1019,11 @@ class TestCapabilitiesBuiltFromRegistrations:
             def supports_type(self, t: Type) -> bool:
                 return isinstance(t, TextType)
 
-            def make_contract(self, type_ref: Type) -> OutputContract:
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
                 return OutputContract(
-                    target_type=type_ref,
+                    target_type_label=repr(type_ref),
                     codec=TextCodec(),
                     strict_json=None,
                     format_instructions="",
@@ -1031,10 +1033,10 @@ class TestCapabilitiesBuiltFromRegistrations:
             def parse(
                 self,
                 raw: str,
-                target_type: Type,
                 *,
                 strict_json: bool = False,
                 schema: dict[str, object] | None = None,
+                decode: object | None = None,
             ) -> ParseResult:
                 return ParseResult.success(TV(raw))
 
@@ -1047,9 +1049,7 @@ class TestCapabilitiesBuiltFromRegistrations:
     def test_as_renderer_syntax_is_parse_error(self) -> None:
         """``${x as name}`` is a syntax error (renderer syntax removed)."""
         rt = PipelineDriver(default_agent=lambda req: "ok")
-        result = rt.run(
-            'param x\nlet y = ask "see ${x as fancy}"', param_values={"x": "hi"}
-        )
+        result = rt.run('param x\nlet y = ask "see ${x as fancy}"', param_values={"x": "hi"})
         assert result.ok is False
 
 
@@ -1345,8 +1345,10 @@ class TestRenderValue:
         from agm.agl.semantics.values import EnumValue, IntValue
 
         v = EnumValue(
-            nominal=NominalId(ENTRY_ID, "Outcome"), display_name="Outcome",
-            variant="Partial", fields={"left": IntValue(2)},
+            nominal=NominalId(ENTRY_ID, "Outcome"),
+            display_name="Outcome",
+            variant="Partial",
+            fields={"left": IntValue(2)},
         )
         assert render_value(v) == 'Outcome::Partial(left = 2)'
 
@@ -1356,8 +1358,10 @@ class TestRenderValue:
         from agm.agl.semantics.values import EnumValue
 
         v = EnumValue(
-            nominal=NominalId(ENTRY_ID, "Outcome"), display_name="Outcome",
-            variant="Done", fields={},
+            nominal=NominalId(ENTRY_ID, "Outcome"),
+            display_name="Outcome",
+            variant="Done",
+            fields={},
         )
         assert render_value(v) == 'Outcome::Done'
 
@@ -1517,8 +1521,7 @@ class TestRenderValue:
             fields={"title": TextValue("Missing tests"), "severity": IntValue(3)},
         )
         assert (
-            render_value(v, pretty=True)
-            == 'Issue(\n  title = "Missing tests",\n  severity = 3\n)'
+            render_value(v, pretty=True) == 'Issue(\n  title = "Missing tests",\n  severity = 3\n)'
         )
 
     def test_pretty_nested_indentation(self) -> None:
@@ -1563,9 +1566,7 @@ class TestRenderValue:
             UnitValue(),
             ListValue(elements=(IntValue(1),)),
         ):
-            assert render_value(v, pretty=True, quote_strings=True) == render_value(
-                v, pretty=True
-            )
+            assert render_value(v, pretty=True, quote_strings=True) == render_value(v, pretty=True)
 
     def test_nested_text_in_list_is_quoted(self) -> None:
         """Text inside a list is quoted regardless of top-level quote mode."""
@@ -1614,9 +1615,11 @@ class TestSerialize:
         from agm.agl.runtime.serialize import value_to_json_obj
         from agm.agl.semantics.values import IntValue, RecordValue
 
-        result = value_to_json_obj(RecordValue(
-            nominal=NominalId(ENTRY_ID, "R"), display_name="R", fields={"x": IntValue(5)}
-        ))
+        result = value_to_json_obj(
+            RecordValue(
+                nominal=NominalId(ENTRY_ID, "R"), display_name="R", fields={"x": IntValue(5)}
+            )
+        )
         assert result == {"x": 5}
 
     def test_enum_value_serialized(self) -> None:
@@ -1625,8 +1628,10 @@ class TestSerialize:
 
         result = value_to_json_obj(
             EnumValue(
-                nominal=NominalId(ENTRY_ID, "E"), display_name="E",
-                variant="A", fields={"msg": TextValue("hi")},
+                nominal=NominalId(ENTRY_ID, "E"),
+                display_name="E",
+                variant="A",
+                fields={"msg": TextValue("hi")},
             )
         )
         assert result == {"$case": "A", "msg": "hi"}
@@ -1640,9 +1645,9 @@ class TestSerialize:
         from agm.agl.runtime.serialize import value_to_json_obj
         from agm.agl.semantics.values import EnumValue
 
-        result = value_to_json_obj(EnumValue(
-            nominal=NominalId(ENTRY_ID, "E"), display_name="E", variant="Done", fields={}
-        ))
+        result = value_to_json_obj(
+            EnumValue(nominal=NominalId(ENTRY_ID, "E"), display_name="E", variant="Done", fields={})
+        )
         assert result == {"$case": "Done"}
 
     def test_exception_value_serialized(self) -> None:
@@ -1651,7 +1656,8 @@ class TestSerialize:
 
         result = value_to_json_obj(
             ExceptionValue(
-                nominal=NominalId(ENTRY_ID, "Err"), display_name="Err",
+                nominal=NominalId(ENTRY_ID, "Err"),
+                display_name="Err",
                 fields={"message": TextValue("oops")},
             )
         )
@@ -1744,9 +1750,7 @@ class TestMaterializeContractMissingCodec:
 class TestRuntimeErrorPaths:
     """Cover the generic exception handler branches in PipelineDriver.run."""
 
-    def test_generic_parse_exception_covered(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_generic_parse_exception_covered(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Generic (non-AglSyntaxError) exception in parse step → ok=False."""
         import agm.agl.parser as parser_mod
 
@@ -1771,9 +1775,7 @@ class TestRuntimeErrorPaths:
         assert len(tab_warns) == 1
         assert tab_warns[0].line == 1
 
-    def test_generic_scope_exception_covered(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_generic_scope_exception_covered(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Generic (non-AglScopeError) exception in scope step → ok=False."""
         import agm.agl.scope as scope_mod
 
@@ -1786,9 +1788,7 @@ class TestRuntimeErrorPaths:
         assert result.ok is False
         assert any("Scope error" in d.message for d in result.diagnostics)
 
-    def test_generic_typecheck_exception_covered(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_generic_typecheck_exception_covered(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Generic (non-AglTypeError) exception in typecheck step → ok=False."""
         import agm.agl.typecheck as tc_mod
 
@@ -1801,9 +1801,7 @@ class TestRuntimeErrorPaths:
         assert result.ok is False
         assert any("Type error" in d.message for d in result.diagnostics)
 
-    def test_contract_error_returns_not_ok(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_contract_error_returns_not_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Contract materialization error → ok=False with contract error diagnostic."""
         import agm.agl.pipeline as runtime_mod
 
@@ -1846,7 +1844,7 @@ class TestRuntimeErrorPaths:
         from agm.agl.semantics.types import TextType
 
         with pytest.raises(ValueError, match="expected a text value"):
-            convert_param_value("msg", 42, TextType())
+            convert_param_value("msg", 42, TextType(), type_table_for())
 
     def test_int_param_decimal_integral_widened(self) -> None:
         """convert_param_value: integral Decimal → IntValue for int type."""
@@ -1856,7 +1854,7 @@ class TestRuntimeErrorPaths:
         from agm.agl.semantics.types import IntType
         from agm.agl.semantics.values import IntValue
 
-        result = convert_param_value("n", Decimal("3"), IntType())
+        result = convert_param_value("n", Decimal("3"), IntType(), type_table_for())
         assert result == IntValue(3)
 
     def test_int_param_non_integral_fails(self) -> None:
@@ -1865,7 +1863,7 @@ class TestRuntimeErrorPaths:
         from agm.agl.semantics.types import IntType
 
         with pytest.raises(ValueError, match="not of type 'integer'"):
-            convert_param_value("n", "1.5", IntType())
+            convert_param_value("n", "1.5", IntType(), type_table_for())
 
     def test_decimal_param_from_int(self) -> None:
         """convert_param_value: int value → DecimalValue for decimal type."""
@@ -1875,7 +1873,7 @@ class TestRuntimeErrorPaths:
         from agm.agl.semantics.types import DecimalType
         from agm.agl.semantics.values import DecimalValue
 
-        result = convert_param_value("d", 3, DecimalType())
+        result = convert_param_value("d", 3, DecimalType(), type_table_for())
         assert isinstance(result, DecimalValue)
         assert result.value == Decimal(3)
 
@@ -1885,7 +1883,7 @@ class TestRuntimeErrorPaths:
         from agm.agl.semantics.types import DecimalType
 
         with pytest.raises(ValueError, match="not of type 'number'"):
-            convert_param_value("d", "true", DecimalType())
+            convert_param_value("d", "true", DecimalType(), type_table_for())
 
     def test_bool_param_invalid_type_fails(self) -> None:
         """convert_param_value: non-bool value → ValueError for bool type."""
@@ -1893,7 +1891,7 @@ class TestRuntimeErrorPaths:
         from agm.agl.semantics.types import BoolType
 
         with pytest.raises(ValueError, match="not of type 'boolean'"):
-            convert_param_value("b", "1", BoolType())
+            convert_param_value("b", "1", BoolType(), type_table_for())
 
     def test_bool_param_true_succeeds(self) -> None:
         """convert_param_value: bool value → BoolValue for bool type."""
@@ -1901,14 +1899,12 @@ class TestRuntimeErrorPaths:
         from agm.agl.semantics.types import BoolType
         from agm.agl.semantics.values import BoolValue
 
-        result = convert_param_value("b", True, BoolType())
+        result = convert_param_value("b", True, BoolType(), type_table_for())
         assert result == BoolValue(True)
 
     # --- assertions migrated from TestRuntimeExceptionHandlers (eval tests) ---
 
-    def test_internal_interpreter_error_propagates(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_internal_interpreter_error_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """an unexpected (non-AglRaise) interpreter error must propagate.
 
         A Python-level bug must crash loudly rather than masquerade as a
@@ -1963,7 +1959,8 @@ class TestRuntimeErrorPaths:
                 "list_val": ListValue(elements=(IntValue(1),)),
                 "dict_val": DictValue(entries={"x": IntValue(2)}),
                 "rec_val": RecordValue(
-                    nominal=NominalId(ENTRY_ID, "R"), display_name="R",
+                    nominal=NominalId(ENTRY_ID, "R"),
+                    display_name="R",
                     fields={"f": TextValue("v")},
                 ),
                 "enum_val": EnumValue(
@@ -1995,8 +1992,18 @@ class TestRuntimeErrorPaths:
         from agm.agl.semantics.types import JsonType
         from agm.agl.semantics.values import JsonValue
 
-        result = convert_param_value("meta", [1, 2, 3], JsonType())
+        result = convert_param_value("meta", [1, 2, 3], JsonType(), type_table_for())
         assert result == JsonValue([1, 2, 3])
+
+    def test_convert_param_value_json_type_decodes_normalized_value(self) -> None:
+        from agm.agl.runtime.params import convert_param_value
+        from agm.agl.semantics.types import JsonType
+        from agm.agl.semantics.values import JsonValue
+
+        result = convert_param_value("meta", "1.0", JsonType(), type_table_for())
+
+        assert result == JsonValue(1)
+        assert isinstance(result.raw, int)
 
     def test_convert_param_value_list_type_parsed_via_json_codec(self) -> None:
         # list/dict/record/enum params are now accepted via the JsonCodec.
@@ -2004,7 +2011,9 @@ class TestRuntimeErrorPaths:
         from agm.agl.semantics.types import ListType, TextType
         from agm.agl.semantics.values import ListValue, TextValue
 
-        result = convert_param_value("xs", '["a", "b"]', ListType(elem=TextType()))
+        result = convert_param_value(
+            "xs", '["a", "b"]', ListType(elem=TextType()), type_table_for()
+        )
         assert isinstance(result, ListValue)
         assert result.elements == (TextValue("a"), TextValue("b"))
 
@@ -2049,7 +2058,10 @@ class TestRuntimeErrorPaths:
         from agm.agl.semantics.values import DecimalValue, ListValue
 
         result = convert_param_value(
-            "xs", [_decimal.Decimal("1.5"), _decimal.Decimal("2.75")], ListType(elem=DecimalType())
+            "xs",
+            [_decimal.Decimal("1.5"), _decimal.Decimal("2.75")],
+            ListType(elem=DecimalType()),
+            type_table_for(),
         )
         assert isinstance(result, ListValue)
         assert result.elements == (
@@ -2066,7 +2078,7 @@ class TestRuntimeErrorPaths:
         from agm.agl.semantics.types import ListType, TextType
 
         with pytest.raises(ValueError, match="xs") as exc_info:
-            convert_param_value("xs", {1, 2, 3}, ListType(elem=TextType()))
+            convert_param_value("xs", {1, 2, 3}, ListType(elem=TextType()), type_table_for())
         # The error message must name the param and mention the type, not
         # contain a raw repr of the set or a json.dumps traceback.
         msg = str(exc_info.value)
@@ -2117,9 +2129,7 @@ class TestRuntimeErrorPaths:
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         result = PipelineDriver().run(
-            'print(render("hello"))\n'
-            "print(render([1, 2]))\n"
-            'print(render({"a": 1} as json))\n'
+            'print(render("hello"))\nprint(render([1, 2]))\nprint(render({"a": 1} as json))\n'
         )
 
         assert result.ok is True
@@ -2199,9 +2209,7 @@ class TestMaxIterationsExceededSchema:
         "  print e.last_condition_value\n"
     )
 
-    def test_fields_surface_through_real_source(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_fields_surface_through_real_source(self, capsys: pytest.CaptureFixture[str]) -> None:
         rt = PipelineDriver()
         result = rt.run(self._PROGRAM)
         # The exception is caught, so the run completes successfully.
@@ -2211,9 +2219,7 @@ class TestMaxIterationsExceededSchema:
         # limit, condition (exact until-expression source), last_condition_value.
         assert lines == ["2", "n > 10", "false"]
 
-    def test_metadata_field_is_accessible(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_metadata_field_is_accessible(self, capsys: pytest.CaptureFixture[str]) -> None:
         # ``metadata`` is a json placeholder, but
         # it is part of the schema and must be readable as a field.
         rt = PipelineDriver()
@@ -2257,17 +2263,10 @@ class TestExhaustivenessWarningSurfaces:
     while the program executes.
     """
 
-    def test_warning_surfaces_and_run_succeeds(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_warning_surfaces_and_run_succeeds(self, capsys: pytest.CaptureFixture[str]) -> None:
         rt = PipelineDriver()
         program = (
-            "enum R\n"
-            "  | Pass\n"
-            "  | Fail\n"
-            "let r: R = Pass()\n"
-            "case r of\n"
-            '  | Pass() => print "ok"\n'
+            'enum R\n  | Pass\n  | Fail\nlet r: R = Pass()\ncase r of\n  | Pass() => print "ok"\n'
         )
         result = rt.run(program)
         # Warning, not error: the run still succeeds.
@@ -2553,39 +2552,39 @@ class TestDeriveSchema:
         from agm.agl.semantics.types import BoolType
         from agm.agl.type_schema import derive_schema
 
-        assert derive_schema(BoolType()) == {"type": "boolean"}
+        assert derive_schema(BoolType(), type_table_for()) == {"type": "boolean"}
 
     def test_json_type(self) -> None:
         from agm.agl.semantics.types import JsonType
         from agm.agl.type_schema import derive_schema
 
-        assert derive_schema(JsonType()) == {}
+        assert derive_schema(JsonType(), type_table_for()) == {}
 
     def test_dict_type(self) -> None:
         from agm.agl.semantics.types import DictType, IntType
         from agm.agl.type_schema import derive_schema
 
-        result = derive_schema(DictType(value=IntType()))
+        result = derive_schema(DictType(value=IntType()), type_table_for())
         assert result == {"type": "object", "additionalProperties": {"type": "integer"}}
 
     def test_record_type(self) -> None:
-        from agm.agl.semantics.types import RecordType, TextType
+        from agm.agl.semantics.types import TextType
         from agm.agl.type_schema import derive_schema
+        from tests._agl_helpers import record_type
 
-        result = derive_schema(RecordType(name="Point", fields={"x": TextType()}))
+        typ, typedef = record_type("Point", {"x": TextType()})
+        result = derive_schema(typ, type_table_for(typedef))
         assert result["type"] == "object"
         assert result["required"] == ["x"]
         assert result["additionalProperties"] is False
 
     def test_enum_type_with_payload(self) -> None:
-        from agm.agl.semantics.types import EnumType, TextType
+        from agm.agl.semantics.types import TextType
         from agm.agl.type_schema import derive_schema
+        from tests._agl_helpers import enum_type
 
-        typ = EnumType(
-            name="Status",
-            variants={"Pass": {}, "Fail": {"reason": TextType()}},
-        )
-        result = derive_schema(typ)
+        typ, typedef = enum_type("Status", {"Pass": {}, "Fail": {"reason": TextType()}})
+        result = derive_schema(typ, type_table_for(typedef))
         assert "oneOf" in result
         assert len(result["oneOf"]) == 2
 
@@ -2594,35 +2593,35 @@ class TestDeriveSchema:
         from agm.agl.type_schema import derive_schema
 
         with pytest.raises(TypeError, match="ExceptionType"):
-            derive_schema(ExceptionType(name="MyErr", fields={}))
+            derive_schema(ExceptionType(name="MyErr"), type_table_for())
 
     def test_unit_type_raises(self) -> None:
         from agm.agl.semantics.types import UnitType
         from agm.agl.type_schema import derive_schema
 
         with pytest.raises(TypeError, match="UnitType"):
-            derive_schema(UnitType())
+            derive_schema(UnitType(), type_table_for())
 
     def test_agent_type_raises(self) -> None:
         from agm.agl.semantics.types import AgentType
         from agm.agl.type_schema import derive_schema
 
         with pytest.raises(TypeError, match="AgentType"):
-            derive_schema(AgentType())
+            derive_schema(AgentType(), type_table_for())
 
     def test_function_type_raises(self) -> None:
         from agm.agl.semantics.types import FunctionType, TextType
         from agm.agl.type_schema import derive_schema
 
         with pytest.raises(TypeError, match="FunctionType"):
-            derive_schema(FunctionType(params=(TextType(),), result=TextType()))
+            derive_schema(FunctionType(params=(TextType(),), result=TextType()), type_table_for())
 
     def test_bottom_type_raises(self) -> None:
         from agm.agl.semantics.types import BottomType
         from agm.agl.type_schema import derive_schema
 
         with pytest.raises(TypeError, match="BottomType"):
-            derive_schema(BottomType())
+            derive_schema(BottomType(), type_table_for())
 
 
 # ---------------------------------------------------------------------------
@@ -2638,7 +2637,7 @@ class TestBuildParamDecoder:
         from agm.agl.semantics.types import TextType
         from agm.agl.type_schema import build_param_decoder
 
-        decoder = build_param_decoder(TextType())
+        decoder = build_param_decoder(TextType(), type_table_for())
         assert decoder.text_verbatim is True
 
     def test_text_type_target_label(self) -> None:
@@ -2646,7 +2645,7 @@ class TestBuildParamDecoder:
         from agm.agl.semantics.types import TextType
         from agm.agl.type_schema import build_param_decoder
 
-        decoder = build_param_decoder(TextType())
+        decoder = build_param_decoder(TextType(), type_table_for())
         assert decoder.target_type_label == repr(TextType())
 
     def test_int_type_not_verbatim(self) -> None:
@@ -2654,7 +2653,7 @@ class TestBuildParamDecoder:
         from agm.agl.semantics.types import IntType
         from agm.agl.type_schema import build_param_decoder
 
-        decoder = build_param_decoder(IntType())
+        decoder = build_param_decoder(IntType(), type_table_for())
         assert decoder.text_verbatim is False
 
     def test_int_type_json_schema_matches_derive_schema(self) -> None:
@@ -2665,8 +2664,9 @@ class TestBuildParamDecoder:
         from agm.agl.type_schema import build_param_decoder, derive_schema
 
         typ = IntType()
-        decoder = build_param_decoder(typ)
-        expected_schema = json.dumps(derive_schema(typ), sort_keys=True)
+        table = type_table_for()
+        decoder = build_param_decoder(typ, table)
+        expected_schema = json.dumps(derive_schema(typ, table), sort_keys=True)
         assert decoder.json_schema == expected_schema
         # Parses as valid JSON
         parsed = json.loads(decoder.json_schema)
@@ -2676,12 +2676,14 @@ class TestBuildParamDecoder:
         """A record type's json_schema embeds the full record schema."""
         import json
 
-        from agm.agl.semantics.types import RecordType, TextType
+        from agm.agl.semantics.types import TextType
         from agm.agl.type_schema import build_param_decoder, derive_schema
+        from tests._agl_helpers import record_type
 
-        typ = RecordType(name="Point", fields={"x": TextType()})
-        decoder = build_param_decoder(typ)
-        expected_schema = json.dumps(derive_schema(typ), sort_keys=True)
+        typ, typedef = record_type("Point", {"x": TextType()})
+        table = type_table_for(typedef)
+        decoder = build_param_decoder(typ, table)
+        expected_schema = json.dumps(derive_schema(typ, table), sort_keys=True)
         assert decoder.json_schema == expected_schema
         # Sanity: the schema is valid JSON with expected structure
         parsed = json.loads(decoder.json_schema)
@@ -2694,7 +2696,7 @@ class TestBuildParamDecoder:
         from agm.agl.type_schema import build_param_decoder
 
         typ = IntType()
-        decoder = build_param_decoder(typ)
+        decoder = build_param_decoder(typ, type_table_for())
         assert decoder.target_type_label == repr(typ)
 
     def test_undecodable_type_raises_type_error(self) -> None:
@@ -2703,21 +2705,21 @@ class TestBuildParamDecoder:
         from agm.agl.type_schema import build_param_decoder
 
         with pytest.raises(TypeError):
-            build_param_decoder(UnitType())
+            build_param_decoder(UnitType(), type_table_for())
 
     def test_agent_type_raises_type_error(self) -> None:
         from agm.agl.semantics.types import AgentType
         from agm.agl.type_schema import build_param_decoder
 
         with pytest.raises(TypeError):
-            build_param_decoder(AgentType())
+            build_param_decoder(AgentType(), type_table_for())
 
     def test_exception_type_raises_type_error(self) -> None:
         from agm.agl.semantics.types import ExceptionType
         from agm.agl.type_schema import build_param_decoder
 
         with pytest.raises(TypeError):
-            build_param_decoder(ExceptionType(name="MyErr", fields={}))
+            build_param_decoder(ExceptionType(name="MyErr"), type_table_for())
 
 
 class TestBuildFormatInstructions:
@@ -2844,17 +2846,14 @@ class TestIrHostMetadataCoverage:
         assert contracts == {}
         assert "missing" in errors[0].message
 
-    def test_decode_schema_defensive_and_integral_decimal_paths(self) -> None:
+    def test_integral_decimal_decodes_to_int(self) -> None:
         from decimal import Decimal
 
         from agm.agl.eval.conversions import decode_value
         from agm.agl.ir.contracts import ScalarDecode, ScalarKind
-        from agm.agl.runtime.contract import _type_from_decode
         from agm.agl.semantics.values import IntValue
 
         assert decode_value(ScalarDecode(ScalarKind.INT), Decimal("2.0")) == IntValue(2)
-        with pytest.raises(AssertionError, match="Unknown decode schema"):
-            _type_from_decode(object())
 
 
 class TestRunErrorToMessage:
@@ -2909,6 +2908,7 @@ class TestRegisterCodecErrors:
     def _make_codec(self, name: str) -> OutputCodec:
         from agm.agl.runtime.codec import OutputCodec, ParseResult, TextCodec
         from agm.agl.runtime.contract import OutputContract
+        from agm.agl.semantics.type_table import TypeTable
         from agm.agl.semantics.types import TextType
         from agm.agl.semantics.values import TextValue
 
@@ -2924,9 +2924,11 @@ class TestRegisterCodecErrors:
             def supports_type(self, t: Type) -> bool:
                 return isinstance(t, TextType)
 
-            def make_contract(self, type_ref: Type) -> OutputContract:
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
                 return OutputContract(
-                    target_type=type_ref,
+                    target_type_label=repr(type_ref),
                     codec=TextCodec(),
                     strict_json=None,
                     format_instructions="",
@@ -2936,10 +2938,10 @@ class TestRegisterCodecErrors:
             def parse(
                 self,
                 raw: str,
-                target_type: Type,
                 *,
                 strict_json: bool = False,
                 schema: dict[str, object] | None = None,
+                decode: object | None = None,
             ) -> ParseResult:
                 return ParseResult.success(TextValue(""))
 
@@ -2981,7 +2983,7 @@ class TestConvertInputUnsupportedType:
         from agm.agl.semantics.types import AgentType
 
         with pytest.raises(ValueError, match="unsupported type"):
-            convert_param_value("x", "agent_val", AgentType())
+            convert_param_value("x", "agent_val", AgentType(), type_table_for())
 
 
 # ---------------------------------------------------------------------------
@@ -2994,10 +2996,7 @@ class TestV2UserDefinedFunctions:
 
     def test_def_call_basic(self) -> None:
         rt = PipelineDriver()
-        result = rt.run(
-            "def add(a: int, b: int) -> int = a + b\n"
-            "add(1, 2)\n"
-        )
+        result = rt.run("def add(a: int, b: int) -> int = a + b\nadd(1, 2)\n")
         assert result.ok is True
 
     def test_def_recursive_call(self) -> None:
@@ -3015,11 +3014,7 @@ class TestV2UserDefinedFunctions:
     def test_def_call_depth_limit_enforced(self) -> None:
         """Exceeding max_call_depth raises a RecursionError."""
         rt = PipelineDriver(default_call_depth_limit=10)
-        result = rt.run(
-            "def inf(n: int) -> int =\n"
-            "  inf(n + 1)\n"
-            "inf(0)\n"
-        )
+        result = rt.run("def inf(n: int) -> int =\n  inf(n + 1)\ninf(0)\n")
         assert result.ok is False
 
 
@@ -3074,29 +3069,21 @@ class TestPrepareProgram:
         from agm.agl.pipeline import PreparedGraph
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = PipelineDriver.prepare_program(
-            "let x = 1\nx", entry_path=None, roots=roots
-        )
+        prepared = PipelineDriver.prepare_program("let x = 1\nx", entry_path=None, roots=roots)
         assert isinstance(prepared, PreparedGraph)
         assert prepared.resolved_graph is not None
         assert prepared.diagnostics == ()
 
-    def test_prepare_program_syntax_error_captured(
-        self, tmp_path: pathlib.Path
-    ) -> None:
+    def test_prepare_program_syntax_error_captured(self, tmp_path: pathlib.Path) -> None:
         """A syntax error is captured as a diagnostic, not raised."""
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = PipelineDriver.prepare_program(
-            "let x = !!!", entry_path=None, roots=roots
-        )
+        prepared = PipelineDriver.prepare_program("let x = !!!", entry_path=None, roots=roots)
         assert prepared.resolved_graph is None
         assert len(prepared.diagnostics) >= 1
 
-    def test_prepare_program_missing_import_captured(
-        self, tmp_path: pathlib.Path
-    ) -> None:
+    def test_prepare_program_missing_import_captured(self, tmp_path: pathlib.Path) -> None:
         """A missing import is captured as a diagnostic, not raised."""
         from agm.agl.modules.roots import RootSet
 
@@ -3110,9 +3097,7 @@ class TestPrepareProgram:
         assert len(prepared.diagnostics) >= 1
         assert "nonexistent.module" in prepared.diagnostics[0].message
 
-    def test_prepare_program_with_valid_import(
-        self, tmp_path: pathlib.Path
-    ) -> None:
+    def test_prepare_program_with_valid_import(self, tmp_path: pathlib.Path) -> None:
         """A valid import resolves when the module file exists on disk."""
         from agm.agl.modules.roots import RootSet
 
@@ -3122,15 +3107,11 @@ class TestPrepareProgram:
 
         roots = RootSet(roots=frozenset({lib_dir, _STDLIB_ROOT}))
         entry = "import mymod\nlet r = add(2, 3)\nr"
-        prepared = PipelineDriver.prepare_program(
-            entry, entry_path=None, roots=roots
-        )
+        prepared = PipelineDriver.prepare_program(entry, entry_path=None, roots=roots)
         assert prepared.resolved_graph is not None
         assert prepared.diagnostics == ()
 
-    def test_prepare_program_declared_agents_from_entry(
-        self, tmp_path: pathlib.Path
-    ) -> None:
+    def test_prepare_program_declared_agents_from_entry(self, tmp_path: pathlib.Path) -> None:
         """declared_agents reads from the entry module only."""
         from agm.agl.modules.roots import RootSet
 
@@ -3143,9 +3124,7 @@ class TestPrepareProgram:
         assert prepared.resolved_graph is not None
         assert any(d.name == "reviewer" for d in prepared.declared_agents)
 
-    def test_prepare_program_configs_from_entry(
-        self, tmp_path: pathlib.Path
-    ) -> None:
+    def test_prepare_program_configs_from_entry(self, tmp_path: pathlib.Path) -> None:
         """Config declarations are discovered from the entry module."""
         from agm.agl.modules.roots import RootSet
 
@@ -3179,24 +3158,18 @@ class TestPrepareProgram:
 class TestRunPreparedGraph:
     """PipelineDriver.run_prepared_graph: graph execution."""
 
-    def test_single_entry_graph_behaves_like_run(
-        self, tmp_path: pathlib.Path
-    ) -> None:
+    def test_single_entry_graph_behaves_like_run(self, tmp_path: pathlib.Path) -> None:
         """A single-file program via run_prepared_graph returns same result as run()."""
         from agm.agl.modules.roots import RootSet
 
         rt = PipelineDriver()
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = PipelineDriver.prepare_program(
-            "let x = 1\nx", entry_path=None, roots=roots
-        )
+        prepared = PipelineDriver.prepare_program("let x = 1\nx", entry_path=None, roots=roots)
         result = rt.run_prepared_graph(prepared)
         assert result.ok is True
         assert result.error is None
 
-    def test_graph_with_library_module_executes(
-        self, tmp_path: pathlib.Path
-    ) -> None:
+    def test_graph_with_library_module_executes(self, tmp_path: pathlib.Path) -> None:
         """A two-module graph (entry + library) runs to completion."""
         from agm.agl.modules.roots import RootSet
 
@@ -3206,17 +3179,13 @@ class TestRunPreparedGraph:
 
         roots = RootSet(roots=frozenset({lib_dir.resolve(), _STDLIB_ROOT}))
         entry = "import mymod\nlet r = add(2, 3)\nr"
-        prepared = PipelineDriver.prepare_program(
-            entry, entry_path=None, roots=roots
-        )
+        prepared = PipelineDriver.prepare_program(entry, entry_path=None, roots=roots)
         rt = PipelineDriver()
         result = rt.run_prepared_graph(prepared)
         assert result.ok is True
         assert result.error is None
 
-    def test_graph_failure_propagated(
-        self, tmp_path: pathlib.Path
-    ) -> None:
+    def test_graph_failure_propagated(self, tmp_path: pathlib.Path) -> None:
         """When the load phase captured a scope error, run_prepared_graph reports it."""
         from agm.agl.modules.roots import RootSet
 
@@ -3230,9 +3199,7 @@ class TestRunPreparedGraph:
         assert result.error is None
         assert len(result.diagnostics) >= 1
 
-    def test_graph_missing_import_propagated(
-        self, tmp_path: pathlib.Path
-    ) -> None:
+    def test_graph_missing_import_propagated(self, tmp_path: pathlib.Path) -> None:
         """A missing import error from prepare_program flows through run_prepared_graph."""
         from agm.agl.modules.roots import RootSet
 
@@ -3245,25 +3212,19 @@ class TestRunPreparedGraph:
         assert result.ok is False
         assert "missing.module" in result.diagnostics[0].message
 
-    def test_graph_agents_are_entry_owned(
-        self, tmp_path: pathlib.Path
-    ) -> None:
+    def test_graph_agents_are_entry_owned(self, tmp_path: pathlib.Path) -> None:
         """Agents are entry-program-owned; a registered undeclared agent is an error."""
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = PipelineDriver.prepare_program(
-            "let x = 1\nx", entry_path=None, roots=roots
-        )
+        prepared = PipelineDriver.prepare_program("let x = 1\nx", entry_path=None, roots=roots)
         rt = PipelineDriver()
         rt.register_agent("reviewer", lambda req: "resp")  # type: ignore[arg-type]
         result = rt.run_prepared_graph(prepared)
         assert result.ok is False
         assert any("reviewer" in d.message for d in result.diagnostics)
 
-    def test_graph_check_only_returns_call_inventory(
-        self, tmp_path: pathlib.Path
-    ) -> None:
+    def test_graph_check_only_returns_call_inventory(self, tmp_path: pathlib.Path) -> None:
         """check_only=True produces call_sites from the entry module."""
         from agm.agl.modules.roots import RootSet
 
@@ -3276,48 +3237,36 @@ class TestRunPreparedGraph:
         assert result.ok is True
         assert len(result.call_sites) >= 1
 
-    def test_multimodule_wildcard_import(
-        self, tmp_path: pathlib.Path
-    ) -> None:
+    def test_multimodule_wildcard_import(self, tmp_path: pathlib.Path) -> None:
         """Wildcard import brings multiple modules into scope."""
         from agm.agl.modules.roots import RootSet
 
         lib_dir = tmp_path / "lib"
         utils_dir = lib_dir / "utils"
         utils_dir.mkdir(parents=True)
-        (utils_dir / "math.agl").write_text(
-            "def add(a: int, b: int) -> int = a + b\n"
-        )
+        (utils_dir / "math.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
         (utils_dir / "strings.agl").write_text(
             'def greet(name: text) -> text = "Hello, " + name + "!"\n'
         )
 
         roots = RootSet(roots=frozenset({lib_dir.resolve(), _STDLIB_ROOT}))
         entry = 'import utils.*\nlet n = add(2, 3)\nlet g = greet("World")\nprint n\nprint g\n'
-        prepared = PipelineDriver.prepare_program(
-            entry, entry_path=None, roots=roots
-        )
+        prepared = PipelineDriver.prepare_program(entry, entry_path=None, roots=roots)
         rt = PipelineDriver()
         result = rt.run_prepared_graph(prepared, check_only=True)
         assert result.ok is True
 
-    def test_multimodule_qualified_import(
-        self, tmp_path: pathlib.Path
-    ) -> None:
+    def test_multimodule_qualified_import(self, tmp_path: pathlib.Path) -> None:
         """Qualified import requires :: qualifier to access names."""
         from agm.agl.modules.roots import RootSet
 
         lib_dir = tmp_path / "lib"
         lib_dir.mkdir()
-        (lib_dir / "calc.agl").write_text(
-            "def square(n: int) -> int = n * n\n"
-        )
+        (lib_dir / "calc.agl").write_text("def square(n: int) -> int = n * n\n")
 
         roots = RootSet(roots=frozenset({lib_dir.resolve(), _STDLIB_ROOT}))
         entry = "import calc qualified\nlet r = calc::square(5)\nr"
-        prepared = PipelineDriver.prepare_program(
-            entry, entry_path=None, roots=roots
-        )
+        prepared = PipelineDriver.prepare_program(entry, entry_path=None, roots=roots)
         rt = PipelineDriver()
         result = rt.run_prepared_graph(prepared)
         assert result.ok is True
@@ -3326,24 +3275,18 @@ class TestRunPreparedGraph:
 class TestDiscoverParamsGraph:
     """PipelineDriver.discover_params_graph: typed param discovery."""
 
-    def test_discover_params_no_params(
-        self, tmp_path: pathlib.Path
-    ) -> None:
+    def test_discover_params_no_params(self, tmp_path: pathlib.Path) -> None:
         """discover_params_graph returns empty params for a program with no params."""
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = PipelineDriver.prepare_program(
-            "let x = 1\nx", entry_path=None, roots=roots
-        )
+        prepared = PipelineDriver.prepare_program("let x = 1\nx", entry_path=None, roots=roots)
         rt = PipelineDriver()
         discovery = rt.discover_params_graph(prepared)
         assert discovery.diagnostics == ()
         assert discovery.params == ()
 
-    def test_discover_params_with_declared_param(
-        self, tmp_path: pathlib.Path
-    ) -> None:
+    def test_discover_params_with_declared_param(self, tmp_path: pathlib.Path) -> None:
         """discover_params_graph discovers typed param declarations."""
         from agm.agl.modules.roots import RootSet
 
@@ -3359,9 +3302,7 @@ class TestDiscoverParamsGraph:
         assert len(discovery.params) == 1
         assert discovery.params[0].name == "name"
 
-    def test_discover_params_failure_returns_diagnostics(
-        self, tmp_path: pathlib.Path
-    ) -> None:
+    def test_discover_params_failure_returns_diagnostics(self, tmp_path: pathlib.Path) -> None:
         """discover_params_graph returns diagnostics when the prepare phase failed."""
         from agm.agl.modules.roots import RootSet
 
@@ -3403,9 +3344,7 @@ class TestPreparedGraphDefensivePaths:
         )
         assert pg.program_name is None
 
-    def test_prepare_program_generic_exception_during_load(
-        self, tmp_path: pathlib.Path
-    ) -> None:
+    def test_prepare_program_generic_exception_during_load(self, tmp_path: pathlib.Path) -> None:
         """A non-AglError exception during load_graph is captured as a diagnostic."""
         from unittest.mock import patch
 
@@ -3413,15 +3352,11 @@ class TestPreparedGraphDefensivePaths:
 
         roots = RootSet(roots=frozenset({tmp_path.resolve(), _STDLIB_ROOT}))
         with patch("agm.agl.modules.loader.load_graph", side_effect=RuntimeError("boom")):
-            prepared = PipelineDriver.prepare_program(
-                "let x = 1\nx", entry_path=None, roots=roots
-            )
+            prepared = PipelineDriver.prepare_program("let x = 1\nx", entry_path=None, roots=roots)
         assert len(prepared.diagnostics) >= 1
         assert "boom" in prepared.diagnostics[0].message
 
-    def test_prepare_program_generic_exception_during_resolve(
-        self, tmp_path: pathlib.Path
-    ) -> None:
+    def test_prepare_program_generic_exception_during_resolve(self, tmp_path: pathlib.Path) -> None:
         """A non-AglScopeError exception during resolve_graph is captured."""
         from unittest.mock import patch
 
@@ -3432,9 +3367,7 @@ class TestPreparedGraphDefensivePaths:
             "agm.agl.scope.graph.resolve_graph",
             side_effect=RuntimeError("resolve fail"),
         ):
-            prepared = PipelineDriver.prepare_program(
-                "let x = 1\nx", entry_path=None, roots=roots
-            )
+            prepared = PipelineDriver.prepare_program("let x = 1\nx", entry_path=None, roots=roots)
         assert len(prepared.diagnostics) >= 1
         assert "resolve fail" in prepared.diagnostics[0].message
 
@@ -3451,17 +3384,13 @@ class TestDiscoverParamsDefensivePaths:
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = PipelineDriver.prepare_program(
-            "let x = 1\nx", entry_path=None, roots=roots
-        )
+        prepared = PipelineDriver.prepare_program("let x = 1\nx", entry_path=None, roots=roots)
         rt = PipelineDriver()
         # Patch check_graph to return a graph with no ENTRY_ID.
         fake_checked_graph = MagicMock()
         fake_checked_graph.modules = {}
 
-        with patch(
-            "agm.agl.typecheck.graph.check_graph", return_value=fake_checked_graph
-        ):
+        with patch("agm.agl.typecheck.graph.check_graph", return_value=fake_checked_graph):
             discovery = rt.discover_params_graph(prepared)
         assert len(discovery.diagnostics) >= 1
         assert "Entry module not found" in discovery.diagnostics[0].message
@@ -3472,18 +3401,14 @@ class TestDiscoverParamsDefensivePaths:
 
         from agm.agl.typecheck import AglTypeError
 
-        prepared = PipelineDriver.prepare(
-            'def f(x: int) -> text = "bad"\nlet r = f(1)\nprint r'
-        )
+        prepared = PipelineDriver.prepare('def f(x: int) -> text = "bad"\nlet r = f(1)\nprint r')
         rt = PipelineDriver()
         with patch("agm.agl.typecheck.check", side_effect=AglTypeError("type error")):
             discovery = rt.discover_params(prepared)
         assert discovery.checked is None
         assert len(discovery.diagnostics) >= 1
 
-    def test_run_typecheck_graph_generic_exception_captured(
-        self, tmp_path: pathlib.Path
-    ) -> None:
+    def test_run_typecheck_graph_generic_exception_captured(self, tmp_path: pathlib.Path) -> None:
         """_run_typecheck_graph captures generic exceptions as diagnostics."""
         from unittest.mock import MagicMock, patch
 
@@ -3544,6 +3469,25 @@ class TestRunPreparedDefensivePaths:
         assert result.ok is False
         assert any("tc fail" in d.message for d in result.diagnostics)
 
+    def test_run_prepared_custom_contract_error(self) -> None:
+        """run_prepared exits early when custom pre-lower contract materialization fails."""
+        from unittest.mock import patch
+
+        from agm.agl.runtime.codec import TextCodec
+
+        class BadCodec(TextCodec):
+            @property
+            def name(self) -> str:
+                return "bad"
+
+        prepared = PipelineDriver.prepare('let r = ask("hi", format = "bad")\nr')
+        rt = PipelineDriver(default_agent=lambda req: "ok")
+        rt.register_codec(BadCodec())
+        with patch("agm.agl.runtime.contract.materialize_contract", side_effect=ValueError("bad")):
+            result = rt.run_prepared(prepared)
+        assert result.ok is False
+        assert any("Contract error" in d.message for d in result.diagnostics)
+
     def test_run_prepared_graph_contract_error(self, tmp_path: pathlib.Path) -> None:
         """run_prepared_graph exits early when an IR contract is invalid."""
         from unittest.mock import patch
@@ -3567,6 +3511,30 @@ class TestRunPreparedDefensivePaths:
         # A contract error yields a RunResult with ok=False and a contract diagnostic.
         assert result.ok is False
         assert any("Contract error" in d.message for d in result.diagnostics)
+
+    def test_run_prepared_graph_custom_contract_error(self) -> None:
+        """run_prepared_graph exits early when custom pre-lower materialization fails."""
+        from unittest.mock import patch
+
+        from agm.agl.modules.roots import RootSet
+        from agm.agl.runtime.codec import TextCodec
+
+        class BadCodec(TextCodec):
+            @property
+            def name(self) -> str:
+                return "bad"
+
+        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
+        prepared = PipelineDriver.prepare_program(
+            'let r = ask("hi", format = "bad")\nr', entry_path=None, roots=roots
+        )
+        rt = PipelineDriver(default_agent=lambda req: "ok")
+        rt.register_codec(BadCodec())
+        with patch("agm.agl.runtime.contract.materialize_contract", side_effect=ValueError("bad")):
+            result = rt.run_prepared_graph(prepared)
+        assert result.ok is False
+        assert any("Contract error" in d.message for d in result.diagnostics)
+
     def test_run_prepared_graph_with_prechecked_graph_decodes_param_from_ir(
         self, tmp_path: pathlib.Path
     ) -> None:
@@ -3581,7 +3549,5 @@ class TestRunPreparedDefensivePaths:
         rt = PipelineDriver()
         env = rt.host_environment()
         checked_graph = real_check_graph(prepared.resolved_graph, env.capabilities)  # type: ignore[arg-type]
-        result = rt.run_prepared_graph(
-            prepared, param_values={"n": 7}, checked_graph=checked_graph
-        )
+        result = rt.run_prepared_graph(prepared, param_values={"n": 7}, checked_graph=checked_graph)
         assert result.ok

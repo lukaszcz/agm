@@ -19,6 +19,7 @@ from __future__ import annotations
 import pytest
 
 from agm.agl.modules.ids import ModuleId
+from agm.agl.semantics.type_table import TypeTable, comparable_types
 from agm.agl.semantics.types import (
     AgentType,
     BoolType,
@@ -35,7 +36,6 @@ from agm.agl.semantics.types import (
     TextType,
     TypeVarType,
     UnitType,
-    comparable_types,
     contains_type_var,
     free_type_vars,
     is_assignable,
@@ -43,6 +43,11 @@ from agm.agl.semantics.types import (
     substitute,
 )
 from agm.agl.typecheck.env import TypeEnvironment
+
+# Comparability tests below only exercise scalar/agent/unit/function/typevar
+# operands, whose comparable_types arms never consult the TypeTable; an empty
+# table is a valid (unused) argument for those calls.
+_EMPTY_TABLE = TypeTable()
 
 # ---------------------------------------------------------------------------
 # UnitType
@@ -166,7 +171,7 @@ class TestIsJsonShaped:
         assert is_json_shaped(IntType()) is True
 
     def test_record_not_json_shaped(self) -> None:
-        r = RecordType(name="R", fields={"x": IntType()})
+        r = RecordType(name="R")
         assert is_json_shaped(r) is False
 
 
@@ -245,51 +250,51 @@ class TestIsAssignable:
 class TestComparableTypes:
     # New types: never comparable (even with themselves).
     def test_agent_vs_agent_not_comparable(self) -> None:
-        assert comparable_types(AgentType(), AgentType()) is False
+        assert comparable_types(AgentType(), AgentType(), _EMPTY_TABLE) is False
 
     def test_unit_vs_unit_not_comparable(self) -> None:
-        assert comparable_types(UnitType(), UnitType()) is False
+        assert comparable_types(UnitType(), UnitType(), _EMPTY_TABLE) is False
 
     def test_function_vs_same_function_not_comparable(self) -> None:
         f = FunctionType(params=(IntType(),), result=IntType())
-        assert comparable_types(f, f) is False
+        assert comparable_types(f, f, _EMPTY_TABLE) is False
 
     def test_function_vs_function_not_comparable(self) -> None:
         f1 = FunctionType(params=(IntType(),), result=IntType())
         f2 = FunctionType(params=(IntType(),), result=IntType())
-        assert comparable_types(f1, f2) is False
+        assert comparable_types(f1, f2, _EMPTY_TABLE) is False
 
     def test_agent_vs_int_not_comparable(self) -> None:
-        assert comparable_types(AgentType(), IntType()) is False
+        assert comparable_types(AgentType(), IntType(), _EMPTY_TABLE) is False
 
     def test_int_vs_agent_not_comparable(self) -> None:
-        assert comparable_types(IntType(), AgentType()) is False
+        assert comparable_types(IntType(), AgentType(), _EMPTY_TABLE) is False
 
     def test_unit_vs_text_not_comparable(self) -> None:
-        assert comparable_types(UnitType(), TextType()) is False
+        assert comparable_types(UnitType(), TextType(), _EMPTY_TABLE) is False
 
     def test_function_vs_text_not_comparable(self) -> None:
         f = FunctionType(params=(), result=UnitType())
-        assert comparable_types(f, TextType()) is False
+        assert comparable_types(f, TextType(), _EMPTY_TABLE) is False
 
     # Regression: existing scalar comparability is unchanged.
     def test_int_vs_int_comparable(self) -> None:
-        assert comparable_types(IntType(), IntType()) is True
+        assert comparable_types(IntType(), IntType(), _EMPTY_TABLE) is True
 
     def test_text_vs_text_comparable(self) -> None:
-        assert comparable_types(TextType(), TextType()) is True
+        assert comparable_types(TextType(), TextType(), _EMPTY_TABLE) is True
 
     def test_int_vs_decimal_comparable(self) -> None:
-        assert comparable_types(IntType(), DecimalType()) is True
+        assert comparable_types(IntType(), DecimalType(), _EMPTY_TABLE) is True
 
     def test_decimal_vs_int_comparable(self) -> None:
-        assert comparable_types(DecimalType(), IntType()) is True
+        assert comparable_types(DecimalType(), IntType(), _EMPTY_TABLE) is True
 
     def test_bool_vs_bool_comparable(self) -> None:
-        assert comparable_types(BoolType(), BoolType()) is True
+        assert comparable_types(BoolType(), BoolType(), _EMPTY_TABLE) is True
 
     def test_int_vs_text_not_comparable(self) -> None:
-        assert comparable_types(IntType(), TextType()) is False
+        assert comparable_types(IntType(), TextType(), _EMPTY_TABLE) is False
 
 
 # ---------------------------------------------------------------------------
@@ -308,10 +313,11 @@ class TestTypeEnvironmentPrelude:
         env = TypeEnvironment()
         t = env.get_type("ExecResult")
         assert isinstance(t, RecordType)
-        assert t.fields["stdout"] == TextType()
-        assert t.fields["exit_code"] == IntType()
-        assert t.fields["stderr"] == TextType()
-        assert t.fields["timed_out"] == BoolType()
+        fields = env.type_table.record_fields(t)
+        assert fields["stdout"] == TextType()
+        assert fields["exit_code"] == IntType()
+        assert fields["stderr"] == TextType()
+        assert fields["timed_out"] == BoolType()
 
     def test_parse_policy_resolves(self) -> None:
         env = TypeEnvironment()
@@ -323,10 +329,11 @@ class TestTypeEnvironmentPrelude:
         env = TypeEnvironment()
         t = env.get_type("ParsePolicy")
         assert isinstance(t, EnumType)
+        variants = env.type_table.enum_variants(t)
         # Abort has no fields.
-        assert t.variants["Abort"] == {}
+        assert variants["Abort"] == {}
         # Retry has n: int.
-        assert t.variants["Retry"] == {"n": IntType()}
+        assert variants["Retry"] == {"n": IntType()}
 
     def test_recursion_error_resolves(self) -> None:
         env = TypeEnvironment()
@@ -338,9 +345,10 @@ class TestTypeEnvironmentPrelude:
         env = TypeEnvironment()
         t = env.get_type("RecursionError")
         assert isinstance(t, ExceptionType)
-        assert t.fields["message"] == TextType()
-        assert t.fields["trace_id"] == TextType()
-        assert t.fields["limit"] == IntType()
+        fields = env.type_table.exception_fields(t)
+        assert fields["message"] == TextType()
+        assert fields["trace_id"] == TextType()
+        assert fields["limit"] == IntType()
 
     def test_resolve_named_type_exec_result(self) -> None:
         env = TypeEnvironment()
@@ -387,19 +395,17 @@ class TestSeedFrom:
         source = TypeEnvironment()
         # Manually inject a different type under the prelude name in source._types.
         # We reach inside _types to simulate a hypothetical collision.
-        getattr(source, "_types")["ExecResult"] = RecordType(
-            name="ExecResult", fields={"x": IntType()}
-        )
+        getattr(source, "_types")["ExecResult"] = RecordType(name="ExecResult")
         target = TypeEnvironment()
         target.seed_from(source)
         # Target's ExecResult must be the original prelude, not the source's fake.
         t = target.get_type("ExecResult")
         assert isinstance(t, RecordType)
-        assert "stdout" in t.fields  # original prelude has stdout
+        assert "stdout" in target.type_table.record_fields(t)  # original prelude has stdout
 
     def test_seed_copies_user_types(self) -> None:
         source = TypeEnvironment()
-        user_record = RecordType(name="MyRecord", fields={"val": IntType()})
+        user_record = RecordType(name="MyRecord")
         source.register_type("MyRecord", user_record)
         target = TypeEnvironment()
         target.seed_from(source)
@@ -445,7 +451,7 @@ class TestUnregisterName:
 
     def test_can_unregister_user_type(self) -> None:
         env = TypeEnvironment()
-        env.register_type("UserRec", RecordType(name="UserRec", fields={}))
+        env.register_type("UserRec", RecordType(name="UserRec"))
         env.unregister_name("UserRec")
         assert env.has_type("UserRec") is False
 
@@ -477,13 +483,13 @@ class TestTypeVarType:
         assert is_json_shaped(TypeVarType("T")) is False
 
     def test_not_comparable_left(self) -> None:
-        assert comparable_types(TypeVarType("T"), IntType()) is False
+        assert comparable_types(TypeVarType("T"), IntType(), _EMPTY_TABLE) is False
 
     def test_not_comparable_right(self) -> None:
-        assert comparable_types(IntType(), TypeVarType("T")) is False
+        assert comparable_types(IntType(), TypeVarType("T"), _EMPTY_TABLE) is False
 
     def test_not_comparable_with_itself(self) -> None:
-        assert comparable_types(TypeVarType("T"), TypeVarType("T")) is False
+        assert comparable_types(TypeVarType("T"), TypeVarType("T"), _EMPTY_TABLE) is False
 
     def test_assignable_to_same_typevar(self) -> None:
         assert is_assignable(TypeVarType("T"), TypeVarType("T")) is True
@@ -510,46 +516,49 @@ class TestTypeVarType:
 
 
 class TestGenericNominalIdentity:
+    """RecordType/EnumType handles carry no field/variant data; identity is
+    purely ``(module_id, name, type_args)``."""
+
     def test_record_identity_by_name_and_type_args(self) -> None:
-        r1 = RecordType("Box", {"value": IntType()}, type_args=(IntType(),))
-        r2 = RecordType("Box", {"value": TextType()}, type_args=(IntType(),))
-        assert r1 == r2  # fields excluded from equality
+        r1 = RecordType("Box", type_args=(IntType(),))
+        r2 = RecordType("Box", type_args=(IntType(),))
+        assert r1 == r2
 
     def test_record_different_type_args_not_equal(self) -> None:
-        r1 = RecordType("Box", {"value": IntType()}, type_args=(IntType(),))
-        r2 = RecordType("Box", {"value": IntType()}, type_args=(TextType(),))
+        r1 = RecordType("Box", type_args=(IntType(),))
+        r2 = RecordType("Box", type_args=(TextType(),))
         assert r1 != r2
 
     def test_record_no_type_args_identity(self) -> None:
-        r1 = RecordType("R", {"x": IntType()})
-        r2 = RecordType("R", {"y": TextType()})
+        r1 = RecordType("R")
+        r2 = RecordType("R")
         assert r1 == r2  # name-based, no type_args
 
     def test_record_consistent_hash(self) -> None:
-        r1 = RecordType("Box", {"v": IntType()}, type_args=(IntType(),))
-        r2 = RecordType("Box", {"v": TextType()}, type_args=(IntType(),))
+        r1 = RecordType("Box", type_args=(IntType(),))
+        r2 = RecordType("Box", type_args=(IntType(),))
         assert hash(r1) == hash(r2)
 
     def test_enum_identity_by_name_and_type_args(self) -> None:
-        e1 = EnumType("Option", {"Some": {"value": IntType()}, "None": {}}, type_args=(IntType(),))
-        e2 = EnumType("Option", {"Some": {"value": TextType()}, "None": {}}, type_args=(IntType(),))
+        e1 = EnumType("Option", type_args=(IntType(),))
+        e2 = EnumType("Option", type_args=(IntType(),))
         assert e1 == e2
 
     def test_enum_different_type_args_not_equal(self) -> None:
-        e1 = EnumType("Option", {"None": {}}, type_args=(IntType(),))
-        e2 = EnumType("Option", {"None": {}}, type_args=(TextType(),))
+        e1 = EnumType("Option", type_args=(IntType(),))
+        e2 = EnumType("Option", type_args=(TextType(),))
         assert e1 != e2
 
     def test_repr_with_type_args(self) -> None:
-        r = RecordType("Box", {}, type_args=(IntType(),))
+        r = RecordType("Box", type_args=(IntType(),))
         assert repr(r) == "Box[int]"
 
     def test_repr_without_type_args(self) -> None:
-        r = RecordType("R", {})
+        r = RecordType("R")
         assert repr(r) == "R"
 
     def test_enum_repr_with_type_args(self) -> None:
-        e = EnumType("Option", {}, type_args=(TextType(),))
+        e = EnumType("Option", type_args=(TextType(),))
         assert repr(e) == "Option[text]"
 
 
@@ -576,23 +585,19 @@ class TestHelpers:
         assert free_type_vars(ft) == frozenset({"A", "B"})
 
     def test_free_type_vars_record_type_args(self) -> None:
-        r = RecordType("Box", {"value": TypeVarType("T")}, type_args=(TypeVarType("T"),))
+        r = RecordType("Box", type_args=(TypeVarType("T"),))
         assert free_type_vars(r) == frozenset({"T"})
 
     def test_free_type_vars_no_vars(self) -> None:
-        r = RecordType("R", {"x": IntType()})
+        r = RecordType("R")
         assert free_type_vars(r) == frozenset()
 
     def test_free_type_vars_enum_variants(self) -> None:
-        e = EnumType(
-            "Either",
-            {"Left": {"v": TypeVarType("A")}, "Right": {"v": TypeVarType("B")}},
-            type_args=(TypeVarType("A"), TypeVarType("B")),
-        )
+        e = EnumType("Either", type_args=(TypeVarType("A"), TypeVarType("B")))
         assert free_type_vars(e) == frozenset({"A", "B"})
 
     def test_free_type_vars_enum_no_vars(self) -> None:
-        e = EnumType("Status", {"Pass": {}, "Fail": {}})
+        e = EnumType("Status")
         assert free_type_vars(e) == frozenset()
 
     def test_substitute_typevar(self) -> None:
@@ -620,24 +625,19 @@ class TestHelpers:
         result = substitute(ft, {"A": IntType(), "B": TextType()})
         assert result == FunctionType(params=(IntType(),), result=TextType())
 
-    def test_substitute_record_type_args_and_fields(self) -> None:
-        r = RecordType("Box", {"value": TypeVarType("T")}, type_args=(TypeVarType("T"),))
+    def test_substitute_record_type_args(self) -> None:
+        r = RecordType("Box", type_args=(TypeVarType("T"),))
         result = substitute(r, {"T": IntType()})
         assert isinstance(result, RecordType)
         assert result.type_args == (IntType(),)
-        assert result.fields["value"] == IntType()
+        assert result.name == "Box"
 
-    def test_substitute_enum(self) -> None:
-        e = EnumType(
-            "Option",
-            {"Some": {"value": TypeVarType("T")}, "None": {}},
-            type_args=(TypeVarType("T"),),
-        )
+    def test_substitute_enum_type_args(self) -> None:
+        e = EnumType("Option", type_args=(TypeVarType("T"),))
         result = substitute(e, {"T": TextType()})
         assert isinstance(result, EnumType)
         assert result.type_args == (TextType(),)
-        assert result.variants["Some"]["value"] == TextType()
-        assert result.variants["None"] == {}
+        assert result.name == "Option"
 
     def test_substitute_primitive_unchanged(self) -> None:
         assert substitute(IntType(), {"T": TextType()}) == IntType()
@@ -647,6 +647,14 @@ class TestHelpers:
 
     def test_contains_type_var_false(self) -> None:
         assert contains_type_var(ListType(IntType())) is False
+
+    def test_contains_type_var_record_type_args(self) -> None:
+        assert contains_type_var(RecordType("Box", type_args=(TypeVarType("T"),))) is True
+        assert contains_type_var(RecordType("Box", type_args=(IntType(),))) is False
+
+    def test_contains_type_var_enum_type_args(self) -> None:
+        assert contains_type_var(EnumType("Option", type_args=(TypeVarType("T"),))) is True
+        assert contains_type_var(EnumType("Option", type_args=(IntType(),))) is False
 
 
 # ---------------------------------------------------------------------------
@@ -659,13 +667,13 @@ class TestCapabilityGates:
         assert is_json_shaped(TypeVarType("T")) is False
 
     def test_typevar_not_comparable_left(self) -> None:
-        assert comparable_types(TypeVarType("T"), IntType()) is False
+        assert comparable_types(TypeVarType("T"), IntType(), _EMPTY_TABLE) is False
 
     def test_typevar_not_comparable_right(self) -> None:
-        assert comparable_types(IntType(), TypeVarType("T")) is False
+        assert comparable_types(IntType(), TypeVarType("T"), _EMPTY_TABLE) is False
 
     def test_typevar_not_comparable_with_itself(self) -> None:
-        assert comparable_types(TypeVarType("T"), TypeVarType("T")) is False
+        assert comparable_types(TypeVarType("T"), TypeVarType("T"), _EMPTY_TABLE) is False
 
     def test_typevar_assignable_to_same(self) -> None:
         assert is_assignable(TypeVarType("T"), TypeVarType("T")) is True
@@ -692,18 +700,22 @@ class TestNewExceptions:
         assert "JsonParseError" in BUILTIN_EXCEPTION_NAMES
 
     def test_cast_error_fields(self) -> None:
+        from agm.agl.semantics.type_table import create_seeded_type_table
         from agm.agl.semantics.types import BUILTIN_EXCEPTIONS, TextType
         e = BUILTIN_EXCEPTIONS["CastError"]
-        assert "source_type" in e.fields
-        assert "target_type" in e.fields
-        assert "raw" in e.fields
-        assert e.fields["source_type"] == TextType()
+        fields = create_seeded_type_table().exception_fields(e)
+        assert "source_type" in fields
+        assert "target_type" in fields
+        assert "raw" in fields
+        assert fields["source_type"] == TextType()
 
     def test_json_parse_error_fields(self) -> None:
+        from agm.agl.semantics.type_table import create_seeded_type_table
         from agm.agl.semantics.types import BUILTIN_EXCEPTIONS, TextType
         e = BUILTIN_EXCEPTIONS["JsonParseError"]
-        assert "raw" in e.fields
-        assert e.fields["raw"] == TextType()
+        fields = create_seeded_type_table().exception_fields(e)
+        assert "raw" in fields
+        assert fields["raw"] == TextType()
 
 
 class TestCastClassification:
@@ -775,7 +787,7 @@ class TestCastClassification:
 
     def test_record_to_json_total(self) -> None:
         from agm.agl.semantics.types import CastKind, JsonType, RecordType, cast_classification
-        r = RecordType(name="R", fields={})
+        r = RecordType(name="R")
         assert cast_classification(r, JsonType()) == CastKind.TOTAL_JSON
 
     def test_list_of_record_to_json_static_error(self) -> None:
@@ -789,17 +801,17 @@ class TestCastClassification:
             RecordType,
             cast_classification,
         )
-        lst = ListType(elem=RecordType(name="R", fields={}))
+        lst = ListType(elem=RecordType(name="R"))
         assert cast_classification(lst, JsonType()) == CastKind.STATIC_ERROR
 
     def test_text_to_record_fallible(self) -> None:
         from agm.agl.semantics.types import CastKind, RecordType, TextType, cast_classification
-        r = RecordType(name="R", fields={})
+        r = RecordType(name="R")
         assert cast_classification(TextType(), r) == CastKind.FALLIBLE
 
     def test_json_to_record_fallible(self) -> None:
         from agm.agl.semantics.types import CastKind, JsonType, RecordType, cast_classification
-        r = RecordType(name="R", fields={})
+        r = RecordType(name="R")
         assert cast_classification(JsonType(), r) == CastKind.FALLIBLE
 
     def test_exception_as_target_static_error(self) -> None:
@@ -809,7 +821,7 @@ class TestCastClassification:
             TextType,
             cast_classification,
         )
-        exc = ExceptionType(name="MyError", fields={"message": TextType(), "trace_id": TextType()})
+        exc = ExceptionType(name="MyError")
         assert cast_classification(TextType(), exc) == CastKind.STATIC_ERROR
 
     def test_exception_source_to_text_render(self) -> None:
@@ -819,7 +831,7 @@ class TestCastClassification:
             TextType,
             cast_classification,
         )
-        exc = ExceptionType(name="MyError", fields={"message": TextType(), "trace_id": TextType()})
+        exc = ExceptionType(name="MyError")
         assert cast_classification(exc, TextType()) == CastKind.TOTAL_RENDER
 
     def test_json_to_text_render(self) -> None:
@@ -842,34 +854,34 @@ class TestCastClassification:
 
 
 class TestNominalEquality:
-    """RecordType and EnumType must compare by (module_id, name) only."""
+    """RecordType/EnumType are handles: identity is (module_id, name, type_args) only."""
 
     def _mod(self, name: str) -> "ModuleId":
         from agm.agl.modules.ids import ModuleId
 
         return ModuleId(segments=(name,))
 
-    def test_record_same_name_module_different_fields_equal(self) -> None:
-        from agm.agl.semantics.types import IntType, RecordType, TextType
+    def test_record_same_name_and_module_equal(self) -> None:
+        from agm.agl.semantics.types import RecordType
 
-        r1 = RecordType(name="Point", fields={"x": IntType(), "y": IntType()})
-        r2 = RecordType(name="Point", fields={"z": TextType()})
+        r1 = RecordType(name="Point")
+        r2 = RecordType(name="Point")
         assert r1 == r2
 
-    def test_enum_same_name_module_different_variants_equal(self) -> None:
-        from agm.agl.semantics.types import EnumType, IntType
+    def test_enum_same_name_and_module_equal(self) -> None:
+        from agm.agl.semantics.types import EnumType
 
-        e1 = EnumType(name="Color", variants={"Red": {}, "Green": {}})
-        e2 = EnumType(name="Color", variants={"Blue": {"n": IntType()}})
+        e1 = EnumType(name="Color")
+        e2 = EnumType(name="Color")
         assert e1 == e2
 
     def test_record_different_module_not_equal(self) -> None:
-        from agm.agl.semantics.types import IntType, RecordType
+        from agm.agl.semantics.types import RecordType
 
         mod_foo = self._mod("foo")
         mod_bar = self._mod("bar")
-        r1 = RecordType(name="Color", fields={"x": IntType()}, module_id=mod_foo)
-        r2 = RecordType(name="Color", fields={"x": IntType()}, module_id=mod_bar)
+        r1 = RecordType(name="Color", module_id=mod_foo)
+        r2 = RecordType(name="Color", module_id=mod_bar)
         assert r1 != r2
 
     def test_enum_different_module_not_equal(self) -> None:
@@ -877,81 +889,69 @@ class TestNominalEquality:
 
         mod_foo = self._mod("foo")
         mod_bar = self._mod("bar")
-        e1 = EnumType(name="Color", variants={"Red": {}}, module_id=mod_foo)
-        e2 = EnumType(name="Color", variants={"Red": {}}, module_id=mod_bar)
+        e1 = EnumType(name="Color", module_id=mod_foo)
+        e2 = EnumType(name="Color", module_id=mod_bar)
         assert e1 != e2
 
     def test_record_different_name_not_equal(self) -> None:
-        from agm.agl.semantics.types import IntType, RecordType
+        from agm.agl.semantics.types import RecordType
 
-        r1 = RecordType(name="Point", fields={"x": IntType()})
-        r2 = RecordType(name="Color", fields={"x": IntType()})
+        r1 = RecordType(name="Point")
+        r2 = RecordType(name="Color")
         assert r1 != r2
 
     def test_enum_different_name_not_equal(self) -> None:
         from agm.agl.semantics.types import EnumType
 
-        e1 = EnumType(name="Color", variants={"Red": {}})
-        e2 = EnumType(name="Shape", variants={"Red": {}})
+        e1 = EnumType(name="Color")
+        e2 = EnumType(name="Shape")
         assert e1 != e2
 
     def test_record_hashable(self) -> None:
-        from agm.agl.semantics.types import IntType, RecordType
+        from agm.agl.semantics.types import RecordType
 
-        r = RecordType(name="Point", fields={"x": IntType()})
+        r = RecordType(name="Point")
         h = hash(r)
         assert isinstance(h, int)
 
     def test_enum_hashable(self) -> None:
         from agm.agl.semantics.types import EnumType
 
-        e = EnumType(name="Color", variants={"Red": {}})
+        e = EnumType(name="Color")
         h = hash(e)
         assert isinstance(h, int)
 
     def test_equal_records_hash_equal(self) -> None:
-        from agm.agl.semantics.types import IntType, RecordType, TextType
+        from agm.agl.semantics.types import RecordType
 
-        r1 = RecordType(name="Point", fields={"x": IntType()})
-        r2 = RecordType(name="Point", fields={"z": TextType()})
+        r1 = RecordType(name="Point")
+        r2 = RecordType(name="Point")
         assert r1 == r2
         assert hash(r1) == hash(r2)
 
     def test_equal_enums_hash_equal(self) -> None:
-        from agm.agl.semantics.types import EnumType, IntType
+        from agm.agl.semantics.types import EnumType
 
-        e1 = EnumType(name="Color", variants={"Red": {}})
-        e2 = EnumType(name="Color", variants={"Blue": {"n": IntType()}})
+        e1 = EnumType(name="Color")
+        e2 = EnumType(name="Color")
         assert e1 == e2
         assert hash(e1) == hash(e2)
 
     def test_record_usable_as_dict_key(self) -> None:
-        from agm.agl.semantics.types import IntType, RecordType, TextType
+        from agm.agl.semantics.types import RecordType
 
-        r1 = RecordType(name="Point", fields={"x": IntType()})
-        r2 = RecordType(name="Point", fields={"z": TextType()})
+        r1 = RecordType(name="Point")
+        r2 = RecordType(name="Point")
         d: dict[RecordType, str] = {r1: "found"}
         assert d[r2] == "found"
 
     def test_enum_usable_in_set(self) -> None:
-        from agm.agl.semantics.types import EnumType, IntType
+        from agm.agl.semantics.types import EnumType
 
-        e1 = EnumType(name="Color", variants={"Red": {}})
-        e2 = EnumType(name="Color", variants={"Blue": {"n": IntType()}})
+        e1 = EnumType(name="Color")
+        e2 = EnumType(name="Color")
         s = {e1, e2}
         assert len(s) == 1
-
-    def test_shell_record_equals_built(self) -> None:
-        from agm.agl.semantics.types import IntType, RecordType
-
-        shell = RecordType(name="Point", fields={})
-        built = RecordType(name="Point", fields={"x": IntType(), "y": IntType()})
-        assert shell == built
-
-    def test_shell_enum_equals_built(self) -> None:
-        shell = EnumType(name="Color", variants={})
-        built = EnumType(name="Color", variants={"Red": {}, "Blue": {"n": IntType()}})
-        assert shell == built
 
     def test_list_type_stays_structural(self) -> None:
         assert ListType(IntType()) != ListType(TextType())

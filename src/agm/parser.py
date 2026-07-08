@@ -32,7 +32,9 @@ _HELP_TEXTS: dict[str, str] = {
                          branch currently checked out there.
           existing branch workspace
                          Open the tmux session for an existing branch workspace.
+                         With --parent, this is an error.
           existing branch Check out BRANCH into a Git worktree, then open it as a workspace.
+                         With --parent, warn and ignore --parent.
           missing branch  Create BRANCH from PARENT/current branch, then open it.
 
         Examples:

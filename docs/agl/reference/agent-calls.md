@@ -160,6 +160,30 @@ enum Option[T]
 let n: Option[int] = ask("Pick a number, or nothing.", agent = picker)
 ```
 
+### Recursive target types
+
+A [recursive record or enum](types.md#recursive-types) works as a target type
+exactly like any other: the response is validated and decoded through the same
+output contract, and construction/matching/equality on the resulting value
+work normally.
+
+```agl
+enum Tree
+  | Leaf
+  | Node(value: int, left: Tree, right: Tree)
+
+let t: Tree = ask("Build a tree.", agent = builder)
+```
+
+The one restriction is on the type's **shape**, not on recursion itself: the
+target type must have a finite JSON Schema. A non-generic recursive type
+always does. A [polymorphically recursive](generics.md#recursive-generic-types)
+generic type whose reachable instantiations never close (its schema would need
+infinitely many distinct concrete shapes) is rejected as a target type at the
+call site with a static error — the type is otherwise fully usable in every
+other position, only its JSON Schema is unbounded. See
+[Generics](generics.md#the-finite-schema-boundary) for the exact boundary.
+
 ## Named parameters
 
 ### `agent`
@@ -281,6 +305,15 @@ mechanically from the target type:
 | `dict[text, V]` | `{"type": "object", "additionalProperties": <V>}` |
 | record | object schema: `additionalProperties: false`, all fields `required`, per-field `properties` |
 | enum | `oneOf` of per-variant schemas, each with a `"$case"` `const` plus payload fields, `additionalProperties: false` |
+
+A [recursive](types.md#recursive-types) target type's schema uses standard
+JSON Schema `$defs`/`$ref`: every recursive record/enum reachable from the
+target gets one entry under a top-level `"$defs"` object, and every place it
+occurs — including the target itself, if it is directly recursive — is a
+`{"$ref": "#/$defs/<name>"}` instead of being inlined. A target that is not
+itself recursive can still have `$defs` when one of its fields reaches a
+recursive type; otherwise the schema is fully inlined, exactly as the table
+above shows.
 
 ### Format instructions
 

@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.contracts import (
     BoundaryDict,
@@ -19,6 +21,7 @@ from agm.agl.ir.contracts import (
     BoundaryException,
     BoundaryList,
     BoundaryRecord,
+    BoundaryRef,
     BoundaryScalar,
     BoundarySealVar,
     BoundaryUnit,
@@ -29,6 +32,7 @@ from agm.agl.ir.contracts import (
 )
 from agm.agl.parser import parse_program
 from agm.agl.scope import resolve
+from agm.agl.semantics.type_table import create_seeded_type_table
 from agm.agl.semantics.types import (
     AgentType,
     FunctionType,
@@ -38,7 +42,7 @@ from agm.agl.semantics.types import (
 from agm.agl.syntax.nodes import ParamKind
 from agm.agl.type_schema import build_extern_contract
 from agm.agl.typecheck import ParamSpec, check
-from agm.agl.typecheck.env import FunctionSignature
+from agm.agl.typecheck.env import AglTypeError, FunctionSignature
 
 _PATH = Path("/virtual/extern_contracts.agl")
 
@@ -60,7 +64,7 @@ def build_contract(source: str, fn_name: str = "f") -> ExternContract:
     resolved = resolve(parse_program(source), origin_path=_PATH)
     cp = check(resolved, _CAPS)
     sig = cp.function_signatures[fn_name]
-    return build_extern_contract(sig)
+    return build_extern_contract(sig, cp.type_env.type_table)
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +269,75 @@ class TestGenericNominalInstantiation:
 
 
 # ---------------------------------------------------------------------------
+# Recursive types — shared BoundaryRef defs (same recursion plan as decode)
+# ---------------------------------------------------------------------------
+
+
+_TREE = "enum Tree\n  | Leaf(value: int)\n  | Node(left: Tree, right: Tree)\n"
+_PERFECT = (
+    "record Pair[A, B]\n  first: A\n  second: B\n"
+    "enum Perfect[T]\n  | Single(value: T)\n  | Succ(next: Perfect[Pair[T, T]])\n"
+)
+
+
+class TestRecursiveTypes:
+    def test_recursive_enum_crosses_as_boundary_ref(self) -> None:
+        contract = build_contract(_TREE + "extern def f(t: Tree) -> int\n0")
+        schema = contract.params[0].schema
+        assert isinstance(schema, BoundaryRef)
+        defs = dict(contract.defs)
+        assert schema.key in defs
+        body = defs[schema.key]
+        assert isinstance(body, BoundaryEnum)
+        node = {v.name: v for v in body.variants}["Node"]
+        # Every self-occurrence — including inside the def body itself — refs out.
+        assert node.fields == (
+            ("left", BoundaryRef(schema.key)),
+            ("right", BoundaryRef(schema.key)),
+        )
+
+    def test_recursive_record_crosses_as_boundary_ref(self) -> None:
+        # A self-referential record (finite via the possibly-empty child list).
+        source = (
+            "record Node\n  value: int\n  children: list[Node]\n"
+            "extern def f(n: Node) -> int\n0"
+        )
+        contract = build_contract(source)
+        schema = contract.params[0].schema
+        assert isinstance(schema, BoundaryRef)
+        body = dict(contract.defs)[schema.key]
+        assert isinstance(body, BoundaryRecord)
+        assert body.fields == (
+            ("value", BoundaryScalar(ScalarKind.INT)),
+            ("children", BoundaryList(BoundaryRef(schema.key))),
+        )
+
+    def test_recursive_type_shared_across_param_and_result(self) -> None:
+        # One plan spans all param types and the result, so a recursive type used
+        # in both positions gets a single shared defs key/body.
+        contract = build_contract(_TREE + "extern def f(t: Tree) -> Tree\n0")
+        param_schema = contract.params[0].schema
+        assert isinstance(param_schema, BoundaryRef)
+        assert isinstance(contract.result, BoundaryRef)
+        assert param_schema.key == contract.result.key
+        assert len(contract.defs) == 1
+
+    def test_non_finite_schema_param_rejected(self) -> None:
+        with pytest.raises(AglTypeError) as exc:
+            build_contract(_PERFECT + "extern def f(p: Perfect[int]) -> int\n0")
+        message = str(exc.value).lower()
+        assert "no finite json schema" in message
+        assert "extern parameter type" in message
+
+    def test_non_finite_schema_return_rejected(self) -> None:
+        with pytest.raises(AglTypeError) as exc:
+            build_contract(_PERFECT + "extern def f(n: int) -> Perfect[int]\n0")
+        message = str(exc.value).lower()
+        assert "no finite json schema" in message
+        assert "extern return type" in message
+
+
+# ---------------------------------------------------------------------------
 # Artifact hygiene
 # ---------------------------------------------------------------------------
 
@@ -304,7 +377,7 @@ class TestFunctionAgentTypeBan:
             result=IntType(),
         )
         try:
-            build_extern_contract(sig)
+            build_extern_contract(sig, create_seeded_type_table())
         except TypeError as exc:
             assert "function" in str(exc).lower()
         else:
@@ -313,7 +386,7 @@ class TestFunctionAgentTypeBan:
     def test_agent_typed_result_rejected(self) -> None:
         sig = FunctionSignature(params=(), result=AgentType())
         try:
-            build_extern_contract(sig)
+            build_extern_contract(sig, create_seeded_type_table())
         except TypeError as exc:
             assert "agent" in str(exc).lower()
         else:
@@ -329,7 +402,7 @@ class TestFunctionAgentTypeBan:
             result=TextType(),
         )
         try:
-            build_extern_contract(sig)
+            build_extern_contract(sig, create_seeded_type_table())
         except TypeError as exc:
             assert "agent" in str(exc).lower()
         else:

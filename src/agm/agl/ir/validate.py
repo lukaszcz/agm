@@ -38,6 +38,7 @@ future change without a validator arm produces a mypy exhaustiveness error.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import assert_never
 
 from agm.agl.ir.contracts import (
@@ -46,6 +47,7 @@ from agm.agl.ir.contracts import (
     BoundaryException,
     BoundaryList,
     BoundaryRecord,
+    BoundaryRef,
     BoundaryScalar,
     BoundarySchema,
     BoundarySealVar,
@@ -58,6 +60,7 @@ from agm.agl.ir.contracts import (
     ExternContract,
     ListDecode,
     RecordDecode,
+    RefDecode,
     ScalarDecode,
 )
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId
@@ -256,6 +259,7 @@ def _check_recipe_consistency(
     strategy: ConversionStrategy,
     json_schema: str | None,
     decode: DecodeSchema | None,
+    defs: "tuple[tuple[str, DecodeSchema], ...]",
 ) -> None:
     """Enforce that decode strategies carry schema+decode and total strategies do not."""
     needs_decode = strategy in _DECODE_STRATEGIES
@@ -264,32 +268,80 @@ def _check_recipe_consistency(
         raise InvalidIrError(
             f"ConversionRecipe strategy {strategy.value!r} requires json_schema and decode"
         )
-    if not needs_decode and (json_schema is not None or decode is not None):
+    if not needs_decode and (json_schema is not None or decode is not None or defs):
         raise InvalidIrError(
-            f"ConversionRecipe strategy {strategy.value!r} must not carry json_schema/decode"
+            f"ConversionRecipe strategy {strategy.value!r} must not carry "
+            "json_schema/decode/defs"
         )
 
 
-def _check_decode_nominals(decode: DecodeSchema, ctx: _Context) -> None:
-    """Deep tier: every nominal referenced by a decode schema must be registered."""
+def _check_decode_nominals(
+    decode: DecodeSchema, defs: "tuple[tuple[str, DecodeSchema], ...]", ctx: _Context
+) -> None:
+    """Deep tier: every nominal referenced by a decode schema (root + ``defs``) must be registered.
+
+    Walks *decode* (the root) and every DISTINCT ``defs`` entry exactly once:
+    a ``RefDecode`` node is checked for key membership and its ref chain is
+    required to reach a non-ref body, but that body is not walked inline from
+    the ref — each entry is instead walked once from the loop below, so a
+    normal self- or mutually-recursive decode body terminates while malformed
+    ref-only cycles are rejected.
+    """
+    visited: set[str] = set()
+    for key, _entry in defs:
+        if key in visited:
+            raise InvalidIrError(f"DecodeSchema has duplicate $defs key {key!r}")
+        visited.add(key)
+    defs_map = dict(defs)
+    _walk_decode_schema(decode, defs_map, ctx)
+    for key, entry in defs:
+        _walk_decode_schema(entry, defs_map, ctx)
+
+
+def _walk_decode_schema(
+    decode: DecodeSchema, defs: "Mapping[str, DecodeSchema]", ctx: _Context
+) -> None:
+    """Walk one decode-schema node (never re-entering a ``RefDecode`` target)."""
     match decode:
         case ScalarDecode():
             return
+        case RefDecode(key=key):
+            _check_refdecode_chain(key, defs)
         case ListDecode(elem=elem):
-            _check_decode_nominals(elem, ctx)
+            _walk_decode_schema(elem, defs, ctx)
         case DictDecode(value=value_schema):
-            _check_decode_nominals(value_schema, ctx)
+            _walk_decode_schema(value_schema, defs, ctx)
         case RecordDecode(nominal=nominal, fields=fields):
             _check_nominal_in_table(nominal, ctx)
             for _fname, fschema in fields:
-                _check_decode_nominals(fschema, ctx)
+                _walk_decode_schema(fschema, defs, ctx)
         case EnumDecode(nominal=nominal, variants=variants):
             _check_nominal_in_table(nominal, ctx)
             for variant in variants:
                 for _fname, fschema in variant.fields:
-                    _check_decode_nominals(fschema, ctx)
+                    _walk_decode_schema(fschema, defs, ctx)
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
+
+
+def _check_refdecode_chain(key: str, defs: Mapping[str, DecodeSchema]) -> None:
+    """Ensure a ``RefDecode`` chain reaches a non-ref body without cycling."""
+    seen: set[str] = set()
+    current = key
+    while True:
+        if current in seen:
+            raise InvalidIrError(
+                f"DecodeSchema RefDecode cycle reaches no body at $defs key {current!r}"
+            )
+        seen.add(current)
+        target = defs.get(current)
+        if target is None:
+            raise InvalidIrError(
+                f"DecodeSchema RefDecode references unknown $defs key {current!r}"
+            )
+        if not isinstance(target, RefDecode):
+            return
+        current = target.key
 
 
 # ---------------------------------------------------------------------------
@@ -297,36 +349,68 @@ def _check_decode_nominals(decode: DecodeSchema, ctx: _Context) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _check_boundary_schema_nominals(schema: BoundarySchema, ctx: _Context) -> None:
-    """Deep tier: every nominal referenced by a boundary schema must be registered."""
+def _check_boundary_schema_nominals(
+    schema: BoundarySchema, defs: "Mapping[str, BoundarySchema]", ctx: _Context
+) -> None:
+    """Deep tier: every nominal referenced by a boundary schema must be registered.
+
+    Never re-enters a ``BoundaryRef`` target — each ``defs`` body is walked once
+    by :func:`_validate_extern_contract`; a ref only checks its chain resolves.
+    """
     match schema:
         case BoundaryScalar() | BoundaryUnit() | BoundarySealVar():
             return
+        case BoundaryRef(key=key):
+            _check_boundaryref_chain(key, defs)
         case BoundaryList(element=element):
-            _check_boundary_schema_nominals(element, ctx)
+            _check_boundary_schema_nominals(element, defs, ctx)
         case BoundaryDict(value=value_schema):
-            _check_boundary_schema_nominals(value_schema, ctx)
+            _check_boundary_schema_nominals(value_schema, defs, ctx)
         case BoundaryRecord(nominal=nominal, fields=fields):
             _check_nominal_in_table(nominal, ctx)
             for _fname, fschema in fields:
-                _check_boundary_schema_nominals(fschema, ctx)
+                _check_boundary_schema_nominals(fschema, defs, ctx)
         case BoundaryEnum(nominal=nominal, variants=variants):
             _check_nominal_in_table(nominal, ctx)
             for variant in variants:
                 for _fname, fschema in variant.fields:
-                    _check_boundary_schema_nominals(fschema, ctx)
+                    _check_boundary_schema_nominals(fschema, defs, ctx)
         case BoundaryException(nominal=nominal, fields=fields):
             _check_nominal_in_table(nominal, ctx)
             for _fname, fschema in fields:
-                _check_boundary_schema_nominals(fschema, ctx)
+                _check_boundary_schema_nominals(fschema, defs, ctx)
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 
 
+def _check_boundaryref_chain(key: str, defs: "Mapping[str, BoundarySchema]") -> None:
+    """Ensure a ``BoundaryRef`` chain reaches a non-ref body without cycling."""
+    seen: set[str] = set()
+    current = key
+    while True:
+        if current in seen:
+            raise InvalidIrError(
+                f"BoundarySchema BoundaryRef cycle reaches no body at defs key {current!r}"
+            )
+        seen.add(current)
+        target = defs.get(current)
+        if target is None:
+            raise InvalidIrError(
+                f"BoundarySchema BoundaryRef references unknown defs key {current!r}"
+            )
+        if not isinstance(target, BoundaryRef):
+            return
+        current = target.key
+
+
 def _collect_boundary_seal_vars(schema: BoundarySchema, out: set[str]) -> None:
-    """Collect every ``BoundarySealVar.var`` name appearing in *schema*."""
+    """Collect every ``BoundarySealVar.var`` name appearing directly in *schema*.
+
+    Does not follow a ``BoundaryRef`` — every ``defs`` body is scanned for seal
+    vars separately by :func:`_validate_extern_contract`.
+    """
     match schema:
-        case BoundaryScalar() | BoundaryUnit():
+        case BoundaryScalar() | BoundaryUnit() | BoundaryRef():
             return
         case BoundarySealVar(var=var):
             out.add(var)
@@ -353,16 +437,31 @@ def _validate_extern_contract(
 ) -> None:
     """Validate one extern's boundary contract (deep tier).
 
-    Every nominal referenced by a param/result schema must be registered, and
-    every type-variable position (``BoundarySealVar``) must name one of the
-    contract's declared ``type_params``.
+    Every nominal referenced by a param/result schema (or a shared ``defs``
+    body) must be registered, every ``BoundaryRef`` must resolve to a body in
+    ``defs`` without cycling, and every type-variable position
+    (``BoundarySealVar``) must name one of the contract's declared
+    ``type_params``.
     """
+    seen_keys: set[str] = set()
+    for key, _entry in contract.defs:
+        if key in seen_keys:
+            raise InvalidIrError(
+                f"ExternFunctionDescriptor for {fn_key!r}: contract has duplicate"
+                f" defs key {key!r}"
+            )
+        seen_keys.add(key)
+    defs_map = dict(contract.defs)
+
     seal_vars: set[str] = set()
     for param_schema in contract.params:
-        _check_boundary_schema_nominals(param_schema.schema, ctx)
+        _check_boundary_schema_nominals(param_schema.schema, defs_map, ctx)
         _collect_boundary_seal_vars(param_schema.schema, seal_vars)
-    _check_boundary_schema_nominals(contract.result, ctx)
+    _check_boundary_schema_nominals(contract.result, defs_map, ctx)
     _collect_boundary_seal_vars(contract.result, seal_vars)
+    for _key, entry in contract.defs:
+        _check_boundary_schema_nominals(entry, defs_map, ctx)
+        _collect_boundary_seal_vars(entry, seal_vars)
     unknown = seal_vars - set(contract.type_params)
     if unknown:
         raise InvalidIrError(
@@ -687,9 +786,11 @@ def _validate_expr(node: IrExpr, ctx: _Context) -> None:
 
         case IrConvert(value=val, recipe=recipe):
             _validate_location(node.location, ctx)
-            _check_recipe_consistency(recipe.strategy, recipe.json_schema, recipe.decode)
+            _check_recipe_consistency(
+                recipe.strategy, recipe.json_schema, recipe.decode, recipe.defs
+            )
             if ctx.deep and recipe.decode is not None:
-                _check_decode_nominals(recipe.decode, ctx)
+                _check_decode_nominals(recipe.decode, recipe.defs, ctx)
             _validate_expr(val, ctx)
 
         case IrIf(branches=branches):
@@ -1016,6 +1117,12 @@ def _validate_ir_param(param: IrParam, ctx: _Context) -> None:
                 f"IrParam public_name={param.public_name!r} references"
                 f" symbol_id={param.symbol.value!r} which is not in program.symbols"
             )
+        if param.external_decoder is not None:
+            _check_decode_nominals(
+                param.external_decoder.decode,
+                param.external_decoder.defs,
+                ctx,
+            )
     if param.default is not None:
         _validate_expr(param.default, ctx)
 
@@ -1026,17 +1133,26 @@ def _validate_contract_request(
     ctx: _Context,
 ) -> None:
     """Validate a ContractRequest entry (deep tier)."""
+    has_decode_fields = req.json_schema is not None or req.decode is not None or bool(req.defs)
+    if req.is_unit or req.codec_name == "text":
+        if has_decode_fields:
+            raise InvalidIrError(
+                f"ContractRequest {cid!r} must not carry json_schema/decode/defs"
+            )
+        return
     if req.codec_name == "json":
-        if req.json_schema is None and not req.is_unit:
+        if req.json_schema is None:
             raise InvalidIrError(
                 f"ContractRequest {cid!r} has codec_name='json' but json_schema is None"
             )
-        if req.decode is None and not req.is_unit:
+        if req.decode is None:
             raise InvalidIrError(
                 f"ContractRequest {cid!r} has codec_name='json' but decode is None"
             )
-        if req.decode is not None:
-            _check_decode_nominals(req.decode, ctx)
+    elif req.defs and req.decode is None:
+        raise InvalidIrError(f"ContractRequest {cid!r} has defs but decode is None")
+    if req.decode is not None:
+        _check_decode_nominals(req.decode, req.defs, ctx)
 
 
 # ---------------------------------------------------------------------------

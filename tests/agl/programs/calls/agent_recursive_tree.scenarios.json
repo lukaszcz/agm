@@ -1,0 +1,66 @@
+{
+  "scenarios": [
+    {
+      "name": "lenient_chatty_fenced_response",
+      "agents": {
+        "builder": [
+          "Sure! Here is the tree you asked for:\n```json\n{\"$case\": \"Node\", \"value\": 1, \"left\": {\"$case\": \"Leaf\"}, \"right\": {\"$case\": \"Node\", \"value\": 2, \"left\": {\"$case\": \"Leaf\"}, \"right\": {\"$case\": \"Leaf\"}}}\n```\nLet me know if you need changes."
+        ]
+      },
+      "expect": {
+        "stdout": "3\n",
+        "calls": {"builder": 1},
+        "prompts": [
+          {
+            "agent": "builder", "call": 0,
+            "schema_contains": ["$defs", "$ref", "oneOf", "Leaf", "Node"]
+          }
+        ]
+      }
+    },
+    {
+      "name": "strict_json_mode",
+      "runtime": {"default_strict_json": true},
+      "agents": {
+        "builder": [
+          "{\"$case\": \"Node\", \"value\": 5, \"left\": {\"$case\": \"Leaf\"}, \"right\": {\"$case\": \"Leaf\"}}"
+        ]
+      },
+      "expect": {
+        "stdout": "5\n",
+        "calls": {"builder": 1}
+      }
+    },
+    {
+      "name": "retry_recovers_after_nested_failure",
+      "agents": {
+        "builder": [
+          "{\"$case\": \"Node\", \"value\": 1, \"left\": {\"$case\": \"Leaf\"}, \"right\": {\"$case\": \"Node\", \"left\": {\"$case\": \"Leaf\"}, \"right\": {\"$case\": \"Leaf\"}}}",
+          "{\"$case\": \"Node\", \"value\": 1, \"left\": {\"$case\": \"Leaf\"}, \"right\": {\"$case\": \"Node\", \"value\": 2, \"left\": {\"$case\": \"Leaf\"}, \"right\": {\"$case\": \"Leaf\"}}}"
+        ]
+      },
+      "expect": {
+        "stdout": "3\n",
+        "calls": {"builder": 2}
+      }
+    },
+    {
+      "name": "abort_after_retries_exhausted",
+      "agents": {
+        "builder": [
+          "{\"$case\": \"Node\", \"left\": {\"$case\": \"Leaf\"}, \"right\": {\"$case\": \"Leaf\"}}",
+          "{\"$case\": \"Bogus\"}"
+        ]
+      },
+      "expect": {
+        "stdout_contains": ["$defs", "$ref", "schema: "],
+        "calls": {"builder": 2},
+        "raises": {
+          "type": "AgentParseError",
+          "fields": {"agent": "builder", "attempts": 2, "target_type": "Tree"},
+          "message_contains": ["Tree", "2 attempt"]
+        }
+      }
+    }
+  ]
+}

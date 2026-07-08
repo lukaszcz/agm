@@ -1,0 +1,18 @@
+# Generic recursive instantiation at the agent boundary: `Tree[T]` derives a
+# distinct $defs key per concrete instantiation (e.g. `Tree_int`) — the same
+# collision-free generic-instantiation keying `derive_schema` uses, mirrored
+# one-to-one on the `RefDecode` decode side — separate from any non-generic
+# `Tree` or a different instantiation such as `Tree[text]`.
+enum Tree[T]
+  | Leaf
+  | Node(value: T, left: Tree[T], right: Tree[T])
+
+agent builder
+
+def sum_tree(t: Tree[int]) -> int =
+  case t of
+    | Leaf => 0
+    | Node(value, left, right) => value + sum_tree(left) + sum_tree(right)
+
+let t: Tree[int] = ask("Build an int tree.", agent = builder, on_parse_error = Retry(n = 1))
+print sum_tree(t)

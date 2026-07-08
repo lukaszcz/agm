@@ -26,7 +26,7 @@ import sys
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
 from pathlib import Path
-from types import ModuleType
+from types import MappingProxyType, ModuleType
 from typing import Protocol, assert_never, cast
 
 from agm.agl.diagnostics import AglError
@@ -36,6 +36,7 @@ from agm.agl.ir.contracts import (
     BoundaryException,
     BoundaryList,
     BoundaryRecord,
+    BoundaryRef,
     BoundaryScalar,
     BoundarySchema,
     BoundarySealVar,
@@ -147,13 +148,21 @@ def _pytype(obj: object) -> str:
     return type(obj).__name__
 
 
+#: Shared read-only empty ``defs`` table for boundary walks over a self-contained
+#: schema (one with no ``BoundaryRef`` leaf, i.e. no recursive type).
+_NO_DEFS: Mapping[str, BoundarySchema] = MappingProxyType({})
+
+
 # ---------------------------------------------------------------------------
 # Encode: AgL Value -> Python argument
 # ---------------------------------------------------------------------------
 
 
 def encode_boundary_value(
-    schema: BoundarySchema, value: Value, seals: Mapping[str, object]
+    schema: BoundarySchema,
+    value: Value,
+    seals: Mapping[str, object],
+    defs: Mapping[str, BoundarySchema] = _NO_DEFS,
 ) -> object:
     """Encode one AgL value crossing an extern boundary as a Python argument.
 
@@ -164,7 +173,9 @@ def encode_boundary_value(
     receives never affects the wrapped AgL value.  A type-variable leaf seals
     the value in a :class:`SealedHandle` carrying this call's token for that
     variable (from *seals*, minted once per :meth:`ExternRegistry.invoke`
-    call).  A *value* whose runtime shape does not match *schema* raises
+    call).  A ``BoundaryRef`` leaf resolves through *defs* (the contract's
+    shared recursive-instantiation bodies), so a recursive value crosses as a
+    finite walk.  A *value* whose runtime shape does not match *schema* raises
     :class:`BoundaryViolation` (an argument-conversion failure at the call
     site, reported by :meth:`ExternRegistry.invoke` as ``ExternError``).
     """
@@ -178,12 +189,12 @@ def encode_boundary_value(
         case BoundaryList(element=elem_schema):
             if not isinstance(value, ListValue):
                 raise BoundaryViolation(f"expected a list value, got {_agltype(value)}")
-            return [encode_boundary_value(elem_schema, e, seals) for e in value.elements]
+            return [encode_boundary_value(elem_schema, e, seals, defs) for e in value.elements]
         case BoundaryDict(value=val_schema):
             if not isinstance(value, DictValue):
                 raise BoundaryViolation(f"expected a dict value, got {_agltype(value)}")
             return {
-                k: encode_boundary_value(val_schema, v, seals)
+                k: encode_boundary_value(val_schema, v, seals, defs)
                 for k, v in value.entries.items()
             }
         case BoundaryRecord(display_name=display_name, fields=fields):
@@ -192,7 +203,7 @@ def encode_boundary_value(
                     f"expected record {display_name!r}, got {_agltype(value)}"
                 )
             return {
-                fname: encode_boundary_value(fschema, value.fields[fname], seals)
+                fname: encode_boundary_value(fschema, value.fields[fname], seals, defs)
                 for fname, fschema in fields
             }
         case BoundaryEnum(display_name=display_name, variants=variants):
@@ -206,7 +217,7 @@ def encode_boundary_value(
             result: dict[str, object] = {"$case": value.variant}
             result.update(
                 {
-                    fname: encode_boundary_value(fschema, value.fields[fname], seals)
+                    fname: encode_boundary_value(fschema, value.fields[fname], seals, defs)
                     for fname, fschema in variant.fields
                 }
             )
@@ -217,11 +228,13 @@ def encode_boundary_value(
                     f"expected exception {display_name!r}, got {_agltype(value)}"
                 )
             return {
-                fname: encode_boundary_value(fschema, value.fields[fname], seals)
+                fname: encode_boundary_value(fschema, value.fields[fname], seals, defs)
                 for fname, fschema in fields
             }
         case BoundarySealVar(var=var):
             return SealedHandle(value, seals[var])
+        case BoundaryRef(key=key):
+            return encode_boundary_value(defs[key], value, seals, defs)
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 
@@ -264,7 +277,10 @@ def _encode_scalar(kind: ScalarKind, value: Value) -> object:
 
 
 def decode_boundary_value(
-    schema: BoundarySchema, obj: object, seals: Mapping[str, object]
+    schema: BoundarySchema,
+    obj: object,
+    seals: Mapping[str, object],
+    defs: Mapping[str, BoundarySchema] = _NO_DEFS,
 ) -> Value:
     """Strictly decode one Python return value against *schema*.
 
@@ -277,7 +293,9 @@ def decode_boundary_value(
     misnamed fields and unknown variants are rejected).  A type-variable
     leaf requires a :class:`SealedHandle` carrying this call's token for
     that variable — a stale or cross-variable handle is rejected, and so is
-    a raw forged value.  Raises :class:`BoundaryViolation` on any mismatch.
+    a raw forged value.  A ``BoundaryRef`` leaf resolves through *defs*, so a
+    recursive return value decodes as a finite walk.  Raises
+    :class:`BoundaryViolation` on any mismatch.
     """
     match schema:
         case BoundaryScalar(kind=kind):
@@ -291,7 +309,7 @@ def decode_boundary_value(
                 raise BoundaryViolation(f"expected a list, got {_pytype(obj)}")
             items: list[object] = obj
             return ListValue(
-                tuple(decode_boundary_value(elem_schema, e, seals) for e in items)
+                tuple(decode_boundary_value(elem_schema, e, seals, defs) for e in items)
             )
         case BoundaryDict(value=val_schema):
             if not isinstance(obj, dict):
@@ -301,13 +319,13 @@ def decode_boundary_value(
             for k, v in mapping.items():
                 if not isinstance(k, str):
                     raise BoundaryViolation(f"dict key must be str, got {_pytype(k)}")
-                entries[k] = decode_boundary_value(val_schema, v, seals)
+                entries[k] = decode_boundary_value(val_schema, v, seals, defs)
             return DictValue(entries=entries)
         case BoundaryRecord(nominal=nominal, display_name=display_name, fields=fields):
             obj_fields = _expect_object(obj, display_name)
             _check_exact_fields(display_name, {fname for fname, _ in fields}, obj_fields)
             record_fields = {
-                fname: decode_boundary_value(fschema, obj_fields[fname], seals)
+                fname: decode_boundary_value(fschema, obj_fields[fname], seals, defs)
                 for fname, fschema in fields
             }
             return RecordValue(nominal=nominal, display_name=display_name, fields=record_fields)
@@ -324,7 +342,7 @@ def decode_boundary_value(
             expected = {fname for fname, _ in variant.fields} | {"$case"}
             _check_exact_fields(f"{display_name}.{case_val}", expected, obj_fields)
             payload = {
-                fname: decode_boundary_value(fschema, obj_fields[fname], seals)
+                fname: decode_boundary_value(fschema, obj_fields[fname], seals, defs)
                 for fname, fschema in variant.fields
             }
             return EnumValue(
@@ -334,7 +352,7 @@ def decode_boundary_value(
             obj_fields = _expect_object(obj, display_name)
             _check_exact_fields(display_name, {fname for fname, _ in fields}, obj_fields)
             exc_fields = {
-                fname: decode_boundary_value(fschema, obj_fields[fname], seals)
+                fname: decode_boundary_value(fschema, obj_fields[fname], seals, defs)
                 for fname, fschema in fields
             }
             return ExceptionValue(nominal=nominal, display_name=display_name, fields=exc_fields)
@@ -348,6 +366,8 @@ def decode_boundary_value(
                     f"handle does not carry this call's seal for type variable {var!r}"
                 )
             return obj._value
+        case BoundaryRef(key=key):
+            return decode_boundary_value(defs[key], obj, seals, defs)
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 
@@ -559,10 +579,11 @@ class ExternRegistry:
         violation.
         """
         seals: dict[str, object] = {var: object() for var in contract.type_params}
+        defs: dict[str, BoundarySchema] = dict(contract.defs)
 
         try:
             encoded_args = [
-                encode_boundary_value(param.schema, arg, seals)
+                encode_boundary_value(param.schema, arg, seals, defs)
                 for param, arg in zip(contract.params, args, strict=True)
             ]
         except BoundaryViolation as exc:
@@ -581,7 +602,7 @@ class ExternRegistry:
             ) from exc
 
         try:
-            return decode_boundary_value(contract.result, result, seals)
+            return decode_boundary_value(contract.result, result, seals, defs)
         except BoundaryViolation as exc:
             raise _extern_error(
                 function_name, f"return value violates contract: {exc}", trace_id, python_type=""

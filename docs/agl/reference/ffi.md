@@ -107,6 +107,12 @@ guarantee end to end.
 enum, so `None`/`Some(value = ...)` cross as `{"$case": "None"}` and
 `{"$case": "Some", "value": ...}` respectively, just like any other enum.
 
+A recursive record or enum crosses just like any other, nesting its mapped
+shape to whatever depth the value reaches. The only requirement is that the
+type has a finite schema: a type whose recursive instantiations never close
+(growing polymorphic recursion) cannot appear as an extern parameter or return
+type — the same restriction that applies to agent-output and cast targets.
+
 ### Return values are validated strictly
 
 A companion's return value is checked against the extern's declared return

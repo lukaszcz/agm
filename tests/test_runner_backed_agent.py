@@ -870,7 +870,6 @@ class TestRunnerMessageComposition:
         from agm.agl.runtime.codec import TextCodec
         from agm.agl.runtime.contract import OutputContract
         from agm.agl.runtime.request import ValidationError
-        from agm.agl.semantics.types import TextType
 
         ve: list[ValidationError] = (
             [v for v in validation_errors if isinstance(v, ValidationError)]
@@ -898,7 +897,7 @@ class TestRunnerMessageComposition:
             )
 
         contract = OutputContract(
-            target_type=TextType(),
+            target_type_label="text",
             codec=TextCodec(),
             strict_json=None,
             format_instructions=format_instructions,

@@ -31,6 +31,7 @@ config, workspace config, dependency environment, setup scripts, and tmux sessio
 - an existing branch workspace opens its tmux session
 - an existing branch without a workspace is checked out into a Git worktree and then opened
 - a missing branch is created from `--parent` or the main workspace's current branch and then opened
+- with `--parent`, an existing target branch produces a warning because `--parent` only bases new branches; an existing target workspace is an error
 
 `agm workspace open` options:
 

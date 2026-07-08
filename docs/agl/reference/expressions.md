@@ -474,6 +474,16 @@ rendering). For structured source types (`list`, records, enums, exceptions …)
 `as text` produces the same AgL-form text that `print` would render.
 For scalar types (`bool`, `int`, `decimal`) it produces the plain scalar text.
 
+**Recursive cast targets.** A [recursive record or enum](types.md#recursive-types)
+works as a `text`/`json` cast target exactly like any other: the value is
+validated and decoded through the same JSON Schema (`$defs`/`$ref` for the
+recursive parts) used at the agent-call boundary, and `as`/`as?` behave
+normally, including inside a container target such as `list[Tree]`. The same
+finite-schema restriction applies as for an agent output type: a
+[polymorphically recursive](generics.md#recursive-generic-types) generic type
+whose reachable instantiations never close cannot be used as a cast target
+either — a static error at the `as`/`as?` expression, not a runtime failure.
+
 ### Variant tests: `is`, `is not`
 
 ```agl

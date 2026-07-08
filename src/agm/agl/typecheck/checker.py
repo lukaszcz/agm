@@ -374,6 +374,11 @@ class _Checker:
         self._constructor_call_bindings: dict[int, dict[str, Expr]] = {}
         self._constructor_pattern_bindings: dict[int, tuple[tuple[str, Pattern], ...]] = {}
         self._partial_calls: dict[int, PartialCallSpec] = {}
+        # Extern provenance for first-class function values.  A value can name
+        # one or more externs (e.g. through a branch); when such a function
+        # value is actually called, dry-run inventory records that call site.
+        self._extern_expr_targets: dict[int, tuple[tuple[str, Type], ...]] = {}
+        self._extern_binding_targets: dict[int, tuple[tuple[str, Type], ...]] = {}
         self._builtins = BuiltinCallChecker(self)
         self._constructors = ConstructorChecker(self)
         # Function return contexts. The top entry is either an annotated expected
@@ -850,6 +855,12 @@ class _Checker:
                 )
             declared_type = val_type
         self._env.set_binding_type(stmt.node_id, declared_type)
+        targets = (
+            self._extern_expr_targets.get(stmt.value.node_id, ())
+            if isinstance(declared_type, FunctionType)
+            else ()
+        )
+        self._set_extern_binding_targets(stmt.node_id, targets)
         return self._binder_result(val_type)
 
     def _check_assign_stmt(self, stmt: AssignStmt) -> Type:
@@ -858,6 +869,12 @@ class _Checker:
             target_type = self._require_binding_type(ref)
             val_type = self._check_expr(stmt.value, expected=target_type)
             self._assert_assignable(val_type, target_type, stmt.span)
+            targets = (
+                self._extern_expr_targets.get(stmt.value.node_id, ())
+                if isinstance(target_type, FunctionType)
+                else ()
+            )
+            self._set_extern_binding_targets(ref.decl_node_id, targets)
             return self._binder_result(val_type)
 
         if isinstance(stmt.target, IndexTarget):
@@ -1048,7 +1065,12 @@ class _Checker:
                             f"annotate the binding more precisely.",
                             span=node.span,
                         )
-                return substitute(typ, subst)
+                concrete = substitute(typ, subst)
+                self._set_extern_expr_targets(
+                    node.node_id, self._extern_targets_for_ref(ref, concrete)
+                )
+                return concrete
+        self._set_extern_expr_targets(node.node_id, self._extern_targets_for_ref(ref, typ))
         return typ
 
     def _require_binding_type(self, ref: BindingRef) -> Type:
@@ -1138,6 +1160,9 @@ class _Checker:
         )
         concrete = substitute(typ, subst)
         self._node_types[node.expr.node_id] = concrete
+        self._set_extern_expr_targets(
+            node.node_id, self._extern_targets_for_ref(ref, concrete)
+        )
         return concrete
 
     # --- Cast ---
@@ -1227,6 +1252,49 @@ class _Checker:
                 for expr in binding
             ),
             callee_kind=callee_kind,
+        )
+
+    def _set_extern_expr_targets(
+        self, node_id: int, targets: tuple[tuple[str, Type], ...]
+    ) -> None:
+        """Record or clear extern provenance for a function-valued expression."""
+        if targets:
+            self._extern_expr_targets[node_id] = targets
+        else:
+            self._extern_expr_targets.pop(node_id, None)
+
+    def _set_extern_binding_targets(
+        self, node_id: int, targets: tuple[tuple[str, Type], ...]
+    ) -> None:
+        """Record or clear extern provenance for a function-valued binding."""
+        if targets:
+            self._extern_binding_targets[node_id] = targets
+        else:
+            self._extern_binding_targets.pop(node_id, None)
+
+    def _extern_targets_for_ref(
+        self, ref: BindingRef, typ: Type
+    ) -> tuple[tuple[str, Type], ...]:
+        """Return extern call targets represented by a resolved value reference."""
+        if ref.kind is BinderKind.function_binding and self._env.is_extern_node_id(
+            ref.decl_node_id
+        ):
+            if isinstance(typ, FunctionType):
+                return ((ref.name, typ.result),)
+            return ()
+        return self._extern_binding_targets.get(ref.decl_node_id, ())
+
+    def _record_extern_call_site(self, node: Call, callee: str, target_type: Type) -> None:
+        self._call_sites.append(
+            CallSiteRecord(
+                node_id=node.node_id,
+                callee=callee,
+                target_type=target_type,
+                codec_name="extern",
+                parse_policy="default",
+                line=node.span.start_line,
+                col=node.span.start_col,
+            )
         )
 
     def _check_call_dispatch(
@@ -1594,27 +1662,22 @@ class _Checker:
                 node, sig.params, sig.result, binding, hole_indices
             )
 
-        # Direct calls to a known extern are recorded like ask/exec call sites,
-        # for own-module AND imported (graph-mode) externs alike — the checker's
-        # env carries extern-ness by the callee's globally-unique decl_node_id
-        # regardless of which module declared it.
+        # Calls to a known extern are recorded like ask/exec call sites, for
+        # own-module AND imported (graph-mode) externs alike. A partial call
+        # only builds a function value, so carry extern provenance forward and
+        # record the eventual invocation site instead.
         if self._env.is_extern_node_id(callee_node_id):
             extern_target_type = (
                 result_type.result
                 if hole_indices and isinstance(result_type, FunctionType)
                 else result_type
             )
-            self._call_sites.append(
-                CallSiteRecord(
-                    node_id=node.node_id,
-                    callee=func_name,
-                    target_type=extern_target_type,
-                    codec_name="extern",
-                    parse_policy="default",
-                    line=node.span.start_line,
-                    col=node.span.start_col,
+            if hole_indices:
+                self._set_extern_expr_targets(
+                    node.node_id, ((func_name, extern_target_type),)
                 )
-            )
+            else:
+                self._record_extern_call_site(node, func_name, extern_target_type)
 
         return result_type
 
@@ -1671,7 +1734,16 @@ class _Checker:
             )
             for index, ptype in enumerate(callee_type.params)
         )
-        return self._call_result_type(params, callee_type.result, binding, hole_indices)
+        result_type = self._call_result_type(params, callee_type.result, binding, hole_indices)
+        extern_targets = self._extern_expr_targets.get(node.callee.node_id, ())
+        if extern_targets:
+            invocation_targets = tuple((callee, callee_type.result) for callee, _ in extern_targets)
+            if hole_indices:
+                self._set_extern_expr_targets(node.node_id, invocation_targets)
+            else:
+                for callee, target_type in invocation_targets:
+                    self._record_extern_call_site(node, callee, target_type)
+        return result_type
 
     # --- Lambda ---
 

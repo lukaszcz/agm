@@ -349,10 +349,21 @@ class TestExternCallSiteRecording:
         callees = [s.callee for s in cp.call_sites]
         assert callees == ["ask"]
 
-    def test_indirect_first_class_call_not_recorded(self) -> None:
+    def test_indirect_first_class_call_recorded_at_invocation(self) -> None:
         source = "extern def f(x: int) -> int\nlet g: (int) -> int = f\ng(1)"
         cp = check_extern(source)
-        assert all(s.callee != "f" for s in cp.call_sites)
+        sites = [s for s in cp.call_sites if s.callee == "f"]
+        assert len(sites) == 1
+        assert sites[0].line == 3
+        assert sites[0].target_type == IntType()
+
+    def test_partial_extern_call_recorded_at_invocation(self) -> None:
+        source = "extern def f(x: int, y: int) -> int\nlet g = f(?, 2)\ng(1)"
+        cp = check_extern(source)
+        sites = [s for s in cp.call_sites if s.callee == "f"]
+        assert len(sites) == 1
+        assert sites[0].line == 3
+        assert sites[0].target_type == IntType()
 
     def test_graph_mode_imported_extern_call_recorded(self, tmp_path: Path) -> None:
         write_companion_file(tmp_path / "root", "lib.mod", "def f(x):\n    return x\n")

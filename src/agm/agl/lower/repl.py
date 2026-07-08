@@ -6,8 +6,8 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
 from agm.agl.ir.contracts import ContractPayload
-from agm.agl.ir.ids import SourceId, SymbolId
-from agm.agl.ir.program import ExecutableProgram, SourceFile
+from agm.agl.ir.ids import NominalId, SourceId, SymbolId
+from agm.agl.ir.program import ExecutableProgram, NominalDescriptor, SourceFile
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.lowerer import _LinkState, _Lowerer
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
@@ -39,6 +39,30 @@ class LinkImage:
         next import while the reloaded module carries fresh declaration IDs).
         """
         self._linked_modules.update(module_ids)
+
+    def snapshot_nominals(self) -> dict[NominalId, NominalDescriptor]:
+        """Return a rollback snapshot of persistent nominal descriptors."""
+        return dict(self._state.nominals)
+
+    def restore_nominals(
+        self,
+        snapshot: Mapping[NominalId, NominalDescriptor],
+        nominal_ids: Iterable[NominalId],
+    ) -> None:
+        """Restore selected nominal descriptors from *snapshot*.
+
+        Runtime-failed REPL entries may have linked type declarations that were
+        not promoted statically. Nominals are keyed by stable module/name rather
+        than declaration node id, so unpromoted redeclarations must be restored
+        explicitly to keep constructor values in later entries consistent with
+        the restored type environment.
+        """
+        for nominal in nominal_ids:
+            previous = snapshot.get(nominal)
+            if previous is None:
+                self._state.nominals.pop(nominal, None)
+            else:
+                self._state.nominals[nominal] = previous
 
 
 @dataclass(frozen=True, slots=True)

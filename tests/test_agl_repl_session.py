@@ -1862,6 +1862,23 @@ class TestImports:
         assert not s._loaded_lib_modules
         assert not s._accumulated_imports
 
+    def test_runtime_failure_restores_unpromoted_type_nominal(self, tmp_path: Path) -> None:
+        s = self._make_session_with_root(tmp_path)
+        r1 = s.eval_entry("record R\n  x: int")
+        assert r1.ok, r1.diagnostics
+
+        r2 = s.eval_entry("let z: decimal = 1 / 0\nrecord R\n  y: int")
+        assert not r2.ok
+        from agm.agl.ir.ids import NominalId
+        from agm.agl.modules.ids import ENTRY_ID
+
+        assert s._link_image._state.nominals[NominalId(ENTRY_ID, "R")].fields == ("x",)
+
+        r3 = s.eval_entry("let f = R\nlet v = f(1)\nv.x")
+
+        assert r3.ok, r3.diagnostics
+        assert _int(r3.value) == 1
+
     def test_runtime_failure_does_not_mark_module_linked(self, tmp_path: Path) -> None:
         # Regression: when an entry imports a previously unseen
         # module and then raises at runtime, the module must NOT be marked as

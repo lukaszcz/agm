@@ -91,6 +91,15 @@ def _nominal(schema: BoundarySchema) -> NominalId:
     return schema.nominal
 
 
+def _sealed_handle(value: object, seal: object) -> SealedHandle:
+    """Mint a test handle through the real encoder, not the public constructor."""
+    assert isinstance(value, (BoolValue, DecimalValue, IntValue, IrClosureValue, TextValue))
+    contract = build_contract("extern def identity[T](x: T) -> T\n0", fn_name="identity")
+    encoded = encode_boundary_value(contract.params[0].schema, value, {"T": seal})
+    assert isinstance(encoded, SealedHandle)
+    return encoded
+
+
 # ---------------------------------------------------------------------------
 # Encode direction — one test per type-mapping row
 # ---------------------------------------------------------------------------
@@ -514,7 +523,7 @@ class TestDecodeJson:
 
     def test_rejects_sealed_handle(self) -> None:
         contract = build_contract("extern def f(x: int) -> json\n0")
-        handle = SealedHandle(IntValue(1), object())
+        handle = _sealed_handle(IntValue(1), object())
         with pytest.raises(BoundaryViolation):
             decode_boundary_value(contract.result, handle, {})
 
@@ -537,14 +546,14 @@ class TestSealing:
     def test_decode_accepts_this_calls_handle(self) -> None:
         contract = build_contract("extern def identity[T](x: T) -> T\n0", fn_name="identity")
         seals = {"T": object()}
-        handle = SealedHandle(IntValue(5), seals["T"])
+        handle = _sealed_handle(IntValue(5), seals["T"])
         assert decode_boundary_value(contract.result, handle, seals) == IntValue(5)
 
     def test_decode_rejects_stale_handle_from_a_different_call(self) -> None:
         contract = build_contract("extern def identity[T](x: T) -> T\n0", fn_name="identity")
         stale_seals = {"T": object()}
         this_calls_seals = {"T": object()}
-        handle = SealedHandle(IntValue(5), stale_seals["T"])
+        handle = _sealed_handle(IntValue(5), stale_seals["T"])
         with pytest.raises(BoundaryViolation):
             decode_boundary_value(contract.result, handle, this_calls_seals)
 
@@ -553,9 +562,10 @@ class TestSealing:
             "extern def pair[A, B](a: A, b: B) -> A\n0", fn_name="pair"
         )
         seals = {"A": object(), "B": object()}
-        handle_for_b = SealedHandle(IntValue(1), seals["B"])
+        encoded = encode_boundary_value(contract.params[1].schema, IntValue(1), seals)
+        assert isinstance(encoded, SealedHandle)
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, handle_for_b, seals)
+            decode_boundary_value(contract.result, encoded, seals)
 
     def test_decode_rejects_raw_forged_value(self) -> None:
         contract = build_contract("extern def identity[T](x: T) -> T\n0", fn_name="identity")
@@ -563,38 +573,47 @@ class TestSealing:
         with pytest.raises(BoundaryViolation):
             decode_boundary_value(contract.result, 5, seals)
 
+    def test_public_constructor_cannot_forge_handle(self) -> None:
+        with pytest.raises(TypeError):
+            SealedHandle(IntValue(1), object())
+
+    def test_handle_exposes_no_value_or_seal_attributes(self) -> None:
+        h = _sealed_handle(IntValue(1), object())
+        assert not hasattr(h, "_value")
+        assert not hasattr(h, "_seal")
+
     def test_handle_equality_and_hash_delegate_to_wrapped_value(self) -> None:
-        h1 = SealedHandle(IntValue(1), object())
-        h2 = SealedHandle(IntValue(1), object())
+        h1 = _sealed_handle(IntValue(1), object())
+        h2 = _sealed_handle(IntValue(1), object())
         assert h1 == h2
         assert hash(h1) == hash(h2)
-        assert h1 != SealedHandle(IntValue(2), object())
+        assert h1 != _sealed_handle(IntValue(2), object())
 
     def test_handle_never_equals_a_non_handle(self) -> None:
-        h = SealedHandle(IntValue(1), object())
+        h = _sealed_handle(IntValue(1), object())
         assert (h == 1) is False
         assert h != 1
 
     def test_handles_work_in_sets_and_dicts(self) -> None:
-        h1 = SealedHandle(TextValue("a"), object())
-        h2 = SealedHandle(TextValue("a"), object())
+        h1 = _sealed_handle(TextValue("a"), object())
+        h2 = _sealed_handle(TextValue("a"), object())
         assert h2 in {h1}
         mapping = {h1: "found"}
         assert mapping[h2] == "found"
 
     def test_handle_repr_shows_rendered_value(self) -> None:
-        h = SealedHandle(TextValue("hi"), object())
+        h = _sealed_handle(TextValue("hi"), object())
         assert repr(h) == render_value(TextValue("hi"))
 
     def test_identity_equality_values_seal_and_hash_without_error(self) -> None:
         closure = IrClosureValue(function_id=FunctionId(0), captures=())
-        h1 = SealedHandle(closure, object())
-        h2 = SealedHandle(closure, object())
+        h1 = _sealed_handle(closure, object())
+        h2 = _sealed_handle(closure, object())
         assert h1 == h2
         assert hash(h1) == hash(h2)
 
         other_closure = IrClosureValue(function_id=FunctionId(0), captures=())
-        h3 = SealedHandle(other_closure, object())
+        h3 = _sealed_handle(other_closure, object())
         assert h1 != h3  # distinct closure identity, even with identical fields
 
 

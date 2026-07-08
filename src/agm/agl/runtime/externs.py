@@ -22,8 +22,11 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import itertools
 import sys
+import weakref
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from types import MappingProxyType, ModuleType
@@ -112,12 +115,27 @@ class ExternResolutionError(AglError):
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True, slots=True)
+class _SealedPayload:
+    """Registry-private payload for a minted sealed handle."""
+
+    value: Value
+    seal: object
+
+
+_HANDLE_FACTORY_KEY = object()
+_NEXT_HANDLE_ID = itertools.count()
+_SEALED_PAYLOADS: dict[int, _SealedPayload] = {}
+
+
 class SealedHandle:
     """Opaque wrapper for an AgL value at a sealed type-variable position.
 
     A Python companion may rearrange, count, and compare handles it receives,
-    but cannot inspect or forge them: the wrapped value and seal token are
-    private, and there is no other public surface.
+    but cannot inspect or forge them: handles expose no value/seal attributes,
+    and the public constructor rejects companion-created instances.  Only the
+    boundary encoder can mint an instance whose private id resolves in the
+    registry owned by this module.
 
     ``__eq__``/``__hash__`` delegate to the wrapped value's own equality and
     hash (never equal to a non-handle), so handles compose correctly in
@@ -125,22 +143,49 @@ class SealedHandle:
     debugging aid.
     """
 
-    __slots__ = ("_seal", "_value")
+    __slots__ = ("__id", "__weakref__")
 
-    def __init__(self, value: Value, seal: object) -> None:
-        self._value = value
-        self._seal = seal
+    def __init__(
+        self,
+        *_args: object,
+        _factory_key: object | None = None,
+        _handle_id: int | None = None,
+    ) -> None:
+        if _factory_key is not _HANDLE_FACTORY_KEY or _handle_id is None:
+            raise TypeError("SealedHandle instances can only be minted by the extern boundary")
+        self.__id = _handle_id
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, SealedHandle):
             return False
-        return self._value == other._value
+        return _open_sealed_handle(self).value == _open_sealed_handle(other).value
 
     def __hash__(self) -> int:
-        return hash(self._value)
+        return hash(_open_sealed_handle(self).value)
 
     def __repr__(self) -> str:
-        return render_value(self._value)
+        return render_value(_open_sealed_handle(self).value)
+
+
+def _make_sealed_handle(value: Value, seal: object) -> SealedHandle:
+    """Mint a sealed handle and retain its payload outside the public object."""
+    handle_id = next(_NEXT_HANDLE_ID)
+    handle = SealedHandle(_factory_key=_HANDLE_FACTORY_KEY, _handle_id=handle_id)
+    _SEALED_PAYLOADS[handle_id] = _SealedPayload(value=value, seal=seal)
+    weakref.finalize(handle, _SEALED_PAYLOADS.pop, handle_id, None)
+    return handle
+
+
+def _open_sealed_handle(handle: SealedHandle) -> _SealedPayload:
+    """Return a minted handle's payload, rejecting unmapped forged instances."""
+    try:
+        handle_id = cast(int, object.__getattribute__(handle, "_SealedHandle__id"))
+    except AttributeError as exc:
+        raise BoundaryViolation("sealed handle was not minted by this boundary") from exc
+    payload = _SEALED_PAYLOADS.get(handle_id)
+    if payload is None:
+        raise BoundaryViolation("sealed handle was not minted by this boundary")
+    return payload
 
 
 def _typename(obj: object) -> str:
@@ -221,7 +266,7 @@ def encode_boundary_value(
                 )
             return _encode_boundary_fields(fields, value.fields, seals, defs)
         case BoundarySealVar(var=var):
-            return SealedHandle(value, seals[var])
+            return _make_sealed_handle(value, seals[var])
         case BoundaryRef(key=key):
             return encode_boundary_value(defs[key], value, seals, defs)
         case _ as unreachable:  # pragma: no cover
@@ -349,11 +394,12 @@ def decode_boundary_value(
                 raise BoundaryViolation(
                     f"expected a sealed handle for type variable {var!r}, got {_typename(obj)}"
                 )
-            if obj._seal is not seals.get(var):
+            payload = _open_sealed_handle(obj)
+            if payload.seal is not seals.get(var):
                 raise BoundaryViolation(
                     f"handle does not carry this call's seal for type variable {var!r}"
                 )
-            return obj._value
+            return payload.value
         case BoundaryRef(key=key):
             return decode_boundary_value(defs[key], obj, seals, defs)
         case _ as unreachable:  # pragma: no cover

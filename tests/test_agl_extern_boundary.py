@@ -317,6 +317,12 @@ class TestDecodeScalars:
             Decimal("1.25")
         )
 
+    def test_decimal_rejects_non_finite_decimal(self) -> None:
+        contract = build_contract("extern def f(x: int) -> decimal\n0")
+        for raw in (Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity")):
+            with pytest.raises(BoundaryViolation):
+                decode_boundary_value(contract.result, raw, {})
+
     def test_bool_rejected_where_int_declared(self) -> None:
         contract = build_contract("extern def f(x: int) -> int\n0")
         with pytest.raises(BoundaryViolation):
@@ -511,6 +517,12 @@ class TestDecodeJson:
         result = decode_boundary_value(contract.result, obj, {})
         assert isinstance(result, JsonValue)
         assert result.raw == obj
+
+    def test_rejects_non_finite_decimal_nested_in_json(self) -> None:
+        contract = build_contract("extern def f(x: int) -> json\n0")
+        for raw in (Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity")):
+            with pytest.raises(BoundaryViolation):
+                decode_boundary_value(contract.result, {"bad": [raw]}, {})
 
     def test_rejects_arbitrary_object(self) -> None:
         contract = build_contract("extern def f(x: int) -> json\n0")

@@ -461,6 +461,8 @@ def _decode_scalar(kind: ScalarKind, obj: object) -> Value:
             if isinstance(obj, bool):
                 raise BoundaryViolation("expected decimal, got bool")
             if isinstance(obj, Decimal):
+                if not obj.is_finite():
+                    raise BoundaryViolation("expected finite decimal")
                 return DecimalValue(obj)
             if isinstance(obj, int):
                 return DecimalValue(Decimal(obj))
@@ -484,7 +486,9 @@ def _is_json_shaped(obj: object) -> bool:
     ``None`` recursively; anything else (a ``float``, a :class:`SealedHandle`,
     an arbitrary object) is rejected.
     """
-    if obj is None or isinstance(obj, (bool, str, int, Decimal)):
+    if isinstance(obj, Decimal):
+        return obj.is_finite()
+    if obj is None or isinstance(obj, (bool, str, int)):
         return True
     if isinstance(obj, list):
         items: list[object] = obj

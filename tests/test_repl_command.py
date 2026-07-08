@@ -229,6 +229,7 @@ class TestReplRun:
         assert call["echo"] is True
         assert call["check_only"] is False  # not a dry-run by default
         assert call["history_path"] == home / ".agm" / "repl_history"
+        assert (home / ".agm").is_dir()
 
     def test_history_path_uses_agm_home_override(
         self,

@@ -148,6 +148,7 @@ def run(args: ReplArgs) -> None:
     )
 
     history_path = agm_home_dir(home=ctx.home) / "repl_history"
+    history_path.parent.mkdir(parents=True, exist_ok=True)
 
     # ``--dry-run`` means type-check only in the REPL: every entry runs the full
     # static pipeline but is never evaluated, so no agent/exec calls fire and no

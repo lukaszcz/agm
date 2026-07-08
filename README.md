@@ -96,7 +96,9 @@ Use `agm help` for the command list and `agm help <command>` for detailed help. 
 ### `agm open`
 
 Shortcut for `agm workspace open`. Open a tmux session for the main workspace or a branch
-workspace, creating or checking out the branch when needed.
+workspace, creating or checking out the branch when needed. `--parent` bases only new
+branches; AGM warns if the target branch already exists and errors if its workspace already
+exists.
 
 ```bash
 agm open repo

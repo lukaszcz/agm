@@ -18,8 +18,11 @@ import pytest
 from agm.agl.modules.ids import STD_CORE_ID
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PipelineDriver, PreparedGraph, static_config_values
+from agm.agl.runtime.codec import ParseResult
+from agm.agl.runtime.contract import OutputContract
 from agm.agl.runtime.params import convert_config_value
-from agm.agl.semantics.types import OPTION_TEXT_TYPE
+from agm.agl.semantics.type_table import TypeTable
+from agm.agl.semantics.types import OPTION_TEXT_TYPE, TextType, Type
 from agm.agl.semantics.values import BoolValue, EnumValue, IntValue, TextValue, Value
 
 
@@ -255,6 +258,102 @@ class TestStartupConfigCollection:
 
         assert result.ok
         assert result.values["log"] == BoolValue(True)
+
+    def test_startup_config_graph_reports_custom_codec_contract_error(self) -> None:
+        class BadContractCodec:
+            @property
+            def name(self) -> str:
+                return "bad-contract"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"text"})
+
+            def supports_type(self, t: Type) -> bool:
+                return isinstance(t, TextType)
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                raise ValueError("boom")
+
+            def parse(self, raw: str) -> ParseResult:
+                return ParseResult.success(TextValue(raw))
+
+        rt = PipelineDriver()
+        rt.register_codec(BadContractCodec())
+        prepared = _prepare_graph(
+            'config runner = exec("printf startup", format = "bad-contract")\n'
+        )
+
+        result = rt.collect_startup_config_graph(prepared, names={"runner"})
+
+        assert not result.ok
+        assert result.diagnostics
+        assert result.checked_graph is not None
+
+    def test_startup_config_graph_reports_ir_contract_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from agm.agl.diagnostics import Diagnostic
+
+        def fail_ir_contracts(_executable: object, _codecs: object) -> object:
+            return {}, [Diagnostic(message="contract failed", line=1)]
+
+        monkeypatch.setattr("agm.agl.pipeline._materialize_ir_contracts", fail_ir_contracts)
+        prepared = _prepare_graph('config runner = "ok"\n')
+
+        result = PipelineDriver().collect_startup_config_graph(prepared, names={"runner"})
+
+        assert not result.ok
+        assert result.diagnostics
+        assert result.checked_graph is not None
+
+    def test_startup_config_graph_materializes_custom_codec_contract(self) -> None:
+        class SchemaTextCodec:
+            @property
+            def name(self) -> str:
+                return "schema-text"
+
+            @property
+            def supported_kinds(self) -> frozenset[str]:
+                return frozenset({"text"})
+
+            def supports_type(self, t: Type) -> bool:
+                return isinstance(t, TextType)
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=None,
+                    format_instructions="SCHEMA-TEXT",
+                    json_schema={"expected": "schema"},
+                )
+
+            def parse(
+                self,
+                raw: str,
+                *,
+                strict_json: bool = False,
+                schema: dict[str, object] | None = None,
+            ) -> ParseResult:
+                if schema != {"expected": "schema"}:
+                    return ParseResult.failure("missing custom schema")
+                return ParseResult.success(TextValue(raw))
+
+        rt = PipelineDriver()
+        rt.register_codec(SchemaTextCodec())
+        prepared = _prepare_graph(
+            'config runner = exec("printf startup", format = "schema-text")\n'
+        )
+
+        result = rt.collect_startup_config_graph(prepared, names={"runner"})
+
+        assert result.ok, result.error
+        assert result.values["runner"] == TextValue("startup")
 
     def test_startup_config_runtime_error_returns_error(self) -> None:
         prepared = _prepare_graph('config runner = raise Abort(message = "boom")\n')

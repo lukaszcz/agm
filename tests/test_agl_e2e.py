@@ -59,16 +59,26 @@ def _load_json(path: Path) -> Any:
 
 @dataclass
 class ScriptedAgent:
-    """Replays a scenario's scripted responses and records rendered prompts."""
+    """Replays a scenario's scripted responses and records rendered prompts.
+
+    ``schemas`` records, alongside each call's ``prompt``, the structured JSON
+    Schema from the output contract for that same call. It is a SEPARATE list
+    from ``prompts`` so existing ``equals``/``contains`` assertions against the
+    literal user prompt are unaffected; a scenario that wants to assert on the
+    schema instead uses ``schema_contains``.
+    """
 
     name: str
     responses: list[str]
     repeat_last: bool = False
     prompts: list[str] = field(default_factory=list)
+    schemas: list[Any] = field(default_factory=list)
     overflowed: bool = False
 
     def __call__(self, request: Any) -> str:
         self.prompts.append(request.prompt)
+        contract = request.output_contract
+        self.schemas.append(contract.json_schema if contract is not None else None)
         index = len(self.prompts) - 1
         if index < len(self.responses):
             return self.responses[index]
@@ -174,6 +184,17 @@ def _assert_output(out: str, expect: dict[str, Any]) -> None:
         assert needle not in out, f"{needle!r} unexpectedly in stdout {out!r}"
 
 
+def _schema_contains(schema: Any, needle: str) -> bool:
+    if isinstance(schema, dict):
+        return any(
+            str(key) == needle or _schema_contains(value, needle)
+            for key, value in schema.items()
+        )
+    if isinstance(schema, list):
+        return any(_schema_contains(item, needle) for item in schema)
+    return schema == needle
+
+
 def _assert_calls(agents: dict[str, ScriptedAgent], expect: dict[str, Any]) -> None:
     for name, agent in agents.items():
         assert not agent.overflowed, f"agent {name!r} was called more times than scripted"
@@ -199,6 +220,9 @@ def _assert_calls(agents: dict[str, ScriptedAgent], expect: dict[str, Any]) -> N
             assert needle in prompt, f"{needle!r} not in prompt {prompt!r}"
         for needle in spec.get("not_contains", []):
             assert needle not in prompt, f"{needle!r} unexpectedly in prompt {prompt!r}"
+        for needle in spec.get("schema_contains", []):
+            schema = agents[spec["agent"]].schemas[call]
+            assert _schema_contains(schema, needle), f"{needle!r} not in schema {schema!r}"
 
 
 def _scenario_params() -> list[Any]:

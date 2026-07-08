@@ -1,0 +1,34 @@
+# Mutual recursion between a record and an enum: Expr.Block holds a
+# list[Stmt], and Stmt.value holds an Expr, so the two declarations are
+# mutually recursive (guarded here by the list, though neither actually
+# NEEDS a guard since Expr's Lit variant is already a base case). Folds over
+# both via a single recursive function.
+enum Expr
+  | Lit(value: int)
+  | Add(lhs: Expr, rhs: Expr)
+  | Block(stmts: list[Stmt])
+
+record Stmt
+  name: text
+  value: Expr
+
+def eval_expr(e: Expr) -> int =
+  case e of
+    | Lit(value) => value
+    | Add(lhs, rhs) => eval_expr(lhs) + eval_expr(rhs)
+    | Block(stmts) =>
+        var total: int = 0
+        for s in stmts do
+          total := total + eval_expr(s.value)
+        total
+
+param x: int
+param y: int
+
+let block_expr = Block(stmts = [
+  Stmt(name = "a", value = Lit(value = x)),
+  Stmt(name = "b", value = Add(lhs = Lit(value = y), rhs = Lit(value = 1))),
+])
+
+print eval_expr(block_expr)
+print eval_expr(Add(lhs = Lit(value = x), rhs = Lit(value = y)))

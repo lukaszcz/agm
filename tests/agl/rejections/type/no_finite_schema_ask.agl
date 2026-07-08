@@ -1,0 +1,10 @@
+record Pair[A, B]
+  first: A
+  second: B
+
+enum Perfect[T]
+  | Single(value: T)
+  | Succ(next: Perfect[Pair[T, T]])
+
+let x = ask-request::[Perfect[int]]("Q")
+x

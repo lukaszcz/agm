@@ -1,0 +1,26 @@
+# Recursive exception guarded by a list field: ValidationError.causes holds
+# more ValidationErrors, guarded by list[...] exactly like a recursive
+# record would be. A recursive function builds a chain of nested causes,
+# the exception is raised and caught, and the caught fields (including the
+# nested cause's own field) are asserted.
+exception ValidationError extends Exception
+  field_name: text
+  causes: list[ValidationError]
+
+param field_name: text
+param depth: int
+
+def make_causes(d: int) -> list[ValidationError] =
+  if d <= 0 => []
+  else => [ValidationError(message = "nested failure", field_name = "cause_${d}", causes = make_causes(d - 1))]
+
+try
+  raise ValidationError(message = "invalid", field_name = field_name, causes = make_causes(depth))
+catch ValidationError as e =>
+  print e.field_name
+  var count: int = 0
+  for c in e.causes do
+    count := count + 1
+  print count
+  if count > 0 =>
+    print e.causes[0].field_name

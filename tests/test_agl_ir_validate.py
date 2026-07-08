@@ -1476,6 +1476,27 @@ class TestM6aIrParamValidation:
         with pytest.raises(InvalidIrError, match="start_offset"):
             validate_ir(prog, deep=False)
 
+    def test_ir_param_external_decoder_refs_are_validated_deep(self) -> None:
+        """IrParam external decoders must not carry dangling recursive refs."""
+        from agm.agl.ir.contracts import ParamDecoder, RefDecode
+        from agm.agl.ir.program import IrParam
+
+        p = IrParam(
+            symbol=SYM0,
+            public_name="tree",
+            required=True,
+            default=None,
+            location=LOC,
+            external_decoder=ParamDecoder(
+                target_type_label="Tree",
+                json_schema="{}",
+                decode=RefDecode("Tree"),
+            ),
+        )
+        prog = self._make_program_with_params((p,))
+        with pytest.raises(InvalidIrError, match="RefDecode.*Tree"):
+            validate_ir(prog, deep=True)
+
 
 # ===========================================================================
 # IrExec validation
@@ -1546,6 +1567,147 @@ class TestM6cIrExecValidation:
         )
         prog = self._make_prog_with_contract(node, cid, {})  # empty contracts
         with pytest.raises(InvalidIrError, match="9999"):
+            validate_ir(prog, deep=True)
+
+    def test_contract_refdecode_cycle_raises_deep(self) -> None:
+        """Contract decoders must not contain ref-only cycles in their defs."""
+        from agm.agl.ir.contracts import ContractRequest, RefDecode
+        from agm.agl.ir.ids import ContractId
+        from agm.agl.ir.nodes import IrExec
+
+        cid = ContractId(value=0)
+        contract = ContractRequest(
+            codec_name="json",
+            strict_json=None,
+            json_schema="{}",
+            decode=RefDecode("A"),
+            target_type_label="A",
+            structured_exec=False,
+            format_instructions="",
+            is_unit=False,
+            defs=(("A", RefDecode("A")),),
+        )
+        node = IrExec(
+            location=LOC,
+            command=IrConstText(location=LOC, value="echo hi"),
+            contract_id=cid,
+            max_attempts=1,
+        )
+        prog = self._make_prog_with_contract(node, cid, {cid: contract})
+        with pytest.raises(InvalidIrError, match="RefDecode.*cycle.*A"):
+            validate_ir(prog, deep=True)
+
+    def test_contract_duplicate_decode_defs_key_raises_deep(self) -> None:
+        """Duplicate decode defs keys are rejected before dict coercion."""
+        from agm.agl.ir.contracts import ContractRequest, RefDecode, ScalarDecode, ScalarKind
+        from agm.agl.ir.ids import ContractId
+        from agm.agl.ir.nodes import IrExec
+
+        cid = ContractId(value=0)
+        contract = ContractRequest(
+            codec_name="json",
+            strict_json=None,
+            json_schema="{}",
+            decode=RefDecode("A"),
+            target_type_label="A",
+            structured_exec=False,
+            format_instructions="",
+            is_unit=False,
+            defs=(
+                ("A", ScalarDecode(ScalarKind.INT)),
+                ("A", ScalarDecode(ScalarKind.TEXT)),
+            ),
+        )
+        node = IrExec(
+            location=LOC,
+            command=IrConstText(location=LOC, value="echo hi"),
+            contract_id=cid,
+            max_attempts=1,
+        )
+        prog = self._make_prog_with_contract(node, cid, {cid: contract})
+        with pytest.raises(InvalidIrError, match="duplicate.*A"):
+            validate_ir(prog, deep=True)
+
+    def test_custom_contract_rejects_defs_without_decode(self) -> None:
+        """Custom contracts may carry decode metadata, but defs require a decode root."""
+        from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+        from agm.agl.ir.ids import ContractId
+        from agm.agl.ir.nodes import IrExec
+
+        cid = ContractId(value=0)
+        contract = ContractRequest(
+            codec_name="custom-json",
+            strict_json=None,
+            json_schema="{}",
+            decode=None,
+            target_type_label="text",
+            structured_exec=False,
+            format_instructions="",
+            is_unit=False,
+            defs=(("A", ScalarDecode(ScalarKind.INT)),),
+        )
+        node = IrExec(
+            location=LOC,
+            command=IrConstText(location=LOC, value="echo hi"),
+            contract_id=cid,
+            max_attempts=1,
+        )
+        prog = self._make_prog_with_contract(node, cid, {cid: contract})
+        with pytest.raises(InvalidIrError, match="defs but decode is None"):
+            validate_ir(prog, deep=True)
+
+    def test_text_contract_rejects_stale_json_decode_fields(self) -> None:
+        """Text contracts must not carry stale JSON-only decode fields."""
+        from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+        from agm.agl.ir.ids import ContractId
+        from agm.agl.ir.nodes import IrExec
+
+        cid = ContractId(value=0)
+        contract = ContractRequest(
+            codec_name="text",
+            strict_json=None,
+            json_schema="{}",
+            decode=ScalarDecode(ScalarKind.INT),
+            target_type_label="text",
+            structured_exec=False,
+            format_instructions="",
+            is_unit=False,
+        )
+        node = IrExec(
+            location=LOC,
+            command=IrConstText(location=LOC, value="echo hi"),
+            contract_id=cid,
+            max_attempts=1,
+        )
+        prog = self._make_prog_with_contract(node, cid, {cid: contract})
+        with pytest.raises(InvalidIrError, match="must not carry json_schema/decode/defs"):
+            validate_ir(prog, deep=True)
+
+    def test_unit_contract_rejects_stale_json_decode_fields(self) -> None:
+        """Unit contracts skip parsing and must not carry JSON decode fields."""
+        from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+        from agm.agl.ir.ids import ContractId
+        from agm.agl.ir.nodes import IrExec
+
+        cid = ContractId(value=0)
+        contract = ContractRequest(
+            codec_name="json",
+            strict_json=None,
+            json_schema="{}",
+            decode=ScalarDecode(ScalarKind.INT),
+            target_type_label="unit",
+            structured_exec=False,
+            format_instructions="",
+            is_unit=True,
+        )
+        node = IrExec(
+            location=LOC,
+            command=IrConstText(location=LOC, value="echo hi"),
+            contract_id=cid,
+            max_attempts=1,
+        )
+        prog = self._make_prog_with_contract(node, cid, {cid: contract})
+        with pytest.raises(InvalidIrError, match="must not carry json_schema/decode/defs"):
             validate_ir(prog, deep=True)
 
     def test_ir_exec_bad_max_attempts_raises_deep(self) -> None:

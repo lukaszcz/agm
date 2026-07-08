@@ -17,6 +17,7 @@ import pytest
 from agm.agl.diagnostics import AglError
 from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.runtime.request import AgentRequest, AgentResponse
+from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS, create_seeded_type_table
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPES,
@@ -178,13 +179,14 @@ class TestStdlib:
         for name, typ in BUILTIN_PRELUDE_TYPES.items():
             if name in COMPATIBILITY_PRELUDE_TYPE_NAMES:
                 continue
+            typedef = BUILTIN_PRELUDE_TYPE_DEFS[name]
             if isinstance(typ, RecordType):
-                result = s.eval_entry(f"{name}({_constructor_args(dict(typ.fields))})")
+                result = s.eval_entry(f"{name}({_constructor_args(dict(typedef.fields))})")
                 assert result.ok, (name, result.diagnostics)
                 assert result.value_type is not None
                 assert result.value_type.name == name
             elif isinstance(typ, EnumType):
-                for variant, fields in typ.variants.items():
+                for variant, fields in typedef.variants:
                     args = _constructor_args(dict(fields))
                     call = f"{name}::{variant}({args})" if args else f"{name}::{variant}"
                     result = s.eval_entry(call)
@@ -194,17 +196,18 @@ class TestStdlib:
 
     def test_all_concrete_builtin_exceptions_are_available(self) -> None:
         s = ReplSession()
+        table = create_seeded_type_table()
 
         for name, typ in BUILTIN_EXCEPTIONS.items():
             assert isinstance(typ, ExceptionType)
-            if typ.abstract:
+            if table.exception_def(typ).abstract:
                 result = s.eval_entry(f'{name}(message = "x")')
                 assert not result.ok
                 assert any("abstract" in diagnostic.message for diagnostic in result.diagnostics)
                 continue
             fields = {
                 field_name: field_type
-                for field_name, field_type in typ.fields.items()
+                for field_name, field_type in table.exception_fields(typ).items()
                 if field_name != "trace_id"
             }
             result = s.eval_entry(f"{name}({_constructor_args(fields)})")
@@ -242,6 +245,123 @@ class TestRedefinition:
         assert use.ok
         bad = s.eval_entry("let r2 = R(a = 1)")
         assert not bad.ok  # old field 'a' no longer valid
+
+    def test_record_redefinition_clears_generic_metadata(self) -> None:
+        s = ReplSession()
+        first = s.eval_entry("record Box[T]\n  x: T")
+        assert first.ok
+        second = s.eval_entry("record Box\n  x: int")
+        assert second.ok
+
+        use = s.eval_entry("let y: Box[int] = Box(x = 1)")
+
+        assert not use.ok
+        assert any("does not take type arguments" in d.message for d in use.diagnostics)
+
+
+# ---------------------------------------------------------------------------
+# Recursive types across entries
+# ---------------------------------------------------------------------------
+
+
+class TestRecursiveTypesAcrossEntries:
+    """A recursive type declared in one entry is usable in later entries.
+
+    The REPL (graph mode) re-validates the accumulated table on every entry;
+    this is idempotent for a declaration that already passed inhabitation in
+    the entry that declared it.
+    """
+
+    def test_recursive_enum_constructed_and_matched_in_later_entries(self) -> None:
+        s = ReplSession()
+        declare = s.eval_entry(
+            "enum Tree\n  | Leaf\n  | Node(value: int, left: Tree, right: Tree)"
+        )
+        assert declare.ok
+
+        build = s.eval_entry(
+            "let t = Node(value = 1, left = Leaf(), right = Node(value = 2, left = Leaf(), "
+            "right = Leaf()))"
+        )
+        assert build.ok
+
+        match = s.eval_entry(
+            "case t of\n"
+            "  | Leaf() => 0\n"
+            "  | Node(value, left, right) => value"
+        )
+        assert match.ok
+        assert match.value is not None
+
+    def test_recursive_record_still_rejects_redefinition_style_reset(self) -> None:
+        # Redefinition semantics are unaffected: a later entry redeclaring
+        # the same name with a different (still recursive) shape shadows it,
+        # exactly like any other record redefinition.
+        s = ReplSession()
+        first = s.eval_entry("record Category\n  name: text\n  subcategories: list[Category]")
+        assert first.ok
+        second = s.eval_entry("record Category\n  label: text\n  kids: list[Category]")
+        assert second.ok
+        use = s.eval_entry('let c = Category(label = "root", kids = [])')
+        assert use.ok
+        stale = s.eval_entry('let bad = Category(name = "root", subcategories = [])')
+        assert not stale.ok
+
+    def test_type_redefinition_invalidation_detects_nested_nominal_types(self) -> None:
+        from agm.agl.semantics.types import (
+            DictType,
+            ExceptionType,
+            FunctionType,
+            ListType,
+            RecordType,
+            TextType,
+        )
+
+        names = frozenset({"R"})
+
+        assert ReplSession._type_mentions_entry_nominal(ExceptionType("R"), names)
+        assert ReplSession._type_mentions_entry_nominal(ListType(RecordType("R")), names)
+        assert ReplSession._type_mentions_entry_nominal(DictType(RecordType("R")), names)
+        assert ReplSession._type_mentions_entry_nominal(
+            FunctionType((RecordType("R"),), TextType()), names
+        )
+        assert ReplSession._type_mentions_entry_nominal(FunctionType((), RecordType("R")), names)
+        assert not ReplSession._type_mentions_entry_nominal(TextType(), names)
+
+    def test_record_redefinition_invalidates_old_nominal_values(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("record R\n  old: int").ok
+        assert s.eval_entry("let stale = R(old = 1)").ok
+        assert s.eval_entry("record R\n  fresh: int").ok
+
+        result = s.eval_entry("stale.fresh")
+
+        assert not result.ok
+
+    def test_ask_with_recursive_output_type_does_not_crash(self) -> None:
+        """The REPL's contract-preview path (make_contract) handles a recursive ask target.
+
+        Regression coverage for the graph-session contract-preview call
+        (``materialize_contract`` → ``JsonCodec.make_contract`` →
+        ``derive_schema``/``build_decode_schema``) with a recursive type: before
+        the decode side supported ``$defs``/``RefDecode``, ``build_decode_schema``
+        recursed forever on a finite recursive type and crashed lowering.
+        """
+        agent = CountingAgent('{"$case": "Node", "value": 1, "left": {"$case": "Leaf"}, '
+                               '"right": {"$case": "Leaf"}}')
+        s = ReplSession(default_agent=agent)
+        declare = s.eval_entry(
+            "enum Tree\n  | Leaf\n  | Node(value: int, left: Tree, right: Tree)"
+        )
+        assert declare.ok
+        asked = s.eval_entry('let t: Tree = ask """build a tree"""')
+        assert asked.ok
+        assert agent.calls == 1
+        match = s.eval_entry(
+            "case t of\n  | Leaf() => 0\n  | Node(value, left, right) => value"
+        )
+        assert match.ok
+        assert match.value == IntValue(1)
 
 
 # ---------------------------------------------------------------------------
@@ -418,9 +538,7 @@ class TestFailureEffects:
         s = ReplSession()
         result = s.eval_entry("param p: int = 7\nlet z: decimal = 1 / 0")
         assert not result.ok
-        assert [(name, _int(value)) for name, _type, value in s.declared_params()] == [
-            ("p", 7)
-        ]
+        assert [(name, _int(value)) for name, _type, value in s.declared_params()] == [("p", 7)]
 
     def test_runtime_raise_excludes_param_declared_after_failure(self) -> None:
         # Regression: a runtime failure that precedes a later
@@ -441,6 +559,30 @@ class TestFailureEffects:
         result = s.eval_entry("param p: decimal = 1 / 0")
         assert not result.ok
         assert s.declared_params() == []
+
+    def test_runtime_raise_does_not_promote_later_type(self) -> None:
+        s = ReplSession()
+        result = s.eval_entry("let z: decimal = 1 / 0\nrecord After\n  value: int")
+        assert not result.ok
+        assert not s.eval_entry("After").ok
+        assert not s.eval_entry("After(value = 3)").ok
+
+    def test_runtime_raise_does_not_promote_later_exception_type(self) -> None:
+        s = ReplSession()
+        result = s.eval_entry(
+            "let z: decimal = 1 / 0\nexception Later extends Exception\n  code: int"
+        )
+        assert not result.ok
+        assert not s.eval_entry("Later").ok
+        assert not s.eval_entry('Later(message = "m", code = 3)').ok
+
+    def test_runtime_raise_promotes_prior_exception_constructor(self) -> None:
+        s = ReplSession()
+        result = s.eval_entry(
+            "exception Before extends Exception\n  code: int\nlet z: decimal = 1 / 0"
+        )
+        assert not result.ok
+        assert s.eval_entry('Before(message = "m", code = 3)').ok
 
     def test_runtime_raise_preserves_prior_type_but_not_later_binding(self) -> None:
         s = ReplSession()
@@ -797,11 +939,11 @@ class TestLoadFile:
         f = tmp_path / "block.agl"
         f.write_text(
             "let n = 1\n"
-            "var label: text = \"\"\n"
+            'var label: text = ""\n'
             "if n == 1 =>\n"
-            "    label := \"one\"\n"
+            '    label := "one"\n'
             "| else =>\n"
-            "    label := \"many\"\n"
+            '    label := "many"\n'
             "label\n"
         )
         s = ReplSession()
@@ -812,13 +954,7 @@ class TestLoadFile:
 
     def test_load_file_record_block_slices_correctly(self, tmp_path: Path) -> None:
         f = tmp_path / "rec.agl"
-        f.write_text(
-            "record Point\n"
-            "    x: int\n"
-            "    y: int\n"
-            "let p = Point(x = 1, y = 2)\n"
-            "p.x\n"
-        )
+        f.write_text("record Point\n    x: int\n    y: int\nlet p = Point(x = 1, y = 2)\np.x\n")
         s = ReplSession()
         results = s.load_file(f)
         assert all(r.ok for r in results), [r.diagnostics for r in results if not r.ok]
@@ -1019,12 +1155,20 @@ class TestContractError:
     ) -> None:
         import agm.agl.runtime.contract as contract_mod
 
-        def bad_materialize(spec: object, codecs: object) -> object:
+        def bad_materialize(spec: object, codecs: object, type_table: object = None) -> object:
             raise ValueError("bad contract")
 
         monkeypatch.setattr(contract_mod, "materialize_contract", bad_materialize)
+        from agm.agl.runtime.codec import TextCodec
+
+        class BadCodec(TextCodec):
+            @property
+            def name(self) -> str:
+                return "bad"
+
         s = ReplSession(default_agent=CountingAgent("ok"))
-        r = s.eval_entry('let x = ask """hi"""')
+        s.register_codec(BadCodec())
+        r = s.eval_entry('let x = ask("hi", format = "bad")')
         assert not r.ok
         assert any("Contract error" in d.message for d in r.diagnostics)
         # Atomic: nothing promoted.
@@ -1583,8 +1727,8 @@ class TestImports:
         return s
 
     def test_import_basic_function_call(self, tmp_path: Path) -> None:
-        lib = tmp_path / 'mylib.agl'
-        lib.write_text('def add(a: int, b: int) -> int = a + b\n')
+        lib = tmp_path / "mylib.agl"
+        lib.write_text("def add(a: int, b: int) -> int = a + b\n")
         s = self._make_session_with_root(tmp_path)
         # Open import: functions are in unqualified scope
         r = s.eval_entry("import mylib\nadd(3, 4)")
@@ -1593,8 +1737,8 @@ class TestImports:
         assert _int(r.value) == 7
 
     def test_import_persists_across_entries(self, tmp_path: Path) -> None:
-        lib = tmp_path / 'util.agl'
-        lib.write_text('def double(x: int) -> int = x * 2\n')
+        lib = tmp_path / "util.agl"
+        lib.write_text("def double(x: int) -> int = x * 2\n")
         s = self._make_session_with_root(tmp_path)
         r1 = s.eval_entry("import util")
         assert r1.ok, r1.diagnostics
@@ -1604,18 +1748,16 @@ class TestImports:
         assert _int(r2.value) == 10
 
     def test_import_using_hiding(self, tmp_path: Path) -> None:
-        lib = tmp_path / 'funcs.agl'
-        lib.write_text(
-            'def square(n: int) -> int = n * n\ndef cube(n: int) -> int = n * n * n\n'
-        )
+        lib = tmp_path / "funcs.agl"
+        lib.write_text("def square(n: int) -> int = n * n\ndef cube(n: int) -> int = n * n * n\n")
         s = self._make_session_with_root(tmp_path)
         r = s.eval_entry("import funcs using square\nsquare(4)")
         assert r.ok, r.diagnostics
         assert _int(r.value) == 16
 
     def test_import_as_qualifier(self, tmp_path: Path) -> None:
-        lib = tmp_path / 'math.agl'
-        lib.write_text('def inc(n: int) -> int = n + 1\n')
+        lib = tmp_path / "math.agl"
+        lib.write_text("def inc(n: int) -> int = n + 1\n")
         s = self._make_session_with_root(tmp_path)
         # 'as' alias creates qualifier, use :: for qualified access
         r = s.eval_entry("import math as m\nm::inc(9)")
@@ -1626,8 +1768,8 @@ class TestImports:
         # ::name should resolve to a prior session binding in graph mode
         s = self._make_session_with_root(tmp_path)
         s.eval_entry("let x = 42")
-        lib = tmp_path / 'refs.agl'
-        lib.write_text('def noop(n: int) -> int = n\n')
+        lib = tmp_path / "refs.agl"
+        lib.write_text("def noop(n: int) -> int = n\n")
         r = s.eval_entry("import refs\n::x")
         assert r.ok, r.diagnostics
         assert _int(r.value) == 42
@@ -1636,8 +1778,8 @@ class TestImports:
         # Regression (Finding 4): ::x in the REPL (graph mode) must return the
         # session-level binding, not a same-named lexical param.
         # A dummy lib import is used to trigger graph mode so ::name resolves correctly.
-        lib = tmp_path / 'dummy.agl'
-        lib.write_text('def noop(n: int) -> int = n\n')
+        lib = tmp_path / "dummy.agl"
+        lib.write_text("def noop(n: int) -> int = n\n")
         s = self._make_session_with_root(tmp_path)
         r1 = s.eval_entry("let x = 100")
         assert r1.ok, r1.diagnostics
@@ -1645,11 +1787,39 @@ class TestImports:
         r2 = s.eval_entry("import dummy\ndef shadow(x: int) -> int = ::x\nshadow(7)")
         assert r2.ok, r2.diagnostics
         from agm.agl.semantics.values import IntValue
+
         assert r2.value == IntValue(100), f"Expected 100, got {r2.value}"
 
+    def test_graph_entry_type_body_can_reference_prior_repl_type(
+        self, tmp_path: Path
+    ) -> None:
+        lib = tmp_path / "dummy.agl"
+        lib.write_text("def noop(n: int) -> int = n\n")
+        s = self._make_session_with_root(tmp_path)
+        r1 = s.eval_entry("record R\n  x: int")
+        assert r1.ok, r1.diagnostics
+
+        r2 = s.eval_entry("import dummy\nrecord Box\n  r: R\nBox(r = R(x = 1))")
+
+        assert r2.ok, r2.diagnostics
+
+    def test_graph_entry_function_signature_can_reference_prior_repl_type(
+        self, tmp_path: Path
+    ) -> None:
+        lib = tmp_path / "dummy.agl"
+        lib.write_text("def noop(n: int) -> int = n\n")
+        s = self._make_session_with_root(tmp_path)
+        r1 = s.eval_entry("record R\n  x: int")
+        assert r1.ok, r1.diagnostics
+
+        r2 = s.eval_entry("import dummy\ndef get_x(r: R) -> int = r.x\nget_x(R(x = 2))")
+
+        assert r2.ok, r2.diagnostics
+        assert _int(r2.value) == 2
+
     def test_import_error_rollback(self, tmp_path: Path) -> None:
-        lib = tmp_path / 'goodlib.agl'
-        lib.write_text('def val() -> int = 99\n')
+        lib = tmp_path / "goodlib.agl"
+        lib.write_text("def val() -> int = 99\n")
         s = self._make_session_with_root(tmp_path)
         s.eval_entry("let keep = 1")
         before = _snapshot(s)
@@ -1673,15 +1843,13 @@ class TestImports:
         s = ReplSession()
         from agm.agl.modules.roots import RootSet
 
-        s._roots = RootSet(
-            roots=frozenset({Path(__file__).resolve().parents[1] / "stdlib"})
-        )
+        s._roots = RootSet(roots=frozenset({Path(__file__).resolve().parents[1] / "stdlib"}))
         r = s.eval_entry("import something\n1")
         assert not r.ok
         assert r.diagnostics
 
     def test_reuse_cached_module(self, tmp_path: Path) -> None:
-        lib = tmp_path / 'cached.agl'
+        lib = tmp_path / "cached.agl"
         lib.write_text('def greet() -> text = "hello"\n')
         s = self._make_session_with_root(tmp_path)
         from agm.agl.modules.ids import ModuleId
@@ -1697,8 +1865,8 @@ class TestImports:
         assert r2.ok, r2.diagnostics
 
     def test_reset_clears_imports(self, tmp_path: Path) -> None:
-        lib = tmp_path / 'temp.agl'
-        lib.write_text('def f() -> int = 1\n')
+        lib = tmp_path / "temp.agl"
+        lib.write_text("def f() -> int = 1\n")
         s = self._make_session_with_root(tmp_path)
         r = s.eval_entry("import temp\nf()")
         assert r.ok, r.diagnostics
@@ -1706,31 +1874,48 @@ class TestImports:
         assert not s._loaded_lib_modules
         assert not s._accumulated_imports
 
+    def test_runtime_failure_restores_unpromoted_type_nominal(self, tmp_path: Path) -> None:
+        s = self._make_session_with_root(tmp_path)
+        r1 = s.eval_entry("record R\n  x: int")
+        assert r1.ok, r1.diagnostics
+
+        r2 = s.eval_entry("let z: decimal = 1 / 0\nrecord R\n  y: int")
+        assert not r2.ok
+        from agm.agl.ir.ids import NominalId
+        from agm.agl.modules.ids import ENTRY_ID
+
+        assert s._link_image._state.nominals[NominalId(ENTRY_ID, "R")].fields == ("x",)
+
+        r3 = s.eval_entry("let f = R\nlet v = f(1)\nv.x")
+
+        assert r3.ok, r3.diagnostics
+        assert _int(r3.value) == 1
+
     def test_runtime_failure_does_not_mark_module_linked(self, tmp_path: Path) -> None:
         # Regression: when an entry imports a previously unseen
         # module and then raises at runtime, the module must NOT be marked as
         # persistently linked. Otherwise the next import reloads it with fresh
         # declaration IDs but skips lowering it (already linked), crashing with
         # ``no FunctionId for function decl_node_id``.
-        lib = tmp_path / 'boom.agl'
-        lib.write_text('def f() -> int = 42\n')
+        lib = tmp_path / "boom.agl"
+        lib.write_text("def f() -> int = 42\n")
         s = self._make_session_with_root(tmp_path)
-        r1 = s.eval_entry('import boom\nlet z: decimal = 1 / 0')
+        r1 = s.eval_entry("import boom\nlet z: decimal = 1 / 0")
         assert not r1.ok
         # The failed entry cached neither the loaded module nor the link.
         assert not s._loaded_lib_modules
         assert not s._link_image._linked_modules
         # Re-importing reloads and re-lowers boom (with fresh decl IDs) and
         # evaluates successfully instead of hitting a stale-link assertion.
-        r2 = s.eval_entry('import boom\nf()')
+        r2 = s.eval_entry("import boom\nf()")
         assert r2.ok, r2.diagnostics
         assert _int(r2.value) == 42
 
     def test_scope_error_in_graph_mode(self, tmp_path: Path) -> None:
         # Declaring a reserved built-in name as an agent in graph mode
         # triggers AglScopeError during resolve_graph.
-        lib = tmp_path / 'mylib.agl'
-        lib.write_text('def add(a: int, b: int) -> int = a + b\n')
+        lib = tmp_path / "mylib.agl"
+        lib.write_text("def add(a: int, b: int) -> int = a + b\n")
         s = self._make_session_with_root(tmp_path)
         r = s.eval_entry("import mylib\nagent ask")
         assert not r.ok
@@ -1738,8 +1923,8 @@ class TestImports:
 
     def test_check_only_graph_mode(self, tmp_path: Path) -> None:
         # check_only=True in graph mode returns a check result without evaluating.
-        lib = tmp_path / 'mylib.agl'
-        lib.write_text('def add(a: int, b: int) -> int = a + b\n')
+        lib = tmp_path / "mylib.agl"
+        lib.write_text("def add(a: int, b: int) -> int = a + b\n")
         s = self._make_session_with_root(tmp_path)
         r = s.eval_entry("import mylib\nadd(1, 2)", check_only=True)
         assert r.ok, r.diagnostics
@@ -1748,8 +1933,8 @@ class TestImports:
 
     def test_agent_decl_in_graph_mode(self, tmp_path: Path) -> None:
         # Declaring an agent in graph mode installs it in the entry scope.
-        lib = tmp_path / 'mylib.agl'
-        lib.write_text('def id_fn(n: int) -> int = n\n')
+        lib = tmp_path / "mylib.agl"
+        lib.write_text("def id_fn(n: int) -> int = n\n")
         s = self._make_session_with_root(tmp_path)
         s.register_agent("helper", CountingAgent("ok"))
         r = s.eval_entry("import mylib\nagent helper\nid_fn(7)")
@@ -1757,7 +1942,7 @@ class TestImports:
 
     def test_agl_raise_in_graph_mode(self, tmp_path: Path) -> None:
         # An AglRaise exception during graph-mode evaluation aborts the entry.
-        lib = tmp_path / 'mylib.agl'
+        lib = tmp_path / "mylib.agl"
         lib.write_text('def boom() -> int = raise Abort(message = "boom")\n')
         s = self._make_session_with_root(tmp_path)
         r = s.eval_entry("import mylib\nboom()")
@@ -1767,7 +1952,7 @@ class TestImports:
     def test_agl_raise_in_graph_mode_records_exception_trace(self, tmp_path: Path) -> None:
         import json
 
-        lib = tmp_path / 'mylib.agl'
+        lib = tmp_path / "mylib.agl"
         lib.write_text('def boom() -> int = raise Abort(message = "boom")\n')
         trace = tmp_path / "trace.jsonl"
         s = self._make_session_with_root(tmp_path)
@@ -1785,9 +1970,9 @@ class TestImports:
     def test_re_import_replaces_accumulated(self, tmp_path: Path) -> None:
         # Re-importing the same module with a different using clause in a later
         # entry replaces the prior accumulated import declaration (dedup).
-        lib = tmp_path / 'mylib.agl'
+        lib = tmp_path / "mylib.agl"
         lib.write_text(
-            'def add(a: int, b: int) -> int = a + b\ndef mul(a: int, b: int) -> int = a * b\n'
+            "def add(a: int, b: int) -> int = a + b\ndef mul(a: int, b: int) -> int = a * b\n"
         )
         s = self._make_session_with_root(tmp_path)
         # Entry 1: open import of mylib (both add and mul in scope).
@@ -1805,8 +1990,8 @@ class TestImports:
     def test_inject_dedup_skips_already_imported(self, tmp_path: Path) -> None:
         # When the current entry already imports the same module as an accumulated
         # import, the injection skips it (preamble-empty branch).
-        lib = tmp_path / 'util.agl'
-        lib.write_text('def double(x: int) -> int = x * 2\n')
+        lib = tmp_path / "util.agl"
+        lib.write_text("def double(x: int) -> int = x * 2\n")
         s = self._make_session_with_root(tmp_path)
         # Entry 1: import util (accumulates it).
         r1 = s.eval_entry("import util\ndouble(2)")
@@ -1819,8 +2004,8 @@ class TestImports:
     def test_ensure_roots_lazy_init(self, tmp_path: Path) -> None:
         # When a ReplSession is created with cwd= but no explicit _roots,
         # _ensure_roots() builds the root set lazily on first import.
-        lib = tmp_path / 'lazylib.agl'
-        lib.write_text('def val() -> int = 42\n')
+        lib = tmp_path / "lazylib.agl"
+        lib.write_text("def val() -> int = 42\n")
         s = ReplSession(cwd=tmp_path)
         r = s.eval_entry("import lazylib\nval()")
         assert r.ok, r.diagnostics
@@ -1835,25 +2020,32 @@ class TestImports:
         # returns a failed entry with a "Contract error:" diagnostic.
         import agm.agl.runtime.contract as contract_mod
 
-        def bad_materialize(spec: object, codecs: object) -> object:
+        def bad_materialize(spec: object, codecs: object, type_table: object = None) -> object:
             raise ValueError("bad contract")
 
         monkeypatch.setattr(contract_mod, "materialize_contract", bad_materialize)
-        lib = tmp_path / 'mylib.agl'
-        lib.write_text('def add(a: int, b: int) -> int = a + b\n')
+        from agm.agl.runtime.codec import TextCodec
+
+        class BadCodec(TextCodec):
+            @property
+            def name(self) -> str:
+                return "bad"
+
+        lib = tmp_path / "mylib.agl"
+        lib.write_text("def add(a: int, b: int) -> int = a + b\n")
         s = self._make_session_with_root(tmp_path)
-        # The ask() built-in produces a contract spec; trigger it in graph mode.
+        # The custom-format ask produces a pre-lower contract materialization error.
         s.register_agent("helper", CountingAgent("ok"))
-        r = s.eval_entry('import mylib\nagent helper\nask("hi", agent = helper)')
+        s.register_codec(BadCodec())
+        r = s.eval_entry('import mylib\nagent helper\nask("hi", agent = helper, format = "bad")')
         assert not r.ok
         assert any("Contract error" in d.message for d in r.diagnostics)
-
 
     def test_program_decl_conflict_in_graph_mode(self, tmp_path: Path) -> None:
         # _pre_eval_param_check returning non-None in graph mode:
         # setting a different program name when one is already set.
-        lib = tmp_path / 'mylib.agl'
-        lib.write_text('def add(a: int, b: int) -> int = a + b\n')
+        lib = tmp_path / "mylib.agl"
+        lib.write_text("def add(a: int, b: int) -> int = a + b\n")
         s = self._make_session_with_root(tmp_path)
         r1 = s.eval_entry("program first\n1")
         assert r1.ok, r1.diagnostics
@@ -1864,11 +2056,11 @@ class TestImports:
 
     def test_cancellation_in_graph_mode(self, tmp_path: Path) -> None:
         # AgentCancelled during graph-mode execution aborts the entry.
-        lib = tmp_path / 'mylib.agl'
-        lib.write_text('def noop(n: int) -> int = n\n')
+        lib = tmp_path / "mylib.agl"
+        lib.write_text("def noop(n: int) -> int = n\n")
         s = self._make_session_with_root(tmp_path)
         s.register_agent("helper", _CancellingAgent())
-        r = s.eval_entry("import mylib\nagent helper\nnoop(ask(\"hi\", agent = helper))")
+        r = s.eval_entry('import mylib\nagent helper\nnoop(ask("hi", agent = helper))')
         assert not r.ok
         assert r.error is None
         assert r.diagnostics
@@ -1877,8 +2069,8 @@ class TestImports:
         # Regression (Finding 1): parse error in an imported module must surface
         # with source_label pointing to the module file, not a bare line-1 diagnostic
         # with no location information.
-        lib = tmp_path / 'badmod.agl'
-        lib.write_text('def bad = !!!\n')  # syntax error
+        lib = tmp_path / "badmod.agl"
+        lib.write_text("def bad = !!!\n")  # syntax error
         s = self._make_session_with_root(tmp_path)
         r = s.eval_entry("import badmod")
         assert not r.ok
@@ -1901,10 +2093,10 @@ class TestImports:
         # must BOTH persist. The dedup key must include the wildcard flag so they
         # don't clobber each other.
         # Create a submodule foo.a and a top-level module foo.
-        foo_dir = tmp_path / 'foo'
+        foo_dir = tmp_path / "foo"
         foo_dir.mkdir()
-        (foo_dir / 'a.agl').write_text('def val() -> int = 42\n')
-        (tmp_path / 'foo.agl').write_text('def top() -> int = 99\n')
+        (foo_dir / "a.agl").write_text("def val() -> int = 42\n")
+        (tmp_path / "foo.agl").write_text("def top() -> int = 99\n")
         s = self._make_session_with_root(tmp_path)
         # Entry 1: wildcard import of foo.* (imports foo.a, brings val into scope)
         r1 = s.eval_entry("import foo.*\nval()")
@@ -1916,6 +2108,7 @@ class TestImports:
         r3 = s.eval_entry("val()")
         assert r3.ok, r3.diagnostics
         from agm.agl.semantics.values import IntValue
+
         assert r3.value == IntValue(42)
 
     def test_generic_graph_load_error_surfaces_as_diagnostic(
@@ -1932,8 +2125,8 @@ class TestImports:
         def bad_build(*args: object, **kwargs: object) -> object:
             raise RuntimeError("unexpected loader failure")
 
-        lib = tmp_path / 'mylib.agl'
-        lib.write_text('def noop(n: int) -> int = n\n')
+        lib = tmp_path / "mylib.agl"
+        lib.write_text("def noop(n: int) -> int = n\n")
         s = self._make_session_with_root(tmp_path)
         monkeypatch.setattr(loader_mod, "build_repl_graph", bad_build)
         r = s.eval_entry("import mylib\nnoop(1)")
@@ -2006,9 +2199,9 @@ class TestReplConfigDecl:
         for source in [
             "config log = true",
             "config max-iters = 5",
-            "config runner = \"echo\"",
+            'config runner = "echo"',
             "config strict-json = false",
-            "config timeout = \"30s\"",
+            'config timeout = "30s"',
             'config log-file = "trace.jsonl"',
         ]:
             r = s.eval_entry(source)
@@ -2186,6 +2379,7 @@ class TestReplConfigDecl:
 
     def test_config_base_from_program_table(self) -> None:
         """A bare ``config KEY`` resolves from the [<program>] config table."""
+
         # The program config loader returns max-iters = 3 for program "myprog".
         def _loader(name: str) -> dict[str, object]:
             return {"max-iters": 3} if name == "myprog" else {}
@@ -2464,7 +2658,7 @@ class TestBareTypeEntry:
         from agm.agl.modules.ids import ModuleId
         from agm.agl.parser import parse_type_expr
         from agm.agl.scope.imports import ImportEnv
-        from agm.agl.semantics.types import RecordType, TypeVarType
+        from agm.agl.semantics.types import RecordType
         from agm.agl.typecheck.env import GenericTypeDef, TypeEnvironment
 
         left = ModuleId(("left",))
@@ -2472,20 +2666,12 @@ class TestBareTypeEntry:
         left_def = GenericTypeDef(
             kind="record",
             type_params=("T",),
-            template=RecordType(
-                name="Box",
-                fields={"value": TypeVarType("T")},
-                module_id=left,
-            ),
+            template=RecordType(name="Box", module_id=left),
         )
         right_def = GenericTypeDef(
             kind="record",
             type_params=("T",),
-            template=RecordType(
-                name="Box",
-                fields={"value": TypeVarType("T")},
-                module_id=right,
-            ),
+            template=RecordType(name="Box", module_id=right),
         )
         env = TypeEnvironment(
             graph_generic_table={(left, "Box"): left_def, (right, "Box"): right_def},
@@ -2501,14 +2687,14 @@ class TestBareTypeEntry:
         from agm.agl.modules.ids import ENTRY_ID, ModuleId
         from agm.agl.parser import parse_type_expr
         from agm.agl.scope.imports import ImportEnv
-        from agm.agl.semantics.types import RecordType, TypeVarType
+        from agm.agl.semantics.types import RecordType
         from agm.agl.syntax.types import NameT
         from agm.agl.typecheck.env import GenericTypeDef, TypeEnvironment
 
         local_def = GenericTypeDef(
             kind="record",
             type_params=("T",),
-            template=RecordType(name="Box", fields={"value": TypeVarType("T")}),
+            template=RecordType(name="Box"),
         )
         local_expr = parse_type_expr("::Box")
         assert isinstance(local_expr, NameT)

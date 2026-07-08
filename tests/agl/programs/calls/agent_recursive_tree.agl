@@ -1,0 +1,23 @@
+# Recursive output type at the agent boundary: `Tree`'s derived JSON Schema
+# uses `$defs`/`$ref` (its instantiation graph closes on itself via a
+# self-loop), and the typeless decode mirror resolves the matching `RefDecode`
+# through its own defs table the same way. Parse-policy machinery (lenient
+# recovery, strict_json, retry, abort) works identically for a recursive
+# target as for any other output type.
+enum Tree
+  | Leaf
+  | Node(value: int, left: Tree, right: Tree)
+
+agent builder
+
+def sum_tree(t: Tree) -> int =
+  case t of
+    | Leaf() => 0
+    | Node(value, left, right) => value + sum_tree(left) + sum_tree(right)
+
+try
+  let t: Tree = ask("Build a tree.", agent = builder, on_parse_error = Retry(n = 1))
+  print sum_tree(t)
+catch AgentParseError as e =>
+  print "schema: ${e.expected_schema}"
+  raise e

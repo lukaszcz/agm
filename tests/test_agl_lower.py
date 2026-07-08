@@ -14,6 +14,8 @@ from __future__ import annotations
 import decimal
 from pathlib import Path
 
+import pytest
+
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.contracts import ConversionFailureMode, ConversionStrategy
 from agm.agl.ir.nodes import (
@@ -84,7 +86,6 @@ from agm.agl.semantics.types import (
     BoolType,
     DecimalType,
     DictType,
-    EnumType,
     FunctionType,
     IntType,
     JsonType,
@@ -98,6 +99,7 @@ from agm.agl.semantics.types import (
 from agm.agl.syntax.nodes import Placeholder
 from agm.agl.typecheck import check
 from agm.agl.typecheck.env import CheckedProgram
+from tests._agl_helpers import enum_type, record_type, type_table_for
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 
@@ -113,9 +115,7 @@ def _caps() -> HostCapabilities:
         supports_shell_exec=True,
         codec_kinds={
             "text": frozenset({"text"}),
-            "json": frozenset(
-                {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
-            ),
+            "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
         },
     )
 
@@ -176,12 +176,14 @@ def _make_lowerer(checked: CheckedProgram, source: str) -> "_Lowerer":
     from agm.agl.lower.lowerer import _LinkState, _Lowerer
     from agm.agl.modules.ids import ENTRY_ID
     from agm.util.text import normalize_newlines
+
     link = _LinkState()
     source_id = SourceId(link.next_source)
     link.next_source += 1
     normalized = normalize_newlines(source)
     link.sources[source_id] = SourceFile(display_name="<test>", normalized_text=normalized)
     return _Lowerer(checked, link, ENTRY_ID, source_id, source)
+
 
 # ---------------------------------------------------------------------------
 # compile_coercion unit tests — every branch
@@ -192,163 +194,290 @@ class TestCompileCoercion:
     # Identity / None cases
 
     def test_same_int_type_is_none(self) -> None:
-        assert compile_coercion(IntType(), IntType()) is None
+        assert compile_coercion(IntType(), IntType(), type_table_for()) is None
 
     def test_same_text_type_is_none(self) -> None:
-        assert compile_coercion(TextType(), TextType()) is None
+        assert compile_coercion(TextType(), TextType(), type_table_for()) is None
 
     def test_same_bool_type_is_none(self) -> None:
-        assert compile_coercion(BoolType(), BoolType()) is None
+        assert compile_coercion(BoolType(), BoolType(), type_table_for()) is None
 
     def test_same_decimal_type_is_none(self) -> None:
-        assert compile_coercion(DecimalType(), DecimalType()) is None
+        assert compile_coercion(DecimalType(), DecimalType(), type_table_for()) is None
 
     def test_same_unit_type_is_none(self) -> None:
-        assert compile_coercion(UnitType(), UnitType()) is None
+        assert compile_coercion(UnitType(), UnitType(), type_table_for()) is None
 
     def test_same_json_type_is_none(self) -> None:
         # json → json: identity, no coercion
-        assert compile_coercion(JsonType(), JsonType()) is None
+        assert compile_coercion(JsonType(), JsonType(), type_table_for()) is None
 
     def test_type_var_source_is_none(self) -> None:
         # TypeVarType source → opaque, no coercion
-        assert compile_coercion(TypeVarType("T"), IntType()) is None
+        assert compile_coercion(TypeVarType("T"), IntType(), type_table_for()) is None
 
     def test_type_var_target_is_none(self) -> None:
-        assert compile_coercion(IntType(), TypeVarType("T")) is None
+        assert compile_coercion(IntType(), TypeVarType("T"), type_table_for()) is None
 
     # Scalar coercions
 
     def test_int_to_decimal(self) -> None:
-        result = compile_coercion(IntType(), DecimalType())
+        result = compile_coercion(IntType(), DecimalType(), type_table_for())
         assert result == IntToDecimal()
 
     def test_int_to_json(self) -> None:
         # Rule 1: target is JsonType and source is not JsonType → ToJson
-        result = compile_coercion(IntType(), JsonType())
+        result = compile_coercion(IntType(), JsonType(), type_table_for())
         assert result == ToJson()
 
     def test_text_to_json(self) -> None:
-        result = compile_coercion(TextType(), JsonType())
+        result = compile_coercion(TextType(), JsonType(), type_table_for())
         assert result == ToJson()
 
     def test_bool_to_json(self) -> None:
-        result = compile_coercion(BoolType(), JsonType())
+        result = compile_coercion(BoolType(), JsonType(), type_table_for())
         assert result == ToJson()
 
     def test_decimal_to_json(self) -> None:
-        result = compile_coercion(DecimalType(), JsonType())
+        result = compile_coercion(DecimalType(), JsonType(), type_table_for())
         assert result == ToJson()
 
     def test_list_int_to_json(self) -> None:
-        result = compile_coercion(ListType(IntType()), JsonType())
+        result = compile_coercion(ListType(IntType()), JsonType(), type_table_for())
         assert result == ToJson()
 
     # List coercions
 
     def test_list_int_to_list_decimal(self) -> None:
-        result = compile_coercion(ListType(IntType()), ListType(DecimalType()))
+        result = compile_coercion(ListType(IntType()), ListType(DecimalType()), type_table_for())
         assert result == MapList(IntToDecimal())
 
     def test_list_int_to_list_int_is_none(self) -> None:
         # Element coercion is None → outer is None
-        result = compile_coercion(ListType(IntType()), ListType(IntType()))
+        result = compile_coercion(ListType(IntType()), ListType(IntType()), type_table_for())
         assert result is None
 
     def test_list_int_to_list_json(self) -> None:
-        result = compile_coercion(ListType(IntType()), ListType(JsonType()))
+        result = compile_coercion(ListType(IntType()), ListType(JsonType()), type_table_for())
         assert result == MapList(ToJson())
 
     def test_nested_list_int_to_list_list_decimal(self) -> None:
         result = compile_coercion(
             ListType(ListType(IntType())),
             ListType(ListType(DecimalType())),
+            type_table_for(),
         )
         assert result == MapList(MapList(IntToDecimal()))
 
     # Dict coercions
 
     def test_dict_int_to_dict_decimal(self) -> None:
-        result = compile_coercion(DictType(IntType()), DictType(DecimalType()))
+        result = compile_coercion(DictType(IntType()), DictType(DecimalType()), type_table_for())
         assert result == MapDictValues(IntToDecimal())
 
     def test_dict_int_to_dict_int_is_none(self) -> None:
-        result = compile_coercion(DictType(IntType()), DictType(IntType()))
+        result = compile_coercion(DictType(IntType()), DictType(IntType()), type_table_for())
         assert result is None
 
     def test_dict_int_to_dict_json(self) -> None:
-        result = compile_coercion(DictType(IntType()), DictType(JsonType()))
+        result = compile_coercion(DictType(IntType()), DictType(JsonType()), type_table_for())
         assert result == MapDictValues(ToJson())
 
     # Record coercions
+    #
+    # Source/target pairs that need genuinely different field shapes under the
+    # same display name are constructed with distinct module_ids: a TypeTable
+    # entry is keyed by (module_id, name), so two independent declarations
+    # named "R"/"E" in different modules resolve to independent shapes, while
+    # compile_coercion's record/enum branches don't care whether module_ids
+    # match (they only dispatch on isinstance).
 
     def test_record_no_field_needs_coercion_is_none(self) -> None:
-        rec = RecordType("R", {"x": IntType()})
-        result = compile_coercion(rec, rec)
+        rec, rec_def = record_type("R", {"x": IntType()})
+        result = compile_coercion(rec, rec, type_table_for(rec_def))
         assert result is None
 
     def test_record_one_field_needs_coercion(self) -> None:
-        src = RecordType("R", {"x": IntType(), "y": TextType()})
-        tgt = RecordType("R", {"x": DecimalType(), "y": TextType()})
-        result = compile_coercion(src, tgt)
+        from agm.agl.modules.ids import ModuleId
+
+        src, src_def = record_type(
+            "R", {"x": IntType(), "y": TextType()}, module_id=ModuleId.from_dotted("src_mod")
+        )
+        tgt, tgt_def = record_type(
+            "R", {"x": DecimalType(), "y": TextType()}, module_id=ModuleId.from_dotted("tgt_mod")
+        )
+        result = compile_coercion(src, tgt, type_table_for(src_def, tgt_def))
         assert result == MapRecordFields((("x", IntToDecimal()),))
 
     def test_record_multiple_fields_need_coercion(self) -> None:
-        src = RecordType("R", {"x": IntType(), "y": IntType()})
-        tgt = RecordType("R", {"x": DecimalType(), "y": DecimalType()})
-        result = compile_coercion(src, tgt)
+        from agm.agl.modules.ids import ModuleId
+
+        src, src_def = record_type(
+            "R", {"x": IntType(), "y": IntType()}, module_id=ModuleId.from_dotted("src_mod")
+        )
+        tgt, tgt_def = record_type(
+            "R",
+            {"x": DecimalType(), "y": DecimalType()},
+            module_id=ModuleId.from_dotted("tgt_mod"),
+        )
+        result = compile_coercion(src, tgt, type_table_for(src_def, tgt_def))
         assert result == MapRecordFields((("x", IntToDecimal()), ("y", IntToDecimal())))
 
     def test_record_target_field_not_in_source_skipped(self) -> None:
         # Only shared fields are coerced; fields not in source are ignored
-        src = RecordType("R", {"x": IntType()})
-        tgt = RecordType("R", {"x": DecimalType(), "z": TextType()})
-        result = compile_coercion(src, tgt)
+        from agm.agl.modules.ids import ModuleId
+
+        src, src_def = record_type("R", {"x": IntType()}, module_id=ModuleId.from_dotted("src_mod"))
+        tgt, tgt_def = record_type(
+            "R",
+            {"x": DecimalType(), "z": TextType()},
+            module_id=ModuleId.from_dotted("tgt_mod"),
+        )
+        result = compile_coercion(src, tgt, type_table_for(src_def, tgt_def))
         assert result == MapRecordFields((("x", IntToDecimal()),))
 
     # Enum coercions
 
     def test_enum_no_field_coercion_needed_is_none(self) -> None:
-        e = EnumType("E", {"A": {"x": IntType()}, "B": {}})
-        result = compile_coercion(e, e)
+        e, e_def = enum_type("E", {"A": {"x": IntType()}, "B": {}})
+        result = compile_coercion(e, e, type_table_for(e_def))
         assert result is None
 
     def test_enum_one_variant_field_needs_coercion(self) -> None:
-        src = EnumType("E", {"A": {"x": IntType()}, "B": {}})
-        tgt = EnumType("E", {"A": {"x": DecimalType()}, "B": {}})
-        result = compile_coercion(src, tgt)
+        from agm.agl.modules.ids import ModuleId
+
+        src, src_def = enum_type(
+            "E", {"A": {"x": IntType()}, "B": {}}, module_id=ModuleId.from_dotted("src_mod")
+        )
+        tgt, tgt_def = enum_type(
+            "E", {"A": {"x": DecimalType()}, "B": {}}, module_id=ModuleId.from_dotted("tgt_mod")
+        )
+        result = compile_coercion(src, tgt, type_table_for(src_def, tgt_def))
         assert result == MapEnumFields((("A", (("x", IntToDecimal()),)),))
 
     def test_enum_empty_result_variant_excluded(self) -> None:
         # Variant B has no fields needing coercion → only A in result
-        src = EnumType("E", {"A": {"x": IntType()}, "B": {"y": TextType()}})
-        tgt = EnumType("E", {"A": {"x": DecimalType()}, "B": {"y": TextType()}})
-        result = compile_coercion(src, tgt)
+        from agm.agl.modules.ids import ModuleId
+
+        src, src_def = enum_type(
+            "E",
+            {"A": {"x": IntType()}, "B": {"y": TextType()}},
+            module_id=ModuleId.from_dotted("src_mod"),
+        )
+        tgt, tgt_def = enum_type(
+            "E",
+            {"A": {"x": DecimalType()}, "B": {"y": TextType()}},
+            module_id=ModuleId.from_dotted("tgt_mod"),
+        )
+        result = compile_coercion(src, tgt, type_table_for(src_def, tgt_def))
         assert result == MapEnumFields((("A", (("x", IntToDecimal()),)),))
 
     def test_enum_target_field_not_in_source_skipped(self) -> None:
         # Target variant A has field "extra" not in source → only "x" can be coerced
-        src = EnumType("E", {"A": {"x": IntType()}})
-        tgt = EnumType("E", {"A": {"x": DecimalType(), "extra": TextType()}})
-        result = compile_coercion(src, tgt)
+        from agm.agl.modules.ids import ModuleId
+
+        src, src_def = enum_type(
+            "E", {"A": {"x": IntType()}}, module_id=ModuleId.from_dotted("src_mod")
+        )
+        tgt, tgt_def = enum_type(
+            "E",
+            {"A": {"x": DecimalType(), "extra": TextType()}},
+            module_id=ModuleId.from_dotted("tgt_mod"),
+        )
+        result = compile_coercion(src, tgt, type_table_for(src_def, tgt_def))
         # "extra" is not in source so it's skipped; only "x" coercion emitted
         assert result == MapEnumFields((("A", (("x", IntToDecimal()),)),))
 
     def test_enum_source_variant_not_in_target_skipped(self) -> None:
         # Source has variant B that target doesn't; only target variants are processed
-        src = EnumType("E", {"A": {"x": IntType()}, "B": {"y": IntType()}})
-        tgt = EnumType("E", {"A": {"x": DecimalType()}})
-        result = compile_coercion(src, tgt)
+        from agm.agl.modules.ids import ModuleId
+
+        src, src_def = enum_type(
+            "E",
+            {"A": {"x": IntType()}, "B": {"y": IntType()}},
+            module_id=ModuleId.from_dotted("src_mod"),
+        )
+        tgt, tgt_def = enum_type(
+            "E", {"A": {"x": DecimalType()}}, module_id=ModuleId.from_dotted("tgt_mod")
+        )
+        result = compile_coercion(src, tgt, type_table_for(src_def, tgt_def))
         assert result == MapEnumFields((("A", (("x", IntToDecimal()),)),))
+
+    def test_generic_instantiations_sharing_one_declaration(self) -> None:
+        # The real production scenario: a single generic record declaration
+        # (one (module_id, name) key) instantiated twice with different
+        # type_args.  Box[int] and Box[decimal] are two handles that share
+        # the SAME module_id/name — unlike the other record/enum cases above,
+        # which model two independent declarations via distinct module_ids —
+        # so their field shapes must come from substituting each handle's own
+        # type_args into the one registered TypeDef template, not from two
+        # separate table entries.
+        from agm.agl.modules.ids import ModuleId
+        from agm.agl.semantics.type_table import TypeDef, create_seeded_type_table
+
+        module_id = ModuleId.from_dotted("generics_mod")
+        table = create_seeded_type_table()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Box",
+                module_id=module_id,
+                type_params=("T",),
+                fields=(("value", TypeVarType("T")),),
+            )
+        )
+        box_int = RecordType("Box", type_args=(IntType(),), module_id=module_id)
+        box_decimal = RecordType("Box", type_args=(DecimalType(),), module_id=module_id)
+        result = compile_coercion(box_int, box_decimal, table)
+        assert result == MapRecordFields((("value", IntToDecimal()),))
+
+    def test_unequal_instantiations_of_recursive_declaration_raise_instead_of_looping(
+        self,
+    ) -> None:
+        # Box[T] here ALSO has a `list[Box[T]]` field, unlike the
+        # non-recursive Box[T] above: naively coercing Box[int] -> Box[decimal]
+        # would recurse into that same unequal pair forever (list[Box[int]] ->
+        # list[Box[decimal]] -> Box[int] -> Box[decimal] -> ...), a genuine
+        # Python RecursionError. This pair is never actually produced by the
+        # checker (nominal types are invariant — see
+        # docs/agl/reference/generics.md), so the internal cycle guard is the
+        # right response: fail loudly and immediately with a clear internal
+        # diagnostic rather than hang or silently mis-coerce.
+        from agm.agl.modules.ids import ModuleId
+        from agm.agl.semantics.type_table import TypeDef, create_seeded_type_table
+
+        module_id = ModuleId.from_dotted("recursive_generics_mod")
+        table = create_seeded_type_table()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Box",
+                module_id=module_id,
+                type_params=("T",),
+                fields=(
+                    ("value", TypeVarType("T")),
+                    (
+                        "children",
+                        ListType(
+                            RecordType("Box", type_args=(TypeVarType("T"),), module_id=module_id)
+                        ),
+                    ),
+                ),
+            )
+        )
+        box_int = RecordType("Box", type_args=(IntType(),), module_id=module_id)
+        box_decimal = RecordType("Box", type_args=(DecimalType(),), module_id=module_id)
+        with pytest.raises(AssertionError, match="compile_coercion re-entered"):
+            compile_coercion(box_int, box_decimal, table)
 
     # Fallthrough — otherwise → None
 
     def test_int_to_text_is_none(self) -> None:
         # No implicit int→text coercion; the checker would reject this
-        assert compile_coercion(IntType(), TextType()) is None
+        assert compile_coercion(IntType(), TextType(), type_table_for()) is None
 
     def test_text_to_bool_is_none(self) -> None:
-        assert compile_coercion(TextType(), BoolType()) is None
+        assert compile_coercion(TextType(), BoolType(), type_table_for()) is None
 
 
 # ---------------------------------------------------------------------------
@@ -379,8 +508,7 @@ class TestLowerProgramValidateIr:
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
         assert any(
-            isinstance(init, IrBind) and isinstance(init.value, IrMakeClosure)
-            for init in inits
+            isinstance(init, IrBind) and isinstance(init.value, IrMakeClosure) for init in inits
         )
 
 
@@ -722,8 +850,12 @@ class TestBlockLowering:
         assert isinstance(ref_item, VarRef)
 
         sp = SourceSpan(
-            start_line=1, start_col=1, end_line=2, end_col=3,
-            start_offset=0, end_offset=len(src),
+            start_line=1,
+            start_col=1,
+            end_line=2,
+            end_col=3,
+            start_offset=0,
+            end_offset=len(src),
         )
         block = Block(items=(let_item, ref_item), span=sp, node_id=9999)
 
@@ -791,6 +923,33 @@ class TestNominalsEmpty:
         assert prog.nominals[NominalId(PRELUDE_ID, "ExecResult")].kind is NominalKind.RECORD
         assert prog.nominals[NominalId(PRELUDE_ID, "ParsePolicy")].kind is NominalKind.ENUM
         assert prog.nominals[NominalId(PRELUDE_ID, "Abort")].kind is NominalKind.EXCEPTION
+
+    def test_user_exception_nominal_stamped_with_declaring_module_id(self) -> None:
+        """A user-declared exception's nominal is stamped with its real module_id.
+
+        Declares the exception before a record so ``_build_nominals``' loop
+        continues past the exception branch onto another declaration.
+        """
+        from agm.agl.ir.ids import NominalId
+        from agm.agl.ir.program import NominalKind
+        from agm.agl.modules.ids import ENTRY_ID
+
+        source = (
+            "exception Boom extends Exception\n"
+            "  code: int\n"
+            "\n"
+            "record Point\n"
+            "  x: int\n"
+            "\n"
+            "let p = Point(x = 1)\n"
+            "p"
+        )
+        prog = _lower(source)
+        boom_nominal = NominalId(ENTRY_ID, "Boom")
+        assert boom_nominal in prog.nominals
+        descriptor = prog.nominals[boom_nominal]
+        assert descriptor.kind is NominalKind.EXCEPTION
+        assert set(descriptor.fields) == {"message", "trace_id", "code"}
 
     def test_type_alias_does_not_create_spurious_nominal(self) -> None:
         """A type alias does NOT register a spurious NominalId in program.nominals.
@@ -931,6 +1090,7 @@ let c = Color::Red
     def test_indexed_assign_lowers_to_ir_assign_with_path(self) -> None:
         """IndexTarget assignment lowers to IrAssign with a non-empty path."""
         from agm.agl.ir import IrAssign
+
         prog = _lower('var _d: dict[text, int] = {"a": 1}\n_d["a"] := 2\n()')
         entry = prog.modules[prog.entry_module]
         # AssignStmt lowers directly to IrAssign in the initializers list
@@ -1024,8 +1184,13 @@ class TestIrFieldLowering:
         assert fake_node_id not in checked.resolved.qualified_constructor_refs
 
         span = SourceSpan(
-            start_line=1, start_col=1, end_line=1, end_col=5,
-            start_offset=0, end_offset=4, source=UNKNOWN_SOURCE,
+            start_line=1,
+            start_col=1,
+            end_line=1,
+            end_col=5,
+            start_offset=0,
+            end_offset=4,
+            source=UNKNOWN_SOURCE,
         )
         unit_lit = UnitLit(span=span, node_id=fake_node_id + 1)
         field_access = FieldAccess(obj=unit_lit, field="myfield", span=span, node_id=fake_node_id)
@@ -1043,6 +1208,7 @@ class TestIrFieldLowering:
         never passes a non-container type here).
         """
         import pytest
+
         checked = _check("()")
         lowerer = _make_lowerer(checked, "()")
         with pytest.raises(AssertionError, match="compiler bug"):
@@ -1054,6 +1220,7 @@ class TestIrFieldLowering:
         Defensive guard: can only be triggered by a compiler bug.
         """
         import pytest
+
         checked = _check("()")
         lowerer = _make_lowerer(checked, "()")
         with pytest.raises(AssertionError, match="compiler bug"):
@@ -1084,9 +1251,7 @@ class TestM4aLowerFunctions:
         fn_desc = next(iter(prog.functions.values()))
         body = fn_desc.body
         if isinstance(body, IrBlock):
-            ir_try = next(
-                (item for item in body.items if isinstance(item, IrTry)), None
-            )
+            ir_try = next((item for item in body.items if isinstance(item, IrTry)), None)
             assert ir_try is not None, "Expected an IrTry node in function body IrBlock"
         else:
             assert isinstance(body, IrTry), f"Expected IrTry body, got {type(body).__name__}"
@@ -1099,28 +1264,20 @@ class TestM4aLowerFunctions:
         """print() inside a function body lowers to IrPrint."""
         from agm.agl.ir.nodes import IrPrint
 
-        source = (
-            "def f(x: int) -> int =\n"
-            "  print(x)\n"
-            "  x + 1\n"
-            "let result = f(5)\n()"
-        )
+        source = "def f(x: int) -> int =\n  print(x)\n  x + 1\nlet result = f(5)\n()"
         prog = _lower(source)
         # Find the function descriptor and verify its body contains IrPrint
         assert len(prog.functions) == 1
         fn_desc = next(iter(prog.functions.values()))
         # The function body is a block: [IrPrint(...), IrArith(x + 1)]
         from agm.agl.ir.nodes import IrBlock
+
         assert isinstance(fn_desc.body, IrBlock)
         assert any(isinstance(item, IrPrint) for item in fn_desc.body.items)
 
     def test_indirect_call_via_let_binding_lowers_to_indirect_call(self) -> None:
         """Calling a let-bound function reference lowers to IrIndirectCall."""
-        source = (
-            "def f(x: int) -> int = x + 1\n"
-            "let fn_ref = f\n"
-            "let result = fn_ref(5)\n()"
-        )
+        source = "def f(x: int) -> int = x + 1\nlet fn_ref = f\nlet result = fn_ref(5)\n()"
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
         # inits[0] = IrBind(f, IrMakeClosure)
@@ -1167,20 +1324,12 @@ class TestScanCapturesLambdaBoundary:
         # f's body is a block containing a lambda let-binding followed by the unit value.
         # _scan_captures should stop at the Lambda boundary rather than descending into
         # the lambda's body and incorrectly treating y as a capture of f.
-        source = (
-            "let y = 5\n"
-            "def f() -> unit =\n"
-            "  let _g = fn(u: unit) -> int => y\n"
-            "  ()\n"
-            "f()\n"
-            "()"
-        )
+        source = "let y = 5\ndef f() -> unit =\n  let _g = fn(u: unit) -> int => y\n  ()\nf()\n()"
         prog = _lower(source)
         # f should have no captures (y is not used in f's body directly)
         # Find the outer def whose function_symbol corresponds to "f"
         f_descs = [
-            d for d in prog.functions.values()
-            if prog.symbols[d.function_symbol].public_name == "f"
+            d for d in prog.functions.values() if prog.symbols[d.function_symbol].public_name == "f"
         ]
         assert len(f_descs) == 1
         f_desc = f_descs[0]
@@ -1188,9 +1337,11 @@ class TestScanCapturesLambdaBoundary:
         # (The initializer for f is IrBind(fn_sym, IrMakeClosure(...)))
         f_init = None
         for node in prog.modules[prog.entry_module].initializers:
-            if (isinstance(node, IrBind)
-                    and isinstance(node.value, IrMakeClosure)
-                    and node.value.function_id == f_desc.function_id):
+            if (
+                isinstance(node, IrBind)
+                and isinstance(node.value, IrMakeClosure)
+                and node.value.function_id == f_desc.function_id
+            ):
                 f_init = node
                 break
         assert f_init is not None, "IrBind for f not found in initializers"
@@ -1224,15 +1375,17 @@ class TestScanCapturesLoopForIterWhileCond:
         checked = _check(source)
 
         # Locate x's BindingRef via any resolved reference to it.
-        x_ref = next(
-            ref for ref in checked.resolved.resolution.values() if ref.name == "x"
-        )
+        x_ref = next(ref for ref in checked.resolved.resolution.values() if ref.name == "x")
 
         # Synthetic VarRef nodes for for_iter and while_cond, using fresh node_ids
         # that don't collide with any real node in the checked program.
         fake_span = SourceSpan(
-            start_line=1, start_col=1, end_line=1, end_col=2,
-            start_offset=0, end_offset=1,
+            start_line=1,
+            start_col=1,
+            end_line=1,
+            end_col=2,
+            start_offset=0,
+            end_offset=1,
         )
         for_iter_ref = VarRef(name="x", span=fake_span, node_id=88881)
         while_cond_ref = VarRef(name="x", span=fake_span, node_id=88882)
@@ -1245,10 +1398,17 @@ class TestScanCapturesLoopForIterWhileCond:
         # Synthetic Loop: for_iter and while_cond both reference x; body is unit.
         body = UnitLit(span=fake_span, node_id=88883)
         loop_node = Loop(
-            for_var="i", for_iter=for_iter_ref,
-            for_range_to=None, for_range_down=False, for_range_by=None,
-            while_cond=while_cond_ref, bound=None, body=body, until_cond=None,
-            span=fake_span, node_id=88884,
+            for_var="i",
+            for_iter=for_iter_ref,
+            for_range_to=None,
+            for_range_down=False,
+            for_range_by=None,
+            while_cond=while_cond_ref,
+            bound=None,
+            body=body,
+            until_cond=None,
+            span=fake_span,
+            node_id=88884,
         )
 
         lowerer = _make_lowerer(checked, source)
@@ -1303,11 +1463,7 @@ class TestM4bLambdaLowering:
         closure capture, so IrMakeClosure.captures is empty even when the lambda
         body references a name from an enclosing module initializer.
         """
-        source = (
-            "let offset = 10\n"
-            "let add_off = fn(x: int) -> int => x + offset\n"
-            "()"
-        )
+        source = "let offset = 10\nlet add_off = fn(x: int) -> int => x + offset\n()"
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
         # offset is first, add_off is second
@@ -1366,11 +1522,7 @@ class TestM4bIndirectCallLowering:
 
     def test_indirect_call_lowers_to_indirect_call_node(self) -> None:
         """A value-call lowers to IrIndirectCall (not IrDirectCall)."""
-        source = (
-            "let f = fn(x: int) -> int => x + 1\n"
-            "let r = f(5)\n"
-            "()"
-        )
+        source = "let f = fn(x: int) -> int => x + 1\nlet r = f(5)\n()"
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
         # inits[0] = IrBind(f, IrMakeClosure)
@@ -1390,11 +1542,7 @@ class TestM4bIndirectCallLowering:
         coercion is skipped.  The key invariant: the arg is lowered via lower_coerced,
         which bakes in any needed coercion (e.g. int→decimal) at compile time.
         """
-        source = (
-            "let f = fn(x: int) -> int => x\n"
-            "let r = f(7)\n"
-            "()"
-        )
+        source = "let f = fn(x: int) -> int => x\nlet r = f(7)\n()"
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
         r_bind = inits[1]
@@ -1410,11 +1558,7 @@ class TestM4bIndirectCallLowering:
 
     def test_indirect_call_callee_is_lower_expr_result(self) -> None:
         """Indirect call callee is lowered with lower_expr (no coercion on callee)."""
-        source = (
-            "let f = fn(x: int) -> int => x\n"
-            "let r = f(3)\n"
-            "()"
-        )
+        source = "let f = fn(x: int) -> int => x\nlet r = f(3)\n()"
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
         r_bind = inits[1]
@@ -1422,17 +1566,11 @@ class TestM4bIndirectCallLowering:
         assert isinstance(r_bind.value, IrIndirectCall)
         # Callee should be IrLoad(f's symbol), not IrCoerce
         callee = r_bind.value.callee
-        assert isinstance(callee, IrLoad), (
-            f"Callee should be IrLoad, got {type(callee).__name__}"
-        )
+        assert isinstance(callee, IrLoad), f"Callee should be IrLoad, got {type(callee).__name__}"
 
     def test_indirect_call_validates_deep(self) -> None:
         """IrIndirectCall from end-to-end lowering passes validate_ir deep=True."""
-        source = (
-            "let f = fn(x: int) -> int => x + 1\n"
-            "let r = f(5)\n"
-            "()"
-        )
+        source = "let f = fn(x: int) -> int => x + 1\nlet r = f(5)\n()"
         prog = _lower(source)
         validate_ir(prog, deep=True)  # no exception
 
@@ -1561,7 +1699,7 @@ class TestPartialCallLowering:
         with pytest.raises(AssertionError, match="placeholder"):
             lowerer.lower_expr(Placeholder(index=None, span=span, node_id=999_001))
 
-    def test_typevar_matching_covers_dict_and_function_shape_mismatch(self) -> None:
+    def test_typevar_matching_covers_dict_function_and_nominal_shapes(self) -> None:
         checked = _check("()")
         lowerer = _make_lowerer(checked, "()")
         subst: dict[str, Type] = {}
@@ -1577,6 +1715,14 @@ class TestPartialCallLowering:
             subst,
         )
         assert subst == {"T": IntType()}
+        # Generic nominal handles match by name and recurse into their type args.
+        nominal_subst: dict[str, Type] = {}
+        lowerer._match_typevars(
+            RecordType("Box", type_args=(TypeVarType("B"),)),
+            RecordType("Box", type_args=(IntType(),)),
+            nominal_subst,
+        )
+        assert nominal_subst == {"B": IntType()}
 
 
 # ---------------------------------------------------------------------------
@@ -1661,9 +1807,7 @@ class TestLowerGraph:
         # Both modules' functions appear in program.functions with DISTINCT FunctionIds.
         # lib has make_point; entry has no user functions here, but they share one table.
         lib_fn_ids = {
-            desc.function_id
-            for desc in prog.functions.values()
-            if desc.module_id == lib_mid
+            desc.function_id for desc in prog.functions.values() if desc.module_id == lib_mid
         }
         assert len(lib_fn_ids) >= 1, "lib module must contribute at least one FunctionId"
         # All FunctionIds across both modules must be distinct
@@ -1687,10 +1831,7 @@ class TestLowerGraph:
             )
 
         # The entry module's result binding must be in the symbols table
-        result_syms = [
-            desc for desc in prog.symbols.values()
-            if desc.public_name == "result"
-        ]
+        result_syms = [desc for desc in prog.symbols.values() if desc.public_name == "result"]
         assert len(result_syms) == 1
 
         # validate_ir must pass (already called with validate=True above,
@@ -1732,11 +1873,7 @@ class TestLowerGraph:
             "def origin() -> Point =\n"
             "    Point(x = 0, y = 0)\n"
         )
-        entry_source = (
-            "import lib\n"
-            "let p = lib::origin()\n"
-            "()\n"
-        )
+        entry_source = "import lib\nlet p = lib::origin()\n()\n"
 
         root = tmp_path / "root"
         root.mkdir()
@@ -1828,9 +1965,7 @@ class TestM6aLowering:
         prog = _lower(source)
         entry = prog.modules[list(prog.modules.keys())[-1]]
         # initializers are [IrBind(x=42), IrPrint(IrLoad(x)), IrConstUnit]
-        ir_print = next(
-            (node for node in entry.initializers if isinstance(node, IrPrint)), None
-        )
+        ir_print = next((node for node in entry.initializers if isinstance(node, IrPrint)), None)
         assert ir_print is not None, "Expected IrPrint in entry initializers"
         assert isinstance(ir_print, IrPrint)
 
@@ -1841,9 +1976,7 @@ class TestM6aLowering:
         source = 'let s = render("x", pretty = false, quote_strings = false)\n()'
         prog = _lower(source)
         entry = prog.modules[list(prog.modules.keys())[-1]]
-        ir_bind = next(
-            (node for node in entry.initializers if isinstance(node, IrBind)), None
-        )
+        ir_bind = next((node for node in entry.initializers if isinstance(node, IrBind)), None)
         assert ir_bind is not None, "Expected IrBind in entry initializers"
         assert isinstance(ir_bind.value, IrRenderValue)
         assert ir_bind.value.pretty is not None
@@ -1857,9 +1990,7 @@ class TestM6aLowering:
         prog = _lower(source)
         entry = prog.modules[list(prog.modules.keys())[-1]]
         # The binding `let j = parse_json(...)` lowers to IrBind(value=IrParseJson(...))
-        ir_bind = next(
-            (node for node in entry.initializers if isinstance(node, IrBind)), None
-        )
+        ir_bind = next((node for node in entry.initializers if isinstance(node, IrBind)), None)
         assert ir_bind is not None, "Expected IrBind in entry initializers"
         assert isinstance(ir_bind, IrBind)
         assert isinstance(ir_bind.value, IrParseJson), (
@@ -1911,7 +2042,7 @@ class TestM6aLowering:
         """ask() now lowers to IrAsk."""
         from agm.agl.ir.nodes import IrAsk, IrBind
 
-        source = "agent impl\nlet r: text = ask(\"prompt\", agent = impl)\n()"
+        source = 'agent impl\nlet r: text = ask("prompt", agent = impl)\n()'
         prog = _lower(source)
         # The initializers contain IrBind(IrAgentHandle) for `impl` then IrBind(IrAsk) for `r`.
         inits = prog.modules[prog.entry_module].initializers
@@ -1923,7 +2054,7 @@ class TestM6aLowering:
         """exec() lowers to IrExec."""
         from agm.agl.ir.nodes import IrExec
 
-        source = "exec(\"ls -la\")\n()"
+        source = 'exec("ls -la")\n()'
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
         exec_nodes = [n for n in inits if isinstance(n, IrExec)]
@@ -1938,8 +2069,7 @@ class TestM6aLowering:
         inits = prog.modules[prog.entry_module].initializers
         # Expect an IrBind whose value is IrAgentHandle with the agent's name.
         handle_binds = [
-            n for n in inits
-            if isinstance(n, IrBind) and isinstance(n.value, IrAgentHandle)
+            n for n in inits if isinstance(n, IrBind) and isinstance(n.value, IrAgentHandle)
         ]
         assert len(handle_binds) == 1, (
             f"Expected exactly 1 IrBind(IrAgentHandle), got {len(handle_binds)}"
@@ -1950,13 +2080,12 @@ class TestM6aLowering:
         """ask-request lowers to IrAskRequest + ContractRequest in program.contracts."""
         from agm.agl.ir.nodes import IrAskRequest, IrBind
 
-        source = "agent worker\nlet req = ask-request(\"my prompt\", agent = worker)\n()"
+        source = 'agent worker\nlet req = ask-request("my prompt", agent = worker)\n()'
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
         # The ask-request binding lowers to IrBind(symbol, IrAskRequest(...)).
         ask_req_binds = [
-            n for n in inits
-            if isinstance(n, IrBind) and isinstance(n.value, IrAskRequest)
+            n for n in inits if isinstance(n, IrBind) and isinstance(n.value, IrAskRequest)
         ]
         assert len(ask_req_binds) == 1, (
             f"Expected exactly 1 IrBind(IrAskRequest), got {len(ask_req_binds)}"
@@ -1993,15 +2122,11 @@ class TestLambdaCapturePositive:
         (snapshot-value semantics, not cell-sharing).  Asserts captures is
         non-empty and the single entry has by_cell=False matching the symbol.
         """
-        source = (
-            "def make_fn(n: int) -> unit =\n"
-            "  let _g = fn(x: int) -> int => n + x\n"
-            "  ()\n"
-            "()\n"
-        )
+        source = "def make_fn(n: int) -> unit =\n  let _g = fn(x: int) -> int => n + x\n  ()\n()\n"
         prog = _lower(source)
         make_fn_desc = next(
-            d for d in prog.functions.values()
+            d
+            for d in prog.functions.values()
             if prog.symbols[d.function_symbol].public_name == "make_fn"
         )
         body = make_fn_desc.body
@@ -2038,7 +2163,8 @@ class TestLambdaCapturePositive:
         )
         prog = _lower(source)
         make_fn_desc = next(
-            d for d in prog.functions.values()
+            d
+            for d in prog.functions.values()
             if prog.symbols[d.function_symbol].public_name == "make_fn"
         )
         body = make_fn_desc.body
@@ -2073,7 +2199,8 @@ class TestLambdaCapturePositive:
         )
         prog = _lower(source)
         make_fn_desc = next(
-            d for d in prog.functions.values()
+            d
+            for d in prog.functions.values()
             if prog.symbols[d.function_symbol].public_name == "make_fn"
         )
         body = make_fn_desc.body
@@ -2426,7 +2553,8 @@ class TestIrMakeExceptionLowering:
         """Lower source and return the IrRaise from the 'stop_fn' function body."""
         prog = _lower(source)
         stop_desc = next(
-            d for d in prog.functions.values()
+            d
+            for d in prog.functions.values()
             if prog.symbols[d.function_symbol].public_name == "stop_fn"
         )
         body = stop_desc.body
@@ -2441,11 +2569,7 @@ class TestIrMakeExceptionLowering:
 
     def test_exception_construction_emits_ir_make_exception(self) -> None:
         """raise Abort(message = ...) → IrRaise(exc=IrMakeException(display_name='Abort'))."""
-        source = (
-            'def stop_fn() -> unit =\n'
-            '  raise Abort(message = "stop")\n'
-            'stop_fn()\n'
-        )
+        source = 'def stop_fn() -> unit =\n  raise Abort(message = "stop")\nstop_fn()\n'
         raise_node = self._get_raise_in_fn(source)
         exc = raise_node.exc
         assert isinstance(exc, IrMakeException)
@@ -2453,11 +2577,7 @@ class TestIrMakeExceptionLowering:
 
     def test_provided_field_is_ir_expr_not_auto_trace_field(self) -> None:
         """Explicitly provided 'message' field → IrConstText, not AutoTraceField."""
-        source = (
-            'def stop_fn() -> unit =\n'
-            '  raise Abort(message = "stop")\n'
-            'stop_fn()\n'
-        )
+        source = 'def stop_fn() -> unit =\n  raise Abort(message = "stop")\nstop_fn()\n'
         raise_node = self._get_raise_in_fn(source)
         exc = raise_node.exc
         assert isinstance(exc, IrMakeException)
@@ -2476,11 +2596,7 @@ class TestIrMakeExceptionLowering:
         construction time.  This test pins that exactly one AutoTraceField
         is present for the omitted trace_id.
         """
-        source = (
-            'def stop_fn() -> unit =\n'
-            '  raise Abort(message = "stop")\n'
-            'stop_fn()\n'
-        )
+        source = 'def stop_fn() -> unit =\n  raise Abort(message = "stop")\nstop_fn()\n'
         raise_node = self._get_raise_in_fn(source)
         exc = raise_node.exc
         assert isinstance(exc, IrMakeException)
@@ -2700,9 +2816,7 @@ class TestLoopDesugar:
         body = node.body
         assert isinstance(body, IrBlock)
         # Only item 6 (body) — no items 4/5 (no bound), no item 7 (done = until false)
-        assert len(body.items) == 1, (
-            f"unbounded done body must have 1 item, got {len(body.items)}"
-        )
+        assert len(body.items) == 1, f"unbounded done body must have 1 item, got {len(body.items)}"
 
     def test_n_bound_evaluated_once(self) -> None:
         """The bound expression is bound to ``__n`` ONCE via a single IrBind in the IrSequence."""
@@ -2755,9 +2869,7 @@ class TestLoopDesugar:
         assert isinstance(node, IrSequence), (
             f"for+while+bound: expected IrSequence, got {type(node).__name__}"
         )
-        assert len(node.items) == 4, (
-            f"expected 4 pre-loop+loop items, got {len(node.items)}"
-        )
+        assert len(node.items) == 4, f"expected 4 pre-loop+loop items, got {len(node.items)}"
         it_bind = node.items[0]
         n_bind = node.items[1]
         count_bind = node.items[2]
@@ -2791,9 +2903,7 @@ class TestLoopDesugar:
         assert count_bind.value.value == 0
 
         # IrLoop with 7-item body
-        assert isinstance(loop, IrLoop), (
-            f"item 3 must be IrLoop, got {type(loop).__name__}"
-        )
+        assert isinstance(loop, IrLoop), f"item 3 must be IrLoop, got {type(loop).__name__}"
         body = loop.body
         assert isinstance(body, IrBlock)
         assert len(body.items) == 7, (
@@ -2808,12 +2918,8 @@ class TestLoopDesugar:
         cond1 = item1.branches[0].cond
         assert isinstance(cond1, IrUnary), "item 1 condition must be IrUnary (not)"
         assert cond1.op is UnaryOp.NOT
-        assert isinstance(cond1.value, IrIterHasNext), (
-            "item 1 IrUnary.value must be IrIterHasNext"
-        )
-        assert isinstance(item1.branches[0].body, IrBreak), (
-            "item 1 branch body must be IrBreak"
-        )
+        assert isinstance(cond1.value, IrIterHasNext), "item 1 IrUnary.value must be IrIterHasNext"
+        assert isinstance(item1.branches[0].body, IrBreak), "item 1 branch body must be IrBreak"
 
         # Item 2: for-var bind — IrBind(for_var, IrIterNext(__it))
         item2 = body.items[1]
@@ -2830,9 +2936,7 @@ class TestLoopDesugar:
         cond3 = item3.branches[0].cond
         assert isinstance(cond3, IrUnary), "item 3 condition must be IrUnary (not)"
         assert cond3.op is UnaryOp.NOT
-        assert isinstance(item3.branches[0].body, IrBreak), (
-            "item 3 branch body must be IrBreak"
-        )
+        assert isinstance(item3.branches[0].body, IrBreak), "item 3 branch body must be IrBreak"
 
         # Item 4: bound check — IrIf (GE outer)
         item4 = body.items[3]
@@ -2851,9 +2955,7 @@ class TestLoopDesugar:
         assert isinstance(item7, IrIf), "item 7 must be IrIf (until guard)"
         assert len(item7.branches) == 1
         assert item7.has_else is False
-        assert isinstance(item7.branches[0].body, IrBreak), (
-            "item 7 branch body must be IrBreak"
-        )
+        assert isinstance(item7.branches[0].body, IrBreak), "item 7 branch body must be IrBreak"
 
     def test_for_iter_kind_list(self) -> None:
         """``for x in items`` over ``list[int]`` selects IterKind.LIST."""
@@ -2928,9 +3030,7 @@ class TestRangeForDesugar:
             f"range for: expected IrSequence, got {type(node).__name__}"
         )
         # 5 items: __cur bind, __end bind, __step bind, step guard IrIf, IrLoop
-        assert len(node.items) == 5, (
-            f"range for pre-loop: expected 5 items, got {len(node.items)}"
-        )
+        assert len(node.items) == 5, f"range for pre-loop: expected 5 items, got {len(node.items)}"
         cur_bind, end_bind, step_bind, guard_if, loop = node.items
         # __cur: mutable, value is IrConstInt(1)
         assert isinstance(cur_bind, IrBind)
@@ -3118,9 +3218,7 @@ class TestRangeForDesugar:
         assert isinstance(loop, IrLoop)
         body = loop.body
         assert isinstance(body, IrBlock)
-        assert len(body.items) == 6, (
-            f"range+bound body: expected 6 items, got {len(body.items)}"
-        )
+        assert len(body.items) == 6, f"range+bound body: expected 6 items, got {len(body.items)}"
         # Items: 1(IrIf range-break), 2a(IrBind i), 2b(IrAssign advance),
         #        4(IrIf bound-check), 5(IrAssign count), 6(body)
         assert isinstance(body.items[0], IrIf), "item 1 must be IrIf (range break)"
@@ -3141,9 +3239,7 @@ class TestRangeForDesugar:
         body = loop.body
         assert isinstance(body, IrBlock)
         # Items: 1(range break), 2a(bind), 2b(advance), 3(while guard), 6(body) = 5
-        assert len(body.items) == 5, (
-            f"range+while body: expected 5 items, got {len(body.items)}"
-        )
+        assert len(body.items) == 5, f"range+while body: expected 5 items, got {len(body.items)}"
         # Item 3: while guard — IrIf(not cond)
         item3 = body.items[3]
         assert isinstance(item3, IrIf)
@@ -3162,9 +3258,7 @@ class TestRangeForDesugar:
         body = loop.body
         assert isinstance(body, IrBlock)
         # Items: 1(range break), 2a(bind), 2b(advance), 6(body), 7(until guard) = 5
-        assert len(body.items) == 5, (
-            f"range+until body: expected 5 items, got {len(body.items)}"
-        )
+        assert len(body.items) == 5, f"range+until body: expected 5 items, got {len(body.items)}"
         item7 = body.items[4]
         assert isinstance(item7, IrIf)
         assert item7.has_else is False
@@ -3197,7 +3291,8 @@ class TestRangeForDesugar:
         prog = _lower(source)
         # Find the FunctionDescriptor for ``make_fn``.
         make_fn_desc = next(
-            d for d in prog.functions.values()
+            d
+            for d in prog.functions.values()
             if prog.symbols[d.function_symbol].public_name == "make_fn"
         )
         body = make_fn_desc.body
@@ -3212,9 +3307,7 @@ class TestRangeForDesugar:
         # _scan_captures must have walked for_range_to / for_range_by and found
         # end_val and step_val as free variables captured from make_fn's params.
         captures = g_closure.captures
-        assert len(captures) == 2, (
-            f"Expected 2 captures (end_val + step_val), got {captures!r}"
-        )
+        assert len(captures) == 2, f"Expected 2 captures (end_val + step_val), got {captures!r}"
         # Both are params (immutable) → by_cell=False for each capture.
         for cap in captures:
             assert isinstance(cap, IrCapture)
@@ -3240,9 +3333,7 @@ class TestRangeForDesugar:
         assert isinstance(node, IrSequence)
         it_bind = node.items[0]
         assert isinstance(it_bind, IrBind)
-        assert isinstance(it_bind.value, IrIterInit), (
-            "collection for must still use IrIterInit"
-        )
+        assert isinstance(it_bind.value, IrIterInit), "collection for must still use IrIterInit"
         loop = node.items[1]
         assert isinstance(loop, IrLoop)
         body = loop.body
@@ -3251,23 +3342,21 @@ class TestRangeForDesugar:
         assert isinstance(item1, IrIf)
         cond = item1.branches[0].cond
         assert isinstance(cond, IrUnary)
-        assert isinstance(cond.value, IrIterHasNext), (
-            "collection for item 1 must use IrIterHasNext"
-        )
+        assert isinstance(cond.value, IrIterHasNext), "collection for item 1 must use IrIterHasNext"
         item2 = body.items[1]
         assert isinstance(item2, IrBind)
-        assert isinstance(item2.value, IrIterNext), (
-            "collection for item 2 must use IrIterNext"
-        )
+        assert isinstance(item2.value, IrIterNext), "collection for item 2 must use IrIterNext"
 
     def test_range_error_in_builtin_exceptions(self) -> None:
         """RangeError is present in BUILTIN_EXCEPTIONS with the expected fields."""
+        from agm.agl.semantics.type_table import create_seeded_type_table
         from agm.agl.semantics.types import BUILTIN_EXCEPTIONS
         from agm.agl.semantics.types import TextType as _TextType
 
         assert "RangeError" in BUILTIN_EXCEPTIONS
         exc = BUILTIN_EXCEPTIONS["RangeError"]
         assert exc.name == "RangeError"
-        assert set(exc.fields.keys()) == {"message", "trace_id"}
-        assert isinstance(exc.fields["message"], _TextType)
-        assert isinstance(exc.fields["trace_id"], _TextType)
+        fields = create_seeded_type_table().exception_fields(exc)
+        assert set(fields.keys()) == {"message", "trace_id"}
+        assert isinstance(fields["message"], _TextType)
+        assert isinstance(fields["trace_id"], _TextType)

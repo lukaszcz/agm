@@ -96,16 +96,18 @@ def _make_minimal_program(
     symbols: dict | None = None,
 ) -> ExecutableProgram:
     """Build a minimal ExecutableProgram for hand-crafted IR tests."""
+    from agm.agl.semantics.type_table import create_seeded_type_table
     from agm.agl.semantics.types import BUILTIN_EXCEPTIONS
 
     max_iter_nominal = NominalId(PRELUDE_ID, "MaxIterationsExceeded")
     exc_type = BUILTIN_EXCEPTIONS["MaxIterationsExceeded"]
+    exc_fields = create_seeded_type_table().exception_fields(exc_type)
     nominals = {
         max_iter_nominal: NominalDescriptor(
             nominal=max_iter_nominal,
             display_name="MaxIterationsExceeded",
             kind=NominalKind.EXCEPTION,
-            fields=tuple(exc_type.fields.keys()),
+            fields=tuple(exc_fields.keys()),
             variants=(),
         )
     }

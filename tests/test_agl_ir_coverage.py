@@ -36,6 +36,7 @@ from agm.agl.semantics.values import (
     _json_hash,
 )
 from agm.agl.typecheck.env import OutputContractSpec
+from tests._agl_helpers import type_table_for
 
 
 def test_arithmetic_mixed_and_defensive_edges() -> None:
@@ -104,12 +105,13 @@ def test_constructor_render_and_serialization_edges() -> None:
 
 
 def test_param_conversion_direct_success_edges() -> None:
-    assert convert_param_value("text", "value", TextType()) == TextValue("value")
-    assert convert_param_value("decimal", decimal.Decimal("1.5"), DecimalType()) == (
+    table = type_table_for()
+    assert convert_param_value("text", "value", TextType(), table) == TextValue("value")
+    assert convert_param_value("decimal", decimal.Decimal("1.5"), DecimalType(), table) == (
         DecimalValue(decimal.Decimal("1.5"))
     )
     with pytest.raises(ValueError, match="unsupported type"):
-        convert_param_value("unit", None, UnitType())
+        convert_param_value("unit", None, UnitType(), table)
 
 
 def test_structured_exec_contract_uses_passthrough_codec() -> None:

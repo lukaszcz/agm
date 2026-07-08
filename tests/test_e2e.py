@@ -339,12 +339,20 @@ def _agm_install(tmp_path_factory: pytest.TempPathFactory) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     venv = tmp_path_factory.mktemp("agm-install") / "venv"
     subprocess.run(
-        ["uv", "venv", str(venv), "--python", "3.12"],
+        ["uv", "venv", str(venv), "--python", "3.12", "--offline"],
         check=True,
         capture_output=True,
     )
     subprocess.run(
-        ["uv", "pip", "install", "--python", str(venv / "bin" / "python"), str(repo_root)],
+        [
+            "uv",
+            "pip",
+            "install",
+            "--python",
+            str(venv / "bin" / "python"),
+            "--offline",
+            str(repo_root),
+        ],
         check=True,
         capture_output=True,
     )
@@ -6522,6 +6530,78 @@ class TestOpen:
         assert wt.is_dir()
         assert (wt / "dev.txt").exists()
 
+    def test_open_missing_branch_with_missing_parent_errors(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        project = _make_project(tmp_path, bare, env)
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+
+        result = run_agm(
+            ["open", "-p", "missing-parent", "feat/from-missing"],
+            env=env,
+            cwd=str(project),
+            check=False,
+        )
+
+        assert result.returncode != 0
+        assert "parent branch" in result.stderr
+        assert not (project / "worktrees" / "feat/from-missing").exists()
+
+    def test_open_missing_branch_with_remote_only_parent_keeps_target_branch_name(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        clone = tmp_path / "tmp-clone"
+        _git("clone", str(bare), str(clone), cwd=str(tmp_path), env=env)
+        _push_branch(clone, bare, "cloud-native", "cloud.txt", env)
+
+        project = _make_project(tmp_path, bare, env)
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+        missing_local_parent = _git(
+            "show-ref",
+            "--verify",
+            "--quiet",
+            "refs/heads/cloud-native",
+            cwd=project / "repo",
+            env=env,
+            check=False,
+        )
+        assert missing_local_parent.returncode != 0
+
+        run_agm(
+            ["open", "-p", "cloud-native", "tool-history-cloud-backend"],
+            env=env,
+            cwd=str(project),
+        )
+
+        wt = project / "worktrees" / "tool-history-cloud-backend"
+        upstream_remote = _git(
+            "config",
+            "--get",
+            "branch.tool-history-cloud-backend.remote",
+            cwd=project / "repo",
+            env=env,
+            check=False,
+        )
+        upstream_merge = _git(
+            "config",
+            "--get",
+            "branch.tool-history-cloud-backend.merge",
+            cwd=project / "repo",
+            env=env,
+            check=False,
+        )
+
+        assert _git("branch", "--show-current", cwd=wt, env=env).stdout.strip() == (
+            "tool-history-cloud-backend"
+        )
+        assert (wt / "cloud.txt").exists()
+        assert upstream_remote.returncode != 0
+        assert upstream_merge.returncode != 0
+
     def test_open_existing_branch_with_pane_count(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
@@ -6553,13 +6633,56 @@ class TestOpen:
         tmux_log = tmp_path / "tmux.log"
         _install_fake_tmux(tmp_path / "bin", tmux_log, env)
 
-        run_agm(
+        result = run_agm(
             ["open", "-p", "main", "feat/q"],
             env=env,
             cwd=str(project),
         )
 
+        upstream_remote = _git(
+            "config",
+            "--get",
+            "branch.feat/q.remote",
+            cwd=project / "repo",
+            env=env,
+        )
+        upstream_merge = _git(
+            "config",
+            "--get",
+            "branch.feat/q.merge",
+            cwd=project / "repo",
+            env=env,
+        )
+
+        assert "warning" in result.stderr
+        assert "--parent" in result.stderr
         assert (project / "worktrees" / "feat/q" / "q.txt").exists()
+        assert upstream_remote.stdout.strip() == "origin"
+        assert upstream_merge.stdout.strip() == "refs/heads/feat/q"
+
+    def test_open_existing_workspace_with_parent_errors(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        bare = make_bare_repo(tmp_path / "origin.git", env)
+        clone = tmp_path / "tmp-clone"
+        _git("clone", str(bare), str(clone), cwd=str(tmp_path), env=env)
+        _push_branch(clone, bare, "feat/existing", "existing.txt", env)
+
+        project = _make_project(tmp_path, bare, env)
+        tmux_log = tmp_path / "tmux.log"
+        _install_fake_tmux(tmp_path / "bin", tmux_log, env)
+        run_agm(["open", "feat/existing"], env=env, cwd=str(project))
+
+        result = run_agm(
+            ["open", "-p", "main", "feat/existing"],
+            env=env,
+            cwd=str(project),
+            check=False,
+        )
+
+        assert result.returncode != 0
+        assert "workspace" in result.stderr
+        assert "--parent" in result.stderr
 
     def test_error_open_without_target(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)

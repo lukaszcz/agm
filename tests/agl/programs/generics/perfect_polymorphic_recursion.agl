@@ -1,0 +1,72 @@
+# Polymorphic (growing) recursion, used purely in-language: `Perfect[T]`
+# references itself at a DIFFERENT, larger argument (`Pair[T, T]`) rather than
+# at `T` itself, so its instantiation closure never closes (Perfect[int] ->
+# Perfect[Pair[int, int]] -> Perfect[Pair[Pair[int, int], Pair[int, int]]] ->
+# ...). Every actual VALUE is still finite, so construction, `case` matching,
+# and a generic recursive fold all work exactly like an ordinary recursive
+# type — there is no agent call or cast anywhere near this boundary.
+record Pair[A, B]
+  first: A
+  second: B
+
+enum Perfect[T]
+  | Single(value: T)
+  | Succ(next: Perfect[Pair[T, T]])
+
+# A generic fold that recurses ALONGSIDE the type's own growth: each `Succ`
+# instantiates `render_perfect` again at `Pair[T, T]`, one level "rounder"
+# than the caller's own `T`, with a freshly-built `show` closure that unwraps
+# one more level of pairing before delegating to the caller's own `show`.
+def show_pair_of[T](show: (T) -> text) -> (Pair[T, T]) -> text =
+  fn(pr: Pair[T, T]) -> text => "(" + show(pr.first) + "," + show(pr.second) + ")"
+
+def render_perfect[T](p: Perfect[T], show: (T) -> text) -> text =
+  case p of
+    | Single(value) => show(value)
+    | Succ(next) => render_perfect(next, show_pair_of(show))
+
+def shape[T](p: Perfect[T]) -> text =
+  case p of
+    | Single(value) => "leaf"
+    | Succ(next) => "deeper"
+
+param a: int
+param b: int
+param c: int
+param d: int
+
+let show_int: (int) -> text = fn(n: int) -> text => "${n}"
+
+# Level 0: the base case, no growth yet.
+let level0: Perfect[int] = Single(value = a)
+
+# Level 1: one `Succ` — `next` is a Perfect[Pair[int, int]] value, but the
+# WHOLE `level1` expression is still typed `Perfect[int]`.
+let level1: Perfect[int] = Succ(next = Single(value = Pair(first = a, second = b)))
+
+# Level 2: two `Succ`s — the innermost `Single` carries a
+# `Pair[Pair[int, int], Pair[int, int]]`, two constructor-argument levels
+# "rounder" than `level0`'s bare `int`.
+let level2: Perfect[int] = Succ(
+  next = Succ(
+    next = Single(value = Pair(first = Pair(first = a, second = b), second = Pair(first = c, second = d))),
+  ),
+)
+
+print shape(level0)
+print shape(level1)
+print shape(level2)
+
+print render_perfect(level0, show_int)
+print render_perfect(level1, show_int)
+print render_perfect(level2, show_int)
+
+print (level0 == level0)
+print (level0 == level1)
+
+let level1_same: Perfect[int] = Succ(next = Single(value = Pair(first = a, second = b)))
+print (level1 == level1_same)
+
+case level2 of
+  | Single(value) => print "unexpected leaf"
+  | Succ(next) => print "has a next level"

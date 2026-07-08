@@ -127,7 +127,7 @@ def _decode_from_json(recipe: ConversionRecipe, obj: object, value: Value) -> Va
     if recipe.decode is None:  # pragma: no cover
         raise AssertionError("decode strategy requires a decode schema")
     try:
-        return decode_value(recipe.decode, normalized)
+        return decode_value(recipe.decode, normalized, dict(recipe.defs))
     except ValueError as exc:
         raise AglCastConversion(
             f"Value conversion failed: {exc}",

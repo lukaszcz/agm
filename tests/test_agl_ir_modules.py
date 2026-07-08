@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from agm.agl.semantics.values import BoolValue, EnumValue, IntValue, RecordValue, TextValue
+from agm.agl.typecheck import AglTypeError
 from tests.agl.ir_harness import evaluate_ir_graph, evaluate_ir_graph_raises
 
 
@@ -50,6 +53,21 @@ let r2 = even::is_even(3)
     )
     assert r["r1"] == BoolValue(True)
     assert r["r2"] == BoolValue(False)
+
+
+def test_cross_module_abstract_exception_constructor_rejected(tmp_path: Path) -> None:
+    lib_source = """
+exception Root
+  code: int
+"""
+    entry_source = """
+import lib
+let boom = lib::Root(code = 1)
+()
+"""
+
+    with pytest.raises(AglTypeError):
+        evaluate_ir_graph(entry_source, {"lib": lib_source}, tmp_path)
 
 
 def test_imported_record_and_enum(tmp_path: Path) -> None:

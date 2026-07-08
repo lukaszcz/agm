@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from decimal import Decimal
 from typing import TYPE_CHECKING, Protocol
 
@@ -30,15 +31,20 @@ from agm.agl.ir.contracts import (
     EnumDecode,
     ListDecode,
     RecordDecode,
+    RefDecode,
 )
-from agm.agl.runtime.convert import decode_value, normalize_integral_decimals
+from agm.agl.runtime.convert import _EMPTY_DEFS, decode_value, normalize_integral_decimals
 from agm.agl.runtime.request import ValidationError
+from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import TextType, Type
 from agm.agl.semantics.values import TextValue, Value
-from agm.agl.type_schema import build_decode_schema, build_format_instructions, derive_schema
+from agm.agl.type_schema import build_format_instructions, derive_schema_and_decode
 
 if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract
+
+DecodeDefsInput = Mapping[str, DecodeSchema] | tuple[tuple[str, DecodeSchema], ...]
+
 
 # ---------------------------------------------------------------------------
 # ParseResult — outcome of codec.parse()
@@ -109,12 +115,19 @@ class OutputCodec(Protocol):
     Every codec exposes:
     - ``name`` — the codec identifier (e.g. ``"text"``, ``"json"``).
     - ``supported_kinds`` — frozenset of semantic type-kind strings this codec handles.
-      This is the authoritative source for ``HostCapabilities.codec_kinds`` (CARRY-IN 1).
+      This is the authoritative source for ``HostCapabilities.codec_kinds``.
     - ``supports_type(t)`` — True iff this codec can handle the given type.
-    - ``make_contract(type_ref)`` — build an ``OutputContract``.
-    - ``parse(raw, target_type, *, strict_json, schema)`` — parse a raw string.
-      *schema* is an optional precomputed JSON Schema (CARRY-IN 2); when provided,
-      ``JsonCodec`` skips re-deriving it from *target_type*.
+    - ``make_contract(type_ref, type_table)`` — build an ``OutputContract``.
+      Runs at check time (or REPL contract-preview time), when a real checker
+      ``Type`` is in hand.  ``type_table`` resolves record/enum field/variant
+      shapes for *type_ref* (or one nested inside it); ``None`` is only valid
+      when *type_ref* carries no nominal type.
+    - ``parse(raw, *, strict_json, schema, decode, defs)`` — parse a raw string.
+      Runs at execution time against the typeless contract data the lowerer
+      already compiled (``schema`` is the JSON Schema dict, ``decode`` the
+      typeless ``DecodeSchema`` walk, ``defs`` its ``$defs`` table for a
+      recursive target type — empty/absent for a non-recursive one); a codec
+      never sees a checker ``Type`` at parse time.
     """
 
     @property
@@ -125,15 +138,18 @@ class OutputCodec(Protocol):
 
     def supports_type(self, t: Type) -> bool: ...
 
-    def make_contract(self, type_ref: Type) -> "OutputContract": ...
+    def make_contract(
+        self, type_ref: Type, type_table: TypeTable | None = None
+    ) -> "OutputContract": ...
 
     def parse(
         self,
         raw: str,
-        target_type: Type,
         *,
         strict_json: bool = False,
         schema: dict[str, object] | None = None,
+        decode: DecodeSchema | None = None,
+        defs: DecodeDefsInput | None = None,
     ) -> ParseResult: ...
 
 
@@ -166,44 +182,48 @@ class TextCodec:
     def supported_kinds(self) -> frozenset[str]:
         """The set of type-kind strings this codec can handle.
 
-        Single source of truth for ``HostCapabilities.codec_kinds["text"]``
-        (CARRY-IN 1 — eliminates a duplicated literal at the host-environment assembly site).
+        Single source of truth for ``HostCapabilities.codec_kinds["text"]``,
+        avoiding a duplicated literal at the host-environment assembly site.
         """
         return frozenset({"text"})
 
     def supports_type(self, t: Type) -> bool:
         return isinstance(t, TextType)
 
-    def make_contract(self, type_ref: Type) -> "OutputContract":
+    def make_contract(
+        self, type_ref: Type, type_table: TypeTable | None = None
+    ) -> "OutputContract":
         """Build an ``OutputContract`` for *type_ref*.
-
-        The ``TypeEnvironment`` parameter was removed (CARRY-IN 2): it was
-        never used by this implementation.
 
         For ``text`` targets ``format_instructions`` is left empty (absent):
         a text target imposes no format on the agent's response, so there are
-        no instructions to relay.
+        no instructions to relay.  ``decode`` is ``None``: a text target has
+        no schema-driven decode walk, since the raw string is the value.
+        *type_table* is accepted for protocol conformance but unused — a
+        ``text`` target never carries a nominal type.
         """
         from agm.agl.runtime.contract import OutputContract
 
         return OutputContract(
-            target_type=type_ref,
+            target_type_label=repr(type_ref),
             codec=self,
             strict_json=None,
             format_instructions="",
             json_schema=None,
+            decode=None,
         )
 
     def parse(
         self,
         raw: str,
-        target_type: Type,
         *,
         strict_json: bool = False,
         schema: dict[str, object] | None = None,
+        decode: DecodeSchema | None = None,
+        defs: DecodeDefsInput | None = None,
     ) -> ParseResult:
         # Text codec: always succeeds; the raw string is the value.
-        # ``strict_json`` and ``schema`` are inapplicable for text targets.
+        # ``strict_json``/``schema``/``decode``/``defs`` are inapplicable for text targets.
         return ParseResult.success(TextValue(raw))
 
 
@@ -372,11 +392,62 @@ def _path_sort_key(error: JsonschemaValidationError) -> str:
     return "/".join(str(p) for p in error.path)
 
 
+def _resolve_ref(decode: DecodeSchema, defs: Mapping[str, DecodeSchema]) -> DecodeSchema:
+    """Resolve a ``RefDecode`` node through *defs*; return *decode* unchanged otherwise.
+
+    Shared by the classification walkers below, which navigate a finite JSON
+    error PATH (not the value graph) — resolving a ref as encountered always
+    terminates, so no visited-set is needed here (contrast
+    ``ir/validate.py::_check_decode_nominals``, which walks the whole decode
+    plan and does track visited ``defs`` keys). An unknown key (should never
+    happen for a well-formed contract) makes the ref opaque to the caller's
+    ``isinstance`` checks, so navigation fails soft into the generic fallback
+    message rather than raising — these walkers only refine an already-failed
+    validation's message, never gate correctness.
+    """
+    while isinstance(decode, RefDecode):
+        resolved = defs.get(decode.key)
+        if resolved is None:
+            return decode
+        decode = resolved
+    return decode
+
+
+def _decode_contains_ref(decode: DecodeSchema) -> bool:
+    """Return whether *decode* contains any ``RefDecode`` node."""
+    if isinstance(decode, RefDecode):
+        return True
+    if isinstance(decode, ListDecode):
+        return _decode_contains_ref(decode.elem)
+    if isinstance(decode, DictDecode):
+        return _decode_contains_ref(decode.value)
+    if isinstance(decode, RecordDecode):
+        return any(_decode_contains_ref(field_decode) for _name, field_decode in decode.fields)
+    if isinstance(decode, EnumDecode):
+        return any(
+            _decode_contains_ref(field_decode)
+            for variant in decode.variants
+            for _name, field_decode in variant.fields
+        )
+    return False
+
+
+def _coerce_decode_defs(defs: DecodeDefsInput | None) -> Mapping[str, DecodeSchema]:
+    """Normalize parse-time decode defs from either contract storage shape."""
+    if defs is None:
+        return _EMPTY_DEFS
+    if isinstance(defs, Mapping):
+        return defs
+    return dict(defs)
+
+
 def _find_enum_decode_at_path(
     decode: DecodeSchema,
     path_elements: list[object],
+    defs: Mapping[str, DecodeSchema] = _EMPTY_DEFS,
 ) -> EnumDecode | None:
     """Navigate the decode schema to find an ``EnumDecode`` at the given JSON path."""
+    decode = _resolve_ref(decode, defs)
     for elem in path_elements:
         if isinstance(decode, ListDecode):
             decode = decode.elem
@@ -395,10 +466,13 @@ def _find_enum_decode_at_path(
             decode = field_decode
         else:
             return None
+        decode = _resolve_ref(decode, defs)
     return decode if isinstance(decode, EnumDecode) else None
 
 
-def _make_validation_error(error: object, decode_schema: DecodeSchema) -> ValidationError:
+def _make_validation_error(
+    error: object, decode_schema: DecodeSchema, defs: Mapping[str, DecodeSchema] = _EMPTY_DEFS
+) -> ValidationError:
     """Map a jsonschema error into a structured :class:`ValidationError`."""
     if not isinstance(error, JsonschemaValidationError):
         return ValidationError(category="wrong_type", message=str(error), path="$", field=None)
@@ -428,7 +502,7 @@ def _make_validation_error(error: object, decode_schema: DecodeSchema) -> Valida
             category="wrong_type", message=error.message, path=path, field=fname
         )
     if error.validator == "oneOf":
-        return _classify_enum_failure(error, path, decode_schema)
+        return _classify_enum_failure(error, path, decode_schema, defs)
     return ValidationError(category="wrong_type", message=error.message, path=path, field=None)
 
 
@@ -436,6 +510,7 @@ def _classify_enum_failure(
     error: JsonschemaValidationError,
     path: str,
     decode_schema: DecodeSchema,
+    defs: Mapping[str, DecodeSchema] = _EMPTY_DEFS,
 ) -> ValidationError:
     """Classify a oneOf enum validation failure using the typeless ``DecodeSchema``."""
     instance = error.instance
@@ -454,7 +529,7 @@ def _classify_enum_failure(
             path=path, field="$case",
         )
 
-    enum_decode = _find_enum_decode_at_path(decode_schema, list(error.absolute_path))
+    enum_decode = _find_enum_decode_at_path(decode_schema, list(error.absolute_path), defs)
     if enum_decode is None:
         return ValidationError(
             category="bad_case",
@@ -501,6 +576,7 @@ def _parse_json_core(
     raw: str,
     schema_dict: dict[str, object],
     decode_schema: DecodeSchema,
+    defs: Mapping[str, DecodeSchema] = _EMPTY_DEFS,
     *,
     strict: bool,
 ) -> ParseResult:
@@ -509,13 +585,17 @@ def _parse_json_core(
     Takes pre-compiled *schema_dict* (a JSON Schema dict) and *decode_schema*
     (a typeless ``DecodeSchema``) so the IR evaluator can call it with values
     already embedded in the ``ContractRequest`` without holding checker types.
+    *defs* is *decode_schema*'s ``$defs`` table for a recursive target type
+    (empty for a non-recursive one).
     """
     if strict:
         try:
             parsed_obj: object = json.loads(raw, parse_float=Decimal)
         except json.JSONDecodeError as exc:
             return ParseResult.failure(f"Strict JSON parse failed: {exc}")
-        return _validate_and_decode_core(raw.strip(), parsed_obj, schema_dict, decode_schema)
+        return _validate_and_decode_core(
+            raw.strip(), parsed_obj, schema_dict, decode_schema, defs
+        )
 
     json_text = _extract_json_text(raw)
     if json_text is _AMBIGUOUS_MULTI_VALUE:
@@ -531,7 +611,7 @@ def _parse_json_core(
         parsed_obj = json.loads(json_text, parse_float=Decimal)
     except json.JSONDecodeError as exc:
         return ParseResult.failure(f"JSON parse failed after repair attempt: {exc}")
-    return _validate_and_decode_core(json_text, parsed_obj, schema_dict, decode_schema)
+    return _validate_and_decode_core(json_text, parsed_obj, schema_dict, decode_schema, defs)
 
 
 def _validate_and_decode_core(
@@ -539,6 +619,7 @@ def _validate_and_decode_core(
     parsed_obj: object,
     schema_dict: dict[str, object],
     decode_schema: DecodeSchema,
+    defs: Mapping[str, DecodeSchema] = _EMPTY_DEFS,
 ) -> ParseResult:
     """Validate *parsed_obj* against *schema_dict*, then decode to typed ``Value``."""
     normalized = normalize_integral_decimals(parsed_obj)
@@ -546,7 +627,7 @@ def _validate_and_decode_core(
     raw_errors: list[JsonschemaValidationError] = list(validator.iter_errors(normalized))
     if raw_errors:
         errors_sorted = sorted(raw_errors, key=_path_sort_key)
-        errors = tuple(_make_validation_error(e, decode_schema) for e in errors_sorted)
+        errors = tuple(_make_validation_error(e, decode_schema, defs) for e in errors_sorted)
         summary = "; ".join(e.message for e in errors)
         return ParseResult.failure(
             f"Schema validation failed: {summary}",
@@ -554,7 +635,7 @@ def _validate_and_decode_core(
             normalized_raw=json_text,
         )
     try:
-        value = decode_value(decode_schema, normalized)
+        value = decode_value(decode_schema, normalized, defs)
     except ValueError as exc:
         return ParseResult.failure(f"Value conversion failed: {exc}", normalized_raw=json_text)
     return ParseResult.success(value, normalized_raw=json_text)
@@ -582,7 +663,9 @@ def _parse_contract_output(
         return ParseResult.failure("ContractRequest json_schema is not a JSON object")
     if contract.decode is None:
         return ParseResult.failure("ContractRequest has no decode schema for json codec")
-    return _parse_json_core(raw, schema_raw, contract.decode, strict=effective_strict)
+    return _parse_json_core(
+        raw, schema_raw, contract.decode, dict(contract.defs), strict=effective_strict
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -616,11 +699,11 @@ class JsonCodec:
     Schema validation is always strict in both modes (rules 3–6 of 
     never relaxed).
 
-    CARRY-IN 2: The ``parse`` method accepts an optional precomputed *schema*
-    keyword argument.  When provided (e.g. by runtime-side callers that already
-    hold the materialized ``OutputContract``), ``derive_schema`` is skipped.
-    This ensures schema derivation happens once per ``make_contract`` call
-    rather than once per parse attempt.
+    ``make_contract`` derives the JSON Schema and typeless decode walk once
+    from a real checker ``Type`` (compile time / REPL contract preview).
+    ``parse`` never derives them: it takes the schema dict and ``DecodeSchema``
+    explicitly, so execution-time parsing runs entirely off the typeless
+    contract data the lowerer already compiled — no checker ``Type`` involved.
     """
 
     @property
@@ -631,8 +714,8 @@ class JsonCodec:
     def supported_kinds(self) -> frozenset[str]:
         """The set of type-kind strings this codec can handle.
 
-        Single source of truth for ``HostCapabilities.codec_kinds["json"]``
-        (CARRY-IN 1 — eliminates a duplicated literal at the host-environment assembly site).
+        Single source of truth for ``HostCapabilities.codec_kinds["json"]``,
+        avoiding a duplicated literal at the host-environment assembly site.
         Matches ``_JSON_CODEC_KINDS`` (kept in this module as a local constant
         to drive ``supports_type``; the runtime no longer duplicates it).
         """
@@ -641,59 +724,84 @@ class JsonCodec:
     def supports_type(self, t: Type) -> bool:
         return t.kind in _JSON_CODEC_KINDS
 
-    def make_contract(self, type_ref: Type) -> "OutputContract":
+    def make_contract(
+        self, type_ref: Type, type_table: TypeTable | None = None
+    ) -> "OutputContract":
         """Build an ``OutputContract`` for *type_ref*.
 
-        The ``TypeEnvironment`` parameter was removed (CARRY-IN 2): it was
-        never used by this implementation.  ``derive_schema`` is called exactly
-        once here; callers that subsequently invoke ``parse`` should pass
-        ``schema=contract.json_schema`` to avoid re-derivation.
+        Derives the JSON Schema, format instructions, and typeless decode
+        walk once, from the real checker ``Type``.  Compile time / REPL
+        contract-preview use only: execution-time parsing never calls this —
+        it uses the ``json_schema``/``decode`` the lowerer already compiled
+        into the IR contract request.
+
+        *type_table* resolves record/enum field/variant shapes.  ``None`` is
+        only valid when *type_ref* carries no nominal type: passing ``None``
+        for a record/enum target is an internal error, surfaced as the
+        ``KeyError`` an empty table's lookup naturally raises rather than a
+        user-facing diagnostic.
         """
         from agm.agl.runtime.contract import OutputContract
 
-        schema = derive_schema(type_ref)
+        table = type_table if type_table is not None else TypeTable()
+        schema, decode_plan = derive_schema_and_decode(type_ref, table)
         instructions = build_format_instructions(schema)
         return OutputContract(
-            target_type=type_ref,
+            target_type_label=repr(type_ref),
             codec=self,
             strict_json=False,  # default; overridden per call-site
             format_instructions=instructions,
             json_schema=schema,
+            decode=decode_plan.root,
+            defs=decode_plan.defs,
         )
 
     def parse(
         self,
         raw: str,
-        target_type: Type,
         *,
         strict_json: bool = False,
         schema: dict[str, object] | None = None,
+        decode: DecodeSchema | None = None,
+        defs: DecodeDefsInput | None = None,
     ) -> ParseResult:
-        """Parse *raw* agent output into the typed ``Value`` for *target_type*.
+        """Parse *raw* agent output into the typed ``Value`` described by *schema*/*decode*.
 
         Lenient mode (``strict_json=False``, the default per design ):
           1. Attempt to extract/repair exactly one JSON text from *raw*.
           2. Re-parse the repaired text with ``json.loads(parse_float=Decimal)``.
-          3. Validate against the derived JSON Schema.
-          4. Convert to the appropriate typed ``Value``.
+          3. Validate against *schema*.
+          4. Convert to the appropriate typed ``Value`` per *decode*.
 
         Strict mode (``strict_json=True``):
           1. ``json.loads`` on the stripped raw string — no repair, no fence
              stripping.  Fails if there is any surrounding non-whitespace.
           2. Validate and convert as in lenient mode.
 
-        *schema* (CARRY-IN 2): optional precomputed JSON Schema dict.  When
-        ``None`` (the default), ``derive_schema`` is called to produce it.
-        Runtime-side callers that already have the materialized
-        ``OutputContract`` should pass ``schema=contract.json_schema`` to
-        avoid redundant schema derivation.
+        *schema* and *decode* are the JSON Schema dict and typeless
+        ``DecodeSchema`` walk for the target type — both required.  *defs* is
+        *decode*'s ``$defs`` table for a recursive target type; absent (or
+        ``None``) for a non-recursive one.  Callers (the IR evaluator, or a
+        test exercising this codec directly) must supply *schema*/*decode*
+        explicitly; this method never derives them from a checker ``Type``,
+        so there is no re-derivation cost per parse attempt.
 
         Decimal exactness: ``json-repair`` always produces a
         JSON *string* (not Python objects), which is then re-parsed via
         ``json.loads(parse_float=Decimal)``.  Decimal values are never
         routed through Python ``float``.
+
+        :raises ValueError: if *schema* or *decode* is ``None``.
         """
-        if schema is None:
-            schema = derive_schema(target_type)
-        decode_schema = build_decode_schema(target_type)
-        return _parse_json_core(raw, schema, decode_schema, strict=strict_json)
+        if schema is None or decode is None:
+            raise ValueError(
+                "JsonCodec.parse requires an explicit schema and decode walk; "
+                "it no longer derives them from a checker Type. Pass the "
+                "contract-carried json_schema/decode (see ContractRequest)."
+            )
+        effective_defs = _coerce_decode_defs(defs)
+        if not effective_defs and _decode_contains_ref(decode):
+            raise ValueError(
+                "JsonCodec.parse requires defs when the decode walk contains RefDecode nodes."
+            )
+        return _parse_json_core(raw, schema, decode, effective_defs, strict=strict_json)

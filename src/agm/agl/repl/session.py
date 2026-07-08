@@ -211,6 +211,34 @@ class ReplSession:
 
         return AgentType()
 
+    @staticmethod
+    def _type_mentions_entry_nominal(typ: "Type", names: frozenset[str]) -> bool:
+        """Return whether *typ* contains an entry-module nominal in *names*."""
+        from agm.agl.semantics.types import (
+            DictType,
+            EnumType,
+            ExceptionType,
+            FunctionType,
+            ListType,
+            RecordType,
+        )
+
+        if isinstance(typ, (RecordType, EnumType)):
+            return (typ.module_id.is_entry and typ.name in names) or any(
+                ReplSession._type_mentions_entry_nominal(arg, names) for arg in typ.type_args
+            )
+        if isinstance(typ, ExceptionType):
+            return typ.module_id.is_entry and typ.name in names
+        if isinstance(typ, ListType):
+            return ReplSession._type_mentions_entry_nominal(typ.elem, names)
+        if isinstance(typ, DictType):
+            return ReplSession._type_mentions_entry_nominal(typ.value, names)
+        if isinstance(typ, FunctionType):
+            return any(
+                ReplSession._type_mentions_entry_nominal(param, names) for param in typ.params
+            ) or ReplSession._type_mentions_entry_nominal(typ.result, names)
+        return False
+
     # ------------------------------------------------------------------
     # Registration (delegated to the internal runtime — shared validation)
     # ------------------------------------------------------------------
@@ -318,6 +346,7 @@ class ReplSession:
                 warnings=[],
                 error=None,
                 ok=True,
+                type_table=type_env.type_table,
             )
         return None
 
@@ -355,7 +384,9 @@ class ReplSession:
             name=None,
             value=None,
             value_type=None,
-            type_display=format_generic_type_def_for_repl(display_name, gdef),
+            type_display=format_generic_type_def_for_repl(
+                display_name, gdef, type_env.type_table
+            ),
             diagnostics=[],
             warnings=[],
             error=None,
@@ -585,7 +616,9 @@ class ReplSession:
             if raw is not None:
                 key_type = get_engine_key_type(key_name)
                 assert key_type is not None
-                config_base[key_name] = convert_config_value(key_name, raw, key_type)
+                config_base[key_name] = convert_config_value(
+                    key_name, raw, key_type, self._type_env.type_table
+                )
 
         return config_base
 
@@ -655,7 +688,7 @@ class ReplSession:
                     assert declared_type is not None
                     try:
                         param_values[item.name] = convert_param_value(
-                            item.name, raw_config, declared_type
+                            item.name, raw_config, declared_type, checked.type_env.type_table
                         )
                     except (TypeError, ValueError) as exc:
                         return (
@@ -710,6 +743,7 @@ class ReplSession:
             error=None,
             ok=True,
             quote_strings=self._quote_strings_for_entry(program),
+            type_table=checked.type_env.type_table,
         )
 
     def _promote_ir_state(
@@ -729,6 +763,7 @@ class ReplSession:
             AgentDecl,
             ConfigDecl,
             EnumDef,
+            ExceptionDef,
             FuncDef,
             LetDecl,
             ParamDecl,
@@ -737,12 +772,14 @@ class ReplSession:
             TypeAlias,
             VarDecl,
         )
+        from agm.agl.typecheck.env import TypeEnvironment
 
         entry_root = checked.resolved.root_scope
         named_declarations = (
             AgentDecl,
             ConfigDecl,
             EnumDef,
+            ExceptionDef,
             FuncDef,
             LetDecl,
             ParamDecl,
@@ -763,6 +800,48 @@ class ReplSession:
         config_decl_names: frozenset[str] = frozenset(
             item.name for item in program.body.items if isinstance(item, ConfigDecl)
         )
+        def _before_failure(end_offset: int) -> bool:
+            return not partial or (
+                failure_span is not None and end_offset <= failure_span.start_offset
+            )
+
+        entry_type_names = frozenset(
+            item.name
+            for item in program.body.items
+            if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias))
+        )
+        promoted_type_names = frozenset(
+            item.name
+            for item in program.body.items
+            if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias))
+            and _before_failure(item.span.end_offset)
+        )
+        unpromoted_type_names = entry_type_names - promoted_type_names
+        stale_binding_names: set[str] = set()
+        stale_binding_node_ids: set[int] = set()
+        if promoted_type_names:
+            for name, ref in self._session_scope.bindings.items():
+                typ = self._type_env.resolve_binding(ref)
+                if typ is not None and self._type_mentions_entry_nominal(typ, promoted_type_names):
+                    stale_binding_names.add(name)
+                    stale_binding_node_ids.add(ref.decl_node_id)
+            for name in stale_binding_names:
+                self._session_scope.bindings.pop(name, None)
+            self._declared_params = {
+                name: typ
+                for name, typ in self._declared_params.items()
+                if not self._type_mentions_entry_nominal(typ, promoted_type_names)
+            }
+            self._ambient_constructor_candidates = {
+                cname: tuple(ref for ref in crefs if ref.owner_name not in promoted_type_names)
+                for cname, crefs in self._ambient_constructor_candidates.items()
+            }
+            self._ambient_constructor_candidates = {
+                cname: crefs
+                for cname, crefs in self._ambient_constructor_candidates.items()
+                if crefs
+            }
+
         installed: list[str] = []
         for name, ref in entry_root.bindings.items():
             # Config bindings are promoted only on full success (alongside the
@@ -785,19 +864,13 @@ class ReplSession:
                 self._session_scope.bindings[name] = ref
                 if partial and name in entry_names:
                     installed.append(name)
+        previous_type_env = TypeEnvironment()
+        previous_type_env.seed_from(self._type_env)
         self._type_env.seed_from(checked.type_env)
+        if partial and unpromoted_type_names:
+            self._type_env.restore_type_names_from(previous_type_env, unpromoted_type_names)
+        self._type_env.remove_binding_types(stale_binding_node_ids)
 
-        def _before_failure(end_offset: int) -> bool:
-            return not partial or (
-                failure_span is not None and end_offset <= failure_span.start_offset
-            )
-
-        promoted_type_names = {
-            item.name
-            for item in program.body.items
-            if isinstance(item, (RecordDef, EnumDef, TypeAlias))
-            and _before_failure(item.span.end_offset)
-        }
         promoted_agents = {
             item.name
             for item in program.body.items
@@ -992,7 +1065,7 @@ class ReplSession:
         assert typ is not None
         from agm.agl.repl.type_display import format_type_for_repl
 
-        return format_type_for_repl(typ)
+        return format_type_for_repl(typ, checked.type_env.type_table)
 
     # ------------------------------------------------------------------
     # Introspection

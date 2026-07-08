@@ -18,7 +18,7 @@
       "name": "negative_int",
       "params": {"n": -3, "flag": true, "ratio": 1.0},
       "expect": {
-        "stdout": "-3\ntrue\n1\n-3\ntrue\n1.0\n\"42\"\n42\n-3\n"
+        "stdout": "-3\ntrue\n1\n-3\ntrue\n1\n\"42\"\n42\n-3\n"
       }
     }
   ]

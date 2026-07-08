@@ -1,0 +1,34 @@
+# Recursive record guarded by a list field: Category can hold nested
+# subcategories without needing a base-case variant, since list[Category] is
+# always inhabited by the empty list. Builds a nested tree (root -> child ->
+# optional grandchild) plus an EMPTY-children case, counts and renders both
+# recursively.
+record Category
+  name: text
+  subcategories: list[Category]
+
+param root_name: text
+param child_name: text
+param include_grandchild: bool
+
+def count_categories(c: Category) -> int =
+  var total: int = 1
+  for child in c.subcategories do
+    total := total + count_categories(child)
+  total
+
+def render_category(c: Category) -> text =
+  var result: text = c.name
+  for child in c.subcategories do
+    result := result + " > " + render_category(child)
+  result
+
+let grandchildren: list[Category] = if include_grandchild => [Category(name = "leaf", subcategories = [])] else => []
+let child = Category(name = child_name, subcategories = grandchildren)
+let root = Category(name = root_name, subcategories = [child])
+let empty_root = Category(name = "empty", subcategories = [])
+
+print count_categories(root)
+print render_category(root)
+print count_categories(empty_root)
+print render_category(empty_root)

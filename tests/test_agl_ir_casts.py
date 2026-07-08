@@ -22,6 +22,7 @@ from agm.agl.ir.contracts import (
     EnumDecode,
     ListDecode,
     RecordDecode,
+    RefDecode,
     ScalarDecode,
     ScalarKind,
     VariantDecode,
@@ -494,6 +495,129 @@ def test_validate_rejects_decode_with_unregistered_nominal() -> None:
     )
     with pytest.raises(InvalidIrError, match="not in program.nominals"):
         validate_ir(_convert_program(recipe), deep=True)
+
+
+def _tree_decode_defs() -> tuple[tuple[str, EnumDecode], ...]:
+    """A self-recursive `Tree` decode $defs table (matches the recursive e2e programs)."""
+    tree_body = EnumDecode(
+        nominal=NominalId(ENTRY_ID, "Tree"),
+        display_name="Tree",
+        variants=(
+            VariantDecode("Leaf", ()),
+            VariantDecode(
+                "Node",
+                (
+                    ("value", ScalarDecode(ScalarKind.INT)),
+                    ("left", RefDecode("Tree")),
+                    ("right", RefDecode("Tree")),
+                ),
+            ),
+        ),
+    )
+    return (("Tree", tree_body),)
+
+
+def test_validate_accepts_recursive_recipe_with_matching_defs() -> None:
+    """A recursive ConversionRecipe (RefDecode root + defs) validates when the nominal exists."""
+    from agm.agl.ir.ids import Location, SourceId
+    from agm.agl.ir.nodes import IrConstText
+    from agm.agl.ir.program import (
+        ExecutableModule,
+        ExecutableProgram,
+        NominalDescriptor,
+        NominalKind,
+        SourceFile,
+        VariantDescriptor,
+    )
+    from agm.agl.ir.validate import validate_ir
+
+    tree_nominal = NominalId(ENTRY_ID, "Tree")
+    recipe = ConversionRecipe(
+        strategy=ConversionStrategy.DECODE_JSON,
+        source_label="json",
+        target_label="Tree",
+        json_schema="{}",
+        decode=RefDecode("Tree"),
+        defs=_tree_decode_defs(),
+    )
+    sid = SourceId(0)
+    loc = Location(source_id=sid, start_offset=0, end_offset=1, start_line=1, start_col=0)
+    node = IrConvert(
+        location=loc,
+        value=IrConstText(loc, "x"),
+        recipe=recipe,
+        failure_mode=ConversionFailureMode.RAISE_CAST_ERROR,
+    )
+    prog = ExecutableProgram(
+        entry_module=ENTRY_ID,
+        modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=(node,))},
+        symbols={},
+        nominals={
+            tree_nominal: NominalDescriptor(
+                nominal=tree_nominal,
+                display_name="Tree",
+                kind=NominalKind.ENUM,
+                variants=(
+                    VariantDescriptor("Leaf", ()),
+                    VariantDescriptor("Node", ("value", "left", "right")),
+                ),
+            )
+        },
+        sources={sid: SourceFile(display_name="<test>", normalized_text=" ")},
+    )
+    validate_ir(prog, deep=True)  # no exception
+
+
+def test_validate_rejects_refdecode_with_unknown_defs_key() -> None:
+    """A RefDecode whose key has no matching defs entry → InvalidIrError."""
+    from agm.agl.ir.validate import InvalidIrError, validate_ir
+
+    recipe = ConversionRecipe(
+        strategy=ConversionStrategy.DECODE_JSON,
+        source_label="json",
+        target_label="Tree",
+        json_schema="{}",
+        decode=RefDecode("Tree"),
+        defs=(),  # missing the "Tree" entry the root RefDecode names
+    )
+    with pytest.raises(InvalidIrError, match=r"unknown \$defs key"):
+        validate_ir(_convert_program(recipe), deep=True)
+
+
+def test_validate_rejects_total_strategy_with_defs() -> None:
+    """A total-strategy recipe must not carry a non-empty defs table either."""
+    from agm.agl.ir.validate import InvalidIrError, validate_ir
+
+    recipe = ConversionRecipe(
+        strategy=ConversionStrategy.RENDER_TO_TEXT,
+        source_label="int",
+        target_label="text",
+        defs=_tree_decode_defs(),  # must not be present for a total strategy
+    )
+    with pytest.raises(InvalidIrError, match="must not carry"):
+        validate_ir(_convert_program(recipe), deep=True)
+
+
+def test_run_recipe_decode_json_resolves_recursive_defs() -> None:
+    """run_recipe (the IR evaluator's cast executor) resolves RefDecode via recipe.defs."""
+    recipe = ConversionRecipe(
+        strategy=ConversionStrategy.DECODE_JSON,
+        source_label="json",
+        target_label="Tree",
+        json_schema="{}",  # permissive: exercises the decode walk, not schema validation
+        decode=RefDecode("Tree"),
+        defs=_tree_decode_defs(),
+    )
+    payload = {
+        "$case": "Node",
+        "value": 1,
+        "left": {"$case": "Leaf"},
+        "right": {"$case": "Leaf"},
+    }
+    result = run_recipe(recipe, JsonValue(payload))
+    assert isinstance(result, EnumValue)
+    assert result.variant == "Node"
+    assert result.fields["value"] == IntValue(1)
 
 
 def test_recipe_is_hashable() -> None:

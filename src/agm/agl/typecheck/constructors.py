@@ -122,6 +122,9 @@ class ConstructorChecker:
         ctor_ref: ConstructorRef,
         span: SourceSpan,
         expected: Type | None,
+        sig: ConstructorSignature | None = None,
+        gdef: GenericTypeDef | None = None,
+        source_name: str | None = None,
     ) -> Type:
         """Handle a generic constructor used as a bare value (not in direct call position).
 
@@ -131,12 +134,13 @@ class ConstructorChecker:
         owner_name = ctor_ref.owner_name
         variant = ctor_ref.variant
         type_params = ctor_ref.type_params
-        sig = self._ctx._env.get_constructor_signature(owner_name, variant)
-        # Open-imported generic constructor used as a bare value: the own-module
-        # env has no signature for it; fall back to the owning module's graph
-        # tables (mirrors the call-position path in _check_constructor_callee_call).
-        imported_gdef: GenericTypeDef | None = None
-        imported_source_name = owner_name
+        # Open-imported and cross-module qualified generic constructors used as bare
+        # values may supply their graph-table signature up front; otherwise start
+        # with the own-module registry and fall back to the open-import map.
+        imported_gdef: GenericTypeDef | None = gdef
+        imported_source_name = source_name or owner_name
+        if sig is None:
+            sig = self._ctx._env.get_constructor_signature(owner_name, variant)
         if sig is None:
             # A generic constructor with no own-module signature must be open-imported
             # (the scope resolver guarantees the reference resolved to some type).
@@ -579,21 +583,20 @@ class ConstructorChecker:
         node: Call,
         owner: RecordType | EnumType | ExceptionType,
         variant: str | None,
-        owner_module_id: ModuleId | None = None,
     ) -> FunctionType:
         if isinstance(owner, EnumType):
             assert variant is not None, "variant is required for EnumType"
-            fields = owner.variants[variant]
+            fields = self._ctx._env.type_table.enum_variants(owner)[variant]
             context_desc = f"variant '{owner.name}.{variant}'"
         elif isinstance(owner, RecordType):
-            fields = owner.fields
+            fields = self._ctx._env.type_table.record_fields(owner)
             context_desc = f"constructor '{owner.name}'"
         else:
-            fields = owner.fields
+            fields = self._ctx._env.type_table.exception_fields(owner)
             context_desc = f"exception '{owner.name}'"
 
         field_kinds = self._ctx._env.get_constructor_field_kinds_for_type(
-            owner, owner.name, variant, module_id=owner_module_id
+            owner, owner.name, variant
         )
         assert field_kinds is not None, (
             f"compiler bug: no field-kinds registered for {context_desc}"
@@ -706,7 +709,6 @@ class ConstructorChecker:
             node=node,
             owner=concrete_type,
             variant=variant,
-            owner_module_id=owner_module_id_for_kinds,
         )
 
     # --- Resolve constructor owner (public entry point) ---
@@ -727,17 +729,6 @@ class ConstructorChecker:
         )
         return owner
 
-    def _resolve_constructor_owner_module_id(self, ref: ConstructorRef) -> ModuleId | None:
-        """Return the defining module for an open-imported concrete constructor."""
-        if self._ctx._env.get_type(ref.owner_name) is not None:
-            return None
-        imported = self._ctx._env.get_open_imported_type(ref.owner_name)
-        assert imported is not None, (
-            f"constructor '{ref.owner_name}' resolved without a local or imported owner type"
-        )
-        module_id, _source_name, _typ = imported
-        return module_id
-
     # --- Qualified constructor as value (public entry point) ---
 
     def check_qualified_constructor_as_value(
@@ -750,8 +741,20 @@ class ConstructorChecker:
         expected: Type | None,
     ) -> Type:
         """Type a qualified constructor (``Owner::variant``) used in value position."""
-        gdef = self._ctx._env.get_generic_type(owner_name)
+        gdef = (
+            self._ctx._env.get_generic_type_from_module(owner_module_id, owner_name)
+            if owner_module_id is not None
+            else self._ctx._env.get_generic_type(owner_name)
+        )
         if gdef is not None:
+            sig = (
+                self._ctx._env.get_ctor_sig_from_module(owner_module_id, owner_name, variant)
+                if owner_module_id is not None
+                else self._ctx._env.get_constructor_signature(owner_name, variant)
+            )
+            assert sig is not None, (
+                f"Generic enum '{owner_name}' has no constructor signature for '{variant}'"
+            )
             # owner_decl_node_id is unused on the as-value path (only owner_name,
             # variant, and type_params are consumed); pass the 0 placeholder.
             ctor_ref = ConstructorRef(
@@ -761,7 +764,12 @@ class ConstructorChecker:
                 type_params=gdef.type_params,
             )
             return self.check_generic_constructor_as_value(
-                ctor_ref=ctor_ref, span=span, expected=expected
+                ctor_ref=ctor_ref,
+                span=span,
+                expected=expected,
+                sig=sig,
+                gdef=gdef if owner_module_id is not None else None,
+                source_name=owner_name,
             )
         enum_type = self._resolve_qualified_enum_owner(
             owner_name, variant, span, owner_module_id=owner_module_id
@@ -796,7 +804,7 @@ class ConstructorChecker:
                 f"'{owner_name}' is not a known enum type.",
                 span=span,
             )
-        if variant not in enum_type.variants:
+        if variant not in self._ctx._env.type_table.enum_variants(enum_type):
             raise AglTypeError(
                 f"Variant '{variant}' does not exist in enum '{owner_name}'.",
                 span=span,
@@ -829,9 +837,9 @@ class ConstructorChecker:
             )
         if isinstance(owner, EnumType):
             assert variant is not None, "variant is required for EnumType"
-            fields = owner.variants[variant]
+            fields = self._ctx._env.type_table.enum_variants(owner)[variant]
         else:
-            fields = owner.fields
+            fields = self._ctx._env.type_table.record_fields(owner)
         if fields:
             params = tuple(fields.values())
             return FunctionType(params=params, result=owner)
@@ -958,9 +966,10 @@ class ConstructorChecker:
             f"constructor_binding for '{callee_ref.name}' in "
             f"'{callee_ref.module_id.dotted()}' resolved to {type(owner_type).__name__}"
         )
+        self._reject_abstract_exception_constructor(owner_type, node.span)
         return self._check_constructor_call(
             owner=owner_type, variant=None, positional=node.args, named=node.named_args,
-            span=node.span, node_id=node.node_id, owner_module_id=callee_ref.module_id,
+            span=node.span, node_id=node.node_id,
         )
 
     # --- Unqualified constructor callee call (public entry point) ---
@@ -1001,16 +1010,10 @@ class ConstructorChecker:
                 span=node.span,
             )
         owner = self.resolve_constructor_owner(ctor_ref, node.span)
-        owner_module_id = self._resolve_constructor_owner_module_id(ctor_ref)
-        if isinstance(owner, ExceptionType) and owner.abstract:
-            raise AglTypeError(
-                "The abstract 'Exception' base type is not constructible. "
-                "Use a concrete exception type (e.g. 'Abort').",
-                span=node.span,
-            )
+        self._reject_abstract_exception_constructor(owner, node.span)
         return self._check_constructor_call(
             owner=owner, variant=ctor_ref.variant, positional=node.args, named=node.named_args,
-            span=node.span, node_id=node.node_id, owner_module_id=owner_module_id,
+            span=node.span, node_id=node.node_id,
         )
 
     # --- Qualified constructor callee call (public entry point) ---
@@ -1084,7 +1087,7 @@ class ConstructorChecker:
             f"'{callee_ref.module_id.dotted()}' resolved to {type(owner_type).__name__}"
         )
         return self._check_partial_concrete_constructor_call(
-            node=node, owner=owner_type, variant=None, owner_module_id=callee_ref.module_id
+            node=node, owner=owner_type, variant=None
         )
 
     def check_partial_constructor_callee_call(
@@ -1120,15 +1123,9 @@ class ConstructorChecker:
                 span=node.span,
             )
         owner = self.resolve_constructor_owner(ctor_ref, node.span)
-        owner_module_id = self._resolve_constructor_owner_module_id(ctor_ref)
-        if isinstance(owner, ExceptionType) and owner.abstract:
-            raise AglTypeError(
-                "The abstract 'Exception' base type is not constructible. "
-                "Use a concrete exception type (e.g. 'Abort').",
-                span=node.span,
-            )
+        self._reject_abstract_exception_constructor(owner, node.span)
         return self._check_partial_concrete_constructor_call(
-            node=node, owner=owner, variant=ctor_ref.variant, owner_module_id=owner_module_id
+            node=node, owner=owner, variant=ctor_ref.variant
         )
 
     def check_partial_qualified_constructor_callee_call(
@@ -1186,10 +1183,22 @@ class ConstructorChecker:
             owner_name, variant, node.span, owner_module_id=owner_module_id
         )
         return self._check_partial_concrete_constructor_call(
-            node=node, owner=enum_type, variant=variant, owner_module_id=owner_module_id
+            node=node, owner=enum_type, variant=variant
         )
 
     # --- Constructor call validation (private helper) ---
+
+    def _reject_abstract_exception_constructor(
+        self, owner: RecordType | EnumType | ExceptionType, span: SourceSpan
+    ) -> None:
+        if isinstance(owner, ExceptionType) and self._ctx._env.type_table.exception_def(
+            owner
+        ).abstract:
+            raise AglTypeError(
+                "The abstract 'Exception' base type is not constructible. "
+                "Use a concrete exception type (e.g. 'Abort').",
+                span=span,
+            )
 
     def _check_constructor_call(
         self,
@@ -1200,23 +1209,23 @@ class ConstructorChecker:
         named: tuple[NamedArg, ...],
         span: SourceSpan,
         node_id: int | None = None,
-        owner_module_id: ModuleId | None = None,
     ) -> RecordType | EnumType | ExceptionType:
         if isinstance(owner, EnumType):
             assert variant is not None, "variant is required for EnumType"
-            fields = owner.variants[variant]
+            fields = self._ctx._env.type_table.enum_variants(owner)[variant]
             context_desc = f"variant '{owner.name}.{variant}'"
         elif isinstance(owner, RecordType):
-            fields = owner.fields
+            fields = self._ctx._env.type_table.record_fields(owner)
             context_desc = f"constructor '{owner.name}'"
         else:
-            fields = owner.fields
+            fields = self._ctx._env.type_table.exception_fields(owner)
             context_desc = f"exception '{owner.name}'"
 
-        # Get field kinds from the registry (excludes trace_id for exceptions).
-        # The env helper owns the registry-key convention (module_id / variant).
+        # Get field kinds (excludes trace_id for exceptions). The env helper
+        # owns the lookup convention (registered table for records/enums,
+        # derived from exception_fields for exceptions).
         field_kinds = self._ctx._env.get_constructor_field_kinds_for_type(
-            owner, owner.name, variant, module_id=owner_module_id
+            owner, owner.name, variant
         )
         assert field_kinds is not None, (
             f"compiler bug: no field-kinds registered for {context_desc}"

@@ -1,0 +1,25 @@
+{
+  "scenarios": [
+    {
+      "name": "positive_values",
+      "params": {"a": 1, "b": 2, "c": 3},
+      "expect": {
+        "stdout": "6\n2\ntrue\nfalse\nroot 1\n"
+      }
+    },
+    {
+      "name": "negative_and_zero_values",
+      "params": {"a": -5, "b": 0, "c": 10},
+      "expect": {
+        "stdout": "5\n2\ntrue\nfalse\nroot -5\n"
+      }
+    },
+    {
+      "name": "all_equal_values",
+      "params": {"a": 7, "b": 7, "c": 7},
+      "expect": {
+        "stdout": "21\n2\ntrue\nfalse\nroot 7\n"
+      }
+    }
+  ]
+}

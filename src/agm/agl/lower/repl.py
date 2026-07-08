@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
-from agm.agl.ir.ids import SourceId, SymbolId
-from agm.agl.ir.program import ExecutableProgram, SourceFile
+from agm.agl.ir.contracts import ContractPayload
+from agm.agl.ir.ids import NominalId, SourceId, SymbolId
+from agm.agl.ir.program import ExecutableProgram, NominalDescriptor, SourceFile
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.lowerer import _LinkState, _Lowerer
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
@@ -39,6 +40,30 @@ class LinkImage:
         """
         self._linked_modules.update(module_ids)
 
+    def snapshot_nominals(self) -> dict[NominalId, NominalDescriptor]:
+        """Return a rollback snapshot of persistent nominal descriptors."""
+        return dict(self._state.nominals)
+
+    def restore_nominals(
+        self,
+        snapshot: Mapping[NominalId, NominalDescriptor],
+        nominal_ids: Iterable[NominalId],
+    ) -> None:
+        """Restore selected nominal descriptors from *snapshot*.
+
+        Runtime-failed REPL entries may have linked type declarations that were
+        not promoted statically. Nominals are keyed by stable module/name rather
+        than declaration node id, so unpromoted redeclarations must be restored
+        explicitly to keep constructor values in later entries consistent with
+        the restored type environment.
+        """
+        for nominal in nominal_ids:
+            previous = snapshot.get(nominal)
+            if previous is None:
+                self._state.nominals.pop(nominal, None)
+            else:
+                self._state.nominals[nominal] = previous
+
 
 @dataclass(frozen=True, slots=True)
 class LoweredReplEntry:
@@ -59,6 +84,7 @@ def lower_repl_entry(
     source_text: str,
     source_label: str,
     validate: bool = False,
+    contract_payloads: Mapping[int, ContractPayload] | None = None,
 ) -> LoweredReplEntry:
     """Link one checked REPL entry into ``image`` without resetting any IDs."""
     link = image._state
@@ -68,7 +94,14 @@ def lower_repl_entry(
         display_name=source_label,
         normalized_text=normalize_newlines(source_text),
     )
-    lowerer = _Lowerer(checked_entry, link, ENTRY_ID, source_id, source_text)
+    lowerer = _Lowerer(
+        checked_entry,
+        link,
+        ENTRY_ID,
+        source_id,
+        source_text,
+        contract_payloads=contract_payloads,
+    )
     program = lowerer.lower()
     items = checked_entry.resolved.program.body.items
     last = items[-1]
@@ -88,6 +121,7 @@ def lower_repl_graph(
     image: LinkImage,
     source_text: str,
     validate: bool = False,
+    contract_payloads: Mapping[int, ContractPayload] | None = None,
 ) -> LoweredReplEntry:
     """Incrementally link a checked module graph into a REPL image."""
     from agm.agl.lower.graph import lower_graph
@@ -103,6 +137,7 @@ def lower_repl_graph(
         _link=image._state,
         _already_linked=frozenset(image._linked_modules),
         _entry_source_text=source_text,
+        contract_payloads=contract_payloads,
     )
     entry = checked_graph.modules[checked_graph.entry_id].resolved.program
     last = entry.body.items[-1]

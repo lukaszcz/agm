@@ -8,6 +8,7 @@ narrow ``GraphSessionCtx`` Protocol.  Must NOT import ``session`` (no cycle).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Protocol
 
 from agm.agl.diagnostics import Diagnostic
@@ -16,7 +17,9 @@ from agm.agl.repl.entry import EntryKind, EntryResult
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from agm.agl.ir.ids import Location
+    from agm.agl.ir.contracts import ContractPayload
+    from agm.agl.ir.ids import Location, NominalId
+    from agm.agl.ir.program import NominalDescriptor
     from agm.agl.lower import LinkImage
     from agm.agl.modules.ids import ModuleId
     from agm.agl.modules.loader import LoadedModule
@@ -141,7 +144,6 @@ class GraphSession:
         from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.modules.loader import build_repl_graph
         from agm.agl.parser import AglSyntaxError
-        from agm.agl.runtime.contract import materialize_contract
         from agm.agl.scope import AglScopeError
         from agm.agl.scope.graph import resolve_graph
         from agm.agl.typecheck import AglTypeError
@@ -211,13 +213,12 @@ class GraphSession:
         if pre_eval_result is not None:
             return pre_eval_result
 
-        # Materialize contracts (validation pass; the IR image rebuilds them below).
-        contract_errors: list[Diagnostic] = []
-        for spec in checked.contract_specs.values():
-            try:
-                materialize_contract(spec, host_env.codecs)
-            except ValueError as exc:
-                contract_errors.append(Diagnostic(message=f"Contract error: {exc}", line=1))
+        from agm.agl.pipeline import _materialize_graph_custom_contract_payloads
+
+        contract_payloads, contract_errors = _materialize_graph_custom_contract_payloads(
+            cgraph,
+            host_env.codecs,
+        )
         if contract_errors:
             return self._ctx._fail(contract_errors, warnings)
 
@@ -234,6 +235,7 @@ class GraphSession:
             param_values=param_values,
             entry_program_name=entry_program_name,
             entry_active_config=entry_active_config,
+            contract_payloads=contract_payloads,
         )
 
     @staticmethod
@@ -307,6 +309,7 @@ class GraphSession:
         param_values: dict[str, Value],
         entry_program_name: str | None,
         entry_active_config: dict[str, object],
+        contract_payloads: Mapping[int, "ContractPayload"],
     ) -> EntryResult:
         """Lower and execute one graph-mode entry in the persistent IR image."""
         from agm.agl.eval.ir_interpreter import IrInterpreter
@@ -318,8 +321,13 @@ class GraphSession:
         from agm.agl.semantics.exceptions import AglRaise
         from agm.agl.syntax.nodes import ImportDecl
 
+        nominal_snapshot = self._ctx._link_image.snapshot_nominals()
         lowered = lower_repl_graph(
-            cgraph, image=self._ctx._link_image, source_text=text, validate=True
+            cgraph,
+            image=self._ctx._link_image,
+            source_text=text,
+            validate=True,
+            contract_payloads=contract_payloads,
         )
         ir_params = {
             param.symbol: param_values[param.public_name]
@@ -364,6 +372,7 @@ class GraphSession:
                 partial=True,
                 failure_span=exc.span,
             )
+            self._restore_unpromoted_entry_nominals(orig_program, exc.span, nominal_snapshot)
             kind, name = self._ctx._classify(orig_program)
             return EntryResult(
                 kind=kind,
@@ -390,6 +399,7 @@ class GraphSession:
                 partial=True,
                 failure_span=cancel_span,
             )
+            self._restore_unpromoted_entry_nominals(orig_program, cancel_span, nominal_snapshot)
             kind, name = self._ctx._classify(orig_program)
             return EntryResult(
                 kind=kind,
@@ -462,4 +472,26 @@ class GraphSession:
             ok=True,
             trace_path=self._ctx._trace_path,
             quote_strings=self._ctx._quote_strings_for_entry(orig_program),
+            type_table=checked.type_env.type_table,
         )
+
+    def _restore_unpromoted_entry_nominals(
+        self,
+        program: Program,
+        failure_span: SourceSpan | Location | None,
+        nominal_snapshot: Mapping["NominalId", "NominalDescriptor"],
+    ) -> None:
+        """Rollback entry nominal descriptors for type declarations after a failure."""
+        from agm.agl.ir.ids import NominalId
+        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.syntax.nodes import EnumDef, ExceptionDef, RecordDef
+
+        nominal_ids = tuple(
+            NominalId(ENTRY_ID, item.name)
+            for item in program.body.items
+            if isinstance(item, (RecordDef, EnumDef, ExceptionDef))
+            and not (
+                failure_span is not None and item.span.end_offset <= failure_span.start_offset
+            )
+        )
+        self._ctx._link_image.restore_nominals(nominal_snapshot, nominal_ids)

@@ -13,9 +13,14 @@ Type hierarchy
 - ``DecimalType`` — the ``decimal`` primitive (exact fixed-point).
 - ``ListType(elem)`` — ``list[T]``.
 - ``DictType(value)`` — ``dict[text, V]`` (keys are always ``text`` in AgL).
-- ``RecordType(name, fields)`` — a ``record`` nominal type.
-- ``EnumType(name, variants)`` — an ``enum`` nominal type.
-- ``ExceptionType(name, fields)`` — a built-in exception type.
+- ``RecordType(name, type_args, module_id)`` — a ``record`` nominal type
+  handle; field shapes live in the shared ``TypeTable``
+  (``semantics.type_table``), keyed by ``(module_id, name)``.
+- ``EnumType(name, type_args, module_id)`` — an ``enum`` nominal type handle;
+  variant shapes live in the shared ``TypeTable``.
+- ``ExceptionType(name, module_id)`` — an exception nominal type handle
+  (never generic); field shapes and hierarchy (``abstract``, ``base``) live
+  in the shared ``TypeTable``.
 - ``UnitType`` — the ``unit`` type (AgL; single value ``()``).
 - ``AgentType`` — the opaque ``agent`` type (AgL).
 - ``FunctionType(params, result)`` — a first-class function type (AgL),
@@ -43,7 +48,6 @@ from __future__ import annotations
 import enum as _enum
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import assert_never
 
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CORE_ID, ModuleId
 
@@ -152,22 +156,18 @@ class DictType:
 
 @dataclass(frozen=True, slots=True)
 class RecordType:
-    """A ``record`` nominal type.
+    """A ``record`` nominal type handle.
 
-    ``fields`` maps field name → field type.  Fields are excluded from
-    equality and hashing so that two instantiations of the same generic type
-    compare equal iff their ``name``, ``type_args``, and ``module_id`` match.
-    ``type_args`` holds the resolved type arguments for a generic instantiation
-    (empty tuple for non-generic records).
+    A ``RecordType`` carries no field data — it is a lightweight handle whose
+    identity is ``(module_id, name, type_args)``.  Field types are looked up
+    by handle in the shared ``TypeTable`` (``semantics.type_table.TypeTable
+    .record_fields``).  ``type_args`` holds the resolved type arguments for a
+    generic instantiation (empty tuple for non-generic records).
     ``module_id`` is the owning module (defaults to ``ENTRY_ID`` so existing
     single-program paths and built-in/prelude types are unaffected).
-    Identity is ``(module_id, name, type_args)`` — ``fields`` is excluded from
-    equality and hashing so that a shell (empty fields) and its built form
-    compare equal.
     """
 
     name: str
-    fields: Mapping[str, Type] = field(compare=False)
     type_args: tuple[Type, ...] = ()
     module_id: ModuleId = field(default_factory=lambda: ENTRY_ID)
 
@@ -185,20 +185,18 @@ class RecordType:
 
 @dataclass(frozen=True, slots=True)
 class EnumType:
-    """An ``enum`` nominal type.
+    """An ``enum`` nominal type handle.
 
-    ``variants`` maps variant name → mapping of field names → field types.
-    Variants are excluded from equality and hashing so that two instantiations
-    of the same generic type compare equal iff their ``name``, ``type_args``,
-    and ``module_id`` match.  ``type_args`` holds the resolved type arguments
-    for a generic instantiation (empty tuple for non-generic enums).
-    ``module_id`` is the owning module (defaults to ``ENTRY_ID``).
-    Identity is ``(module_id, name, type_args)`` — ``variants`` is excluded
-    from equality and hashing so that a shell and its built form compare equal.
+    An ``EnumType`` carries no variant data — it is a lightweight handle
+    whose identity is ``(module_id, name, type_args)``.  Variant shapes are
+    looked up by handle in the shared ``TypeTable``
+    (``semantics.type_table.TypeTable.enum_variants``).  ``type_args`` holds
+    the resolved type arguments for a generic instantiation (empty tuple for
+    non-generic enums).  ``module_id`` is the owning module (defaults to
+    ``ENTRY_ID``).
     """
 
     name: str
-    variants: Mapping[str, Mapping[str, Type]] = field(compare=False)
     type_args: tuple[Type, ...] = ()
     module_id: ModuleId = field(default_factory=lambda: ENTRY_ID)
 
@@ -216,25 +214,36 @@ class EnumType:
 
 @dataclass(frozen=True, slots=True)
 class ExceptionType:
-    """A built-in exception type.
+    """An exception nominal type handle.
 
-    ``fields`` maps field name → field type.
-    The abstract ``Exception`` base is represented as an ``ExceptionType``
-    with name ``"Exception"``, only ``message``/``trace_id`` fields, and
-    ``abstract=True`` (it is catchable as the hierarchy root but not
-    constructible).
+    An ``ExceptionType`` carries no field data — it is a lightweight handle
+    whose identity is ``(module_id, name)``; exceptions are never generic, so
+    there is no ``type_args`` component (unlike ``RecordType``/``EnumType``).
+    Field shapes and hierarchy metadata (``abstract``, ``base``) are looked
+    up by handle in the shared ``TypeTable``
+    (``semantics.type_table.TypeTable.exception_fields``/``exception_def``).
+    ``module_id`` is the owning module (defaults to ``ENTRY_ID``, like
+    ``RecordType``/``EnumType``); built-in exceptions carry ``PRELUDE_ID``.
+
+    The abstract ``Exception`` root is the ``TypeDef`` registered under name
+    ``"Exception"`` with ``abstract=True`` and only ``message``/``trace_id``
+    fields — it is catchable as the hierarchy root but not constructible.
     """
 
     name: str
-    fields: Mapping[str, Type] = field(default_factory=dict)
-    abstract: bool = False
+    module_id: ModuleId = field(default_factory=lambda: ENTRY_ID)
 
     @property
     def kind(self) -> str:
         return "exception"
 
     def __repr__(self) -> str:
-        return self.name
+        # Built-in/prelude exceptions always render as the bare name (matching
+        # today's user-visible diagnostics); a module-owned user exception
+        # matches the record/enum qualification style.
+        if self.module_id.is_entry or self.module_id == PRELUDE_ID:
+            return self.name
+        return f"{self.module_id.dotted()}::{self.name}"
 
 
 # ---------------------------------------------------------------------------
@@ -325,7 +334,8 @@ class TypeVarType:
 
     Capability notes:
     - Not JSON-shaped (``is_json_shaped`` returns ``False``).
-    - Not comparable (``comparable_types`` returns ``False`` for either side).
+    - Not comparable (``semantics.type_table.comparable_types`` returns
+      ``False`` for either side).
     - Assignable only to an identical ``TypeVarType`` (same name); ``json``
       does NOT absorb it; ``BottomType`` is still assignable to it.
     """
@@ -388,71 +398,6 @@ def is_json_shaped(value_type: Type) -> bool:
     return False
 
 
-def _has_no_value_equality(t: Type) -> bool:
-    """True if ``t`` is, or transitively contains, a type with no value equality.
-
-    Function, agent, and unit values are opaque / identity-only and AgL gives
-    them no ``=``/``!=`` operator; ``unit`` has a single value but no equality
-    operator.  A list, dict, record, enum, or exception that transitively holds
-    such a type is therefore itself not comparable.  Recursive types are
-    rejected, so this recursion terminates.
-    """
-    match t:
-        case FunctionType() | AgentType() | UnitType():
-            return True
-        case ListType():
-            return _has_no_value_equality(t.elem)
-        case DictType():
-            return _has_no_value_equality(t.value)
-        case RecordType():
-            return any(_has_no_value_equality(ft) for ft in t.fields.values())
-        case EnumType():
-            return any(
-                _has_no_value_equality(ft)
-                for variant in t.variants.values()
-                for ft in variant.values()
-            )
-        case ExceptionType():
-            return any(_has_no_value_equality(ft) for ft in t.fields.values())
-        case (TextType() | JsonType() | BoolType() | IntType() | DecimalType()
-              | BottomType() | TypeVarType()):
-            return False
-        case _ as unreachable:  # pragma: no cover
-            assert_never(unreachable)
-
-
-def comparable_types(left: Type, right: Type) -> bool:
-    """Return ``True`` if ``left`` and ``right`` may be compared.
-
-    Equality (``=``, ``!=``) and ordering comparisons require both operands to
-    have the **same** type after the single ``int → decimal`` widening.  Unlike
-    :func:`is_assignable`, ``json`` does **not** absorb JSON-shaped scalars here:
-    ``json = json`` is allowed but ``json`` vs any non-``json`` type is a static
-    error (rule 4 as written).  Records/enums/exceptions compare only with their
-    own exact type.
-
-    AgL: ``AgentType``, ``FunctionType``, and ``UnitType`` operands are
-    NON-comparable — using ``=``/``!=``/``<`` on them is a static error. Agents
-    have no equality in AgL; function values are opaque.
-    This rule is **transitive**: a ``list``, ``dict``, ``record``, ``enum``, or
-    ``exception`` that (at any depth) contains a function, agent, or ``unit``
-    value likewise has no equality and cannot be compared with ``=``/``!=``.
-    """
-    # Function/agent/unit values — and any container/record/enum that transitively
-    # holds one — have no value equality.
-    if _has_no_value_equality(left) or _has_no_value_equality(right):
-        return False
-    # Bare type variables and the bottom type are never comparable here (the
-    # checker additionally rejects bare type variables at the comparison site).
-    if isinstance(left, (BottomType, TypeVarType)) or isinstance(right, (BottomType, TypeVarType)):
-        return False
-    if left == right:
-        return True
-    # The only cross-type comparison is numeric int↔decimal (either direction).
-    numeric = (IntType, DecimalType)
-    return isinstance(left, numeric) and isinstance(right, numeric)
-
-
 def is_assignable(value_type: Type, target_type: Type) -> bool:
     """Return ``True`` if ``value_type`` is assignable to ``target_type``.
 
@@ -506,20 +451,10 @@ def free_type_vars(t: Type) -> frozenset[str]:
         for p in t.params:
             result = result | free_type_vars(p)
         return result | free_type_vars(t.result)
-    if isinstance(t, RecordType):
+    if isinstance(t, (RecordType, EnumType)):
         result = frozenset()
         for ta in t.type_args:
             result = result | free_type_vars(ta)
-        for ft in t.fields.values():
-            result = result | free_type_vars(ft)
-        return result
-    if isinstance(t, EnumType):
-        result = frozenset()
-        for ta in t.type_args:
-            result = result | free_type_vars(ta)
-        for vfields in t.variants.values():
-            for ft in vfields.values():
-                result = result | free_type_vars(ft)
         return result
     # Primitives, ExceptionType, UnitType, AgentType, BottomType: no type vars.
     return frozenset()
@@ -540,19 +475,10 @@ def substitute(t: Type, subst: Mapping[str, Type]) -> Type:
         )
     if isinstance(t, RecordType):
         new_type_args = tuple(substitute(ta, subst) for ta in t.type_args)
-        new_fields = {k: substitute(v, subst) for k, v in t.fields.items()}
-        return RecordType(
-            name=t.name, fields=new_fields, type_args=new_type_args, module_id=t.module_id
-        )
+        return RecordType(name=t.name, type_args=new_type_args, module_id=t.module_id)
     if isinstance(t, EnumType):
         new_type_args = tuple(substitute(ta, subst) for ta in t.type_args)
-        new_variants = {
-            vname: {k: substitute(v, subst) for k, v in vfields.items()}
-            for vname, vfields in t.variants.items()
-        }
-        return EnumType(
-            name=t.name, variants=new_variants, type_args=new_type_args, module_id=t.module_id
-        )
+        return EnumType(name=t.name, type_args=new_type_args, module_id=t.module_id)
     # Primitives, ExceptionType, UnitType, AgentType, BottomType: unchanged.
     return t
 
@@ -571,195 +497,45 @@ def contains_type_var(t: Type) -> bool:
         return contains_type_var(t.value)
     if isinstance(t, FunctionType):
         return any(contains_type_var(p) for p in t.params) or contains_type_var(t.result)
-    if isinstance(t, RecordType):
-        return any(contains_type_var(ta) for ta in t.type_args) or any(
-            contains_type_var(ft) for ft in t.fields.values()
-        )
-    if isinstance(t, EnumType):
-        return any(contains_type_var(ta) for ta in t.type_args) or any(
-            contains_type_var(ft) for vfields in t.variants.values() for ft in vfields.values()
-        )
+    if isinstance(t, (RecordType, EnumType)):
+        return any(contains_type_var(ta) for ta in t.type_args)
     return False
 
 
 # ---------------------------------------------------------------------------
 # Built-in exception types
+#
+# These are pure handles — ``module_id=PRELUDE_ID`` — carrying no field data
+# of their own; the shapes are the single source of truth defined once as
+# ``TypeDef`` literals in ``semantics.type_table.BUILTIN_EXCEPTION_TYPE_DEFS``
+# (registered into every fresh ``TypeTable`` by ``create_seeded_type_table``).
 # ---------------------------------------------------------------------------
 
-# Abstract base: only message + trace_id fields.
-EXCEPTION_BASE = ExceptionType(
-    name="Exception",
-    fields={
-        "message": TextType(),
-        "trace_id": TextType(),
-    },
-    abstract=True,
-)
+# Abstract base: the hierarchy root, catchable but not constructible.
+EXCEPTION_BASE = ExceptionType(name="Exception", module_id=PRELUDE_ID)
 
-# Concrete built-in exceptions — exact .
-# Every exception includes the base fields (message, trace_id) plus the
-# additional fields listed in the design's "Additional fields" section.
-#
-# Changes from prior draft vs :
-#   - AgentCallError: added agent: text and metadata: json
-#   - UndefinedVariableError: added with name: text
-#   - ImmutableBindingError: added with name: text, operation: text
-#   - ValidationError: REMOVED — ;
-#     agm.agl.runtime.request.ValidationError is a Python-level record shape
-#     embedded in AgentParseError.validation_errors, not an AgL type.
 BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
     "Exception": EXCEPTION_BASE,
-    # : agent/cause/metadata.
-    "AgentCallError": ExceptionType(
-        name="AgentCallError",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-            "agent": TextType(),
-            "cause": TextType(),
-            "metadata": JsonType(),
-        },
-    ),
-    "AgentParseError": ExceptionType(
-        name="AgentParseError",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-            "agent": TextType(),
-            "target_type": TextType(),
-            "expected_schema": JsonType(),
-            "raw": TextType(),
-            "normalized_raw": TextType(),
-            "validation_errors": JsonType(),
-            "attempts": IntType(),
-            "metadata": JsonType(),
-        },
-    ),
-    "ExecError": ExceptionType(
-        name="ExecError",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-            "command": TextType(),
-            "exit_code": IntType(),
-            "stdout": TextType(),
-            "stderr": TextType(),
-            "timed_out": BoolType(),
-        },
-    ),
-    "MaxIterationsExceeded": ExceptionType(
-        name="MaxIterationsExceeded",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-            "limit": IntType(),
-            "condition": TextType(),
-            "last_condition_value": BoolType(),
-            "metadata": JsonType(),
-        },
-    ),
-    "MatchError": ExceptionType(
-        name="MatchError",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-            "scrutinee_type": TextType(),
-            "scrutinee": JsonType(),
-        },
-    ),
-    "IndexError": ExceptionType(
-        name="IndexError",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-            "index": IntType(),
-            "length": IntType(),
-        },
-    ),
-    "KeyError": ExceptionType(
-        name="KeyError",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-            "key": TextType(),
-        },
-    ),
-    "TypeError": ExceptionType(
-        name="TypeError",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-        },
-    ),
-    "ArithmeticError": ExceptionType(
-        name="ArithmeticError",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-            "operation": TextType(),
-        },
-    ),
+    "AgentCallError": ExceptionType(name="AgentCallError", module_id=PRELUDE_ID),
+    "AgentParseError": ExceptionType(name="AgentParseError", module_id=PRELUDE_ID),
+    "ExecError": ExceptionType(name="ExecError", module_id=PRELUDE_ID),
+    "MaxIterationsExceeded": ExceptionType(name="MaxIterationsExceeded", module_id=PRELUDE_ID),
+    "MatchError": ExceptionType(name="MatchError", module_id=PRELUDE_ID),
+    "IndexError": ExceptionType(name="IndexError", module_id=PRELUDE_ID),
+    "KeyError": ExceptionType(name="KeyError", module_id=PRELUDE_ID),
+    "TypeError": ExceptionType(name="TypeError", module_id=PRELUDE_ID),
+    "ArithmeticError": ExceptionType(name="ArithmeticError", module_id=PRELUDE_ID),
     # Statically prevented by scope/typecheck (assignment to immutable bindings
     # and undeclared names), but still listed as catchable runtime
     # exceptions for any runtime paths that bypass the static passes.
-    "UndefinedVariableError": ExceptionType(
-        name="UndefinedVariableError",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-            "name": TextType(),
-        },
-    ),
-    "ImmutableBindingError": ExceptionType(
-        name="ImmutableBindingError",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-            "name": TextType(),
-            "operation": TextType(),
-        },
-    ),
-    "Abort": ExceptionType(
-        name="Abort",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-        },
-    ),
+    "UndefinedVariableError": ExceptionType(name="UndefinedVariableError", module_id=PRELUDE_ID),
+    "ImmutableBindingError": ExceptionType(name="ImmutableBindingError", module_id=PRELUDE_ID),
+    "Abort": ExceptionType(name="Abort", module_id=PRELUDE_ID),
     # AgL: RecursionError raised when the call-depth limit is exceeded.
-    "RecursionError": ExceptionType(
-        name="RecursionError",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-            "limit": IntType(),
-        },
-    ),
-    "CastError": ExceptionType(
-        name="CastError",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-            "source_type": TextType(),
-            "target_type": TextType(),
-            "raw": TextType(),
-        },
-    ),
-    "JsonParseError": ExceptionType(
-        name="JsonParseError",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-            "raw": TextType(),
-        },
-    ),
-    "RangeError": ExceptionType(
-        name="RangeError",
-        fields={
-            "message": TextType(),
-            "trace_id": TextType(),
-        },
-    ),
+    "RecursionError": ExceptionType(name="RecursionError", module_id=PRELUDE_ID),
+    "CastError": ExceptionType(name="CastError", module_id=PRELUDE_ID),
+    "JsonParseError": ExceptionType(name="JsonParseError", module_id=PRELUDE_ID),
+    "RangeError": ExceptionType(name="RangeError", module_id=PRELUDE_ID),
 }
 
 # Names of built-in exception types (cannot be redeclared as records/enums/aliases).
@@ -776,94 +552,34 @@ BUILTIN_EXCEPTION_NAMES: frozenset[str] = frozenset(BUILTIN_EXCEPTIONS)
 
 # ``ExecResult`` — the structured result of an ``exec`` call when the target
 # type is ``ExecResult``.  Mirrors the field shape of ``ExecError``.
-_EXEC_RESULT_TYPE = RecordType(
-    name="ExecResult",
-    fields={
-        "stdout": TextType(),
-        "exit_code": IntType(),
-        "stderr": TextType(),
-        "timed_out": BoolType(),
-    },
-    module_id=PRELUDE_ID,
-)
+# These prelude constants are pure handles — their field/variant shapes are
+# defined once as explicit ``TypeDef`` literals in
+# ``semantics.type_table.BUILTIN_PRELUDE_TYPE_DEFS``.
+_EXEC_RESULT_TYPE = RecordType(name="ExecResult", module_id=PRELUDE_ID)
 
 # ``ParsePolicy`` — controls ``ask``/``exec`` error handling.
 # ``Abort`` — abort on parse error (no fields).
 # ``Retry(n: int)`` — retry up to ``n`` times.
-_PARSE_POLICY_TYPE = EnumType(
-    name="ParsePolicy",
-    variants={
-        "Abort": {},
-        "Retry": {"n": IntType()},
-    },
-    module_id=PRELUDE_ID,
-)
+_PARSE_POLICY_TYPE = EnumType(name="ParsePolicy", module_id=PRELUDE_ID)
 
-_OPTION_TEXT_TYPE = EnumType(
-    name="Option",
-    variants={
-        "None": {},
-        "Some": {"value": TextType()},
-    },
-    type_args=(TextType(),),
-    module_id=STD_CORE_ID,
-)
+_OPTION_TEXT_TYPE = EnumType(name="Option", type_args=(TextType(),), module_id=STD_CORE_ID)
 
 # Public alias for the ``Option[text]`` type — the single source of truth
 # shared with engine_keys and any other module that needs this type.
 OPTION_TEXT_TYPE: EnumType = _OPTION_TEXT_TYPE
 
-_OPTION_JSON_TYPE = EnumType(
-    name="Option",
-    variants={
-        "None": {},
-        "Some": {"value": JsonType()},
-    },
-    type_args=(JsonType(),),
-    module_id=STD_CORE_ID,
-)
+_OPTION_JSON_TYPE = EnumType(name="Option", type_args=(JsonType(),), module_id=STD_CORE_ID)
 
-_OUTPUT_CONTRACT_TYPE = RecordType(
-    name="OutputContract",
-    fields={
-        "target_type": TextType(),
-        "codec_name": TextType(),
-        "strict_json": JsonType(),
-        "format_instructions": TextType(),
-        "json_schema": JsonType(),
-        "structured_exec": BoolType(),
-    },
-    module_id=PRELUDE_ID,
-)
+_OUTPUT_CONTRACT_TYPE = RecordType(name="OutputContract", module_id=PRELUDE_ID)
 
-_OUTPUT_CONTRACT_OPTION_TYPE = EnumType(
-    name="OutputContractOption",
-    variants={
-        "None": {},
-        "Some": {"value": _OUTPUT_CONTRACT_TYPE},
-    },
-    module_id=PRELUDE_ID,
-)
+_OUTPUT_CONTRACT_OPTION_TYPE = EnumType(name="OutputContractOption", module_id=PRELUDE_ID)
 
 # ``AgentRequest`` — the request that the corresponding ``ask`` call would
 # dispatch to its agent, surfaced as an AgL value by ``ask-request``.  This is
 # the first-attempt request: ``attempt`` is always ``0`` and there is no
 # retry context (no ``previous_invalid_output`` / ``validation_errors``),
 # because ``ask-request`` never invokes the agent.
-_AGENT_REQUEST_TYPE = RecordType(
-    name="AgentRequest",
-    fields={
-        "agent": TextType(),
-        "prompt": TextType(),
-        "target_type": _OPTION_TEXT_TYPE,
-        "format_instructions": _OPTION_TEXT_TYPE,
-        "json_schema": _OPTION_JSON_TYPE,
-        "attempt": IntType(),
-        "previous_error": _OPTION_TEXT_TYPE,
-        "metadata": JsonType(),
-    },
-    module_id=PRELUDE_ID,
-)
+_AGENT_REQUEST_TYPE = RecordType(name="AgentRequest", module_id=PRELUDE_ID)
 
 BUILTIN_PRELUDE_TYPES: dict[str, Type] = {
     "ExecResult": _EXEC_RESULT_TYPE,

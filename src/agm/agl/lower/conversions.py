@@ -12,9 +12,11 @@ total casts (``TOTAL_NOOP`` / ``TOTAL_RENDER`` / ``TOTAL_JSON``) never fail;
 fallible casts (``decimal → int`` narrowing, ``text → T``, ``json → T``) carry
 the derived JSON schema and the ``decode_value`` decode walk.
 
-``build_decode_schema`` lives in :mod:`agm.agl.type_schema` (alongside
-``derive_schema``) so both the lowerer and the runtime codec can import it
-without a cycle.
+``derive_schema_and_decode`` lives in :mod:`agm.agl.type_schema` (alongside
+``derive_schema``/``build_decode_schema``) so both the lowerer and the runtime
+codec can import it without a cycle; it derives the JSON schema and the
+typeless decode plan (``DecodePlan`` — a decode schema plus its ``$defs``
+table for a recursive target type) from one shared recursion plan.
 
 """
 
@@ -24,14 +26,21 @@ import json
 from typing import assert_never
 
 from agm.agl.ir.contracts import ConversionRecipe, ConversionStrategy
+from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import CastKind, DecimalType, IntType, JsonType, TextType, Type
-from agm.agl.type_schema import build_decode_schema, derive_schema
+from agm.agl.type_schema import derive_schema_and_decode
 
 __all__ = ["compile_recipe"]
 
 
-def compile_recipe(source: Type, target: Type, kind: CastKind) -> ConversionRecipe:
-    """Compile a cast ``(source, target, kind)`` into a ``ConversionRecipe``."""
+def compile_recipe(
+    source: Type, target: Type, kind: CastKind, type_table: TypeTable
+) -> ConversionRecipe:
+    """Compile a cast ``(source, target, kind)`` into a ``ConversionRecipe``.
+
+    *type_table* resolves record/enum field/variant shapes for the fallible
+    branch's ``derive_schema_and_decode`` call.
+    """
     source_label = repr(source)
     target_label = repr(target)
 
@@ -70,14 +79,16 @@ def compile_recipe(source: Type, target: Type, kind: CastKind) -> ConversionReci
                     f"unexpected fallible cast source {source!r}"
                 )
                 strategy = ConversionStrategy.DECODE_JSON
+            schema, decode_plan = derive_schema_and_decode(target, type_table)
             return ConversionRecipe(
                 strategy=strategy,
                 source_label=source_label,
                 target_label=target_label,
                 # Serialize the schema to a canonical JSON string so the recipe
                 # stays hashable (sort_keys → deterministic recipe equality).
-                json_schema=json.dumps(derive_schema(target), sort_keys=True),
-                decode=build_decode_schema(target),
+                json_schema=json.dumps(schema, sort_keys=True),
+                decode=decode_plan.root,
+                defs=decode_plan.defs,
             )
         case CastKind.STATIC_ERROR:  # pragma: no cover
             # The checker rejects statically-impossible casts before lowering.

@@ -12,14 +12,19 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import Literal
 
 from agm.agl.diagnostics import AglError, Diagnostic
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.scope.imports import ImportEnv, QName
 from agm.agl.scope.symbols import BindingRef, ResolvedProgram
+from agm.agl.semantics.type_table import (
+    BUILTIN_PRELUDE_TYPE_DEFS,
+    TypeTable,
+    create_seeded_type_table,
+)
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPE_NAMES,
@@ -94,8 +99,10 @@ class GenericTypeDef:
 
     ``kind``        — ``"record"`` or ``"enum"``.
     ``type_params`` — ordered tuple of type-parameter names.
-    ``template``    — a ``RecordType`` or ``EnumType`` whose fields/variants
-                      may contain ``TypeVarType`` nodes.
+    ``template``    — a bare ``RecordType``/``EnumType`` handle whose
+                      ``type_args`` are ``TypeVarType`` nodes for each of
+                      ``type_params``; field/variant shapes are looked up by
+                      handle in the shared ``TypeTable``.
     """
 
     kind: str  # "record" | "enum"
@@ -238,6 +245,10 @@ class ArgumentBindings:
     ``function_calls``
         Direct user-function ``Call.node_id`` → declaration-order argument tuple
         (one entry per parameter; ``None`` means "use the parameter's default").
+    ``function_param_types``
+        Direct user-function ``Call.node_id`` → concrete declaration-order parameter
+        types after generic type-argument substitution.  The lowerer uses these
+        types to insert call-site coercions without re-inferring generic arguments.
     ``constructor_calls``
         Record/enum/exception constructor ``Call.node_id`` → ordered
         ``{field_name: expr}`` mapping (every field bound; constructors have no
@@ -248,6 +259,7 @@ class ArgumentBindings:
     """
 
     function_calls: dict[int, tuple[Expr | None, ...]]
+    function_param_types: dict[int, tuple[Type, ...]]
     constructor_calls: dict[int, dict[str, Expr]]
     constructor_patterns: dict[int, tuple[tuple[str, Pattern], ...]]
 
@@ -340,7 +352,10 @@ class TypeEnvironment:
       ``Type`` objects stamped with their owning ``module_id``.  Built once by
       the graph pre-pass; shared (read-only) across all per-module envs.
     - ``graph_generic_table`` and ``graph_alias_table`` carry cross-module
-      templates for applied nominal types and parameterized aliases.
+      templates for applied nominal types and parameterized aliases; during
+      graph type-table construction, ``graph_alias_keys`` and
+      ``graph_alias_resolver`` let transparent cross-module aliases resolve
+      lazily before their sorted body-resolution turn.
     - ``import_env`` is the per-module :class:`~agm.agl.scope.imports.ImportEnv`
       produced by graph scope resolution. Used to resolve qualified and open-imported type names.
     - ``module_id`` is the owning module of the current env.  ``::Name``
@@ -358,6 +373,9 @@ class TypeEnvironment:
         graph_type_table: Mapping[tuple[ModuleId, str], Type] | None = None,
         graph_generic_table: Mapping[tuple[ModuleId, str], GenericTypeDef] | None = None,
         graph_alias_table: Mapping[tuple[ModuleId, str], GenericAliasDef] | None = None,
+        graph_alias_keys: frozenset[tuple[ModuleId, str]] | None = None,
+        graph_alias_resolver: Callable[[ModuleId, str, SourceSpan | None], Type | None]
+        | None = None,
         graph_ctor_sig_table: Mapping[
             tuple[ModuleId, str, str | None], ConstructorSignature
         ] | None = None,
@@ -366,7 +384,14 @@ class TypeEnvironment:
         ] | None = None,
         import_env: ImportEnv | None = None,
         module_id: ModuleId = ENTRY_ID,
+        type_table: TypeTable | None = None,
     ) -> None:
+        # Shared nominal type-declaration table (dual-write target alongside
+        # ``_types``): defaults to a fresh table seeded with built-in prelude
+        # defs; graph mode passes one shared instance across per-module envs.
+        self._type_table: TypeTable = (
+            type_table if type_table is not None else create_seeded_type_table()
+        )
         # user-declared types (records, enums) — name → Type
         self._types: dict[str, Type] = {}
         # alias targets — name → resolved Type (cycle detection uses seen set)
@@ -410,6 +435,12 @@ class TypeEnvironment:
         self._graph_alias_table: Mapping[tuple[ModuleId, str], GenericAliasDef] = (
             graph_alias_table if graph_alias_table is not None else {}
         )
+        self._graph_alias_keys: frozenset[tuple[ModuleId, str]] = (
+            graph_alias_keys if graph_alias_keys is not None else frozenset()
+        )
+        self._graph_alias_resolver: Callable[
+            [ModuleId, str, SourceSpan | None], Type | None
+        ] | None = graph_alias_resolver
         # Cross-module constructor signatures: (ModuleId, owner_name, variant) → sig.
         self._graph_ctor_sig_table: Mapping[
             tuple[ModuleId, str, str | None], ConstructorSignature
@@ -419,28 +450,34 @@ class TypeEnvironment:
         # Built-in exception types are always available.
         for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
             self._types[exc_name] = exc_type
-        # Built-in prelude types (AgL: ExecResult, ParsePolicy) are always available.
+        # Built-in prelude types (AgL: ExecResult, ParsePolicy) are always
+        # available.  Field/variant names for constructor-kind registration
+        # come from the shared prelude ``TypeDef`` literals — the handles
+        # themselves carry no shape data.
         for prelude_name, prelude_type in BUILTIN_PRELUDE_TYPES.items():
             self._types[prelude_name] = prelude_type
-            if isinstance(prelude_type, RecordType):
+            typedef = BUILTIN_PRELUDE_TYPE_DEFS[prelude_name]
+            if typedef.kind == "record":
                 self._constructor_field_kinds[(prelude_name, None)] = tuple(
-                    (fname, ParamKind.NAMED_ONLY) for fname in prelude_type.fields
+                    (fname, ParamKind.NAMED_ONLY) for fname, _ in typedef.fields
                 )
                 continue
-            enum_type = cast(EnumType, prelude_type)
-            for variant, fields in enum_type.variants.items():
+            for variant, vfields in typedef.variants:
                 self._constructor_field_kinds[(prelude_name, variant)] = tuple(
-                    (fname, ParamKind.NAMED_ONLY) for fname in fields
+                    (fname, ParamKind.NAMED_ONLY) for fname, _ in vfields
                 )
-        # Pre-register builtin exception field kinds (all non-trace_id fields, NAMED_ONLY).
-        for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
-            if not exc_type.abstract:
-                _kinds: tuple[tuple[str, ParamKind], ...] = tuple(
-                    (fname, ParamKind.NAMED_ONLY)
-                    for fname in exc_type.fields
-                    if fname != "trace_id"
-                )
-                self._constructor_field_kinds[(exc_name, None)] = _kinds
+        # Exception constructor field kinds are NOT pre-registered here: each
+        # exception's own fields honor their declared @pos/@std/@named marker
+        # (stored on its TypeDef as ``field_kinds``, alongside ``fields``),
+        # same as a record's fields.  ``get_constructor_field_kinds_for_type``
+        # derives the full flattened (base-chain-inherited + own) kinds
+        # directly from ``type_table.exception_field_kinds`` on demand instead
+        # of a pre-registration step, since that requires no build ordering.
+
+    @property
+    def type_table(self) -> TypeTable:
+        """The shared ``TypeTable`` populated alongside ``_types`` (dual-write)."""
+        return self._type_table
 
     # --- Type namespace queries ---
 
@@ -458,16 +495,20 @@ class TypeEnvironment:
         self._types[name] = typ
 
     def unregister_name(self, name: str) -> None:
-        """Remove a user *name* from BOTH the type and alias namespace tables.
+        """Remove a user *name* from the type, alias, and type-table namespaces.
 
         Used by the type-builder when an incremental-session entry redeclares a
-        *seeded* name with a different kind (e.g. a seeded ``record R`` redefined
-        as ``type R = int``).  ``_types`` (records/enums/exceptions) and
-        ``_alias_targets`` (aliases) are separate tables, so a cross-kind
-        redefinition would otherwise leave a stale entry in the other table and
-        make ``get_type`` disagree with annotation/constructor resolution.
-        Dropping the name from both tables before the new kind is registered
-        keeps the two namespaces mutually exclusive for user names.
+        *seeded* name — either with a different kind (e.g. a seeded ``record R``
+        redefined as ``type R = int``) or a different shape (e.g. ``record R``
+        redefined with different fields).  Type handles, aliases, generic
+        templates, constructor metadata, and alias parameter metadata live in
+        separate tables, so a cross-kind redefinition would otherwise leave a
+        stale entry in another table and make ``get_type`` disagree with
+        annotation/constructor resolution.  Dropping the name from all
+        namespaces before the new declaration is registered keeps them mutually
+        consistent, and lets the type table's dual-write ``register`` calls
+        treat every registration as a fresh one rather than a conflicting
+        re-registration of the same key.
 
         Built-in exception names and built-in prelude type names are never
         removed: they are non-shadowable (rejected earlier by
@@ -478,6 +519,15 @@ class TypeEnvironment:
             return
         self._types.pop(name, None)
         self._alias_targets.pop(name, None)
+        self._generic_types.pop(name, None)
+        self._alias_type_params.pop(name, None)
+        for key in tuple(self._constructor_sigs):
+            if key[0] == name:
+                self._constructor_sigs.pop(key, None)
+        for key in tuple(self._constructor_field_kinds):
+            if key[0] == name:
+                self._constructor_field_kinds.pop(key, None)
+        self._type_table.unregister(self._module_id, name)
 
     def register_alias(
         self, name: str, target_expr: object, *, type_params: tuple[str, ...] = ()
@@ -489,9 +539,6 @@ class TypeEnvironment:
         """
         self._alias_targets[name] = target_expr
         self._alias_type_params[name] = type_params
-
-    def get_alias_target_expr(self, name: str) -> object | None:
-        return self._alias_targets.get(name)
 
     def get_alias_type_params(self, name: str) -> tuple[str, ...]:
         """Return the type-parameter names for a parameterized alias, or ``()``."""
@@ -515,9 +562,9 @@ class TypeEnvironment:
     ) -> RecordType | EnumType:
         """Instantiate a generic type named *name* with *args*.
 
-        Substitutes the type parameters in the template with *args* and
-        returns a concrete ``RecordType`` or ``EnumType`` with ``type_args``
-        set to the supplied arguments.
+        Returns a ``RecordType``/``EnumType`` handle with ``type_args`` set to
+        the supplied arguments; field/variant shapes are resolved later, by
+        handle, from the shared ``TypeTable``.
 
         Raises ``AglTypeError`` for unknown names or arity mismatches.
         The optional *span* is forwarded to the error for source-location reporting.
@@ -542,29 +589,20 @@ class TypeEnvironment:
         in the own-module ``_generic_types`` table.
         The optional *span* is forwarded to any ``AglTypeError`` raised.
         """
-        from agm.agl.semantics.types import substitute as _subst
-
         if len(args) != len(gdef.type_params):
             raise AglTypeError(
                 f"Type '{name}' requires {len(gdef.type_params)} type argument(s), "
                 f"got {len(args)}.",
                 span=span,
             )
-        subst = dict(zip(gdef.type_params, args))
+        # No field/variant substitution: the result is a bare handle with the
+        # supplied type_args; field/variant shapes are looked up by handle in
+        # the shared TypeTable (which substitutes type_args into the
+        # registered TypeDef's templates on demand).
         template = gdef.template
         if isinstance(template, RecordType):
-            new_fields = {k: _subst(v, subst) for k, v in template.fields.items()}
-            return RecordType(
-                name=name, fields=new_fields, type_args=args, module_id=template.module_id
-            )
-        # EnumType: substitute into each variant's field types.
-        new_variants = {
-            vname: {k: _subst(v, subst) for k, v in vfields.items()}
-            for vname, vfields in template.variants.items()
-        }
-        return EnumType(
-            name=name, variants=new_variants, type_args=args, module_id=template.module_id
-        )
+            return RecordType(name=name, type_args=args, module_id=template.module_id)
+        return EnumType(name=name, type_args=args, module_id=template.module_id)
 
     def instantiate_alias(
         self,
@@ -617,12 +655,53 @@ class TypeEnvironment:
         # Graph mode: look up via open imports.
         if self._import_env is not None and self._graph_type_table is not None:
             candidates = self._import_env.unqualified.get(name, frozenset())
-            type_candidates = [
-                qn for qn in candidates if (qn[0], qn[1]) in self._graph_type_table
-            ]
+            type_candidates = [qn for qn in candidates if self._is_graph_type_candidate(qn)]
             if len(type_candidates) == 1:
-                return self._graph_type_table.get((type_candidates[0][0], type_candidates[0][1]))
+                return self._resolve_graph_qname_as_bare_type(
+                    type_candidates[0], name, span=None
+                )
         return None
+
+    def _is_graph_type_candidate(self, qname: QName) -> bool:
+        """Return whether a graph QName denotes any type-namespace declaration."""
+        key = (qname[0], qname[1])
+        return (
+            (self._graph_type_table is not None and key in self._graph_type_table)
+            or (self._graph_generic_table is not None and key in self._graph_generic_table)
+            or key in self._graph_alias_table
+            or key in self._graph_alias_keys
+        )
+
+    def _ensure_graph_alias_resolved(
+        self, module_id: ModuleId, name: str, span: SourceSpan | None
+    ) -> Type | None:
+        """Resolve a graph alias lazily when the graph pre-pass is still building it."""
+        key = (module_id, name)
+        if key not in self._graph_alias_keys or self._graph_alias_resolver is None:
+            return None
+        return self._graph_alias_resolver(module_id, name, span)
+
+    def _resolve_graph_qname_as_bare_type(
+        self, qname: QName, exposed_name: str, *, span: SourceSpan | None
+    ) -> Type | None:
+        """Resolve a graph QName used as an unapplied type expression."""
+        assert self._graph_type_table is not None
+        key = (qname[0], qname[1])
+        typ = self._graph_type_table.get(key)
+        if typ is not None:
+            return typ
+        typ = self._ensure_graph_alias_resolved(qname[0], qname[1], span)
+        if typ is not None:
+            return typ
+        alias_def = self._graph_alias_table.get(key)
+        if alias_def is not None and alias_def.type_params:
+            raise AglTypeError(
+                f"Parameterized alias '{exposed_name}' requires "
+                f"{len(alias_def.type_params)} type argument(s); "
+                f"use '{exposed_name}[...]' to apply it.",
+                span=span,
+            )
+        return self._graph_type_table.get(key)
 
     # --- Function signature table ---
 
@@ -671,6 +750,12 @@ class TypeEnvironment:
 
     def get_binding_type(self, node_id: int) -> Type | None:
         return self._binding_types.get(node_id)
+
+    def remove_binding_types(self, node_ids: Iterable[int]) -> None:
+        """Forget binding-type metadata for the given declaration node ids."""
+        for node_id in node_ids:
+            self._binding_types.pop(node_id, None)
+            self._function_signatures_by_node_id.pop(node_id, None)
 
     def resolve_binding(self, ref: BindingRef) -> Type | None:
         """Return the declared type for a ``BindingRef``."""
@@ -811,6 +896,9 @@ class TypeEnvironment:
                     resolved_args,
                     span=eff_span,
                 )
+            graph_alias_def = self._graph_alias_table.get((self._module_id, name))
+            if graph_alias_def is not None:
+                return self.instantiate_alias(name, graph_alias_def, resolved_args, span=eff_span)
             if name in self._types:
                 raise AglTypeError(
                     f"Type '{name}' does not take type arguments.",
@@ -842,16 +930,7 @@ class TypeEnvironment:
         if self._import_env is None or self._graph_generic_table is None:
             return None
         candidates = self._import_env.unqualified.get(name, frozenset())
-        type_candidates = [
-            qname
-            for qname in candidates
-            if (qname[0], qname[1]) in self._graph_generic_table
-            or (qname[0], qname[1]) in self._graph_alias_table
-            or (
-                self._graph_type_table is not None
-                and (qname[0], qname[1]) in self._graph_type_table
-            )
-        ]
+        type_candidates = [qname for qname in candidates if self._is_graph_type_candidate(qname)]
         if len(type_candidates) > 1:
             labels = sorted(f"{qname[0].dotted()}::{qname[1]}" for qname in type_candidates)
             raise AglTypeError(
@@ -866,6 +945,9 @@ class TypeEnvironment:
         if gdef is not None:
             return self.instantiate_from_gdef(source_name, gdef, args, span=span)
         alias_def = self._graph_alias_table.get((module_id, source_name))
+        if alias_def is None and (module_id, source_name) in self._graph_alias_keys:
+            self._ensure_graph_alias_resolved(module_id, source_name, span)
+            alias_def = self._graph_alias_table.get((module_id, source_name))
         if alias_def is not None:
             return self.instantiate_alias(source_name, alias_def, args, span=span)
         raise AglTypeError(
@@ -909,6 +991,9 @@ class TypeEnvironment:
         if gdef is not None:
             return self.instantiate_from_gdef(qname[1], gdef, args, span=span)
         alias_def = self._graph_alias_table.get((qname[0], qname[1]))
+        if alias_def is None and (qname[0], qname[1]) in self._graph_alias_keys:
+            self._ensure_graph_alias_resolved(qname[0], qname[1], span)
+            alias_def = self._graph_alias_table.get((qname[0], qname[1]))
         if alias_def is not None:
             return self.instantiate_alias(qname[1], alias_def, args, span=span)
         if self._graph_type_table is not None and (qname[0], qname[1]) in self._graph_type_table:
@@ -962,6 +1047,14 @@ class TypeEnvironment:
                 _resolving=_resolving | {name},
                 type_vars=type_vars,
             )
+        graph_alias_def = self._graph_alias_table.get((self._module_id, name))
+        if graph_alias_def is not None:
+            raise AglTypeError(
+                f"Parameterized alias '{name}' requires "
+                f"{len(graph_alias_def.type_params)} type argument(s); "
+                f"use '{name}[...]' to apply it.",
+                span=span,
+            )
         # Direct named type (record, enum, exception, prelude).
         typ = self._types.get(name)
         if typ is not None:
@@ -969,13 +1062,15 @@ class TypeEnvironment:
         # Graph mode: unqualified lookup through open-imported names.
         if self._import_env is not None and self._graph_type_table is not None:
             candidates = self._import_env.unqualified.get(name, frozenset())
-            # Filter to candidates that are type names in the graph type table.
+            # Filter to candidates that are type names in the graph type namespace.
             type_candidates: list[QName] = [
-                qn for qn in candidates if (qn[0], qn[1]) in self._graph_type_table
+                qn for qn in candidates if self._is_graph_type_candidate(qn)
             ]
             if len(type_candidates) == 1:
                 qn = type_candidates[0]
-                return self._graph_type_table[(qn[0], qn[1])]
+                typ = self._resolve_graph_qname_as_bare_type(qn, name, span=span)
+                if typ is not None:
+                    return typ
             elif len(type_candidates) > 1:
                 # Ambiguous: multiple modules export this type name.
                 sorted_candidates = sorted(
@@ -1046,7 +1141,7 @@ class TypeEnvironment:
                 "It may not be in the imported set S, or may not be exported.",
                 span=span,
             )
-        t = self._graph_type_table.get((qname[0], qname[1]))
+        t = self._resolve_graph_qname_as_bare_type(qname, name, span=span)
         if t is not None:
             return t
         # Name is in S but isn't a type in the graph table — it might be a function.
@@ -1188,21 +1283,6 @@ class TypeEnvironment:
                 matches.append((module_id, source_name, gdef))
         return matches
 
-    def get_open_imported_type(self, exposed_name: str) -> tuple[ModuleId, str, Type] | None:
-        """Return the unique concrete type exposed by an open-imported name."""
-        if self._import_env is None or self._graph_type_table is None:
-            return None
-        matches = []
-        for module_id, source_name in self._import_env.unqualified.get(
-            exposed_name, frozenset()
-        ):
-            typ = self._graph_type_table.get((module_id, source_name))
-            if typ is not None:
-                matches.append((module_id, source_name, typ))
-        if len(matches) == 1:
-            return matches[0]
-        return None
-
     def get_ctor_sig_from_module(
         self, module_id: ModuleId, owner_name: str, variant: str | None
     ) -> ConstructorSignature | None:
@@ -1250,40 +1330,34 @@ class TypeEnvironment:
         typ: Type | None,
         owner_name: str,
         variant: str | None,
-        *,
-        module_id: ModuleId | None = None,
     ) -> tuple[tuple[str, ParamKind], ...] | None:
         """Return field-kinds for a constructor identified by its resolved owner *typ*.
 
-        Encapsulates the registry-key convention in one place. ``RecordType`` and
-        ``EnumType`` carry their own ``module_id``. ``ExceptionType`` does not, so
-        callers that resolved a cross-module exception must provide its defining
-        ``module_id``; built-in and same-module exceptions still resolve through
-        the local registry before any graph lookup. Enum variants are keyed by
-        *variant*; records and exceptions are keyed under ``variant=None``.
+        ``RecordType``, ``EnumType``, and ``ExceptionType`` all carry their own
+        ``module_id``, so the owning module is read directly off the handle —
+        no caller-supplied module id is needed.  Exception field kinds are
+        derived directly from ``type_table.exception_field_kinds``, which
+        flattens the ``extends`` base chain (base kinds first, then own kinds,
+        each honoring its declaration's ``@pos``/``@std``/``@named`` marker —
+        exactly like a record's fields) and excludes ``trace_id`` (auto-filled
+        at construction time, never supplied by the caller), rather than
+        through the registered-kinds table records/enums use, since an
+        exception's kinds are never pre-registered (see ``TypeEnvironment.
+        __init__``).  ``exception_field_kinds`` returns ``ParamKind.value``
+        strings rather than the enum (``semantics`` may not import
+        ``syntax.nodes``), so each is converted back with ``ParamKind(...)``
+        here, in the ``typecheck`` layer.  Enum variants are keyed by
+        *variant*; records are keyed under ``variant=None``.
         """
+        if isinstance(typ, ExceptionType):
+            return tuple(
+                (fname, ParamKind(kind_value))
+                for fname, kind_value in self._type_table.exception_field_kinds(typ)
+            )
         if isinstance(typ, EnumType):
-            lookup_module_id: ModuleId = typ.module_id
-            lookup_variant = variant
-        elif isinstance(typ, RecordType):
-            lookup_module_id = typ.module_id
-            lookup_variant = None
-        elif isinstance(typ, ExceptionType) and module_id is not None:
-            lookup_module_id = module_id
-            lookup_variant = None
-        else:
-            # ExceptionType without a caller-provided module_id (same-module or
-            # built-in exception) or an unexpected typ value.  Both same-module
-            # exceptions and built-in prelude exceptions are pre-registered in the
-            # LOCAL registry, so get_constructor_field_kinds() returns at the first
-            # check and never reaches the graph-table lookup.  PRELUDE_ID is used
-            # here only to satisfy the type; the graph lookup is always a no-op for
-            # this branch.
-            lookup_module_id = PRELUDE_ID
-            lookup_variant = None
-        return self.get_constructor_field_kinds(
-            owner_name, lookup_variant, module_id=lookup_module_id
-        )
+            return self.get_constructor_field_kinds(owner_name, variant, module_id=typ.module_id)
+        assert isinstance(typ, RecordType), f"unexpected constructor owner type {typ!r}"
+        return self.get_constructor_field_kinds(owner_name, None, module_id=typ.module_id)
 
     def all_constructor_field_kinds(
         self,
@@ -1309,8 +1383,25 @@ class TypeEnvironment:
         built-in prelude types are already present in every fresh environment
         and are not copied from the source.  Binding types are keyed by
         globally-unique ``decl_node_id`` so they never collide across entries.
+
+        Also merges *other*'s ``type_table`` entries in: *other* is treated as
+        authoritative, so an entry under a key already present in this
+        environment's table is overwritten (last-write-wins). For names present
+        in *other*'s type namespace, stale metadata in this environment is
+        cleared before copying so cross-kind REPL redefinitions do not leave old
+        generic/constructor/alias tables behind. See :meth:`TypeTable.merge_from`.
         """
         builtin = frozenset(BUILTIN_EXCEPTIONS) | BUILTIN_PRELUDE_TYPE_NAMES
+        incoming_type_names = {
+            name for name in other._types if name not in builtin
+        } | set(other._alias_targets) | set(other._generic_types) | set(other._alias_type_params)
+        incoming_type_names |= {owner_name for owner_name, _variant in other._constructor_sigs}
+        incoming_type_names |= {
+            owner_name for owner_name, _variant in other._constructor_field_kinds
+        }
+        for name in incoming_type_names:
+            self.unregister_name(name)
+        self._type_table.merge_from(other._type_table)
         for name, typ in other._types.items():
             if name not in builtin:
                 self._types[name] = typ
@@ -1322,3 +1413,35 @@ class TypeEnvironment:
         self._constructor_field_kinds.update(other._constructor_field_kinds)
         self._alias_type_params.update(other._alias_type_params)
         self._function_signatures_by_node_id.update(other._function_signatures_by_node_id)
+
+    def restore_type_names_from(self, other: TypeEnvironment, names: Iterable[str]) -> None:
+        """Restore selected type-namespace names from *other*.
+
+        Used by the REPL after partial runtime failure: checking an entry builds
+        metadata for every declaration in the entry, but only declarations before
+        the failure are promoted. For each unpromoted type name, remove the
+        checked-entry metadata and restore the previous session definition when
+        one existed.
+        """
+        builtin = frozenset(BUILTIN_EXCEPTIONS) | BUILTIN_PRELUDE_TYPE_NAMES
+        for name in names:
+            if name in builtin:
+                continue
+            self.unregister_name(name)
+            typedef = other._type_table.get(other._module_id, name)
+            if typedef is not None:
+                self._type_table.register(typedef)
+            if name in other._types:
+                self._types[name] = other._types[name]
+            if name in other._alias_targets:
+                self._alias_targets[name] = other._alias_targets[name]
+            if name in other._generic_types:
+                self._generic_types[name] = other._generic_types[name]
+            if name in other._alias_type_params:
+                self._alias_type_params[name] = other._alias_type_params[name]
+            for key, sig in other._constructor_sigs.items():
+                if key[0] == name:
+                    self._constructor_sigs[key] = sig
+            for key, kinds in other._constructor_field_kinds.items():
+                if key[0] == name:
+                    self._constructor_field_kinds[key] = kinds

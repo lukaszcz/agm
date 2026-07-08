@@ -1,0 +1,25 @@
+{
+  "scenarios": [
+    {
+      "name": "no_causes",
+      "params": {"field_name": "top", "depth": 0},
+      "expect": {
+        "stdout": "top\n0\n"
+      }
+    },
+    {
+      "name": "one_cause",
+      "params": {"field_name": "top", "depth": 1},
+      "expect": {
+        "stdout": "top\n1\ncause_1\n"
+      }
+    },
+    {
+      "name": "nested_causes",
+      "params": {"field_name": "root_field", "depth": 3},
+      "expect": {
+        "stdout": "root_field\n1\ncause_3\n"
+      }
+    }
+  ]
+}

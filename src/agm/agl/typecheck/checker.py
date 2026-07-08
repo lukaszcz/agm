@@ -1285,6 +1285,19 @@ class _Checker:
             return ((ref.name, typ.result),)
         return self._extern_binding_targets.get(ref.decl_node_id, ())
 
+    def _extern_targets_for_function_exprs(
+        self, exprs: Sequence[Expr], result_type: Type
+    ) -> tuple[tuple[str, Type], ...]:
+        """Merge extern provenance from branches of a function-valued expression."""
+        if not isinstance(result_type, FunctionType):
+            return ()
+        merged: list[tuple[str, Type]] = []
+        for expr in exprs:
+            for target in self._extern_expr_targets.get(expr.node_id, ()):
+                if target not in merged:
+                    merged.append(target)
+        return tuple(merged)
+
     def _record_extern_call_site(self, node: Call, callee: str, target_type: Type) -> None:
         self._call_sites.append(
             CallSiteRecord(
@@ -1807,7 +1820,14 @@ class _Checker:
         if not has_else:
             return UnitType()
 
-        return self._unify_branch_types(branch_types, node.span, "If expression")
+        result = self._unify_branch_types(branch_types, node.span, "If expression")
+        self._set_extern_expr_targets(
+            node.node_id,
+            self._extern_targets_for_function_exprs(
+                tuple(branch.body for branch in node.branches), result
+            ),
+        )
+        return result
 
     # --- case ---
 
@@ -1820,7 +1840,14 @@ class _Checker:
             branch_types.append(bt)
         self._warn_non_exhaustive(subj_type, [b.pattern for b in node.branches], node.span)
 
-        return self._unify_branch_types(branch_types, node.span, "Case expression")
+        result = self._unify_branch_types(branch_types, node.span, "Case expression")
+        self._set_extern_expr_targets(
+            node.node_id,
+            self._extern_targets_for_function_exprs(
+                tuple(branch.body for branch in node.branches), result
+            ),
+        )
+        return result
 
     # --- loop ---
 

@@ -182,7 +182,7 @@ def worktree_add(
 
     args = [*_git_args(repo_dir), "worktree", "add"]
     if create:
-        args.extend(["-b", branch])
+        args.extend(["-b", branch, "--no-track"])
     args.append(str(path))
     if create and start_point is not None:
         args.append(_worktree_create_start_point(repo_dir, start_point, env=env))

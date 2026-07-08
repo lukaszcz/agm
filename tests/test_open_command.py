@@ -615,6 +615,60 @@ class TestSmartOpenSession:
         assert "tmux new-session -dP" in out
         assert f"-c {project / 'worktrees' / 'feature'}" in out
 
+    def test_parent_errors_when_existing_branch_workspace_exists(
+        self,
+        tmp_path: Path,
+        env: dict[str, str],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        dry_run.set_enabled(True)
+        project = _make_git_project(tmp_path, env)
+        subprocess.run(
+            ["git", "worktree", "add", "-b", "feature", str(project / "worktrees" / "feature")],
+            cwd=project / "repo",
+            env=env,
+            check=True,
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            open_or_create_workspace(
+                detached=True,
+                pane_count=None,
+                parent="main",
+                branch="feature",
+                cwd=project,
+            )
+
+        captured = capsys.readouterr()
+        assert exc_info.value.code == 1
+        assert "workspace" in captured.err
+        assert "--parent" in captured.err
+        assert "tmux new-session" not in captured.out
+
+    def test_parent_warns_when_existing_branch_has_no_workspace(
+        self,
+        tmp_path: Path,
+        env: dict[str, str],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        dry_run.set_enabled(True)
+        project = _make_git_project(tmp_path, env)
+        subprocess.run(["git", "branch", "feature"], cwd=project / "repo", env=env, check=True)
+
+        open_or_create_workspace(
+            detached=True,
+            pane_count=None,
+            parent="main",
+            branch="feature",
+            cwd=project,
+        )
+
+        captured = capsys.readouterr()
+        assert "warning" in captured.err
+        assert "--parent" in captured.err
+        assert "worktree add" in captured.out
+        assert "-b feature" not in captured.out
+
     def test_checks_out_existing_remote_branch(
         self,
         tmp_path: Path,

@@ -568,9 +568,87 @@ class TestWorktreeAdd:
             env=env,
         )
 
+        upstream_remote = subprocess.run(
+            ["git", "config", "--get", "branch.tool-history-cloud-backend.remote"],
+            cwd=repo,
+            env=env,
+            check=False,
+        )
+        upstream_merge = subprocess.run(
+            ["git", "config", "--get", "branch.tool-history-cloud-backend.merge"],
+            cwd=repo,
+            env=env,
+            check=False,
+        )
+
         assert wt.is_dir()
         assert current_branch(wt, env=env) == "tool-history-cloud-backend"
         assert (wt / "cloud.txt").exists()
+        assert upstream_remote.returncode != 0
+        assert upstream_merge.returncode != 0
+
+    def test_add_existing_remote_branch_tracks_its_remote(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        source = tmp_path / "source"
+        _init_repo(source, env)
+        subprocess.run(
+            ["git", "checkout", "-b", "existing-remote", "-q"],
+            cwd=source,
+            env=env,
+            check=True,
+        )
+        (source / "remote.txt").write_text("remote\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=source, env=env, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "remote commit", "-q"], cwd=source, env=env, check=True
+        )
+        bare = tmp_path / "origin.git"
+        subprocess.run(["git", "init", "--bare", str(bare)], env=env, check=True)
+        subprocess.run(
+            ["git", "remote", "add", "origin", str(bare)], cwd=source, env=env, check=True
+        )
+        subprocess.run(["git", "checkout", "main", "-q"], cwd=source, env=env, check=True)
+        subprocess.run(["git", "push", "-u", "origin", "main"], cwd=source, env=env, check=True)
+        subprocess.run(
+            ["git", "push", "-u", "origin", "existing-remote"],
+            cwd=source,
+            env=env,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "symbolic-ref", "HEAD", "refs/heads/main"], cwd=bare, env=env, check=True
+        )
+        repo = tmp_path / "repo"
+        subprocess.run(["git", "clone", str(bare), str(repo)], env=env, check=True)
+        assert local_branch_exists(repo, "existing-remote", env=env) is False
+        assert remote_branch_exists(repo, "existing-remote", env=env) is True
+
+        wt = tmp_path / "wt-from-existing-remote"
+        worktree_add(repo, wt, "existing-remote", env=env)
+
+        upstream_remote = subprocess.run(
+            ["git", "config", "--get", "branch.existing-remote.remote"],
+            cwd=repo,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        upstream_merge = subprocess.run(
+            ["git", "config", "--get", "branch.existing-remote.merge"],
+            cwd=repo,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+
+        assert wt.is_dir()
+        assert current_branch(wt, env=env) == "existing-remote"
+        assert (wt / "remote.txt").exists()
+        assert upstream_remote.stdout.strip() == "origin"
+        assert upstream_merge.stdout.strip() == "refs/heads/existing-remote"
 
 
 # ---------------------------------------------------------------------------

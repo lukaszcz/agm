@@ -65,6 +65,15 @@ def require_parent_start_point(project_dir: Path, parent: str | None) -> str | N
     raise SystemExit(1)
 
 
+def warn_parent_ignored_for_existing_branch(branch: str) -> None:
+    """Warn that --parent has no effect when the target branch already exists."""
+
+    print(
+        f"warning: branch '{branch}' already exists; ignoring --parent",
+        file=sys.stderr,
+    )
+
+
 def create_configured_workspace_session(
     *,
     detached: bool,
@@ -252,13 +261,21 @@ def open_or_create_workspace(
 
     git_helpers.fetch(repo_dir)
     if has_expected_worktree(proj_dir, branch):
+        if parent is not None:
+            print(
+                f"error: workspace for branch '{branch}' already exists; cannot use --parent",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
         open_workspace(detached=detached, pane_count=pane_count, branch=branch, cwd=current)
         return
     if branch_exists(repo_dir, branch):
+        if parent is not None:
+            warn_parent_ignored_for_existing_branch(branch)
         checkout_workspace(
             detached=detached,
             pane_count=pane_count,
-            parent=parent,
+            parent=None,
             branch=branch,
             cwd=current,
         )

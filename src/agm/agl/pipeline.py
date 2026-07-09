@@ -14,9 +14,9 @@ types).  This module is the top-of-stack host façade that depends on both
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.eval.ir_interpreter import IrInterpreter
@@ -54,6 +54,8 @@ if TYPE_CHECKING:
     from agm.agl.typecheck.env import CheckedProgram as CheckedProgramType
     from agm.agl.typecheck.env import OutputContractSpec, TypeEnvironment
     from agm.agl.typecheck.graph import CheckedModuleGraph
+
+_ResultT = TypeVar("_ResultT")
 
 # Reserved agent names: cannot be registered by callers.
 _RESERVED_AGENT_NAMES: frozenset[str] = frozenset({"ask", "exec", "ask-request"})
@@ -1113,20 +1115,21 @@ class PipelineDriver:
         # ExternRegistry.resolve's unguarded assert. This is still after all
         # static checks, including custom contract materialization, so companion
         # top-level code cannot run before a static diagnostic is surfaced.
-        extern_diagnostics = _wire_extern_registry(
+        startup_failure = self._wire_externs_or_fail(
             checked_graph=checked_graph,
             capabilities=capabilities,
-            registry=host_env.extern_registry,
-            companion_paths=prepared.companion_paths,
-        )
-        if extern_diagnostics:
-            return StartupConfigResult(
+            host_env=host_env,
+            prepared=prepared,
+            on_failure=lambda extern_diagnostics: StartupConfigResult(
                 ok=False,
                 diagnostics=extern_diagnostics,
                 error=None,
                 warnings=warnings,
                 checked_graph=checked_graph,
-            )
+            ),
+        )
+        if startup_failure is not None:
+            return startup_failure
 
         from agm.agl.lower import lower_graph
         from agm.agl.semantics.exceptions import AglRaise
@@ -1178,6 +1181,33 @@ class PipelineDriver:
             values=values,
             checked_graph=checked_graph,
         )
+
+    def _wire_externs_or_fail(
+        self,
+        *,
+        checked_graph: "CheckedModuleGraph",
+        capabilities: "HostCapabilities",
+        host_env: HostEnvironment,
+        prepared: PreparedGraph,
+        on_failure: "Callable[[list[Diagnostic]], _ResultT]",
+    ) -> "_ResultT | None":
+        """Import and resolve every extern companion, or build a failure result.
+
+        Shared by the startup-config and run paths, which wire externs
+        identically and differ only in the result dataclass returned on
+        failure.  Returns ``None`` when wiring succeeds, otherwise
+        ``on_failure(diagnostics)`` with the collected import/resolution
+        diagnostics.
+        """
+        extern_diagnostics = _wire_extern_registry(
+            checked_graph=checked_graph,
+            capabilities=capabilities,
+            registry=host_env.extern_registry,
+            companion_paths=prepared.companion_paths,
+        )
+        if extern_diagnostics:
+            return on_failure(extern_diagnostics)
+        return None
 
     def run_prepared_graph(
         self,
@@ -1267,19 +1297,20 @@ class PipelineDriver:
             # and after every static pass (so a static error elsewhere is reported
             # instead, with no companion import side effect). Dry-run stops before
             # this host-side import step to preserve its no-side-effects contract.
-            extern_diagnostics = _wire_extern_registry(
+            run_failure = self._wire_externs_or_fail(
                 checked_graph=checked_graph,
                 capabilities=capabilities,
-                registry=host_env.extern_registry,
-                companion_paths=prepared.companion_paths,
-            )
-            if extern_diagnostics:
-                return RunResult(
+                host_env=host_env,
+                prepared=prepared,
+                on_failure=lambda extern_diagnostics: RunResult(
                     ok=False,
                     diagnostics=extern_diagnostics,
                     error=None,
                     warnings=warnings,
-                )
+                ),
+            )
+            if run_failure is not None:
+                return run_failure
 
         from agm.agl.lower import lower_graph
 

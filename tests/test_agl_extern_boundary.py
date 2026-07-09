@@ -669,12 +669,19 @@ class TestSealing:
         assert repr(forged) == "<sealed handle>"
 
     def test_decode_rejects_handle_with_forged_public_shape(self) -> None:
+        from agm.agl.runtime import externs as externs_mod
+
         contract = build_contract("extern def identity[T](x: T) -> T\n0", fn_name="identity")
         forged = object.__new__(SealedHandle)
-        object.__setattr__(forged, "_SealedHandle__hash_value", hash((IntValue, 1)))
-        object.__setattr__(forged, "_SealedHandle__repr_value", "1")
-        with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, forged, {"T": object()})
+        # Give the forged instance the public shape of a real handle (so it
+        # hashes and reprs like one), yet it was never minted into any vault.
+        externs_mod._HANDLE_STATE[id(forged)] = externs_mod._HandleState(IntValue(1))
+        try:
+            assert hash(forged) == hash(_sealed_handle(IntValue(1), object()))
+            with pytest.raises(BoundaryViolation):
+                decode_boundary_value(contract.result, forged, {"T": object()})
+        finally:
+            externs_mod._HANDLE_STATE.pop(id(forged), None)
 
     def test_public_constructor_cannot_forge_handle(self) -> None:
         with pytest.raises(TypeError):
@@ -707,6 +714,13 @@ class TestSealing:
     def test_handle_repr_shows_rendered_value(self) -> None:
         h = _sealed_handle(TextValue("hi"), object())
         assert repr(h) == render_value(TextValue("hi"))
+
+    def test_handle_hash_and_repr_are_stable_across_repeated_access(self) -> None:
+        # Exercises the lazy key/repr caches: the second access returns the
+        # value derived on the first without recomputing it.
+        h = _sealed_handle(TextValue("hi"), object())
+        assert hash(h) == hash(h)
+        assert repr(h) == repr(h) == render_value(TextValue("hi"))
 
     def test_identity_equality_values_seal_and_hash_without_error(self) -> None:
         closure = IrClosureValue(function_id=FunctionId(0), captures=())

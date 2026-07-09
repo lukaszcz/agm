@@ -145,42 +145,62 @@ class SealedHandle:
     shows the rendered AgL value as a debugging aid.
     """
 
-    __slots__ = ("__hash_value", "__repr_value", "__weakref__")
+    __slots__ = ("__weakref__",)
 
-    def __init__(
-        self,
-        *_args: object,
-        _factory_key: object | None = None,
-        _hash_value: int | None = None,
-        _repr_value: str | None = None,
-    ) -> None:
-        if (
-            _factory_key is not _HANDLE_FACTORY_KEY
-            or _hash_value is None
-            or _repr_value is None
-        ):
+    def __init__(self, *_args: object, _factory_key: object | None = None) -> None:
+        if _factory_key is not _HANDLE_FACTORY_KEY:
             raise TypeError("SealedHandle instances can only be minted by the extern boundary")
-        self.__hash_value = _hash_value
-        self.__repr_value = _repr_value
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, SealedHandle):
             return False
-        self_key = _HANDLE_EQ_KEYS.get(id(self))
-        other_key = _HANDLE_EQ_KEYS.get(id(other))
-        return self_key is not None and self_key == other_key
+        self_state = _HANDLE_STATE.get(id(self))
+        other_state = _HANDLE_STATE.get(id(other))
+        if self_state is None or other_state is None:
+            return False
+        return self_state.eq_key() == other_state.eq_key()
 
     def __hash__(self) -> int:
-        try:
-            return self.__hash_value
-        except AttributeError as exc:
-            raise TypeError("uninitialized sealed handle is not hashable") from exc
+        state = _HANDLE_STATE.get(id(self))
+        if state is None:
+            raise TypeError("uninitialized sealed handle is not hashable")
+        return hash(state.eq_key())
 
     def __repr__(self) -> str:
-        try:
-            return self.__repr_value
-        except AttributeError:
+        state = _HANDLE_STATE.get(id(self))
+        if state is None:
             return "<sealed handle>"
+        return state.rendered()
+
+
+class _HandleState:
+    """Deferred equality key and repr for a minted sealed handle.
+
+    The wrapped value is already retained by the minting vault, so this holder
+    keeps only a reference to it and derives the structural equality key and
+    rendered repr lazily, on first ``__hash__``/``__eq__``/``__repr__``.  A
+    handle that merely crosses the boundary and is passed back — never hashed,
+    compared, or rendered — therefore pays none of that O(size) work.
+    """
+
+    __slots__ = ("_value", "_eq_key", "_has_eq_key", "_repr")
+
+    def __init__(self, value: Value) -> None:
+        self._value = value
+        self._eq_key: object = None
+        self._has_eq_key = False
+        self._repr: str | None = None
+
+    def eq_key(self) -> object:
+        if not self._has_eq_key:
+            self._eq_key = _sealed_value_eq_key(self._value)
+            self._has_eq_key = True
+        return self._eq_key
+
+    def rendered(self) -> str:
+        if self._repr is None:
+            self._repr = render_value(self._value)
+        return self._repr
 
 
 class _HandleVault:
@@ -191,16 +211,10 @@ class _HandleVault:
 
     def make(self, value: Value, seal: object) -> SealedHandle:
         """Mint a sealed handle and retain its payload in this vault."""
-        rendered = render_value(value)
-        eq_key = _sealed_value_eq_key(value)
-        handle = SealedHandle(
-            _factory_key=_HANDLE_FACTORY_KEY,
-            _hash_value=hash(eq_key),
-            _repr_value=rendered,
-        )
+        handle = SealedHandle(_factory_key=_HANDLE_FACTORY_KEY)
         handle_id = id(handle)
         self._payloads[handle_id] = _SealedPayload(value=value, seal=seal)
-        _HANDLE_EQ_KEYS[handle_id] = eq_key
+        _HANDLE_STATE[handle_id] = _HandleState(value)
         weakref.finalize(handle, _drop_handle_state, self._payloads, handle_id)
         return handle
 
@@ -213,12 +227,12 @@ class _HandleVault:
 
 
 _DEFAULT_HANDLE_VAULT = _HandleVault()
-_HANDLE_EQ_KEYS: dict[int, object] = {}
+_HANDLE_STATE: dict[int, _HandleState] = {}
 
 
 def _drop_handle_state(payloads: dict[int, _SealedPayload], handle_id: int) -> None:
     payloads.pop(handle_id, None)
-    _HANDLE_EQ_KEYS.pop(handle_id, None)
+    _HANDLE_STATE.pop(handle_id, None)
 
 
 def _sealed_value_eq_key(value: Value) -> object:

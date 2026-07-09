@@ -290,13 +290,8 @@ BoundarySchema = (
 
 @dataclass(frozen=True, slots=True)
 class ExternParamSchema:
-    """One extern parameter's boundary schema plus its diagnostic label.
+    """One extern parameter's boundary schema."""
 
-    ``label`` is the human-readable type label (``repr(type)``) used in
-    ``ExternError`` messages and other diagnostics.
-    """
-
-    label: str
     schema: BoundarySchema
 
 
@@ -314,8 +309,6 @@ class ExternContract:
                         declaration order; each name may appear as a
                         ``BoundarySealVar`` leaf somewhere in ``params``/
                         ``result``.
-    ``result_label`` — the human-readable return-type label (``repr(type)``)
-                        used in ``ExternError`` messages.
     ``defs``         — the shared boundary-schema bodies for every recursive
                         instantiation reachable from ``params``/``result``,
                         keyed exactly as the corresponding JSON ``$defs``
@@ -326,7 +319,6 @@ class ExternContract:
     params: tuple[ExternParamSchema, ...]
     result: BoundarySchema
     type_params: tuple[str, ...]
-    result_label: str
     defs: "tuple[tuple[str, BoundarySchema], ...]" = ()
 
 

@@ -659,9 +659,7 @@ def build_extern_contract(sig: FunctionSignature, type_table: TypeTable) -> Exte
         _require_finite_schema(typ, type_table, "build an extern contract")
     plan = _plan_types(boundary_types, type_table)
     params = tuple(
-        ExternParamSchema(
-            label=repr(param.type), schema=_emit_boundary(param.type, type_table, plan)
-        )
+        ExternParamSchema(schema=_emit_boundary(param.type, type_table, plan))
         for param in sig.params
     )
     defs = tuple(
@@ -671,7 +669,6 @@ def build_extern_contract(sig: FunctionSignature, type_table: TypeTable) -> Exte
         params=params,
         result=_emit_boundary(sig.result, type_table, plan),
         type_params=sig.type_params,
-        result_label=repr(sig.result),
         defs=defs,
     )
 

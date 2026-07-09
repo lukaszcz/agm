@@ -111,12 +111,11 @@ def _build_indirect_extern_call_program(tmp_path: Path, call_args: tuple[int, ..
 
     contract = ExternContract(
         params=(
-            ExternParamSchema(label="int", schema=BoundaryScalar(ScalarKind.INT)),
-            ExternParamSchema(label="int", schema=BoundaryScalar(ScalarKind.INT)),
+            ExternParamSchema(schema=BoundaryScalar(ScalarKind.INT)),
+            ExternParamSchema(schema=BoundaryScalar(ScalarKind.INT)),
         ),
         result=BoundaryScalar(ScalarKind.INT),
         type_params=(),
-        result_label="int",
     )
     extern_desc = FunctionDescriptor(
         function_id=fn_id,

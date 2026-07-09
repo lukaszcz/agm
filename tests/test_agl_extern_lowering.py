@@ -141,10 +141,9 @@ class TestExternDescriptor:
         desc = _only_extern(executable)
         contract = _extern_impl(desc).contract
         assert contract.params == (
-            ExternParamSchema(label="int", schema=BoundaryScalar(ScalarKind.INT)),
+            ExternParamSchema(schema=BoundaryScalar(ScalarKind.INT)),
         )
         assert contract.result == BoundaryScalar(ScalarKind.INT)
-        assert contract.result_label == "int"
 
     def test_private_extern_is_unexported_but_lowers_the_same(self) -> None:
         executable = _lower_source("private extern def f(x: int) -> int\nf(1)")
@@ -276,12 +275,10 @@ def _extern_contract(
 ) -> ExternContract:
     return ExternContract(
         params=tuple(
-            ExternParamSchema(label="int", schema=BoundaryScalar(ScalarKind.INT))
-            for _ in range(n_params)
+            ExternParamSchema(schema=BoundaryScalar(ScalarKind.INT)) for _ in range(n_params)
         ),
         result=result if result is not None else BoundaryScalar(ScalarKind.INT),
         type_params=type_params,
-        result_label="int",
         defs=defs,
     )
 

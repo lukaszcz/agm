@@ -76,10 +76,9 @@ class TestScalarsAndContainers:
     def test_int(self) -> None:
         contract = build_contract("extern def f(x: int) -> int\n0")
         assert contract.params == (
-            ExternParamSchema(label=repr(IntType()), schema=BoundaryScalar(ScalarKind.INT)),
+            ExternParamSchema(schema=BoundaryScalar(ScalarKind.INT)),
         )
         assert contract.result == BoundaryScalar(ScalarKind.INT)
-        assert contract.result_label == repr(IntType())
 
     def test_decimal(self) -> None:
         contract = build_contract("extern def f(x: decimal) -> decimal\n0")

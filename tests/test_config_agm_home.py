@@ -26,6 +26,15 @@ class TestAgmHomeDir:
         result = agm_home_dir(home=home, env={"AGM_HOME": "~/elsewhere"})
         assert result == Path.home() / "elsewhere"
 
+    def test_relative_override_is_made_absolute(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        monkeypatch.chdir(tmp_path)
+        result = agm_home_dir(home=home, env={"AGM_HOME": "relative-agm"})
+        assert result.is_absolute()
+        assert result == Path.cwd() / "relative-agm"
+
     def test_blank_override_falls_back_to_default(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
         assert agm_home_dir(home=home, env={"AGM_HOME": "   "}) == home / ".agm"
@@ -74,6 +83,15 @@ class TestResolveStdlibRootEnvOverride:
         home = tmp_path / "home"
         result = resolve_stdlib_root(home=home, env={"AGM_STDLIB": "~/std"})
         assert result == Path.home() / "std"
+
+    def test_relative_override_is_made_absolute(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        monkeypatch.chdir(tmp_path)
+        result = resolve_stdlib_root(home=home, env={"AGM_STDLIB": "rel-stdlib"})
+        assert result.is_absolute()
+        assert result == Path.cwd() / "rel-stdlib"
 
     def test_blank_override_ignored(self, tmp_path: Path) -> None:
         home = tmp_path / "home"

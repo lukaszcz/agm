@@ -27,7 +27,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from agm.config.general import agm_home_dir, agm_path_candidates, config_file_candidates
+from agm.config.general import (
+    agm_home_dir,
+    agm_path_candidates,
+    config_file_candidates,
+    expand_env_root,
+)
 from agm.core.env import resolve_env
 from agm.core.toml import load_toml_file, toml_dict
 
@@ -143,17 +148,18 @@ def resolve_stdlib_root(*, home: Path, env: Mapping[str, str] | None = None) -> 
     """Return the selected AgL standard-library module root.
 
     The stdlib is a normal module tree installed under ``.agm/stdlib``.  An
-    explicit ``AGM_STDLIB`` environment override wins outright.  Otherwise a
-    user-writable home stdlib wins when present (honouring ``AGM_HOME``), then
-    an installation-prefix stdlib, then the repository ``stdlib/`` tree for
-    source-checkout workflows.  A legacy installed stdlib that still uses old
-    constructor syntax is skipped when a source-checkout stdlib is available.
-    If none exists yet, return the home destination so diagnostics mention the
-    path that ``just install`` populates.
+    explicit ``AGM_STDLIB`` environment override wins outright (a leading ``~``
+    is expanded and a relative override is anchored to the current directory).
+    Otherwise a user-writable home stdlib wins when present (honouring
+    ``AGM_HOME``), then an installation-prefix stdlib, then the repository
+    ``stdlib/`` tree for source-checkout workflows.  A legacy installed stdlib
+    that still uses old constructor syntax is skipped when a source-checkout
+    stdlib is available.  If none exists yet, return the home destination so
+    diagnostics mention the path that ``just install`` populates.
     """
     override = resolve_env(env).get("AGM_STDLIB")
     if override is not None and override.strip():
-        return Path(os.path.expanduser(override))
+        return expand_env_root(override)
     candidates = agm_path_candidates(home=home, relative_path=Path("stdlib"), env=env)
     repo_stdlib = Path(__file__).resolve().parents[3] / "stdlib"
     for candidate in reversed(candidates):

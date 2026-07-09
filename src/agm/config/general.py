@@ -96,17 +96,30 @@ def _unique_paths(paths: list[Path]) -> list[Path]:
     return unique_paths
 
 
+def expand_env_root(override: str) -> Path:
+    """Expand ``~`` in an environment root override and force it absolute.
+
+    ``AGM_HOME`` / ``AGM_STDLIB`` relocate the whole AGM tree, so a relative
+    value must be anchored to the current directory once (via ``abspath``)
+    rather than silently re-resolving against wherever ``agm`` happens to be
+    invoked from.  A leading ``~`` / ``~user`` is expanded first.
+    """
+    return Path(os.path.abspath(os.path.expanduser(override)))
+
+
 def agm_home_dir(*, home: Path, env: Mapping[str, str] | None = None) -> Path:
     """Return the AGM home directory (the ``.agm`` data/config root).
 
     Defaults to ``home/.agm``.  When the ``AGM_HOME`` environment variable is
     set to a non-blank value it overrides that default entirely, so the whole
     ``.agm`` tree — config, prompts, sandbox settings, and stdlib — can be
-    relocated.  A leading ``~`` in the override is expanded.
+    relocated.  A leading ``~`` in the override is expanded and a relative
+    override is anchored to the current directory, so the resolved home is
+    always absolute.
     """
     override = resolve_env(env).get("AGM_HOME")
     if override is not None and override.strip():
-        return Path(os.path.expanduser(override))
+        return expand_env_root(override)
     return home / ".agm"
 
 

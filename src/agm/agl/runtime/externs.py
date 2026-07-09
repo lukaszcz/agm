@@ -52,12 +52,16 @@ from agm.agl.runtime.render import render_value
 from agm.agl.runtime.serialize import value_to_json_obj
 from agm.agl.semantics.exceptions import AglRaise, make_builtin_exception
 from agm.agl.semantics.values import (
+    AgentValue,
     BoolValue,
+    ConstructorValue,
     DecimalValue,
     DictValue,
     EnumValue,
     ExceptionValue,
     IntValue,
+    IrClosureValue,
+    IteratorValue,
     JsonValue,
     ListValue,
     RecordValue,
@@ -135,40 +139,36 @@ class SealedHandle:
     boundary encoder can mint an instance whose private id resolves in the
     registry owned by this module.
 
-    ``__eq__``/``__hash__`` delegate to the wrapped value's own equality and
-    hash (never equal to a non-handle), so handles compose correctly in
-    Python sets and dicts.  ``__repr__`` shows the rendered AgL value as a
-    debugging aid.
+    ``__eq__``/``__hash__`` mirror the wrapped value's own equality and hash
+    (never equal to a non-handle), so handles compose correctly in Python sets
+    and dicts without exposing the wrapped value on the handle.  ``__repr__``
+    shows the rendered AgL value as a debugging aid.
     """
 
-    __slots__ = ("__eq_key", "__hash_value", "__repr_value", "__weakref__")
+    __slots__ = ("__hash_value", "__repr_value", "__weakref__")
 
     def __init__(
         self,
         *_args: object,
         _factory_key: object | None = None,
-        _eq_key: object | None = None,
         _hash_value: int | None = None,
         _repr_value: str | None = None,
     ) -> None:
         if (
             _factory_key is not _HANDLE_FACTORY_KEY
-            or _eq_key is None
             or _hash_value is None
             or _repr_value is None
         ):
             raise TypeError("SealedHandle instances can only be minted by the extern boundary")
-        self.__eq_key = _eq_key
         self.__hash_value = _hash_value
         self.__repr_value = _repr_value
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, SealedHandle):
             return False
-        try:
-            return self.__eq_key == other.__eq_key
-        except AttributeError:
-            return False
+        self_key = _HANDLE_EQ_KEYS.get(id(self))
+        other_key = _HANDLE_EQ_KEYS.get(id(other))
+        return self_key is not None and self_key == other_key
 
     def __hash__(self) -> int:
         try:
@@ -192,16 +192,16 @@ class _HandleVault:
     def make(self, value: Value, seal: object) -> SealedHandle:
         """Mint a sealed handle and retain its payload in this vault."""
         rendered = render_value(value)
-        eq_key = (type(value), value)
+        eq_key = _sealed_value_eq_key(value)
         handle = SealedHandle(
             _factory_key=_HANDLE_FACTORY_KEY,
-            _eq_key=eq_key,
             _hash_value=hash(eq_key),
             _repr_value=rendered,
         )
         handle_id = id(handle)
         self._payloads[handle_id] = _SealedPayload(value=value, seal=seal)
-        weakref.finalize(handle, self._payloads.pop, handle_id, None)
+        _HANDLE_EQ_KEYS[handle_id] = eq_key
+        weakref.finalize(handle, _drop_handle_state, self._payloads, handle_id)
         return handle
 
     def open(self, handle: SealedHandle) -> _SealedPayload:
@@ -213,6 +213,74 @@ class _HandleVault:
 
 
 _DEFAULT_HANDLE_VAULT = _HandleVault()
+_HANDLE_EQ_KEYS: dict[int, object] = {}
+
+
+def _drop_handle_state(payloads: dict[int, _SealedPayload], handle_id: int) -> None:
+    payloads.pop(handle_id, None)
+    _HANDLE_EQ_KEYS.pop(handle_id, None)
+
+
+def _sealed_value_eq_key(value: Value) -> object:
+    """Return an immutable equality key for a sealed value, without retaining it."""
+    if isinstance(value, TextValue):
+        return ("text", value.value)
+    if isinstance(value, IntValue):
+        return ("int", value.value)
+    if isinstance(value, DecimalValue):
+        return ("decimal", value.value)
+    if isinstance(value, BoolValue):
+        return ("bool", value.value)
+    if isinstance(value, JsonValue):
+        return ("json", _json_eq_key(value.raw))
+    if isinstance(value, ListValue):
+        return ("list", tuple(_sealed_value_eq_key(item) for item in value.elements))
+    if isinstance(value, DictValue):
+        return (
+            "dict",
+            tuple(sorted((key, _sealed_value_eq_key(item)) for key, item in value.entries.items())),
+        )
+    if isinstance(value, RecordValue):
+        return (
+            "record",
+            value.nominal,
+            tuple(sorted((key, _sealed_value_eq_key(item)) for key, item in value.fields.items())),
+        )
+    if isinstance(value, EnumValue):
+        return (
+            "enum",
+            value.nominal,
+            value.variant,
+            tuple(sorted((key, _sealed_value_eq_key(item)) for key, item in value.fields.items())),
+        )
+    if isinstance(value, ExceptionValue):
+        return (
+            "exception",
+            value.nominal,
+            tuple(sorted((key, _sealed_value_eq_key(item)) for key, item in value.fields.items())),
+        )
+    if isinstance(value, UnitValue):
+        return ("unit",)
+    if isinstance(value, AgentValue):
+        return ("agent", value.name)
+    if isinstance(value, ConstructorValue):
+        return ("constructor", value.nominal, value.variant)
+    if isinstance(value, (IrClosureValue, IteratorValue)):
+        return (type(value).__name__, id(value))
+    assert_never(value)  # pragma: no cover
+
+
+def _json_eq_key(obj: object) -> object:
+    """Return an immutable key matching ``JsonValue`` equality/hash semantics."""
+    if isinstance(obj, bool):
+        return ("bool", obj)
+    if isinstance(obj, (int, decimal.Decimal)):
+        return ("number", decimal.Decimal(obj))
+    if isinstance(obj, list):
+        return ("list", tuple(_json_eq_key(item) for item in obj))
+    if isinstance(obj, dict):
+        return ("dict", tuple(sorted((_json_eq_key(k), _json_eq_key(v)) for k, v in obj.items())))
+    return ("scalar", obj)
 
 
 def _typename(obj: object) -> str:

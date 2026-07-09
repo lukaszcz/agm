@@ -29,6 +29,7 @@ from agm.agl.ir.contracts import (
     ExternContract,
 )
 from agm.agl.ir.ids import FunctionId, NominalId
+from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.parser import parse_program
 from agm.agl.runtime.externs import (
     BoundaryViolation,
@@ -41,7 +42,9 @@ from agm.agl.runtime.render import render_value
 from agm.agl.scope import resolve
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import (
+    AgentValue,
     BoolValue,
+    ConstructorValue,
     DecimalValue,
     DictValue,
     EnumValue,
@@ -595,6 +598,39 @@ class TestSealing:
         handle = _sealed_handle(IntValue(5), seals["T"])
         assert decode_boundary_value(contract.result, handle, seals) == IntValue(5)
 
+    def test_handle_does_not_expose_mutable_value_payload(self) -> None:
+        contract = build_contract("extern def identity[T](x: T) -> T\n0", fn_name="identity")
+        seals = {"T": object()}
+        original = DictValue(entries={"a": IntValue(1)})
+        encoded = encode_boundary_value(contract.params[0].schema, original, seals)
+        assert isinstance(encoded, SealedHandle)
+
+        assert not hasattr(encoded, "_SealedHandle__eq_key")
+        assert decode_boundary_value(contract.result, encoded, seals) == original
+
+    def test_handle_equality_keys_cover_all_sealable_value_shapes(self) -> None:
+        contract = build_contract("extern def identity[T](x: T) -> T\n0", fn_name="identity")
+        nominal = NominalId(ENTRY_ID, "Choice")
+        values = (
+            DecimalValue(Decimal("1.5")),
+            BoolValue(True),
+            JsonValue({"items": [True, 1, Decimal("2"), "x", None]}),
+            ListValue((IntValue(1),)),
+            EnumValue(nominal=nominal, display_name="Choice", variant="some", fields={}),
+            ExceptionValue(nominal=nominal, display_name="Oops", fields={"msg": TextValue("x")}),
+            UnitValue(),
+            AgentValue("runner"),
+            ConstructorValue(nominal=nominal, display_name="Choice", variant="some"),
+        )
+
+        for value in values:
+            left = encode_boundary_value(contract.params[0].schema, value, {"T": object()})
+            right = encode_boundary_value(contract.params[0].schema, value, {"T": object()})
+            assert isinstance(left, SealedHandle)
+            assert isinstance(right, SealedHandle)
+            assert left == right
+            assert hash(left) == hash(right)
+
     def test_decode_rejects_stale_handle_from_a_different_call(self) -> None:
         contract = build_contract("extern def identity[T](x: T) -> T\n0", fn_name="identity")
         stale_seals = {"T": object()}
@@ -635,10 +671,7 @@ class TestSealing:
     def test_decode_rejects_handle_with_forged_public_shape(self) -> None:
         contract = build_contract("extern def identity[T](x: T) -> T\n0", fn_name="identity")
         forged = object.__new__(SealedHandle)
-        object.__setattr__(forged, "_SealedHandle__eq_key", (IntValue, IntValue(1)))
-        object.__setattr__(
-            forged, "_SealedHandle__hash_value", hash((IntValue, IntValue(1)))
-        )
+        object.__setattr__(forged, "_SealedHandle__hash_value", hash((IntValue, 1)))
         object.__setattr__(forged, "_SealedHandle__repr_value", "1")
         with pytest.raises(BoundaryViolation):
             decode_boundary_value(contract.result, forged, {"T": object()})

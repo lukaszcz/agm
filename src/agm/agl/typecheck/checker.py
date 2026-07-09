@@ -1853,6 +1853,8 @@ class _Checker:
             )
             if hole_indices:
                 self._set_extern_expr_targets(node.node_id, invocation_targets)
+            elif isinstance(result_type, FunctionType):
+                self._set_extern_expr_targets(node.node_id, invocation_targets)
             else:
                 for target in invocation_targets:
                     self._record_extern_call_site(node, target.name, target.result_type)

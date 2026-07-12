@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import agm.vcs.git as git_helpers
+from agm.core.path import display_path
 from agm.core.process import require_success
 from agm.project.dependency_env import ensure_dependency_configs_for_branch
 from agm.project.layout import (
@@ -169,6 +170,6 @@ def remove_worktree(
         raise SystemExit(1)
 
     git_helpers.worktree_remove(repo_dir, worktree_path, force=force, env=env)
-    print(f"Removed worktree for branch '{branch}': {worktree_path}")
+    print(f"Removed worktree for branch '{branch}': {display_path(worktree_path)}")
     if delete_branch:
         git_helpers.branch_delete(repo_dir, branch, force=force_delete, env=env)

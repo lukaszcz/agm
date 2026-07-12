@@ -22,6 +22,7 @@ from agm.agent.runner import (
 )
 from agm.cli_support.args import LoopSelectArgs
 from agm.core import dry_run
+from agm.core.path import display_path
 
 
 def _print_dry_run_prompt(label: str, prompt_text: str) -> None:
@@ -56,7 +57,7 @@ def run(args: LoopSelectArgs) -> None:
 
         if dry_run.enabled():
             dry_run.print_configuration("loop-select")
-            dry_run.print_detail("tasks dir", str(resolved_tasks_dir))
+            dry_run.print_detail("tasks dir", display_path(resolved_tasks_dir))
             dry_run.print_detail(
                 "runner command",
                 dry_run.format_command(invocation.runner_command),

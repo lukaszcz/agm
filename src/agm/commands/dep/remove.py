@@ -8,6 +8,7 @@ from pathlib import Path
 import agm.vcs.git as git_helpers
 from agm.cli_support.args import DepRemoveArgs
 from agm.core.fs import is_dir, rmtree
+from agm.core.path import display_path
 from agm.project.dependency_checkout import main_dep_repo
 from agm.project.layout import project_deps_dir, require_current_project_dir
 
@@ -71,7 +72,7 @@ def _remove_dep_worktree_by_path(
     worktree: git_helpers.WorktreeInfo,
 ) -> None:
     git_helpers.worktree_remove(repo_path, worktree.path)
-    print(f"Removed dependency worktree: {worktree.path}")
+    print(f"Removed dependency worktree: {display_path(worktree.path)}")
     if worktree.branch is not None:
         git_helpers.branch_delete(repo_path, worktree.branch)
 
@@ -89,8 +90,9 @@ def run(args: DepRemoveArgs) -> None:
     if args.all:
         for worktree in linked_worktrees:
             if worktree.branch is None:
+                path = display_path(worktree.path)
                 print(
-                    f"error: cannot remove detached dependency worktree at {worktree.path}",
+                    f"error: cannot remove detached dependency worktree at {path}",
                     file=sys.stderr,
                 )
                 raise SystemExit(1)

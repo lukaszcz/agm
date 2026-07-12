@@ -8,6 +8,7 @@ from pathlib import Path
 import agm.vcs.git as git_helpers
 from agm.cli_support.args import OpenArgs
 from agm.core.fs import mkdir
+from agm.core.path import display_path
 from agm.parser import exit_with_usage_error
 from agm.project.config_git import commit_config_dir_changes
 from agm.project.dependency_env import ensure_dependency_configs_for_branch
@@ -135,10 +136,8 @@ def open_workspace(
     else:
         repo_path = branch_worktree_path(proj_dir, branch, repo_branch=repo_branch)
         if not has_expected_worktree(proj_dir, branch):
-            print(
-                f"error: branch '{branch}' is not checked out at {repo_path}",
-                file=sys.stderr,
-            )
+            path = display_path(repo_path, cwd=current)
+            print(f"error: branch '{branch}' is not checked out at {path}", file=sys.stderr)
             raise SystemExit(1)
         session_name = branch_session_name(proj_dir, branch)
         ensure_dependency_configs_for_branch(project_dir=proj_dir, branch=branch)

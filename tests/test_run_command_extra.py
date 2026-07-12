@@ -197,7 +197,7 @@ class TestRunDryRun:
         )
 
         out = capsys.readouterr().out
-        assert f"patch proj dir path: {tmp_path}" in out
+        assert "patch proj dir path: ." in out
         assert "srt --settings '<dry-run-settings>' -- echo hi" in out
 
     def test_dry_run_no_sandbox_with_memory_limits(

@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from agm.core.path import display_path
 from agm.core.process import (
     exit_with_output,
     require_capture,
@@ -436,10 +437,9 @@ def default_branch_from_repo(
     branch = stdout.strip().removeprefix("origin/") if returncode == 0 else ""
     if branch:
         return branch
-    print(
-        f"error: could not determine default branch for dependency repo at {repo_path}",
-        file=sys.stderr,
-    )
+    path = display_path(repo_path)
+    message = f"error: could not determine default branch for dependency repo at {path}"
+    print(message, file=sys.stderr)
     raise SystemExit(1)
 
 

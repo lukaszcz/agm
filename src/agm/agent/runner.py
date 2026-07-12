@@ -13,6 +13,7 @@ from tempfile import NamedTemporaryFile
 from agm.agent.prompt import expand_prompt_env_vars, preprocess_prompt_file
 from agm.core import dry_run
 from agm.core.fs import is_file
+from agm.core.path import display_path
 from agm.core.process import ProcessCaptureResult, run_capture, run_capture_result
 
 # Shell convention: exit code 127 means the command could not be found or
@@ -116,7 +117,7 @@ def prepare_prompt_from_source(
     source_path = source
     if not is_file(source_path):
         print(
-            f"Error: prompt file not found: {source_path}",
+            f"Error: prompt file not found: {display_path(source_path)}",
             file=sys.stderr,
         )
         raise SystemExit(1)
@@ -140,7 +141,7 @@ def append_extra_prompt(
         extra_path = extra_source
         if not is_file(extra_path):
             print(
-                f"Error: extra prompt file not found: {extra_path}",
+                f"Error: extra prompt file not found: {display_path(extra_path)}",
                 file=sys.stderr,
             )
             raise SystemExit(1)

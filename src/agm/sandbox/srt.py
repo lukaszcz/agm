@@ -18,6 +18,7 @@ from agm.config.sandbox.srt import (
 )
 from agm.core import dry_run
 from agm.core.fs import is_dir, is_file, rmdir, stat, unlink
+from agm.core.path import display_path
 from agm.core.process import run_foreground
 
 
@@ -66,9 +67,12 @@ def _resolve_settings_path(
     if settings_file is not None:
         selected_settings = Path(settings_file)
         if not selected_settings.is_absolute():
-            selected_settings = Path.cwd() / selected_settings
+            selected_settings = cwd / selected_settings
         if not is_file(selected_settings):
-            print(f"Error: settings file not found: {settings_file}", file=sys.stderr)
+            print(
+                f"Error: settings file not found: {display_path(selected_settings, cwd=cwd)}",
+                file=sys.stderr,
+            )
             raise SystemExit(1)
         return selected_settings
 
@@ -82,7 +86,10 @@ def _resolve_settings_path(
     found_settings = [path for path in settings_candidates if is_file(path)]
     if not found_settings:
         print("Error: no sandbox settings file found.", file=sys.stderr)
-        print("Checked: " + ", ".join(str(path) for path in settings_candidates), file=sys.stderr)
+        print(
+            "Checked: " + ", ".join(display_path(path, cwd=cwd) for path in settings_candidates),
+            file=sys.stderr,
+        )
         raise SystemExit(1)
     if len(found_settings) == 1:
         return found_settings[0]
@@ -104,7 +111,7 @@ def _print_dry_run(
 ) -> None:
     if settings_file is not None:
         settings_source = "explicit"
-        settings_detail = settings_file
+        settings_detail = display_path(Path(settings_file), cwd=cwd)
     else:
         settings_candidates = sandbox_settings_candidates(
             cwd=cwd,
@@ -114,14 +121,16 @@ def _print_dry_run(
             alias_command_name=alias_command_name,
         )
         settings_source = "merged"
-        settings_detail = ", ".join(str(path) for path in settings_candidates)
+        settings_detail = ", ".join(
+            display_path(path, cwd=cwd) for path in settings_candidates
+        )
 
     dry_run.print_configuration("sandbox")
     dry_run.print_detail("settings source", settings_source)
     dry_run.print_detail("settings candidates", settings_detail)
     dry_run.print_detail(
         "patch proj dir path",
-        str(patch_proj_dir) if patch_proj_dir is not None else "disabled",
+        display_path(patch_proj_dir, cwd=cwd) if patch_proj_dir is not None else "disabled",
     )
 
     dry_run.print_labeled_command(

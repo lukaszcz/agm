@@ -90,7 +90,7 @@ def mkdir(path: Path, *, parents: bool = False, exist_ok: bool = False) -> None:
     """Create a directory unless dry-run is enabled."""
 
     if dry_run.enabled():
-        dry_run.print_operation("mkdir", str(path))
+        dry_run.print_operation("mkdir", display_path(path))
         return
     path.mkdir(parents=parents, exist_ok=exist_ok)
 
@@ -99,7 +99,7 @@ def write_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
     """Write text unless dry-run is enabled."""
 
     if dry_run.enabled():
-        dry_run.print_operation("write-file", str(path))
+        dry_run.print_operation("write-file", display_path(path))
         return
     path.write_text(content, encoding=encoding)
 
@@ -108,7 +108,7 @@ def chmod(path: Path, mode: int) -> None:
     """Change file mode unless dry-run is enabled."""
 
     if dry_run.enabled():
-        dry_run.print_operation("chmod", f"{oct(mode)} {path}")
+        dry_run.print_operation("chmod", f"{oct(mode)} {display_path(path)}")
         return
     path.chmod(mode)
 
@@ -117,7 +117,7 @@ def append_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
     """Append text unless dry-run is enabled."""
 
     if dry_run.enabled():
-        dry_run.print_operation("append-file", str(path))
+        dry_run.print_operation("append-file", display_path(path))
         return
     with path.open("a", encoding=encoding) as handle:
         handle.write(content)
@@ -127,7 +127,7 @@ def rmtree(path: Path) -> None:
     """Remove a directory tree unless dry-run is enabled."""
 
     if dry_run.enabled():
-        dry_run.print_operation("remove-tree", str(path))
+        dry_run.print_operation("remove-tree", display_path(path))
         return
     shutil.rmtree(path)
 
@@ -136,7 +136,7 @@ def rmdir(path: Path) -> None:
     """Remove an empty directory unless dry-run is enabled."""
 
     if dry_run.enabled():
-        dry_run.print_operation("rmdir", str(path))
+        dry_run.print_operation("rmdir", display_path(path))
         return
     path.rmdir()
 
@@ -145,6 +145,6 @@ def unlink(path: Path, *, missing_ok: bool = False) -> None:
     """Remove a file unless dry-run is enabled."""
 
     if dry_run.enabled():
-        dry_run.print_operation("unlink", str(path))
+        dry_run.print_operation("unlink", display_path(path))
         return
     path.unlink(missing_ok=missing_ok)

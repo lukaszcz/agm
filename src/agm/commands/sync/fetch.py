@@ -6,10 +6,10 @@ import sys
 from pathlib import Path
 
 from agm.core.fs import is_dir, iterdir
+from agm.core.path import display_path
 from agm.project.layout import (
     project_deps_dir,
     project_repo_dir,
-    project_root,
     require_current_project_dir,
 )
 from agm.project.worktree import sync_remote_tracking_branches
@@ -17,12 +17,8 @@ from agm.vcs.git import fetch_prune_all, find_first_git_repo, is_git_repo, workt
 
 
 def _fetch_repo(project_dir: Path, repo_path: Path) -> None:
-    try:
-        relative_path = repo_path.relative_to(project_root(project_dir))
-        display_path = "." if relative_path == Path(".") else str(relative_path)
-    except ValueError:
-        display_path = str(repo_path)
-    print(f"Fetching {display_path}", flush=True)
+    del project_dir
+    print(f"Fetching {display_path(repo_path)}", flush=True)
     worktree_prune(repo_path)
     fetch_prune_all(repo_path)
     sync_remote_tracking_branches(repo_path)
@@ -33,7 +29,7 @@ def project_git_repos(project_dir: Path) -> list[Path]:
 
     repo_dir = project_repo_dir(project_dir)
     if not is_dir(repo_dir) or not is_git_repo(repo_dir):
-        print(f"error: repo does not exist in {project_dir}", file=sys.stderr)
+        print(f"error: repo does not exist in {display_path(project_dir)}", file=sys.stderr)
         raise SystemExit(1)
 
     repos = [repo_dir]

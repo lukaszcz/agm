@@ -9,6 +9,7 @@ from typing import Sequence
 import agm.vcs.git as git_helpers
 from agm.cli_support.args import InitArgs
 from agm.core.fs import chmod, exists, is_empty_dir, mkdir, read_text, stat, write_text
+from agm.core.path import display_path
 from agm.core.process import require_success
 from agm.project.config_git import commit_config_dir_changes
 from agm.project.dependency_env import ensure_project_name_in_config, update_main_dependency_configs
@@ -201,13 +202,7 @@ def run(args: InitArgs) -> None:
 
     repo_dir = base_dir if embedded_layout else base_dir / "repo"
     if exists(repo_dir) and not is_empty_dir(repo_dir):
-        try:
-            relative_repo_dir = repo_dir.relative_to(Path.cwd())
-        except ValueError:
-            display_dir = str(repo_dir)
-        else:
-            relative_display = str(relative_repo_dir)
-            display_dir = "current directory" if relative_display == "." else relative_display
+        display_dir = display_path(repo_dir)
         print(f"error: {display_dir} already exists and is not empty", file=sys.stderr)
         raise SystemExit(1)
 

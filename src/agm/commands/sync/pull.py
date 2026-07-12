@@ -6,19 +6,13 @@ from pathlib import Path
 
 import agm.commands.sync.fetch as fetch_command
 import agm.vcs.git as git_helpers
+from agm.core.path import display_path
 from agm.project.layout import require_current_project_dir
 
 
-def _display_path(project_dir: Path, path: Path) -> str:
-    try:
-        relative_path = path.relative_to(project_dir)
-        return "." if relative_path == Path(".") else str(relative_path)
-    except ValueError:
-        return str(path)
-
-
 def _merge_worktree(project_dir: Path, worktree_path: Path) -> None:
-    print(f"Merging {_display_path(project_dir, worktree_path)}", flush=True)
+    del project_dir
+    print(f"Merging {display_path(worktree_path)}", flush=True)
     git_helpers.merge(worktree_path)
 
 

@@ -119,7 +119,7 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
             implement_prompt_file = prompt_file("implement.md")
             if not is_file(implement_prompt_file):
                 print(
-                    f"Error: prompt file not found: {implement_prompt_file}",
+                    f"Error: prompt file not found: {display_path(implement_prompt_file)}",
                     file=sys.stderr,
                 )
                 raise SystemExit(1)
@@ -138,7 +138,9 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
     elif select_invocation is None:
         loop_prompt_file = prompt_file("loop.md")
         if not is_file(loop_prompt_file):
-            print(f"Error: prompt file not found: {loop_prompt_file}", file=sys.stderr)
+            print(
+                f"Error: prompt file not found: {display_path(loop_prompt_file)}", file=sys.stderr
+            )
             raise SystemExit(1)
         loop_prompt = _prepare_prompt("loop", loop_prompt_file, temp_files=temp_files, env=env)
 
@@ -146,7 +148,8 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
     if select_invocation is None and not is_file(resolved_progress_file):
         bootstrap_prompt_file = prompt_file("select.md")
         if not is_file(bootstrap_prompt_file):
-            print(f"Error: prompt file not found: {bootstrap_prompt_file}", file=sys.stderr)
+            message = f"Error: prompt file not found: {display_path(bootstrap_prompt_file)}"
+            print(message, file=sys.stderr)
             raise SystemExit(1)
         bootstrap_prompt = _prepare_prompt(
             "bootstrap",
@@ -216,11 +219,11 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
 
 def print_dry_run(runtime: LoopStepRuntime) -> None:
     dry_run.print_configuration("loop")
-    dry_run.print_detail("tasks dir", str(runtime.resolved_tasks_dir))
-    dry_run.print_detail("progress file", str(runtime.resolved_progress_file))
+    dry_run.print_detail("tasks dir", display_path(runtime.resolved_tasks_dir))
+    dry_run.print_detail("progress file", display_path(runtime.resolved_progress_file))
     dry_run.print_detail(
         "log file",
-        str(runtime.log_file) if runtime.log_file is not None else "disabled",
+        display_path(runtime.log_file) if runtime.log_file is not None else "disabled",
     )
     dry_run.print_detail("runner command", dry_run.format_command(runtime.resolved_runner_command))
     dry_run.print_detail(
@@ -280,7 +283,9 @@ def print_dry_run(runtime: LoopStepRuntime) -> None:
             "runner command repeats until output is COMPLETE",
         )
         if runtime.resolved_prompt is not None:
-            dry_run.print_detail("explicit prompt", str(runtime.resolved_prompt.effective_file))
+            dry_run.print_detail(
+                "explicit prompt", display_path(runtime.resolved_prompt.effective_file)
+            )
         return
 
     _print_dry_run_command(
@@ -291,10 +296,10 @@ def print_dry_run(runtime: LoopStepRuntime) -> None:
         ),
     )
     if runtime.resolved_prompt is not None:
-        dry_run.print_detail("runner prompt", str(runtime.resolved_prompt.effective_file))
+        dry_run.print_detail("runner prompt", display_path(runtime.resolved_prompt.effective_file))
     elif runtime.implement_prompt_file is not None:
         dry_run.print_detail(
-            "runner prompt", f"{runtime.implement_prompt_file} (default)"
+            "runner prompt", f"{display_path(runtime.implement_prompt_file)} (default)"
         )
     dry_run.print_operation(
         "loop-runner",

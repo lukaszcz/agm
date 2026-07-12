@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
+from agm.core.path import display_path
+
 _PROMPT_ENV_VAR_PATTERN = re.compile(
     r"\$(?P<simple>[A-Za-z_][A-Za-z0-9_]*)|\$\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)\}"
 )
@@ -43,5 +45,5 @@ def preprocess_prompt_file(
 
 def dry_run_prompt_text(source_file: Path, effective_file: Path) -> str:
     if source_file == effective_file:
-        return str(source_file)
-    return f"{source_file} -> {effective_file} (preprocessed)"
+        return display_path(source_file)
+    return f"{display_path(source_file)} -> {display_path(effective_file)} (preprocessed)"

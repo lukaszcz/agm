@@ -27,6 +27,7 @@ from agm.config.general import (
 )
 from agm.core.env import clone_env
 from agm.core.fs import is_file
+from agm.core.path import display_path
 
 LoopCommandArgs = LoopArgs | LoopSelectArgs
 
@@ -52,7 +53,7 @@ def configured_loop_settings(command_name: str | None) -> LoopConfig:
 
 
 def selected_task_text(task_file: Path) -> str:
-    return f"Selected task: {task_file}\n\n"
+    return f"Selected task: {display_path(task_file)}\n\n"
 
 
 def runner_command(args: LoopCommandArgs) -> list[str]:
@@ -196,7 +197,10 @@ def prepare_select_invocation(
     else:
         source_prompt_file = prompt_file("select.md")
         if not is_file(source_prompt_file):
-            print(f"Error: prompt file not found: {source_prompt_file}", file=sys.stderr)
+            print(
+                f"Error: prompt file not found: {display_path(source_prompt_file)}",
+                file=sys.stderr,
+            )
             raise SystemExit(1)
         effective_prompt_file = preprocess_prompt_file(
             source_prompt_file,

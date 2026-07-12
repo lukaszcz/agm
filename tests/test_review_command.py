@@ -650,7 +650,7 @@ def test_review_once_warns_before_overwriting_existing_review_file(
     review_mod.review_once(_review_args(review_file="saved/review.md"))
 
     captured = capsys.readouterr()
-    assert str(review_file) in captured.err
+    assert "saved/review.md" in captured.err
     assert review_file.read_text(encoding="utf-8") == "new review output\n"
 
 
@@ -781,7 +781,7 @@ def test_review_once_dry_run_prints_configuration(
     captured = capsys.readouterr()
     assert output == ""
     assert "dry-run" in captured.out
-    assert str(tmp_path / ".agent-files") in captured.out
+    assert ".agent-files/" in captured.out
     assert "review-" in captured.out
 
 

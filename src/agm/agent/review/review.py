@@ -127,7 +127,7 @@ def review_once(
             dry_run.print_configuration("review")
             dry_run.print_detail(
                 "review file",
-                "disabled" if review_file is None else str(review_file),
+                "disabled" if review_file is None else display_path(review_file),
             )
         output = run_prepared_prompt(
             prepared,
@@ -137,7 +137,9 @@ def review_once(
         if dry_run.enabled():
             return output
         if review_file is not None and review_file.exists():
-            stderr_callback(f"warning: overwriting existing review file {review_file}\n")
+            stderr_callback(
+                f"warning: overwriting existing review file {display_path(review_file)}\n"
+            )
         saved_review_file = _save_review_output(review_file, output)
         if saved_review_file is not None:
             stdout_callback(f"\nSaved review to {display_path(saved_review_file)}\n")

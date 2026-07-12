@@ -8,6 +8,7 @@ from pathlib import Path
 import agm.vcs.git as git_helpers
 from agm.cli_support.args import CloseArgs
 from agm.core import fs
+from agm.core.path import display_path
 from agm.project.config_git import commit_config_dir_changes
 from agm.project.layout import (
     branch_session_name,
@@ -56,7 +57,7 @@ def close_workspace(
         print(
             (
                 f"error: '{branch}' resolves to the main workspace at "
-                f"{repo_dir} and cannot be removed"
+                f"{display_path(repo_dir, cwd=current)} and cannot be removed"
             ),
             file=sys.stderr,
         )

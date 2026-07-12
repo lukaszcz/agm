@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from agm.core.fs import is_dir
+from agm.core.path import display_path
 from agm.project.dependency_env import (
     config_toml_file,
     current_config_branch,
@@ -77,7 +78,7 @@ def list_deps(
         for dep_name, entries in all_deps.items():
             for checkout_name, checkout_path in entries:
                 if verbose:
-                    print(f"{dep_name}/{checkout_name}  {checkout_path}")
+                    print(f"{dep_name}/{checkout_name}  {display_path(checkout_path)}")
                 else:
                     print(f"{dep_name}/{checkout_name}")
         return
@@ -87,7 +88,7 @@ def list_deps(
     for dep_name, dep_branch in sorted(deps.items()):
         dep_path = deps_dir / dep_name / dep_branch
         if verbose:
-            print(f"{dep_name}/{dep_branch}  {dep_path}")
+            print(f"{dep_name}/{dep_branch}  {display_path(dep_path)}")
         else:
             print(f"{dep_name}/{dep_branch}")
 

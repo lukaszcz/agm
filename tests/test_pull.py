@@ -10,19 +10,6 @@ import agm.commands.sync.pull as pull_cmd
 from agm.vcs.git import WorktreeInfo
 
 
-class TestDisplayPath:
-    def test_returns_dot_for_project_dir(self, tmp_path: Path) -> None:
-        project_dir = tmp_path / "proj"
-
-        assert pull_cmd._display_path(project_dir, project_dir) == "."
-
-    def test_returns_absolute_path_for_external_path(self, tmp_path: Path) -> None:
-        project_dir = tmp_path / "proj"
-        external = tmp_path / "external"
-
-        assert pull_cmd._display_path(project_dir, external) == str(external)
-
-
 class TestMergeWorktree:
     def test_merges_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         project_dir = tmp_path / "proj"
@@ -109,12 +96,13 @@ class TestPullRun:
             ],
         )
         monkeypatch.setattr(pull_cmd.git_helpers, "merge", lambda p: None)
+        monkeypatch.chdir(tmp_path)
 
         pull_cmd.run(object())
 
         captured = capsys.readouterr()
-        assert "Merging repo" in captured.out
-        assert "Merging worktrees/feat" in captured.out
+        assert "Merging proj/repo" in captured.out
+        assert "Merging proj/worktrees/feat" in captured.out
 
 
 class TestPullRunEdgeCases:

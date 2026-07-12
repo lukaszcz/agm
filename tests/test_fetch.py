@@ -37,6 +37,7 @@ class TestFetchRepo:
             fetch_cmd, "sync_remote_tracking_branches", lambda p: synced.append(p)
         )
 
+        monkeypatch.chdir(project_dir)
         fetch_cmd._fetch_repo(project_dir, project_dir)
 
         captured = capsys.readouterr()
@@ -55,10 +56,11 @@ class TestFetchRepo:
         monkeypatch.setattr(fetch_cmd, "fetch_prune_all", lambda p: None)
         monkeypatch.setattr(fetch_cmd, "sync_remote_tracking_branches", lambda p: None)
 
+        monkeypatch.chdir(tmp_path)
         fetch_cmd._fetch_repo(project_dir, repo_dir)
 
         captured = capsys.readouterr()
-        assert "Fetching repo" in captured.out
+        assert "Fetching proj/repo" in captured.out
 
     def test_prints_absolute_path_when_outside_project(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

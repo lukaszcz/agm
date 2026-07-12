@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import agm.vcs.git as git_helpers
+from agm.core.path import display_path
 from agm.project.layout import (
     current_workspace,
     project_repo_dir,
@@ -54,7 +55,7 @@ def list_workspaces(*, cwd: Path | None = None, verbose: bool = False) -> None:
     marker = "*" if _is_current(repo_dir, current_dir) else " "
     main_branch = main_worktree.branch if main_worktree is not None else repo_branch
     if verbose:
-        print(f"{marker} {main_branch}  {repo_dir}")
+        print(f"{marker} {main_branch}  {display_path(repo_dir, cwd=current)}")
     else:
         print(f"{marker} {main_branch}")
 
@@ -62,7 +63,7 @@ def list_workspaces(*, cwd: Path | None = None, verbose: bool = False) -> None:
         marker = "*" if _is_current(wt.path, current_dir) else " "
         branch = wt.branch or "(detached)"
         if verbose:
-            print(f"{marker} {branch}  {wt.path}")
+            print(f"{marker} {branch}  {display_path(wt.path, cwd=current)}")
         else:
             print(f"{marker} {branch}")
 

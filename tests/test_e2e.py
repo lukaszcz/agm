@@ -2648,8 +2648,8 @@ class TestFetch:
 
         result = run_agm(["sync", "fetch"], env=env, cwd=str(project / "repo"))
         assert result.returncode == 0
-        assert "Fetching repo" in result.stdout
-        assert "Fetching deps/mylib/main" in result.stdout
+        assert "Fetching ." in result.stdout
+        assert f"Fetching {project / 'deps' / 'mylib' / 'main'}" in result.stdout
 
     def test_no_deps_dir_ok(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare = make_bare_repo(tmp_path / "origin.git", env)
@@ -3811,7 +3811,7 @@ class TestSandbox:
         assert "dry-run:   settings source: merged" in result.stdout
         assert f"{home / '.agm' / 'sandbox' / 'echo.json'}" in result.stdout
         assert f"{proj_dir / 'config' / 'sandbox' / 'printf.json'}" in result.stdout
-        assert f"{work / '.sandbox' / 'printf.json'}" in result.stdout
+        assert ".sandbox/printf.json" in result.stdout
         assert f"dry-run:   patch proj dir path: {proj_dir}" in result.stdout
         assert "dry-run: command [sandbox]:" in result.stdout
         assert "systemd-run --user --scope -q -p MemoryMax=5G" in result.stdout
@@ -4949,7 +4949,7 @@ class TestLoop:
 
         assert result.returncode == 0
         assert "Step 1" in result.stdout
-        assert f"Selected task: {tasks_dir / 'task-1.md'}" in result.stdout
+        assert "Selected task: .agent-files/tasks/task-1.md" in result.stdout
         assert "Step 2" in result.stdout
         assert "Completed." in result.stdout
         assert Path(env["FAKE_SELECTOR_LOG"]).read_text().splitlines() == [
@@ -4964,7 +4964,7 @@ class TestLoop:
         assert re.search(r"Step 1\s+\(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\)", log_text)
         assert re.search(r"Step 2\s+\(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\)", log_text)
         assert "task-1.md\n" in log_text
-        assert f"\nSelected task: {tasks_dir / 'task-1.md'}\n" in log_text
+        assert "\nSelected task: .agent-files/tasks/task-1.md\n" in log_text
         assert "implemented task\n" in log_text
         assert " COMPLETE \n" in log_text
 
@@ -5080,7 +5080,7 @@ class TestLoop:
         )
 
         assert result.returncode == 0
-        assert f"Selected task: {tasks_dir / 'task-1.md'}" in result.stdout
+        assert "Selected task: .agent-files/tasks/task-1.md" in result.stdout
         assert "Completed." in result.stdout
         assert selector_log.read_text().splitlines() == [
             f"@{selector_prompt}",
@@ -5313,7 +5313,7 @@ class TestLoop:
         )
 
         assert result.returncode == 0
-        assert f"Selected task: {cwd_task}" in result.stdout
+        assert "Selected task: custom/tasks/task-1.md" in result.stdout
         runner_log_text = Path(env["FAKE_RUNNER_LOG"]).read_text()
         assert str(cwd_task) in runner_log_text
 
@@ -5467,13 +5467,10 @@ class TestLoop:
 
         assert result.returncode == 0
         assert "Logging to .agent-files/loop-" in result.stdout
-        assert f"dry-run: agm mkdir {work}" in result.stdout
+        assert "dry-run: agm mkdir .agent-files" in result.stdout
         assert "dry-run: loop configuration" in result.stdout
-        assert f"dry-run:   tasks dir: {work / 'config' / 'tasks'}" in result.stdout
-        assert (
-            f"dry-run:   progress file: {work / 'config' / 'tasks' / 'PROGRESS.md'}"
-            in result.stdout
-        )
+        assert "dry-run:   tasks dir: config/tasks" in result.stdout
+        assert "dry-run:   progress file: config/tasks/PROGRESS.md" in result.stdout
         assert "dry-run:   runner command: runner" in result.stdout
         assert "dry-run:   selector command: selector" in result.stdout
         assert f"dry-run: prompt [selector]: {selector_prompt} -> " in result.stdout
@@ -5941,7 +5938,7 @@ class TestLoop:
 
         assert result.returncode == 0
         assert "dry-run: loop-select configuration" in result.stdout
-        assert f"dry-run:   tasks dir: {work / 'config' / 'tasks'}" in result.stdout
+        assert "dry-run:   tasks dir: config/tasks" in result.stdout
         assert "dry-run:   selector command: selector" in result.stdout
         assert "dry-run:   runner command: runner" in result.stdout
         assert "dry-run:   execution command: selector" in result.stdout
@@ -5980,7 +5977,7 @@ class TestLoop:
 
         assert result.returncode == 0
         assert "dry-run: loop-select configuration" in result.stdout
-        assert f"dry-run:   tasks dir: {work / '.agent-files' / 'tasks'}" in result.stdout
+        assert "dry-run:   tasks dir: .agent-files/tasks" in result.stdout
         assert "dry-run:   selector command: disabled" in result.stdout
         assert "dry-run:   runner command: runner" in result.stdout
         assert "dry-run:   execution command: runner" in result.stdout
@@ -6072,7 +6069,7 @@ class TestLoop:
 
         assert result.returncode == 0
         assert "Step 1" in result.stdout
-        assert f"Selected task: {tasks_dir / 'task-1.md'}" in result.stdout
+        assert "Selected task: .agent-files/tasks/task-1.md" in result.stdout
         assert "Step 2" in result.stdout
         assert "Completed." in result.stdout
         # The runner was invoked with the select.md prompt (selector role)
@@ -6137,7 +6134,7 @@ class TestLoop:
         assert result.returncode == 0
         assert "Logging to .agent-files/loop-" in result.stdout
         assert "Step 1" in result.stdout
-        assert "task-1.md\n\nSelected task: " + str(tasks_dir / "task-1.md") in result.stdout
+        assert "task-1.md\n\nSelected task: .agent-files/tasks/task-1.md" in result.stdout
         assert result.stdout.endswith("runner iteration\n")
         assert Path(env["FAKE_SELECTOR_LOG"]).read_text().splitlines() == [
             f"@{selector_prompt}",

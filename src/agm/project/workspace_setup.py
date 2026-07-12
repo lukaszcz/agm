@@ -7,6 +7,7 @@ from pathlib import Path
 
 import agm.vcs.git as git_helpers
 from agm.core import dry_run
+from agm.core.path import display_path
 from agm.core.process import require_success
 from agm.project.layout import (
     branch_session_name,
@@ -64,6 +65,6 @@ def run_setup(*, cwd: Path | None = None, env: dict[str, str] | None = None) -> 
                 setup_label = setup_path
         print(f"Running {setup_label}...")
         if dry_run.enabled():
-            dry_run.print_operation("run-setup", str(setup_path))
+            dry_run.print_operation("run-setup", display_path(setup_path))
         require_success(["bash", str(setup_path)], cwd=workspace_dir, env=setup_env)
     print(f"Setup complete for {target_name}.")

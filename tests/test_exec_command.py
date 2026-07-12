@@ -667,18 +667,22 @@ class TestExecCommandWarnings:
         assert f"{agl_file}:7:3-7: warning: case is non-exhaustive" in captured.err
 
     def test_error_diagnostic_still_exits_1(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         # Real source: an undefined name is a static (error-severity) diagnostic.
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("let x = undefined_name\n")
 
+        monkeypatch.chdir(tmp_path)
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args(agl_file))
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
         assert "undefined_name" in captured.err
-        assert f"{agl_file}:1:9-22: error:" in captured.err
+        assert captured.err.startswith("test.agl:1:9-22: error:")
 
     def test_inline_error_diagnostic_has_command_label(
         self, capsys: pytest.CaptureFixture[str]

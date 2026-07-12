@@ -12,11 +12,13 @@ for backward compatibility (the lexer and other callers use
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 # Re-export the canonical definition so existing callers keep working.
 from agm.agl.syntax.spans import UNKNOWN_SOURCE as UNKNOWN_SOURCE
 from agm.agl.syntax.spans import SourceSpan as SourceSpan
+from agm.core.path import display_path
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,7 +90,9 @@ def format_diagnostic_location(
     effective_source: str | None = (
         diagnostic.source_label if diagnostic.source_label is not None else source_name
     )
-    prefix = f"{effective_source}:" if effective_source is not None else ""
+    prefix = (
+        f"{display_path(Path(effective_source))}:" if effective_source is not None else ""
+    )
     if diagnostic.column is None:
         return f"{prefix}{diagnostic.line}"
     if diagnostic.end_line is None or diagnostic.end_column is None:

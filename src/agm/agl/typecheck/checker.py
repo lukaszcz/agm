@@ -752,6 +752,7 @@ class _Checker:
                     f"Cannot infer return type of function '{node.name}': return values have "
                     "incompatible types. Add a return type annotation.",
                     span=node.span,
+                    related=exc.related,
                 ) from exc
             inferred_sig = FunctionSignature(
                 params=sig.params, result=result_type, type_params=sig.type_params
@@ -1899,6 +1900,7 @@ class _Checker:
                     "Cannot infer return type of lambda: return values have incompatible "
                     "types. Add a return type annotation.",
                     span=node.span,
+                    related=exc.related,
                 ) from exc
 
         return FunctionType(params=tuple(param_types), result=result_type)
@@ -2521,6 +2523,7 @@ class _Checker:
                 f"'{'.'.join(module_qualifier.segments)}::{enum_name}' "
                 "is not a known enum type.",
                 span=span,
+                related=exc.related,
             ) from exc
         if not isinstance(resolved, EnumType):
             raise AglTypeError(

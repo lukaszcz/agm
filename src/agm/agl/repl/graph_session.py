@@ -135,6 +135,7 @@ class GraphSession:
         the full scope/typecheck pass with the session context, then evaluates
         or returns a check-only result.
         """
+        from agm.agl.diagnostics import AglError
         from agm.agl.modules.errors import (
             AmbiguousModule,
             ImportEntryError,
@@ -173,6 +174,8 @@ class GraphSession:
             ImportEntryError,
             MissingExternCompanion,
         ) as exc:
+            return self._ctx._fail([exc.to_diagnostic()], tab_warnings)
+        except AglError as exc:
             return self._ctx._fail([exc.to_diagnostic()], tab_warnings)
         except Exception as exc:
             return self._ctx._fail([Diagnostic(message=str(exc), line=1)], tab_warnings)

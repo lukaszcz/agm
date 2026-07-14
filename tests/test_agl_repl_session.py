@@ -97,6 +97,19 @@ class TestPersistence:
         names = {n: v for n, _t, v in s.bindings()}
         assert {"x", "y"} <= set(names)
 
+    def test_graph_loader_agl_error_retains_related_notes(self) -> None:
+        from unittest.mock import patch
+
+        from agm.agl.syntax.spans import SourceSpan
+
+        related = SourceSpan(2, 1, 2, 2, 2, 3)
+        error = AglError("load failed", related=(("constraint", related),))
+        with patch("agm.agl.modules.loader.build_repl_graph", side_effect=error):
+            result = ReplSession().eval_entry("1")
+
+        assert not result.ok
+        assert result.diagnostics[0].related[0].message == "constraint"
+
     def test_node_ids_advance_across_entries(self) -> None:
         # Two entries that each declare a distinct binding must both survive —
         # which only works if node ids stay globally unique (binding-type table

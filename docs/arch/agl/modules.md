@@ -24,7 +24,7 @@ The graph passes generalize the single-module passes to whole-graph operation wh
 
 ## Source Attribution
 
-Every source span carries a source id identifying its origin file, so multi-file diagnostics name the right file. Span positions compare equal across files (the source id is excluded from equality), consistent with how node ids are excluded from AST equality. Diagnostics carry the source label through to formatting.
+Every source span carries a source id identifying its origin file, so multi-file diagnostics name the right file. Span positions compare equal across files (the source id is excluded from equality), consistent with how node ids are excluded from AST equality. Diagnostics carry the source label through to formatting, including ordered, non-recursive related notes that can point into other modules.
 
 ## Code Entry Points
 

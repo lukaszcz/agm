@@ -920,6 +920,25 @@ class TestLoadFile:
         vals = {n: _int(v) for n, _t, v in b.bindings()}
         assert vals == {"x": 2}
 
+    def test_load_file_can_be_loaded_twice_with_nominal_and_function_definitions(
+        self, tmp_path: Path
+    ) -> None:
+        f = tmp_path / "functions.agl"
+        f.write_text(
+            "enum Counter = zero\n"
+            "def increment(n: int) = n + 1\n"
+            "def reset(_: Counter) = Counter::zero\n"
+        )
+        session = ReplSession()
+
+        first = session.load_file(f)
+        second = session.load_file(f)
+
+        assert all(result.ok for result in (*first, *second))
+        result = session.eval_entry("increment(2)")
+        assert result.ok
+        assert _int(result.value) == 3
+
     def test_load_file_multi_binding_round_trips(self, tmp_path: Path) -> None:
         a = ReplSession()
         a.eval_entry("let a = 1")

@@ -676,10 +676,11 @@ class _Checker:
         its defaults are pinned by the hardcoded builtin signature table, not
         evaluated as ordinary AgL expressions.
         """
-        sig = self._env.get_function_signature(node.name)
-        if sig is None:
+        if node.return_type is None:
             self._infer_funcdef_signature(node)
             return
+        sig = self._env.get_function_signature_by_node_id(node.node_id)
+        assert sig is not None, f"compiler bug: no signature registered for {node.name!r}"
         if node.is_builtin:
             return
         assert node.is_extern or node.body is not None, (

@@ -1,0 +1,18 @@
+# Generic function values and partial applications share one expression inference region.
+param mode: text
+
+def maker[T]() -> T -> T = fn(value: T) => value
+
+def make_pair[T]() -> (T, T) -> T = fn(left: T, right: T) => left
+
+if
+  | mode == "call" =>
+      print(maker()(7))
+  | mode == "partial" =>
+      let keep: (int) -> int = make_pair()(?, 5)
+      print(keep(8))
+  | else =>
+      let first = maker()(3)
+      let second = maker()("text")
+      print(first)
+      print(second)

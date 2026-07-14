@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "provisional_value_call",
+      "params": {"mode": "call"},
+      "expect": {"stdout": "7\n"}
+    },
+    {
+      "name": "provisional_value_partial",
+      "params": {"mode": "partial"},
+      "expect": {"stdout": "8\n"}
+    },
+    {
+      "name": "independent_occurrences",
+      "params": {"mode": "independent"},
+      "expect": {"stdout": "3\ntext\n"}
+    }
+  ]
+}

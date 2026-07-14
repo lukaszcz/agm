@@ -2009,11 +2009,36 @@ class _Checker:
         binding: tuple[Expr | None, ...] = node.args
         if hole_indices:
             self._record_partial_call(node, binding, hole_indices, callee_kind="value")
-        for arg, ptype in zip(node.args, callee_type.params):
+        for arg, ptype in zip(node.args, callee_type.params, strict=True):
             if isinstance(arg, Placeholder):
                 continue
-            at = self._check_expr(arg, expected=ptype)
-            self._assert_assignable(at, ptype, arg.span)
+            argument_type = self._check_expr(arg, expected=ptype)
+            # A function value can itself be the provisional result of a
+            # generic call.  Its parameter positions are exact inference
+            # constraints, just like declared generic-call parameters; applying
+            # ordinary assignability before the region has zonked them would
+            # reject useful evidence such as ``maker()(1)``.
+            if contains_inference_var(ptype) or contains_inference_var(argument_type):
+                assert self._inference_region is not None
+                engine = self._inference_region.engine
+                try:
+                    engine.unify(
+                        ptype,
+                        argument_type,
+                        engine.origin(
+                            arg.span,
+                            role=ConstraintRole.FUNCTION_ARGUMENT,
+                            subject="function value",
+                        ),
+                    )
+                except InferenceError as exc:
+                    raise AglTypeError(
+                        f"Inconsistent type argument for function value call: {exc}",
+                        span=exc.span,
+                        related=exc.related,
+                    ) from exc
+            else:
+                self._assert_assignable(argument_type, ptype, arg.span)
         params = tuple(
             ParamSpec(
                 name=f"arg{index}",
@@ -2024,6 +2049,17 @@ class _Checker:
             for index, ptype in enumerate(callee_type.params)
         )
         result_type = self._call_result_type(params, callee_type.result, binding, hole_indices)
+        if expected is not None:
+            assert self._inference_region is not None
+            self._inference_region.engine.complete_from_context(
+                result_type,
+                expected,
+                self._inference_region.engine.origin(
+                    node.span,
+                    role=ConstraintRole.EXPECTED_RESULT,
+                    subject="function value",
+                ),
+            )
         extern_targets = self._extern_expr_targets.get(node.callee.node_id, ())
         if extern_targets:
             invocation_targets = tuple(

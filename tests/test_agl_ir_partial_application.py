@@ -96,6 +96,17 @@ let result = h(2.5)
     assert result["result"] == DecimalValue(decimal.Decimal("3.5"))
 
 
+def test_partial_provisional_function_value_captures_and_calls_after_inference() -> None:
+    source = """
+def maker[T]() -> (T, T) -> T = fn(left: T, right: T) => left
+let keep: (int) -> int = maker()(?, 1)
+let result = keep(8)
+()
+"""
+    result = evaluate_ir(source)
+    assert result["result"] == IntValue(8)
+
+
 def test_cross_module_constructor_partial_uses_shared_lowering(tmp_path: Path) -> None:
     result = evaluate_ir_graph(
         "import mylib\n"

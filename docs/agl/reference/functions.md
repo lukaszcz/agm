@@ -432,6 +432,20 @@ let g: int -> text = classify
 let label = g(7)               # positional call of a function value
 ```
 
+A generic call that produces a function value may use the arguments of that
+value call to determine its type arguments. The constraints of one enclosing
+expression are considered together, so this needs no intermediate annotation:
+
+```agl
+def maker[T]() -> T -> T = fn(value: T) => value
+
+let number = maker()(7)        # T = int
+```
+
+Each occurrence is inferred independently. As with any generic expression,
+an unconstrained function-producing call still requires explicit type arguments
+or an expected function type at its binding boundary.
+
 ## Partial application
 
 A parenthesized call that contains one or more placeholder arguments evaluates
@@ -547,9 +561,12 @@ catch Abort as e =>
   print(e.message)              # called 9
 ```
 
-Generic callees infer type arguments from non-placeholder arguments and from an
-expected function type when one is available. If a type argument is still not
-known, give it explicitly with the `::[…]` form.
+Generic callees infer type arguments jointly from non-placeholder arguments,
+placeholder parameter types, and an expected function type when one is
+available. This applies equally when the callee is a function-valued expression;
+fixed arguments are considered before an expected shape completes any remaining
+type arguments. If a type argument is still not known, give it explicitly with
+the `::[…]` form.
 
 ```agl
 def id[T](x: T) -> T = x

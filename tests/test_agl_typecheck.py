@@ -2075,6 +2075,117 @@ class TestPartialConstructorAndValueCalls:
         assert "named arguments" in str(named_err).lower()
 
 
+class TestProvisionalFunctionValuesAndPartials:
+    def test_provisional_function_value_call_uses_later_argument_evidence(self) -> None:
+        checked = accept_type(
+            "def maker[T]() -> T -> T = fn(value: T) => value\n"
+            "let result = maker()(1)\n"
+            "result"
+        )
+        result = checked.resolved.program.body.items[1]
+        assert isinstance(result, LetDecl)
+        assert checked.node_types[result.value.node_id] == IntType()
+        assert not contains_inference_var(checked.node_types[result.value.node_id])
+
+    def test_nested_higher_order_provisional_values_are_fresh_per_occurrence(self) -> None:
+        checked = accept_type(
+            "def maker[T]() -> T -> T = fn(value: T) => value\n"
+            "def choose[A, B](left: A -> A, right: B -> B, a: A, b: B) -> B = right(b)\n"
+            "let result = choose(maker(), maker(), 1, \"text\")\n"
+            "result"
+        )
+        result = checked.resolved.program.body.items[2]
+        assert isinstance(result, LetDecl)
+        assert checked.node_types[result.value.node_id] == TextType()
+
+    def test_partial_declared_call_joins_fixed_holes_and_expected_shape(self) -> None:
+        checked = accept_type(
+            "def route[T](first: T, evidence: T, optional: int = 0, *, tail: T) -> T = first\n"
+            "let fill: (int, int) -> int = route(?, 1, tail = ?)\n"
+            "fill"
+        )
+        fill = checked.resolved.program.body.items[1]
+        assert isinstance(fill, LetDecl)
+        assert isinstance(fill.value, Call)
+        assert checked.node_types[fill.value.node_id] == FunctionType(
+            params=(IntType(), IntType()), result=IntType()
+        )
+        assert checked.partial_calls[fill.value.node_id] == PartialCallSpec(
+            argument_holes=(0, None, None, 1)
+        )
+        assert all(
+            not contains_inference_var(param_type)
+            for param_types in checked.argument_bindings.function_param_types.values()
+            for param_type in param_types
+        )
+
+    def test_provisional_function_value_conflict_reports_argument_provenance(self) -> None:
+        err = reject_type(
+            "def maker[T]() -> (T, T) -> T = fn(left: T, right: T) => left\n"
+            "maker()(1, \"bad\")"
+        )
+        assert err.related
+
+    def test_partial_function_value_uses_fixed_argument_to_solve_provisional_callee(self) -> None:
+        checked = accept_type(
+            "def maker[T]() -> (T, T) -> T = fn(left: T, right: T) => left\n"
+            "let keep: (int) -> int = maker()(?, 1)\n"
+            "keep"
+        )
+        keep = checked.resolved.program.body.items[1]
+        assert isinstance(keep, LetDecl)
+        assert isinstance(keep.value, Call)
+        assert checked.node_types[keep.value.node_id] == FunctionType(
+            params=(IntType(),), result=IntType()
+        )
+        assert checked.partial_calls[keep.value.node_id] == PartialCallSpec(
+            argument_holes=(0, None), callee_kind="value"
+        )
+
+    def test_partial_function_value_context_completes_provisional_result(self) -> None:
+        checked = accept_type(
+            "def maker[T]() -> T -> T = fn(value: T) => value\n"
+            "let keep: (int) -> int = maker()(?)\n"
+            "keep"
+        )
+        keep = checked.resolved.program.body.items[1]
+        assert isinstance(keep, LetDecl)
+        assert checked.node_types[keep.value.node_id] == FunctionType(
+            params=(IntType(),), result=IntType()
+        )
+
+    def test_unresolved_partial_function_value_fails_at_its_binding_boundary(self) -> None:
+        err = reject_type(
+            "def maker[T]() -> T -> T = fn(value: T) => value\nlet keep = maker()(?)\nkeep"
+        )
+        assert "infer" in str(err).lower()
+        assert "maker::[…]" in str(err)
+
+    def test_partial_conflict_reports_argument_provenance(self) -> None:
+        err = reject_type(
+            "def triple[T](a: T, b: T, c: T) -> T = a\n"
+            "let keep: (int) -> int = triple(?, 1, \"bad\")\n"
+            "keep"
+        )
+        assert err.related
+
+    def test_concrete_evidence_before_or_after_provisional_value_is_equivalent(self) -> None:
+        checked = accept_type(
+            "def maker[T]() -> T -> T = fn(value: T) => value\n"
+            "def value_first[T](value: T, transform: T -> T) -> T = transform(value)\n"
+            "def function_first[T](transform: T -> T, value: T) -> T = transform(value)\n"
+            "let before = value_first(1, maker())\n"
+            "let after = function_first(maker(), 1)\n"
+            "after"
+        )
+        before = checked.resolved.program.body.items[3]
+        after = checked.resolved.program.body.items[4]
+        assert isinstance(before, LetDecl)
+        assert isinstance(after, LetDecl)
+        assert checked.node_types[before.value.node_id] == IntType()
+        assert checked.node_types[after.value.node_id] == IntType()
+
+
 class TestLambda:
     def test_lambda_with_return_type(self) -> None:
         r = accept_type("fn(x: int) -> int => x")

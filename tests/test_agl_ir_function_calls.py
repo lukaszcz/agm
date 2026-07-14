@@ -89,6 +89,17 @@ def test_generic_explicit_arg_coercion_uses_instantiated_param_type() -> None:
     assert ir["result"] == DecimalValue(decimal.Decimal("1"))
 
 
+def test_provisional_generic_function_value_call_is_lowered_after_argument_inference() -> None:
+    """A value call can solve a generic callee result from its own argument."""
+    source = (
+        "def maker[T]() -> T -> T = fn(value: T) => value\n"
+        "let result = maker()(7)\n"
+        "()"
+    )
+    ir = evaluate_ir(source)
+    assert ir["result"] == IntValue(7)
+
+
 def test_self_recursion_factorial() -> None:
     """Self-recursive factorial function."""
     source = (

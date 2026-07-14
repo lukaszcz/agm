@@ -274,6 +274,20 @@ def test_program_scenario(
     _assert_calls(agents, expect)
 
 
+def test_inference_characterization_reaches_type_checker() -> None:
+    """The motivating higher-order workflow is not a parser, scope, or runtime failure."""
+    from agm.agl.capabilities import HostCapabilities
+    from agm.agl.parser import parse_program
+    from agm.agl.scope import resolve
+    from agm.agl.typecheck import AglTypeError, check
+
+    source = (PROGRAMS_DIR / "generics" / "inference_characterization.agl").read_text(
+        encoding="utf-8"
+    )
+    with pytest.raises(AglTypeError):
+        check(resolve(parse_program(source)), HostCapabilities(has_default_agent=True))
+
+
 @pytest.mark.parametrize("program", _rejection_params())
 def test_static_rejection(program: Path) -> None:
     from agm.agl import PipelineDriver

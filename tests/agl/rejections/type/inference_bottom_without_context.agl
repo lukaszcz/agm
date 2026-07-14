@@ -1,0 +1,5 @@
+exception Stop extends Exception
+  code: int
+
+def id[T](x: T) -> T = x
+id(raise Stop(message = "stop", code = 0))

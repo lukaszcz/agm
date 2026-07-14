@@ -1,0 +1,2 @@
+def fetch[T](prompt: text) -> T = ask::[T](prompt)
+fetch::[int]("Give an integer.")

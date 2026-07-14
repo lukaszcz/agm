@@ -1,0 +1,68 @@
+# Characterizes expression-scoped generic inference. Every branch below is a
+# valid runtime workflow once the checker can retain constraints from all parts
+# of one expression instead of requiring a generic value to be concrete eagerly.
+param mode: text
+
+record Box[T]
+  value: T
+
+record Duo[A, B]
+  first: A
+  second: B
+
+enum Option[T]
+  | none
+  | some(value: T)
+
+def app[T](f: T -> T, x: T) -> T = f(x)
+def app_reversed[T](x: T, f: T -> T) -> T = f(x)
+def id[T](x: T) -> T = x
+
+def compose[A, B, C](x: A, first: A -> B, second: B -> C) -> C = second(first(x))
+def pair[A, B](first: A -> A, second: B -> B, a: A, b: B) -> Duo[A, B] =
+  Duo(first = first(a), second = second(b))
+def apply_to[A, B](x: A, f: A -> B) -> B = f(x)
+def relay[T](value: T, f: T -> T) -> T = f(value)
+def same_lists[T](left: list[T], right: list[T]) -> list[T] = right
+def choose[T](left: T, right: T) -> T = right
+
+def stringify(n: int) -> text = "n=${n}"
+
+if
+  | mode == "argument_order" =>
+      # Generic evidence appears before the concrete argument, then after it.
+      print(app(id, 0))
+      print(app_reversed(0, id))
+  | mode == "nested_and_fresh" =>
+      # `compose` has three quantified variables. The two `id` occurrences in
+      # `pair` must be independently fresh.
+      print(compose(2, id, stringify))
+      print(app(id, app(id, 3)))
+      let values = pair(id, id, 1, "fresh")
+      print(values.first)
+      print(values.second)
+  | mode == "constructors" =>
+      # Generic record, payload, and nullary constructors flow through HOFs.
+      let boxed = apply_to(7, Box)
+      let present = apply_to(8, some)
+      let missing: Option[int] = relay(none, id)
+      print(boxed.value)
+      print(present is Option::some)
+      print(missing is Option::none)
+  | mode == "partial" =>
+      # The first partial is solved by the sibling argument; the second by its
+      # expected result type.
+      let from_sibling = apply_to(10, id(?))
+      let from_result: int -> int = id(?)
+      print(from_sibling)
+      print(from_result(11))
+  | mode == "empty_literal" =>
+      # The later list argument determines the empty literal's element type.
+      let values = same_lists([], [12])
+      print(values[0])
+  | mode == "ask_target" =>
+      # The mocked `ask` target is determined by `choose`'s sibling argument.
+      print(choose(ask("Give an integer."), 7))
+  | else =>
+      # Explicit type application remains an exact composition escape hatch.
+      print(app::[int](id::[int], 12))

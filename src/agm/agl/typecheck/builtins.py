@@ -7,6 +7,8 @@ delegates the six built-in dispatch branches to the public entry points.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol
 
 from agm.agl.capabilities import HostCapabilities
@@ -41,6 +43,43 @@ from agm.agl.typecheck.env import (
 )
 
 # ---------------------------------------------------------------------------
+# Deferred built-in obligations
+# ---------------------------------------------------------------------------
+
+
+class BuiltinObligationKind(StrEnum):
+    """The built-in operation whose concrete output metadata is pending."""
+
+    ASK = "ask"
+    ASK_REQUEST = "ask-request"
+    EXEC = "exec"
+
+
+@dataclass(frozen=True, slots=True)
+class PendingBuiltinObligation:
+    """Syntax-derived data needed to materialize one built-in contract later.
+
+    ``target_type`` and ``result_type`` may contain solver-owned variables while
+    the enclosing inference region is open.  The checker zonks both before
+    handing this record back to :class:`BuiltinCallChecker` at region close.
+    No callback captures checker state, so a failed region can discard its
+    whole obligation list without publishing partial side-table data.
+    """
+
+    node_id: int
+    target_type: Type
+    result_type: Type
+    span: SourceSpan
+    kind: BuiltinObligationKind
+    format_name: str | None
+    strict_json: bool | None
+    parse_policy: str
+    has_parse_error_option: bool
+    has_parse_shaping_option: bool
+    has_agent_argument: bool
+
+
+# ---------------------------------------------------------------------------
 # Narrow context Protocol
 # ---------------------------------------------------------------------------
 
@@ -63,9 +102,7 @@ class BuiltinCheckCtx(Protocol):
 
     def _type_is_wire_serializable(self, typ: Type) -> bool: ...
 
-    def _defer_ask_like(
-        self, node: Call, target_type: Type, *, callee: str, require_default_agent: bool
-    ) -> None: ...
+    def _register_builtin_obligation(self, obligation: PendingBuiltinObligation) -> None: ...
 
 
 # ---------------------------------------------------------------------------
@@ -143,20 +180,12 @@ class BuiltinCallChecker:
             expected if expected is not None else TextType()
         )
         self._reject_type_var_target(target_type, node.span)
-
-        # reject function/agent targets.
-        if isinstance(target_type, (FunctionType, AgentType)):
-            raise AglTypeError(
-                "cannot parse agent output into a function/agent value.",
-                span=node.span,
-            )
-
-        if contains_inference_var(target_type):
-            self._ctx._defer_ask_like(
-                node, target_type, callee="ask", require_default_agent=True
-            )
-        else:
-            self.finish_ask_like(node, target_type, callee="ask", require_default_agent=True)
+        self._register_ask_like_obligation(
+            node,
+            target_type=target_type,
+            result_type=target_type,
+            kind=BuiltinObligationKind.ASK,
+        )
         return target_type
 
     # --- ask-request ---
@@ -185,94 +214,146 @@ class BuiltinCallChecker:
         target_type = explicit if explicit is not None else TextType()
         self._reject_type_var_target(target_type, node.span)
 
-        # reject function/agent targets.
-        if isinstance(target_type, (FunctionType, AgentType)):
-            raise AglTypeError(
-                "cannot build an output contract for a function/agent target.",
-                span=node.span,
-            )
-
         # Build the same output contract spec an ``ask`` call would, so the
         # materialized contract (and thus the returned request) matches exactly.
         # ``ask-request`` never dispatches, so a missing ``agent:`` is allowed.
-        self.finish_ask_like(node, target_type, callee="ask-request", require_default_agent=False)
+        self._register_ask_like_obligation(
+            node,
+            target_type=target_type,
+            result_type=agent_request_type,
+            kind=BuiltinObligationKind.ASK_REQUEST,
+        )
         return agent_request_type
 
-    def finish_ask_like(
-        self, node: Call, target_type: Type, *, callee: str, require_default_agent: bool
+    def _register_ask_like_obligation(
+        self,
+        node: Call,
+        *,
+        target_type: Type,
+        result_type: Type,
+        kind: BuiltinObligationKind,
     ) -> None:
-        """Shared tail for ``ask`` / ``ask-request``: validate args, record the contract.
+        """Check target-independent syntax, then queue contract materialization."""
+        callee = kind.value
+        named = self._validate_ask_like_arguments(node, callee)
+        format_name, strict_json, parse_policy = self._parse_options(named)
+        self._ctx._register_builtin_obligation(
+            PendingBuiltinObligation(
+                node_id=node.node_id,
+                target_type=target_type,
+                result_type=result_type,
+                span=node.span,
+                kind=kind,
+                format_name=format_name,
+                strict_json=strict_json,
+                parse_policy=parse_policy,
+                has_parse_error_option="on_parse_error" in named,
+                has_parse_shaping_option=any(
+                    name in named for name in ("format", "strict_json", "on_parse_error")
+                ),
+                has_agent_argument="agent" in named,
+            )
+        )
 
-        Both builtins accept the same named args, a single prompt positional, and
-        an optional ``agent:`` value, and build an identical output-contract spec +
-        call-site record.  They differ only in ``callee`` (woven into diagnostics)
-        and whether a missing ``agent:`` requires a configured default agent
-        (``ask`` dispatches; ``ask-request`` does not).
-        """
+    def _validate_ask_like_arguments(self, node: Call, callee: str) -> dict[str, NamedArg]:
+        """Check syntax and value arguments that do not need the target type."""
         named = {na.name: na for na in node.named_args}
-
-        # Reject unknown named args.
         for arg_name, na in named.items():
             if arg_name not in self._ASK_ALLOWED_NAMED_ARGS:
-                raise AglTypeError(
-                    f"{callee}: unknown argument '{arg_name}'.",
-                    span=na.span,
-                )
-
-        # Prompt (first positional arg — reject extra positionals).
+                raise AglTypeError(f"{callee}: unknown argument '{arg_name}'.", span=na.span)
         if not node.args:
             raise AglTypeError(f"{callee}() requires a prompt argument.", span=node.span)
         if len(node.args) > 1:
             raise AglTypeError(
-                f"{callee}: too many positional arguments (expected 1).",
-                span=node.span,
+                f"{callee}: too many positional arguments (expected 1).", span=node.span
             )
         prompt_type = self._ctx._check_expr(node.args[0], expected=TextType())
         self._ctx._assert_assignable(prompt_type, TextType(), node.args[0].span)
-
-        # agent: named arg.
         if "agent" in named:
             agent_na = named["agent"]
             agent_type = self._ctx._check_expr(agent_na.value, expected=AgentType())
             self._ctx._assert_assignable(agent_type, AgentType(), agent_na.value.span)
-        elif (
-            require_default_agent
+        return named
+
+    def finalize(self, obligation: PendingBuiltinObligation) -> None:
+        """Materialize one fully zonked built-in obligation at region close."""
+        target_type = obligation.target_type
+        if contains_inference_var(target_type) or contains_inference_var(obligation.result_type):
+            raise AglTypeError(
+                "Cannot infer a concrete target type for this built-in call.", span=obligation.span
+            )
+        self._reject_type_var_target(target_type, obligation.span)
+        if isinstance(target_type, (FunctionType, AgentType)):
+            raise AglTypeError(
+                "cannot parse agent or exec output into a function/agent value.",
+                span=obligation.span,
+            )
+        if obligation.kind is BuiltinObligationKind.EXEC:
+            self._finalize_exec(obligation)
+        else:
+            self._finalize_ask_like(obligation)
+
+    def _finalize_ask_like(self, obligation: PendingBuiltinObligation) -> None:
+        target_type = obligation.target_type
+        callee = obligation.kind.value
+        if (
+            obligation.kind is BuiltinObligationKind.ASK
+            and not obligation.has_agent_argument
             and not self._ctx._caps.has_default_agent
             and isinstance(target_type, TextType)
         ):
             raise AglTypeError(
-                "No default agent is configured; the built-in 'ask' call "
-                "cannot run. Register a default agent, or run via `agm exec`, "
-                "which provides one.",
-                span=node.span,
+                "No default agent is configured; the built-in 'ask' call cannot run. "
+                "Register a default agent, or run via `agm exec`, which provides one.",
+                span=obligation.span,
             )
-
         if isinstance(target_type, UnitType):
-            self._reject_unit_parse_options(named, callee=callee)
+            if obligation.has_parse_shaping_option:
+                raise AglTypeError(
+                    f"{callee} returning unit does not accept parse options; unit responses "
+                    "are ignored and have no output contract.",
+                    span=obligation.span,
+                )
             codec_name = "none"
-            parse_policy_str = "default"
+            parse_policy = "default"
         else:
-            codec_name, effective_strict, parse_policy_str = self._resolve_parse_options(
-                node, target_type, named
-            )
+            codec_name, effective_strict = self._resolve_codec(obligation)
             self._check_schema_compilable(
-                target_type, codec_name, node.span, use="an agent output type"
+                target_type, codec_name, obligation.span, use="an agent output type"
             )
-            spec = OutputContractSpec(
-                target_type=target_type,
-                codec_name=codec_name,
-                strict_json=effective_strict,
-            )
-            self._ctx._contract_specs[node.node_id] = spec
+            spec = OutputContractSpec(target_type, codec_name, effective_strict)
+            assert not contains_inference_var(spec.target_type)
+            self._ctx._contract_specs[obligation.node_id] = spec
+            parse_policy = obligation.parse_policy
+            if obligation.has_parse_error_option and isinstance(target_type, TextType):
+                self._ctx._warnings.append(
+                    Diagnostic(
+                        message=(
+                            "'on_parse_error' has no effect on a text target: a text result "
+                            "never fails parsing, so the policy can never fire."
+                        ),
+                        line=obligation.span.start_line,
+                        column=obligation.span.start_col,
+                        end_line=obligation.span.end_line,
+                        end_column=obligation.span.end_col,
+                        severity="warning",
+                    )
+                )
+        self._append_call_site(obligation, codec_name, parse_policy)
+
+    def _append_call_site(
+        self, obligation: PendingBuiltinObligation, codec_name: str, parse_policy: str
+    ) -> None:
+        assert not contains_inference_var(obligation.target_type)
         self._ctx._call_sites.append(
             CallSiteRecord(
-                node_id=node.node_id,
-                callee=callee,
-                target_type=target_type,
+                node_id=obligation.node_id,
+                callee=obligation.kind.value,
+                target_type=obligation.target_type,
                 codec_name=codec_name,
-                parse_policy=parse_policy_str,
-                line=node.span.start_line,
-                col=node.span.start_col,
+                parse_policy=parse_policy,
+                line=obligation.span.start_line,
+                col=obligation.span.start_col,
             )
         )
 
@@ -296,77 +377,32 @@ class BuiltinCallChecker:
             assert exec_result_type is not None
             target_type = exec_result_type
         self._reject_type_var_target(target_type, node.span)
-
-        # reject function/agent targets.
-        if isinstance(target_type, (FunctionType, AgentType)):
-            raise AglTypeError(
-                "cannot parse exec output into a function/agent value.",
-                span=node.span,
-            )
-
         named = {na.name: na for na in node.named_args}
-
-        # Reject unknown named args (exec has no 'agent:' argument).
         for arg_name, na in named.items():
             if arg_name not in self._EXEC_ALLOWED_NAMED_ARGS:
-                raise AglTypeError(
-                    f"exec: unknown argument '{arg_name}'.",
-                    span=na.span,
-                )
-
-        # Command (first positional arg — reject extra positionals).
+                raise AglTypeError(f"exec: unknown argument '{arg_name}'.", span=na.span)
         if not node.args:
             raise AglTypeError("exec() requires a command argument.", span=node.span)
         if len(node.args) > 1:
-            raise AglTypeError(
-                "exec: too many positional arguments (expected 1).",
-                span=node.span,
-            )
+            raise AglTypeError("exec: too many positional arguments (expected 1).", span=node.span)
         cmd_type = self._ctx._check_expr(node.args[0], expected=TextType())
         self._ctx._assert_assignable(cmd_type, TextType(), node.args[0].span)
-
-        # Determine codec.
-        is_exec_result = exec_result_type is not None and target_type == exec_result_type
-        parse_policy_str = "default"
-
-        if is_exec_result:
-            # Structured form: reject parse-shaping options — they are meaningless
-            # when exec returns the raw ExecResult record.
-            for shaping_arg in ("format", "strict_json", "on_parse_error"):
-                if shaping_arg in named:
-                    raise AglTypeError(
-                        f"exec returning ExecResult does not accept '{shaping_arg}'; "
-                        "those options apply only when parsing stdout into a typed value.",
-                        span=named[shaping_arg].span,
-                    )
-            spec = OutputContractSpec(
-                target_type=target_type,
-                codec_name="text",
-                strict_json=None,
-                structured_exec=True,
-            )
-        else:
-            codec_name, effective_strict, parse_policy_str = self._resolve_parse_options(
-                node, target_type, named
-            )
-            self._check_schema_compilable(
-                target_type, codec_name, node.span, use="an exec output type"
-            )
-            spec = OutputContractSpec(
-                target_type=target_type,
-                codec_name=codec_name,
-                strict_json=effective_strict,
-            )
-        self._ctx._contract_specs[node.node_id] = spec
-        self._ctx._call_sites.append(
-            CallSiteRecord(
+        format_name, strict_json, parse_policy = self._parse_options(named)
+        self._ctx._register_builtin_obligation(
+            PendingBuiltinObligation(
                 node_id=node.node_id,
-                callee="exec",
                 target_type=target_type,
-                codec_name=spec.codec_name,
-                parse_policy=parse_policy_str,
-                line=node.span.start_line,
-                col=node.span.start_col,
+                result_type=target_type,
+                span=node.span,
+                kind=BuiltinObligationKind.EXEC,
+                format_name=format_name,
+                strict_json=strict_json,
+                parse_policy=parse_policy,
+                has_parse_error_option="on_parse_error" in named,
+                has_parse_shaping_option=any(
+                    name in named for name in ("format", "strict_json", "on_parse_error")
+                ),
+                has_agent_argument=False,
             )
         )
         return target_type
@@ -417,7 +453,7 @@ class BuiltinCallChecker:
     ) -> None:
         """Reject *target_type* if lowering will schema-compile it but cannot.
 
-        Shared by ``ask``/``ask-request`` (via :meth:`finish_ask_like`) and
+        Shared by ``ask``/``ask-request`` finalization and
         ``exec``. The lowerer derives schema/decode metadata only for the
         built-in JSON codec, so custom codecs are responsible for their own
         output format and parsing behavior. Text (and unit/structured-exec)
@@ -437,75 +473,86 @@ class BuiltinCallChecker:
 
     # --- shared parse-option handling (ask / exec) ---
 
-    def _reject_unit_parse_options(
-        self, named: dict[str, NamedArg], *, callee: str
-    ) -> None:
-        for option in ("format", "strict_json", "on_parse_error"):
-            if option in named:
-                raise AglTypeError(
-                    f"{callee} returning unit does not accept '{option}'; "
-                    "unit responses are ignored and have no output contract.",
-                    span=named[option].span,
-                )
-
-    def _resolve_parse_options(
-        self, node: Call, target_type: Type, named: dict[str, NamedArg]
-    ) -> tuple[str, bool | None, str]:
-        """Resolve the format/strict_json/on_parse_error named args shared by ask and exec.
-
-        Returns ``(codec_name, effective_strict, parse_policy_str)``.
-        """
+    def _parse_options(
+        self, named: dict[str, NamedArg]
+    ) -> tuple[str | None, bool | None, str]:
+        """Validate static option syntax without selecting a target-dependent codec."""
+        format_name: str | None = None
         if "format" in named:
             format_na = named["format"]
-            fmt_expr = format_na.value
-            if not isinstance(fmt_expr, StringLit):
+            if not isinstance(format_na.value, StringLit):
                 raise AglTypeError(
-                    "'format' must be a static text literal (codec name).",
-                    span=format_na.span,
+                    "'format' must be a static text literal (codec name).", span=format_na.span
                 )
-            codec_name = self._validate_format_option(fmt_expr.value, target_type, format_na.span)
-        else:
-            codec_name = self._select_codec(target_type, node.span)
-
+            format_name = format_na.value.value
         strict_json: bool | None = None
         if "strict_json" in named:
-            sj_na = named["strict_json"]
-            sj_expr = sj_na.value
-            if not isinstance(sj_expr, BoolLit):
+            strict_na = named["strict_json"]
+            if not isinstance(strict_na.value, BoolLit):
                 raise AglTypeError(
-                    "'strict_json' must be a static bool literal.",
-                    span=sj_na.span,
+                    "'strict_json' must be a static bool literal.", span=strict_na.span
                 )
-            if codec_name != "json":
-                raise AglTypeError(
-                    f"'strict_json' is only valid when the codec is 'json'; "
-                    f"the selected codec for this call is '{codec_name}'.",
-                    span=sj_na.span,
-                )
-            strict_json = sj_expr.value
-
-        parse_policy_str = "default"
+            strict_json = strict_na.value.value
+        parse_policy = "default"
         if "on_parse_error" in named:
-            ope_na = named["on_parse_error"]
-            parse_policy_str = self._extract_parse_policy_str(ope_na.value, ope_na.span)
-            # Warn: no-op on text target.
-            if isinstance(target_type, TextType):
+            parse_na = named["on_parse_error"]
+            parse_policy = self._extract_parse_policy_str(parse_na.value, parse_na.span)
+        return format_name, strict_json, parse_policy
+
+    def _resolve_codec(self, obligation: PendingBuiltinObligation) -> tuple[str, bool | None]:
+        """Select and validate the codec after the target type is concrete."""
+        if obligation.format_name is None:
+            codec_name = self._select_codec(obligation.target_type, obligation.span)
+        else:
+            codec_name = self._validate_format_option(
+                obligation.format_name, obligation.target_type, obligation.span
+            )
+        if obligation.strict_json is not None and codec_name != "json":
+            raise AglTypeError(
+                f"'strict_json' is only valid when the codec is 'json'; the selected codec "
+                f"for this call is '{codec_name}'.",
+                span=obligation.span,
+            )
+        return codec_name, obligation.strict_json if codec_name == "json" else None
+
+    def _finalize_exec(self, obligation: PendingBuiltinObligation) -> None:
+        exec_result_type = self._ctx._env.get_type("ExecResult")
+        is_structured = exec_result_type is not None and obligation.target_type == exec_result_type
+        if is_structured:
+            if obligation.has_parse_shaping_option:
+                raise AglTypeError(
+                    "exec returning ExecResult does not accept parse options; those options "
+                    "apply only when parsing stdout into a typed value.",
+                    span=obligation.span,
+                )
+            spec = OutputContractSpec(
+                obligation.target_type, "text", None, structured_exec=True
+            )
+            parse_policy = "default"
+        else:
+            codec_name, effective_strict = self._resolve_codec(obligation)
+            self._check_schema_compilable(
+                obligation.target_type, codec_name, obligation.span, use="an exec output type"
+            )
+            spec = OutputContractSpec(obligation.target_type, codec_name, effective_strict)
+            parse_policy = obligation.parse_policy
+            if obligation.has_parse_error_option and isinstance(obligation.target_type, TextType):
                 self._ctx._warnings.append(
                     Diagnostic(
                         message=(
-                            "'on_parse_error' has no effect on a text target: a text "
-                            "result never fails parsing, so the policy can never fire."
+                            "'on_parse_error' has no effect on a text target: a text result "
+                            "never fails parsing, so the policy can never fire."
                         ),
-                        line=node.span.start_line,
-                        column=node.span.start_col,
-                        end_line=node.span.end_line,
-                        end_column=node.span.end_col,
+                        line=obligation.span.start_line,
+                        column=obligation.span.start_col,
+                        end_line=obligation.span.end_line,
+                        end_column=obligation.span.end_col,
                         severity="warning",
                     )
                 )
-
-        effective_strict = strict_json if codec_name == "json" else None
-        return codec_name, effective_strict, parse_policy_str
+        assert not contains_inference_var(spec.target_type)
+        self._ctx._contract_specs[obligation.node_id] = spec
+        self._append_call_site(obligation, spec.codec_name, parse_policy)
 
     # --- on_parse_error policy extraction ---
 

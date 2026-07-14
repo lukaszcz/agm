@@ -42,7 +42,7 @@ from __future__ import annotations
 import keyword
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal, TypeGuard, assert_never
 
 from agm.agl.capabilities import HostCapabilities
@@ -149,7 +149,10 @@ from agm.agl.syntax.types import Qualifier, TypeExpr
 from agm.agl.typecheck.arguments import bind_call_args, bind_pattern_args
 from agm.agl.typecheck.builder import _BUILTIN_TYPE_NAMES as _BUILTIN_TYPE_NAMES
 from agm.agl.typecheck.builder import _TypeBuilder
-from agm.agl.typecheck.builtins import BuiltinCallChecker
+from agm.agl.typecheck.builtins import (
+    BuiltinCallChecker,
+    PendingBuiltinObligation,
+)
 from agm.agl.typecheck.constructors import ConstructorChecker
 from agm.agl.typecheck.env import (
     AglTypeError,
@@ -197,7 +200,7 @@ class _InferenceRegion:
     engine: InferenceEngine
     node_types: dict[int, Type]
     function_call_param_types: dict[int, tuple[Type, ...]]
-    finalizers: list[Callable[[], None]]
+    builtin_obligations: list[PendingBuiltinObligation]
 
 
 _IndexLike = IndexAccess | IndexTarget
@@ -1003,10 +1006,10 @@ class _Checker:
             return self._inference_region.engine.zonk(typ)
 
         region = _InferenceRegion(InferenceEngine(), {}, {}, [])
-        # Most side tables are written while an expression is being checked
-        # because collaborators (notably builtins and constructors) need their
-        # normal checker-facing APIs.  Keep a checkpoint so an error while
-        # finalizing the region cannot publish any of that provisional work.
+        # Some side tables are written while an expression is being checked,
+        # while built-in contracts remain typed obligations until region close.
+        # Keep a checkpoint so an error while finalizing cannot publish either
+        # provisional work or partially materialized built-in metadata.
         side_table_checkpoint = (
             self._function_call_bindings.copy(),
             self._constructor_call_bindings.copy(),
@@ -1034,8 +1037,14 @@ class _Checker:
                     ),
                 )
             region.engine.check_requirements()
-            for finalizer in region.finalizers:
-                finalizer()
+            for obligation in region.builtin_obligations:
+                self._builtins.finalize(
+                    replace(
+                        obligation,
+                        target_type=region.engine.zonk(obligation.target_type),
+                        result_type=region.engine.zonk(obligation.result_type),
+                    )
+                )
             final_type = region.engine.zonk(typ)
             final_node_types = {
                 node_id: region.engine.zonk(node_type)
@@ -1085,20 +1094,10 @@ class _Checker:
                     del targets[length:]
             self._inference_region = None
 
-    def _defer_ask_like(
-        self, node: Call, target_type: Type, *, callee: str, require_default_agent: bool
-    ) -> None:
-        """Finalize an inference-dependent agent-output contract at region close."""
+    def _register_builtin_obligation(self, obligation: PendingBuiltinObligation) -> None:
+        """Queue one built-in contract operation in source registration order."""
         assert self._inference_region is not None
-        region = self._inference_region
-        region.finalizers.append(
-            lambda: self._builtins.finish_ask_like(
-                node,
-                region.engine.zonk(target_type),
-                callee=callee,
-                require_default_agent=require_default_agent,
-            )
-        )
+        self._inference_region.builtin_obligations.append(obligation)
 
     def _record_node_type(self, node_id: int, typ: Type) -> None:
         """Store a node type provisionally while its inference region is open."""

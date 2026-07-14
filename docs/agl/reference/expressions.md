@@ -679,6 +679,7 @@ The checker propagates an expected type top-down where it helps:
 | Function body | `-> RetType` propagated in |
 
 Propagation resolves unqualified variant constructors (`let r: Review = Pass`),
-types empty containers, and gives agent calls their output contracts. Where
-no expectation exists, inference is bottom-up, and an untyped `ask` defaults
-to `text`.
+types empty containers, and gives agent calls their output contracts. A target
+that depends on sibling constraints is resolved with the enclosing expression
+before its codec and schema are chosen. Where no expectation exists, inference
+is bottom-up, and an untyped `ask` defaults to `text`.

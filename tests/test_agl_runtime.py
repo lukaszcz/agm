@@ -26,6 +26,7 @@ from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
 from agm.agl.pipeline import RunResult
 from agm.agl.runtime import AgentRequest
+from agm.agl.runtime.contract import OutputContract
 from agm.agl.semantics.types import Type
 from agm.agl.typecheck import AglTypeError
 from tests._agl_helpers import type_table_for
@@ -820,6 +821,25 @@ class TestNoDefaultAgent:
         result = rt.run('ask "hi"')
         assert result.ok is True
         assert result.error is None
+
+    def test_later_solved_ask_uses_its_concrete_contract_at_runtime(self) -> None:
+        requests: list[AgentRequest] = []
+
+        def agent(request: AgentRequest) -> str:
+            requests.append(request)
+            return "7"
+
+        result = PipelineDriver(default_agent=agent).run(
+            "def select[T](first: T, second: T) -> T = first\n"
+            'let value = select(ask("number"), 1)\n'
+            "value"
+        )
+        assert result.ok is True
+        assert len(requests) == 1
+        contract = requests[0].output_contract
+        assert isinstance(contract, OutputContract)
+        assert contract.codec.name == "json"
+        assert contract.json_schema == {"type": "integer"}
 
 
 class TestDryRunCheckOnly:

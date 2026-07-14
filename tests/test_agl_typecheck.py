@@ -6069,6 +6069,74 @@ class TestGenerics:
         accept_type('let n: int = ask("Q")\nn')
         accept_type('let x: text = exec("ls")\nx')
 
+    def test_later_solved_ask_and_exec_targets_materialize_concrete_contracts(self) -> None:
+        result = accept_type(
+            "def select[T](first: T, second: T, third: T) -> T = first\n"
+            'let value = select(ask("ask"), exec("exec"), 1)\n'
+            "value"
+        )
+        assert [site.callee for site in result.call_sites] == ["ask", "exec"]
+        assert [site.target_type for site in result.call_sites] == [IntType(), IntType()]
+        assert [site.codec_name for site in result.call_sites] == ["json", "json"]
+        assert all(spec.target_type == IntType() for spec in result.contract_specs.values())
+
+    def test_deferred_builtin_contracts_keep_source_order_inside_generic_constructor(self) -> None:
+        result = accept_type(
+            "record Bundle\n"
+            "  answer: int\n"
+            "  request: AgentRequest\n"
+            "def select[T](first: T, second: T) -> T = first\n"
+            'let bundle = Bundle(answer = select(ask("answer"), 1), '
+            'request = ask-request::[int]("request"))\n'
+            "bundle"
+        )
+        assert [site.callee for site in result.call_sites] == ["ask", "ask-request"]
+        assert [site.target_type for site in result.call_sites] == [IntType(), IntType()]
+        assert [site.codec_name for site in result.call_sites] == ["json", "json"]
+
+    def test_later_solved_builtin_target_rejects_unserializable_type(self) -> None:
+        err = reject_type(
+            "def select[T](first: T, second: T) -> T = first\n"
+            'select(ask("Q"), fn(x: int) -> int => x)'
+        )
+        assert "function" in str(err).lower() or "agent" in str(err).lower()
+
+    def test_unresolved_builtin_target_fails_at_region_close(self) -> None:
+        err = reject_type(
+            "def select[T](first: T, second: T) -> T = first\n"
+            'select(ask("Q"), [])'
+        )
+        assert "infer" in str(err).lower() or "type argument" in str(err).lower()
+
+    def test_finalization_defensively_rejects_an_unresolved_obligation(self) -> None:
+        from agm.agl.typecheck.builtins import (
+            BuiltinObligationKind,
+            PendingBuiltinObligation,
+        )
+        from agm.agl.typecheck.checker import _Checker, _InferenceRegion
+        from agm.agl.typecheck.inference import InferenceEngine
+
+        checker = _Checker(TypeEnvironment(), resolve(parse_program("()")), default_capabilities())
+        engine = InferenceEngine()
+        checker._inference_region = _InferenceRegion(engine, {}, {}, [])
+        unresolved = engine.fresh("target")
+        with pytest.raises(AglTypeError, match="concrete target"):
+            checker._builtins.finalize(
+                PendingBuiltinObligation(
+                    node_id=1,
+                    target_type=unresolved,
+                    result_type=unresolved,
+                    span=SourceSpan(1, 1, 1, 1, 0, 0),
+                    kind=BuiltinObligationKind.ASK,
+                    format_name=None,
+                    strict_json=None,
+                    parse_policy="default",
+                    has_parse_error_option=False,
+                    has_parse_shaping_option=False,
+                    has_agent_argument=False,
+                )
+            )
+
     # ------------------------------------------------------------------
     # right-operand TypeVarType branches (separate from left)
     # ------------------------------------------------------------------

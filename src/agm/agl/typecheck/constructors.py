@@ -19,6 +19,7 @@ from agm.agl.semantics.types import (
     FunctionType,
     RecordType,
     Type,
+    contains_inference_var,
     substitute,
 )
 from agm.agl.syntax.nodes import Call, Expr, NamedArg, ParamKind, Placeholder, VarRef
@@ -90,6 +91,15 @@ class ConstructorCheckCtx(Protocol):
         message_for: Callable[[str], str],
     ) -> None: ...
 
+    def _instantiate_generic_constructor_value(
+        self,
+        *,
+        type_params: tuple[str, ...],
+        field_templates: tuple[Type, ...],
+        result_template: Type,
+        span: SourceSpan,
+        expected: Type,
+    ) -> Type: ...
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +158,15 @@ class ConstructorChecker:
                 module_id, imported_source_name, variant
             )
         assert sig is not None, f"No constructor signature for {owner_name}.{variant}"
+
+        if expected is not None and contains_inference_var(expected):
+            return self._ctx._instantiate_generic_constructor_value(
+                type_params=type_params,
+                field_templates=sig.field_templates,
+                result_template=sig.result_template,
+                span=span,
+                expected=expected,
+            )
 
         if not sig.field_names:
             # Nullary variant: infer type args from the expected nominal enum type.

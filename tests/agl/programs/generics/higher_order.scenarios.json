@@ -4,7 +4,7 @@
       "name": "loud_transform",
       "params": {"shout": true},
       "expect": {
-        "stdout": "6\nn=7\n5\n11\n16\na!!\n99\nkept\nwrapped hi\nraw!!!\n",
+        "stdout": "0\nfresh\n6\nn=7\n5\n11\n16\na!!\n99\nkept\nwrapped hi\nraw!!!\n",
         "calls": {}
       }
     },
@@ -12,7 +12,7 @@
       "name": "quiet_transform",
       "params": {"shout": false},
       "expect": {
-        "stdout": "6\nn=7\n5\n11\n16\na!!\n99\nkept\nwrapped hi\nraw\n",
+        "stdout": "0\nfresh\n6\nn=7\n5\n11\n16\na!!\n99\nkept\nwrapped hi\nraw\n",
         "calls": {}
       }
     }

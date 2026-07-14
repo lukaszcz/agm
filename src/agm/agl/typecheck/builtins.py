@@ -19,6 +19,7 @@ from agm.agl.semantics.types import (
     TextType,
     Type,
     UnitType,
+    contains_inference_var,
     contains_type_var,
     free_type_vars,
 )
@@ -61,6 +62,10 @@ class BuiltinCheckCtx(Protocol):
     ) -> None: ...
 
     def _type_is_wire_serializable(self, typ: Type) -> bool: ...
+
+    def _defer_ask_like(
+        self, node: Call, target_type: Type, *, callee: str, require_default_agent: bool
+    ) -> None: ...
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +151,12 @@ class BuiltinCallChecker:
                 span=node.span,
             )
 
-        self._finish_ask_like(node, target_type, callee="ask", require_default_agent=True)
+        if contains_inference_var(target_type):
+            self._ctx._defer_ask_like(
+                node, target_type, callee="ask", require_default_agent=True
+            )
+        else:
+            self.finish_ask_like(node, target_type, callee="ask", require_default_agent=True)
         return target_type
 
     # --- ask-request ---
@@ -185,12 +195,10 @@ class BuiltinCallChecker:
         # Build the same output contract spec an ``ask`` call would, so the
         # materialized contract (and thus the returned request) matches exactly.
         # ``ask-request`` never dispatches, so a missing ``agent:`` is allowed.
-        self._finish_ask_like(
-            node, target_type, callee="ask-request", require_default_agent=False
-        )
+        self.finish_ask_like(node, target_type, callee="ask-request", require_default_agent=False)
         return agent_request_type
 
-    def _finish_ask_like(
+    def finish_ask_like(
         self, node: Call, target_type: Type, *, callee: str, require_default_agent: bool
     ) -> None:
         """Shared tail for ``ask`` / ``ask-request``: validate args, record the contract.
@@ -227,7 +235,11 @@ class BuiltinCallChecker:
             agent_na = named["agent"]
             agent_type = self._ctx._check_expr(agent_na.value, expected=AgentType())
             self._ctx._assert_assignable(agent_type, AgentType(), agent_na.value.span)
-        elif require_default_agent and not self._ctx._caps.has_default_agent:
+        elif (
+            require_default_agent
+            and not self._ctx._caps.has_default_agent
+            and isinstance(target_type, TextType)
+        ):
             raise AglTypeError(
                 "No default agent is configured; the built-in 'ask' call "
                 "cannot run. Register a default agent, or run via `agm exec`, "
@@ -405,7 +417,7 @@ class BuiltinCallChecker:
     ) -> None:
         """Reject *target_type* if lowering will schema-compile it but cannot.
 
-        Shared by ``ask``/``ask-request`` (via ``_finish_ask_like``) and
+        Shared by ``ask``/``ask-request`` (via :meth:`finish_ask_like`) and
         ``exec``. The lowerer derives schema/decode metadata only for the
         built-in JSON codec, so custom codecs are responsible for their own
         output format and parsing behavior. Text (and unit/structured-exec)

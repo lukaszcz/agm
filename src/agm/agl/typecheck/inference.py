@@ -157,9 +157,7 @@ class InferenceEngine:
                 typ.name, tuple(self.zonk(arg) for arg in typ.type_args), typ.module_id
             )
         if isinstance(typ, EnumType):
-            return EnumType(
-                typ.name, tuple(self.zonk(arg) for arg in typ.type_args), typ.module_id
-            )
+            return EnumType(typ.name, tuple(self.zonk(arg) for arg in typ.type_args), typ.module_id)
         return typ
 
     def is_solved(self, variable: InferenceVarType) -> bool:
@@ -182,7 +180,9 @@ class InferenceEngine:
                 origin = requirement.origin
                 name = origin.type_param or origin.subject
                 raise InferenceError(
-                    f"Cannot infer type argument '{name}' for '{origin.subject}'.",
+                    f"Cannot infer type arguments for '{origin.subject}': "
+                    f"type argument '{name}' remains unresolved; supply it explicitly via "
+                    f"'{origin.subject}::[…]'.",
                     span=origin.span,
                 )
 
@@ -388,9 +388,7 @@ class InferenceEngine:
         root = self._find(variable)
         self._evidence[root] = self._merge_origins(self._evidence[root], (origin,))
 
-    def _merge_origins(
-        self, *groups: tuple[ConstraintOrigin, ...]
-    ) -> tuple[ConstraintOrigin, ...]:
+    def _merge_origins(self, *groups: tuple[ConstraintOrigin, ...]) -> tuple[ConstraintOrigin, ...]:
         origins = {origin for group in groups for origin in group}
         return tuple(sorted(origins, key=self._origin_key))
 

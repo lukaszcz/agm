@@ -39,6 +39,7 @@ from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
     EXCEPTION_BASE,
     TypeVarType,
+    contains_inference_var,
     is_assignable,
     is_json_shaped,
 )
@@ -5396,6 +5397,141 @@ class TestTypeVarTypeSchema:
 # ---------------------------------------------------------------------------
 
 
+class TestGenericFunctionInferenceRegions:
+    """Expression-scoped inference for polymorphic function occurrences."""
+
+    @staticmethod
+    def _assert_finalized(checked: CheckedProgram) -> None:
+        assert all(
+            not contains_inference_var(typ)
+            for node_id, typ in checked.node_types.items()
+            if node_id in all_node_ids(checked.resolved.program)
+        )
+
+    def test_direct_call_accepts_fresh_generic_function_argument(self) -> None:
+        checked = accept_type(
+            "def app[T](f: T -> T, x: T) -> T = f(x)\n"
+            "def id[T](x: T) -> T = x\n"
+            "let n = app(id, 0)\n"
+            "n"
+        )
+        binding = checked.resolved.program.body.items[2]
+        assert isinstance(binding, LetDecl)
+        assert checked.type_env.get_binding_type(binding.node_id) == IntType()
+        self._assert_finalized(checked)
+
+    def test_generic_function_arguments_are_order_independent_and_named(self) -> None:
+        checked = accept_type(
+            "def app[T](f: T -> T, x: T) -> T = f(x)\n"
+            "def app_reversed[T](x: T, f: T -> T) -> T = f(x)\n"
+            "def id[T](x: T) -> T = x\n"
+            "let first = app(id, 0)\n"
+            "let second = app_reversed(0, id)\n"
+            "let named = app(x = 0, f = id)\n"
+            "named"
+        )
+        for item in checked.resolved.program.body.items[3:6]:
+            assert isinstance(item, LetDecl)
+            assert checked.type_env.get_binding_type(item.node_id) == IntType()
+        self._assert_finalized(checked)
+
+    def test_nested_generic_occurrences_are_fresh(self) -> None:
+        checked = accept_type(
+            "record Duo[A, B]\n"
+            "  first: A\n"
+            "  second: B\n"
+            "def pair[A, B](fa: A -> A, fb: B -> B, a: A, b: B) -> Duo[A, B] =\n"
+            "  Duo(first = fa(a), second = fb(b))\n"
+            "def app[T](f: T -> T, x: T) -> T = f(x)\n"
+            "def id[T](x: T) -> T = x\n"
+            "let nested = app(id, app(id, 3))\n"
+            'let values = pair(id, id, 1, "fresh")\n'
+            "values\n"
+        )
+        nested = checked.resolved.program.body.items[4]
+        values = checked.resolved.program.body.items[5]
+        assert isinstance(nested, LetDecl)
+        assert isinstance(values, LetDecl)
+        assert checked.type_env.get_binding_type(nested.node_id) == IntType()
+        assert checked.type_env.get_binding_type(values.node_id) == RecordType(
+            "Duo", (IntType(), TextType())
+        )
+        self._assert_finalized(checked)
+
+    def test_generic_body_can_solve_a_fresh_occurrence_to_a_rigid_variable(self) -> None:
+        checked = accept_type(
+            "def id[T](x: T) -> T = x\n"
+            "def relay[U](value: U, f: U -> U) -> U = f(value)\n"
+            "def preserve[V](value: V) -> V = relay(value, id)\n"
+            "preserve(1)\n"
+        )
+        assert checked.node_types[checked.resolved.program.body.items[-1].node_id] == IntType()
+        self._assert_finalized(checked)
+
+    def test_argument_evidence_precedes_contextual_coercion(self) -> None:
+        checked = accept_type("def id[T](x: T) -> T = x\nlet d: decimal = id(1)\nd")
+        binding = checked.resolved.program.body.items[1]
+        assert isinstance(binding, LetDecl)
+        assert checked.node_types[binding.value.node_id] == IntType()
+        assert checked.type_env.get_binding_type(binding.node_id) == DecimalType()
+        self._assert_finalized(checked)
+
+    def test_context_completes_empty_collection_arguments_after_their_shape_is_known(self) -> None:
+        checked = accept_type(
+            "def id[T](value: T) -> T = value\n"
+            "let xs: list[int] = id([])\n"
+            "let values: dict[text, int] = id({})\n"
+            "values\n"
+        )
+        xs = checked.resolved.program.body.items[1]
+        values = checked.resolved.program.body.items[2]
+        assert isinstance(xs, LetDecl)
+        assert isinstance(values, LetDecl)
+        assert checked.type_env.get_binding_type(xs.node_id) == ListType(IntType())
+        assert checked.type_env.get_binding_type(values.node_id) == DictType(IntType())
+        self._assert_finalized(checked)
+
+    def test_bottom_requires_context_but_can_be_completed_by_it(self) -> None:
+        checked = accept_type(
+            'def id[T](x: T) -> T = x\nlet n: int = id(raise Abort(message = "stop"))\nn'
+        )
+        self._assert_finalized(checked)
+        reject_type('def id[T](x: T) -> T = x\nid(raise Abort(message = "stop"))')
+
+    def test_unannotated_generic_value_cannot_escape_binding_region(self) -> None:
+        reject_type("def id[T](x: T) -> T = x\nlet f = id\nf(0)")
+
+    def test_conflicting_arguments_include_prior_constraint_location(self) -> None:
+        error = reject_type('def same[T](left: T, right: T) -> T = left\nsame(1, "x")')
+        assert error.related
+        assert error.span is not None
+        assert error.related[0][1].start_line == 2
+
+    def test_direct_call_parameter_types_are_finalized(self) -> None:
+        checked = accept_type(
+            "def app[T](f: T -> T, x: T) -> T = f(x)\n"
+            "def id[T](x: T) -> T = x\n"
+            "app(id, 0)\n"
+        )
+        call = checked.resolved.program.body.items[-1]
+        assert isinstance(call, Call)
+        assert all(
+            not contains_inference_var(typ)
+            for param_types in checked.argument_bindings.function_param_types.values()
+            for typ in param_types
+        )
+
+    def test_generic_constructor_function_conflict_retains_legacy_matching(self) -> None:
+        reject_type(
+            "record Pair[T]\n"
+            "  left: T -> T\n"
+            "  right: T -> T\n"
+            "def int_id(value: int) -> int = value\n"
+            "def text_id(value: text) -> text = value\n"
+            "Pair(left = int_id, right = text_id)"
+        )
+
+
 class TestGenerics:
     """Tests for generic def type-checking, inference,  parametricity,
     target guard, and  generic-def-as-value instantiation."""
@@ -5815,10 +5951,7 @@ class TestGenerics:
         r = accept_type('def f[T](x: int, y: T) -> T = y\nf(1, "hi")')
         assert r.resolved.program is not None
 
-    def test_match_function_arity_mismatch_falls_off(self) -> None:
-        # Template (T)->T matched against (int,int)->int: arity mismatch (1301->exit)
-        # _match silently gives up; T is inferred from x: T = 1 = int;
-        # then (int,int)->int is checked against (int)->int → type mismatch
+    def test_generic_function_arity_mismatch_rejected(self) -> None:
         err = reject_type(
             "def apply[T](f: (T) -> T, x: T) -> T = f(x)\n"
             "def two(a: int, b: int) -> int = a + b\n"
@@ -5830,6 +5963,17 @@ class TestGenerics:
             or "mismatch" in str(err).lower()
             or "assign" in str(err).lower()
         )
+
+    def test_constructor_match_function_arity_mismatch_falls_off(self) -> None:
+        # A generic constructor still uses its legacy one-sided matcher. Its
+        # (T) -> T field cannot infer T from an arity-mismatched function.
+        err = reject_type(
+            "record Box[T]\n"
+            "  value: T -> T\n"
+            "def two(a: int, b: int) -> int = a + b\n"
+            "Box(value = two)"
+        )
+        assert "infer" in str(err).lower() or "type argument" in str(err).lower()
 
 
 # ---------------------------------------------------------------------------

@@ -38,6 +38,7 @@ from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPE_NAMES,
     BUILTIN_PRELUDE_TYPES,
     EXCEPTION_BASE,
+    InferenceVarType,
     TypeVarType,
     contains_inference_var,
     is_assignable,
@@ -615,6 +616,35 @@ class TestTypeEnvironment:
         env.register_function_signature("g", sig)
         sigs = env.all_function_signatures()
         assert "g" in sigs
+
+    def test_restore_binding_metadata_restores_prior_signature(self) -> None:
+        previous = TypeEnvironment()
+        signature = FunctionSignature(params=(), result=IntType())
+        previous.set_binding_type(1, IntType())
+        previous.register_function_signature_by_node_id(1, signature)
+        previous.register_function_signature("f", signature)
+        previous.register_extern_node_id(1)
+
+        current = TypeEnvironment()
+        current.set_binding_type(1, TextType())
+        current.register_function_signature_by_node_id(
+            1, FunctionSignature(params=(), result=TextType())
+        )
+        current.register_function_signature("f", FunctionSignature(params=(), result=TextType()))
+        current.register_extern_node_id(1)
+        current.restore_binding_metadata_from(previous, (1,), ("f",))
+
+        assert current.get_binding_type(1) == IntType()
+        assert current.get_function_signature_by_node_id(1) == signature
+        assert current.get_function_signature("f") == signature
+        assert current.is_extern_node_id(1)
+
+    def test_seed_rejects_an_environment_with_a_flexible_variable(self) -> None:
+        source = TypeEnvironment()
+        source.set_binding_type(1, InferenceVarType())
+
+        with pytest.raises(AssertionError, match="inference variable"):
+            TypeEnvironment().seed_from(source)
 
     def test_seed_from_copies_types_and_bindings(self) -> None:
         env1 = TypeEnvironment()

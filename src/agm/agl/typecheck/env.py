@@ -45,6 +45,7 @@ from agm.agl.semantics.types import (
     Type,
     TypeVarType,
     UnitType,
+    contains_inference_var,
 )
 from agm.agl.syntax.nodes import Expr, ParamKind, Pattern
 from agm.agl.syntax.spans import SourceSpan
@@ -774,6 +775,79 @@ class TypeEnvironment:
         for node_id in node_ids:
             self._binding_types.pop(node_id, None)
             self._function_signatures_by_node_id.pop(node_id, None)
+            self._extern_node_ids.discard(node_id)
+
+    def restore_binding_metadata_from(
+        self,
+        other: "TypeEnvironment",
+        node_ids: Iterable[int],
+        function_names: Iterable[str],
+    ) -> None:
+        """Restore selected binding/signature metadata from an earlier environment.
+
+        Incremental hosts may check a whole entry before a runtime failure
+        determines which declarations were actually installed.  This removes
+        metadata for declarations that did not commit, then restores any
+        pre-existing entries (normally none because declaration ids are
+        globally unique).  Function names need separate handling because their
+        convenient name-keyed signature table is not keyed by declaration id.
+        """
+        node_id_set = set(node_ids)
+        self.remove_binding_types(node_id_set)
+        for node_id in node_id_set:
+            binding_type = other._binding_types.get(node_id)
+            if binding_type is not None:
+                self._binding_types[node_id] = binding_type
+            signature = other._function_signatures_by_node_id.get(node_id)
+            if signature is not None:
+                self._function_signatures_by_node_id[node_id] = signature
+            if node_id in other._extern_node_ids:
+                self._extern_node_ids.add(node_id)
+        for name in function_names:
+            self._function_signatures.pop(name, None)
+            signature = other._function_signatures.get(name)
+            if signature is not None:
+                self._function_signatures[name] = signature
+
+    def assert_closed(self) -> None:
+        """Assert that this environment contains no solver-local type variables.
+
+        Rigid ``TypeVarType`` nodes are valid inside persisted rank-1 schemes;
+        flexible ``InferenceVarType`` nodes are owned by an expression region
+        and must be finalized before an environment is seeded or retained.
+        """
+        types: list[Type] = [
+            *self._types.values(),
+            *self._binding_types.values(),
+            *(param.type for sig in self._function_signatures.values() for param in sig.params),
+            *(sig.result for sig in self._function_signatures.values()),
+            *(
+                param.type
+                for sig in self._function_signatures_by_node_id.values()
+                for param in sig.params
+            ),
+            *(sig.result for sig in self._function_signatures_by_node_id.values()),
+            *(generic.template for generic in self._generic_types.values()),
+            *(
+                template
+                for sig in self._constructor_sigs.values()
+                for template in sig.field_templates
+            ),
+            *(sig.result_template for sig in self._constructor_sigs.values()),
+            *(
+                field_type
+                for typedef in self._type_table.entries()
+                for _, field_type in typedef.fields
+            ),
+            *(
+                field_type
+                for typedef in self._type_table.entries()
+                for _, fields in typedef.variants
+                for _, field_type in fields
+            ),
+        ]
+        if any(contains_inference_var(typ) for typ in types):
+            raise AssertionError("inference variable leaked into a persistent type environment")
 
     def resolve_binding(self, ref: BindingRef) -> Type | None:
         """Return the declared type for a ``BindingRef``."""
@@ -1409,6 +1483,7 @@ class TypeEnvironment:
         cleared before copying so cross-kind REPL redefinitions do not leave old
         generic/constructor/alias tables behind. See :meth:`TypeTable.merge_from`.
         """
+        other.assert_closed()
         builtin = frozenset(BUILTIN_EXCEPTIONS) | BUILTIN_PRELUDE_TYPE_NAMES
         incoming_type_names = {
             name for name in other._types if name not in builtin

@@ -18,7 +18,7 @@ rendering, meta-commands, and the prompt_toolkit console are future work.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from agm.agl.diagnostics import AglError, Diagnostic, diagnostic_from_span
 from agm.agl.repl.entry import EntryKind, EntryResult
@@ -238,6 +238,52 @@ class ReplSession:
                 ReplSession._type_mentions_entry_nominal(param, names) for param in typ.params
             ) or ReplSession._type_mentions_entry_nominal(typ.result, names)
         return False
+
+    @staticmethod
+    def _node_ids_from_failure(
+        program: "Program", failure_span: "SourceSpan | Location | None"
+    ) -> set[int]:
+        """Return AST ids belonging to the unexecuted suffix of a failed entry."""
+        if failure_span is None:
+            return set()
+        from agm.agl.syntax.visitor import walk
+
+        node_ids: set[int] = set()
+
+        def collect(node: object) -> None:
+            typed_node = cast("Program", node)
+            if typed_node.span.start_offset >= failure_span.start_offset:
+                node_ids.add(typed_node.node_id)
+
+        walk(program, collect)
+        return node_ids
+
+    @staticmethod
+    def _assert_checked_state_closed(checked: "CheckedProgram") -> None:
+        """Assert that a checked entry contains no region-local flexible types."""
+        from agm.agl.semantics.types import contains_inference_var
+
+        checked.type_env.assert_closed()
+        types = (
+            *checked.node_types.values(),
+            *(spec.target_type for spec in checked.contract_specs.values()),
+            *(call.target_type for call in checked.call_sites),
+            *(signature.result for signature in checked.function_signatures.values()),
+            *(
+                param.type
+                for signature in checked.function_signatures.values()
+                for param in signature.params
+            ),
+            *(spec.target_type for spec in checked.cast_specs.values()),
+            *(
+                param_type
+                for param_types in checked.argument_bindings.function_param_types.values()
+                for param_type in param_types
+            ),
+        )
+        assert not any(contains_inference_var(typ) for typ in types), (
+            "inference variable leaked from a checked REPL entry"
+        )
 
     # ------------------------------------------------------------------
     # Registration (delegated to the internal runtime — shared validation)
@@ -774,6 +820,7 @@ class ReplSession:
         )
         from agm.agl.typecheck.env import TypeEnvironment
 
+        self._assert_checked_state_closed(checked)
         entry_root = checked.resolved.root_scope
         named_declarations = (
             AgentDecl,
@@ -843,6 +890,13 @@ class ReplSession:
             }
 
         installed: list[str] = []
+        unpromoted_binding_node_ids = {
+            item.node_id
+            for item in program.body.items
+            if partial
+            and isinstance(item, named_declarations)
+            and not _before_failure(item.span.end_offset)
+        }
         for name, ref in entry_root.bindings.items():
             # Config bindings are promoted only on full success (alongside the
             # engine setting), never on partial failure.
@@ -869,6 +923,18 @@ class ReplSession:
         self._type_env.seed_from(checked.type_env)
         if partial and unpromoted_type_names:
             self._type_env.restore_type_names_from(previous_type_env, unpromoted_type_names)
+        if partial:
+            unpromoted_binding_node_ids |= self._node_ids_from_failure(program, failure_span)
+            unpromoted_function_names = (
+                item.name
+                for item in program.body.items
+                if isinstance(item, FuncDef) and not _before_failure(item.span.end_offset)
+            )
+            self._type_env.restore_binding_metadata_from(
+                previous_type_env,
+                unpromoted_binding_node_ids,
+                unpromoted_function_names,
+            )
         self._type_env.remove_binding_types(stale_binding_node_ids)
 
         promoted_agents = {

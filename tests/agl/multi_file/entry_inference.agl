@@ -1,0 +1,6 @@
+import inference.app
+
+let number = relay(1)
+let word = relay("text")
+print number.value
+print word.value

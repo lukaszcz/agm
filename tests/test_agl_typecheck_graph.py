@@ -15,6 +15,7 @@ from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.scope.graph import resolve_graph
 from agm.agl.scope.symbols import AglScopeError
+from agm.agl.semantics.types import contains_inference_var
 from agm.agl.typecheck import (
     AgentType,
     AglTypeError,
@@ -2730,6 +2731,103 @@ def test_cross_module_generic_func_call_wrong_type_rejected(tmp_path: Path) -> N
     }
     with pytest.raises(AglTypeError):
         _check_graph(tmp_path, modules)
+
+
+# ---------------------------------------------------------------------------
+# Module-graph inference parity
+# ---------------------------------------------------------------------------
+
+
+def test_graph_infers_unannotated_local_def_despite_imported_same_name(tmp_path: Path) -> None:
+    """Graph signatures are keyed by declaration id, not a colliding import name."""
+    graph = _check_graph(
+        tmp_path,
+        {
+            "id": "def relay(value: int) -> int = value",
+            "entry": "import id\ndef relay(value: text) = value\nrelay(\"ok\")",
+        },
+    )
+
+    assert graph.modules[ENTRY_ID].function_signatures["relay"].result == TextType()
+
+
+def test_imported_generic_occurrences_are_fresh_and_checked_output_is_closed(
+    tmp_path: Path,
+) -> None:
+    """Two imported generic uses solve independently in one enclosing expression."""
+    graph = _check_graph(
+        tmp_path,
+        {
+            "id": "def id[T](value: T) -> T = value",
+            "app": (
+                "import id qualified\n"
+                "record Pair[A, B]\n"
+                "  left: A\n"
+                "  right: B\n"
+                "def make[T](value: T) -> T = id::id(value)\n"
+                "def pair[A, B](left: A, right: B) -> Pair[A, B] = "
+                "Pair(left = left, right = right)"
+            ),
+            "entry": (
+                "import app qualified\n"
+                "let values = app::pair(app::make(1), app::make(\"text\"))\n"
+                "values"
+            ),
+        },
+    )
+
+    app_id = ModuleId.from_dotted("app")
+    assert _binding_value_type(graph, ENTRY_ID, "values") == RecordType(
+        "Pair", module_id=app_id, type_args=(IntType(), TextType())
+    )
+    for module in graph.modules.values():
+        published_types = [
+            *module.node_types.values(),
+            *(
+                param_type
+                for parameter_types in module.argument_bindings.function_param_types.values()
+                for param_type in parameter_types
+            ),
+            *(site.target_type for site in module.call_sites),
+        ]
+        assert not any(contains_inference_var(typ) for typ in published_types)
+
+
+def test_imported_generic_conflict_keeps_source_labels_for_both_constraints(tmp_path: Path) -> None:
+    """A conflict in an importing module retains its original source on primary and note."""
+    with pytest.raises(AglTypeError) as exc_info:
+        _check_graph(
+            tmp_path,
+            {
+                "id": "def same[T](left: T, right: T) -> T = left",
+                "app": 'import id qualified\ndef bad() -> int = id::same(1, "text")',
+                "entry": "import app\n()",
+            },
+        )
+
+    error = exc_info.value
+    assert error.span is not None
+    assert error.related
+    assert error.span.source.label.endswith("app.agl")
+    assert error.related[0][1].source.label.endswith("app.agl")
+
+
+def test_checked_modules_publish_only_their_own_function_signatures(tmp_path: Path) -> None:
+    """Imported signature lookup state is not exposed as a module's checked declarations."""
+    graph = _check_graph(
+        tmp_path,
+        {
+            "id": "def shared[T](value: T) -> T = value",
+            "app": "import id\ndef shared(value: text) -> text = value",
+            "entry": "import app\napp::shared(\"ok\")",
+        },
+    )
+
+    assert set(graph.modules[ModuleId.from_dotted("id")].function_signatures) == {"shared"}
+    assert set(graph.modules[ModuleId.from_dotted("app")].function_signatures) == {"shared"}
+    app_signatures = graph.modules[ModuleId.from_dotted("app")].function_signatures
+    assert app_signatures["shared"].result == TextType()
+    assert graph.modules[ENTRY_ID].function_signatures == {}
 
 
 # ---------------------------------------------------------------------------

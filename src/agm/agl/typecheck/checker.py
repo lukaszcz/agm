@@ -47,7 +47,7 @@ from typing import Literal, TypeGuard, assert_never
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
-from agm.agl.modules.ids import ModuleId
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.scope.symbols import (
     BUILTIN_CALL_NAMES,
     BinderKind,
@@ -712,7 +712,11 @@ class _Checker:
         its defaults are pinned by the hardcoded builtin signature table, not
         evaluated as ordinary AgL expressions.
         """
-        sig = self._env.get_function_signature(node.name)
+        # Signatures are declaration schemes, not name-keyed templates. In
+        # graph mode an imported declaration may use the same spelling as this
+        # local unannotated definition; only this declaration's node id can
+        # determine whether its signature was pre-registered.
+        sig = self._env.get_function_signature_by_node_id(node.node_id)
         if sig is None:
             self._infer_funcdef_signature(node)
             return
@@ -3226,6 +3230,34 @@ class _Checker:
 
 
 # ---------------------------------------------------------------------------
+# Checked-output construction
+# ---------------------------------------------------------------------------
+
+
+def check_prepared(
+    resolved: ResolvedProgram,
+    capabilities: HostCapabilities,
+    *,
+    env: TypeEnvironment,
+    module_id: ModuleId = ENTRY_ID,
+    check_inhabitation: bool = True,
+) -> CheckedProgram:
+    """Check using a prepared environment and return only finalized annotations.
+
+    Both single-module and graph callers enter here after preparing the
+    namespace appropriate to their mode.  ``_Checker`` owns expression-region
+    close/finalize validation, so this boundary never returns provisional
+    inference state.
+    """
+    builder = _TypeBuilder(env, module_id=module_id)
+    builder.collect(resolved.program, check_inhabitation=check_inhabitation)
+
+    checker = _Checker(env=env, resolved=resolved, capabilities=capabilities)
+    checker.check_program(resolved.program)
+    return checker.result(resolved)
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -3261,12 +3293,4 @@ def check(
     env = TypeEnvironment()
     if seed_env is not None:
         env.seed_from(seed_env)
-    program = resolved.program
-
-    builder = _TypeBuilder(env)
-    builder.collect(program)
-
-    checker = _Checker(env=env, resolved=resolved, capabilities=capabilities)
-    checker.check_program(program)
-
-    return checker.result(resolved)
+    return check_prepared(resolved, capabilities, env=env)

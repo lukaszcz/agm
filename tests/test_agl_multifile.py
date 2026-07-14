@@ -198,6 +198,24 @@ class TestQualifiedImport:
 
 
 # ---------------------------------------------------------------------------
+# Generic inference across module boundaries
+# ---------------------------------------------------------------------------
+
+
+def test_imported_generic_inside_generic_module_body_freshens_per_entry_occurrence(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Fixtures keep an imported generic use inside app's generic declaration."""
+    entry_file = MULTI_FILE_DIR / "entry_inference.agl"
+    result = _run_graph(
+        entry_file.read_text(), entry_path=entry_file, roots_dirs=[MULTI_FILE_DIR]
+    )
+
+    assert result.ok is True
+    assert capsys.readouterr().out == "1\ntext\n"
+
+
+# ---------------------------------------------------------------------------
 # Scenario 3: error in imported module reports correct file path
 # ---------------------------------------------------------------------------
 

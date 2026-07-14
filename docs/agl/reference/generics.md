@@ -142,10 +142,10 @@ let e: Option[int] = none          # T inferred from the annotation
 ```
 
 Partial application placeholders participate in the same inference. Non-hole
-arguments constrain type parameters first; if an expected function type is
-available, its parameter types constrain the placeholder positions and its
-result type constrains the call result. If any type parameter remains unknown,
-use `::[…]` to pin the instantiation explicitly:
+arguments constrain type parameters first; sibling arguments and an expected
+function type can constrain the placeholder positions and the call result. If
+any type parameter remains unknown, use `::[…]` to pin the instantiation
+explicitly:
 
 ```agl
 def id[T](x: T) -> T = x
@@ -212,6 +212,22 @@ let n = apply(id, 42)
 let mk: int -> Box[int] = Box
 let made = map(42, mk)
 print made.value
+```
+
+The same expression-local inference applies to every generic constructor form,
+including payload variants, nullary variants, and partial constructors. Evidence
+may come from a later sibling argument or the enclosing result:
+
+```agl
+enum Option[T]
+  | none
+  | some(value: T)
+
+def build[T](factory: (T) -> Option[T], value: T) -> Option[T] = factory(value)
+def fallback[T](value: Option[T], item: T) -> Option[T] = value
+
+let present = build(some, 7)      # `some` is inferred as int -> Option[int]
+let missing = fallback(none, 7)   # `none` is inferred as Option[int]
 ```
 
 A binding is an inference boundary: `let f = id` is an error even if a later

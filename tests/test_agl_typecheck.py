@@ -109,7 +109,6 @@ from agm.agl.typecheck import (
     PartialCallSpec,
     RecordType,
     TextType,
-    Type,
     TypeEnvironment,
     UnitType,
     check,
@@ -6220,6 +6219,126 @@ class TestGenericConstructorInference:
             or "annotation" in str(err).lower()
         )
 
+    def test_generic_constructor_values_use_later_sibling_evidence(self) -> None:
+        checked = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "def box[T](factory: (T) -> Box[T], value: T) -> Box[T] = factory(value)\n"
+            "def payload[T](factory: (T) -> Option[T], value: T) -> Option[T] = factory(value)\n"
+            "def fallback[T](value: Option[T], item: T) -> Option[T] = value\n"
+            "let b = box(Box, 1)\n"
+            "let p = payload(some, 2)\n"
+            "let n = fallback(none, 3)\n"
+            "n"
+        )
+        box_type = checked.type_env.instantiate_nominal("Box", (IntType(),))
+        option_type = checked.type_env.instantiate_nominal("Option", (IntType(),))
+        assert checked.type_env.get_binding_type(
+            checked.resolved.program.body.items[5].node_id
+        ) == box_type
+        assert checked.type_env.get_binding_type(
+            checked.resolved.program.body.items[6].node_id
+        ) == option_type
+        assert checked.type_env.get_binding_type(
+            checked.resolved.program.body.items[7].node_id
+        ) == option_type
+
+    def test_generic_constructor_partial_uses_later_sibling_evidence(self) -> None:
+        checked = accept_type(
+            "record Pair[T]\n"
+            "  @std\n"
+            "  left: T\n"
+            "  right: T\n"
+            "def use[T](factory: (T) -> Pair[T], value: T) -> Pair[T] = factory(value)\n"
+            "let pair = use(Pair(left = ?, right = 1), 1)\n"
+            "pair"
+        )
+        pair_type = checked.type_env.instantiate_nominal("Pair", (IntType(),))
+        pair_call = checked.resolved.program.body.items[2]
+        assert isinstance(pair_call, LetDecl)
+        assert checked.type_env.get_binding_type(pair_call.node_id) == pair_type
+        assert isinstance(pair_call.value, Call)
+        constructor_call = pair_call.value.args[0]
+        assert isinstance(constructor_call, Call)
+        assert checked.node_types[constructor_call.node_id] == FunctionType(
+            params=(IntType(),), result=pair_type
+        )
+        assert checked.partial_calls[constructor_call.node_id].callee_kind == "constructor"
+
+    def test_generic_constructor_preserves_enclosing_rigid_type_variable(self) -> None:
+        checked = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "def wrap[T](value: T) -> Box[T] = Box(value = value)\n"
+            "let box = wrap(1)\n"
+            "box"
+        )
+        assert checked.type_env.get_binding_type(
+            checked.resolved.program.body.items[2].node_id
+        ) == checked.type_env.instantiate_nominal("Box", (IntType(),))
+
+    def test_generic_constructor_conflicts_include_solver_provenance(self) -> None:
+        err = reject_type(
+            "record Pair[T]\n"
+            "  @std\n"
+            "  left: T\n"
+            "  right: T\n"
+            'Pair(left = 1, right = "bad")'
+        )
+        assert err.related
+
+    def test_generic_constructor_freshens_same_spelled_declarations(self) -> None:
+        checked = accept_type(
+            "record Left[T]\n"
+            "  value: T\n"
+            "record Right[T]\n"
+            "  value: T\n"
+            "record Both\n"
+            "  left: (int) -> Left[int]\n"
+            "  right: (text) -> Right[text]\n"
+            "let both = Both(left = Left, right = Right)\n"
+            "both"
+        )
+        both = checked.resolved.program.body.items[3]
+        assert isinstance(both, LetDecl)
+        assert checked.type_env.get_binding_type(both.node_id) == checked.type_env.get_type("Both")
+
+    def test_generic_constructor_never_queries_type_table_with_flexible_owner(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        original = TypeTable.record_fields
+
+        def guarded(table: TypeTable, handle: RecordType) -> object:
+            assert not contains_inference_var(handle)
+            return original(table, handle)
+
+        monkeypatch.setattr(TypeTable, "record_fields", guarded)
+        checked = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "def use[T](factory: (T) -> Box[T], value: T) -> Box[T] = factory(value)\n"
+            "let box = use(Box(value = ?), 1)\n"
+            "box"
+        )
+        assert checked.type_env.get_binding_type(
+            checked.resolved.program.body.items[2].node_id
+        ) == checked.type_env.instantiate_nominal("Box", (IntType(),))
+
+        from agm.agl.typecheck.checker import _Checker, _InferenceRegion
+        from agm.agl.typecheck.inference import InferenceEngine
+
+        checker = _Checker(TypeEnvironment(), resolve(parse_program("()")), default_capabilities())
+        concrete_owner = RecordType("Box", type_args=(IntType(),))
+        assert checker._zonk_constructor_owner(concrete_owner) == concrete_owner
+        engine = InferenceEngine()
+        checker._inference_region = _InferenceRegion(engine, {}, {}, [])
+        flexible_owner = RecordType("Box", type_args=(engine.fresh("T"),))
+        with pytest.raises(AssertionError, match="flexible"):
+            checker._zonk_constructor_owner(flexible_owner)
+
 
 class TestGenericConstructorExplicit:
     """Tests for explicit type arguments on generic constructors."""
@@ -7541,21 +7660,23 @@ class TestGenericNominalModuleId:
         )
 
     def test_generic_match_does_not_infer_through_different_module_id(self) -> None:
-        """Generic inference must respect nominal module identity."""
+        """Contextual generic completion respects nominal module identity."""
         from agm.agl.modules.ids import ModuleId
-        from agm.agl.typecheck.checker import _Checker
+        from agm.agl.typecheck.inference import ConstraintRole, InferenceEngine
 
         lib_a = ModuleId.from_dotted("libA")
         lib_b = ModuleId.from_dotted("libB")
-        checker = _Checker(TypeEnvironment(), resolve(parse_program("()")), default_capabilities())
-        subst: dict[str, Type] = {}
-        checker._match(
-            RecordType("Box", type_args=(TypeVarType("T"),), module_id=lib_a),
+        engine = InferenceEngine()
+        inferred = engine.instantiate(
+            ("T",), (RecordType("Box", type_args=(TypeVarType("T"),), module_id=lib_a),)
+        ).templates[0]
+        engine.complete_from_context(
+            inferred,
             RecordType("Box", type_args=(IntType(),), module_id=lib_b),
-            subst,
-            span=mk_span(),
+            engine.origin(mk_span(), role=ConstraintRole.EXPECTED_RESULT, subject="Box"),
         )
-        assert subst == {}
+        assert isinstance(inferred, RecordType)
+        assert contains_inference_var(engine.zonk(inferred))
 
     def test_build_generic_record_stamps_module_id(self) -> None:
         """_TypeBuilder._build_generic_record stamps the template with module_id.

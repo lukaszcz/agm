@@ -147,8 +147,8 @@ the name refers to the binding, not the constructor.
 ### Generic constructors
 
 The constructors of a generic record or enum ([Generics](generics.md)) are
-generic too. Their type arguments are normally inferred — from the payload
-arguments, the expected type, or both:
+generic too. Their type arguments are normally inferred — from payload
+arguments, the expected type, or other evidence in the surrounding expression:
 
 ```agl
 record Box[T]
@@ -165,8 +165,19 @@ should not) determine it:
 let be = Box::[int](value = 99)
 ```
 
+This also applies when a constructor value or partial constructor is an
+argument to another call: a sibling argument may determine its type arguments.
+
+```agl
+record Box[T]
+  value: T
+
+def build[T](factory: (T) -> Box[T], value: T) -> Box[T] = factory(value)
+let b = build(Box(value = ?), 5)  # the partial is int -> Box[int]
+```
+
 Nullary variants of a generic enum carry no payload to infer from, so they
-need an expected type (or an explicit `::[…]`):
+need contextual evidence (or an explicit `::[…]`):
 
 ```agl
 enum Option[T]
@@ -202,9 +213,11 @@ let built = apply(42, mk)           # mk applied inside a generic HOF
 print built.value
 ```
 
-A **generic** constructor used as a value needs an expected type to fix its
-instantiation, exactly like a generic `def` used as a value (a bare
-`let f = some` is a static error). The annotation on `mk` above supplies it.
+A **generic** constructor used as a value needs expression-local evidence to
+fix its instantiation, exactly like a generic `def` used as a value. An
+annotation supplies that evidence, and a surrounding higher-order call may
+supply it through another argument or its result. A bare `let f = some` is a
+static error because the binding has no such evidence.
 
 Nullary enum variants are likewise ordinary values:
 

@@ -2069,6 +2069,75 @@ def test_cross_module_generic_constructor_call_inferred_type_args(tmp_path: Path
     )
 
 
+def test_imported_generic_constructor_values_use_later_sibling_evidence(tmp_path: Path) -> None:
+    """Imported payload and nullary constructor values stay provisional in a call."""
+    lib_id = ModuleId.from_dotted("lib")
+    modules = {
+        "lib": (
+            "record Point\n"
+            "  value: int\n"
+            "record Box[T]\n"
+            "  value: T\n"
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)"
+        ),
+        "entry": (
+            "import lib qualified\n"
+            "def box[T](factory: (T) -> lib::Box[T], value: T) -> lib::Box[T] = factory(value)\n"
+            "def payload[T](factory: (T) -> lib::Option[T], value: T) "
+            "-> lib::Option[T] = factory(value)\n"
+            "def fallback[T](value: lib::Option[T], item: T) -> lib::Option[T] = value\n"
+            "let b = box(lib::Box, 1)\n"
+            "let p = payload(lib::Option::some, 2)\n"
+            "let n = fallback(lib::Option::none, 3)\n"
+            "let point: (int) -> lib::Point = lib::Point\n"
+            "let explicit: (int) -> lib::Box[int] = lib::Box::[int]\n"
+            "n"
+        ),
+    }
+    checked = _check_graph(tmp_path, modules)
+    box_type = RecordType("Box", module_id=lib_id, type_args=(IntType(),))
+    option_type = EnumType("Option", module_id=lib_id, type_args=(IntType(),))
+    assert _binding_value_type(checked, ENTRY_ID, "b") == box_type
+    assert _binding_value_type(checked, ENTRY_ID, "p") == option_type
+    assert _binding_value_type(checked, ENTRY_ID, "n") == option_type
+    assert _binding_value_type(checked, ENTRY_ID, "point") == FunctionType(
+        params=(IntType(),), result=RecordType("Point", module_id=lib_id)
+    )
+    assert _binding_value_type(checked, ENTRY_ID, "explicit") == FunctionType(
+        params=(IntType(),), result=box_type
+    )
+
+
+def test_cross_module_non_generic_constructor_value_type_apply_rejected(tmp_path: Path) -> None:
+    modules = {
+        "lib": "record Point\n  value: int",
+        "entry": "import lib qualified\nlet factory = lib::Point::[int]\nfactory",
+    }
+    with pytest.raises(AglTypeError, match="not a generic constructor"):
+        _check_graph(tmp_path, modules)
+
+
+def test_open_imported_generic_constructor_value_uses_later_sibling_evidence(
+    tmp_path: Path,
+) -> None:
+    lib_id = ModuleId.from_dotted("lib")
+    modules = {
+        "lib": "record Box[T]\n  value: T",
+        "entry": (
+            "import lib\n"
+            "def box[T](factory: (T) -> Box[T], value: T) -> Box[T] = factory(value)\n"
+            "let result = box(Box, 1)\n"
+            "result"
+        ),
+    }
+    checked = _check_graph(tmp_path, modules)
+    assert _binding_value_type(checked, ENTRY_ID, "result") == RecordType(
+        "Box", module_id=lib_id, type_args=(IntType(),)
+    )
+
+
 def test_open_imported_generic_type_in_annotation(tmp_path: Path) -> None:
     lib_id = ModuleId.from_dotted("lib")
     modules = {

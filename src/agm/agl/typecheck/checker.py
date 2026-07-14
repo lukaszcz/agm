@@ -78,7 +78,6 @@ from agm.agl.semantics.types import (
     UnitType,
     cast_classification,
     contains_inference_var,
-    contains_type_var,
     is_assignable,
     substitute,
 )
@@ -1221,6 +1220,10 @@ class _Checker:
         # Catch bare type name references (e.g. ``mylib::Color``) and raise a
         # user-facing error instead of an internal assertion failure.
         if ref.kind is BinderKind.constructor_binding:
+            if not ref.module_id.is_entry:
+                return self._constructors.check_cross_module_constructor_as_value(
+                    ref, span=node.span, expected=expected
+                )
             raise AglTypeError(
                 f"'{node.name}' is a type name, not a value; "
                 "use it with a constructor call (e.g. 'EnumName::Variant' or 'RecordName(...)').",
@@ -1264,6 +1267,11 @@ class _Checker:
         self._set_extern_expr_targets(node.node_id, self._extern_targets_for_ref(ref, typ))
         return typ
 
+    def _active_inference_engine(self) -> InferenceEngine:
+        """Return the solver for the expression region currently being checked."""
+        assert self._inference_region is not None
+        return self._inference_region.engine
+
     def _instantiate_generic_constructor_value(
         self,
         *,
@@ -1271,11 +1279,11 @@ class _Checker:
         field_templates: tuple[Type, ...],
         result_template: Type,
         span: SourceSpan,
-        expected: Type,
+        expected: Type | None,
+        subject: str,
     ) -> Type:
-        """Freshen a generic constructor value constrained by this expression region."""
-        assert self._inference_region is not None
-        engine = self._inference_region.engine
+        """Freshen a generic constructor value in the active expression region."""
+        engine = self._active_inference_engine()
         instantiation = engine.instantiate(type_params, (*field_templates, result_template))
         for type_param in type_params:
             engine.require_solved(
@@ -1283,21 +1291,37 @@ class _Checker:
                 engine.origin(
                     span,
                     role=ConstraintRole.EXPECTED_RESULT,
-                    subject="constructor",
+                    subject=subject,
                     type_param=type_param,
                 ),
             )
         result = instantiation.templates[-1]
-        if field_templates:
-            concrete: Type = FunctionType(params=instantiation.templates[:-1], result=result)
-        else:
-            concrete = result
-        engine.complete_from_context(
-            concrete,
-            expected,
-            engine.origin(span, role=ConstraintRole.EXPECTED_RESULT, subject="constructor"),
+        concrete: Type = (
+            FunctionType(params=instantiation.templates[:-1], result=result)
+            if field_templates
+            else result
         )
+        if expected is not None:
+            engine.complete_from_context(
+                concrete,
+                expected,
+                engine.origin(span, role=ConstraintRole.EXPECTED_RESULT, subject=subject),
+            )
         return concrete
+
+    def _zonk_constructor_owner(
+        self, owner: RecordType | EnumType | ExceptionType
+    ) -> RecordType | EnumType | ExceptionType:
+        """Resolve a nominal owner before a constructor-side TypeTable lookup."""
+        if self._inference_region is not None:
+            zonked = self._inference_region.engine.zonk(owner)
+            assert isinstance(zonked, (RecordType, EnumType, ExceptionType))
+            owner = zonked
+        if contains_inference_var(owner):
+            raise AssertionError(
+                "TypeTable received a constructor owner with flexible type arguments"
+            )
+        return owner
 
     def _require_binding_type(self, ref: BindingRef) -> Type:
         typ = self._env.resolve_binding(ref)
@@ -1349,6 +1373,18 @@ class _Checker:
             and node.expr.node_id in self._resolved.qualified_constructor_refs
         ):
             raise self._qualified_constructor_typed_call_error(node.span)
+        if isinstance(node.expr, VarRef):
+            constructor_ref = self._resolved.resolution.get(node.expr.node_id)
+            if (
+                constructor_ref is not None
+                and constructor_ref.kind is BinderKind.constructor_binding
+                and not constructor_ref.module_id.is_entry
+            ):
+                typ = self._constructors.check_cross_module_constructor_type_apply(
+                    constructor_ref, type_args=node.type_args, span=node.span
+                )
+                self._record_node_type(node.expr.node_id, typ)
+                return typ
 
         if not isinstance(node.expr, VarRef):
             raise AglTypeError(
@@ -1642,99 +1678,6 @@ class _Checker:
 
         # Value call (lambda or higher-order).
         return self._check_value_call(node, expected=expected, hole_indices=hole_indices)
-
-    # --- type-variable matching (one-sided unification) ---
-
-    def _match(
-        self,
-        template: Type,
-        concrete: Type,
-        subst: dict[str, Type],
-        *,
-        span: SourceSpan,
-        challenge: bool = True,
-    ) -> None:
-        """One-sided unification: bind type vars in *template* to *concrete* types.
-
-        With ``challenge=True`` (the default, used for argument inference) an
-        already-bound type var that disagrees with *concrete* raises
-        ``AglTypeError``.  With ``challenge=False`` only currently-unbound
-        variables are bound and existing bindings are left untouched — used to
-        fill remaining type vars from an expected result type (which must not
-        override what the arguments already inferred).
-
-        Silently stops on structural shape mismatches (the assignability check
-        will report the error).
-        """
-        if isinstance(template, TypeVarType):
-            p = template.name
-            if p in subst:
-                if challenge and subst[p] != concrete:
-                    raise AglTypeError(
-                        f"Inconsistent type argument: '{p}' was inferred as "
-                        f"'{subst[p]!r}' from one argument but '{concrete!r}' from another.",
-                        span=span,
-                    )
-            else:
-                subst[p] = concrete
-            return
-        if isinstance(template, ListType) and isinstance(concrete, ListType):
-            self._match(template.elem, concrete.elem, subst, span=span, challenge=challenge)
-        elif isinstance(template, DictType) and isinstance(concrete, DictType):
-            self._match(template.value, concrete.value, subst, span=span, challenge=challenge)
-        elif isinstance(template, FunctionType) and isinstance(concrete, FunctionType):
-            if len(template.params) == len(concrete.params):
-                for tp, cp in zip(template.params, concrete.params):
-                    self._match(tp, cp, subst, span=span, challenge=challenge)
-                self._match(template.result, concrete.result, subst, span=span, challenge=challenge)
-        elif (
-            isinstance(template, (RecordType, EnumType))
-            and isinstance(concrete, (RecordType, EnumType))
-            and type(template) is type(concrete)
-            and template.module_id == concrete.module_id
-            and template.name == concrete.name
-            and len(template.type_args) == len(concrete.type_args)
-        ):
-            for ta, ca in zip(template.type_args, concrete.type_args):
-                self._match(ta, ca, subst, span=span, challenge=challenge)
-        # Shape mismatch, primitive mismatch, or nominal mismatch: stop (best-effort).
-
-    def _infer_arg(
-        self,
-        template: Type,
-        arg_expr: Expr,
-        subst: dict[str, Type],
-        hint: Mapping[str, Type],
-        *,
-        span: SourceSpan,
-    ) -> None:
-        """Check one argument against a (possibly type-var) parameter/field *template*
-        and unify the result into *subst*.
-
-        When the template, after applying the already-solved bindings, is fully
-        concrete it is passed to ``_check_expr`` as the expected type so that
-        annotation-requiring literals (notably ``[]``) can be resolved.  *hint*
-        supplies advisory bindings derived from the expected result type — used
-        only to make the expected type concrete, never to seed ``subst`` (which
-        stays authoritative, driven by the checked argument type).
-        """
-        partially = substitute(template, {**hint, **subst})
-        expected = None if contains_type_var(partially) else partially
-        arg_type = self._check_expr(arg_expr, expected=expected)
-        self._match(template, arg_type, subst, span=span)
-
-    def _require_all_solved(
-        self,
-        type_params: tuple[str, ...],
-        subst: Mapping[str, Type],
-        *,
-        span: SourceSpan,
-        message_for: Callable[[str], str],
-    ) -> None:
-        """Raise ``AglTypeError`` for the first type parameter left unsolved after inference."""
-        for p in type_params:
-            if p not in subst:
-                raise AglTypeError(message_for(p), span=span)
 
     # --- shared call-argument checker ---
 

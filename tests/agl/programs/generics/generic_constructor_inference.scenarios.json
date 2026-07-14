@@ -1,0 +1,14 @@
+{
+  "scenarios": [
+    {
+      "name": "small_integer",
+      "params": {"value": 7},
+      "expect": {"stdout": "7\n7\n7\nnone\n"}
+    },
+    {
+      "name": "different_integer",
+      "params": {"value": 19},
+      "expect": {"stdout": "19\n19\n19\nnone\n"}
+    }
+  ]
+}

@@ -107,6 +107,19 @@ let result = keep(8)
     assert result["result"] == IntValue(8)
 
 
+def test_generic_constructor_partial_uses_sibling_inference_at_runtime() -> None:
+    result = evaluate_ir(
+        "record Box[T]\n"
+        "  value: T\n"
+        "def use[T](factory: (T) -> Box[T], value: T) -> Box[T] = factory(value)\n"
+        "let box = use(Box(value = ?), 7)\n"
+        "()"
+    )
+    box = result["box"]
+    assert isinstance(box, RecordValue)
+    assert box.fields["value"] == IntValue(7)
+
+
 def test_cross_module_constructor_partial_uses_shared_lowering(tmp_path: Path) -> None:
     result = evaluate_ir_graph(
         "import mylib\n"

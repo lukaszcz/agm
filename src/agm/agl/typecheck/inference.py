@@ -178,11 +178,16 @@ class InferenceEngine:
         for requirement in self._requirements:
             if not self.is_solved(requirement.variable):
                 origin = requirement.origin
-                name = origin.type_param or origin.subject
+                if origin.type_param is None:
+                    raise InferenceError(
+                        f"Cannot infer type of {origin.subject}; add an explicit container "
+                        "type annotation.",
+                        span=origin.span,
+                    )
                 raise InferenceError(
                     f"Cannot infer type arguments for '{origin.subject}': "
-                    f"type argument '{name}' remains unresolved; supply it explicitly via "
-                    f"'{origin.subject}::[…]'.",
+                    f"type argument '{origin.type_param}' remains unresolved; "
+                    f"supply it explicitly via '{origin.subject}::[…]'.",
                     span=origin.span,
                 )
 

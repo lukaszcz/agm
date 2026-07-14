@@ -3308,6 +3308,166 @@ class TestDictLiterals:
 
 
 # ---------------------------------------------------------------------------
+# Provisional container literals
+# ---------------------------------------------------------------------------
+
+
+class TestProvisionalContainerLiterals:
+    @staticmethod
+    def _assert_finalized(checked: CheckedProgram) -> None:
+        assert all(
+            not contains_inference_var(typ)
+            for node_id, typ in checked.node_types.items()
+            if node_id in all_node_ids(checked.resolved.program)
+        )
+
+    def test_empty_literals_are_solved_by_sibling_arguments(self) -> None:
+        checked = accept_type(
+            "def choose[T](left: T, right: T) -> T = right\n"
+            "let xs = choose([], [1])\n"
+            'let values = choose({}, {answer: 1})\n'
+            "values"
+        )
+        xs, values = checked.resolved.program.body.items[1:3]
+        assert isinstance(xs, LetDecl)
+        assert isinstance(values, LetDecl)
+        assert checked.type_env.get_binding_type(xs.node_id) == ListType(IntType())
+        assert checked.type_env.get_binding_type(values.node_id) == DictType(IntType())
+        self._assert_finalized(checked)
+
+    def test_empty_literals_are_solved_by_enclosing_results_and_constructor_fields(self) -> None:
+        checked = accept_type(
+            "record Bundle[T]\n"
+            "  values: list[T]\n"
+            "  metadata: dict[text, T]\n"
+            "  value: T\n"
+            "def id[T](value: T) -> T = value\n"
+            "let xs: list[int] = id([])\n"
+            "let values: dict[text, int] = id({})\n"
+            "let bundle = Bundle(values = [], metadata = {}, value = 1)\n"
+            "bundle"
+        )
+        xs, values, bundle = checked.resolved.program.body.items[2:5]
+        assert isinstance(xs, LetDecl)
+        assert isinstance(values, LetDecl)
+        assert isinstance(bundle, LetDecl)
+        assert checked.type_env.get_binding_type(xs.node_id) == ListType(IntType())
+        assert checked.type_env.get_binding_type(values.node_id) == DictType(IntType())
+        assert checked.type_env.get_binding_type(bundle.node_id) == RecordType(
+            "Bundle", (IntType(),)
+        )
+        self._assert_finalized(checked)
+
+    def test_empty_literals_are_solved_by_expected_container_types(self) -> None:
+        checked = accept_type("let xs: list[int] = []\nlet values: dict[text, int] = {}\nvalues")
+        xs, values = checked.resolved.program.body.items[:2]
+        assert isinstance(xs, LetDecl)
+        assert isinstance(values, LetDecl)
+        assert checked.type_env.get_binding_type(xs.node_id) == ListType(IntType())
+        assert checked.type_env.get_binding_type(values.node_id) == DictType(IntType())
+        self._assert_finalized(checked)
+
+    def test_empty_literals_are_solved_by_branch_common_types(self) -> None:
+        checked = accept_type(
+            "param choose_empty: bool\n"
+            "let xs = if choose_empty => [] else => [1]\n"
+            'let values = if choose_empty => {} else => {answer: 1}\n'
+            "values"
+        )
+        xs, values = checked.resolved.program.body.items[1:3]
+        assert isinstance(xs, LetDecl)
+        assert isinstance(values, LetDecl)
+        assert checked.type_env.get_binding_type(xs.node_id) == ListType(IntType())
+        assert checked.type_env.get_binding_type(values.node_id) == DictType(IntType())
+        self._assert_finalized(checked)
+
+    def test_populated_literals_unify_provisional_generic_values(self) -> None:
+        checked = accept_type(
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "let xs = [none, some(value = 1)]\n"
+            'let values = {first: none, second: some(value = 1)}\n'
+            "values"
+        )
+        xs, values = checked.resolved.program.body.items[1:3]
+        option_int = EnumType("Option", (IntType(),))
+        assert isinstance(xs, LetDecl)
+        assert isinstance(values, LetDecl)
+        assert checked.type_env.get_binding_type(xs.node_id) == ListType(option_int)
+        assert checked.type_env.get_binding_type(values.node_id) == DictType(option_int)
+        self._assert_finalized(checked)
+
+    def test_branches_unify_provisional_generic_values(self) -> None:
+        checked = accept_type(
+            "param choose_none: bool\n"
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "if choose_none => none else => some(value = 1)"
+        )
+        branch = checked.resolved.program.body.items[-1]
+        assert checked.node_types[branch.node_id] == EnumType("Option", (IntType(),))
+        self._assert_finalized(checked)
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "[]",
+            "{}",
+            "def id[T](value: T) -> T = value\nid([])",
+            "def id[T](value: T) -> T = value\nid({})",
+        ),
+    )
+    def test_unresolved_empty_literals_fail_at_the_inference_boundary(self, source: str) -> None:
+        reject_type(source)
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "let value: int = []\nvalue",
+            "let value: int = {}\nvalue",
+        ),
+    )
+    def test_empty_literals_reject_non_container_expectations(self, source: str) -> None:
+        reject_type(source)
+
+    def test_provisional_common_types_do_not_accept_conflicting_generic_values(self) -> None:
+        error = reject_type(
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            'let values = [none, some(value = 1), some(value = "wrong")]\n'
+            "values"
+        )
+        assert "inconsistent" in str(error).lower() or "unify" in str(error).lower()
+
+    def test_provisional_common_types_reject_incompatible_generic_structures(self) -> None:
+        error = reject_type(
+            "enum Option[T]\n"
+            "  | none\n"
+            "enum Other[T]\n"
+            "  | none\n"
+            "let values = [Option::none, Other::none]\n"
+            "values"
+        )
+        assert "incompatible" in str(error).lower() or "unify" in str(error).lower()
+
+    def test_concrete_container_and_branch_widening_is_unchanged(self) -> None:
+        checked = accept_type(
+            "param choose_decimal: bool\n"
+            "let xs = [1, 2.5]\n"
+            "let value = if choose_decimal => 1 else => 2.5\n"
+            "value"
+        )
+        xs, value = checked.resolved.program.body.items[1:3]
+        assert isinstance(xs, LetDecl)
+        assert isinstance(value, LetDecl)
+        assert checked.type_env.get_binding_type(xs.node_id) == ListType(DecimalType())
+        assert checked.type_env.get_binding_type(value.node_id) == DecimalType()
+
+
+# ---------------------------------------------------------------------------
 # Type declarations: record/enum/alias
 # ---------------------------------------------------------------------------
 

@@ -2770,32 +2770,50 @@ class _Checker:
         return None
 
     def _complete_empty_literal_shape(
-        self, expected: Type | None, *, make_type: Callable[[Type], Type], span: SourceSpan
+        self,
+        expected: Type | None,
+        *,
+        make_type: Callable[[Type], Type],
+        literal_name: str,
+        span: SourceSpan,
     ) -> Type | None:
-        """Give an empty literal a shape when its expected type is flexible.
+        """Return an empty literal's provisional container shape.
 
-        A direct generic call checks arguments before its result context.  For
-        ``id([])`` that means the literal initially sees only the call's fresh
-        ``T``.  It still supplies the exact evidence that ``T`` is a list; a
-        fresh element variable is then completed later by the result context.
+        An uncontextualized empty literal introduces an element/value variable
+        that must resolve before the owning expression region closes. When a
+        generic call supplies a flexible expected type, the literal also gives
+        that type its container shape, leaving its element/value to be solved
+        by sibling arguments or the enclosing result context.
         """
-        if not isinstance(expected, InferenceVarType):
-            return expected
         assert self._inference_region is not None
         engine = self._inference_region.engine
+        if expected is not None:
+            expected = engine.zonk(expected)
+        if isinstance(expected, InferenceVarType):
+            element = engine.fresh()
+            shape = make_type(element)
+            engine.unify(
+                expected,
+                shape,
+                engine.origin(span, role=ConstraintRole.LITERAL_ELEMENT, subject=literal_name),
+            )
+            return engine.zonk(expected)
+        if expected is not None:
+            return expected
         element = engine.fresh()
-        shape = make_type(element)
-        engine.unify(
-            expected,
-            shape,
-            engine.origin(span, role=ConstraintRole.LITERAL_ELEMENT, subject="empty literal"),
+        engine.require_solved(
+            element,
+            engine.origin(span, role=ConstraintRole.LITERAL_ELEMENT, subject=literal_name),
         )
-        return engine.zonk(expected)
+        return make_type(element)
 
     def _check_list_lit(self, node: ListLit, *, expected: Type | None) -> Type:
         if not node.elements:
             expected = self._complete_empty_literal_shape(
-                expected, make_type=ListType, span=node.span
+                expected,
+                make_type=ListType,
+                literal_name="empty list literal",
+                span=node.span,
             )
         elem_expected = self._expected_elem_type(expected)
         if not node.elements:
@@ -2817,7 +2835,10 @@ class _Checker:
     def _check_dict_lit(self, node: DictLit, *, expected: Type | None) -> Type:
         if not node.entries:
             expected = self._complete_empty_literal_shape(
-                expected, make_type=DictType, span=node.span
+                expected,
+                make_type=DictType,
+                literal_name="empty dict literal",
+                span=node.span,
             )
         seen_keys: dict[str, SourceSpan] = {}
         for entry in node.entries:
@@ -2847,18 +2868,46 @@ class _Checker:
         return DictType(value=unified)
 
     def _unify_elements(self, elements: Sequence[Expr], *, kind: str, span: SourceSpan) -> Type:
-        """Unify literal element types with int → decimal widening."""
+        """Find a literal's common element type without coercing flexible variables."""
         types = [self._check_expr(e, expected=None) for e in elements]
         unified = types[0]
-        for t in types[1:]:
-            if is_assignable(unified, t):
-                unified = t
-            elif not is_assignable(t, unified):
+        for typ in types[1:]:
+            provisional = self._unify_provisional_common_types(
+                unified, typ, span=span, subject=f"{kind} literal elements"
+            )
+            if provisional is not None:
+                unified = provisional
+            elif is_assignable(unified, typ):
+                unified = typ
+            elif not is_assignable(typ, unified):
                 raise AglTypeError(
-                    f"{kind} literal elements have inconsistent types: '{unified!r}' and '{t!r}'.",
+                    f"{kind} literal elements have inconsistent types: "
+                    f"'{unified!r}' and '{typ!r}'.",
                     span=span,
                 )
         return unified
+
+    def _unify_provisional_common_types(
+        self, left: Type, right: Type, *, span: SourceSpan, subject: str
+    ) -> Type | None:
+        """Exactly unify provisional common-type candidates, if either has flexibles."""
+        assert self._inference_region is not None
+        engine = self._inference_region.engine
+        left = engine.zonk(left)
+        right = engine.zonk(right)
+        if not (contains_inference_var(left) or contains_inference_var(right)):
+            return None
+        try:
+            engine.unify(
+                left,
+                right,
+                engine.origin(span, role=ConstraintRole.LITERAL_ELEMENT, subject=subject),
+            )
+        except InferenceError as exc:
+            raise AglTypeError(
+                f"{subject} have incompatible types: {exc}", span=exc.span, related=exc.related
+            ) from exc
+        return engine.zonk(left)
 
     # ------------------------------------------------------------------
     # Pattern binding helpers
@@ -3012,22 +3061,39 @@ class _Checker:
         span: SourceSpan,
         construct: str,
     ) -> Type:
-        """Unify branch types with int→decimal widening and BottomType filtering."""
-        non_bottom = [t for t in branch_types if not isinstance(t, BottomType)]
+        """Find a branch common type, exactly solving provisional candidates first."""
+        if self._inference_region is None:
+            non_bottom = [typ for typ in branch_types if not isinstance(typ, BottomType)]
+        else:
+            engine = self._inference_region.engine
+            non_bottom = [
+                resolved
+                for typ in branch_types
+                if not isinstance(resolved := engine.zonk(typ), BottomType)
+            ]
         if not non_bottom:
             return BottomType()
-        result_type = non_bottom[0]
-        for bt in non_bottom[1:]:
-            if bt == result_type:
+        result_type: Type = non_bottom[0]
+        for branch_type in non_bottom[1:]:
+            provisional = (
+                self._unify_provisional_common_types(
+                    result_type, branch_type, span=span, subject=f"{construct} branches"
+                )
+                if self._inference_region is not None
+                else None
+            )
+            if provisional is not None:
+                result_type = provisional
+            elif result_type == branch_type:
                 continue
-            if isinstance(result_type, IntType) and isinstance(bt, DecimalType):
+            elif isinstance(result_type, IntType) and isinstance(branch_type, DecimalType):
                 result_type = DecimalType()
-            elif isinstance(result_type, DecimalType) and isinstance(bt, IntType):
+            elif isinstance(result_type, DecimalType) and isinstance(branch_type, IntType):
                 pass
             else:
                 raise AglTypeError(
                     f"{construct} branches have incompatible types: "
-                    f"'{result_type!r}' and '{bt!r}'.",
+                    f"'{result_type!r}' and '{branch_type!r}'.",
                     span=span,
                 )
         return result_type

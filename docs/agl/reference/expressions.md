@@ -36,8 +36,17 @@ let issues = ["missing tests", "unclear API"]
 ```
 
 Elements must share a type, up to `int → decimal` widening. Under an expected
-type, each element is checked against the expected element type. An **empty
-list requires an annotation**:
+type, each element is checked against the expected element type. An empty list
+may obtain its element type from an expected container type or another
+constraint in the same enclosing expression:
+
+```agl
+def choose[T](left: T, right: T) -> T = right
+let items = choose([], [1])
+```
+
+If no such constraint determines the element type before the enclosing
+expression ends, add an annotation:
 
 ```agl
 let items: list[Issue] = []
@@ -53,8 +62,14 @@ let metadata: dict[text, json] = {
 ```
 
 Keys are literal strings; an unquoted identifier key is shorthand for the same
-string. Interpolated keys are rejected. Duplicate keys are a
-static error.
+string. Interpolated keys are rejected. Duplicate keys are a static error. An
+empty dictionary may obtain its value type from an expected dictionary type or
+another constraint in the same enclosing expression; otherwise it needs an
+annotation:
+
+```agl
+let metadata: dict[text, json] = {}
+```
 
 ## Constructors
 

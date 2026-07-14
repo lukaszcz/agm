@@ -35,6 +35,7 @@ from agm.agl.typecheck import (
     CheckedProgram,
     FunctionType,
     IntType,
+    TextType,
     check,
     check_graph,
 )
@@ -344,6 +345,80 @@ class TestExternCallSiteRecording:
         sites = [s for s in cp.call_sites if s.callee == "f"]
         assert len(sites) == 2
 
+    def test_generic_direct_calls_publish_independently_concrete_metadata(self) -> None:
+        cp = check_extern(
+            "extern def id[T](value: T) -> T\n"
+            "let number = id(1)\n"
+            'let text = id("value")\n'
+            "text"
+        )
+        sites = [site for site in cp.call_sites if site.callee == "id"]
+        assert [site.target_type for site in sites] == [IntType(), TextType()]
+        assert cp.argument_bindings.function_param_types[_last_call_node_id(cp, "id")] == (
+            IntType(),
+        )
+
+    def test_generic_extern_and_builtin_inventory_preserves_source_order(self) -> None:
+        cp = check_extern(
+            "extern def id[T](value: T) -> T\n"
+            "def choose[T](first: T, second: T) -> T = first\n"
+            'let value: int = choose(ask("answer"), id(1))\n'
+            "value"
+        )
+        assert [site.callee for site in cp.call_sites] == ["ask", "id"]
+        assert [site.target_type for site in cp.call_sites] == [IntType(), IntType()]
+
+    def test_failed_region_rolls_back_extern_inventory_before_checker_reuse(self) -> None:
+        from agm.agl.syntax.nodes import Call
+        from agm.agl.typecheck.builder import _TypeBuilder
+        from agm.agl.typecheck.checker import _Checker
+        from agm.agl.typecheck.env import TypeEnvironment
+
+        resolved = resolve(
+            parse_program(
+                "extern def id[T](value: T) -> T\n"
+                "extern def same[T](left: T, right: T) -> T\n"
+                "def choose[T](first: T, second: T) -> T = first\n"
+                'choose(id(same(?, fn(value: int) -> int => value)), ask("answer"))'
+            ),
+            origin_path=_PATH,
+        )
+        env = TypeEnvironment()
+        _TypeBuilder(env).collect(resolved.program)
+        checker = _Checker(env, resolved, _CAPS)
+        definitions = [item for item in resolved.program.body.items if isinstance(item, FuncDef)]
+        for definition in definitions:
+            checker._preregister_funcdef(definition)
+        failed_call = resolved.program.body.items[-1]
+        assert isinstance(failed_call, Call)
+        with pytest.raises(AglTypeError):
+            checker._check_expr(failed_call, expected=None)
+        assert checker._call_sites == []
+        assert checker._extern_expr_targets == {}
+        assert checker._extern_binding_targets == {}
+
+        successful_call = failed_call.args[0]
+        assert isinstance(successful_call, Call)
+        assert isinstance(checker._check_expr(successful_call, expected=None), FunctionType)
+        assert [site.callee for site in checker._call_sites] == ["id"]
+
+    def test_finalization_defensively_rejects_an_unresolved_extern_obligation(self) -> None:
+        from agm.agl.typecheck.checker import PendingExternCallObligation, _Checker
+        from agm.agl.typecheck.env import TypeEnvironment
+        from agm.agl.typecheck.inference import InferenceEngine
+
+        checker = _Checker(TypeEnvironment(), resolve(parse_program("()")), _CAPS)
+        unresolved = InferenceEngine().fresh("target")
+        with pytest.raises(AglTypeError, match="concrete target"):
+            checker._finalize_extern_call_obligation(
+                PendingExternCallObligation(
+                    node_id=1,
+                    callee="id",
+                    target_type=unresolved,
+                    span=SourceSpan(1, 1, 1, 1, 0, 0),
+                )
+            )
+
     def test_ask_exec_recording_unaffected_by_extern_presence(self) -> None:
         cp = check_extern('extern def f(x: int) -> int\nask("hi")')
         callees = [s.callee for s in cp.call_sites]
@@ -357,10 +432,51 @@ class TestExternCallSiteRecording:
         assert sites[0].line == 3
         assert sites[0].target_type == IntType()
 
+    def test_generic_indirect_call_uses_finalized_function_provenance(self) -> None:
+        cp = check_extern(
+            "extern def id[T](value: T) -> T\n"
+            "let apply: (int) -> int = id\n"
+            "apply(1)"
+        )
+        sites = [site for site in cp.call_sites if site.callee == "id"]
+        assert len(sites) == 1
+        assert sites[0].line == 3
+        assert sites[0].target_type == IntType()
+
+    def test_generic_extern_provenance_is_finalized_through_a_returned_function(self) -> None:
+        cp = check_extern(
+            "extern def id[T](value: T) -> T\n"
+            "def get() -> (int) -> int\n"
+            "  return id\n"
+            "let apply = get()\n"
+            "apply(1)"
+        )
+        sites = [site for site in cp.call_sites if site.callee == "id"]
+        assert len(sites) == 1
+        assert sites[0].line == 5
+        assert sites[0].target_type == IntType()
+
     def test_partial_extern_call_recorded_at_invocation(self) -> None:
         source = "extern def f(x: int, y: int) -> int\nlet g = f(?, 2)\ng(1)"
         cp = check_extern(source)
         sites = [s for s in cp.call_sites if s.callee == "f"]
+        assert len(sites) == 1
+        assert sites[0].line == 3
+        assert sites[0].target_type == IntType()
+
+    def test_generic_partial_call_publishes_concrete_parameter_and_result_metadata(self) -> None:
+        cp = check_extern(
+            "extern def same[T](left: T, right: T) -> T\n"
+            "let apply: (int) -> int = same(?, 1)\n"
+            "apply(2)"
+        )
+        partial_node_id = _last_call_node_id(cp, "same")
+        assert cp.partial_calls[partial_node_id].argument_holes == (0, None)
+        assert cp.argument_bindings.function_param_types[partial_node_id] == (
+            IntType(),
+            IntType(),
+        )
+        sites = [site for site in cp.call_sites if site.callee == "same"]
         assert len(sites) == 1
         assert sites[0].line == 3
         assert sites[0].target_type == IntType()
@@ -477,6 +593,20 @@ class TestExternCallSiteRecording:
         sites = [s for s in entry_module.call_sites if s.callee == "f"]
         assert len(sites) == 1
         assert sites[0].codec_name == "extern"
+        assert sites[0].target_type == IntType()
+
+    def test_graph_mode_generic_extern_call_has_concrete_inventory(self, tmp_path: Path) -> None:
+        write_companion_file(tmp_path / "root", "lib.mod", "def id(value):\n    return value\n")
+        checked = check_extern_graph(
+            tmp_path,
+            {
+                "entry": "import lib.mod\nlib.mod::id(1)",
+                "lib.mod": "extern def id[T](value: T) -> T",
+            },
+        )
+        entry_module = checked.modules[checked.entry_id]
+        sites = [site for site in entry_module.call_sites if site.callee == "id"]
+        assert len(sites) == 1
         assert sites[0].target_type == IntType()
 
     def test_graph_mode_same_named_externs_from_different_modules_are_not_collapsed(

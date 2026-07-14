@@ -770,6 +770,19 @@ class TestFirstClass:
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
         assert result["r"] == IntValue(8)
 
+    def test_generic_extern_partial_application_preserves_argument_routing(
+        self, tmp_path: Path
+    ) -> None:
+        source = (
+            "extern def select[T](left: T, right: T) -> T\n"
+            "let apply: (int) -> int = select(?, 1)\n"
+            "let result = apply(7)\n"
+            "result\n"
+        )
+        companion = "def select(left, right):\n    return left\n"
+        result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+        assert result["result"] == IntValue(7)
+
     def test_extern_closure_renders_like_an_ordinary_function(self, tmp_path: Path) -> None:
         source = "extern def f(x: int) -> int\nprint(f)\n()\n"
         companion = "def f(x):\n    return x\n"

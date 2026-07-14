@@ -27,6 +27,8 @@ Type hierarchy
   positional only; named/optional arguments are erased from the value type.
 - ``TypeVarType(name)`` — a rigid type variable bound by an enclosing generic
   declaration.
+- ``InferenceVarType(display_hint)`` — an internal, identity-based flexible
+  variable owned by a future inference solver; it is not source-spellable.
 
 ``Type`` is the closed union of all semantic types.
 
@@ -46,8 +48,10 @@ the type's kind in the ``HostCapabilities.codec_kinds`` maps.  E.g.
 from __future__ import annotations
 
 import enum as _enum
-from collections.abc import Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
+from itertools import count
+from typing import assert_never
 
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CORE_ID, ModuleId
 
@@ -349,6 +353,29 @@ class TypeVarType:
         return self.name
 
 
+_inference_var_ids = count()
+
+
+@dataclass(frozen=True, slots=True)
+class InferenceVarType:
+    """An internal flexible type variable identified by a fresh solver id.
+
+    Unlike rigid :class:`TypeVarType`, this form has no source spelling and is
+    never emitted from checking. ``display_hint`` is solver-only diagnostic
+    metadata: equality and hashing use the private fresh identity alone.
+    """
+
+    display_hint: str = field(default="", compare=False, hash=False)
+    _id: int = field(default_factory=lambda: next(_inference_var_ids), init=False, repr=False)
+
+    @property
+    def kind(self) -> str:
+        return "inferencevar"
+
+    def __repr__(self) -> str:
+        return "<inference-var>"
+
+
 # Closed union of all semantic types.
 Type = (
     TextType
@@ -366,7 +393,86 @@ Type = (
     | FunctionType
     | BottomType
     | TypeVarType
+    | InferenceVarType
 )
+
+
+def type_children(t: Type) -> tuple[Type, ...]:
+    """Return *t*'s direct structural children, if any.
+
+    This is the single constructor walk shared by type traversals. Nominal
+    handles expose only their explicit type arguments; their declaration
+    shapes remain owned by ``TypeTable`` and are never expanded here.
+    """
+    match t:
+        case ListType(elem=elem):
+            return (elem,)
+        case DictType(value=value):
+            return (value,)
+        case FunctionType(params=params, result=result):
+            return (*params, result)
+        case RecordType(type_args=type_args) | EnumType(type_args=type_args):
+            return type_args
+        case (
+            TextType()
+            | JsonType()
+            | BoolType()
+            | IntType()
+            | DecimalType()
+            | ExceptionType()
+            | UnitType()
+            | AgentType()
+            | BottomType()
+            | TypeVarType()
+            | InferenceVarType()
+        ):
+            return ()
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
+
+
+def iter_type(t: Type) -> Iterator[Type]:
+    """Yield *t* and every nested structural type in pre-order."""
+    yield t
+    for child in type_children(t):
+        yield from iter_type(child)
+
+
+def _replace_type_children(t: Type, children: tuple[Type, ...]) -> Type:
+    """Return *t* rebuilt with its direct structural *children*."""
+    match t:
+        case ListType():
+            return ListType(children[0])
+        case DictType():
+            return DictType(children[0])
+        case FunctionType(params=params):
+            return FunctionType(params=children[: len(params)], result=children[-1])
+        case RecordType(name=name, module_id=module_id):
+            return RecordType(name=name, type_args=children, module_id=module_id)
+        case EnumType(name=name, module_id=module_id):
+            return EnumType(name=name, type_args=children, module_id=module_id)
+        case (
+            TextType()
+            | JsonType()
+            | BoolType()
+            | IntType()
+            | DecimalType()
+            | ExceptionType()
+            | UnitType()
+            | AgentType()
+            | BottomType()
+            | TypeVarType()
+            | InferenceVarType()
+        ):
+            return t
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
+
+
+def transform_type(t: Type, transform: Callable[[Type], Type]) -> Type:
+    """Recursively rebuild *t*, applying ``transform`` bottom-up to every node."""
+    children = tuple(transform_type(child, transform) for child in type_children(t))
+    return transform(_replace_type_children(t, children))
 
 
 def _format_type(typ: Type, *, parenthesize_function: bool = False) -> str:
@@ -411,8 +517,10 @@ def is_json_shaped(value_type: Type) -> bool:
         return is_json_shaped(value_type.elem)
     if isinstance(value_type, DictType):
         return is_json_shaped(value_type.value)
-    # RecordType, EnumType, ExceptionType, UnitType, AgentType, FunctionType
-    # are not JSON-shaped.
+    if isinstance(value_type, InferenceVarType):
+        return False
+    # RecordType, EnumType, ExceptionType, UnitType, AgentType, FunctionType,
+    # BottomType, and TypeVarType are not JSON-shaped.
     return False
 
 
@@ -457,67 +565,29 @@ def is_assignable(value_type: Type, target_type: Type) -> bool:
 
 
 def free_type_vars(t: Type) -> frozenset[str]:
-    """Recursively collect free type-variable names in *t*."""
-    if isinstance(t, TypeVarType):
-        return frozenset({t.name})
-    if isinstance(t, ListType):
-        return free_type_vars(t.elem)
-    if isinstance(t, DictType):
-        return free_type_vars(t.value)
-    if isinstance(t, FunctionType):
-        result: frozenset[str] = frozenset()
-        for p in t.params:
-            result = result | free_type_vars(p)
-        return result | free_type_vars(t.result)
-    if isinstance(t, (RecordType, EnumType)):
-        result = frozenset()
-        for ta in t.type_args:
-            result = result | free_type_vars(ta)
-        return result
-    # Primitives, ExceptionType, UnitType, AgentType, BottomType: no type vars.
-    return frozenset()
+    """Collect free rigid source type-variable names in *t*."""
+    return frozenset(node.name for node in iter_type(t) if isinstance(node, TypeVarType))
 
 
 def substitute(t: Type, subst: Mapping[str, Type]) -> Type:
-    """Capture-free substitution: replace ``TypeVarType(n)`` with ``subst[n]``."""
-    if isinstance(t, TypeVarType):
-        return subst.get(t.name, t)
-    if isinstance(t, ListType):
-        return ListType(elem=substitute(t.elem, subst))
-    if isinstance(t, DictType):
-        return DictType(value=substitute(t.value, subst))
-    if isinstance(t, FunctionType):
-        return FunctionType(
-            params=tuple(substitute(p, subst) for p in t.params),
-            result=substitute(t.result, subst),
-        )
-    if isinstance(t, RecordType):
-        new_type_args = tuple(substitute(ta, subst) for ta in t.type_args)
-        return RecordType(name=t.name, type_args=new_type_args, module_id=t.module_id)
-    if isinstance(t, EnumType):
-        new_type_args = tuple(substitute(ta, subst) for ta in t.type_args)
-        return EnumType(name=t.name, type_args=new_type_args, module_id=t.module_id)
-    # Primitives, ExceptionType, UnitType, AgentType, BottomType: unchanged.
-    return t
+    """Capture-free substitution of rigid ``TypeVarType`` names only."""
+
+    def replace_rigid(node: Type) -> Type:
+        if isinstance(node, TypeVarType):
+            return subst.get(node.name, node)
+        return node
+
+    return transform_type(t, replace_rigid)
 
 
 def contains_type_var(t: Type) -> bool:
-    """Return ``True`` if *t* contains any free type variable.
+    """Return whether *t* contains a rigid source declaration variable."""
+    return any(isinstance(node, TypeVarType) for node in iter_type(t))
 
-    Short-circuits on the first ``TypeVarType`` found instead of collecting the
-    full free-variable set (this is called per-argument in the inference loops).
-    """
-    if isinstance(t, TypeVarType):
-        return True
-    if isinstance(t, ListType):
-        return contains_type_var(t.elem)
-    if isinstance(t, DictType):
-        return contains_type_var(t.value)
-    if isinstance(t, FunctionType):
-        return any(contains_type_var(p) for p in t.params) or contains_type_var(t.result)
-    if isinstance(t, (RecordType, EnumType)):
-        return any(contains_type_var(ta) for ta in t.type_args)
-    return False
+
+def contains_inference_var(t: Type) -> bool:
+    """Return whether *t* contains a solver-owned flexible variable."""
+    return any(isinstance(node, InferenceVarType) for node in iter_type(t))
 
 
 # ---------------------------------------------------------------------------

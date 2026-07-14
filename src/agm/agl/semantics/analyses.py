@@ -86,6 +86,7 @@ from agm.agl.semantics.types import (
     EnumType,
     ExceptionType,
     FunctionType,
+    InferenceVarType,
     IntType,
     JsonType,
     ListType,
@@ -259,6 +260,8 @@ def _template_inhabited(
             if replacement is None or replacement == t:
                 return True
             return _template_inhabited(replacement, env, inhabited, defs, stack=stack)
+        case InferenceVarType():
+            return True
         case RecordType() | EnumType():
             key = (t.module_id, t.name)
             if any(stack_key == key for stack_key, _args in stack):
@@ -457,6 +460,7 @@ def _template_no_eq(
             | DecimalType()
             | BottomType()
             | TypeVarType()
+            | InferenceVarType()
         ):
             return False
         case _ as unreachable:  # pragma: no cover
@@ -472,6 +476,8 @@ def _template_relevant_params(
     match t:
         case TypeVarType():
             return {t.name} if t.name in own_params else set()
+        case InferenceVarType():
+            return set()
         case ListType():
             return _template_relevant_params(t.elem, own_params, relevant, defs)
         case DictType():
@@ -503,6 +509,7 @@ def _template_relevant_params(
             | IntType()
             | DecimalType()
             | BottomType()
+            | InferenceVarType()
         ):
             return set()
         case _ as unreachable:  # pragma: no cover
@@ -632,6 +639,7 @@ def nominal_references(t: Type) -> Iterator[RecordType | EnumType | ExceptionTyp
             | AgentType()
             | BottomType()
             | TypeVarType()
+            | InferenceVarType()
         ):
             return
         case _ as unreachable:  # pragma: no cover
@@ -681,6 +689,7 @@ def nominal_references_for_schema(
             | AgentType()
             | BottomType()
             | TypeVarType()
+            | InferenceVarType()
         ):
             return
         case _ as unreachable:  # pragma: no cover
@@ -809,6 +818,8 @@ def _param_occurrences(
     match t:
         case TypeVarType(name=name):
             return {name: growing}
+        case InferenceVarType():
+            return {}
         case ListType(elem=elem):
             return _param_occurrences(
                 elem, growing=True, defs=defs, relevant_params=relevant_params
@@ -866,6 +877,7 @@ def _param_occurrences(
             | IntType()
             | DecimalType()
             | BottomType()
+            | InferenceVarType()
         ):
             return {}
         case _ as unreachable:  # pragma: no cover

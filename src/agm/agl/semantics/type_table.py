@@ -56,6 +56,7 @@ from agm.agl.semantics.types import (
     EnumType,
     ExceptionType,
     FunctionType,
+    InferenceVarType,
     IntType,
     JsonType,
     ListType,
@@ -546,6 +547,7 @@ class TypeTable:
                 | DecimalType()
                 | BottomType()
                 | TypeVarType()
+                | InferenceVarType()
             ):
                 return t
             case _ as unreachable:  # pragma: no cover
@@ -713,6 +715,7 @@ def _has_no_value_equality(t: Type, table: TypeTable) -> bool:
             | DecimalType()
             | BottomType()
             | TypeVarType()
+            | InferenceVarType()
         ):
             return False
         case _ as unreachable:  # pragma: no cover
@@ -743,7 +746,9 @@ def comparable_types(left: Type, right: Type, table: TypeTable) -> bool:
         return False
     # Bare type variables and the bottom type are never comparable here (the
     # checker additionally rejects bare type variables at the comparison site).
-    if isinstance(left, (BottomType, TypeVarType)) or isinstance(right, (BottomType, TypeVarType)):
+    if isinstance(left, (BottomType, TypeVarType, InferenceVarType)) or isinstance(
+        right, (BottomType, TypeVarType, InferenceVarType)
+    ):
         return False
     if left == right:
         return True

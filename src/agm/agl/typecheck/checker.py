@@ -67,6 +67,7 @@ from agm.agl.semantics.types import (
     EnumType,
     ExceptionType,
     FunctionType,
+    InferenceVarType,
     IntType,
     JsonType,
     ListType,
@@ -346,7 +347,7 @@ def _contains_banned_extern_type(
             )
         case (
             TextType() | JsonType() | BoolType() | IntType() | DecimalType()
-            | UnitType() | BottomType() | TypeVarType()
+            | UnitType() | BottomType() | TypeVarType() | InferenceVarType()
         ):
             return False
         case _ as unreachable:  # pragma: no cover
@@ -844,7 +845,15 @@ class _Checker:
             )
         if isinstance(
             schema_type,
-            (ExceptionType, UnitType, AgentType, FunctionType, BottomType, TypeVarType),
+            (
+                ExceptionType,
+                UnitType,
+                AgentType,
+                FunctionType,
+                BottomType,
+                TypeVarType,
+                InferenceVarType,
+            ),
         ):
             return False
         assert_never(schema_type)  # pragma: no cover

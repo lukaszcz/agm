@@ -325,21 +325,28 @@ class BuiltinCallChecker:
             assert not contains_inference_var(spec.target_type)
             self._ctx._contract_specs[obligation.node_id] = spec
             parse_policy = obligation.parse_policy
-            if obligation.has_parse_error_option and isinstance(target_type, TextType):
-                self._ctx._warnings.append(
-                    Diagnostic(
-                        message=(
-                            "'on_parse_error' has no effect on a text target: a text result "
-                            "never fails parsing, so the policy can never fire."
-                        ),
-                        line=obligation.span.start_line,
-                        column=obligation.span.start_col,
-                        end_line=obligation.span.end_line,
-                        end_column=obligation.span.end_col,
-                        severity="warning",
-                    )
-                )
+            self._warn_noop_parse_error_on_text(obligation)
         self._append_call_site(obligation, codec_name, parse_policy)
+
+    def _warn_noop_parse_error_on_text(self, obligation: PendingBuiltinObligation) -> None:
+        """Warn when ``on_parse_error`` is set on a text target, where it can never fire."""
+        if not (
+            obligation.has_parse_error_option and isinstance(obligation.target_type, TextType)
+        ):
+            return
+        self._ctx._warnings.append(
+            Diagnostic(
+                message=(
+                    "'on_parse_error' has no effect on a text target: a text result "
+                    "never fails parsing, so the policy can never fire."
+                ),
+                line=obligation.span.start_line,
+                column=obligation.span.start_col,
+                end_line=obligation.span.end_line,
+                end_column=obligation.span.end_col,
+                severity="warning",
+            )
+        )
 
     def _append_call_site(
         self, obligation: PendingBuiltinObligation, codec_name: str, parse_policy: str
@@ -536,20 +543,7 @@ class BuiltinCallChecker:
             )
             spec = OutputContractSpec(obligation.target_type, codec_name, effective_strict)
             parse_policy = obligation.parse_policy
-            if obligation.has_parse_error_option and isinstance(obligation.target_type, TextType):
-                self._ctx._warnings.append(
-                    Diagnostic(
-                        message=(
-                            "'on_parse_error' has no effect on a text target: a text result "
-                            "never fails parsing, so the policy can never fire."
-                        ),
-                        line=obligation.span.start_line,
-                        column=obligation.span.start_col,
-                        end_line=obligation.span.end_line,
-                        end_column=obligation.span.end_col,
-                        severity="warning",
-                    )
-                )
+            self._warn_noop_parse_error_on_text(obligation)
         assert not contains_inference_var(spec.target_type)
         self._ctx._contract_specs[obligation.node_id] = spec
         self._append_call_site(obligation, spec.codec_name, parse_policy)

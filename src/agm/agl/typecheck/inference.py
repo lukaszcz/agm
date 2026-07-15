@@ -22,7 +22,8 @@ from agm.agl.semantics.types import (
     ListType,
     RecordType,
     Type,
-    TypeVarType,
+    replace_type_children,
+    substitute,
     type_children,
 )
 from agm.agl.syntax.spans import SourceSpan
@@ -112,7 +113,7 @@ class InferenceEngine:
         """Freshen ordered quantified templates without changing other rigids."""
         variables = {name: self.fresh(name) for name in type_params}
         return SchemeInstantiation(
-            templates=tuple(self._freshen(template, variables) for template in templates),
+            templates=tuple(substitute(template, variables) for template in templates),
             variables=variables,
         )
 
@@ -130,10 +131,6 @@ class InferenceEngine:
         """
         self._complete(inferred, context, origin)
 
-    def resolve(self, typ: Type) -> Type:
-        """Return ``typ`` with links followed and compressed."""
-        return self.zonk(typ)
-
     def zonk(self, typ: Type) -> Type:
         """Recursively replace flexible links with their final known solutions."""
         if isinstance(typ, InferenceVarType):
@@ -144,21 +141,7 @@ class InferenceEngine:
             zonked = self.zonk(solution)
             self._solution[root] = zonked
             return zonked
-        if isinstance(typ, ListType):
-            return ListType(self.zonk(typ.elem))
-        if isinstance(typ, DictType):
-            return DictType(self.zonk(typ.value))
-        if isinstance(typ, FunctionType):
-            return FunctionType(
-                tuple(self.zonk(param) for param in typ.params), self.zonk(typ.result)
-            )
-        if isinstance(typ, RecordType):
-            return RecordType(
-                typ.name, tuple(self.zonk(arg) for arg in typ.type_args), typ.module_id
-            )
-        if isinstance(typ, EnumType):
-            return EnumType(typ.name, tuple(self.zonk(arg) for arg in typ.type_args), typ.module_id)
-        return typ
+        return replace_type_children(typ, tuple(self.zonk(child) for child in type_children(typ)))
 
     def is_solved(self, variable: InferenceVarType) -> bool:
         """Return whether ``variable`` has a fully resolved final solution."""
@@ -191,41 +174,11 @@ class InferenceEngine:
                     span=origin.span,
                 )
 
-    def assert_no_inference_vars(self, *types: Type) -> None:
+    def assert_no_inference_vars(self, types: Iterable[Type]) -> None:
         """Assert that finalized types contain no flexible inference variables."""
         for typ in types:
             if self._contains_unresolved_variable(typ):
                 raise AssertionError("inference variable leaked from a finalized inference region")
-
-    def assert_no_owned_leaks(self, types: Iterable[Type]) -> None:
-        """Assert the reusable finalization invariant over an iterable of types."""
-        self.assert_no_inference_vars(*tuple(types))
-
-    def _freshen(self, typ: Type, variables: dict[str, InferenceVarType]) -> Type:
-        if isinstance(typ, TypeVarType):
-            return variables.get(typ.name, typ)
-        if isinstance(typ, ListType):
-            return ListType(self._freshen(typ.elem, variables))
-        if isinstance(typ, DictType):
-            return DictType(self._freshen(typ.value, variables))
-        if isinstance(typ, FunctionType):
-            return FunctionType(
-                tuple(self._freshen(param, variables) for param in typ.params),
-                self._freshen(typ.result, variables),
-            )
-        if isinstance(typ, RecordType):
-            return RecordType(
-                typ.name,
-                tuple(self._freshen(arg, variables) for arg in typ.type_args),
-                typ.module_id,
-            )
-        if isinstance(typ, EnumType):
-            return EnumType(
-                typ.name,
-                tuple(self._freshen(arg, variables) for arg in typ.type_args),
-                typ.module_id,
-            )
-        return typ
 
     def _unify(
         self,
@@ -454,7 +407,3 @@ class InferenceEngine:
         if isinstance(resolved, InferenceVarType):
             return True
         return any(self._contains_unresolved_variable(child) for child in type_children(resolved))
-
-
-InferenceSolver = InferenceEngine
-"""Backward-compatible descriptive alias for :class:`InferenceEngine`."""

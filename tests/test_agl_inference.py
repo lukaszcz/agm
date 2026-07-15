@@ -377,7 +377,7 @@ class TestFinalizationAndProvenance:
         zonked = engine.zonk(FunctionType((first,), ListType(second)))
 
         assert zonked == FunctionType((IntType(),), ListType(IntType()))
-        assert engine.resolve(first) == IntType()
+        assert engine.zonk(first) == IntType()
         assert engine.parent_of(first) == engine.parent_of(third)
 
     def test_requirements_and_leak_assertions_are_owned_and_reusable(self) -> None:
@@ -390,11 +390,11 @@ class TestFinalizationAndProvenance:
             engine.check_requirements()
         assert "inference-var" not in str(raised.value)
         with pytest.raises(AssertionError):
-            engine.assert_no_owned_leaks((FunctionType((variable,), IntType()),))
+            engine.assert_no_inference_vars((FunctionType((variable,), IntType()),))
 
         engine.unify(variable, IntType(), _origin(engine, 2))
         engine.check_requirements()
-        engine.assert_no_inference_vars(FunctionType((variable,), IntType()))
+        engine.assert_no_inference_vars((FunctionType((variable,), IntType()),))
 
     def test_requirement_rejects_a_solution_with_nested_unresolved_variables(self) -> None:
         engine = InferenceEngine()
@@ -406,7 +406,7 @@ class TestFinalizationAndProvenance:
         with pytest.raises(InferenceError, match="T"):
             engine.check_requirements()
         with pytest.raises(AssertionError):
-            engine.assert_no_inference_vars(outer)
+            engine.assert_no_inference_vars((outer,))
 
     def test_mismatch_uses_failing_origin_and_earliest_related_evidence(self) -> None:
         engine = InferenceEngine()

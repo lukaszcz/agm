@@ -438,7 +438,7 @@ def iter_type(t: Type) -> Iterator[Type]:
         yield from iter_type(child)
 
 
-def _replace_type_children(t: Type, children: tuple[Type, ...]) -> Type:
+def replace_type_children(t: Type, children: tuple[Type, ...]) -> Type:
     """Return *t* rebuilt with its direct structural *children*."""
     match t:
         case ListType():
@@ -472,7 +472,7 @@ def _replace_type_children(t: Type, children: tuple[Type, ...]) -> Type:
 def transform_type(t: Type, transform: Callable[[Type], Type]) -> Type:
     """Recursively rebuild *t*, applying ``transform`` bottom-up to every node."""
     children = tuple(transform_type(child, transform) for child in type_children(t))
-    return transform(_replace_type_children(t, children))
+    return transform(replace_type_children(t, children))
 
 
 def _format_type(typ: Type, *, parenthesize_function: bool = False) -> str:

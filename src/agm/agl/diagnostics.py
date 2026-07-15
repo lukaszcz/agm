@@ -11,7 +11,7 @@ for backward compatibility (the lexer and other callers use
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal, Sequence
 
@@ -193,13 +193,4 @@ class AglError(Exception):
         if self.span is None:
             return Diagnostic(message=str(self), line=1, related=related)
         primary = diagnostic_from_span(str(self), self.span)
-        return Diagnostic(
-            message=primary.message,
-            line=primary.line,
-            column=primary.column,
-            end_line=primary.end_line,
-            end_column=primary.end_column,
-            severity=primary.severity,
-            source_label=primary.source_label,
-            related=related,
-        )
+        return replace(primary, related=related)

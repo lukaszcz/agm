@@ -1078,7 +1078,7 @@ class _Checker:
                 node_id: tuple(region.engine.zonk(param_type) for param_type in param_types)
                 for node_id, param_types in region.function_call_param_types.items()
             }
-            region.engine.assert_no_owned_leaks(
+            region.engine.assert_no_inference_vars(
                 (
                     *final_node_types.values(),
                     *(t for ts in final_param_types.values() for t in ts),
@@ -1661,7 +1661,7 @@ class _Checker:
         zonked = tuple(
             replace(target, result_type=engine.zonk(target.result_type)) for target in targets
         )
-        engine.assert_no_owned_leaks(target.result_type for target in zonked)
+        engine.assert_no_inference_vars(target.result_type for target in zonked)
         return self._merge_extern_targets(zonked)
 
     def _finalize_extern_provenance(self, engine: InferenceEngine) -> None:

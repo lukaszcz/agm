@@ -139,9 +139,9 @@ from agm.agl.ir.program import (
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.coercions import compile_coercion
 from agm.agl.lower.conversions import compile_recipe
-from agm.agl.matchcompile.compiler import CompiledCase
-from agm.agl.matchcompile.model import (
+from agm.agl.matchcompile import (
     BoolConstructor,
+    CompiledCase,
     Constructor,
     Decision,
     DecisionLeaf,
@@ -149,10 +149,8 @@ from agm.agl.matchcompile.model import (
     EnumConstructor,
     FieldOccurrenceProvenance,
     LiteralKind,
-    OccurrenceId,
-)
-from agm.agl.matchcompile.stage import (
     MatchCompiledProgram,
+    OccurrenceId,
     validate_match_compiled_program,
 )
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CORE_ID, ModuleId

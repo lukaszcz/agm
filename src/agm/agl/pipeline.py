@@ -1607,7 +1607,7 @@ def _cached_artifact_provenance_diagnostic(
     prepared_modules: "Mapping[ModuleId, ResolvedProgram]",
     compiled_entry: "ModuleId",
     compiled_modules: "Mapping[ModuleId, ResolvedProgram]",
-    cached_capabilities: "HostCapabilities | None",
+    cached_capabilities: object | None,
     capabilities: "HostCapabilities",
     span: "SourceSpan | None",
 ) -> Diagnostic | None:

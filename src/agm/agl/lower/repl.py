@@ -10,7 +10,7 @@ from agm.agl.ir.ids import NominalId, SourceId, SymbolId
 from agm.agl.ir.program import ExecutableProgram, NominalDescriptor, SourceFile
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.lowerer import _LinkState, _Lowerer
-from agm.agl.matchcompile.stage import (
+from agm.agl.matchcompile import (
     MatchCompiledModuleGraph,
     MatchCompiledProgram,
     validate_match_compiled_program,

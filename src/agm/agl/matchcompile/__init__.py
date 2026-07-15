@@ -27,6 +27,7 @@ from .model import (
     DecisionLeaf,
     DecisionSwitch,
     EnumConstructor,
+    FieldOccurrenceProvenance,
     LiteralKind,
     OccurrenceId,
 )
@@ -53,6 +54,7 @@ __all__ = [
     "DecisionSwitch",
     "EnumConstructor",
     "EnumWitness",
+    "FieldOccurrenceProvenance",
     "EnumWitnessQualification",
     "LiteralKind",
     "LiteralWitness",

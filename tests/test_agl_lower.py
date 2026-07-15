@@ -23,7 +23,6 @@ from agm.agl.ir.nodes import (
     IrArith,
     IrAssign,
     IrBind,
-    IrBindPlan,
     IrBlock,
     IrBreak,
     IrCapture,
@@ -39,6 +38,7 @@ from agm.agl.ir.nodes import (
     IrContains,
     IrConvert,
     IrDirectCall,
+    IrEnumCaseKey,
     IrIf,
     IrIndirectCall,
     IrIterHasNext,
@@ -58,7 +58,6 @@ from agm.agl.ir.nodes import (
     IrTemplateValue,
     IrTry,
     IrUnary,
-    IrVariantPlan,
     UseDefault,
 )
 from agm.agl.ir.operations import (
@@ -2314,25 +2313,14 @@ class TestBinaryOpKindSelection:
 
 
 # ---------------------------------------------------------------------------
-# Structural lowering: pattern plan kinds including bare_variant_patterns
+# Structural lowering: compiled one-level cases
 # ---------------------------------------------------------------------------
 
 
-class TestPatternPlanLowering:
-    """Structural tests for _compile_plan: IrVariantPlan vs IrBindPlan.
+class TestOneLevelCaseLowering:
+    """Structural tests for decision-DAG lowering and source binders."""
 
-    A bare NAME in a case pattern that names an in-scope nullary constructor
-    compiles to IrVariantPlan (not IrBindPlan), per the
-    bare_variant_patterns scope-directed rule.  A name that does NOT name
-    a constructor compiles to IrBindPlan.
-    """
-
-    def test_bare_variant_pattern_lowers_to_ir_variant_plan(self) -> None:
-        """Bare nullary-constructor pattern → IrVariantPlan(variant=...).
-
-        'Active' is in bare_variant_patterns (it names a nullary enum variant).
-        _compile_plan must emit IrVariantPlan, NOT IrBindPlan.
-        """
+    def test_bare_variant_pattern_lowers_to_enum_key(self) -> None:
         source = (
             "enum Status\n"
             "  | Active\n"
@@ -2345,22 +2333,18 @@ class TestPatternPlanLowering:
             "()\n"
         )
         prog = _lower(source)
-        inits = prog.modules[prog.entry_module].initializers
-        case_bind: IrBind | None = None
-        for node in inits:
-            if isinstance(node, IrBind) and isinstance(node.value, IrCase):
-                case_bind = node
-                break
-        assert case_bind is not None, "Expected IrBind(IrCase) in initializers"
-        assert isinstance(case_bind.value, IrCase)
-        arm0 = case_bind.value.arms[0]
-        assert isinstance(arm0.plan, IrVariantPlan), (
-            f"bare 'Active' pattern must be IrVariantPlan, got {type(arm0.plan).__name__}"
-        )
-        assert arm0.plan.variant == "Active"
+        case_bind = prog.modules[prog.entry_module].initializers[1]
+        assert isinstance(case_bind, IrBind)
+        sequence = case_bind.value
+        assert isinstance(sequence, IrSequence)
+        assert isinstance(sequence.items[0], IrBind)
+        assert prog.symbols[sequence.items[0].symbol].public_name is None
+        switch = sequence.items[1]
+        assert isinstance(switch, IrCase)
+        assert isinstance(switch.arms[0].key, IrEnumCaseKey)
+        assert switch.arms[0].key.variant == "Active"
 
-    def test_binder_pattern_lowers_to_ir_bind_plan(self) -> None:
-        """A non-constructor name pattern → IrBindPlan (binder), not IrVariantPlan."""
+    def test_binder_pattern_lowers_in_default_leaf(self) -> None:
         source = (
             "enum Status\n"
             "  | Active\n"
@@ -2373,26 +2357,18 @@ class TestPatternPlanLowering:
             "()\n"
         )
         prog = _lower(source)
-        inits = prog.modules[prog.entry_module].initializers
-        case_bind = None
-        for node in inits:
-            if isinstance(node, IrBind) and isinstance(node.value, IrCase):
-                case_bind = node
-                break
-        assert case_bind is not None, "Expected IrBind(IrCase) in initializers"
-        assert isinstance(case_bind.value, IrCase)
-        arm1 = case_bind.value.arms[1]
-        assert isinstance(arm1.plan, IrBindPlan), (
-            f"binder 'x' must be IrBindPlan, got {type(arm1.plan).__name__}"
-        )
+        case_bind = prog.modules[prog.entry_module].initializers[1]
+        assert isinstance(case_bind, IrBind)
+        assert isinstance(case_bind.value, IrSequence)
+        switch = case_bind.value.items[1]
+        assert isinstance(switch, IrCase)
+        assert isinstance(switch.default, IrSequence)
+        binder = switch.default.items[0]
+        assert isinstance(binder, IrBind)
+        assert isinstance(binder.value, IrLoad)
+        assert prog.symbols[binder.symbol].public_name is None
 
-    def test_bare_variant_and_binder_in_same_case_are_distinct(self) -> None:
-        """Bare-variant and binder patterns in the same case compile to distinct plans.
-
-        arm[0] → IrVariantPlan (nullary Active constructor);
-        arm[1] → IrBindPlan (fresh binder x).
-        Together they confirm the scope-directed dispatch in _compile_plan.
-        """
+    def test_bare_variant_and_binder_use_key_and_default(self) -> None:
         source = (
             "enum Status\n"
             "  | Active\n"
@@ -2405,16 +2381,13 @@ class TestPatternPlanLowering:
             "()\n"
         )
         prog = _lower(source)
-        inits = prog.modules[prog.entry_module].initializers
-        case_bind = None
-        for node in inits:
-            if isinstance(node, IrBind) and isinstance(node.value, IrCase):
-                case_bind = node
-                break
-        assert case_bind is not None, "Expected IrBind(IrCase) in initializers"
-        assert isinstance(case_bind.value, IrCase)
-        assert isinstance(case_bind.value.arms[0].plan, IrVariantPlan)
-        assert isinstance(case_bind.value.arms[1].plan, IrBindPlan)
+        case_bind = prog.modules[prog.entry_module].initializers[1]
+        assert isinstance(case_bind, IrBind)
+        assert isinstance(case_bind.value, IrSequence)
+        switch = case_bind.value.items[1]
+        assert isinstance(switch, IrCase)
+        assert isinstance(switch.arms[0].key, IrEnumCaseKey)
+        assert switch.default is not None
 
 
 # ---------------------------------------------------------------------------

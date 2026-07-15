@@ -29,6 +29,7 @@ Dispatch uses structural ``match`` with a final ``assert_never`` arm.
 
 from __future__ import annotations
 
+import decimal
 import json
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -51,12 +52,12 @@ from agm.agl.ir.nodes import (
     IrAskRequest,
     IrAssign,
     IrBind,
-    IrBindPlan,
     IrBlock,
     IrBreak,
     IrCapture,
     IrCase,
     IrCaseArm,
+    IrCaseKey,
     IrCatchHandler,
     IrCoerce,
     IrCompare,
@@ -65,13 +66,13 @@ from agm.agl.ir.nodes import (
     IrConstDecimal,
     IrConstInt,
     IrConstJsonNull,
-    IrConstructorPlan,
     IrConstText,
     IrConstUnit,
     IrContains,
     IrContinue,
     IrConvert,
     IrDirectCall,
+    IrEnumCaseKey,
     IrExec,
     IrExpr,
     IrField,
@@ -84,7 +85,8 @@ from agm.agl.ir.nodes import (
     IrIterHasNext,
     IrIterInit,
     IrIterNext,
-    IrLiteralPlan,
+    IrLiteralCaseKey,
+    IrLiteralKind,
     IrLoad,
     IrLoop,
     IrMakeClosure,
@@ -94,7 +96,6 @@ from agm.agl.ir.nodes import (
     IrMakeException,
     IrMakeList,
     IrMakeRecord,
-    IrMatchPlan,
     IrOr,
     IrParseJson,
     IrPrint,
@@ -108,8 +109,6 @@ from agm.agl.ir.nodes import (
     IrTry,
     IrUnary,
     IrVariantIs,
-    IrVariantPlan,
-    IrWildcardPlan,
     UseDefault,
 )
 from agm.agl.ir.operations import (
@@ -140,7 +139,20 @@ from agm.agl.ir.program import (
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.coercions import compile_coercion
 from agm.agl.lower.conversions import compile_recipe
-from agm.agl.matchcompile import MatchCompiledProgram, validate_match_compiled_program
+from agm.agl.matchcompile import (
+    BoolConstructor,
+    CompiledCase,
+    Decision,
+    DecisionLeaf,
+    DecisionSwitch,
+    EnumConstructor,
+    FieldOccurrenceProvenance,
+    LiteralConstructor,
+    LiteralKind,
+    MatchCompiledProgram,
+    OccurrenceId,
+    validate_match_compiled_program,
+)
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CORE_ID, ModuleId
 from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind
 from agm.agl.semantics.type_table import TypeTable
@@ -345,6 +357,7 @@ class _Lowerer:
         module_id: ModuleId,
         source_id: SourceId,
         source_text: str,
+        cases: Mapping[int, CompiledCase] | None = None,
         *,
         contract_payloads: Mapping[int, ContractPayload] | None = None,
     ) -> None:
@@ -353,6 +366,7 @@ class _Lowerer:
         self._module_id = module_id
         self._source_id = source_id
         self._source_text = normalize_newlines(source_text)
+        self._compiled_cases = cases if cases is not None else {}
         self._params: list[IrParam] = []
         # Shared TypeTable built during checking; resolves record/enum field
         # and variant shapes for constructor lowering, nominal descriptors,
@@ -1205,7 +1219,9 @@ class _Lowerer:
             # Case expression
             # ----------------------------------------------------------
             case Case(subject=subject_expr, branches=branches, span=span, node_id=nid):
-                return self._lower_case(subject_expr, branches, span, self._node_type(nid))
+                return self._lower_case(
+                    nid, subject_expr, branches, span, self._node_type(nid)
+                )
 
             # ----------------------------------------------------------
             # loop expression → IrLoop (desugared by _lower_loop)
@@ -2527,61 +2543,189 @@ class _Lowerer:
 
     def _lower_case(
         self,
+        case_node_id: int,
         subject_expr: "Expr",
         branches: "tuple[CaseBranch, ...]",
         span: "SourceSpan",
         result_type: Type,
-    ) -> IrCase:
-        """Lower a ``Case`` AST node to ``IrCase`` with compiled match plans."""
-        ir_arms = tuple(
-            IrCaseArm(
-                plan=self._compile_plan(branch.pattern),
-                body=self.lower_coerced(branch.body, result_type),
-            )
-            for branch in branches
+    ) -> IrSequence:
+        """Lower one compiled decision DAG without re-reading source patterns."""
+        compiled = self._compiled_cases.get(case_node_id)
+        assert compiled is not None, (
+            f"compiler bug: no compiled decision for case node {case_node_id}"
         )
-        return IrCase(
-            location=self._loc(span),
-            subject=self.lower_expr(subject_expr),
-            arms=ir_arms,
-        )
+        location = self._loc(span)
+        root_symbol = self._alloc_synthetic_sym(mutable=False)
+        occurrence_symbols: dict[OccurrenceId, SymbolId] = {
+            compiled.normalized.root.id: root_symbol
+        }
+        occurrences = {occurrence.id: occurrence for occurrence in compiled.occurrences}
+        actions = {action.action_id: action for action in compiled.actions}
+        branch_by_action = {
+            action.action_id: branches[action.source_index] for action in compiled.actions
+        }
+        decision_memo: dict[int, IrExpr] = {}
+        action_body_memo: dict[int, IrExpr] = {}
 
-    def _compile_plan(self, pattern: Pattern) -> IrMatchPlan:
-        """Compile a ``Pattern`` to a closed ``IrMatchPlan``.
-
-        Closed ``match``/``assert_never`` dispatch over the ``Pattern`` union
-        makes a missing case a mypy exhaustiveness error.
-        """
-        match pattern:
-            case WildcardPattern():
-                return IrWildcardPlan()
-
-            case VarPattern(name=name, node_id=nid):
-                if nid in self._checked.resolved.bare_variant_patterns:
-                    # Nullary constructor pattern — match by variant name, no binding.
-                    return IrVariantPlan(variant=name)
-                # Binder pattern — allocate a fresh SymbolId (private, public=False).
-                sym = self._alloc_sym(nid, name=name, mutable=False, public=False)
-                return IrBindPlan(symbol=sym)
-
-            case LiteralPattern(literal=lit):
-                # Lower the literal to its IrConst* node (re-use lower_expr).
-                return IrLiteralPlan(value=self.lower_expr(lit))
-
-            case ConstructorPattern(name=variant_name):
-                field_plans: list[tuple[str, IrMatchPlan]] = [
-                    (fname, self._compile_plan(sub_pat))
-                    for fname, sub_pat in self._checked.argument_bindings.constructor_patterns[
-                        pattern.node_id
-                    ]
-                ]
-                return IrConstructorPlan(
-                    variant=variant_name,
-                    fields=tuple(field_plans),
+        def symbol_for_occurrence(identifier: OccurrenceId) -> SymbolId:
+            symbol = occurrence_symbols.get(identifier)
+            if symbol is None:
+                assert identifier in occurrences, (
+                    f"compiler bug: unknown occurrence {identifier.value}"
                 )
+                symbol = self._alloc_synthetic_sym(mutable=False)
+                occurrence_symbols[identifier] = symbol
+            return symbol
 
-            case _ as unreachable:  # pragma: no cover
-                assert_never(unreachable)
+        binder_provenance: dict[int, tuple[str, int]] = {}
+        visited_decisions: set[int] = set()
+
+        def collect_binders(decision: Decision) -> None:
+            identifier = id(decision)
+            if identifier in visited_decisions:
+                return
+            visited_decisions.add(identifier)
+            if isinstance(decision, DecisionLeaf):
+                for assignment in decision.binder_assignments:
+                    binder = assignment.binder
+                    binder_provenance.setdefault(
+                        binder.node_id, (binder.name, binder.node_id)
+                    )
+                return
+            switch = cast(DecisionSwitch, decision)
+            for decision_branch in switch.keyed_children:
+                collect_binders(decision_branch.decision)
+            if switch.default is not None:
+                collect_binders(switch.default)
+
+        collect_binders(compiled.root)
+        binder_symbols = {
+            node_id: self._alloc_sym(
+                node_id, name=name, mutable=False, public=False
+            )
+            for name, node_id in binder_provenance.values()
+        }
+        for action_id, action in actions.items():
+            source_branch = branch_by_action[action_id]
+            assert source_branch.body.node_id == action.body_node_id, (
+                "compiler bug: decision action does not identify its source body"
+            )
+            action_body_memo[action_id] = self.lower_coerced(
+                source_branch.body, result_type
+            )
+
+        def case_key(constructor: object) -> IrCaseKey:
+            if isinstance(constructor, EnumConstructor):
+                return IrEnumCaseKey(
+                    NominalId(
+                        constructor.enum_type.module_id,
+                        constructor.enum_type.name,
+                    ),
+                    constructor.variant,
+                )
+            if isinstance(constructor, BoolConstructor):
+                return IrLiteralCaseKey(IrLiteralKind.BOOL, constructor.value)
+            assert isinstance(constructor, LiteralConstructor)
+            match constructor.kind:
+                case LiteralKind.NUMERIC:
+                    assert isinstance(constructor.value, decimal.Decimal)
+                    return IrLiteralCaseKey(IrLiteralKind.NUMERIC, constructor.value)
+                case LiteralKind.TEXT:
+                    assert isinstance(constructor.value, str)
+                    return IrLiteralCaseKey(IrLiteralKind.TEXT, constructor.value)
+                case LiteralKind.NULL:
+                    assert constructor.value is None
+                    return IrLiteralCaseKey(IrLiteralKind.NULL, None)
+                case _ as unreachable:  # pragma: no cover
+                    assert_never(unreachable)
+
+        def lower_decision(decision: Decision, available: frozenset[OccurrenceId]) -> IrExpr:
+            missing = set(decision.free_occurrences) - available
+            assert not missing, (
+                "compiler bug: decision reads undominated occurrences "
+                f"{sorted(identifier.value for identifier in missing)}"
+            )
+            cached = decision_memo.get(id(decision))
+            if cached is not None:
+                return cached
+            if isinstance(decision, DecisionLeaf):
+                bindings = tuple(
+                    IrBind(
+                        location,
+                        binder_symbols[assignment.binder.node_id],
+                        IrLoad(
+                            location,
+                            symbol_for_occurrence(assignment.occurrence),
+                        ),
+                    )
+                    for assignment in decision.binder_assignments
+                )
+                body = action_body_memo[decision.action_id]
+                lowered_leaf: IrExpr = (
+                    IrSequence(location, (*bindings, body)) if bindings else body
+                )
+                decision_memo[id(decision)] = lowered_leaf
+                return lowered_leaf
+
+            switch = cast(DecisionSwitch, decision)
+            arms: list[IrCaseArm] = []
+            for decision_branch in switch.keyed_children:
+                child = decision_branch.decision
+                demanded_children = tuple(
+                    occurrence
+                    for occurrence in compiled.occurrences
+                    if occurrence.id in child.free_occurrences
+                    and isinstance(
+                        occurrence.provenance, FieldOccurrenceProvenance
+                    )
+                    and occurrence.provenance.parent == switch.occurrence.id
+                    and occurrence.provenance.constructor
+                    == decision_branch.constructor
+                )
+                field_bindings = tuple(
+                    (
+                        occurrence.provenance.field_name,
+                        symbol_for_occurrence(occurrence.id),
+                    )
+                    for occurrence in demanded_children
+                    if isinstance(
+                        occurrence.provenance, FieldOccurrenceProvenance
+                    )
+                )
+                child_available = available | frozenset(
+                    occurrence.id for occurrence in demanded_children
+                )
+                arms.append(
+                    IrCaseArm(
+                        case_key(decision_branch.constructor),
+                        field_bindings,
+                        lower_decision(child, child_available),
+                    )
+                )
+            default = (
+                lower_decision(switch.default, available)
+                if switch.default is not None
+                else None
+            )
+            lowered_switch = IrCase(
+                location,
+                IrLoad(location, symbol_for_occurrence(switch.occurrence.id)),
+                tuple(arms),
+                default,
+            )
+            decision_memo[id(decision)] = lowered_switch
+            return lowered_switch
+
+        decision = lower_decision(
+            compiled.root, frozenset({compiled.normalized.root.id})
+        )
+        return IrSequence(
+            location,
+            (
+                IrBind(location, root_symbol, self.lower_expr(subject_expr)),
+                decision,
+            ),
+        )
 
     # ------------------------------------------------------------------
     # Ask/ask-request lowering
@@ -3212,6 +3356,7 @@ def lower_program(
         ENTRY_ID,
         source_id,
         source_text,
+        compiled.cases,
         contract_payloads=contract_payloads,
     )
     program = lowerer.lower()

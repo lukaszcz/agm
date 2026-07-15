@@ -36,7 +36,6 @@ from agm.agl.eval.arith import (
 from agm.agl.eval.conversions import AglCastConversion, run_recipe
 from agm.agl.eval.effects import EffectHandlers
 from agm.agl.eval.indexing import AglIndexOutOfRange, AglMissingKey, index_get, index_set
-from agm.agl.eval.matching import make_match_error as _make_match_error
 from agm.agl.ir.contracts import ContractRequest, ConversionFailureMode
 from agm.agl.ir.ids import ContractId, FunctionId, Location, SymbolId
 from agm.agl.ir.nodes import (
@@ -48,7 +47,6 @@ from agm.agl.ir.nodes import (
     IrAskRequest,
     IrAssign,
     IrBind,
-    IrBindPlan,
     IrBlock,
     IrBreak,
     IrCase,
@@ -59,13 +57,13 @@ from agm.agl.ir.nodes import (
     IrConstDecimal,
     IrConstInt,
     IrConstJsonNull,
-    IrConstructorPlan,
     IrConstText,
     IrConstUnit,
     IrContains,
     IrContinue,
     IrConvert,
     IrDirectCall,
+    IrEnumCaseKey,
     IrExec,
     IrExpr,
     IrField,
@@ -76,7 +74,8 @@ from agm.agl.ir.nodes import (
     IrIterHasNext,
     IrIterInit,
     IrIterNext,
-    IrLiteralPlan,
+    IrLiteralCaseKey,
+    IrLiteralKind,
     IrLoad,
     IrLoop,
     IrMakeClosure,
@@ -86,7 +85,6 @@ from agm.agl.ir.nodes import (
     IrMakeException,
     IrMakeList,
     IrMakeRecord,
-    IrMatchPlan,
     IrOr,
     IrParseJson,
     IrPrint,
@@ -100,8 +98,6 @@ from agm.agl.ir.nodes import (
     IrTry,
     IrUnary,
     IrVariantIs,
-    IrVariantPlan,
-    IrWildcardPlan,
     UseDefault,
 )
 from agm.agl.ir.operations import (
@@ -204,6 +200,25 @@ def _call_custom_codec_parse(
 
         return parse(raw, _target_type_for_request(request), **accepted_kwargs)
     return parse(raw, **accepted_kwargs)
+
+
+def _literal_key_value(key: IrLiteralCaseKey) -> Value:
+    """Materialize the runtime value represented by one typeless scalar key."""
+    match key.kind:
+        case IrLiteralKind.NUMERIC:
+            assert isinstance(key.scalar_value, decimal.Decimal)
+            return DecimalValue(key.scalar_value)
+        case IrLiteralKind.BOOL:
+            assert isinstance(key.scalar_value, bool)
+            return BoolValue(key.scalar_value)
+        case IrLiteralKind.TEXT:
+            assert isinstance(key.scalar_value, str)
+            return TextValue(key.scalar_value)
+        case IrLiteralKind.NULL:
+            assert key.scalar_value is None
+            return JsonValue(None)
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
 
 
 # ---------------------------------------------------------------------------
@@ -982,8 +997,8 @@ class IrInterpreter:
                             return mul(kind, lhs_val, rhs_val)
                         case ArithOp.DIV:
                             return div(lhs_val, rhs_val)
-                        case _ as unreachable:  # pragma: no cover
-                            assert_never(unreachable)
+                        case _ as unreachable_case_key:  # pragma: no cover
+                            assert_never(unreachable_case_key)
                 except AglDivisionByZero:
                     raise AglRaise(
                         _make_exc_value(
@@ -1195,16 +1210,38 @@ class IrInterpreter:
                             return self._eval(handler.body)
                     raise
 
-            case IrCase(subject=subject_expr, arms=arms):
+            case IrCase(subject=subject_expr, arms=arms, default=default):
                 subject_val = self._eval(subject_expr)
                 for arm in arms:
-                    bindings = self._try_match(arm.plan, subject_val)
-                    if bindings is not None:
-                        self._frame.update(bindings)
-                        return self._eval(arm.body)
-                raise AglRaise(
-                    _make_match_error(subject_val, trace_id=self._trace.new_event_id())
-                )
+                    match arm.key:
+                        case IrEnumCaseKey(nominal=nominal, variant=variant):
+                            selected = (
+                                isinstance(subject_val, EnumValue)
+                                and subject_val.nominal == nominal
+                                and subject_val.variant == variant
+                            )
+                        case IrLiteralCaseKey() as key:
+                            selected = value_eq(subject_val, _literal_key_value(key))
+                        case _ as unreachable:  # pragma: no cover
+                            assert_never(unreachable)
+                    if not selected:
+                        continue
+                    if arm.field_bindings:
+                        if not isinstance(subject_val, EnumValue):
+                            raise InvalidIrError(
+                                "IrCase: selected payload arm for a non-enum subject"
+                            )
+                        for field_name, symbol in arm.field_bindings:
+                            field_value = subject_val.fields.get(field_name)
+                            if field_value is None:
+                                raise InvalidIrError(
+                                    f"IrCase: selected enum value lacks field {field_name!r}"
+                                )
+                            self._frame[symbol] = field_value
+                    return self._eval(arm.body)
+                if default is not None:
+                    return self._eval(default)
+                raise InvalidIrError("IrCase has no matching key and no default")
 
             case IrLoop(body=body_expr, guarded=guarded):
                 # Unconditional repeat — all loop logic (bound checks, until
@@ -1482,62 +1519,6 @@ class IrInterpreter:
                                     trace_id=self._trace.new_event_id(),
                                 )
                             ) from exc
-
-    # ------------------------------------------------------------------
-    # Pattern matching helper
-    # ------------------------------------------------------------------
-
-    def _try_match(
-        self, plan: IrMatchPlan, value: Value
-    ) -> dict[SymbolId, Value] | None:
-        """Try to match *value* against *plan*.
-
-        Returns a dict of ``{SymbolId: Value}`` bindings on success, or
-        ``None`` on mismatch.  Mirrors ``_match_pattern`` from the legacy
-        interpreter — closed ``match``/``assert_never`` dispatch.
-
-        Defensive: ``IrVariantPlan`` and ``IrConstructorPlan`` raise
-        ``InvalidIrError`` when applied to a non-``EnumValue`` (cannot occur
-        in well-lowered IR).
-        """
-        match plan:
-            case IrWildcardPlan():
-                return {}
-
-            case IrBindPlan(symbol=sym):
-                return {sym: value}
-
-            case IrLiteralPlan(value=val_expr):
-                pat_val = self._eval(val_expr)
-                return {} if value_eq(value, pat_val) else None
-
-            case IrVariantPlan(variant=variant):
-                if not isinstance(value, EnumValue):
-                    raise InvalidIrError(
-                        f"IrVariantPlan: value is not EnumValue,"
-                        f" got {type(value).__name__}"
-                    )
-                return {} if value.variant == variant else None
-
-            case IrConstructorPlan(variant=variant, fields=fields):
-                if not isinstance(value, EnumValue):
-                    raise InvalidIrError(
-                        f"IrConstructorPlan: value is not EnumValue,"
-                        f" got {type(value).__name__}"
-                    )
-                if value.variant != variant:
-                    return None
-                merged: dict[SymbolId, Value] = {}
-                for fname, subplan in fields:
-                    field_val = value.fields[fname]
-                    sub_bindings = self._try_match(subplan, field_val)
-                    if sub_bindings is None:
-                        return None
-                    merged.update(sub_bindings)
-                return merged
-
-            case _ as unreachable:  # pragma: no cover
-                assert_never(unreachable)
 
     # ------------------------------------------------------------------
     # Result collection

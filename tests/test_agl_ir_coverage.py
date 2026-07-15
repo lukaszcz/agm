@@ -7,8 +7,7 @@ import decimal
 import pytest
 
 from agm.agl.eval.arith import contains, div, order, value_eq
-from agm.agl.eval.matching import _describe_value
-from agm.agl.ir.ids import FunctionId, NominalId
+from agm.agl.ir.ids import NominalId
 from agm.agl.ir.operations import CmpOp, ContainsKind
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.runtime.contract import materialize_contract
@@ -17,21 +16,16 @@ from agm.agl.runtime.render import render_value
 from agm.agl.runtime.serialize import value_to_json_obj
 from agm.agl.semantics.types import DecimalType, TextType, UnitType
 from agm.agl.semantics.values import (
-    AgentValue,
-    BoolValue,
     ConstructorValue,
     DecimalValue,
     DictValue,
     EnumValue,
     ExceptionValue,
     IntValue,
-    IrClosureValue,
     IteratorValue,
     JsonValue,
-    ListValue,
     RecordValue,
     TextValue,
-    UnitValue,
     _json_eq,
     _json_hash,
 )
@@ -51,28 +45,6 @@ def test_arithmetic_mixed_and_defensive_edges() -> None:
         order(CmpOp.LT, TextValue("x"), one)
     with pytest.raises(AssertionError, match="expected numeric"):
         div(TextValue("x"), one)
-
-
-def test_describe_every_runtime_value_kind() -> None:
-    nominal = NominalId(ENTRY_ID, "Thing")
-    values = [
-        (EnumValue(nominal, "Enum", "Case", {}), "Enum"),
-        (RecordValue(nominal, "Record", {}), "Record"),
-        (ExceptionValue(nominal, "Problem", {}), "Problem"),
-        (TextValue("text"), "text"),
-        (IntValue(1), "int"),
-        (DecimalValue(decimal.Decimal("1.5")), "decimal"),
-        (BoolValue(True), "bool"),
-        (JsonValue(None), "json"),
-        (ListValue(()), "list"),
-        (DictValue({}), "dict"),
-        (UnitValue(), "unit"),
-        (AgentValue("agent"), "agent"),
-        (ConstructorValue(nominal, "Thing", None), "function"),
-        (IrClosureValue(FunctionId(0), ()), "function"),
-    ]
-    for value, expected in values:
-        assert _describe_value(value) == expected
 
 
 def test_runtime_value_notimplemented_and_hash_edges() -> None:

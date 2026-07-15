@@ -37,6 +37,7 @@ future change without a validator arm produces a mypy exhaustiveness error.
 
 from __future__ import annotations
 
+import decimal
 from collections.abc import Callable, Mapping
 from typing import TypeVar, assert_never
 
@@ -72,10 +73,10 @@ from agm.agl.ir.nodes import (
     IrAskRequest,
     IrAssign,
     IrBind,
-    IrBindPlan,
     IrBlock,
     IrBreak,
     IrCase,
+    IrCaseArm,
     IrCatchHandler,
     IrCoerce,
     IrCompare,
@@ -84,13 +85,13 @@ from agm.agl.ir.nodes import (
     IrConstDecimal,
     IrConstInt,
     IrConstJsonNull,
-    IrConstructorPlan,
     IrConstText,
     IrConstUnit,
     IrContains,
     IrContinue,
     IrConvert,
     IrDirectCall,
+    IrEnumCaseKey,
     IrExec,
     IrExpr,
     IrField,
@@ -102,7 +103,8 @@ from agm.agl.ir.nodes import (
     IrIterHasNext,
     IrIterInit,
     IrIterNext,
-    IrLiteralPlan,
+    IrLiteralCaseKey,
+    IrLiteralKind,
     IrLoad,
     IrLoop,
     IrMakeClosure,
@@ -112,7 +114,6 @@ from agm.agl.ir.nodes import (
     IrMakeException,
     IrMakeList,
     IrMakeRecord,
-    IrMatchPlan,
     IrOr,
     IrParseJson,
     IrPrint,
@@ -126,8 +127,6 @@ from agm.agl.ir.nodes import (
     IrTry,
     IrUnary,
     IrVariantIs,
-    IrVariantPlan,
-    IrWildcardPlan,
     UseDefault,
 )
 from agm.agl.ir.operations import ArithKind, ArithOp, CmpOp, CompareKind, UnaryOp
@@ -169,11 +168,13 @@ class _Context:
     validator is re-entrant and thread-safe.
     """
 
-    __slots__ = ("program", "deep")
+    __slots__ = ("active_exprs", "deep", "program", "validated_exprs")
 
     def __init__(self, program: ExecutableProgram, *, deep: bool) -> None:
         self.program = program
         self.deep = deep
+        self.active_exprs: set[int] = set()
+        self.validated_exprs: set[int] = set()
 
 
 # ---------------------------------------------------------------------------
@@ -529,40 +530,107 @@ def _validate_catch_handler(handler: IrCatchHandler, ctx: _Context) -> None:
 
 
 # ---------------------------------------------------------------------------
-# IrMatchPlan validator (closed union)
+# IrCase validation
 # ---------------------------------------------------------------------------
 
 
-def _validate_match_plan(plan: IrMatchPlan, ctx: _Context) -> None:
-    """Validate a closed ``IrMatchPlan`` node recursively.
+def _literal_key_is_valid(key: IrLiteralCaseKey) -> bool:
+    value = key.scalar_value
+    return (
+        key.kind is IrLiteralKind.NUMERIC
+        and isinstance(value, decimal.Decimal)
+        or key.kind is IrLiteralKind.BOOL
+        and isinstance(value, bool)
+        or key.kind is IrLiteralKind.TEXT
+        and isinstance(value, str)
+        or key.kind is IrLiteralKind.NULL
+        and value is None
+    )
 
-    The final ``assert_never`` arm ensures mypy reports a type error when
-    a new ``IrMatchPlan`` variant is added without a corresponding arm here.
-    """
-    match plan:
-        case IrWildcardPlan():
-            pass
 
-        case IrBindPlan(symbol=sym):
-            if ctx.deep:
-                if sym not in ctx.program.symbols:
-                    raise InvalidIrError(
-                        f"IrBindPlan references symbol_id={sym.value!r}"
-                        " which is not in program.symbols"
-                    )
-
-        case IrLiteralPlan(value=val_expr):
-            _validate_expr(val_expr, ctx)
-
-        case IrVariantPlan():
-            pass
-
-        case IrConstructorPlan(fields=fields):
-            for _fname, subplan in fields:
-                _validate_match_plan(subplan, ctx)
-
+def _case_family(arm: IrCaseArm) -> tuple[str, object]:
+    match arm.key:
+        case IrEnumCaseKey(nominal=nominal):
+            return "enum", nominal
+        case IrLiteralCaseKey(kind=kind):
+            return "literal", kind
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
+
+
+def _validate_case_arm(arm: IrCaseArm, ctx: _Context) -> None:
+    match arm.key:
+        case IrEnumCaseKey(nominal=nominal, variant=variant):
+            if ctx.deep:
+                descriptor = ctx.program.nominals.get(nominal)
+                if descriptor is None:
+                    raise InvalidIrError(
+                        f"IrEnumCaseKey references nominal {nominal!r}"
+                        " which is not in program.nominals"
+                    )
+                if descriptor.kind is not NominalKind.ENUM:
+                    raise InvalidIrError(
+                        f"IrEnumCaseKey references non-enum nominal {nominal!r}"
+                    )
+                variant_descriptor = next(
+                    (item for item in descriptor.variants if item.name == variant), None
+                )
+                if variant_descriptor is None:
+                    raise InvalidIrError(
+                        f"IrEnumCaseKey references unknown variant {variant!r}"
+                        f" of nominal {nominal!r}"
+                    )
+                valid_fields = set(variant_descriptor.fields)
+            else:
+                valid_fields = None
+        case IrLiteralCaseKey() as key:
+            if not _literal_key_is_valid(key):
+                raise InvalidIrError(f"IrLiteralCaseKey has invalid scalar {key.scalar_value!r}")
+            if arm.field_bindings:
+                raise InvalidIrError("literal IrCaseArm must not bind payload fields")
+            valid_fields = None
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
+
+    field_names: set[str] = set()
+    for field_name, symbol in arm.field_bindings:
+        if field_name in field_names:
+            raise InvalidIrError(f"IrCaseArm binds field {field_name!r} more than once")
+        field_names.add(field_name)
+        if valid_fields is not None and field_name not in valid_fields:
+            raise InvalidIrError(
+                f"IrCaseArm binds unknown immediate field {field_name!r}"
+            )
+        if ctx.deep:
+            symbol_descriptor = ctx.program.symbols.get(symbol)
+            if symbol_descriptor is None:
+                raise InvalidIrError(
+                    f"IrCaseArm field binding references unknown symbol_id={symbol.value!r}"
+                )
+            if symbol_descriptor.mutable or symbol_descriptor.public_name is not None:
+                raise InvalidIrError(
+                    "IrCaseArm field binding symbols must be private immutable temporaries"
+                )
+    _validate_expr(arm.body, ctx)
+
+
+def _validate_case(node: IrCase, ctx: _Context) -> None:
+    _validate_location(node.location, ctx)
+    _validate_expr(node.subject, ctx)
+    seen_keys: set[object] = set()
+    family: tuple[str, object] | None = None
+    for arm in node.arms:
+        arm_family = _case_family(arm)
+        if family is None:
+            family = arm_family
+        elif arm_family != family:
+            raise InvalidIrError("IrCase arms use incompatible discriminant families")
+        _validate_case_arm(arm, ctx)
+        if arm.key in seen_keys:
+            raise InvalidIrError(f"IrCase contains duplicate runtime key {arm.key!r}")
+        seen_keys.add(arm.key)
+    if node.default is not None:
+        _validate_expr(node.default, ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -571,6 +639,21 @@ def _validate_match_plan(plan: IrMatchPlan, ctx: _Context) -> None:
 
 
 def _validate_expr(node: IrExpr, ctx: _Context) -> None:
+    """Validate each shared expression once while rejecting identity cycles."""
+    identifier = id(node)
+    if identifier in ctx.active_exprs:
+        raise InvalidIrError("IR expression graph contains a cycle")
+    if identifier in ctx.validated_exprs:
+        return
+    ctx.active_exprs.add(identifier)
+    try:
+        _validate_expr_node(node, ctx)
+    finally:
+        ctx.active_exprs.remove(identifier)
+    ctx.validated_exprs.add(identifier)
+
+
+def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
     """Dispatch validation over the closed ``IrExpr`` union.
 
     The final ``assert_never`` arm ensures mypy reports a type error when a
@@ -809,12 +892,8 @@ def _validate_expr(node: IrExpr, ctx: _Context) -> None:
             for handler in handlers:
                 _validate_catch_handler(handler, ctx)
 
-        case IrCase(subject=subject, arms=arms):
-            _validate_location(node.location, ctx)
-            _validate_expr(subject, ctx)
-            for arm in arms:
-                _validate_match_plan(arm.plan, ctx)
-                _validate_expr(arm.body, ctx)
+        case IrCase():
+            _validate_case(node, ctx)
 
         case IrLoop(body=body):
             _validate_location(node.location, ctx)

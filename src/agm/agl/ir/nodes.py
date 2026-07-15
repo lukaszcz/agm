@@ -26,7 +26,9 @@ fresh binding).
 from __future__ import annotations
 
 import decimal
+import enum
 from dataclasses import dataclass
+from typing import TypeAlias
 
 from agm.agl.ir.contracts import ConversionFailureMode, ConversionRecipe
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SymbolId
@@ -53,12 +55,12 @@ __all__ = [
     "IrAssign",
     "IrExec",
     "IrBind",
-    "IrBindPlan",
     "IrBlock",
     "IrBreak",
     "IrCapture",
     "IrCase",
     "IrCaseArm",
+    "IrCaseKey",
     "IrCatchHandler",
     "IrCoerce",
     "IrCompare",
@@ -69,7 +71,6 @@ __all__ = [
     "IrConstJsonNull",
     "IrConstText",
     "IrConstUnit",
-    "IrConstructorPlan",
     "IrContains",
     "IrContinue",
     "IrConvert",
@@ -85,7 +86,10 @@ __all__ = [
     "IrIndex",
     "IrIndexStep",
     "IrIndirectCall",
-    "IrLiteralPlan",
+    "IrEnumCaseKey",
+    "IrLiteralCaseKey",
+    "IrLiteralKind",
+    "IrLiteralScalar",
     "IrLoad",
     "IrLoop",
     "IrMakeConstructor",
@@ -95,7 +99,6 @@ __all__ = [
     "IrMakeException",
     "IrMakeList",
     "IrMakeRecord",
-    "IrMatchPlan",
     "IrOr",
     "IrParseJson",
     "IrPrint",
@@ -110,8 +113,6 @@ __all__ = [
     "IrTry",
     "IrUnary",
     "IrVariantIs",
-    "IrVariantPlan",
-    "IrWildcardPlan",
     "UseDefault",
 ]
 
@@ -670,85 +671,93 @@ class IrTry:
 
 
 # ---------------------------------------------------------------------------
-# Match plan nodes — closed tagged-data union for case patterns
+# One-level case keys and arms
 # ---------------------------------------------------------------------------
-# These are NOT members of IrExpr; they appear only as IrCaseArm.plan.
-# Dispatch over IrMatchPlan uses a closed match/assert_never.
+
+
+class IrLiteralKind(enum.Enum):
+    """Runtime equality families supported by scalar case keys."""
+
+    NUMERIC = "numeric"
+    BOOL = "bool"
+    TEXT = "text"
+    NULL = "null"
+
+
+IrLiteralScalar: TypeAlias = int | decimal.Decimal | bool | str | None
 
 
 @dataclass(frozen=True, slots=True)
-class IrWildcardPlan:
-    """Match-plan for the ``_`` wildcard pattern — always matches, no binding."""
+class IrEnumCaseKey:
+    """One enum discriminant identified by nominal owner and variant."""
 
-
-@dataclass(frozen=True, slots=True)
-class IrBindPlan:
-    """Match-plan for a ``VarPattern`` binder — always matches, binds ``symbol``."""
-
-    symbol: SymbolId
-
-
-@dataclass(frozen=True, slots=True)
-class IrLiteralPlan:
-    """Match-plan for a ``LiteralPattern`` — matches when ``value_eq(subject, value)``."""
-
-    value: "IrExpr"
-
-
-@dataclass(frozen=True, slots=True)
-class IrVariantPlan:
-    """Match-plan for a nullary bare-variant ``VarPattern`` — matches ``EnumValue.variant``."""
-
+    nominal: NominalId
     variant: str
 
 
 @dataclass(frozen=True, slots=True)
-class IrConstructorPlan:
-    """Match-plan for a ``ConstructorPattern`` — checks variant then recurses over fields."""
+class IrLiteralCaseKey:
+    """One canonical scalar discriminant using runtime equality semantics.
 
-    variant: str
-    fields: "tuple[tuple[str, IrMatchPlan], ...]"
+    Numeric keys accept an integer or decimal input but store a
+    :class:`decimal.Decimal`, so equal integer/decimal spellings are identical
+    keys before validation or evaluation.
+    """
+
+    kind: IrLiteralKind
+    scalar_value: IrLiteralScalar
+
+    def __post_init__(self) -> None:
+        value = self.scalar_value
+        if self.kind is IrLiteralKind.NUMERIC:
+            if isinstance(value, bool) or not isinstance(value, (int, decimal.Decimal)):
+                raise ValueError("numeric case keys require an int or Decimal scalar")
+            object.__setattr__(self, "scalar_value", decimal.Decimal(value))
+            return
+        valid = (
+            self.kind is IrLiteralKind.BOOL
+            and isinstance(value, bool)
+            or self.kind is IrLiteralKind.TEXT
+            and isinstance(value, str)
+            or self.kind is IrLiteralKind.NULL
+            and value is None
+        )
+        if not valid:
+            raise ValueError(
+                f"invalid scalar {value!r} for literal case kind {self.kind.name!r}"
+            )
 
 
-#: Closed union of all match-plan node types.
-#: Dispatch with a structural ``match`` / ``assert_never``.
-IrMatchPlan = IrWildcardPlan | IrBindPlan | IrLiteralPlan | IrVariantPlan | IrConstructorPlan
-
-
-# ---------------------------------------------------------------------------
-# Case expression helper and node
-# ---------------------------------------------------------------------------
+IrCaseKey: TypeAlias = IrEnumCaseKey | IrLiteralCaseKey
 
 
 @dataclass(frozen=True, slots=True)
 class IrCaseArm:
     """A single arm in an ``IrCase`` node — NOT a member of ``IrExpr``.
 
-    ``plan`` is the closed ``IrMatchPlan`` compiled from the source pattern.
-    ``body`` is evaluated when the plan matches the subject.
+    Enum arms copy their demanded immediate fields into ``field_bindings``.
+    Literal arms carry no field bindings. ``body`` may contain another
+    one-level ``IrCase``.
     """
 
-    plan: "IrMatchPlan"
+    key: IrCaseKey
+    field_bindings: tuple[tuple[str, SymbolId], ...]
     body: "IrExpr"
 
 
 @dataclass(frozen=True, slots=True)
 class IrCase:
-    """IR case expression: eval ``subject`` once; try each arm in order.
+    """A typeless one-level switch over one already-available value.
 
-    The value of an ``IrCase`` is the body of the first arm whose plan
-    matches the subject. Valid lowering input has already passed exhaustive,
-    non-redundant source-case validation, so executable programs do not depend
-    on an unmatched-arm fallback.
-
-    Semantics mirror legacy ``_eval_case`` first-match ordering exactly.
-    Pattern binders (``IrBindPlan``) write their bindings into the current
-    frame before the arm body is evaluated.
+    ``default`` represents the compiled decision DAG's remainder edge. A
+    well-lowered program never reaches a switch with neither a matching key nor
+    a default.
     """
 
     location: Location
     subject: "IrExpr"
     arms: "tuple[IrCaseArm, ...]"
+    default: "IrExpr | None"
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,6 +1,6 @@
 # AgL Execution
 
-Execution is everything after successful match compilation: lowering the checked and match-compiled artifact into a closed, typeless program, evaluating it, and the host runtime that backs agents, shell calls, codecs, and rendering. Frontend artifacts never reach the evaluator — lowering is the boundary. Lowering currently unwraps the checked object and emits recursive match-plan IR; the match-compiled artifact is nevertheless the mandatory gate, and no checked-only public lowering path exists. See [index.md](index.md) for the surrounding pipeline.
+Execution is everything after successful match compilation: lowering the checked and match-compiled artifact into a closed, typeless program, evaluating it, and the host runtime that backs agents, shell calls, codecs, and rendering. Frontend artifacts never reach the evaluator — lowering is the boundary, and no checked-only public lowering path exists. See [index.md](index.md) for the surrounding pipeline.
 
 ## Lowering and Linking
 
@@ -8,9 +8,23 @@ Lowering consumes the checked program (a single module, or a whole module graph)
 
 The point of lowering is to make the evaluator simple: every decision that needed type information (which built-in path, which codec, which decode schema, which conversion) is resolved now and baked into typeless descriptors, so the evaluator only interprets closed nodes. Partial call expressions are lowered here into ordinary closure descriptors with no dedicated IR node: eager callee/non-hole argument evaluation becomes temporary bindings captured by value, and the synthesized closure body reuses the normal direct, indirect, or constructor call IR.
 
+Source cases consume their match-compiled decision DAGs directly. Lowering always binds the
+scrutinee once to a private immutable symbol, then translates each decision switch to a one-level
+`IrCase` over an ordinary load. Enum arms bind only the immediate declaration fields demanded by
+their child decision; nested tests are further one-level cases over those symbols. Leaves initialize
+source binders from dominated occurrence loads before lowering the selected source body. Decision
+identity is memoized per source case, so shared compiler nodes remain shared IR objects.
+
 ## Execution IR
 
 The IR is a runtime-neutral data model: program-local identities and source locations, a closed family of expression nodes (constants and construction, binding/load/assignment, arithmetic and comparison, control flow and matching, closures and calls, conversions, and host operations), and the program container holding modules, symbols, functions, sources, nominals, contracts, and the dry-run inventory. Host operations carry contract requests — codec selection, target type label/kind, format instructions, JSON schema, and a decode walk — compiled from checker types during lowering. Requests are otherwise typeless, except for an opaque checked target type retained solely for compatibility with legacy custom codecs whose `parse(raw, target_type, ...)` hook still expects it; evaluator code does not inspect that object. For a recursive target type, the decode walk mirrors the JSON Schema's own `$defs`/`$ref` shape: a `RefDecode` node plus a `defs` table of one entry per recursive instantiation, keyed identically to the schema's `$defs` keys and built from the same instantiation-graph plan (`type_schema.py`), so the decode walk terminates on a finite value exactly where the schema closes. A structural validation gate exists for the IR but runs only when explicitly requested, not in production evaluation.
+
+`IrCase(subject, arms, default)` is a typeless one-level switch. An arm key is either a nominal
+enum variant or an IR-owned canonical scalar literal; numeric keys use the runtime's int/decimal
+equality convention. Enum arms carry named immediate-field bindings, while defaults represent
+compiled remainder edges. Deep validation checks key families, runtime-semantic uniqueness,
+nominal and field metadata, private immutable temporary symbols, and the complete expression DAG.
+It validates shared nodes once by identity while rejecting cycles.
 
 ### Single-Loop Primitive and Desugar
 
@@ -43,10 +57,17 @@ The `guarded` flag marks self-bounded loops — those with a `[n]` bound (which 
 | `Break` | `IrBreak` |
 | `Continue` | `IrContinue` |
 | `Return` | `IrReturn` |
+| `Case` | root `IrSequence(IrBind(scrutinee, …), decision)`; decisions are nested one-level `IrCase` nodes |
 
 ## Evaluator
 
 The evaluator interprets the linked program and nothing else. Its frame stack holds immutable bindings by value and mutable bindings in shared cells; the base frame is module scope, and function frames hold parameters and captured lexical bindings. Programs run under a pinned decimal arithmetic context so results never depend on the host's ambient precision.
+
+An `IrCase` evaluates its subject once, selects an enum key by nominal plus variant or a literal key
+with runtime value equality, copies selected enum fields into the arm's declared symbols, and then
+evaluates the arm body or default. A switch with neither a matching key nor a default is malformed
+IR and raises `InvalidIrError`; case evaluation never synthesizes `MatchError`. Explicit source
+construction, raising, and catching of the prelude `MatchError` remain ordinary exception behavior.
 
 `IrReturn` evaluates its value and raises an internal `_ReturnSignal`; the function-call boundary catches that signal and uses its payload as the call result. No other evaluator site catches it, so it unwinds through loops and `try`/`catch` naturally.
 

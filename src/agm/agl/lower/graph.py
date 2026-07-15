@@ -174,6 +174,7 @@ def lower_graph(
             _entry_source_text
             if mid.is_entry and _entry_source_text is not None
             else cm.source_text,
+            compiled_graph.cases_by_module[mid],
             contract_payloads=contract_payloads,
         )
         module_lowerers[mid] = lowerer

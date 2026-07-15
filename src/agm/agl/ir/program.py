@@ -70,12 +70,14 @@ class SymbolDescriptor:
     ``public_name`` — the user-facing name (for error messages / debug);
                       ``None`` for synthesised lowering-internal symbols.
     ``owner``     — the module or function that declares this symbol.
+    ``synthetic`` — whether lowering allocated this symbol without a source binding.
     """
 
     symbol_id: SymbolId
     mutable: bool
     public_name: str | None
     owner: ModuleId | FunctionId
+    synthetic: bool = False
 
 
 @dataclass(frozen=True, slots=True)

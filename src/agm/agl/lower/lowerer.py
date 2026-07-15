@@ -414,6 +414,7 @@ class _Lowerer:
             mutable=mutable,
             public_name=name if public else None,
             owner=owner if owner is not None else self._module_id,
+            synthetic=False,
         )
         return sym
 
@@ -437,6 +438,7 @@ class _Lowerer:
             mutable=mutable,
             public_name=None,
             owner=owner if owner is not None else self._module_id,
+            synthetic=True,
         )
         return sym
 

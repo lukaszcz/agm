@@ -232,6 +232,38 @@ def test_case_arm_cannot_bind_multiple_fields_to_one_symbol() -> None:
         validate_ir(program)
 
 
+def test_case_arm_cannot_bind_a_private_source_symbol() -> None:
+    enum_nominal = NominalId(module_id=MOD_A, declared_name="Box")
+    program = _make_program(
+        initializers=(
+            IrCase(
+                location=LOC,
+                subject=IrConstInt(location=LOC, value=1),
+                arms=(
+                    IrCaseArm(
+                        key=IrEnumCaseKey(nominal=enum_nominal, variant="Box"),
+                        field_bindings=(("value", SYM1),),
+                        body=IrConstUnit(location=LOC),
+                    ),
+                ),
+                default=IrConstUnit(location=LOC),
+            ),
+        ),
+        symbols={SYM1: SymbolDescriptor(SYM1, mutable=False, public_name=None, owner=MOD_A)},
+        nominals={
+            enum_nominal: NominalDescriptor(
+                nominal=enum_nominal,
+                display_name="Box",
+                kind=NominalKind.ENUM,
+                variants=(VariantDescriptor("Box", ("value",)),),
+            )
+        },
+    )
+
+    with pytest.raises(InvalidIrError, match="synthetic"):
+        validate_ir(program)
+
+
 def test_case_without_default_requires_complete_boolean_domain() -> None:
     program = _make_program(
         initializers=(

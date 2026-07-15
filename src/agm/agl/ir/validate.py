@@ -609,9 +609,14 @@ def _validate_case_arm(arm: IrCaseArm, ctx: _Context) -> None:
                 raise InvalidIrError(
                     f"IrCaseArm field binding references unknown symbol_id={symbol.value!r}"
                 )
-            if symbol_descriptor.mutable or symbol_descriptor.public_name is not None:
+            if (
+                symbol_descriptor.mutable
+                or symbol_descriptor.public_name is not None
+                or not symbol_descriptor.synthetic
+            ):
                 raise InvalidIrError(
-                    "IrCaseArm field binding symbols must be private immutable temporaries"
+                    "IrCaseArm field binding symbols must be private immutable "
+                    "synthetic temporaries"
                 )
     _validate_expr(arm.body, ctx)
 

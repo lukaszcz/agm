@@ -73,7 +73,9 @@ def _color_descriptor() -> NominalDescriptor:
 
 
 def _private_symbol(symbol: SymbolId = _PAYLOAD) -> SymbolDescriptor:
-    return SymbolDescriptor(symbol, mutable=False, public_name=None, owner=ENTRY_ID)
+    return SymbolDescriptor(
+        symbol, mutable=False, public_name=None, owner=ENTRY_ID, synthetic=True
+    )
 
 
 def _literal_case(*arms: IrCaseArm, default: IrConstInt | None = None) -> IrCase:

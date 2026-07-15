@@ -63,7 +63,7 @@ from agm.agl.ir.contracts import (
     RefDecode,
     ScalarDecode,
 )
-from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId
+from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import (
     AutoTraceField,
     IrAgentHandle,
@@ -589,10 +589,14 @@ def _validate_case_arm(arm: IrCaseArm, ctx: _Context) -> None:
             assert_never(unreachable)
 
     field_names: set[str] = set()
+    binding_symbols: set[SymbolId] = set()
     for field_name, symbol in arm.field_bindings:
         if field_name in field_names:
             raise InvalidIrError(f"IrCaseArm binds field {field_name!r} more than once")
         field_names.add(field_name)
+        if symbol in binding_symbols:
+            raise InvalidIrError(f"IrCaseArm binds destination symbol {symbol.value!r} more than once")
+        binding_symbols.add(symbol)
         if valid_fields is not None and field_name not in valid_fields:
             raise InvalidIrError(
                 f"IrCaseArm binds unknown immediate field {field_name!r}"

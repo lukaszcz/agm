@@ -31,6 +31,8 @@ from agm.agl.ir import (
     IrBind,
     IrBlock,
     IrCapture,
+    IrCase,
+    IrCaseArm,
     IrCoerce,
     IrCompare,
     IrConfigBind,
@@ -41,6 +43,7 @@ from agm.agl.ir import (
     IrConstText,
     IrConstUnit,
     IrDirectCall,
+    IrEnumCaseKey,
     IrField,
     IrFunctionBody,
     IrFunctionParam,
@@ -64,6 +67,7 @@ from agm.agl.ir import (
     SymbolDescriptor,
     SymbolId,
     UseDefault,
+    VariantDescriptor,
 )
 from agm.agl.ir.validate import InvalidIrError, validate_ir
 from agm.agl.modules.ids import ModuleId
@@ -187,6 +191,43 @@ def _assign_sym_mut(value: IrConstInt | None = None) -> IrAssign:
 
 def _int(v: int = 0) -> IrConstInt:
     return IrConstInt(location=LOC, value=v)
+
+
+# ===========================================================================
+# IrCase invariants
+# ===========================================================================
+
+
+def test_case_arm_cannot_bind_multiple_fields_to_one_symbol() -> None:
+    enum_nominal = NominalId(module_id=MOD_A, declared_name="Pair")
+    program = _make_program(
+        initializers=(
+            IrCase(
+                location=LOC,
+                subject=IrConstInt(location=LOC, value=1),
+                arms=(
+                    IrCaseArm(
+                        key=IrEnumCaseKey(nominal=enum_nominal, variant="Both"),
+                        field_bindings=(("left", SYM1), ("right", SYM1)),
+                        body=IrConstUnit(location=LOC),
+                    ),
+                ),
+                default=IrConstUnit(location=LOC),
+            ),
+        ),
+        symbols={SYM1: SymbolDescriptor(SYM1, mutable=False, public_name=None, owner=MOD_A)},
+        nominals={
+            enum_nominal: NominalDescriptor(
+                nominal=enum_nominal,
+                display_name="Pair",
+                kind=NominalKind.ENUM,
+                variants=(VariantDescriptor("Both", ("left", "right")),),
+            )
+        },
+    )
+
+    with pytest.raises(InvalidIrError, match="symbol"):
+        validate_ir(program)
 
 
 # ===========================================================================

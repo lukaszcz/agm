@@ -247,11 +247,16 @@ fallback. To reject part of a domain deliberately, cover it with a final arm
 that explicitly raises the exception ([Exceptions](exceptions.md)):
 
 ```agl
+enum Response
+  | Complete
+  | Rejected
+
+let response = Complete
 case response of
-  | Complete(output) => output
-  | _ => raise MatchError(
+  | Complete => response
+  | _ =>
+    raise MatchError(
       message = "response rejected by this workflow",
-      trace_id = "",
       scrutinee_type = "Response",
       scrutinee = response as json,
     )

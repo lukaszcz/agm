@@ -27,6 +27,7 @@ def _agl_block_after(page: str, marker: str) -> str:
     [
         "### Constructor patterns",
         "Named sub-patterns nest arbitrarily",
+        "`MatchError` is an ordinary constructible exception",
     ],
 )
 def test_pattern_matching_complete_examples_pass_static_pipeline(marker: str) -> None:

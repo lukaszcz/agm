@@ -2,7 +2,7 @@ Implement the plan from %{PLAN_FILE}.
 
 Divide the implementation work into well-scoped tasks doable by an agent in 200k context widow. If the steps described in the plan are too big, split them into multiple tasks.
 
-Use Sonnet subagents to implement the tasks. When handing off each task, include a brief summary of the ultimate goals of the whole plan. Make it clear that any work done must be a step toward these goals, but they are not acceptance criteria for the task. Write the subagent task description as a file under .agent-files/tasks/*.md that the implementer can reference. Launch subagents sequentially one at a time, not in parallel.
+Use Sonnet subagents to implement the tasks. When handing off each task, include a brief summary of the ultimate goals of the whole plan. Make it clear that any work done must be a step toward these goals, but they are not acceptance criteria for the task. Provide each subagent task description directly in the subagent request. Launch subagents sequentially one at a time, not in parallel.
 
 After each implementation agent finishes, use an Opus subagent to review its work for correctness, completeness, maintainability, adherence to the plan and to relevant AGENTS.md files.
 

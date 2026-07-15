@@ -50,6 +50,8 @@ from agm.agl.ir import (
     IrIndex,
     IrIndexStep,
     IrIndirectCall,
+    IrLiteralCaseKey,
+    IrLiteralKind,
     IrLoad,
     IrMakeClosure,
     IrMakeDict,
@@ -227,6 +229,59 @@ def test_case_arm_cannot_bind_multiple_fields_to_one_symbol() -> None:
     )
 
     with pytest.raises(InvalidIrError, match="symbol"):
+        validate_ir(program)
+
+
+def test_case_without_default_requires_complete_boolean_domain() -> None:
+    program = _make_program(
+        initializers=(
+            IrCase(
+                location=LOC,
+                subject=IrConstBool(location=LOC, value=True),
+                arms=(
+                    IrCaseArm(
+                        key=IrLiteralCaseKey(IrLiteralKind.BOOL, True),
+                        field_bindings=(),
+                        body=IrConstUnit(location=LOC),
+                    ),
+                ),
+                default=None,
+            ),
+        )
+    )
+
+    with pytest.raises(InvalidIrError, match="default"):
+        validate_ir(program)
+
+
+def test_case_without_default_requires_complete_enum_domain() -> None:
+    enum_nominal = NominalId(module_id=MOD_A, declared_name="Result")
+    program = _make_program(
+        initializers=(
+            IrCase(
+                location=LOC,
+                subject=IrConstInt(location=LOC, value=1),
+                arms=(
+                    IrCaseArm(
+                        key=IrEnumCaseKey(nominal=enum_nominal, variant="Ok"),
+                        field_bindings=(),
+                        body=IrConstUnit(location=LOC),
+                    ),
+                ),
+                default=None,
+            ),
+        ),
+        nominals={
+            enum_nominal: NominalDescriptor(
+                nominal=enum_nominal,
+                display_name="Result",
+                kind=NominalKind.ENUM,
+                variants=(VariantDescriptor("Ok", ()), VariantDescriptor("Error", ())),
+            )
+        },
+    )
+
+    with pytest.raises(InvalidIrError, match="default"):
         validate_ir(program)
 
 

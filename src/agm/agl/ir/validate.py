@@ -631,6 +631,25 @@ def _validate_case(node: IrCase, ctx: _Context) -> None:
         seen_keys.add(arm.key)
     if node.default is not None:
         _validate_expr(node.default, ctx)
+    elif family == ("literal", IrLiteralKind.BOOL):
+        bool_keys = {
+            arm.key.scalar_value
+            for arm in node.arms
+            if isinstance(arm.key, IrLiteralCaseKey)
+        }
+        if bool_keys != {True, False}:
+            raise InvalidIrError("IrCase has an incomplete boolean domain without a default")
+    elif family is not None and family[0] == "enum" and ctx.deep:
+        nominal = family[1]
+        assert isinstance(nominal, NominalId)
+        descriptor = ctx.program.nominals[nominal]
+        enum_keys = {
+            arm.key.variant for arm in node.arms if isinstance(arm.key, IrEnumCaseKey)
+        }
+        if enum_keys != {variant.name for variant in descriptor.variants}:
+            raise InvalidIrError("IrCase has an incomplete enum domain without a default")
+    elif family is None or family[0] == "literal":
+        raise InvalidIrError("IrCase over an open domain requires a default")
 
 
 # ---------------------------------------------------------------------------

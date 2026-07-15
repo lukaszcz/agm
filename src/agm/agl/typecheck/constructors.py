@@ -127,11 +127,8 @@ class ConstructorChecker:
         owner_name = ctor_ref.owner_name
         variant = ctor_ref.variant
         type_params = ctor_ref.type_params
-        # Open-imported and cross-module qualified generic constructors used as bare
-        # values may supply their graph-table signature up front; otherwise start
-        # with the own-module registry and fall back to the open-import map.
-        imported_gdef: GenericTypeDef | None = gdef
-        imported_source_name = source_name or owner_name
+        # Cross-module callers may supply the graph-table signature up front;
+        # otherwise resolve it through the constructor's recorded owner module.
         if sig is None:
             imported_gdef = self._ctx._env.get_generic_type_from_module(
                 ctor_ref.owner_module_id, owner_name
@@ -142,17 +139,6 @@ class ConstructorChecker:
                 )
         if sig is None:
             sig = self._ctx._env.get_constructor_signature(owner_name, variant)
-        if sig is None:
-            # A generic constructor with no own-module signature must be open-imported
-            # (the scope resolver guarantees the reference resolved to some type).
-            imported = self._ctx._env.get_open_imported_generic_type(owner_name)
-            assert imported is not None, (
-                f"No constructor signature for {owner_name}.{variant}"
-            )
-            module_id, imported_source_name, imported_gdef = imported
-            sig = self._ctx._env.get_ctor_sig_from_module(
-                module_id, imported_source_name, variant
-            )
         assert sig is not None, f"No constructor signature for {owner_name}.{variant}"
 
         return self._ctx._instantiate_generic_constructor_value(
@@ -539,8 +525,6 @@ class ConstructorChecker:
         )
         if owner is None:
             owner = self._ctx._env.get_type(ref.owner_name)
-        if owner is None:
-            owner = self._ctx._env.resolve_named_type(ref.owner_name)
         assert isinstance(owner, (RecordType, EnumType, ExceptionType)), (
             f"'{ref.owner_name}' is not a known constructible type."
         )
@@ -898,13 +882,6 @@ class ConstructorChecker:
                 sig = self._ctx._env.get_ctor_sig_from_module(
                     ctor_ref.owner_module_id, ctor_ref.owner_name, ctor_ref.variant
                 )
-            else:
-                imported = self._ctx._env.get_open_imported_generic_type(ctor_ref.owner_name)
-                if imported is not None:
-                    module_id, source_name, gdef = imported
-                    sig = self._ctx._env.get_ctor_sig_from_module(
-                        module_id, source_name, ctor_ref.variant
-                    )
             return self._check_generic_constructor_call(
                 node_type_args=node.type_args,
                 ctor_ref=ctor_ref,

@@ -254,6 +254,28 @@ def test_case_without_default_requires_complete_boolean_domain() -> None:
         validate_ir(program)
 
 
+def test_case_without_default_requires_default_for_open_literal_domain() -> None:
+    program = _make_program(
+        initializers=(
+            IrCase(
+                location=LOC,
+                subject=IrConstInt(location=LOC, value=1),
+                arms=(
+                    IrCaseArm(
+                        key=IrLiteralCaseKey(IrLiteralKind.NUMERIC, 1),
+                        field_bindings=(),
+                        body=IrConstUnit(location=LOC),
+                    ),
+                ),
+                default=None,
+            ),
+        )
+    )
+
+    with pytest.raises(InvalidIrError, match="default"):
+        validate_ir(program)
+
+
 def test_case_without_default_requires_complete_enum_domain() -> None:
     enum_nominal = NominalId(module_id=MOD_A, declared_name="Result")
     program = _make_program(

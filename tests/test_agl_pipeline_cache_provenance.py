@@ -8,10 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.matchcompile import MatchCompiledModuleGraph
+from agm.agl.matchcompile import MatchCompiledModuleGraph, compile_graph_matches
 from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import ParamDiscovery, PipelineDriver, PreparedGraph
+from agm.agl.typecheck.graph import check_graph
 
 
 def _prepare_graph(
@@ -140,6 +141,39 @@ def test_single_run_rechecks_cached_artifact_when_host_capabilities_change() -> 
     assert not result.ok
     assert result.error is None
     assert result.diagnostics
+
+
+def test_graph_cache_without_capability_provenance_is_rechecked() -> None:
+    runtime = PipelineDriver()
+    prepared = _prepare_graph("let value = 1\nvalue")
+    assert prepared.resolved_graph is not None
+    compiled = compile_graph_matches(
+        check_graph(prepared.resolved_graph, runtime.host_environment().capabilities)
+    ).compiled
+    assert isinstance(compiled, MatchCompiledModuleGraph)
+
+    discovery = runtime.discover_params_graph(prepared, compiled_graph=compiled)
+
+    assert discovery.compiled_graph is not None
+    assert discovery.compiled_graph is not compiled
+
+
+def test_startup_graph_cache_without_capability_provenance_is_rechecked() -> None:
+    runtime = PipelineDriver()
+    prepared = _prepare_graph("config log = true\nlog")
+    assert prepared.resolved_graph is not None
+    compiled = compile_graph_matches(
+        check_graph(prepared.resolved_graph, runtime.host_environment().capabilities)
+    ).compiled
+    assert isinstance(compiled, MatchCompiledModuleGraph)
+
+    result = runtime.collect_startup_config_graph(
+        prepared, names={"log"}, compiled_graph=compiled
+    )
+
+    assert result.ok
+    assert result.compiled_graph is not None
+    assert result.compiled_graph is not compiled
 
 
 def test_graph_cache_mismatch_without_prepared_entry_uses_fallback_location() -> None:

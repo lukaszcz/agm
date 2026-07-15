@@ -19,7 +19,6 @@ from agm.agl.semantics.types import (
     FunctionType,
     RecordType,
     Type,
-    contains_inference_var,
     substitute,
 )
 from agm.agl.syntax.nodes import Call, Expr, NamedArg, ParamKind, Placeholder, VarRef
@@ -32,7 +31,7 @@ from agm.agl.typecheck.env import (
     GenericTypeDef,
     TypeEnvironment,
 )
-from agm.agl.typecheck.inference import ConstraintRole, InferenceEngine, InferenceError
+from agm.agl.typecheck.inference import ConstraintRole, InferenceEngine
 
 # ---------------------------------------------------------------------------
 # Narrow context Protocol
@@ -62,6 +61,16 @@ class ConstructorCheckCtx(Protocol):
     def _assert_assignable(
         self, value_type: Type, target_type: Type, span: SourceSpan
     ) -> None: ...
+
+    def _constrain_argument(
+        self,
+        slot_type: Type,
+        arg_expr: Expr,
+        *,
+        role: ConstraintRole,
+        subject: str,
+        error_subject: str,
+    ) -> Type: ...
 
     def _instantiate_generic_constructor_value(
         self,
@@ -392,27 +401,13 @@ class ConstructorChecker:
             bound_expr = bound_exprs[field_name]
             if isinstance(bound_expr, Placeholder):
                 continue
-            field_type = fields_by_name[field_name]
-            argument_type = self._ctx._check_expr(bound_expr, expected=field_type)
-            if contains_inference_var(field_type) or contains_inference_var(argument_type):
-                try:
-                    self._inference_engine().unify(
-                        field_type,
-                        argument_type,
-                        self._inference_engine().origin(
-                            bound_expr.span,
-                            role=ConstraintRole.CONSTRUCTOR_FIELD,
-                            subject=owner_name,
-                        ),
-                    )
-                except InferenceError as exc:
-                    raise AglTypeError(
-                        f"Inconsistent type argument for constructor '{owner_name}': {exc}",
-                        span=exc.span,
-                        related=exc.related,
-                    ) from exc
-            else:
-                self._ctx._assert_assignable(argument_type, field_type, bound_expr.span)
+            self._ctx._constrain_argument(
+                fields_by_name[field_name],
+                bound_expr,
+                role=ConstraintRole.CONSTRUCTOR_FIELD,
+                subject=owner_name,
+                error_subject=f"constructor '{owner_name}'",
+            )
 
         assert isinstance(result, (RecordType, EnumType))
         produced = self._constructor_call_result_type(

@@ -1322,6 +1322,39 @@ class _Checker:
         assert self._inference_region is not None
         return self._inference_region.engine
 
+    def _constrain_argument(
+        self,
+        slot_type: Type,
+        arg_expr: Expr,
+        *,
+        role: ConstraintRole,
+        subject: str,
+        error_subject: str,
+    ) -> Type:
+        """Check ``arg_expr`` against ``slot_type`` and register the right constraint.
+
+        A flexible slot or argument type is unified into the active inference region;
+        a fully concrete position falls back to ordinary assignability.
+        """
+        argument_type = self._check_expr(arg_expr, expected=slot_type)
+        if contains_inference_var(slot_type) or contains_inference_var(argument_type):
+            engine = self._active_inference_engine()
+            try:
+                engine.unify(
+                    slot_type,
+                    argument_type,
+                    engine.origin(arg_expr.span, role=role, subject=subject),
+                )
+            except InferenceError as exc:
+                raise AglTypeError(
+                    f"Inconsistent type argument for {error_subject}: {exc}",
+                    span=exc.span,
+                    related=exc.related,
+                ) from exc
+        else:
+            self._assert_assignable(argument_type, slot_type, arg_expr.span)
+        return argument_type
+
     def _instantiate_generic_constructor_value(
         self,
         *,
@@ -1880,26 +1913,13 @@ class _Checker:
         for param, bound_expr in zip(params, binding, strict=True):
             if bound_expr is None or isinstance(bound_expr, Placeholder):
                 continue
-            argument_type = self._check_expr(bound_expr, expected=param.type)
-            if contains_inference_var(param.type):
-                try:
-                    engine.unify(
-                        param.type,
-                        argument_type,
-                        engine.origin(
-                            bound_expr.span,
-                            role=ConstraintRole.FUNCTION_ARGUMENT,
-                            subject=func_name,
-                        ),
-                    )
-                except InferenceError as exc:
-                    raise AglTypeError(
-                        f"Inconsistent type argument for call to '{func_name}': {exc}",
-                        span=exc.span,
-                        related=exc.related,
-                    ) from exc
-            else:
-                self._assert_assignable(argument_type, param.type, bound_expr.span)
+            self._constrain_argument(
+                param.type,
+                bound_expr,
+                role=ConstraintRole.FUNCTION_ARGUMENT,
+                subject=func_name,
+                error_subject=f"call to '{func_name}'",
+            )
 
         produced = self._call_result_type(params, result, binding, hole_indices)
         if expected is not None:
@@ -2033,33 +2053,13 @@ class _Checker:
         for arg, ptype in zip(node.args, callee_type.params, strict=True):
             if isinstance(arg, Placeholder):
                 continue
-            argument_type = self._check_expr(arg, expected=ptype)
-            # A function value can itself be the provisional result of a
-            # generic call.  Its parameter positions are exact inference
-            # constraints, just like declared generic-call parameters; applying
-            # ordinary assignability before the region has zonked them would
-            # reject useful evidence such as ``maker()(1)``.
-            if contains_inference_var(ptype) or contains_inference_var(argument_type):
-                assert self._inference_region is not None
-                engine = self._inference_region.engine
-                try:
-                    engine.unify(
-                        ptype,
-                        argument_type,
-                        engine.origin(
-                            arg.span,
-                            role=ConstraintRole.FUNCTION_ARGUMENT,
-                            subject="function value",
-                        ),
-                    )
-                except InferenceError as exc:
-                    raise AglTypeError(
-                        f"Inconsistent type argument for function value call: {exc}",
-                        span=exc.span,
-                        related=exc.related,
-                    ) from exc
-            else:
-                self._assert_assignable(argument_type, ptype, arg.span)
+            self._constrain_argument(
+                ptype,
+                arg,
+                role=ConstraintRole.FUNCTION_ARGUMENT,
+                subject="function value",
+                error_subject="function value call",
+            )
         params = tuple(
             ParamSpec(
                 name=f"arg{index}",

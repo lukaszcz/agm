@@ -5820,6 +5820,24 @@ class TestGenericFunctionInferenceRegions:
         assert checked.type_env.get_binding_type(binding.node_id) == IntType()
         self._assert_finalized(checked)
 
+    def test_declared_call_accepts_generic_argument_for_concrete_slot(self) -> None:
+        checked = accept_type(
+            "def use[A](f: (int) -> int, seed: A) -> A = seed\n"
+            "def id[B](value: B) -> B = value\n"
+            "use(id, 0)"
+        )
+        assert checked.node_types[checked.resolved.program.body.items[-1].node_id] == IntType()
+        self._assert_finalized(checked)
+
+    def test_value_call_accepts_generic_argument_for_concrete_slot(self) -> None:
+        checked = accept_type(
+            "def id[T](value: T) -> T = value\n"
+            "let use: ((int) -> int) -> int = fn(f: (int) -> int) -> int => f(0)\n"
+            "use(id)"
+        )
+        assert checked.node_types[checked.resolved.program.body.items[-1].node_id] == IntType()
+        self._assert_finalized(checked)
+
     def test_generic_function_arguments_are_order_independent_and_named(self) -> None:
         checked = accept_type(
             "def app[T](f: T -> T, x: T) -> T = f(x)\n"
@@ -6529,6 +6547,18 @@ class TestGenericConstructorInference:
     def test_record_constructor_inferred_from_field(self) -> None:
         r = accept_type("record Box[T]\n  value: T\nBox(value = 42)")
         assert r.resolved.program is not None
+
+    def test_constructor_accepts_generic_argument_for_concrete_field(self) -> None:
+        checked = accept_type(
+            "record Wrap[T]\n"
+            "  transform: (int) -> int\n"
+            "  value: T\n"
+            "def id[U](value: U) -> U = value\n"
+            "Wrap(transform = id, value = 0)"
+        )
+        assert checked.node_types[checked.resolved.program.body.items[-1].node_id] == (
+            checked.type_env.instantiate_nominal("Wrap", (IntType(),))
+        )
 
     def test_record_constructor_inferred_from_annotation(self) -> None:
         r = accept_type("record Box[T]\n  value: T\nlet b: Box[int] = Box(value = 42)\nb")

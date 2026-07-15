@@ -44,6 +44,7 @@ from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.parser import parse_program
 from agm.agl.scope import resolve
 from agm.agl.scope.graph import resolve_graph
+from agm.agl.semantics.type_table import TypeDef
 from agm.agl.semantics.types import (
     AgentType,
     BoolType,
@@ -627,6 +628,30 @@ def test_malformed_checked_literal_and_bare_variant_metadata_raise_invariants() 
     malformed_checked = replace(enum_checked, resolved=malformed_resolved)
     with pytest.raises(MatchCompileInvariantError, match="not nullary"):
         normalize_case(_replace_case_pattern(enum_case, bare_some), malformed_checked)
+
+
+def test_bare_variant_normalization_rejects_missing_and_wrong_owner_metadata() -> None:
+    checked = _check(
+        "enum Choice\n  | none\n"
+        "let value: Choice = none\ncase value of | none => 0 | _ => 1"
+    )
+    case = _only_case(checked.resolved.program)
+    pattern = case.branches[0].pattern
+
+    missing_ref = replace(checked.resolved, bare_variant_refs={})
+    with pytest.raises(MatchCompileInvariantError, match="missing or inconsistent"):
+        normalize_case(case, replace(checked, resolved=missing_ref))
+
+    ref = checked.resolved.bare_variant_refs[pattern.node_id]
+    checked.type_env.type_table.register(
+        TypeDef(kind="enum", name="Other", module_id=ENTRY_ID, variants=(("none", ()),))
+    )
+    wrong_owner = replace(ref, owner_name="Other")
+    wrong_owner_resolved = replace(
+        checked.resolved, bare_variant_refs={pattern.node_id: wrong_owner}
+    )
+    with pytest.raises(MatchCompileInvariantError, match="owner does not match"):
+        normalize_case(case, replace(checked, resolved=wrong_owner_resolved))
 
 
 def test_malformed_checked_constructor_metadata_raise_invariants() -> None:

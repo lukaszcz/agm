@@ -217,7 +217,11 @@ def test_case_arm_cannot_bind_multiple_fields_to_one_symbol() -> None:
                 default=IrConstUnit(location=LOC),
             ),
         ),
-        symbols={SYM1: SymbolDescriptor(SYM1, mutable=False, public_name=None, owner=MOD_A)},
+        symbols={
+            SYM1: SymbolDescriptor(
+                SYM1, mutable=False, public_name=None, owner=MOD_A, synthetic=True
+            )
+        },
         nominals={
             enum_nominal: NominalDescriptor(
                 nominal=enum_nominal,
@@ -228,7 +232,7 @@ def test_case_arm_cannot_bind_multiple_fields_to_one_symbol() -> None:
         },
     )
 
-    with pytest.raises(InvalidIrError, match="symbol"):
+    with pytest.raises(InvalidIrError, match="destination symbol"):
         validate_ir(program)
 
 

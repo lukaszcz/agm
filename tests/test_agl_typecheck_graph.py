@@ -752,6 +752,36 @@ def test_imported_generic_alias_to_non_nominal_is_a_type_error(tmp_path: Path) -
         )
 
 
+def test_imported_alias_to_non_nominal_named_type_is_not_constructible(tmp_path: Path) -> None:
+    with pytest.raises(AglTypeError, match="not a constructible nominal"):
+        _check_graph(
+            tmp_path,
+            {
+                "entry": "import lib qualified\nlib::Alias(value = 1)",
+                "lib": "type Scalar = int\ntype Alias = Scalar",
+            },
+        )
+
+
+def test_imported_generic_alias_to_record_is_a_constructor_value(tmp_path: Path) -> None:
+    """A qualified generic alias retains its target record constructor signature."""
+    checked = _check_graph(
+        tmp_path,
+        {
+            "entry": (
+                "import lib qualified\n"
+                "let factory: (int) -> lib::Box[int] = lib::Alias\n"
+                "factory"
+            ),
+            "lib": "record Box[T]\n  value: T\ntype Alias[T] = Box[T]",
+        },
+    )
+
+    assert _binding_value_type(checked, ENTRY_ID, "factory") == FunctionType(
+        (IntType(),), RecordType("Box", (IntType(),), module_id=ModuleId.from_dotted("lib"))
+    )
+
+
 def test_later_module_parameterized_alias_available_to_entry_type_body(
     tmp_path: Path,
 ) -> None:
@@ -2405,6 +2435,17 @@ def test_open_imported_generic_constructor_nullary_type_apply_as_value(tmp_path:
     assert _binding_value_type(cg, ENTRY_ID, "z") == EnumType(
         "Choice", module_id=lib_id, type_args=(IntType(),)
     )
+
+
+def test_cross_module_enum_type_cannot_be_called_as_a_record_constructor(tmp_path: Path) -> None:
+    with pytest.raises(AglTypeError, match="enum type"):
+        _check_graph(
+            tmp_path,
+            {
+                "lib": "enum Choice\n  | none",
+                "entry": "import lib qualified\nlib::Choice()",
+            },
+        )
 
 
 def test_cross_module_non_generic_constructor_type_args_rejected(tmp_path: Path) -> None:

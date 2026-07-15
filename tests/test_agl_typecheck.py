@@ -879,6 +879,15 @@ class TestTypeEnvironment:
         result = env.resolve_type_by_module_id(ModuleId.from_dotted("mymod"), "Color")
         assert result is None
 
+    def test_cross_module_constructible_lookup_rejects_missing_and_non_nominal_types(self) -> None:
+        from agm.agl.modules.ids import ModuleId
+
+        module_id = ModuleId.from_dotted("lib")
+        env = TypeEnvironment(graph_type_table={(module_id, "Alias"): IntType()})
+
+        assert env.resolve_constructible_type_by_module_id(module_id, "Missing") is None
+        assert env.resolve_constructible_type_by_module_id(module_id, "Alias") is None
+
     def test_get_generic_type_from_module_no_graph_table(self) -> None:
         # Coverage: env.py get_generic_type_from_module — single-program mode returns None.
         from agm.agl.modules.ids import ModuleId
@@ -3239,6 +3248,41 @@ class TestConstructorRefDispatch:
         # Bare qualified constructor: VarRef → zero-arg construction
         r = accept_type('enum Status\n  | Pass\n  | Fail\nStatus::Pass()')
         assert r.resolved.program is not None
+
+    def test_bare_variant_pattern_rejects_missing_or_stale_resolver_metadata(self) -> None:
+        resolved = resolve(
+            parse_program(
+                "enum Choice\n  | none\nlet value: Choice = none\ncase value of | none => 0"
+            )
+        )
+        case = resolved.program.body.items[-1]
+        assert isinstance(case, Case)
+        pattern = case.branches[0].pattern
+
+        missing_ref = replace(resolved, bare_variant_refs={})
+        with pytest.raises(AssertionError, match="missing resolved constructor ref"):
+            check(missing_ref, default_capabilities())
+
+        stale_pattern = replace(pattern, name="missing")
+        stale_case = replace(
+            case,
+            branches=(replace(case.branches[0], pattern=stale_pattern),),
+        )
+        stale_program = replace(
+            resolved.program,
+            body=replace(
+                resolved.program.body,
+                items=(*resolved.program.body.items[:-1], stale_case),
+            ),
+        )
+        ref = resolved.bare_variant_refs[pattern.node_id]
+        stale_resolved = replace(
+            resolved,
+            program=stale_program,
+            bare_variant_refs={pattern.node_id: replace(ref, variant="missing")},
+        )
+        with pytest.raises(AglTypeError, match="does not belong"):
+            check(stale_resolved, default_capabilities())
 
     def test_missing_field_still_errors(self) -> None:
         err = reject_type("record Box\n  value: int\nBox()")

@@ -253,6 +253,29 @@ def test_startup_config_rejects_cached_artifact_from_different_prepared_graph(
     assert capsys.readouterr().out == ""
 
 
+def test_prechecked_artifacts_compile_without_rechecking_single_and_graph_paths() -> None:
+    runtime = PipelineDriver()
+    single_prepared = runtime.prepare("let value = 1\nvalue")
+    single_discovery = runtime.discover_params(single_prepared)
+    assert single_discovery.checked is not None
+    single_run = runtime.run_prepared(
+        single_prepared, checked=single_discovery.checked, check_only=True
+    )
+    assert single_run.ok, single_run.diagnostics
+
+    graph_prepared = _prepare_graph("config log = true\nlog")
+    graph_discovery = runtime.discover_params_graph(graph_prepared)
+    assert graph_discovery.checked_graph is not None
+    startup = runtime.collect_startup_config_graph(
+        graph_prepared, names={"log"}, checked_graph=graph_discovery.checked_graph
+    )
+    assert startup.ok, startup.diagnostics
+    graph_run = runtime.run_prepared_graph(
+        graph_prepared, checked_graph=graph_discovery.checked_graph, check_only=True
+    )
+    assert graph_run.ok, graph_run.diagnostics
+
+
 def test_startup_config_validates_cached_artifact_even_when_no_value_is_requested() -> None:
     _prepared_a, discovery_a = _compiled_graph("let a = 1\na")
     prepared_b = _prepare_graph("let b = 2\nb")

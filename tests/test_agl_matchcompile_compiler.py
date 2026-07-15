@@ -622,6 +622,12 @@ def test_compiled_decisions_are_acyclic_single_test_paths_and_locally_shared() -
     assert right.default is left.default
 
 
+def test_large_paper_diagonal_matrix_validates_shared_dag_without_path_expansion() -> None:
+    _, _, compiled = _compile(_diagonal_source(15, exhaustive=True))
+
+    validate_decision_dag(compiled.root)
+
+
 @pytest.mark.parametrize("exhaustive", [False, True])
 def test_failure_analysis_memoizes_paper_diagonal_dag_by_identity(exhaustive: bool) -> None:
     _, _, compiled = _compile(_diagonal_source(10, exhaustive=exhaustive))

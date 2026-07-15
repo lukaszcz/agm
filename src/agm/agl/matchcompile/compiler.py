@@ -129,6 +129,12 @@ class _ReplaySwitchRule:
 
 
 _ReplayRule: TypeAlias = _ReplayFailRule | _ReplayLeafRule | _ReplaySwitchRule
+_CompileStateKey: TypeAlias = tuple[tuple[Occurrence, ...], tuple[MatrixRow, ...]]
+
+
+def _compile_state_key(matrix: PatternMatrix) -> _CompileStateKey:
+    """Return the live matrix state that determines all later compilation work."""
+    return matrix.occurrences, matrix.rows
 
 
 def _constructor_index(constructor: Constructor, signature: ClosedSignature) -> int:
@@ -228,7 +234,7 @@ class _CaseCompiler:
 
     def __init__(self, normalized: NormalizedCase) -> None:
         self._normalized = normalized
-        self._memo: dict[PatternMatrix, Decision] = {}
+        self._memo: dict[_CompileStateKey, Decision] = {}
         self._interned: dict[Decision, Decision] = {}
 
     def intern(self, decision: Decision) -> Decision:
@@ -241,18 +247,19 @@ class _CaseCompiler:
     def compile(
         self, matrix: PatternMatrix, allocator: OccurrenceAllocator
     ) -> tuple[Decision, OccurrenceAllocator]:
-        memoized = self._memo.get(matrix)
+        state_key = _compile_state_key(matrix)
+        memoized = self._memo.get(state_key)
         if memoized is not None:
             return memoized, allocator
         if not matrix.rows:
             decision = self.intern(DecisionFail())
-            self._memo[matrix] = decision
+            self._memo[state_key] = decision
             return decision, allocator
 
         first = matrix.rows[0]
         if all(isinstance(cell, WildcardCell) for cell in first.cells):
             decision = self.intern(DecisionLeaf(first.action_id, _finalize_binders(matrix, first)))
-            self._memo[matrix] = decision
+            self._memo[state_key] = decision
             return decision, allocator
 
         selection = select_qba_column(matrix)
@@ -288,7 +295,7 @@ class _CaseCompiler:
                 free_occurrences,
             )
         )
-        self._memo[matrix] = decision
+        self._memo[state_key] = decision
         return decision, current_allocator
 
 
@@ -688,6 +695,62 @@ def _canonical_switch_constructor(
     return canonical
 
 
+def _validate_decision_dataflow(
+    root: Decision,
+    root_available: frozenset[OccurrenceId],
+    occurrence_groups: dict[tuple[OccurrenceId, Constructor], tuple[Occurrence, ...]] | None,
+) -> None:
+    """Validate path invariants with must/may summaries over a shared DAG.
+
+    Available occurrences are a must fact (intersection at joins); tested
+    occurrences are a may fact (union at joins).  These summaries retain the
+    path-sensitive invariants without enumerating exponentially many paths.
+    """
+    states: dict[int, tuple[Decision, frozenset[OccurrenceId], frozenset[OccurrenceId]]] = {}
+    worklist: list[int] = []
+
+    def merge(
+        decision: Decision,
+        available: frozenset[OccurrenceId],
+        tested: frozenset[OccurrenceId],
+    ) -> None:
+        identifier = id(decision)
+        previous = states.get(identifier)
+        if previous is not None:
+            _, previous_available, previous_tested = previous
+            available &= previous_available
+            tested |= previous_tested
+            if available == previous_available and tested == previous_tested:
+                return
+        states[identifier] = (decision, available, tested)
+        worklist.append(identifier)
+
+    merge(root, root_available, frozenset())
+    while worklist:
+        decision, available, tested = states[worklist.pop()]
+        if not isinstance(decision, DecisionSwitch):
+            continue
+        next_tested = tested | {decision.occurrence.id}
+        for branch in decision.keyed_children:
+            child_available = available
+            if occurrence_groups is not None:
+                children = occurrence_groups.get((decision.occurrence.id, branch.constructor), ())
+                child_available |= frozenset(child.id for child in children)
+            merge(branch.decision, child_available, next_tested)
+        if decision.default is not None:
+            merge(decision.default, available, next_tested)
+
+    for decision, available, tested in states.values():
+        if occurrence_groups is not None and not set(decision.free_occurrences).issubset(available):
+            raise MatchCompileInvariantError(
+                "decision free occurrence interface is unavailable on an incoming path"
+            )
+        if isinstance(decision, DecisionSwitch) and decision.occurrence.id in tested:
+            raise MatchCompileInvariantError(
+                f"occurrence {decision.occurrence.id.value} is tested more than once on a path"
+            )
+
+
 def _validate_compiled_decisions(
     compiled: CompiledCase,
     occurrences_by_id: dict[OccurrenceId, Occurrence],
@@ -824,41 +887,10 @@ def _validate_compiled_decisions(
             "compiled occurrence ledger does not exactly match decision decompositions"
         )
 
-    states: set[tuple[int, frozenset[OccurrenceId], frozenset[OccurrenceId]]] = set()
-
-    def validate_path(
-        decision: Decision,
-        available: frozenset[OccurrenceId],
-        tested: frozenset[OccurrenceId],
-    ) -> None:
-        state = (id(decision), available, tested)
-        if state in states:
-            return
-        states.add(state)
-        if not set(decision.free_occurrences).issubset(available):
-            raise MatchCompileInvariantError(
-                "decision free occurrence interface is unavailable on an incoming path"
-            )
-        if isinstance(decision, DecisionFail):
-            return
-        if isinstance(decision, DecisionLeaf):
-            return
-        occurrence_id = decision.occurrence.id
-        next_tested = tested | {occurrence_id}
-        for branch in decision.keyed_children:
-            children = occurrence_groups.get((occurrence_id, branch.constructor), ())
-            validate_path(
-                branch.decision,
-                available | frozenset(child.id for child in children),
-                next_tested,
-            )
-        if decision.default is not None:
-            validate_path(decision.default, available, next_tested)
-
-    validate_path(
+    _validate_decision_dataflow(
         compiled.root,
         frozenset((normalized.root.id,)),
-        frozenset(),
+        occurrence_groups,
     )
 
 
@@ -870,7 +902,7 @@ def _validate_semantic_replay(compiled: CompiledCase) -> None:
     semantically compatible states but rejects divergent state mappings.
     """
 
-    state_nodes: dict[PatternMatrix, Decision] = {}
+    state_nodes: dict[_CompileStateKey, Decision] = {}
     node_rules: dict[int, _ReplayRule] = {}
 
     def remember_rule(decision: Decision, rule: _ReplayRule) -> None:
@@ -886,14 +918,15 @@ def _validate_semantic_replay(compiled: CompiledCase) -> None:
         decision: Decision,
         allocator: OccurrenceAllocator,
     ) -> OccurrenceAllocator:
-        if matrix in state_nodes:
-            if state_nodes[matrix] is not decision:
+        state_key = _compile_state_key(matrix)
+        if state_key in state_nodes:
+            if state_nodes[state_key] is not decision:
                 raise MatchCompileInvariantError(
                     "semantic replay found one canonical matrix state mapped to divergent "
                     "decision identities"
                 )
             return allocator
-        state_nodes[matrix] = decision
+        state_nodes[state_key] = decision
 
         if not matrix.rows:
             rule: _ReplayRule = _ReplayFailRule()
@@ -1065,26 +1098,7 @@ def validate_decision_dag(root: Decision) -> None:
         visited.add(identifier)
 
     acyclic(root)
-    states: set[tuple[int, frozenset[OccurrenceId]]] = set()
-
-    def paths(decision: Decision, tested: frozenset[OccurrenceId]) -> None:
-        state = (id(decision), tested)
-        if state in states:
-            return
-        states.add(state)
-        if not isinstance(decision, DecisionSwitch):
-            return
-        if decision.occurrence.id in tested:
-            raise MatchCompileInvariantError(
-                f"occurrence {decision.occurrence.id.value} is tested more than once on a path"
-            )
-        next_tested = tested | {decision.occurrence.id}
-        for branch in decision.keyed_children:
-            paths(branch.decision, next_tested)
-        if decision.default is not None:
-            paths(decision.default, next_tested)
-
-    paths(root, frozenset())
+    _validate_decision_dataflow(root, frozenset(), None)
 
 
 def compile_case(normalized: NormalizedCase) -> CompiledCase:

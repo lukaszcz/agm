@@ -1227,6 +1227,7 @@ class PipelineDriver:
                 compiled_graph=compiled_graph,
             )
 
+        tc_diagnostics: tuple[Diagnostic, ...]
         if compiled_graph is not None:
             tc_diagnostics = ()
             checked_graph = compiled_graph.checked_graph
@@ -1448,6 +1449,7 @@ class PipelineDriver:
 
         # Reuse a supplied match-compiled graph rather than repeating its
         # typecheck and match-compilation passes.
+        tc_diagnostics: tuple[Diagnostic, ...]
         if compiled_graph is not None:
             tc_diagnostics = ()
             checked_graph = compiled_graph.checked_graph

@@ -736,7 +736,7 @@ def test_imported_enum_witness_uses_full_module_qualification_only_when_ambiguou
                 f"{other_import}"
                 "let value: library.remote::Remote[int] = "
                 "library.remote::Remote::empty\n"
-                "case value of | empty => 0\n"
+                f"case value of | {'library.remote::Remote::empty' if ambiguous else 'empty'} => 0\n"
             ),
         },
     )

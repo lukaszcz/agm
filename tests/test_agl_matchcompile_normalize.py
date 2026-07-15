@@ -618,8 +618,15 @@ def test_malformed_checked_literal_and_bare_variant_metadata_raise_invariants() 
 
     bare_none = enum_case.branches[0].pattern
     bare_some = replace(bare_none, name="some")
+    assert bare_none.node_id in enum_checked.resolved.bare_variant_refs
+    some_ref = replace(enum_checked.resolved.bare_variant_refs[bare_none.node_id], variant="some")
+    malformed_resolved = replace(
+        enum_checked.resolved,
+        bare_variant_refs={bare_none.node_id: some_ref},
+    )
+    malformed_checked = replace(enum_checked, resolved=malformed_resolved)
     with pytest.raises(MatchCompileInvariantError, match="not nullary"):
-        normalize_case(_replace_case_pattern(enum_case, bare_some), enum_checked)
+        normalize_case(_replace_case_pattern(enum_case, bare_some), malformed_checked)
 
 
 def test_malformed_checked_constructor_metadata_raise_invariants() -> None:

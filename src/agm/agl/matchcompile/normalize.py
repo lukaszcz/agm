@@ -81,15 +81,15 @@ def _bare_enum_constructors(
 ) -> frozenset[tuple[ModuleId, str, str]]:
     """Collect declaration-level bare variants valid in the exact case scope."""
     result: set[tuple[ModuleId, str, str]] = set()
-    for candidate in checked.resolved.bare_variant_refs.values():
-        binding = scope.lookup(candidate.variant or "")
-        if (
-            binding is None
-            or binding.kind is not BinderKind.constructor_binding
-            or candidate.variant is None
-        ):
+    for name, candidates in checked.resolved.constructor_candidates.items():
+        binding = scope.lookup(name)
+        if binding is None or binding.kind is not BinderKind.constructor_binding:
             continue
-        result.add((candidate.owner_module_id, candidate.owner_name, candidate.variant))
+        if len(candidates) != 1:
+            continue
+        candidate = candidates[0]
+        if candidate.variant is not None:
+            result.add((candidate.owner_module_id, candidate.owner_name, candidate.variant))
     return frozenset(result)
 
 

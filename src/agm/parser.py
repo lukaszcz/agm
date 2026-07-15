@@ -541,8 +541,9 @@ _HELP_TEXTS: dict[str, str] = {
 
         Exit codes:
           0  The workflow completed successfully.
-          1  Pre-execution failure: unreadable file, static lex/parse/scope/type
-             diagnostics, host configuration error, or param validation failure.
+          1  Pre-execution failure: unreadable file, static diagnostics
+             (lex/parse/scope/type/match), host configuration error, or param
+             validation failure.
           2  The workflow executed but ended with an uncaught AgL exception.
     """),
     "repl": textwrap.dedent("""\
@@ -582,9 +583,9 @@ _HELP_TEXTS: dict[str, str] = {
           --log-file PATH       Write a JSONL trace log to PATH.
           --no-log              Disable trace logging.
           --log, --log-file, and --no-log are mutually exclusive.
-          --dry-run             Type-check only: run the static pipeline for each
-                                entry but never evaluate it (no agent/exec calls,
-                                no persisted bindings); echo the inferred type.
+          --dry-run             Statically check only: run the full static pipeline
+                                for each entry but never evaluate it (no agent/exec
+                                calls, no persisted bindings); echo the inferred type.
 
         Type :help inside the REPL for the meta-command list; :quit or Ctrl-D
         exits.  Ctrl-C cancels the current entry without exiting.

@@ -56,6 +56,7 @@ AgL supports file-based modules. A single-file program runs through the single-m
 | AST | `src/agm/agl/syntax/` |
 | Scope / name resolution | `src/agm/agl/scope/` |
 | Type checking | `src/agm/agl/typecheck/` |
+| Pattern-match compiler model / normalization | `src/agm/agl/matchcompile/` |
 | Semantic foundation (values, types, exceptions) | `src/agm/agl/semantics/` |
 | Lowering / linking | `src/agm/agl/lower/` |
 | Execution IR (data model) | `src/agm/agl/ir/` |

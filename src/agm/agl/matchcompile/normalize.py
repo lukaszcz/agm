@@ -1,0 +1,302 @@
+"""Normalize checked AgL patterns into canonical pattern-matrix rows."""
+
+from __future__ import annotations
+
+import decimal
+from typing import assert_never
+
+from agm.agl.semantics.type_table import TypeTable
+from agm.agl.semantics.types import (
+    AgentType,
+    BoolType,
+    BottomType,
+    DecimalType,
+    DictType,
+    EnumType,
+    ExceptionType,
+    FunctionType,
+    IntType,
+    JsonType,
+    ListType,
+    RecordType,
+    TextType,
+    Type,
+    TypeVarType,
+    UnitType,
+)
+from agm.agl.syntax.nodes import (
+    BoolLit,
+    Case,
+    ConstructorPattern,
+    DecimalLit,
+    IntLit,
+    LiteralPattern,
+    NullLit,
+    Pattern,
+    StringLit,
+    VarPattern,
+    WildcardPattern,
+)
+from agm.agl.typecheck.env import CheckedProgram
+from agm.agl.typecheck.graph import CheckedModule
+
+from .model import (
+    BinderProvenance,
+    BoolConstructor,
+    ClosedSignature,
+    Constructor,
+    ConstructorCell,
+    ConstructorField,
+    EnumConstructor,
+    LiteralConstructor,
+    LiteralKind,
+    MatrixRow,
+    NormalizedCase,
+    Occurrence,
+    OccurrenceId,
+    OmittedFieldProvenance,
+    OpenSignature,
+    PatternCell,
+    RootOccurrenceProvenance,
+    Signature,
+    SourceAction,
+    SourcePatternProvenance,
+    WildcardCell,
+)
+
+CheckedPatternOwner = CheckedProgram | CheckedModule
+
+
+class MatchCompileInvariantError(RuntimeError):
+    """A checked-program invariant required by match compilation was violated."""
+
+
+def _enum_constructor(
+    enum_type: EnumType, variant: str, table: TypeTable
+) -> EnumConstructor:
+    try:
+        variants = table.enum_variants(enum_type)
+    except (KeyError, AssertionError) as exc:
+        raise MatchCompileInvariantError(
+            f"cannot resolve enum signature for checked type {enum_type!r}"
+        ) from exc
+    fields = variants.get(variant)
+    if fields is None:
+        raise MatchCompileInvariantError(
+            f"checked enum pattern names unknown variant {enum_type!r}::{variant}"
+        )
+    return EnumConstructor(
+        enum_type=enum_type,
+        variant=variant,
+        fields=tuple(ConstructorField(name, field_type) for name, field_type in fields.items()),
+    )
+
+
+def signature_for_type(subject_type: Type, table: TypeTable) -> Signature:
+    """Return the complete constructor signature for every current semantic type.
+
+    The explicit closed dispatch is intentional: adding a semantic ``Type``
+    without classifying its matching domain is a compiler error, not an implicit
+    fallback to an open domain.
+    """
+    match subject_type:
+        case BoolType():
+            return ClosedSignature((BoolConstructor(False), BoolConstructor(True)))
+        case EnumType() as enum_type:
+            try:
+                variant_names = tuple(table.enum_variants(enum_type))
+            except (KeyError, AssertionError) as exc:
+                raise MatchCompileInvariantError(
+                    f"cannot resolve enum signature for checked type {enum_type!r}"
+                ) from exc
+            return ClosedSignature(
+                tuple(_enum_constructor(enum_type, name, table) for name in variant_names)
+            )
+        case (
+            TextType()
+            | JsonType()
+            | IntType()
+            | DecimalType()
+            | TypeVarType()
+            | ListType()
+            | DictType()
+            | RecordType()
+            | ExceptionType()
+            | UnitType()
+            | AgentType()
+            | FunctionType()
+            | BottomType()
+        ):
+            return OpenSignature()
+        case _ as unreachable:
+            try:
+                assert_never(unreachable)
+            except AssertionError as exc:
+                raise MatchCompileInvariantError(
+                    f"unsupported semantic type {type(unreachable).__name__}"
+                ) from exc
+
+
+def _canonical_literal(pattern: LiteralPattern, subject_type: Type) -> Constructor:
+    literal = pattern.literal
+    if isinstance(subject_type, BoolType) and isinstance(literal, BoolLit):
+        return BoolConstructor(literal.value)
+    if isinstance(subject_type, (IntType, DecimalType)) and isinstance(
+        literal, (IntLit, DecimalLit)
+    ):
+        return LiteralConstructor(LiteralKind.NUMERIC, decimal.Decimal(literal.value))
+    if isinstance(subject_type, TextType) and isinstance(literal, StringLit):
+        return LiteralConstructor(LiteralKind.TEXT, literal.value)
+    if isinstance(subject_type, JsonType) and isinstance(literal, NullLit):
+        return LiteralConstructor(LiteralKind.NULL, None)
+    raise MatchCompileInvariantError(
+        "checked literal pattern is incompatible with its occurrence type: "
+        f"{type(literal).__name__} against {subject_type!r}"
+    )
+
+
+def _normalize_pattern(
+    pattern: Pattern,
+    subject_type: Type,
+    checked: CheckedPatternOwner,
+) -> PatternCell:
+    provenance = SourcePatternProvenance(pattern.node_id, pattern.span)
+    match pattern:
+        case WildcardPattern():
+            return WildcardCell(binder=None, provenance=provenance)
+        case VarPattern(node_id=node_id, name=name):
+            if node_id not in checked.resolved.bare_variant_patterns:
+                return WildcardCell(
+                    binder=BinderProvenance(node_id=node_id, name=name, span=pattern.span),
+                    provenance=provenance,
+                )
+            if not isinstance(subject_type, EnumType):
+                raise MatchCompileInvariantError(
+                    "resolver-classified bare variant has a non-enum checked type"
+                )
+            constructor = _enum_constructor(subject_type, name, checked.type_env.type_table)
+            if constructor.arity != 0:
+                raise MatchCompileInvariantError(
+                    f"resolver-classified bare variant {name!r} is not nullary"
+                )
+            return ConstructorCell(constructor, (), provenance)
+        case LiteralPattern():
+            return ConstructorCell(
+                constructor=_canonical_literal(pattern, subject_type),
+                arguments=(),
+                provenance=provenance,
+            )
+        case ConstructorPattern(name=variant):
+            if not isinstance(subject_type, EnumType):
+                raise MatchCompileInvariantError(
+                    "checked constructor pattern has a non-enum occurrence type"
+                )
+            constructor = _enum_constructor(
+                subject_type, variant, checked.type_env.type_table
+            )
+            supplied_pairs = checked.argument_bindings.constructor_patterns.get(pattern.node_id)
+            if supplied_pairs is None:
+                raise MatchCompileInvariantError(
+                    f"missing checked argument bindings for pattern node {pattern.node_id}"
+                )
+            supplied = dict(supplied_pairs)
+            if len(supplied) != len(supplied_pairs):
+                raise MatchCompileInvariantError(
+                    f"duplicate checked field binding for pattern node {pattern.node_id}"
+                )
+            declared_names = {field.name for field in constructor.fields}
+            unknown = supplied.keys() - declared_names
+            if unknown:
+                raise MatchCompileInvariantError(
+                    f"checked pattern node {pattern.node_id} binds unknown fields "
+                    f"{sorted(unknown)!r}"
+                )
+            arguments: list[PatternCell] = []
+            for field in constructor.fields:
+                child = supplied.get(field.name)
+                if child is None:
+                    arguments.append(
+                        WildcardCell(
+                            binder=None,
+                            provenance=OmittedFieldProvenance(
+                                constructor_pattern_id=pattern.node_id,
+                                field_name=field.name,
+                                span=pattern.span,
+                            ),
+                        )
+                    )
+                else:
+                    arguments.append(_normalize_pattern(child, field.type, checked))
+            return ConstructorCell(constructor, tuple(arguments), provenance)
+        case _ as unreachable:
+            try:
+                assert_never(unreachable)
+            except AssertionError as exc:
+                raise MatchCompileInvariantError(
+                    f"unsupported source pattern {type(unreachable).__name__}"
+                ) from exc
+
+
+def normalize_pattern(
+    pattern: Pattern,
+    subject_type: Type,
+    checked: CheckedPatternOwner,
+) -> PatternCell:
+    """Normalize one checked pattern against its checked occurrence type."""
+    return _normalize_pattern(pattern, subject_type, checked)
+
+
+def normalize_case(case: Case, checked: CheckedPatternOwner) -> NormalizedCase:
+    """Normalize one checked source case into a source-priority one-column matrix."""
+    try:
+        subject_type = checked.node_types[case.subject.node_id]
+    except KeyError as exc:
+        raise MatchCompileInvariantError(
+            f"missing checked subject type for case node {case.node_id}"
+        ) from exc
+    root = Occurrence(
+        id=OccurrenceId(0),
+        creation_order=0,
+        type=subject_type,
+        provenance=RootOccurrenceProvenance(
+            case_node_id=case.node_id,
+            subject_node_id=case.subject.node_id,
+            span=case.subject.span,
+        ),
+    )
+    rows = tuple(
+        MatrixRow(
+            cells=(_normalize_pattern(branch.pattern, subject_type, checked),),
+            action_id=branch.node_id,
+            source_index=index,
+            source_pattern_id=branch.pattern.node_id,
+        )
+        for index, branch in enumerate(case.branches)
+    )
+    actions = tuple(
+        SourceAction(
+            action_id=branch.node_id,
+            source_index=index,
+            body_node_id=branch.body.node_id,
+            branch_span=branch.span,
+            pattern_span=branch.pattern.span,
+        )
+        for index, branch in enumerate(case.branches)
+    )
+    return NormalizedCase(
+        case_node_id=case.node_id,
+        span=case.span,
+        root=root,
+        occurrences=(root,),
+        rows=rows,
+        actions=actions,
+    )
+
+
+__all__ = [
+    "CheckedPatternOwner",
+    "MatchCompileInvariantError",
+    "normalize_case",
+    "normalize_pattern",
+    "signature_for_type",
+]

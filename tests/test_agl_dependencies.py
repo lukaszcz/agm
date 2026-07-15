@@ -49,6 +49,18 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
             ),
         ),
         (
+            "matchcompile",
+            (
+                "agm.agl.diagnostics",
+                "agm.agl.matchcompile",
+                "agm.agl.modules.ids",
+                "agm.agl.scope",
+                "agm.agl.semantics",
+                "agm.agl.syntax",
+                "agm.agl.typecheck",
+            ),
+        ),
+        (
             "scope",
             (
                 "agm.agl.diagnostics",

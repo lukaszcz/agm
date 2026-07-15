@@ -1,0 +1,1 @@
+def id[T](value: T) -> T = value

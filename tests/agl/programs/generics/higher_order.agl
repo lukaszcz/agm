@@ -8,6 +8,9 @@
 # HOF and called there under type erasure. A param chooses which transform runs.
 def apply[A, B](x: A, f: A -> B) -> B = f(x)
 
+def app[T](f: T -> T, x: T) -> T = f(x)
+def id[T](x: T) -> T = x
+
 def twice[A](x: A, f: A -> A) -> A = f(f(x))
 
 # A lambda inside a generic def annotating its parameter/return with the def's
@@ -20,6 +23,11 @@ enum Wrapper[T]
   | wrap(value: T)
 
 param shout: bool
+
+# Generic function values are fresh occurrences constrained by the other
+# argument of the enclosing declared call.
+print(app(id, 0))
+print(app(id, "fresh"))
 
 # Inferred A=int, B=int.
 print(apply(3, fn(n: int) -> int => n * 2))

@@ -1,0 +1,3 @@
+def choose[T](left: T, right: T) -> T = left
+let value: decimal = choose(1, 2.5)
+value

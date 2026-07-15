@@ -329,6 +329,71 @@ class TestDiagnosticSourceLabel:
 
 
 # ---------------------------------------------------------------------------
+# Related diagnostics
+# ---------------------------------------------------------------------------
+
+
+class TestRelatedDiagnostics:
+    def test_one_related_location_is_rendered_after_primary(self) -> None:
+        primary = SourceSpan(1, 1, 1, 2, 0, 1, SourceId("/main.agl"))
+        previous = SourceSpan(4, 5, 4, 9, 20, 24, SourceId("/main.agl"))
+
+        diagnostic = AglError(
+            "type mismatch", span=primary, related=(("expected here", previous),)
+        ).to_diagnostic()
+
+        assert format_diagnostic(diagnostic) == (
+            "/main.agl:1:1: error: type mismatch\n"
+            "  /main.agl:4:5-8: note: expected here"
+        )
+
+    def test_multiple_related_locations_preserve_input_order(self) -> None:
+        primary = SourceSpan(1, 1, 1, 2, 0, 1)
+        first = SourceSpan(2, 1, 2, 2, 2, 3)
+        second = SourceSpan(3, 1, 3, 2, 4, 5)
+
+        diagnostic = AglError(
+            "type mismatch",
+            span=primary,
+            related=(("first constraint", first), ("second constraint", second)),
+        ).to_diagnostic()
+
+        assert [note.message for note in diagnostic.related] == [
+            "first constraint",
+            "second constraint",
+        ]
+        assert format_diagnostic(diagnostic).splitlines()[1:] == [
+            "  <agl>:2:1: note: first constraint",
+            "  <agl>:3:1: note: second constraint",
+        ]
+
+    def test_multiline_related_location_uses_range_formatting(self) -> None:
+        primary = SourceSpan(1, 1, 1, 2, 0, 1)
+        multiline = SourceSpan(2, 3, 4, 5, 4, 20)
+
+        diagnostic = AglError(
+            "type mismatch", span=primary, related=(("value originates here", multiline),)
+        ).to_diagnostic()
+
+        assert format_diagnostic(diagnostic).splitlines()[-1] == (
+            "  <agl>:2:3-4:5: note: value originates here"
+        )
+
+    def test_related_location_from_another_module_keeps_its_source_label(self) -> None:
+        primary = SourceSpan(1, 1, 1, 2, 0, 1, SourceId("/entry.agl"))
+        imported = SourceSpan(7, 2, 7, 3, 30, 31, SourceId("/library/types.agl"))
+
+        diagnostic = AglError(
+            "type mismatch", span=primary, related=(("declared by imported module", imported),)
+        ).to_diagnostic()
+
+        assert diagnostic.related[0].source_label == "/library/types.agl"
+        assert format_diagnostic(diagnostic).splitlines()[-1] == (
+            "  /library/types.agl:7:2: note: declared by imported module"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Backward compatibility: callers that never pass source= still work
 # ---------------------------------------------------------------------------
 
@@ -363,6 +428,8 @@ class TestBackwardCompatibility:
         d = err.to_diagnostic()
         assert d.line == 2
         assert d.column == 1
+        assert d.related == ()
+        assert format_diagnostic(d) == "<agl>:2:1-4: error: test error"
 
     def test_parse_program_no_source_backward_compat(self) -> None:
         """parse_program without source= still returns a valid Program."""

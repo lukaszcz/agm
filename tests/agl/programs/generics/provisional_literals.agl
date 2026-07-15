@@ -1,0 +1,32 @@
+# Container literals can collect their element/value type from constraints
+# elsewhere in one expression. Empty literals receive evidence from sibling
+# arguments, expected results, and generic constructor fields; populated
+# containers and branches can unify provisional generic values.
+param prefer_empty: bool
+
+record Bundle[T]
+  values: list[T]
+  metadata: dict[text, T]
+  value: T
+
+enum Option[T]
+  | none
+  | some(value: T)
+
+def choose[T](left: T, right: T) -> T = right
+def id[T](value: T) -> T = value
+
+let from_list_sibling = choose([], [7])
+let from_dict_sibling = choose({}, {answer: 8})
+let from_result: list[int] = id([])
+let from_fields = Bundle(values = [], metadata = {}, value = 9)
+let options = [none, some(value = 10)]
+let selected = if prefer_empty => [] else => [11]
+
+print from_list_sibling
+print from_dict_sibling
+print from_result
+print from_fields.values
+print from_fields.metadata
+print options
+print selected

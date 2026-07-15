@@ -1,0 +1,25 @@
+param value: int
+
+record Box[T]
+  value: T
+
+enum Option[T]
+  | none
+  | some(value: T)
+
+def box[T](factory: (T) -> Box[T], item: T) -> Box[T] = factory(item)
+def option[T](factory: (T) -> Option[T], item: T) -> Option[T] = factory(item)
+def fallback[T](value: Option[T], item: T) -> Option[T] = value
+
+let direct = box(Box, value)
+let partial = box(Box(value = ?), value)
+let present = option(some, value)
+let missing = fallback(none, value)
+print direct.value
+print partial.value
+case present of
+  | some(value = item) => print(item)
+  | none => print(-1)
+case missing of
+  | some(value = item) => print(item)
+  | none => print("none")

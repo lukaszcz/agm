@@ -17,6 +17,7 @@ from agm.agl.semantics.types import (
     EnumType,
     ExceptionType,
     FunctionType,
+    InferenceVarType,
     IntType,
     JsonType,
     ListType,
@@ -167,6 +168,10 @@ def constructor_inhabits_type(constructor: Constructor, subject_type: Type) -> b
                 isinstance(constructor, LiteralConstructor)
                 and constructor.kind is LiteralKind.NULL
             )
+        case InferenceVarType():
+            raise MatchCompileInvariantError(
+                "flexible inference type escaped checked output"
+            )
         case (
             TypeVarType()
             | ListType()
@@ -223,6 +228,10 @@ def signature_for_type(subject_type: Type, table: TypeTable) -> Signature:
                 ) from exc
             return ClosedSignature(
                 tuple(_enum_constructor(enum_type, name, table) for name in variant_names)
+            )
+        case InferenceVarType():
+            raise MatchCompileInvariantError(
+                "flexible inference type escaped checked output"
             )
         case (
             TextType()

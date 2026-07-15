@@ -1,0 +1,2 @@
+def choose[T](left: T, right: T) -> T = left
+choose(1, "text")

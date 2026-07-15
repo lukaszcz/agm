@@ -12,14 +12,32 @@ for backward compatibility (the lexer and other callers use
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Sequence
 
 # Re-export the canonical definition so existing callers keep working.
 from agm.agl.syntax.spans import UNKNOWN_SOURCE as UNKNOWN_SOURCE
 from agm.agl.syntax.spans import SourceSpan as SourceSpan
 from agm.core.path import display_path
+
+
+@dataclass(frozen=True, slots=True)
+class RelatedDiagnostic:
+    """A non-recursive source location that explains a primary diagnostic.
+
+    Related diagnostics are always rendered as ``note:`` entries and cannot
+    themselves have related locations. This keeps a diagnostic's provenance
+    deterministic and bounded while still allowing a primary error to point at
+    every relevant source constraint.
+    """
+
+    message: str
+    line: int
+    column: int | None = None
+    end_line: int | None = None
+    end_column: int | None = None
+    source_label: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +65,24 @@ class Diagnostic:
     end_column: int | None = None
     severity: Literal["error", "warning"] = "error"
     source_label: str | None = None
+    related: tuple[RelatedDiagnostic, ...] = ()
+
+
+def _source_label_from_span(span: SourceSpan) -> str | None:
+    """Return the display label encoded in *span*, if it has one."""
+    return span.source.label if span.source is not UNKNOWN_SOURCE else None
+
+
+def related_diagnostic_from_span(message: str, span: SourceSpan) -> RelatedDiagnostic:
+    """Build a source-aware related note from a semantic message/span pair."""
+    return RelatedDiagnostic(
+        message=message,
+        line=span.start_line,
+        column=span.start_col,
+        end_line=span.end_line,
+        end_column=span.end_col,
+        source_label=_source_label_from_span(span),
+    )
 
 
 def diagnostic_from_span(
@@ -64,9 +100,6 @@ def diagnostic_from_span(
     can still supply a ``source_name`` argument to the formatting functions —
     preserving full backward compatibility for single-source callers.
     """
-    source_label: str | None = (
-        span.source.label if span.source is not UNKNOWN_SOURCE else None
-    )
     return Diagnostic(
         message=message,
         line=span.start_line,
@@ -74,64 +107,91 @@ def diagnostic_from_span(
         end_line=span.end_line,
         end_column=span.end_col,
         severity=severity,
-        source_label=source_label,
+        source_label=_source_label_from_span(span),
     )
 
 
-def format_diagnostic_location(
-    diagnostic: Diagnostic, *, source_name: str | None = "<agl>"
+def _format_diagnostic_location(
+    *,
+    line: int,
+    column: int | None,
+    end_line: int | None,
+    end_column: int | None,
+    source_label: str | None,
+    source_name: str | None,
 ) -> str:
-    """Return a compiler-style source location for a diagnostic.
+    """Format fields shared by primary diagnostics and related notes.
 
-    The effective source identifier is determined in priority order:
-    1. ``diagnostic.source_label`` (set by :func:`diagnostic_from_span` from
-       the span's ``SourceId``) — takes precedence when set.
-    2. The ``source_name`` argument — used when ``source_label`` is ``None``.
+    A source label supplied by a span takes precedence over the ambient
+    ``source_name``; the latter is used for source-less diagnostics.
     """
-    effective_source: str | None = (
-        diagnostic.source_label if diagnostic.source_label is not None else source_name
-    )
+    effective_source: str | None = source_label if source_label is not None else source_name
     prefix = (
         f"{display_path(Path(effective_source))}:" if effective_source is not None else ""
     )
-    if diagnostic.column is None:
-        return f"{prefix}{diagnostic.line}"
-    if diagnostic.end_line is None or diagnostic.end_column is None:
-        return f"{prefix}{diagnostic.line}:{diagnostic.column}"
-    if (
-        diagnostic.end_line == diagnostic.line
-        and diagnostic.end_column > diagnostic.column + 1
-    ):
-        return (
-            f"{prefix}{diagnostic.line}:"
-            f"{diagnostic.column}-{diagnostic.end_column - 1}"
-        )
-    if diagnostic.end_line != diagnostic.line:
-        return (
-            f"{prefix}{diagnostic.line}:{diagnostic.column}-"
-            f"{diagnostic.end_line}:{diagnostic.end_column}"
-        )
-    return f"{prefix}{diagnostic.line}:{diagnostic.column}"
+    if column is None:
+        return f"{prefix}{line}"
+    if end_line is None or end_column is None:
+        return f"{prefix}{line}:{column}"
+    if end_line == line and end_column > column + 1:
+        return f"{prefix}{line}:{column}-{end_column - 1}"
+    if end_line != line:
+        return f"{prefix}{line}:{column}-{end_line}:{end_column}"
+    return f"{prefix}{line}:{column}"
+
+
+def format_diagnostic_location(
+    diagnostic: Diagnostic | RelatedDiagnostic, *, source_name: str | None = "<agl>"
+) -> str:
+    """Return a compiler-style source location for a diagnostic or related note."""
+    return _format_diagnostic_location(
+        line=diagnostic.line,
+        column=diagnostic.column,
+        end_line=diagnostic.end_line,
+        end_column=diagnostic.end_column,
+        source_label=diagnostic.source_label,
+        source_name=source_name,
+    )
 
 
 def format_diagnostic(
     diagnostic: Diagnostic, *, source_name: str | None = "<agl>"
 ) -> str:
-    """Return a user-visible diagnostic line with source and severity."""
-    return (
+    """Return a user-visible primary diagnostic followed by its related notes."""
+    primary = (
         f"{format_diagnostic_location(diagnostic, source_name=source_name)}: "
         f"{diagnostic.severity}: {diagnostic.message}"
     )
+    notes = (
+        f"  {format_diagnostic_location(note, source_name=source_name)}: note: {note.message}"
+        for note in diagnostic.related
+    )
+    return "\n".join((primary, *notes))
 
 
 class AglError(Exception):
-    """Base class for all fatal AgL pipeline errors."""
+    """Base class for all fatal AgL pipeline errors.
 
-    def __init__(self, message: str, *, span: SourceSpan | None = None) -> None:
+    ``related`` carries semantic ``(message, SourceSpan)`` pairs until the
+    error is converted into a source-aware :class:`Diagnostic`.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        span: SourceSpan | None = None,
+        related: Sequence[tuple[str, SourceSpan]] = (),
+    ) -> None:
         super().__init__(message)
         self.span = span
+        self.related = tuple(related)
 
     def to_diagnostic(self) -> Diagnostic:
+        related = tuple(
+            related_diagnostic_from_span(message, span) for message, span in self.related
+        )
         if self.span is None:
-            return Diagnostic(message=str(self), line=1)
-        return diagnostic_from_span(str(self), self.span)
+            return Diagnostic(message=str(self), line=1, related=related)
+        primary = diagnostic_from_span(str(self), self.span)
+        return replace(primary, related=related)

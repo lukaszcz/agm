@@ -238,6 +238,13 @@ class TestDryRunInventory:
         assert entry.codec_name == "extern"
         assert entry.target_type_label == "int"
 
+    def test_generic_extern_dry_run_inventory_has_a_concrete_target_label(self) -> None:
+        executable = _lower_source("extern def id[T](value: T) -> T\nid(1)")
+        assert len(executable.dry_run_inventory) == 1
+        entry = executable.dry_run_inventory[0]
+        assert entry.callee == "id"
+        assert entry.target_type_label == "int"
+
     def test_pipeline_check_only_lists_the_extern_call_site(self, tmp_path: Path) -> None:
         root = tmp_path / "root"
         write_module_file(root, "lib.mod", "extern def f(x: int) -> int")

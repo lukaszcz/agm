@@ -7,6 +7,7 @@ pre-pass."""
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,7 @@ from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.scope.graph import resolve_graph
 from agm.agl.scope.symbols import AglScopeError
+from agm.agl.semantics.types import InferenceVarType, contains_inference_var
 from agm.agl.typecheck import (
     AgentType,
     AglTypeError,
@@ -30,6 +32,7 @@ from agm.agl.typecheck import (
     TextType,
     Type,
     TypeVarType,
+    assert_checked_module_graph_closed,
     check,
     check_graph,
 )
@@ -2083,6 +2086,75 @@ def test_cross_module_generic_constructor_call_inferred_type_args(tmp_path: Path
     )
 
 
+def test_imported_generic_constructor_values_use_later_sibling_evidence(tmp_path: Path) -> None:
+    """Imported payload and nullary constructor values stay provisional in a call."""
+    lib_id = ModuleId.from_dotted("lib")
+    modules = {
+        "lib": (
+            "record Point\n"
+            "  value: int\n"
+            "record Box[T]\n"
+            "  value: T\n"
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)"
+        ),
+        "entry": (
+            "import lib qualified\n"
+            "def box[T](factory: (T) -> lib::Box[T], value: T) -> lib::Box[T] = factory(value)\n"
+            "def payload[T](factory: (T) -> lib::Option[T], value: T) "
+            "-> lib::Option[T] = factory(value)\n"
+            "def fallback[T](value: lib::Option[T], item: T) -> lib::Option[T] = value\n"
+            "let b = box(lib::Box, 1)\n"
+            "let p = payload(lib::Option::some, 2)\n"
+            "let n = fallback(lib::Option::none, 3)\n"
+            "let point: (int) -> lib::Point = lib::Point\n"
+            "let explicit: (int) -> lib::Box[int] = lib::Box::[int]\n"
+            "n"
+        ),
+    }
+    checked = _check_graph(tmp_path, modules)
+    box_type = RecordType("Box", module_id=lib_id, type_args=(IntType(),))
+    option_type = EnumType("Option", module_id=lib_id, type_args=(IntType(),))
+    assert _binding_value_type(checked, ENTRY_ID, "b") == box_type
+    assert _binding_value_type(checked, ENTRY_ID, "p") == option_type
+    assert _binding_value_type(checked, ENTRY_ID, "n") == option_type
+    assert _binding_value_type(checked, ENTRY_ID, "point") == FunctionType(
+        params=(IntType(),), result=RecordType("Point", module_id=lib_id)
+    )
+    assert _binding_value_type(checked, ENTRY_ID, "explicit") == FunctionType(
+        params=(IntType(),), result=box_type
+    )
+
+
+def test_cross_module_non_generic_constructor_value_type_apply_rejected(tmp_path: Path) -> None:
+    modules = {
+        "lib": "record Point\n  value: int",
+        "entry": "import lib qualified\nlet factory = lib::Point::[int]\nfactory",
+    }
+    with pytest.raises(AglTypeError, match="not a generic constructor"):
+        _check_graph(tmp_path, modules)
+
+
+def test_open_imported_generic_constructor_value_uses_later_sibling_evidence(
+    tmp_path: Path,
+) -> None:
+    lib_id = ModuleId.from_dotted("lib")
+    modules = {
+        "lib": "record Box[T]\n  value: T",
+        "entry": (
+            "import lib\n"
+            "def box[T](factory: (T) -> Box[T], value: T) -> Box[T] = factory(value)\n"
+            "let result = box(Box, 1)\n"
+            "result"
+        ),
+    }
+    checked = _check_graph(tmp_path, modules)
+    assert _binding_value_type(checked, ENTRY_ID, "result") == RecordType(
+        "Box", module_id=lib_id, type_args=(IntType(),)
+    )
+
+
 def test_open_imported_generic_type_in_annotation(tmp_path: Path) -> None:
     lib_id = ModuleId.from_dotted("lib")
     modules = {
@@ -2675,6 +2747,142 @@ def test_cross_module_generic_func_call_wrong_type_rejected(tmp_path: Path) -> N
     }
     with pytest.raises(AglTypeError):
         _check_graph(tmp_path, modules)
+
+
+# ---------------------------------------------------------------------------
+# Module-graph inference parity
+# ---------------------------------------------------------------------------
+
+
+def test_graph_infers_unannotated_local_def_despite_imported_same_name(tmp_path: Path) -> None:
+    """Graph signatures are keyed by declaration id, not a colliding import name."""
+    graph = _check_graph(
+        tmp_path,
+        {
+            "id": "def relay(value: int) -> int = value",
+            "entry": "import id\ndef relay(value: text) = value\nrelay(\"ok\")",
+        },
+    )
+
+    assert graph.modules[ENTRY_ID].function_signatures["relay"].result == TextType()
+
+
+def test_cross_module_higher_order_generic_inference(tmp_path: Path) -> None:
+    """Imported rank-1 schemes constrain one another within the entry expression."""
+    graph = _check_graph(
+        tmp_path,
+        {
+            "app": "def app[T](f: T -> T, value: T) -> T = f(value)",
+            "identity": "def id[T](value: T) -> T = value",
+            "entry": "import app qualified\nimport identity qualified\n"
+            "let result = app::app(identity::id, 0)\nresult",
+        },
+    )
+
+    assert _binding_value_type(graph, ENTRY_ID, "result") == IntType()
+
+
+def test_imported_generic_occurrences_are_fresh_and_checked_output_is_closed(
+    tmp_path: Path,
+) -> None:
+    """Two imported generic uses solve independently in one enclosing expression."""
+    graph = _check_graph(
+        tmp_path,
+        {
+            "id": "def id[T](value: T) -> T = value",
+            "app": (
+                "import id qualified\n"
+                "record Pair[A, B]\n"
+                "  left: A\n"
+                "  right: B\n"
+                "def make[T](value: T) -> T = id::id(value)\n"
+                "def pair[A, B](left: A, right: B) -> Pair[A, B] = "
+                "Pair(left = left, right = right)"
+            ),
+            "entry": (
+                "import app qualified\n"
+                "let values = app::pair(app::make(1), app::make(\"text\"))\n"
+                "values"
+            ),
+        },
+    )
+
+    app_id = ModuleId.from_dotted("app")
+    assert _binding_value_type(graph, ENTRY_ID, "values") == RecordType(
+        "Pair", module_id=app_id, type_args=(IntType(), TextType())
+    )
+    for module in graph.modules.values():
+        published_types = [
+            *module.node_types.values(),
+            *(
+                param_type
+                for parameter_types in module.argument_bindings.function_param_types.values()
+                for param_type in parameter_types
+            ),
+            *(site.target_type for site in module.call_sites),
+        ]
+        assert not any(contains_inference_var(typ) for typ in published_types)
+
+
+def test_checked_module_graph_rejects_a_flexible_graph_type(tmp_path: Path) -> None:
+    graph = _check_graph(
+        tmp_path,
+        {
+            "lib": "record Box\n  value: int",
+            "entry": "import lib\nlib::Box(value = 1)",
+        },
+    )
+    key = next(iter(graph.graph_type_table))
+    leaked = replace(
+        graph,
+        graph_type_table={**graph.graph_type_table, key: InferenceVarType("leak")},
+    )
+
+    with pytest.raises(AssertionError, match="inference variable leaked"):
+        assert_checked_module_graph_closed(leaked)
+
+    entry = graph.modules[ENTRY_ID]
+    leaked_module = replace(entry, node_types={**entry.node_types, -1: InferenceVarType("leak")})
+    leaked = replace(graph, modules={**graph.modules, ENTRY_ID: leaked_module})
+    with pytest.raises(AssertionError, match="inference variable leaked"):
+        assert_checked_module_graph_closed(leaked)
+
+
+def test_imported_generic_conflict_keeps_source_labels_for_both_constraints(tmp_path: Path) -> None:
+    """A conflict in an importing module retains its original source on primary and note."""
+    with pytest.raises(AglTypeError) as exc_info:
+        _check_graph(
+            tmp_path,
+            {
+                "id": "def same[T](left: T, right: T) -> T = left",
+                "app": 'import id qualified\ndef bad() -> int = id::same(1, "text")',
+                "entry": "import app\n()",
+            },
+        )
+
+    error = exc_info.value
+    assert error.span is not None
+    assert error.related
+    assert error.span.source.label.endswith("app.agl")
+    assert error.related[0][1].source.label.endswith("app.agl")
+
+
+def test_checked_modules_publish_only_their_own_function_signatures(tmp_path: Path) -> None:
+    """Imported signature lookup state is not exposed as a module's checked declarations."""
+    graph = _check_graph(
+        tmp_path,
+        {
+            "id": "def shared[T](value: T) -> T = value",
+            "app": "import id\ndef shared(value: text) -> text = value",
+            "entry": "import app\napp::shared(\"ok\")",
+        },
+    )
+
+    assert set(graph.modules[ModuleId.from_dotted("id")].function_signatures) == {"shared"}
+    assert set(graph.modules[ModuleId.from_dotted("app")].function_signatures) == {"shared"}
+    app_signatures = graph.modules[ModuleId.from_dotted("app")].function_signatures
+    assert app_signatures["shared"].result == TextType()
+    assert graph.modules[ENTRY_ID].function_signatures == {}
 
 
 # ---------------------------------------------------------------------------

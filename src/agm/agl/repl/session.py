@@ -19,7 +19,7 @@ rendering, meta-commands, and the prompt_toolkit console are future work.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from agm.agl.diagnostics import AglError, Diagnostic, diagnostic_from_span
 from agm.agl.repl.entry import EntryKind, EntryResult
@@ -158,6 +158,7 @@ class ReplSession:
         # as call callees or in expressions.  This is seeded into every entry's
         # fresh TypeEnvironment via seed_from, so it is always available.
         self._type_env.set_binding_type(-1, self._make_agent_type())
+        self._type_env.seal()
         self._link_image = LinkImage()
         self._ir_base_frame: Frame = {}
         self._next_node_id: int = 0
@@ -239,6 +240,32 @@ class ReplSession:
                 ReplSession._type_mentions_entry_nominal(param, names) for param in typ.params
             ) or ReplSession._type_mentions_entry_nominal(typ.result, names)
         return False
+
+    @staticmethod
+    def _node_ids_from_failure(
+        program: "Program", failure_span: "SourceSpan | Location | None"
+    ) -> set[int]:
+        """Return AST ids belonging to the unexecuted suffix of a failed entry."""
+        if failure_span is None:
+            return set()
+        from agm.agl.syntax.visitor import walk
+
+        node_ids: set[int] = set()
+
+        def collect(node: object) -> None:
+            typed_node = cast("Program", node)
+            if typed_node.span.start_offset >= failure_span.start_offset:
+                node_ids.add(typed_node.node_id)
+
+        walk(program, collect)
+        return node_ids
+
+    @staticmethod
+    def _assert_checked_state_closed(checked: "CheckedProgram") -> None:
+        """Assert that a checked entry satisfies the shared lowering boundary."""
+        from agm.agl.typecheck.env import assert_checked_program_closed
+
+        assert_checked_program_closed(checked)
 
     # ------------------------------------------------------------------
     # Registration (delegated to the internal runtime — shared validation)
@@ -775,6 +802,7 @@ class ReplSession:
         )
         from agm.agl.typecheck.env import TypeEnvironment
 
+        self._assert_checked_state_closed(checked)
         entry_root = checked.resolved.root_scope
         named_declarations = (
             AgentDecl,
@@ -844,6 +872,13 @@ class ReplSession:
             }
 
         installed: list[str] = []
+        unpromoted_binding_node_ids = {
+            item.node_id
+            for item in program.body.items
+            if partial
+            and isinstance(item, named_declarations)
+            and not _before_failure(item.span.end_offset)
+        }
         for name, ref in entry_root.bindings.items():
             # Config bindings are promoted only on full success (alongside the
             # engine setting), never on partial failure.
@@ -865,12 +900,37 @@ class ReplSession:
                 self._session_scope.bindings[name] = ref
                 if partial and name in entry_names:
                     installed.append(name)
-        previous_type_env = TypeEnvironment()
-        previous_type_env.seed_from(self._type_env)
-        self._type_env.seed_from(checked.type_env)
-        if partial and unpromoted_type_names:
-            self._type_env.restore_type_names_from(previous_type_env, unpromoted_type_names)
-        self._type_env.remove_binding_types(stale_binding_node_ids)
+        if not partial and not stale_binding_node_ids:
+            # The checked environment already includes the prior sealed session
+            # state and is itself sealed at the checked-output boundary. Reuse it
+            # directly instead of copying the accumulated session a second time.
+            self._type_env = checked.type_env
+        else:
+            previous_type_env = TypeEnvironment()
+            previous_type_env.seed_from(self._type_env)
+            # Build the replacement env in a local so a mid-promotion failure
+            # leaves the session's still-sealed ``self._type_env`` untouched;
+            # publishing an unsealed env would brick ``seed_from`` on every
+            # subsequent entry.  Only the final sealed env is committed.
+            new_type_env = TypeEnvironment()
+            new_type_env.seed_from(checked.type_env)
+            if partial and unpromoted_type_names:
+                new_type_env.restore_type_names_from(previous_type_env, unpromoted_type_names)
+            if partial:
+                unpromoted_binding_node_ids |= self._node_ids_from_failure(program, failure_span)
+                unpromoted_function_names = (
+                    item.name
+                    for item in program.body.items
+                    if isinstance(item, FuncDef) and not _before_failure(item.span.end_offset)
+                )
+                new_type_env.restore_binding_metadata_from(
+                    previous_type_env,
+                    unpromoted_binding_node_ids,
+                    unpromoted_function_names,
+                )
+            new_type_env.remove_binding_types(stale_binding_node_ids)
+            new_type_env.seal()
+            self._type_env = new_type_env
 
         promoted_agents = {
             item.name
@@ -1164,6 +1224,7 @@ class ReplSession:
         self._type_env = TypeEnvironment()
         # Re-seed the sentinel AgentType for ambient agents (see __init__).
         self._type_env.set_binding_type(-1, self._make_agent_type())
+        self._type_env.seal()
         self._link_image = LinkImage()
         self._ir_base_frame = {}
         self._next_node_id = 0

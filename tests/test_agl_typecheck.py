@@ -17,6 +17,7 @@ Tests deliberately do *not* pin internal implementation details.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import cast
 
 import pytest
@@ -38,7 +39,9 @@ from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPE_NAMES,
     BUILTIN_PRELUDE_TYPES,
     EXCEPTION_BASE,
+    InferenceVarType,
     TypeVarType,
+    contains_inference_var,
     is_assignable,
     is_json_shaped,
 )
@@ -108,9 +111,9 @@ from agm.agl.typecheck import (
     PartialCallSpec,
     RecordType,
     TextType,
-    Type,
     TypeEnvironment,
     UnitType,
+    assert_checked_program_closed,
     check,
 )
 from agm.agl.typecheck.builder import _TypeBuilder
@@ -616,6 +619,73 @@ class TestTypeEnvironment:
         sigs = env.all_function_signatures()
         assert "g" in sigs
 
+    def test_restore_binding_metadata_restores_prior_signature(self) -> None:
+        previous = TypeEnvironment()
+        signature = FunctionSignature(params=(), result=IntType())
+        previous.set_binding_type(1, IntType())
+        previous.register_function_signature_by_node_id(1, signature)
+        previous.register_function_signature("f", signature)
+        previous.register_extern_node_id(1)
+
+        current = TypeEnvironment()
+        current.set_binding_type(1, TextType())
+        current.register_function_signature_by_node_id(
+            1, FunctionSignature(params=(), result=TextType())
+        )
+        current.register_function_signature("f", FunctionSignature(params=(), result=TextType()))
+        current.register_extern_node_id(1)
+        current.restore_binding_metadata_from(previous, (1,), ("f",))
+
+        assert current.get_binding_type(1) == IntType()
+        assert current.get_function_signature_by_node_id(1) == signature
+        assert current.get_function_signature("f") == signature
+        assert current.is_extern_node_id(1)
+
+    def test_seed_rejects_an_environment_with_a_flexible_variable(self) -> None:
+        source = TypeEnvironment()
+        source.set_binding_type(1, InferenceVarType())
+
+        with pytest.raises(AssertionError, match="inference variable"):
+            source.seal()
+
+    def test_shared_tables_validation_rejects_a_flexible_variable(self) -> None:
+        # The whole-graph tables shared across module envs are validated once,
+        # separately from each per-module seal; a leaked flexible variable in one
+        # is still caught.
+        source = TypeEnvironment(
+            graph_generic_table={
+                (ENTRY_ID, "Box"): GenericTypeDef(
+                    kind="record", type_params=("T",), template=InferenceVarType("leak")
+                )
+            }
+        )
+        with pytest.raises(AssertionError, match="inference variable"):
+            source.assert_shared_tables_closed()
+
+    def test_persistent_binding_snapshot_tracks_only_local_changes(self) -> None:
+        from agm.agl.semantics.persistent import PersistentDict
+
+        source: PersistentDict[int, IntType] = PersistentDict()
+        source[1] = IntType()
+        child = source.fork()
+        child[2] = IntType()
+
+        assert tuple(child) == (1, 2)
+        assert len(child) == 2
+        assert child.changed_values() == (IntType(),)
+
+    def test_sealed_environment_rejects_mutation_and_is_required_for_seeding(self) -> None:
+        source = TypeEnvironment()
+        with pytest.raises(AssertionError, match="unsealed"):
+            TypeEnvironment().seed_from(source)
+
+        source.seal()
+        assert source.is_sealed
+        with pytest.raises(AssertionError, match="sealed"):
+            source.set_binding_type(1, IntType())
+        with pytest.raises(AssertionError, match="sealed"):
+            source.register_type("Later", RecordType("Later"))
+
     def test_seed_from_copies_types_and_bindings(self) -> None:
         env1 = TypeEnvironment()
         rt = RecordType(name="Foo")
@@ -623,6 +693,7 @@ class TestTypeEnvironment:
         env1.set_binding_type(99, IntType())
         sig = FunctionSignature(params=(), result=UnitType())
         env1.register_function_signature("h", sig)
+        env1.seal()
 
         env2 = TypeEnvironment()
         env2.seed_from(env1)
@@ -632,6 +703,7 @@ class TestTypeEnvironment:
 
     def test_seed_preserves_own_builtins(self) -> None:
         env1 = TypeEnvironment()
+        env1.seal()
         env2 = TypeEnvironment()
         env2.seed_from(env1)
         assert env2.has_type("Abort")
@@ -838,6 +910,107 @@ class TestTypeEnvironment:
             kind=BinderKind.let_binding,
         )
         assert env.resolve_binding(ref) is None
+
+
+class TestCheckedOutputClosure:
+    """The checker publishes only closed, runtime-ready type decisions."""
+
+    @staticmethod
+    def _checked_with_all_type_bearing_side_tables() -> CheckedProgram:
+        return accept_type(
+            "def id[T](value: T) -> T = value\n"
+            "let direct = id(1)\n"
+            "let partial: (int) -> int = id(?)\n"
+            'let parsed: int = ask("number", format = "json")\n'
+            'let converted = "1" as int\n'
+            "direct"
+        )
+
+    def test_closed_output_accepts_rigid_declaration_variables(self) -> None:
+        checked = self._checked_with_all_type_bearing_side_tables()
+        assert_checked_program_closed(checked)
+        assert checked.function_signatures["id"].result == TypeVarType("T")
+
+    @pytest.mark.parametrize(
+        "category",
+        (
+            "node",
+            "binding_environment",
+            "direct_call_parameters",
+            "contract",
+            "call_site",
+            "cast",
+            "signature_parameter",
+            "signature",
+            "partial_call_type",
+        ),
+    )
+    def test_closed_output_rejects_flexible_variables_in_every_published_category(
+        self, category: str
+    ) -> None:
+        checked = self._checked_with_all_type_bearing_side_tables()
+        flexible = InferenceVarType("leak")
+
+        if category == "node":
+            checked = replace(checked, node_types={**checked.node_types, -1: flexible})
+        elif category == "binding_environment":
+            leaked_env = TypeEnvironment()
+            leaked_env.seed_from(checked.type_env)
+            leaked_env.set_binding_type(-1, flexible)
+            checked = replace(checked, type_env=leaked_env)
+        elif category == "direct_call_parameters":
+            bindings = replace(
+                checked.argument_bindings,
+                function_param_types={
+                    **checked.argument_bindings.function_param_types,
+                    -1: (flexible,),
+                },
+            )
+            checked = replace(checked, argument_bindings=bindings)
+        elif category == "contract":
+            node_id, spec = next(iter(checked.contract_specs.items()))
+            checked = replace(
+                checked,
+                contract_specs={
+                    **checked.contract_specs,
+                    node_id: replace(spec, target_type=flexible),
+                },
+            )
+        elif category == "call_site":
+            checked = replace(
+                checked,
+                call_sites=(replace(checked.call_sites[0], target_type=flexible),),
+            )
+        elif category == "cast":
+            node_id, spec = next(iter(checked.cast_specs.items()))
+            checked = replace(
+                checked,
+                cast_specs={**checked.cast_specs, node_id: replace(spec, target_type=flexible)},
+            )
+        elif category.startswith("signature"):
+            signature = checked.function_signatures["id"]
+            if category == "signature_parameter":
+                signature = replace(
+                    signature,
+                    params=(replace(signature.params[0], type=flexible),),
+                    type_params=(),
+                )
+            else:
+                signature = replace(signature, result=flexible, type_params=())
+            checked = replace(
+                checked,
+                function_signatures={**checked.function_signatures, "id": signature},
+            )
+        else:
+            partial = checked.resolved.program.body.items[2]
+            assert isinstance(partial, LetDecl)
+            checked = replace(
+                checked,
+                node_types={**checked.node_types, partial.value.node_id: flexible},
+            )
+
+        with pytest.raises(AssertionError, match="inference variable leaked"):
+            assert_checked_program_closed(checked)
 
 
 # ---------------------------------------------------------------------------
@@ -1111,6 +1284,10 @@ class TestAsk:
         err = reject_type('ask("Q")', capabilities=no_agent_caps())
         assert "agent" in str(err).lower() or "default" in str(err).lower()
 
+    def test_ask_non_text_no_default_agent_raises(self) -> None:
+        err = reject_type('let n: int = ask("Q")\nn', capabilities=no_agent_caps())
+        assert "agent" in str(err).lower() or "default" in str(err).lower()
+
     def test_ask_no_prompt_raises(self) -> None:
         err = reject_type("ask()")
         assert "prompt" in str(err).lower() or "argument" in str(err).lower()
@@ -1136,6 +1313,24 @@ class TestAsk:
     def test_ask_strict_json_without_json_codec_raises(self) -> None:
         err = reject_type('let x = ask("Q", strict_json = true)\nx')
         assert "strict_json" in str(err).lower() or "json" in str(err).lower()
+
+    def test_ask_strict_json_mismatch_diagnostic_targets_the_argument(self) -> None:
+        # The diagnostic underlines the offending strict_json argument, not the
+        # whole call span (even when another option precedes it).
+        src = 'let x = ask("Q", format = "text", strict_json = true)\nx'
+        err = reject_type(src)
+        assert err.span is not None
+        fragment = src[err.span.start_offset : err.span.end_offset]
+        assert "strict_json" in fragment
+        assert "ask" not in fragment
+
+    def test_ask_unit_parse_option_diagnostic_targets_the_argument(self) -> None:
+        src = 'let r: unit = ask("Q", strict_json = true)\nr'
+        err = reject_type(src)
+        assert err.span is not None
+        fragment = src[err.span.start_offset : err.span.end_offset]
+        assert "strict_json" in fragment
+        assert "ask" not in fragment
 
     def test_ask_format_non_string_raises(self) -> None:
         err = reject_type('let n: int = ask("Q", format = 42)\nn')
@@ -1430,6 +1625,16 @@ class TestExec:
     def test_exec_strict_json_without_json_raises(self) -> None:
         err = reject_type('let x: text = exec("ls", strict_json = true)\nx')
         assert "strict_json" in str(err).lower() or "json" in str(err).lower()
+
+    def test_exec_structured_parse_option_diagnostic_targets_the_argument(self) -> None:
+        # A default (structured ExecResult) exec rejects parse-shaping options,
+        # underlining the offending argument rather than the whole call.
+        src = 'let r = exec("ls", format = "text")\nr'
+        err = reject_type(src)
+        assert err.span is not None
+        fragment = src[err.span.start_offset : err.span.end_offset]
+        assert "format" in fragment
+        assert "exec" not in fragment
 
     def test_exec_format_non_string_raises(self) -> None:
         err = reject_type('let n: int = exec("ls", format = 42)\nn')
@@ -2072,6 +2277,117 @@ class TestPartialConstructorAndValueCalls:
         assert "arity" in str(arity_err).lower()
         named_err = reject_type("let f = fn(x: int) -> int => x\nlet g = f(x = ?)\ng")
         assert "named arguments" in str(named_err).lower()
+
+
+class TestProvisionalFunctionValuesAndPartials:
+    def test_provisional_function_value_call_uses_later_argument_evidence(self) -> None:
+        checked = accept_type(
+            "def maker[T]() -> T -> T = fn(value: T) => value\n"
+            "let result = maker()(1)\n"
+            "result"
+        )
+        result = checked.resolved.program.body.items[1]
+        assert isinstance(result, LetDecl)
+        assert checked.node_types[result.value.node_id] == IntType()
+        assert not contains_inference_var(checked.node_types[result.value.node_id])
+
+    def test_nested_higher_order_provisional_values_are_fresh_per_occurrence(self) -> None:
+        checked = accept_type(
+            "def maker[T]() -> T -> T = fn(value: T) => value\n"
+            "def choose[A, B](left: A -> A, right: B -> B, a: A, b: B) -> B = right(b)\n"
+            "let result = choose(maker(), maker(), 1, \"text\")\n"
+            "result"
+        )
+        result = checked.resolved.program.body.items[2]
+        assert isinstance(result, LetDecl)
+        assert checked.node_types[result.value.node_id] == TextType()
+
+    def test_partial_declared_call_joins_fixed_holes_and_expected_shape(self) -> None:
+        checked = accept_type(
+            "def route[T](first: T, evidence: T, optional: int = 0, *, tail: T) -> T = first\n"
+            "let fill: (int, int) -> int = route(?, 1, tail = ?)\n"
+            "fill"
+        )
+        fill = checked.resolved.program.body.items[1]
+        assert isinstance(fill, LetDecl)
+        assert isinstance(fill.value, Call)
+        assert checked.node_types[fill.value.node_id] == FunctionType(
+            params=(IntType(), IntType()), result=IntType()
+        )
+        assert checked.partial_calls[fill.value.node_id] == PartialCallSpec(
+            argument_holes=(0, None, None, 1)
+        )
+        assert all(
+            not contains_inference_var(param_type)
+            for param_types in checked.argument_bindings.function_param_types.values()
+            for param_type in param_types
+        )
+
+    def test_provisional_function_value_conflict_reports_argument_provenance(self) -> None:
+        err = reject_type(
+            "def maker[T]() -> (T, T) -> T = fn(left: T, right: T) => left\n"
+            "maker()(1, \"bad\")"
+        )
+        assert err.related
+
+    def test_partial_function_value_uses_fixed_argument_to_solve_provisional_callee(self) -> None:
+        checked = accept_type(
+            "def maker[T]() -> (T, T) -> T = fn(left: T, right: T) => left\n"
+            "let keep: (int) -> int = maker()(?, 1)\n"
+            "keep"
+        )
+        keep = checked.resolved.program.body.items[1]
+        assert isinstance(keep, LetDecl)
+        assert isinstance(keep.value, Call)
+        assert checked.node_types[keep.value.node_id] == FunctionType(
+            params=(IntType(),), result=IntType()
+        )
+        assert checked.partial_calls[keep.value.node_id] == PartialCallSpec(
+            argument_holes=(0, None), callee_kind="value"
+        )
+
+    def test_partial_function_value_context_completes_provisional_result(self) -> None:
+        checked = accept_type(
+            "def maker[T]() -> T -> T = fn(value: T) => value\n"
+            "let keep: (int) -> int = maker()(?)\n"
+            "keep"
+        )
+        keep = checked.resolved.program.body.items[1]
+        assert isinstance(keep, LetDecl)
+        assert checked.node_types[keep.value.node_id] == FunctionType(
+            params=(IntType(),), result=IntType()
+        )
+
+    def test_unresolved_partial_function_value_fails_at_its_binding_boundary(self) -> None:
+        err = reject_type(
+            "def maker[T]() -> T -> T = fn(value: T) => value\nlet keep = maker()(?)\nkeep"
+        )
+        assert "infer" in str(err).lower()
+        assert "maker::[…]" in str(err)
+
+    def test_partial_conflict_reports_argument_provenance(self) -> None:
+        err = reject_type(
+            "def triple[T](a: T, b: T, c: T) -> T = a\n"
+            "let keep: (int) -> int = triple(?, 1, \"bad\")\n"
+            "keep"
+        )
+        assert err.related
+
+    def test_concrete_evidence_before_or_after_provisional_value_is_equivalent(self) -> None:
+        checked = accept_type(
+            "def maker[T]() -> T -> T = fn(value: T) => value\n"
+            "def value_first[T](value: T, transform: T -> T) -> T = transform(value)\n"
+            "def function_first[T](transform: T -> T, value: T) -> T = transform(value)\n"
+            "let before = value_first(1, maker())\n"
+            "let after = function_first(maker(), 1)\n"
+            "after"
+        )
+        before = checked.resolved.program.body.items[3]
+        after = checked.resolved.program.body.items[4]
+        assert isinstance(before, LetDecl)
+        assert isinstance(after, LetDecl)
+        assert checked.node_types[before.value.node_id] == IntType()
+        assert checked.node_types[after.value.node_id] == IntType()
 
 
 class TestLambda:
@@ -3183,6 +3499,166 @@ class TestDictLiterals:
     def test_dict_in_json_context(self) -> None:
         r = accept_type('let d: json = {"a": 1}\nd')
         assert r.resolved.program is not None
+
+
+# ---------------------------------------------------------------------------
+# Provisional container literals
+# ---------------------------------------------------------------------------
+
+
+class TestProvisionalContainerLiterals:
+    @staticmethod
+    def _assert_finalized(checked: CheckedProgram) -> None:
+        assert all(
+            not contains_inference_var(typ)
+            for node_id, typ in checked.node_types.items()
+            if node_id in all_node_ids(checked.resolved.program)
+        )
+
+    def test_empty_literals_are_solved_by_sibling_arguments(self) -> None:
+        checked = accept_type(
+            "def choose[T](left: T, right: T) -> T = right\n"
+            "let xs = choose([], [1])\n"
+            'let values = choose({}, {answer: 1})\n'
+            "values"
+        )
+        xs, values = checked.resolved.program.body.items[1:3]
+        assert isinstance(xs, LetDecl)
+        assert isinstance(values, LetDecl)
+        assert checked.type_env.get_binding_type(xs.node_id) == ListType(IntType())
+        assert checked.type_env.get_binding_type(values.node_id) == DictType(IntType())
+        self._assert_finalized(checked)
+
+    def test_empty_literals_are_solved_by_enclosing_results_and_constructor_fields(self) -> None:
+        checked = accept_type(
+            "record Bundle[T]\n"
+            "  values: list[T]\n"
+            "  metadata: dict[text, T]\n"
+            "  value: T\n"
+            "def id[T](value: T) -> T = value\n"
+            "let xs: list[int] = id([])\n"
+            "let values: dict[text, int] = id({})\n"
+            "let bundle = Bundle(values = [], metadata = {}, value = 1)\n"
+            "bundle"
+        )
+        xs, values, bundle = checked.resolved.program.body.items[2:5]
+        assert isinstance(xs, LetDecl)
+        assert isinstance(values, LetDecl)
+        assert isinstance(bundle, LetDecl)
+        assert checked.type_env.get_binding_type(xs.node_id) == ListType(IntType())
+        assert checked.type_env.get_binding_type(values.node_id) == DictType(IntType())
+        assert checked.type_env.get_binding_type(bundle.node_id) == RecordType(
+            "Bundle", (IntType(),)
+        )
+        self._assert_finalized(checked)
+
+    def test_empty_literals_are_solved_by_expected_container_types(self) -> None:
+        checked = accept_type("let xs: list[int] = []\nlet values: dict[text, int] = {}\nvalues")
+        xs, values = checked.resolved.program.body.items[:2]
+        assert isinstance(xs, LetDecl)
+        assert isinstance(values, LetDecl)
+        assert checked.type_env.get_binding_type(xs.node_id) == ListType(IntType())
+        assert checked.type_env.get_binding_type(values.node_id) == DictType(IntType())
+        self._assert_finalized(checked)
+
+    def test_empty_literals_are_solved_by_branch_common_types(self) -> None:
+        checked = accept_type(
+            "param choose_empty: bool\n"
+            "let xs = if choose_empty => [] else => [1]\n"
+            'let values = if choose_empty => {} else => {answer: 1}\n'
+            "values"
+        )
+        xs, values = checked.resolved.program.body.items[1:3]
+        assert isinstance(xs, LetDecl)
+        assert isinstance(values, LetDecl)
+        assert checked.type_env.get_binding_type(xs.node_id) == ListType(IntType())
+        assert checked.type_env.get_binding_type(values.node_id) == DictType(IntType())
+        self._assert_finalized(checked)
+
+    def test_populated_literals_unify_provisional_generic_values(self) -> None:
+        checked = accept_type(
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "let xs = [none, some(value = 1)]\n"
+            'let values = {first: none, second: some(value = 1)}\n'
+            "values"
+        )
+        xs, values = checked.resolved.program.body.items[1:3]
+        option_int = EnumType("Option", (IntType(),))
+        assert isinstance(xs, LetDecl)
+        assert isinstance(values, LetDecl)
+        assert checked.type_env.get_binding_type(xs.node_id) == ListType(option_int)
+        assert checked.type_env.get_binding_type(values.node_id) == DictType(option_int)
+        self._assert_finalized(checked)
+
+    def test_branches_unify_provisional_generic_values(self) -> None:
+        checked = accept_type(
+            "param choose_none: bool\n"
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "if choose_none => none else => some(value = 1)"
+        )
+        branch = checked.resolved.program.body.items[-1]
+        assert checked.node_types[branch.node_id] == EnumType("Option", (IntType(),))
+        self._assert_finalized(checked)
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "[]",
+            "{}",
+            "def id[T](value: T) -> T = value\nid([])",
+            "def id[T](value: T) -> T = value\nid({})",
+        ),
+    )
+    def test_unresolved_empty_literals_fail_at_the_inference_boundary(self, source: str) -> None:
+        reject_type(source)
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "let value: int = []\nvalue",
+            "let value: int = {}\nvalue",
+        ),
+    )
+    def test_empty_literals_reject_non_container_expectations(self, source: str) -> None:
+        reject_type(source)
+
+    def test_provisional_common_types_do_not_accept_conflicting_generic_values(self) -> None:
+        error = reject_type(
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            'let values = [none, some(value = 1), some(value = "wrong")]\n'
+            "values"
+        )
+        assert "inconsistent" in str(error).lower() or "unify" in str(error).lower()
+
+    def test_provisional_common_types_reject_incompatible_generic_structures(self) -> None:
+        error = reject_type(
+            "enum Option[T]\n"
+            "  | none\n"
+            "enum Other[T]\n"
+            "  | none\n"
+            "let values = [Option::none, Other::none]\n"
+            "values"
+        )
+        assert "incompatible" in str(error).lower() or "unify" in str(error).lower()
+
+    def test_concrete_container_and_branch_widening_is_unchanged(self) -> None:
+        checked = accept_type(
+            "param choose_decimal: bool\n"
+            "let xs = [1, 2.5]\n"
+            "let value = if choose_decimal => 1 else => 2.5\n"
+            "value"
+        )
+        xs, value = checked.resolved.program.body.items[1:3]
+        assert isinstance(xs, LetDecl)
+        assert isinstance(value, LetDecl)
+        assert checked.type_env.get_binding_type(xs.node_id) == ListType(DecimalType())
+        assert checked.type_env.get_binding_type(value.node_id) == DecimalType()
 
 
 # ---------------------------------------------------------------------------
@@ -5272,6 +5748,7 @@ class TestResolveTypeExprTypeVars:
         template = RecordType("Box")
         gdef = GenericTypeDef(kind="record", type_params=("T",), template=template)
         env1.register_generic_type("Box", gdef)
+        env1.seal()
         env2 = TypeEnvironment()
         env2.seed_from(env1)
         assert env2.get_generic_type("Box") == gdef
@@ -5287,6 +5764,7 @@ class TestResolveTypeExprTypeVars:
             type_params=("T",),
         )
         env1.register_constructor_signature(sig)
+        env1.seal()
         env2 = TypeEnvironment()
         env2.seed_from(env1)
         assert env2.get_constructor_signature("Box", None) == sig
@@ -5302,6 +5780,7 @@ class TestResolveTypeExprTypeVars:
             _ListT(elem=NameT(name="T", span=sp, node_id=1), span=sp, node_id=2),
             type_params=("T",),
         )
+        env1.seal()
         env2 = TypeEnvironment()
         env2.seed_from(env1)
         assert env2.get_alias_type_params("Wrapper") == ("T",)
@@ -5383,6 +5862,178 @@ class TestTypeVarTypeSchema:
 # ---------------------------------------------------------------------------
 # Generic def checking, type-argument solver, parametricity gates
 # ---------------------------------------------------------------------------
+
+
+class TestGenericFunctionInferenceRegions:
+    """Expression-scoped inference for polymorphic function occurrences."""
+
+    @staticmethod
+    def _assert_finalized(checked: CheckedProgram) -> None:
+        assert all(
+            not contains_inference_var(typ)
+            for node_id, typ in checked.node_types.items()
+            if node_id in all_node_ids(checked.resolved.program)
+        )
+
+    def test_direct_call_accepts_fresh_generic_function_argument(self) -> None:
+        checked = accept_type(
+            "def app[T](f: T -> T, x: T) -> T = f(x)\n"
+            "def id[T](x: T) -> T = x\n"
+            "let n = app(id, 0)\n"
+            "n"
+        )
+        binding = checked.resolved.program.body.items[2]
+        assert isinstance(binding, LetDecl)
+        assert checked.type_env.get_binding_type(binding.node_id) == IntType()
+        self._assert_finalized(checked)
+
+    def test_declared_call_accepts_generic_argument_for_concrete_slot(self) -> None:
+        checked = accept_type(
+            "def use[A](f: (int) -> int, seed: A) -> A = seed\n"
+            "def id[B](value: B) -> B = value\n"
+            "use(id, 0)"
+        )
+        assert checked.node_types[checked.resolved.program.body.items[-1].node_id] == IntType()
+        self._assert_finalized(checked)
+
+    def test_value_call_accepts_generic_argument_for_concrete_slot(self) -> None:
+        checked = accept_type(
+            "def id[T](value: T) -> T = value\n"
+            "let use: ((int) -> int) -> int = fn(f: (int) -> int) -> int => f(0)\n"
+            "use(id)"
+        )
+        assert checked.node_types[checked.resolved.program.body.items[-1].node_id] == IntType()
+        self._assert_finalized(checked)
+
+    def test_generic_function_arguments_are_order_independent_and_named(self) -> None:
+        checked = accept_type(
+            "def app[T](f: T -> T, x: T) -> T = f(x)\n"
+            "def app_reversed[T](x: T, f: T -> T) -> T = f(x)\n"
+            "def id[T](x: T) -> T = x\n"
+            "let first = app(id, 0)\n"
+            "let second = app_reversed(0, id)\n"
+            "let named = app(x = 0, f = id)\n"
+            "named"
+        )
+        for item in checked.resolved.program.body.items[3:6]:
+            assert isinstance(item, LetDecl)
+            assert checked.type_env.get_binding_type(item.node_id) == IntType()
+        self._assert_finalized(checked)
+
+    def test_nested_generic_occurrences_are_fresh(self) -> None:
+        checked = accept_type(
+            "record Duo[A, B]\n"
+            "  first: A\n"
+            "  second: B\n"
+            "def pair[A, B](fa: A -> A, fb: B -> B, a: A, b: B) -> Duo[A, B] =\n"
+            "  Duo(first = fa(a), second = fb(b))\n"
+            "def app[T](f: T -> T, x: T) -> T = f(x)\n"
+            "def id[T](x: T) -> T = x\n"
+            "let nested = app(id, app(id, 3))\n"
+            'let values = pair(id, id, 1, "fresh")\n'
+            "values\n"
+        )
+        nested = checked.resolved.program.body.items[4]
+        values = checked.resolved.program.body.items[5]
+        assert isinstance(nested, LetDecl)
+        assert isinstance(values, LetDecl)
+        assert checked.type_env.get_binding_type(nested.node_id) == IntType()
+        assert checked.type_env.get_binding_type(values.node_id) == RecordType(
+            "Duo", (IntType(), TextType())
+        )
+        self._assert_finalized(checked)
+
+    def test_generic_body_can_solve_a_fresh_occurrence_to_a_rigid_variable(self) -> None:
+        checked = accept_type(
+            "def id[T](x: T) -> T = x\n"
+            "def relay[U](value: U, f: U -> U) -> U = f(value)\n"
+            "def preserve[V](value: V) -> V = relay(value, id)\n"
+            "preserve(1)\n"
+        )
+        assert checked.node_types[checked.resolved.program.body.items[-1].node_id] == IntType()
+        self._assert_finalized(checked)
+
+    def test_argument_evidence_precedes_contextual_coercion(self) -> None:
+        checked = accept_type("def id[T](x: T) -> T = x\nlet d: decimal = id(1)\nd")
+        binding = checked.resolved.program.body.items[1]
+        assert isinstance(binding, LetDecl)
+        assert checked.node_types[binding.value.node_id] == IntType()
+        assert checked.type_env.get_binding_type(binding.node_id) == DecimalType()
+        self._assert_finalized(checked)
+
+    def test_generic_arguments_reject_coercions_and_json_as_equality_evidence(self) -> None:
+        reject_type("def same[T](left: T, right: T) -> T = left\nsame(1, 2.0)")
+        reject_type(
+            "def same[T](left: T, right: T) -> T = left\n"
+            "let value: json = 2\n"
+            "same(1, value)"
+        )
+
+    def test_context_completes_empty_collection_arguments_after_their_shape_is_known(self) -> None:
+        checked = accept_type(
+            "def id[T](value: T) -> T = value\n"
+            "let xs: list[int] = id([])\n"
+            "let values: dict[text, int] = id({})\n"
+            "values\n"
+        )
+        xs = checked.resolved.program.body.items[1]
+        values = checked.resolved.program.body.items[2]
+        assert isinstance(xs, LetDecl)
+        assert isinstance(values, LetDecl)
+        assert checked.type_env.get_binding_type(xs.node_id) == ListType(IntType())
+        assert checked.type_env.get_binding_type(values.node_id) == DictType(IntType())
+        self._assert_finalized(checked)
+
+    def test_bottom_requires_context_but_can_be_completed_by_it(self) -> None:
+        checked = accept_type(
+            'def id[T](x: T) -> T = x\nlet n: int = id(raise Abort(message = "stop"))\nn'
+        )
+        self._assert_finalized(checked)
+        reject_type('def id[T](x: T) -> T = x\nid(raise Abort(message = "stop"))')
+
+    def test_bottom_does_not_prevent_sibling_evidence_from_solving_a_generic_call(self) -> None:
+        checked = accept_type(
+            'def choose[T](left: T, right: T) -> T = right\n'
+            'let result = choose(raise Abort(message = "stop"), 0)\n'
+            "result"
+        )
+        result = checked.resolved.program.body.items[1]
+        assert isinstance(result, LetDecl)
+        assert checked.type_env.get_binding_type(result.node_id) == IntType()
+        self._assert_finalized(checked)
+
+    def test_unannotated_generic_value_cannot_escape_binding_region(self) -> None:
+        reject_type("def id[T](x: T) -> T = x\nlet f = id\nf(0)")
+
+    def test_conflicting_arguments_include_prior_constraint_location(self) -> None:
+        error = reject_type('def same[T](left: T, right: T) -> T = left\nsame(1, "x")')
+        assert error.related
+        assert error.span is not None
+        assert error.related[0][1].start_line == 2
+
+    def test_direct_call_parameter_types_are_finalized(self) -> None:
+        checked = accept_type(
+            "def app[T](f: T -> T, x: T) -> T = f(x)\n"
+            "def id[T](x: T) -> T = x\n"
+            "app(id, 0)\n"
+        )
+        call = checked.resolved.program.body.items[-1]
+        assert isinstance(call, Call)
+        assert all(
+            not contains_inference_var(typ)
+            for param_types in checked.argument_bindings.function_param_types.values()
+            for typ in param_types
+        )
+
+    def test_generic_constructor_function_conflict_is_rejected(self) -> None:
+        reject_type(
+            "record Pair[T]\n"
+            "  left: T -> T\n"
+            "  right: T -> T\n"
+            "def int_id(value: int) -> int = value\n"
+            "def text_id(value: text) -> text = value\n"
+            "Pair(left = int_id, right = text_id)"
+        )
 
 
 class TestGenerics:
@@ -5652,6 +6303,73 @@ class TestGenerics:
         accept_type('let n: int = ask("Q")\nn')
         accept_type('let x: text = exec("ls")\nx')
 
+    def test_later_solved_ask_and_exec_targets_materialize_concrete_contracts(self) -> None:
+        result = accept_type(
+            "def select[T](first: T, second: T, third: T) -> T = first\n"
+            'let value = select(ask("ask"), exec("exec"), 1)\n'
+            "value"
+        )
+        assert [site.callee for site in result.call_sites] == ["ask", "exec"]
+        assert [site.target_type for site in result.call_sites] == [IntType(), IntType()]
+        assert [site.codec_name for site in result.call_sites] == ["json", "json"]
+        assert all(spec.target_type == IntType() for spec in result.contract_specs.values())
+
+    def test_deferred_builtin_contracts_keep_source_order_inside_generic_constructor(self) -> None:
+        result = accept_type(
+            "record Bundle\n"
+            "  answer: int\n"
+            "  request: AgentRequest\n"
+            "def select[T](first: T, second: T) -> T = first\n"
+            'let bundle = Bundle(answer = select(ask("answer"), 1), '
+            'request = ask-request::[int]("request"))\n'
+            "bundle"
+        )
+        assert [site.callee for site in result.call_sites] == ["ask", "ask-request"]
+        assert [site.target_type for site in result.call_sites] == [IntType(), IntType()]
+        assert [site.codec_name for site in result.call_sites] == ["json", "json"]
+
+    def test_later_solved_builtin_target_rejects_unserializable_type(self) -> None:
+        err = reject_type(
+            "def select[T](first: T, second: T) -> T = first\n"
+            'select(ask("Q"), fn(x: int) -> int => x)'
+        )
+        assert "function" in str(err).lower() or "agent" in str(err).lower()
+
+    def test_unresolved_builtin_target_fails_at_region_close(self) -> None:
+        err = reject_type(
+            "def select[T](first: T, second: T) -> T = first\n"
+            'select(ask("Q"), [])'
+        )
+        assert "infer" in str(err).lower() or "type argument" in str(err).lower()
+
+    def test_finalization_defensively_rejects_an_unresolved_obligation(self) -> None:
+        from agm.agl.typecheck.builtins import (
+            BuiltinObligationKind,
+            PendingBuiltinObligation,
+        )
+        from agm.agl.typecheck.checker import _Checker, _InferenceRegion
+        from agm.agl.typecheck.inference import InferenceEngine
+
+        checker = _Checker(TypeEnvironment(), resolve(parse_program("()")), default_capabilities())
+        engine = InferenceEngine()
+        checker._inference_region = _InferenceRegion(engine, {}, {}, [])
+        unresolved = engine.fresh("target")
+        with pytest.raises(AglTypeError, match="concrete target"):
+            checker._builtins.finalize(
+                PendingBuiltinObligation(
+                    node_id=1,
+                    target_type=unresolved,
+                    result_type=unresolved,
+                    span=SourceSpan(1, 1, 1, 1, 0, 0),
+                    kind=BuiltinObligationKind.ASK,
+                    format_name=None,
+                    strict_json=None,
+                    parse_policy="default",
+                    parse_option_spans=(),
+                    has_agent_argument=False,
+                )
+            )
+
     # ------------------------------------------------------------------
     # right-operand TypeVarType branches (separate from left)
     # ------------------------------------------------------------------
@@ -5700,16 +6418,16 @@ class TestGenerics:
         )
 
     # ------------------------------------------------------------------
-    # _match structural: DictType and FunctionType recursion
+    # Structural inference through dict and function types
     # ------------------------------------------------------------------
 
-    def test_match_dict_T_inferred(self) -> None:
-        # dict[text, T] param: matching infers T from a dict[text, int] value
+    def test_dict_type_argument_is_inferred(self) -> None:
+        # dict[text, T] parameter infers T from a dict[text, int] value.
         r = accept_type('def first_val[T](d: dict[text, T]) -> T = d["k"]\nfirst_val({"k": 1})')
         assert r.resolved.program is not None
 
-    def test_match_function_T_inferred(self) -> None:
-        # (T) -> T param: matching against a concrete function infers T
+    def test_function_type_argument_is_inferred(self) -> None:
+        # A (T) -> T parameter infers T from a concrete function value.
         r = accept_type(
             "def apply[T](f: (T) -> T, x: T) -> T = f(x)\n"
             "def inc(n: int) -> int = n + 1\n"
@@ -5718,19 +6436,18 @@ class TestGenerics:
         assert r.resolved.program is not None
 
     # ------------------------------------------------------------------
-    # _match_unsolved: DictType and FunctionType structural recursion
+    # Contextual completion through structural result types
     # ------------------------------------------------------------------
 
-    def test_match_unsolved_dict_T_from_expected(self) -> None:
+    def test_dict_type_argument_is_completed_from_expected_type(self) -> None:
         # empty[T]() -> dict[text, T]: T inferred from expected dict[text, text]
         r = accept_type(
             "def empty_dict[T]() -> dict[text, T] = {}\nlet d: dict[text, text] = empty_dict()\nd"
         )
         assert r.resolved.program is not None
 
-    def test_match_unsolved_non_matching_result_type_ignored(self) -> None:
-        # When sig.result is a concrete type, _match_unsolved is a no-op —
-        # the type mismatch is caught by the final assignability check instead.
+    def test_concrete_result_type_mismatch_is_rejected(self) -> None:
+        # A concrete result cannot satisfy an incompatible expected type.
         err = reject_type('def f[T](x: T) -> text = "hi"\nlet n: int = f(1)\nn')
         assert (
             "text" in str(err).lower() or "int" in str(err).lower() or "assign" in str(err).lower()
@@ -5794,20 +6511,15 @@ class TestGenerics:
         )
 
     # ------------------------------------------------------------------
-    # _match: non-TypeVar/List/Dict/Function template (1300->exit) and
-    # FunctionType arity mismatch (1301->exit)
+    # Concrete generic parameters and function arity
     # ------------------------------------------------------------------
 
-    def test_match_concrete_param_in_generic_def(self) -> None:
-        # Concrete param (int) → _match(IntType(), IntType(), ...) falls off
-        # the elif chain (1300->exit); T inferred from second param
+    def test_concrete_parameter_in_generic_def(self) -> None:
+        # The concrete first parameter agrees while the second infers T.
         r = accept_type('def f[T](x: int, y: T) -> T = y\nf(1, "hi")')
         assert r.resolved.program is not None
 
-    def test_match_function_arity_mismatch_falls_off(self) -> None:
-        # Template (T)->T matched against (int,int)->int: arity mismatch (1301->exit)
-        # _match silently gives up; T is inferred from x: T = 1 = int;
-        # then (int,int)->int is checked against (int)->int → type mismatch
+    def test_generic_function_arity_mismatch_rejected(self) -> None:
         err = reject_type(
             "def apply[T](f: (T) -> T, x: T) -> T = f(x)\n"
             "def two(a: int, b: int) -> int = a + b\n"
@@ -5819,6 +6531,16 @@ class TestGenerics:
             or "mismatch" in str(err).lower()
             or "assign" in str(err).lower()
         )
+
+    def test_constructor_function_arity_mismatch_is_rejected(self) -> None:
+        # A (T) -> T field cannot unify with an arity-mismatched function.
+        err = reject_type(
+            "record Box[T]\n"
+            "  value: T -> T\n"
+            "def two(a: int, b: int) -> int = a + b\n"
+            "Box(value = two)"
+        )
+        assert "infer" in str(err).lower() or "type argument" in str(err).lower()
 
 
 # ---------------------------------------------------------------------------
@@ -5892,6 +6614,18 @@ class TestGenericConstructorInference:
         r = accept_type("record Box[T]\n  value: T\nBox(value = 42)")
         assert r.resolved.program is not None
 
+    def test_constructor_accepts_generic_argument_for_concrete_field(self) -> None:
+        checked = accept_type(
+            "record Wrap[T]\n"
+            "  transform: (int) -> int\n"
+            "  value: T\n"
+            "def id[U](value: U) -> U = value\n"
+            "Wrap(transform = id, value = 0)"
+        )
+        assert checked.node_types[checked.resolved.program.body.items[-1].node_id] == (
+            checked.type_env.instantiate_nominal("Wrap", (IntType(),))
+        )
+
     def test_record_constructor_inferred_from_annotation(self) -> None:
         r = accept_type("record Box[T]\n  value: T\nlet b: Box[int] = Box(value = 42)\nb")
         assert r.resolved.program is not None
@@ -5953,6 +6687,126 @@ class TestGenericConstructorInference:
             or "type argument" in str(err).lower()
             or "annotation" in str(err).lower()
         )
+
+    def test_generic_constructor_values_use_later_sibling_evidence(self) -> None:
+        checked = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "def box[T](factory: (T) -> Box[T], value: T) -> Box[T] = factory(value)\n"
+            "def payload[T](factory: (T) -> Option[T], value: T) -> Option[T] = factory(value)\n"
+            "def fallback[T](value: Option[T], item: T) -> Option[T] = value\n"
+            "let b = box(Box, 1)\n"
+            "let p = payload(some, 2)\n"
+            "let n = fallback(none, 3)\n"
+            "n"
+        )
+        box_type = checked.type_env.instantiate_nominal("Box", (IntType(),))
+        option_type = checked.type_env.instantiate_nominal("Option", (IntType(),))
+        assert checked.type_env.get_binding_type(
+            checked.resolved.program.body.items[5].node_id
+        ) == box_type
+        assert checked.type_env.get_binding_type(
+            checked.resolved.program.body.items[6].node_id
+        ) == option_type
+        assert checked.type_env.get_binding_type(
+            checked.resolved.program.body.items[7].node_id
+        ) == option_type
+
+    def test_generic_constructor_partial_uses_later_sibling_evidence(self) -> None:
+        checked = accept_type(
+            "record Pair[T]\n"
+            "  @std\n"
+            "  left: T\n"
+            "  right: T\n"
+            "def use[T](factory: (T) -> Pair[T], value: T) -> Pair[T] = factory(value)\n"
+            "let pair = use(Pair(left = ?, right = 1), 1)\n"
+            "pair"
+        )
+        pair_type = checked.type_env.instantiate_nominal("Pair", (IntType(),))
+        pair_call = checked.resolved.program.body.items[2]
+        assert isinstance(pair_call, LetDecl)
+        assert checked.type_env.get_binding_type(pair_call.node_id) == pair_type
+        assert isinstance(pair_call.value, Call)
+        constructor_call = pair_call.value.args[0]
+        assert isinstance(constructor_call, Call)
+        assert checked.node_types[constructor_call.node_id] == FunctionType(
+            params=(IntType(),), result=pair_type
+        )
+        assert checked.partial_calls[constructor_call.node_id].callee_kind == "constructor"
+
+    def test_generic_constructor_preserves_enclosing_rigid_type_variable(self) -> None:
+        checked = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "def wrap[T](value: T) -> Box[T] = Box(value = value)\n"
+            "let box = wrap(1)\n"
+            "box"
+        )
+        assert checked.type_env.get_binding_type(
+            checked.resolved.program.body.items[2].node_id
+        ) == checked.type_env.instantiate_nominal("Box", (IntType(),))
+
+    def test_generic_constructor_conflicts_include_solver_provenance(self) -> None:
+        err = reject_type(
+            "record Pair[T]\n"
+            "  @std\n"
+            "  left: T\n"
+            "  right: T\n"
+            'Pair(left = 1, right = "bad")'
+        )
+        assert err.related
+
+    def test_generic_constructor_freshens_same_spelled_declarations(self) -> None:
+        checked = accept_type(
+            "record Left[T]\n"
+            "  value: T\n"
+            "record Right[T]\n"
+            "  value: T\n"
+            "record Both\n"
+            "  left: (int) -> Left[int]\n"
+            "  right: (text) -> Right[text]\n"
+            "let both = Both(left = Left, right = Right)\n"
+            "both"
+        )
+        both = checked.resolved.program.body.items[3]
+        assert isinstance(both, LetDecl)
+        assert checked.type_env.get_binding_type(both.node_id) == checked.type_env.get_type("Both")
+
+    def test_generic_constructor_never_queries_type_table_with_flexible_owner(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        original = TypeTable.record_fields
+
+        def guarded(table: TypeTable, handle: RecordType) -> object:
+            assert not contains_inference_var(handle)
+            return original(table, handle)
+
+        monkeypatch.setattr(TypeTable, "record_fields", guarded)
+        checked = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "def use[T](factory: (T) -> Box[T], value: T) -> Box[T] = factory(value)\n"
+            "let box = use(Box(value = ?), 1)\n"
+            "box"
+        )
+        assert checked.type_env.get_binding_type(
+            checked.resolved.program.body.items[2].node_id
+        ) == checked.type_env.instantiate_nominal("Box", (IntType(),))
+
+        from agm.agl.typecheck.checker import _Checker, _InferenceRegion
+        from agm.agl.typecheck.inference import InferenceEngine
+
+        checker = _Checker(TypeEnvironment(), resolve(parse_program("()")), default_capabilities())
+        concrete_owner = RecordType("Box", type_args=(IntType(),))
+        assert checker._zonk_constructor_owner(concrete_owner) == concrete_owner
+        engine = InferenceEngine()
+        checker._inference_region = _InferenceRegion(engine, {}, {}, [])
+        flexible_owner = RecordType("Box", type_args=(engine.fresh("T"),))
+        with pytest.raises(AssertionError, match="flexible"):
+            checker._zonk_constructor_owner(flexible_owner)
 
 
 class TestGenericConstructorExplicit:
@@ -6401,10 +7255,7 @@ class TestGenericCoverageEdgeCases:
 
 
 class TestNestedGenericInference:
-    """Regression tests for _match recursing into generic RecordType/EnumType type_args.
-
-    These verify that nested-generic inference works WITHOUT explicit ::[…] or annotations.
-    """
+    """Regression tests for structural generic inference through nominal arguments."""
 
     def test_def_call_unwrap_infers_u_from_box(self) -> None:
         # def-call path: unwrap(b = Box(value = 1)) must infer U=int without annotation.
@@ -7274,22 +8125,24 @@ class TestGenericNominalModuleId:
             "Both had module_id=ENTRY_ID before the fix."
         )
 
-    def test_generic_match_does_not_infer_through_different_module_id(self) -> None:
-        """Generic inference must respect nominal module identity."""
+    def test_generic_completion_respects_different_module_ids(self) -> None:
+        """Contextual generic completion respects nominal module identity."""
         from agm.agl.modules.ids import ModuleId
-        from agm.agl.typecheck.checker import _Checker
+        from agm.agl.typecheck.inference import ConstraintRole, InferenceEngine
 
         lib_a = ModuleId.from_dotted("libA")
         lib_b = ModuleId.from_dotted("libB")
-        checker = _Checker(TypeEnvironment(), resolve(parse_program("()")), default_capabilities())
-        subst: dict[str, Type] = {}
-        checker._match(
-            RecordType("Box", type_args=(TypeVarType("T"),), module_id=lib_a),
+        engine = InferenceEngine()
+        inferred = engine.instantiate(
+            ("T",), (RecordType("Box", type_args=(TypeVarType("T"),), module_id=lib_a),)
+        ).templates[0]
+        engine.complete_from_context(
+            inferred,
             RecordType("Box", type_args=(IntType(),), module_id=lib_b),
-            subst,
-            span=mk_span(),
+            engine.origin(mk_span(), role=ConstraintRole.EXPECTED_RESULT, subject="Box"),
         )
-        assert subst == {}
+        assert isinstance(inferred, RecordType)
+        assert contains_inference_var(engine.zonk(inferred))
 
     def test_build_generic_record_stamps_module_id(self) -> None:
         """_TypeBuilder._build_generic_record stamps the template with module_id.

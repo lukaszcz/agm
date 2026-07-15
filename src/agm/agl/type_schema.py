@@ -114,6 +114,7 @@ from agm.agl.semantics.types import (
     EnumType,
     ExceptionType,
     FunctionType,
+    InferenceVarType,
     IntType,
     JsonType,
     ListType,
@@ -270,6 +271,8 @@ def _emit_body(typ: Type, type_table: TypeTable, plan: _SchemaPlan) -> dict[str,
         raise TypeError(
             "TypeVarType has no JSON Schema; type variables are not wire-serialised."
         )
+    if isinstance(typ, InferenceVarType):
+        raise TypeError("InferenceVarType is internal and has no JSON Schema.")
     assert_never(typ)  # pragma: no cover
 
 
@@ -754,6 +757,8 @@ def _emit_boundary_body(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -
         )
     if isinstance(typ, TypeVarType):
         return BoundarySealVar(typ.name)
+    if isinstance(typ, InferenceVarType):
+        raise TypeError("InferenceVarType is internal and cannot cross the extern boundary.")
     if isinstance(typ, AgentType):
         raise TypeError(
             "AgentType cannot cross the extern boundary; banned in extern signatures."

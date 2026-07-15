@@ -36,8 +36,17 @@ let issues = ["missing tests", "unclear API"]
 ```
 
 Elements must share a type, up to `int → decimal` widening. Under an expected
-type, each element is checked against the expected element type. An **empty
-list requires an annotation**:
+type, each element is checked against the expected element type. An empty list
+may obtain its element type from an expected container type or another
+constraint in the same enclosing expression:
+
+```agl
+def choose[T](left: T, right: T) -> T = right
+let items = choose([], [1])
+```
+
+If no such constraint determines the element type before the enclosing
+expression ends, add an annotation:
 
 ```agl
 let items: list[Issue] = []
@@ -53,8 +62,14 @@ let metadata: dict[text, json] = {
 ```
 
 Keys are literal strings; an unquoted identifier key is shorthand for the same
-string. Interpolated keys are rejected. Duplicate keys are a
-static error.
+string. Interpolated keys are rejected. Duplicate keys are a static error. An
+empty dictionary may obtain its value type from an expected dictionary type or
+another constraint in the same enclosing expression; otherwise it needs an
+annotation:
+
+```agl
+let metadata: dict[text, json] = {}
+```
 
 ## Constructors
 
@@ -152,8 +167,8 @@ the name refers to the binding, not the constructor.
 ### Generic constructors
 
 The constructors of a generic record or enum ([Generics](generics.md)) are
-generic too. Their type arguments are normally inferred — from the payload
-arguments, the expected type, or both:
+generic too. Their type arguments are normally inferred — from payload
+arguments, the expected type, or other evidence in the surrounding expression:
 
 ```agl
 record Box[T]
@@ -170,8 +185,19 @@ should not) determine it:
 let be = Box::[int](value = 99)
 ```
 
+This also applies when a constructor value or partial constructor is an
+argument to another call: a sibling argument may determine its type arguments.
+
+```agl
+record Box[T]
+  value: T
+
+def build[T](factory: (T) -> Box[T], value: T) -> Box[T] = factory(value)
+let b = build(Box(value = ?), 5)  # the partial is int -> Box[int]
+```
+
 Nullary variants of a generic enum carry no payload to infer from, so they
-need an expected type (or an explicit `::[…]`):
+need contextual evidence (or an explicit `::[…]`):
 
 ```agl
 enum Option[T]
@@ -207,9 +233,11 @@ let built = apply(42, mk)           # mk applied inside a generic HOF
 print built.value
 ```
 
-A **generic** constructor used as a value needs an expected type to fix its
-instantiation, exactly like a generic `def` used as a value (a bare
-`let f = some` is a static error). The annotation on `mk` above supplies it.
+A **generic** constructor used as a value needs expression-local evidence to
+fix its instantiation, exactly like a generic `def` used as a value. An
+annotation supplies that evidence, and a surrounding higher-order call may
+supply it through another argument or its result. A bare `let f = some` is a
+static error because the binding has no such evidence.
 
 Nullary enum variants are likewise ordinary values:
 
@@ -657,6 +685,7 @@ The checker propagates an expected type top-down where it helps:
 | Function body | `-> RetType` propagated in |
 
 Propagation resolves unqualified variant constructors (`let r: Review = Pass`),
-types empty containers, and gives agent calls their output contracts. Where
-no expectation exists, inference is bottom-up, and an untyped `ask` defaults
-to `text`.
+types empty containers, and gives agent calls their output contracts. A target
+that depends on sibling constraints is resolved with the enclosing expression
+before its codec and schema are chosen. Where no expectation exists, inference
+is bottom-up, and an untyped `ask` defaults to `text`.

@@ -80,7 +80,9 @@ let qualified_box: containers::Box[int] = containers::Box(value = 2)
 ## Inference and the explicit `::[…]` override
 
 Type arguments are normally **inferred** from the argument types and the
-expected (contextual) type, so generic code reads like ordinary code:
+expected (contextual) type, so generic code reads like ordinary code. Each
+occurrence of a generic value or call is instantiated independently; only the
+surrounding expression's argument and result equalities connect occurrences:
 
 ```agl
 def id[T](x: T) -> T = x
@@ -90,7 +92,17 @@ record Box[T]
 print(id(5))                       # T inferred = int
 print(id("hi"))                    # T inferred = text
 let bi: Box[int] = Box(value = 5)   # T inferred from the payload
+
+def apply[T](f: T -> T, value: T) -> T = f(value)
+print(apply(id, 5))                 # the `id` occurrence is inferred as int -> int
 ```
+
+Arguments provide exact type evidence before an expected result type is used.
+For example, `let d: decimal = id(1)` instantiates `id` at `int`, then widens
+the resulting `int` to `decimal`; the annotation does not instead instantiate
+`id` at `decimal`. A divergent expression such as `raise` provides no type
+argument evidence, so `id(raise Abort(...))` needs result context or explicit
+type arguments.
 
 When inference cannot determine the arguments, or to pin them explicitly, pass
 type arguments at the call site with the `::[…]` typed-call form, listing one
@@ -130,10 +142,10 @@ let e: Option[int] = none          # T inferred from the annotation
 ```
 
 Partial application placeholders participate in the same inference. Non-hole
-arguments constrain type parameters first; if an expected function type is
-available, its parameter types constrain the placeholder positions and its
-result type constrains the call result. If any type parameter remains unknown,
-use `::[…]` to pin the instantiation explicitly:
+arguments constrain type parameters first; sibling arguments and an expected
+function type can constrain the placeholder positions and the call result. If
+any type parameter remains unknown, use `::[…]` to pin the instantiation
+explicitly:
 
 ```agl
 def id[T](x: T) -> T = x
@@ -170,9 +182,9 @@ let one = mk(1)                         # called positionally
 print one.value
 ```
 
-A **generic** constructor or generic `def` used as a first-class value has
-nothing to infer from, so it needs an **expected-type annotation** that pins
-the instantiation:
+A **generic** constructor or generic `def` used as a first-class value needs
+constraints that pin its instantiation. An expected function type does this for
+a standalone value:
 
 ```agl
 def id[T](x: T) -> T = x
@@ -186,17 +198,41 @@ let made = mk(2)
 print made.value
 ```
 
-Such a value behaves like any monomorphic function value afterwards — it can
-be passed to a higher-order function and called there:
+A generic function occurrence can also be constrained by the other arguments
+of the enclosing higher-order call, without a separate annotation:
 
 ```agl
-def apply[A, B](x: A, f: A -> B) -> B = f(x)
+def apply[T](f: T -> T, value: T) -> T = f(value)
+def map[A, B](value: A, f: A -> B) -> B = f(value)
+def id[T](value: T) -> T = value
 record Box[T]
   value: T
+
+let n = apply(id, 42)
 let mk: int -> Box[int] = Box
-let made = apply(42, mk)
+let made = map(42, mk)
 print made.value
 ```
+
+The same expression-local inference applies to every generic constructor form,
+including payload variants, nullary variants, and partial constructors. Evidence
+may come from a later sibling argument or the enclosing result:
+
+```agl
+enum Option[T]
+  | none
+  | some(value: T)
+
+def build[T](factory: (T) -> Option[T], value: T) -> Option[T] = factory(value)
+def fallback[T](value: Option[T], item: T) -> Option[T] = value
+
+let present = build(some, 7)      # `some` is inferred as int -> Option[int]
+let missing = fallback(none, 7)   # `none` is inferred as Option[int]
+```
+
+A binding is an inference boundary: `let f = id` is an error even if a later
+expression calls `f`, because that later use cannot specialize an already-bound
+value.
 
 ### Pinning a generic constructor value with `::[…]`
 

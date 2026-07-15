@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.diagnostics import Diagnostic
+from agm.agl.diagnostics import Diagnostic, RelatedDiagnostic
 from agm.agl.pipeline import RunError
 from agm.agl.repl import meta as meta_mod
 from agm.agl.repl import render as render_mod
@@ -227,6 +227,22 @@ class TestRenderEntryResult:
             diagnostics=[Diagnostic(message="boom", line=1, column=4)],
         )
         assert render_mod.render_entry_result(result, echo=True) == "1:4: error: boom"
+
+    def test_pre_execution_related_diagnostics_are_rendered(self) -> None:
+        result = _result(
+            ok=False,
+            diagnostics=[
+                Diagnostic(
+                    message="boom",
+                    line=1,
+                    column=4,
+                    related=(RelatedDiagnostic(message="earlier", line=2, column=3),),
+                )
+            ],
+        )
+        assert render_mod.render_entry_result(result, echo=True) == (
+            "1:4: error: boom\n  2:3: note: earlier"
+        )
 
     def test_runtime_failure_reports_partially_installed_names(self) -> None:
         result = _result(

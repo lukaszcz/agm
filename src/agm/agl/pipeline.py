@@ -18,7 +18,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, TypeVar
 
-from agm.agl.diagnostics import Diagnostic, diagnostic_from_span
+from agm.agl.diagnostics import AglError, Diagnostic, diagnostic_from_span
 from agm.agl.eval.ir_interpreter import IrInterpreter
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.params import _materialize_ir_contracts, _prepare_ir_params
@@ -463,6 +463,10 @@ class PipelineDriver:
                 return PreparedProgram(
                     source, None, None, (exc.to_diagnostic(),), tuple(tab_sink)
                 )
+            except AglError as exc:
+                return PreparedProgram(
+                    source, None, None, (exc.to_diagnostic(),), tuple(tab_sink)
+                )
             except Exception as exc:
                 return PreparedProgram(
                     source,
@@ -479,6 +483,8 @@ class PipelineDriver:
             return PreparedProgram(
                 source, program, None, (exc.to_diagnostic(),), warnings
             )
+        except AglError as exc:
+            return PreparedProgram(source, program, None, (exc.to_diagnostic(),), warnings)
         except Exception as exc:
             return PreparedProgram(
                 source,
@@ -953,6 +959,15 @@ class PipelineDriver:
                     (exc.to_diagnostic(),),
                     tuple(tab_sink),
                 )
+            except AglError as exc:
+                return PreparedGraph(
+                    entry_source,
+                    entry_path,
+                    roots,
+                    None,
+                    (exc.to_diagnostic(),),
+                    tuple(tab_sink),
+                )
             except Exception as exc:
                 return PreparedGraph(
                     entry_source,
@@ -967,6 +982,10 @@ class PipelineDriver:
         try:
             resolved_graph = resolve_graph(graph)
         except AglScopeError as exc:
+            return PreparedGraph(
+                entry_source, entry_path, roots, None, (exc.to_diagnostic(),), warnings
+            )
+        except AglError as exc:
             return PreparedGraph(
                 entry_source, entry_path, roots, None, (exc.to_diagnostic(),), warnings
             )
@@ -1628,12 +1647,11 @@ def _run_typecheck_graph(
     capabilities: "HostCapabilities",
 ) -> "tuple[CheckedModuleGraph | None, tuple[Diagnostic, ...]]":
     """Run the graph typecheck pass without raising."""
-    from agm.agl.typecheck.env import AglTypeError
     from agm.agl.typecheck.graph import check_graph
 
     try:
         return check_graph(resolved_graph, capabilities), ()
-    except AglTypeError as exc:
+    except AglError as exc:
         return None, (exc.to_diagnostic(),)
     except Exception as exc:
         return None, (Diagnostic(message=f"Type error: {exc}", line=1),)
@@ -1774,11 +1792,11 @@ def _run_typecheck(
     capabilities: "HostCapabilities",
 ) -> "tuple[CheckedProgramType | None, tuple[Diagnostic, ...]]":
     """Run the typecheck pass without raising."""
-    from agm.agl.typecheck import AglTypeError, check
+    from agm.agl.typecheck import check
 
     try:
         return check(resolved, capabilities), ()
-    except AglTypeError as exc:
+    except AglError as exc:
         return None, (exc.to_diagnostic(),)
     except Exception as exc:
         return None, (Diagnostic(message=f"Type error: {exc}", line=1),)

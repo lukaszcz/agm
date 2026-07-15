@@ -52,6 +52,7 @@ from agm.agl.semantics.types import (
     EnumType,
     ExceptionType,
     FunctionType,
+    InferenceVarType,
     IntType,
     JsonType,
     ListType,
@@ -154,6 +155,16 @@ def test_every_current_non_closed_type_has_an_explicit_open_signature(
 ) -> None:
     checked = _check("()")
     assert signature_for_type(subject_type, checked.type_env.type_table) == OpenSignature()
+
+
+def test_flexible_inference_types_cannot_enter_match_normalization() -> None:
+    checked = _check("()")
+    leaked = InferenceVarType("T")
+
+    with pytest.raises(MatchCompileInvariantError):
+        signature_for_type(leaked, checked.type_env.type_table)
+    with pytest.raises(MatchCompileInvariantError):
+        constructor_inhabits_type(BoolConstructor(False), leaked)
 
 
 def test_normalize_case_preserves_priority_actions_and_binder_provenance() -> None:

@@ -20,7 +20,13 @@ Usage::
 
 from __future__ import annotations
 
-from agm.agl.diagnostics import AglError, Diagnostic, SourceSpan, format_diagnostic
+from agm.agl.diagnostics import (
+    AglError,
+    Diagnostic,
+    RelatedDiagnostic,
+    SourceSpan,
+    format_diagnostic,
+)
 from agm.agl.pipeline import (
     AgentDeclInfo,
     CallSiteInfo,
@@ -40,6 +46,7 @@ __all__ = [
     "Diagnostic",
     "format_diagnostic",
     "PipelineDriver",
+    "RelatedDiagnostic",
     "PreparedGraph",
     "PreparedProgram",
     "RunError",

@@ -8,7 +8,7 @@ and delegates the constructor dispatch branches in ``_check_varref``,
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from typing import Literal, Protocol
 
 from agm.agl.modules.ids import ModuleId
@@ -31,6 +31,7 @@ from agm.agl.typecheck.env import (
     GenericTypeDef,
     TypeEnvironment,
 )
+from agm.agl.typecheck.inference import ConstraintRole, InferenceEngine
 
 # ---------------------------------------------------------------------------
 # Narrow context Protocol
@@ -43,8 +44,8 @@ class ConstructorCheckCtx(Protocol):
     _env: TypeEnvironment
     _resolved: ResolvedProgram
     _current_type_vars: frozenset[str]
-    _constructor_call_bindings: dict[int, dict[str, Expr]]
 
+    def _record_constructor_call_binding(self, node_id: int, binding: dict[str, Expr]) -> None: ...
 
     def _record_partial_call(
         self,
@@ -61,35 +62,32 @@ class ConstructorCheckCtx(Protocol):
         self, value_type: Type, target_type: Type, span: SourceSpan
     ) -> None: ...
 
-    def _match(
+    def _constrain_argument(
         self,
-        template: Type,
-        concrete: Type,
-        subst: dict[str, Type],
-        *,
-        span: SourceSpan,
-        challenge: bool = True,
-    ) -> None: ...
-
-    def _infer_arg(
-        self,
-        template: Type,
+        slot_type: Type,
         arg_expr: Expr,
-        subst: dict[str, Type],
-        hint: Mapping[str, Type],
         *,
-        span: SourceSpan,
-    ) -> None: ...
+        role: ConstraintRole,
+        subject: str,
+        error_subject: str,
+    ) -> Type: ...
 
-    def _require_all_solved(
+    def _instantiate_generic_constructor_value(
         self,
-        type_params: tuple[str, ...],
-        subst: Mapping[str, Type],
         *,
+        type_params: tuple[str, ...],
+        field_templates: tuple[Type, ...],
+        result_template: Type,
         span: SourceSpan,
-        message_for: Callable[[str], str],
-    ) -> None: ...
+        expected: Type | None,
+        subject: str,
+    ) -> Type: ...
 
+    def _zonk_constructor_owner(
+        self, owner: RecordType | EnumType | ExceptionType
+    ) -> RecordType | EnumType | ExceptionType: ...
+
+    def _active_inference_engine(self) -> InferenceEngine: ...
 
 
 # ---------------------------------------------------------------------------
@@ -149,72 +147,14 @@ class ConstructorChecker:
             )
         assert sig is not None, f"No constructor signature for {owner_name}.{variant}"
 
-        if not sig.field_names:
-            # Nullary variant: infer type args from the expected nominal enum type.
-            # Match on FULL nominal identity (name AND owning module), not just the
-            # name — two modules may export same-named generic enums, and borrowing
-            # type args from the wrong one would mis-instantiate this constructor.
-            if imported_gdef is not None:
-                owner_module_id = imported_gdef.template.module_id
-                nominal_name = imported_source_name
-            else:
-                local_gdef = self._ctx._env.get_generic_type(owner_name)
-                assert local_gdef is not None, f"No generic type def for '{owner_name}'"
-                owner_module_id = local_gdef.template.module_id
-                nominal_name = owner_name
-            subst: dict[str, Type] = {}
-            if (
-                expected is not None
-                and isinstance(expected, EnumType)
-                and expected.name == nominal_name
-                and expected.module_id == owner_module_id
-            ):
-                for p, ta in zip(type_params, expected.type_args):
-                    subst[p] = ta
-            self._ctx._require_all_solved(
-                type_params,
-                subst,
-                span=span,
-                message_for=lambda p: (
-                    f"Cannot infer type argument(s) for '{owner_name}': "
-                    "no contextual type available. "
-                    f"Add a type annotation (e.g. 'let x: {owner_name}[…] = …')."
-                ),
-            )
-            concrete_args = tuple(subst[p] for p in type_params)
-            concrete_type = (
-                self._ctx._env.instantiate_from_gdef(
-                    imported_source_name, imported_gdef, concrete_args
-                )
-                if imported_gdef is not None
-                else self._ctx._env.instantiate_nominal(owner_name, concrete_args)
-            )
-            return self._check_constructor_call(
-                owner=concrete_type, variant=variant, positional=(), named=(), span=span
-            )
-        else:
-            # Payload constructor as value: produce a FunctionType.
-            subst = {}
-            if expected is not None and isinstance(expected, FunctionType):
-                # Match field templates against expected function params.
-                for ft, ep in zip(sig.field_templates, expected.params):
-                    self._ctx._match(ft, ep, subst, span=span, challenge=False)
-                self._ctx._match(
-                    sig.result_template, expected.result, subst, span=span, challenge=False
-                )
-            self._ctx._require_all_solved(
-                type_params,
-                subst,
-                span=span,
-                message_for=lambda p: (
-                    f"Cannot infer type argument(s) for constructor '{owner_name}': "
-                    "no contextual type available. "
-                    f"Add a type annotation (e.g. 'let f: ({owner_name}[…]) = …')."
-                ),
-            )
-            concrete_params = tuple(substitute(ft, subst) for ft in sig.field_templates)
-            concrete_result = substitute(sig.result_template, subst)
-            return FunctionType(params=concrete_params, result=concrete_result)
+        return self._ctx._instantiate_generic_constructor_value(
+            type_params=type_params,
+            field_templates=sig.field_templates,
+            result_template=sig.result_template,
+            span=span,
+            expected=expected,
+            subject=owner_name,
+        )
 
     # --- Generic constructor type-apply as value (explicit type args) ---
 
@@ -388,39 +328,6 @@ class ConstructorChecker:
         )
         return field_kinds
 
-    def _seed_generic_constructor_inference(
-        self,
-        sig: ConstructorSignature,
-        templates_by_name: Mapping[str, Type],
-        field_kinds: tuple[tuple[str, ParamKind], ...],
-        bound_exprs: Mapping[str, Expr],
-        hole_indices: Mapping[int, int],
-        expected: Type | None,
-        subst: dict[str, Type],
-        *,
-        span: SourceSpan,
-    ) -> None:
-        if not hole_indices:
-            if expected is not None:
-                self._ctx._match(
-                    sig.result_template, expected, subst, span=span, challenge=False
-                )
-            return
-        if not isinstance(expected, FunctionType) or len(expected.params) != len(hole_indices):
-            return
-        hole_templates: list[Type | None] = [None] * len(hole_indices)
-        for fname, _fkind in field_kinds:
-            bound_expr = bound_exprs[fname]
-            if isinstance(bound_expr, Placeholder):
-                hole_templates[hole_indices[bound_expr.node_id]] = templates_by_name[fname]
-        assert all(template is not None for template in hole_templates), (
-            "compiler bug: partial constructor hole was not bound to a field"
-        )
-        for template, concrete in zip(hole_templates, expected.params):
-            assert template is not None
-            self._ctx._match(template, concrete, subst, span=span, challenge=False)
-        self._ctx._match(sig.result_template, expected.result, subst, span=span, challenge=False)
-
     def _check_generic_constructor_call(
         self,
         *,
@@ -435,12 +342,7 @@ class ConstructorChecker:
         sig: ConstructorSignature | None = None,
         gdef: GenericTypeDef | None = None,
     ) -> Type:
-        """Check a generic constructor call (with inference or explicit type args).
-
-        ``sig`` and ``gdef`` may be supplied by cross-module callers that already
-        looked up these from the graph tables; when ``None``, they are looked up
-        from the own-module env (the default path for same-module generic calls).
-        """
+        """Check a generic constructor through the expression-region solver."""
         owner_name = ctor_ref.owner_name
         variant = ctor_ref.variant
         type_params = ctor_ref.type_params
@@ -450,7 +352,6 @@ class ConstructorChecker:
             f"No constructor signature for {owner_name}.{variant!r}; "
             "scope resolver should have caught unknown variants."
         )
-
         field_kinds = self._generic_constructor_field_kinds(
             owner_name=owner_name, variant=variant, gdef=gdef
         )
@@ -462,87 +363,85 @@ class ConstructorChecker:
             context_desc=f"constructor '{owner_name}'",
         )
 
-        subst: dict[str, Type] = {}
-
         if node_type_args:
-            # Explicit type arguments path.
             if len(node_type_args) != len(type_params):
                 raise AglTypeError(
                     f"'{owner_name}' requires {len(type_params)} type argument(s), "
                     f"but {len(node_type_args)} were supplied.",
                     span=span,
                 )
-            for p, ta in zip(type_params, node_type_args):
-                resolved_arg = self._ctx._env.resolve_type_expr(
-                    ta, span=span, type_vars=self._ctx._current_type_vars
+            subst = {
+                type_param: self._ctx._env.resolve_type_expr(
+                    type_arg, span=span, type_vars=self._ctx._current_type_vars
                 )
-                subst[p] = resolved_arg
+                for type_param, type_arg in zip(type_params, node_type_args, strict=True)
+            }
+            field_types = tuple(substitute(template, subst) for template in sig.field_templates)
+            result = substitute(sig.result_template, subst)
         else:
-            # Inference path: infer type-parameter substitutions from non-hole
-            # arguments, using contextual result/produced-function type as a hint.
-            templates_by_name = dict(zip(sig.field_names, sig.field_templates))
-            hint: dict[str, Type] = {}
-            self._seed_generic_constructor_inference(
-                sig,
-                templates_by_name,
-                field_kinds,
-                bound_exprs,
-                hole_indices,
-                expected,
-                hint,
-                span=span,
+            engine = self._inference_engine()
+            instantiation = engine.instantiate(
+                type_params, (*sig.field_templates, sig.result_template)
             )
-            for fname, _fkind in field_kinds:
-                bound_expr = bound_exprs[fname]
-                if isinstance(bound_expr, Placeholder):
-                    continue
-                self._ctx._infer_arg(
-                    templates_by_name[fname], bound_expr, subst, hint, span=bound_expr.span
+            field_types = instantiation.templates[:-1]
+            result = instantiation.templates[-1]
+            for type_param in type_params:
+                engine.require_solved(
+                    instantiation.variables[type_param],
+                    engine.origin(
+                        span,
+                        role=ConstraintRole.EXPECTED_RESULT,
+                        subject=owner_name,
+                        type_param=type_param,
+                    ),
                 )
-            self._seed_generic_constructor_inference(
-                sig,
-                templates_by_name,
-                field_kinds,
-                bound_exprs,
-                hole_indices,
-                expected,
-                subst,
-                span=span,
-            )
-            # Verify all type params were solved.
-            self._ctx._require_all_solved(
-                type_params,
-                subst,
-                span=span,
-                message_for=lambda p: (
-                    f"Cannot infer type argument '{p}' for constructor '{owner_name}'; "
-                    f"supply it explicitly via '{owner_name}::[…]' or add a type annotation."
-                ),
+
+        fields_by_name = dict(zip(sig.field_names, field_types, strict=True))
+        for field_name, _field_kind in field_kinds:
+            bound_expr = bound_exprs[field_name]
+            if isinstance(bound_expr, Placeholder):
+                continue
+            self._ctx._constrain_argument(
+                fields_by_name[field_name],
+                bound_expr,
+                role=ConstraintRole.CONSTRUCTOR_FIELD,
+                subject=owner_name,
+                error_subject=f"constructor '{owner_name}'",
             )
 
-        # Instantiate the nominal type.
-        concrete_args = tuple(subst[p] for p in type_params)
-        if gdef is not None:
-            concrete_type = self._ctx._env.instantiate_from_gdef(
-                owner_name, gdef, concrete_args, span=span
-            )
-        else:
-            concrete_type = self._ctx._env.instantiate_nominal(owner_name, concrete_args, span=span)
-        assert isinstance(concrete_type, (RecordType, EnumType))
-        return self._finish_constructor_call(
-            owner=concrete_type,
-            variant=variant,
-            field_kinds=field_kinds,
-            bound_exprs=bound_exprs,
-            node=node,
-            hole_indices=hole_indices,
+        assert isinstance(result, (RecordType, EnumType))
+        produced = self._constructor_call_result_type(
+            field_kinds, fields_by_name, result, bound_exprs, hole_indices
         )
+        if expected is not None and not node_type_args:
+            engine = self._inference_engine()
+            engine.complete_from_context(
+                produced,
+                expected,
+                engine.origin(
+                    span, role=ConstraintRole.EXPECTED_RESULT, subject=owner_name
+                ),
+            )
+        self._ctx._record_constructor_call_binding(node.node_id, dict(bound_exprs))
+        if hole_indices:
+            self._ctx._record_partial_call(
+                node,
+                tuple(bound_exprs[name] for name, _kind in field_kinds),
+                hole_indices,
+                callee_kind="constructor",
+            )
+        return produced
+
+    def _inference_engine(self) -> InferenceEngine:
+        """Return the active shared solver for a generic constructor occurrence."""
+        return self._ctx._active_inference_engine()
 
     # --- Constructor call helpers ---
 
     def _constructor_fields_and_context(
         self, owner: RecordType | EnumType | ExceptionType, variant: str | None
     ) -> tuple[Mapping[str, Type], str]:
+        owner = self._ctx._zonk_constructor_owner(owner)
         if isinstance(owner, EnumType):
             assert variant is not None, "variant is required for EnumType"
             return (
@@ -586,10 +485,11 @@ class ConstructorChecker:
         node: Call | None,
         hole_indices: Mapping[int, int],
     ) -> Type:
+        owner = self._ctx._zonk_constructor_owner(owner)
         fields, _context_desc = self._constructor_fields_and_context(owner, variant)
 
         if node is not None:
-            self._ctx._constructor_call_bindings[node.node_id] = dict(bound_exprs)
+            self._ctx._record_constructor_call_binding(node.node_id, dict(bound_exprs))
             if hole_indices:
                 binding: tuple[Expr | None, ...] = tuple(
                     bound_exprs[fname] for fname, _fkind in field_kinds
@@ -709,6 +609,8 @@ class ConstructorChecker:
                 f"'{owner_name}' is not a known enum type.",
                 span=span,
             )
+        enum_type = self._ctx._zonk_constructor_owner(enum_type)
+        assert isinstance(enum_type, EnumType)
         if variant not in self._ctx._env.type_table.enum_variants(enum_type):
             raise AglTypeError(
                 f"Variant '{variant}' does not exist in enum '{owner_name}'.",
@@ -734,6 +636,7 @@ class ConstructorChecker:
         construction has special trace-id semantics and is out of scope as a
         first-class value.
         """
+        owner = self._ctx._zonk_constructor_owner(owner)
         if isinstance(owner, ExceptionType):
             raise AglTypeError(
                 "Exception constructors cannot be used as a first-class value; "
@@ -817,7 +720,81 @@ class ConstructorChecker:
             hole_indices=hole_indices,
         )
 
-    # --- Cross-module constructor call (public entry point) ---
+    # --- Cross-module constructor value/call (public entry points) ---
+
+    def check_cross_module_constructor_as_value(
+        self, callee_ref: BindingRef, *, span: SourceSpan, expected: Type | None
+    ) -> Type:
+        """Type a module-qualified record constructor used as a value."""
+        gdef = self._ctx._env.get_generic_type_from_module(callee_ref.module_id, callee_ref.name)
+        if gdef is not None:
+            if not isinstance(gdef.template, RecordType):
+                raise AglTypeError(
+                    f"'{callee_ref.name}' is a type name, not a value; "
+                    "use it with a constructor call "
+                    "(e.g. 'EnumName::Variant' or 'RecordName(...)').",
+                    span=span,
+                )
+            sig = self._ctx._env.get_ctor_sig_from_module(
+                callee_ref.module_id, callee_ref.name, None
+            )
+            assert sig is not None, (
+                f"GenericTypeDef '{callee_ref.name}' in '{callee_ref.module_id.dotted()}' "
+                "has no constructor signature in the graph table"
+            )
+            return self.check_generic_constructor_as_value(
+                ctor_ref=ConstructorRef(
+                    owner_name=callee_ref.name,
+                    variant=None,
+                    owner_decl_node_id=callee_ref.decl_node_id,
+                    type_params=gdef.type_params,
+                ),
+                span=span,
+                expected=expected,
+                sig=sig,
+                gdef=gdef,
+                source_name=callee_ref.name,
+            )
+        owner = self._ctx._env.resolve_type_by_module_id(callee_ref.module_id, callee_ref.name)
+        assert isinstance(owner, (RecordType, EnumType, ExceptionType))
+        if isinstance(owner, RecordType):
+            return self.check_constructor_as_value(owner=owner, variant=None, span=span)
+        raise AglTypeError(
+            f"'{callee_ref.name}' is a type name, not a value; "
+            "use it with a constructor call (e.g. 'EnumName::Variant' or 'RecordName(...)').",
+            span=span,
+        )
+
+    def check_cross_module_constructor_type_apply(
+        self,
+        callee_ref: BindingRef,
+        *,
+        type_args: tuple[TypeExpr, ...],
+        span: SourceSpan,
+    ) -> Type:
+        """Instantiate a module-qualified generic record constructor value."""
+        gdef = self._ctx._env.get_generic_type_from_module(callee_ref.module_id, callee_ref.name)
+        if gdef is None or not isinstance(gdef.template, RecordType):
+            raise AglTypeError(
+                f"'{callee_ref.name}' is not a generic constructor and does not accept "
+                "type arguments.",
+                span=span,
+            )
+        sig = self._ctx._env.get_ctor_sig_from_module(callee_ref.module_id, callee_ref.name, None)
+        assert sig is not None, (
+            f"GenericTypeDef '{callee_ref.name}' in '{callee_ref.module_id.dotted()}' "
+            "has no constructor signature in the graph table"
+        )
+        return self._instantiate_constructor_value(
+            owner_name=callee_ref.name,
+            variant=None,
+            type_params=gdef.type_params,
+            type_args=type_args,
+            sig=sig,
+            gdef=gdef,
+            source_name=callee_ref.name,
+            span=span,
+        )
 
     def check_cross_module_constructor_call(
         self,
@@ -967,6 +944,7 @@ class ConstructorChecker:
     def _reject_abstract_exception_constructor(
         self, owner: RecordType | EnumType | ExceptionType, span: SourceSpan
     ) -> None:
+        owner = self._ctx._zonk_constructor_owner(owner)
         if isinstance(owner, ExceptionType) and self._ctx._env.type_table.exception_def(
             owner
         ).abstract:
@@ -987,6 +965,7 @@ class ConstructorChecker:
         node: Call | None = None,
         hole_indices: Mapping[int, int] | None = None,
     ) -> Type:
+        owner = self._ctx._zonk_constructor_owner(owner)
         fields, context_desc = self._constructor_fields_and_context(owner, variant)
 
         # Get field kinds (excludes trace_id for exceptions). The env helper

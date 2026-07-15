@@ -1,0 +1,3 @@
+def id[T](x: T) -> T = x
+let value: text = id(1)
+value

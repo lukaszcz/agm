@@ -257,7 +257,9 @@ throughout the body of the `def` that introduces it.
 ### Inference and explicit type arguments
 
 At a call site the type arguments are normally **inferred** — from the
-argument types and from the expected type of the call:
+argument types and from the expected type of the call. Argument evidence fixes
+an instantiation before an expected result type is considered, so ordinary
+assignability (including `int` to `decimal`) applies only afterwards:
 
 ```agl
 print(id(5))          # T = int, inferred from the argument
@@ -277,15 +279,24 @@ order.
 
 ### A generic `def` as a first-class value
 
-A generic `def` can be used as a value, but only where an **expected type**
-fixes its instantiation — typically an annotated binding. The expected
-function type determines the type arguments:
+A generic `def` can be used as a value wherever surrounding constraints fix
+its instantiation. An expected function type does so for an annotated binding:
 
 ```agl
 def id[T](x: T) -> T = x
 
 let f: text -> text = id      # T = text, fixed by the annotation
 print(f("via value"))
+```
+
+A higher-order declared call can supply those constraints through its other
+arguments, so a generic function occurrence is fresh at each use:
+
+```agl
+def apply[T](f: T -> T, value: T) -> T = f(value)
+def id[T](value: T) -> T = value
+
+let n = apply(id, 5)              # `id` is instantiated as int -> int
 ```
 
 You can also pin the instantiation explicitly without calling the function:
@@ -295,9 +306,10 @@ let g = id::[int]
 print(g(5))
 ```
 
-A bare `let f = id` with no expected type is a **static error**: there is
-nothing to infer the type arguments from. (Calling `id` directly, where the
-arguments drive inference, needs no annotation.)
+A bare `let f = id` with no constraints is a **static error**: there is
+nothing to infer the type arguments from. Bindings finalize their initializer,
+so a later `f(5)` cannot retroactively specialize `f`. (Calling `id` directly,
+where the arguments drive inference, needs no annotation.)
 
 ### Strict parametricity
 
@@ -420,6 +432,20 @@ let g: int -> text = classify
 let label = g(7)               # positional call of a function value
 ```
 
+A generic call that produces a function value may use the arguments of that
+value call to determine its type arguments. The constraints of one enclosing
+expression are considered together, so this needs no intermediate annotation:
+
+```agl
+def maker[T]() -> T -> T = fn(value: T) => value
+
+let number = maker()(7)        # T = int
+```
+
+Each occurrence is inferred independently. As with any generic expression,
+an unconstrained function-producing call still requires explicit type arguments
+or an expected function type at its binding boundary.
+
 ## Partial application
 
 A parenthesized call that contains one or more placeholder arguments evaluates
@@ -535,9 +561,12 @@ catch Abort as e =>
   print(e.message)              # called 9
 ```
 
-Generic callees infer type arguments from non-placeholder arguments and from an
-expected function type when one is available. If a type argument is still not
-known, give it explicitly with the `::[…]` form.
+Generic callees infer type arguments jointly from non-placeholder arguments,
+placeholder parameter types, and an expected function type when one is
+available. This applies equally when the callee is a function-valued expression;
+fixed arguments are considered before an expected shape completes any remaining
+type arguments. If a type argument is still not known, give it explicitly with
+the `::[…]` form.
 
 ```agl
 def id[T](x: T) -> T = x

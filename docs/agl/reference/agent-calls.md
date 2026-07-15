@@ -129,6 +129,16 @@ invalid for a `unit` target.
 You normally never write "Return JSON matching …" yourself — the type
 annotation is the source of truth.
 
+When a target is constrained by another part of the same enclosing expression,
+AgL first resolves that expression's type and then builds the contract from the
+resolved concrete target. This gives a call in a generic call or constructor
+the same codec, schema, and validation as writing that concrete target directly:
+
+```agl
+def select[T](first: T, second: T) -> T = first
+let count = select(ask("Choose a count."), 1)  # target: int
+```
+
 ### Target types may not be type variables
 
 The target type of `ask`, of `exec`, and of the `ask-request` builder must be
@@ -438,7 +448,9 @@ let r = ask-request("Anything goes")   # target type is text
 
 The target type drives the output contract exactly as it would for `ask`:
 a `Review` target selects the JSON codec, derives a JSON Schema, and produces
-format instructions; a `text` target selects the text codec. The returned
+format instructions; a `text` target selects the text codec. Contract choices
+are made from the resolved concrete target, including when the request builder
+is nested in a larger expression. The returned
 `AgentRequest.target_type` is `Some(value = "...")` for parsed response types
 and `None` for `unit`, because a `unit` response is ignored:
 

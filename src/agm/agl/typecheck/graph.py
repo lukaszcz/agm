@@ -88,7 +88,7 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.builder import _TypeBuilder
-from agm.agl.typecheck.checker import _Checker
+from agm.agl.typecheck.checker import _Checker, check_prepared
 from agm.agl.typecheck.env import (
     AglTypeError,
     ArgumentBindings,
@@ -101,6 +101,8 @@ from agm.agl.typecheck.env import (
     ParamSpec,
     PartialCallSpec,
     TypeEnvironment,
+    _assert_checked_types_closed,
+    assert_checked_output_closed,
 )
 
 # ---------------------------------------------------------------------------
@@ -181,6 +183,31 @@ class CheckedModuleGraph:
     entry_id: ModuleId
     graph_type_table: dict[tuple[ModuleId, str], Type]
     warnings: tuple[Diagnostic, ...]
+
+
+def _assert_checked_module_closed(module: CheckedModule) -> None:
+    """Assert that one graph module is safe to pass to the lowerer."""
+    assert_checked_output_closed(
+        node_types=module.node_types,
+        contract_specs=module.contract_specs,
+        call_sites=module.call_sites,
+        type_env=module.type_env,
+        function_signatures=module.function_signatures,
+        cast_specs=module.cast_specs,
+        argument_bindings=module.argument_bindings,
+        owner=f"checked module {module.module_id.dotted()}",
+    )
+
+
+def assert_checked_module_graph_closed(checked: CheckedModuleGraph) -> None:
+    """Assert that all graph-level checked output is safe to lower."""
+    for module in checked.modules.values():
+        _assert_checked_module_closed(module)
+    _assert_checked_types_closed(checked.graph_type_table.values(), owner="checked module graph")
+    # The remaining whole-graph tables (the shared TypeTable and the generic /
+    # alias / constructor maps) are the same instances on every module env, so
+    # validate them once here rather than on every per-module seal.
+    checked.modules[checked.entry_id].type_env.assert_shared_tables_closed()
 
 
 # ---------------------------------------------------------------------------
@@ -696,6 +723,25 @@ def _build_graph_func_sig_table(
 # ---------------------------------------------------------------------------
 
 
+def _module_function_signatures(
+    program: Program, env: TypeEnvironment
+) -> dict[str, FunctionSignature]:
+    """Return checked schemes declared by *program*, keyed by their local names.
+
+    A graph environment carries imported schemes during checking, keyed by
+    declaration node id.  They support resolved occurrences but are not
+    declarations of the module being published.
+    """
+    signatures: dict[str, FunctionSignature] = {}
+    for item in program.body.items:
+        if not isinstance(item, FuncDef):
+            continue
+        signature = env.get_function_signature_by_node_id(item.node_id)
+        assert signature is not None, f"No checked signature for '{item.name}'"
+        signatures[item.name] = signature
+    return signatures
+
+
 def _check_module(
     mid: ModuleId,
     resolved: ResolvedProgram,
@@ -784,20 +830,16 @@ def _check_module(
         if is_extern:
             env.register_extern_node_id(node_id)
 
-    # Run the full _TypeBuilder + _Checker pipeline on this module's program.
-    # builder.collect() → _preregister_funcdef re-registers this module's own
-    # function signatures (both _binding_types and _function_signatures), so
-    # any same-named collision seeded above is corrected for the current module.
-    # check_inhabitation=False: the whole-graph pre-pass (_build_graph_type_table)
-    # already ran the inhabitation fixpoint over every module's declarations
-    # before Phase 3 started; re-running it per module would be redundant.
-    builder = _TypeBuilder(env, module_id=mid)
-    builder.collect(resolved.program, check_inhabitation=False)
-
-    checker = _Checker(env=env, resolved=resolved, capabilities=capabilities)
-    checker.check_program(resolved.program)
-
-    cp = checker.result(resolved)
+    # Build the checked output through the same close/finalize boundary as a
+    # single module. The graph pre-pass already checked inhabitation over the
+    # shared table, so this per-module pass only skips that redundant analysis.
+    cp = check_prepared(
+        resolved,
+        capabilities,
+        env=env,
+        module_id=mid,
+        check_inhabitation=False,
+    )
     return CheckedModule(
         module_id=mid,
         resolved=resolved,
@@ -805,7 +847,7 @@ def _check_module(
         contract_specs=cp.contract_specs,
         call_sites=cp.call_sites,
         warnings=cp.warnings,
-        function_signatures=cp.function_signatures,
+        function_signatures=_module_function_signatures(resolved.program, cp.type_env),
         cast_specs=cp.cast_specs,
         type_env=cp.type_env,
         import_env=import_env,
@@ -923,9 +965,11 @@ def check_graph(
         checked_modules[mid] = cm
         all_warnings.extend(cm.warnings)
 
-    return CheckedModuleGraph(
+    checked = CheckedModuleGraph(
         modules=checked_modules,
         entry_id=resolved_graph.entry_id,
         graph_type_table=graph_type_table,
         warnings=tuple(all_warnings),
     )
+    assert_checked_module_graph_closed(checked)
+    return checked

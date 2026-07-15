@@ -10,6 +10,7 @@ license = "GPL-3.0-or-later"
 requires-python = ">=3.12"
 dependencies = [
     "click>=8.0",
+    "immutables>=0.21",
     "json-repair>=0.30",
     "jsonschema>=4.0",
     "lark>=1.2",

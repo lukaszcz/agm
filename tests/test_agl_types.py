@@ -29,18 +29,22 @@ from agm.agl.semantics.types import (
     EnumType,
     ExceptionType,
     FunctionType,
+    InferenceVarType,
     IntType,
     JsonType,
     ListType,
     RecordType,
     TextType,
+    Type,
     TypeTemplateMatch,
     TypeVarType,
     UnitType,
+    contains_inference_var,
     contains_type_var,
     free_type_vars,
     is_assignable,
     is_json_shaped,
+    iter_type,
     match_type_template,
     substitute,
 )
@@ -400,6 +404,7 @@ class TestTypeEnvironmentPrelude:
 class TestSeedFrom:
     def test_prelude_present_after_seed(self) -> None:
         source = TypeEnvironment()
+        source.seal()
         target = TypeEnvironment()
         target.seed_from(source)
         # Prelude types are still available.
@@ -413,6 +418,7 @@ class TestSeedFrom:
         # Manually inject a different type under the prelude name in source._types.
         # We reach inside _types to simulate a hypothetical collision.
         getattr(source, "_types")["ExecResult"] = RecordType(name="ExecResult")
+        source.seal()
         target = TypeEnvironment()
         target.seed_from(source)
         # Target's ExecResult must be the original prelude, not the source's fake.
@@ -424,6 +430,7 @@ class TestSeedFrom:
         source = TypeEnvironment()
         user_record = RecordType(name="MyRecord")
         source.register_type("MyRecord", user_record)
+        source.seal()
         target = TypeEnvironment()
         target.seed_from(source)
         assert target.get_type("MyRecord") == user_record
@@ -431,6 +438,7 @@ class TestSeedFrom:
     def test_seed_does_not_copy_builtin_exceptions(self) -> None:
         # Built-in exceptions are present by default; seeding must not duplicate.
         source = TypeEnvironment()
+        source.seal()
         target = TypeEnvironment()
         target.seed_from(source)
         # Still exactly one ExecError (an ExceptionType), not duplicated.
@@ -525,6 +533,143 @@ class TestTypeVarType:
 
     def test_bottom_assignable_to_typevar(self) -> None:
         assert is_assignable(BottomType(), TypeVarType("T")) is True
+
+
+# ---------------------------------------------------------------------------
+# InferenceVarType
+# ---------------------------------------------------------------------------
+
+
+class TestInferenceVarType:
+    def test_default_hint_allocates_a_fresh_identity(self) -> None:
+        assert InferenceVarType() != InferenceVarType()
+
+    def test_same_hint_allocates_distinct_identities(self) -> None:
+        first = InferenceVarType("T")
+        second = InferenceVarType("T")
+
+        assert first != second
+        assert len({first, second}) == 2
+
+    def test_aliases_have_the_same_identity(self) -> None:
+        variable = InferenceVarType("T")
+        alias = variable
+
+        assert alias == variable
+        assert hash(alias) == hash(variable)
+
+    def test_display_hint_does_not_determine_identity(self) -> None:
+        first = InferenceVarType("first")
+        second = InferenceVarType("second")
+
+        assert first != second
+
+    def test_representation_is_private(self) -> None:
+        variable = InferenceVarType("T")
+
+        assert variable.kind == "inferencevar"
+        assert repr(variable) == "<inference-var>"
+        assert "T" not in repr(variable)
+
+    def test_is_not_a_source_or_rigid_type_variable(self) -> None:
+        variable = InferenceVarType("T")
+
+        assert is_json_shaped(variable) is False
+        assert free_type_vars(variable) == frozenset()
+        assert contains_type_var(variable) is False
+        assert contains_inference_var(variable) is True
+
+    def test_is_not_registered_as_a_source_type(self) -> None:
+        assert TypeEnvironment().has_type("InferenceVarType") is False
+
+    def test_is_not_reexported_by_the_public_typecheck_package(self) -> None:
+        import agm.agl.typecheck as typecheck
+
+        assert "InferenceVarType" not in typecheck.__all__
+
+    @pytest.mark.parametrize(
+        "typ",
+        [
+            ListType(InferenceVarType("T")),
+            DictType(InferenceVarType("T")),
+            FunctionType(params=(InferenceVarType("T"),), result=InferenceVarType("T")),
+            RecordType("Box", type_args=(InferenceVarType("T"),)),
+            EnumType("Option", type_args=(InferenceVarType("T"),)),
+        ],
+    )
+    def test_can_nest_under_every_structural_or_nominal_constructor(self, typ: Type) -> None:
+        assert isinstance(typ, Type)
+        assert contains_inference_var(typ) is True
+        assert contains_type_var(typ) is False
+        assert free_type_vars(typ) == frozenset()
+
+    def test_iter_type_visits_flexible_variables_in_nested_types(self) -> None:
+        variable = InferenceVarType("T")
+        typ = FunctionType(
+            params=(ListType(variable),),
+            result=RecordType("Box", type_args=(DictType(variable),)),
+        )
+
+        assert tuple(item for item in iter_type(typ) if item == variable) == (variable, variable)
+
+    def test_rigid_substitution_does_not_rewrite_flexible_variables(self) -> None:
+        variable = InferenceVarType("T")
+        typ = FunctionType(
+            params=(TypeVarType("T"), ListType(variable)),
+            result=EnumType("Option", type_args=(variable, TypeVarType("U"))),
+        )
+
+        result = substitute(typ, {"T": IntType(), "U": TextType()})
+
+        assert result == FunctionType(
+            params=(IntType(), ListType(variable)),
+            result=EnumType("Option", type_args=(variable, TextType())),
+        )
+        assert contains_inference_var(result) is True
+
+    def test_shared_semantic_analyses_ignore_flexible_variables_as_source_names(self) -> None:
+        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.semantics.analyses import compute_finite_closure, compute_uninhabited
+        from agm.agl.semantics.type_table import TypeDef
+
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Value",
+                module_id=ENTRY_ID,
+                fields=(("value", InferenceVarType("T")),),
+            )
+        )
+        assert compute_uninhabited(table) == frozenset()
+
+        finite_table = TypeTable()
+        finite_table.register(
+            TypeDef(
+                kind="record",
+                name="Box",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(
+                    ("direct", TypeVarType("T")),
+                    ("next", RecordType("Box", type_args=(InferenceVarType("T"),))),
+                ),
+            )
+        )
+        assert compute_finite_closure(finite_table).infinite == frozenset()
+
+    def test_schema_and_extern_walkers_reject_flexible_variables(self) -> None:
+        from agm.agl.semantics.type_table import create_seeded_type_table
+        from agm.agl.type_schema import build_extern_contract, derive_schema
+        from agm.agl.typecheck.env import FunctionSignature
+
+        variable = InferenceVarType("T")
+        table = create_seeded_type_table()
+
+        with pytest.raises(TypeError):
+            derive_schema(variable, table)
+        with pytest.raises(TypeError):
+            build_extern_contract(FunctionSignature(params=(), result=variable), table)
 
 
 # ---------------------------------------------------------------------------

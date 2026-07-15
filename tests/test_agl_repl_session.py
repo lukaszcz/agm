@@ -97,6 +97,19 @@ class TestPersistence:
         names = {n: v for n, _t, v in s.bindings()}
         assert {"x", "y"} <= set(names)
 
+    def test_graph_loader_agl_error_retains_related_notes(self) -> None:
+        from unittest.mock import patch
+
+        from agm.agl.syntax.spans import SourceSpan
+
+        related = SourceSpan(2, 1, 2, 2, 2, 3)
+        error = AglError("load failed", related=(("constraint", related),))
+        with patch("agm.agl.modules.loader.build_repl_graph", side_effect=error):
+            result = ReplSession().eval_entry("1")
+
+        assert not result.ok
+        assert result.diagnostics[0].related[0].message == "constraint"
+
     def test_node_ids_advance_across_entries(self) -> None:
         # Two entries that each declare a distinct binding must both survive —
         # which only works if node ids stay globally unique (binding-type table
@@ -499,6 +512,67 @@ class TestTypeOf:
 
 
 # ---------------------------------------------------------------------------
+# Inference boundaries
+# ---------------------------------------------------------------------------
+
+
+class TestInferenceBoundaries:
+    def test_generic_entry_infers_concrete_result_in_graph_and_type_sessions(self) -> None:
+        from agm.agl.repl.render import render_entry_result
+
+        s = ReplSession()
+        assert s.eval_entry("def id[T](x: T) -> T = x").ok
+        assert s.eval_entry("def app[T](f: T -> T, x: T) -> T = f(x)").ok
+
+        graph_result = s.eval_entry("let result = app(id, 0)")
+
+        assert graph_result.ok, graph_result.diagnostics
+        assert graph_result.value == IntValue(0)
+        assert isinstance(graph_result.value_type, IntType)
+        assert render_entry_result(graph_result, echo=True) == "result : int = 0"
+        # ``eval_entry`` uses the graph pipeline, while ``:type`` checks the
+        # same persisted declarations through the single-module session path.
+        assert s.type_of("app(id, 0)") == "int"
+
+    def test_failed_generic_entries_leave_next_entry_fresh_and_render_diagnostic_notes(
+        self,
+    ) -> None:
+        from agm.agl.repl.render import render_entry_result
+
+        s = ReplSession()
+        assert s.eval_entry("def id[T](x: T) -> T = x").ok
+        assert s.eval_entry("def app[T](f: T -> T, x: T) -> T = f(x)").ok
+        assert s.eval_entry("def same[T](left: T, right: T) -> T = left").ok
+
+        unresolved = s.eval_entry("id")
+        assert not unresolved.ok
+        conflicting = s.eval_entry('same(0, "x")')
+        assert not conflicting.ok
+        assert conflicting.diagnostics[0].related
+        rendered = render_entry_result(conflicting, echo=True)
+        assert rendered is not None
+        assert "note:" in rendered
+
+        # Both failures are entry-local: the succeeding occurrence receives a
+        # new generic instantiation rather than any stale solver constraints.
+        recovered = s.eval_entry('app(id, "fresh")')
+        assert recovered.ok, recovered.diagnostics
+        assert recovered.value_type == TextType()
+        assert s.eval_entry("app(id, 7)").value_type == IntType()
+
+    def test_failed_entry_does_not_persist_a_generic_declaration(self) -> None:
+        s = ReplSession()
+
+        failed = s.eval_entry("def transient[T](x: T) -> T = x\ntransient")
+
+        assert not failed.ok
+        assert not s.eval_entry("transient(1)").ok
+        # A subsequent declaration/use starts from only committed state.
+        assert s.eval_entry("def id[T](x: T) -> T = x").ok
+        assert s.eval_entry("id(1)").value_type == IntType()
+
+
+# ---------------------------------------------------------------------------
 # Atomic-on-error
 # ---------------------------------------------------------------------------
 
@@ -571,6 +645,15 @@ class TestFailureEffects:
         assert not result.ok
         assert not s.eval_entry("After").ok
         assert not s.eval_entry("After(value = 3)").ok
+
+    def test_runtime_raise_does_not_retain_later_function_signature(self) -> None:
+        s = ReplSession()
+        failed = s.eval_entry("let z: decimal = 1 / 0\ndef later[T](x: T) -> T = x")
+
+        assert not failed.ok
+        assert not s.eval_entry("later(1)").ok
+        assert s.eval_entry("def later[T](x: T) -> T = x").ok
+        assert s.eval_entry("later(1)").value_type == IntType()
 
     def test_runtime_raise_does_not_promote_later_exception_type(self) -> None:
         s = ReplSession()

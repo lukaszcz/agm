@@ -26,7 +26,9 @@ from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
 from agm.agl.pipeline import RunResult
 from agm.agl.runtime import AgentRequest
+from agm.agl.runtime.contract import OutputContract
 from agm.agl.semantics.types import Type
+from agm.agl.typecheck import AglTypeError
 from tests._agl_helpers import type_table_for
 
 if TYPE_CHECKING:
@@ -594,6 +596,20 @@ class TestAglError:
         err = AglError("test")
         assert err.span is None
 
+    def test_related_notes_are_retained_by_type_errors(self) -> None:
+        primary = SourceSpan(1, 1, 1, 2, 0, 1)
+        related = SourceSpan(2, 3, 2, 4, 4, 5)
+
+        diagnostic = AglTypeError(
+            "conflicting constraint",
+            span=primary,
+            related=(("previous constraint", related),),
+        ).to_diagnostic()
+
+        assert diagnostic.related[0].message == "previous constraint"
+        assert diagnostic.related[0].line == 2
+        assert diagnostic.related[0].column == 3
+
 
 class TestTokenConstants:
     """Verify the token alphabet is importable and has the expected constants."""
@@ -805,6 +821,25 @@ class TestNoDefaultAgent:
         result = rt.run('ask "hi"')
         assert result.ok is True
         assert result.error is None
+
+    def test_later_solved_ask_uses_its_concrete_contract_at_runtime(self) -> None:
+        requests: list[AgentRequest] = []
+
+        def agent(request: AgentRequest) -> str:
+            requests.append(request)
+            return "7"
+
+        result = PipelineDriver(default_agent=agent).run(
+            "def select[T](first: T, second: T) -> T = first\n"
+            'let value = select(ask("number"), 1)\n'
+            "value"
+        )
+        assert result.ok is True
+        assert len(requests) == 1
+        contract = requests[0].output_contract
+        assert isinstance(contract, OutputContract)
+        assert contract.codec.name == "json"
+        assert contract.json_schema == {"type": "integer"}
 
 
 class TestDryRunCheckOnly:
@@ -3400,6 +3435,58 @@ class TestPreparedGraphDefensivePaths:
         )
         assert pg.program_name is None
 
+    def test_prepare_single_program_agl_error_retains_related_notes(self) -> None:
+        """The single-file parse path uses AglError.to_diagnostic()."""
+        from unittest.mock import patch
+
+        related = SourceSpan(2, 1, 2, 2, 2, 3)
+        error = AglError("parse failed", related=(("constraint", related),))
+        with patch("agm.agl.parser.parse_program", side_effect=error):
+            prepared = PipelineDriver.prepare("let x = 1")
+
+        assert prepared.diagnostics[0].related[0].message == "constraint"
+
+    def test_prepare_single_scope_agl_error_retains_related_notes(self) -> None:
+        """The single-file scope path uses AglError.to_diagnostic()."""
+        from unittest.mock import patch
+
+        related = SourceSpan(2, 1, 2, 2, 2, 3)
+        error = AglError("scope failed", related=(("constraint", related),))
+        with patch("agm.agl.scope.resolve", side_effect=error):
+            prepared = PipelineDriver.prepare("let x = 1")
+
+        assert prepared.diagnostics[0].related[0].message == "constraint"
+
+    def test_prepare_program_agl_error_retains_related_notes(self, tmp_path: pathlib.Path) -> None:
+        """The graph loader path uses AglError.to_diagnostic()."""
+        from unittest.mock import patch
+
+        from agm.agl.modules.roots import RootSet
+
+        roots = RootSet(roots=frozenset({tmp_path.resolve(), _STDLIB_ROOT}))
+        related = SourceSpan(2, 1, 2, 2, 2, 3)
+        error = AglError("load failed", related=(("constraint", related),))
+        with patch("agm.agl.modules.loader.load_graph", side_effect=error):
+            prepared = PipelineDriver.prepare_program("let x = 1", entry_path=None, roots=roots)
+
+        assert prepared.diagnostics[0].related[0].message == "constraint"
+
+    def test_prepare_program_scope_agl_error_retains_related_notes(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """The graph scope path uses AglError.to_diagnostic()."""
+        from unittest.mock import patch
+
+        from agm.agl.modules.roots import RootSet
+
+        roots = RootSet(roots=frozenset({tmp_path.resolve(), _STDLIB_ROOT}))
+        related = SourceSpan(2, 1, 2, 2, 2, 3)
+        error = AglError("scope failed", related=(("constraint", related),))
+        with patch("agm.agl.scope.graph.resolve_graph", side_effect=error):
+            prepared = PipelineDriver.prepare_program("let x = 1", entry_path=None, roots=roots)
+
+        assert prepared.diagnostics[0].related[0].message == "constraint"
+
     def test_prepare_program_generic_exception_during_load(self, tmp_path: pathlib.Path) -> None:
         """A non-AglError exception during load_graph is captured as a diagnostic."""
         from unittest.mock import patch
@@ -3463,6 +3550,43 @@ class TestDiscoverParamsDefensivePaths:
             discovery = rt.discover_params(prepared)
         assert discovery.checked is None
         assert len(discovery.diagnostics) >= 1
+
+    def test_discover_params_typecheck_agl_error_retains_related_notes(self) -> None:
+        """The single-file typecheck boundary uses AglError.to_diagnostic()."""
+        from unittest.mock import patch
+
+        prepared = PipelineDriver.prepare("let x = 1")
+        related = SourceSpan(2, 1, 2, 2, 2, 3)
+        error = AglError("type failed", related=(("constraint", related),))
+        with patch("agm.agl.typecheck.check", side_effect=error):
+            discovery = PipelineDriver().discover_params(prepared)
+
+        assert discovery.diagnostics[0].related[0].message == "constraint"
+
+    def test_run_typecheck_graph_agl_error_retains_related_notes(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """The graph typecheck boundary uses AglError.to_diagnostic()."""
+        from unittest.mock import MagicMock, patch
+
+        from agm.agl.modules.roots import RootSet
+        from agm.agl.pipeline import PreparedGraph
+
+        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
+        prepared = PreparedGraph(
+            source="let x = 1",
+            entry_path=None,
+            roots=roots,
+            resolved_graph=MagicMock(),
+            diagnostics=(),
+            warnings=(),
+        )
+        related = SourceSpan(2, 1, 2, 2, 2, 3)
+        error = AglError("type failed", related=(("constraint", related),))
+        with patch("agm.agl.typecheck.graph.check_graph", side_effect=error):
+            discovery = PipelineDriver().discover_params_graph(prepared)
+
+        assert discovery.diagnostics[0].related[0].message == "constraint"
 
     def test_run_typecheck_graph_generic_exception_captured(self, tmp_path: pathlib.Path) -> None:
         """_run_typecheck_graph captures generic exceptions as diagnostics."""

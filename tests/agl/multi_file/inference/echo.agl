@@ -1,0 +1,1 @@
+extern def echo[T](value: T) -> T

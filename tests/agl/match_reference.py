@@ -7,10 +7,20 @@ compiler tests can compare selected source actions against a simple oracle.
 
 from __future__ import annotations
 
+import decimal
 from typing import assert_never
 
 from agm.agl.eval.arith import value_eq
-from agm.agl.matchcompile import CheckedPatternOwner
+from agm.agl.matchcompile import (
+    BoolConstructor,
+    CheckedPatternOwner,
+    EnumConstructor,
+    LiteralConstructor,
+    LiteralKind,
+    PatternCell,
+    PatternMatrix,
+    WildcardCell,
+)
 from agm.agl.semantics.types import EnumType, Type
 from agm.agl.semantics.values import (
     BoolValue,
@@ -101,4 +111,50 @@ def reference_action(case: Case, checked: CheckedPatternOwner, subject: Value) -
     return None
 
 
-__all__ = ["reference_action"]
+def _constructor_literal_value(constructor: LiteralConstructor) -> Value:
+    if constructor.kind is LiteralKind.NUMERIC:
+        assert isinstance(constructor.value, decimal.Decimal)
+        return DecimalValue(constructor.value)
+    if constructor.kind is LiteralKind.TEXT:
+        assert isinstance(constructor.value, str)
+        return TextValue(constructor.value)
+    return JsonValue(None)
+
+
+def canonical_cell_matches(cell: PatternCell, value: Value) -> bool:
+    """Match one canonical matrix cell with AgL runtime equality semantics."""
+    if isinstance(cell, WildcardCell):
+        return True
+
+    constructor = cell.constructor
+    if isinstance(constructor, BoolConstructor):
+        return isinstance(value, BoolValue) and value.value is constructor.value
+    if isinstance(constructor, LiteralConstructor):
+        return value_eq(value, _constructor_literal_value(constructor))
+    if not isinstance(constructor, EnumConstructor) or not isinstance(value, EnumValue):
+        return False
+    if (
+        value.nominal.module_id != constructor.enum_type.module_id
+        or value.nominal.declared_name != constructor.enum_type.name
+        or value.variant != constructor.variant
+    ):
+        return False
+    return all(
+        canonical_cell_matches(argument, value.fields[field.name])
+        for field, argument in zip(constructor.fields, cell.arguments, strict=True)
+    )
+
+
+def matrix_action(matrix: PatternMatrix, values: tuple[Value, ...]) -> int | None:
+    """Return the first action selected by a canonical pattern matrix."""
+    assert len(values) == len(matrix.occurrences)
+    for row in matrix.rows:
+        if all(
+            canonical_cell_matches(cell, value)
+            for cell, value in zip(row.cells, values, strict=True)
+        ):
+            return row.action_id
+    return None
+
+
+__all__ = ["canonical_cell_matches", "matrix_action", "reference_action"]

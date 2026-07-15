@@ -15,6 +15,7 @@ from agm.agl.matchcompile import (
     BinderAssignment,
     BoolConstructor,
     ClosedSignature,
+    Constructor,
     ConstructorCell,
     DecisionBranch,
     DecisionFail,
@@ -31,6 +32,7 @@ from agm.agl.matchcompile import (
     OpenSignature,
     SourcePatternProvenance,
     WildcardCell,
+    constructor_inhabits_type,
     normalize_case,
     normalize_pattern,
     signature_for_type,
@@ -159,6 +161,7 @@ def test_normalize_case_preserves_priority_actions_and_binder_provenance() -> No
     normalized = normalize_case(case, checked)
 
     assert normalized.case_node_id == case.node_id
+    assert normalized.type_table is checked.type_env.type_table
     assert normalized.occurrences == (normalized.root,)
     assert normalized.root.id.value == 0
     assert normalized.root.creation_order == 0
@@ -196,6 +199,124 @@ def test_numeric_literals_share_runtime_equality_canonical_form() -> None:
     assert first.constructor == LiteralConstructor(
         kind=LiteralKind.NUMERIC, value=decimal.Decimal("1")
     )
+
+
+def test_fractional_decimal_arm_is_omitted_for_int_but_integral_decimal_is_retained() -> None:
+    checked = _check(
+        "let value: int = 1\n"
+        "case value of | 1.5 => 15 | 1.0 => 10 | _ => 0"
+    )
+    case = _only_case(checked.resolved.program)
+
+    normalized = normalize_case(case, checked)
+
+    assert [action.source_index for action in normalized.actions] == [0, 1, 2]
+    assert [row.source_index for row in normalized.rows] == [1, 2]
+    assert [row.action_id for row in normalized.rows] == [
+        case.branches[1].node_id,
+        case.branches[2].node_id,
+    ]
+    integral = normalized.rows[0].cells[0]
+    assert isinstance(integral, ConstructorCell)
+    assert integral.constructor == LiteralConstructor(
+        LiteralKind.NUMERIC, decimal.Decimal("1.0")
+    )
+
+
+def test_nested_uninhabited_constructor_omits_only_its_source_row() -> None:
+    checked = _check(
+        "enum Box\n"
+        "  | box(value: int)\n"
+        "let subject: Box = box(value = 1)\n"
+        "case subject of\n"
+        "  | box(value = 1.5) => 15\n"
+        "  | box(value = 1.0) => 10\n"
+        "  | _ => 0\n"
+    )
+    case = _only_case(checked.resolved.program)
+
+    normalized = normalize_case(case, checked)
+
+    assert [action.source_index for action in normalized.actions] == [0, 1, 2]
+    assert [row.source_index for row in normalized.rows] == [1, 2]
+    assert [row.action_id for row in normalized.rows] == [
+        case.branches[1].node_id,
+        case.branches[2].node_id,
+    ]
+
+
+def test_constructor_inhabitation_is_total_over_current_constructor_and_type_unions() -> None:
+    checked = _check(
+        "enum Choice\n  | none\n"
+        "let value: Choice = none\n"
+        "case value of | none => 0"
+    )
+    normalized = normalize_case(_only_case(checked.resolved.program), checked)
+    enum_cell = normalized.rows[0].cells[0]
+    assert isinstance(enum_cell, ConstructorCell)
+    enum_constructor = enum_cell.constructor
+    assert isinstance(enum_constructor, EnumConstructor)
+    all_types: tuple[Type, ...] = (
+        TextType(),
+        JsonType(),
+        BoolType(),
+        IntType(),
+        DecimalType(),
+        TypeVarType("T"),
+        ListType(IntType()),
+        DictType(IntType()),
+        RecordType("R"),
+        EnumType("Choice"),
+        ExceptionType("E"),
+        UnitType(),
+        AgentType(),
+        FunctionType((IntType(),), IntType()),
+        BottomType(),
+    )
+    constructors = (
+        BoolConstructor(False),
+        LiteralConstructor(LiteralKind.NUMERIC, decimal.Decimal("1")),
+        LiteralConstructor(LiteralKind.TEXT, "x"),
+        LiteralConstructor(LiteralKind.NULL, None),
+        enum_constructor,
+    )
+
+    results = {
+        (constructor, subject_type): constructor_inhabits_type(constructor, subject_type)
+        for constructor in constructors
+        for subject_type in all_types
+    }
+
+    assert results[BoolConstructor(False), BoolType()]
+    assert results[constructors[1], IntType()]
+    assert results[constructors[1], DecimalType()]
+    assert results[constructors[2], TextType()]
+    assert results[constructors[3], JsonType()]
+    assert results[enum_constructor, EnumType("Choice")]
+    assert sum(results.values()) == 6
+
+
+@pytest.mark.parametrize(
+    ("value", "inhabits_int", "inhabits_decimal"),
+    [
+        (decimal.Decimal("1"), True, True),
+        (decimal.Decimal("1.0"), True, True),
+        (decimal.Decimal("-2.000"), True, True),
+        (decimal.Decimal("1.5"), False, True),
+        (decimal.Decimal("NaN"), False, False),
+        (decimal.Decimal("Infinity"), False, False),
+        (decimal.Decimal("-Infinity"), False, False),
+    ],
+)
+def test_numeric_constructor_inhabitation_matches_runtime_numeric_domains(
+    value: decimal.Decimal,
+    inhabits_int: bool,
+    inhabits_decimal: bool,
+) -> None:
+    constructor = LiteralConstructor(LiteralKind.NUMERIC, value)
+
+    assert constructor_inhabits_type(constructor, IntType()) is inhabits_int
+    assert constructor_inhabits_type(constructor, DecimalType()) is inhabits_decimal
 
 
 def test_boolean_literals_normalize_to_boolean_constructors() -> None:
@@ -359,6 +480,15 @@ def test_model_rejects_invalid_occurrences_cells_and_normalized_matrices() -> No
         bad_action = replace(normalized.actions[0], action_id=-1)
         replace(normalized, actions=(bad_action, normalized.actions[1]))
 
+    # Rows are the surviving ordered, unique subsequence of source actions.
+    assert replace(normalized, rows=(normalized.rows[1],)).rows[0].source_index == 1
+    with pytest.raises(ValueError, match="ordered unique subsequence"):
+        replace(normalized, rows=(normalized.rows[1], normalized.rows[0]))
+    with pytest.raises(ValueError, match="ordered unique subsequence"):
+        replace(normalized, rows=(normalized.rows[0], normalized.rows[0]))
+    with pytest.raises(ValueError, match="source action"):
+        replace(normalized, rows=(replace(normalized.rows[0], action_id=-1),))
+
 
 def test_decision_model_carries_occurrence_and_binder_identities() -> None:
     checked = _check("let value = 1\ncase value of | captured => captured")
@@ -411,6 +541,10 @@ def test_signature_and_pattern_dispatch_reject_unknown_future_members() -> None:
 
     with pytest.raises(MatchCompileInvariantError, match="unsupported semantic type"):
         signature_for_type(cast(Type, object()), checked.type_env.type_table)
+    with pytest.raises(MatchCompileInvariantError, match="unsupported semantic type"):
+        constructor_inhabits_type(BoolConstructor(False), cast(Type, object()))
+    with pytest.raises(MatchCompileInvariantError, match="unsupported constructor"):
+        constructor_inhabits_type(cast(Constructor, object()), IntType())
     unknown = cast(Pattern, _UnknownPattern(node_id=999, span=case.span))
     with pytest.raises(MatchCompileInvariantError, match="unsupported source pattern"):
         normalize_pattern(unknown, IntType(), checked)

@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import decimal
 import enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TypeAlias
 
+from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import EnumType, Type
 from agm.agl.syntax.spans import SourceSpan
 
@@ -174,6 +175,15 @@ class Occurrence:
 
 
 @dataclass(frozen=True, slots=True)
+class PathDecomposition:
+    """One constructor decomposition selected on the current compilation path."""
+
+    parent: Occurrence
+    constructor: Constructor
+    children: tuple[Occurrence, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class BinderProvenance:
     """Identity and source provenance of a real variable pattern."""
 
@@ -249,22 +259,34 @@ class NormalizedCase:
     occurrences: tuple[Occurrence, ...]
     rows: tuple[MatrixRow, ...]
     actions: tuple[SourceAction, ...]
+    type_table: TypeTable = field(repr=False, compare=False, hash=False)
+    case_context: object = field(
+        default_factory=object, repr=False, compare=False, hash=False
+    )
 
     def __post_init__(self) -> None:
         if self.occurrences != (self.root,):
             raise ValueError("a freshly normalized case must contain only its root occurrence")
         if any(len(row.cells) != len(self.occurrences) for row in self.rows):
             raise ValueError("normalized matrix row width does not match occurrence width")
-        if tuple(row.source_index for row in self.rows) != tuple(range(len(self.rows))):
-            raise ValueError("normalized matrix rows must retain contiguous source priority")
         if tuple(action.source_index for action in self.actions) != tuple(
             range(len(self.actions))
         ):
             raise ValueError("source actions must retain contiguous source priority")
-        if tuple(row.action_id for row in self.rows) != tuple(
-            action.action_id for action in self.actions
+        row_indices = tuple(row.source_index for row in self.rows)
+        if row_indices != tuple(sorted(set(row_indices))) or any(
+            not 0 <= source_index < len(self.actions) for source_index in row_indices
         ):
-            raise ValueError("normalized rows and source actions must agree")
+            raise ValueError(
+                "normalized matrix rows must retain an ordered unique subsequence "
+                "of source actions"
+            )
+        if any(
+            row.action_id != self.actions[row.source_index].action_id for row in self.rows
+        ):
+            raise ValueError(
+                "normalized rows and source actions must agree for each retained row"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -325,6 +347,7 @@ __all__ = [
     "OccurrenceProvenance",
     "OmittedFieldProvenance",
     "OpenSignature",
+    "PathDecomposition",
     "PatternCell",
     "PatternProvenance",
     "RootOccurrenceProvenance",

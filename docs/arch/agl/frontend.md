@@ -52,8 +52,23 @@ source binder/action provenance, and decision nodes. Normalization expands parti
 declaration-order cells using the checker's argument bindings and the shared `TypeTable`; boolean and
 enum domains have closed signatures, while all other current semantic types are explicitly
 classified as open domains. Numeric literal keys use the same integer/decimal equality
-canonicalization as execution. The package may consume syntax, scope, semantic, and typecheck data,
-but dependency contracts prevent it from importing lowering, IR, evaluation, or runtime services.
+canonicalization as execution; normalization drops source rows whose typed constructors cannot
+denote runtime values (while retaining the complete ordered action provenance), and matrix
+boundaries recheck that inhabitation recursively. Immutable matrix states track active and
+path-available occurrences plus the exact constructor decompositions selected on their path;
+specialization/defaulting preserve source priority and migrate binder provenance, while a
+persistent case-local allocator gives introduced fields stable identities without becoming
+semantic path state. Order-insensitive available occurrences, path decompositions, and binder
+environments are canonicalized at matrix construction, so equivalent operation paths form the same
+immutable compilation key while active column and source-row order remain semantic. Allocators can
+be created only for a freshly normalized case, then evolve persistently across sibling and
+descendant specializations; a case-identity token prevents structurally equal matrices from mixing
+those ledgers. Each case also carries its checked `TypeTable` as identity-only compiler context,
+allowing matrix boundaries to validate enum heads and path decompositions against canonical
+declaration-order signatures without changing semantic matrix keys. Column choice is isolated
+behind the deterministic `qba` selector. The package may consume syntax, scope, semantic, and
+typecheck data, but dependency contracts prevent it from importing lowering, IR, evaluation, or
+runtime services.
 
 An `extern def` (Python FFI) shares the `builtin def` signature path end to end — body-less construction, header validation, signature registration — plus extern-only checks: the declared name must be a valid, non-keyword Python identifier, and no function or agent type may occur anywhere in its parameter or return types (a type variable is fine; sealing enforces parametricity for it at runtime — see [execution.md](execution.md)). Calls to an extern typecheck exactly like calls to an ordinary function and are additionally recorded in the dry-run call-site inventory, including indirect calls through first-class function values and partial applications. The placement rule — externs are only allowed in a file-backed module — is a scope-pass check keyed on whether the module's loader-recorded origin path is present.
 
@@ -64,7 +79,7 @@ An `extern def` (Python FFI) shares the `builtin def` signature path end to end 
 - `src/agm/agl/syntax/` — the AST dataclasses, type nodes, and source spans.
 - `src/agm/agl/scope/` — name resolution and the resolved-program side tables.
 - `src/agm/agl/typecheck/` — type checking, built-in typing rules, casts, and generics.
-- `src/agm/agl/matchcompile/` — checked-pattern normalization and the compiler-private matrix /
-  decision model.
+- `src/agm/agl/matchcompile/` — checked-pattern normalization, matrix decomposition / selection,
+  and the compiler-private decision model.
 - `src/agm/agl/semantics/` — the shared value model, semantic types, and exceptions.
 - Tests: `tests/test_agl_lexer.py`, `tests/test_agl_parser.py`, `tests/test_agl_ast.py`, `tests/test_agl_scope.py`, `tests/test_agl_typecheck.py`, `tests/test_agl_types.py`.

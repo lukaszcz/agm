@@ -92,6 +92,95 @@ def _enum_constructor(
     )
 
 
+def constructor_inhabits_type(constructor: Constructor, subject_type: Type) -> bool:
+    """Return whether a constructor denotes any runtime value of ``subject_type``.
+
+    This dispatch is deliberately total over both current closed unions.  In
+    particular, runtime numeric equality permits an integral decimal pattern
+    to match an integer, but no integer value can equal a fractional or
+    non-finite decimal.  AgL decimal values are finite exact decimals.
+    """
+    match constructor:
+        case BoolConstructor() | EnumConstructor() | LiteralConstructor():
+            pass
+        case _ as unsupported_constructor:
+            try:
+                assert_never(unsupported_constructor)
+            except AssertionError as exc:
+                raise MatchCompileInvariantError(
+                    f"unsupported constructor {type(unsupported_constructor).__name__}"
+                ) from exc
+
+    match subject_type:
+        case BoolType():
+            return isinstance(constructor, BoolConstructor)
+        case EnumType() as enum_type:
+            return (
+                isinstance(constructor, EnumConstructor)
+                and constructor.enum_type == enum_type
+            )
+        case IntType():
+            return (
+                isinstance(constructor, LiteralConstructor)
+                and constructor.kind is LiteralKind.NUMERIC
+                and isinstance(constructor.value, decimal.Decimal)
+                and constructor.value.is_finite()
+                and constructor.value == constructor.value.to_integral_value()
+            )
+        case DecimalType():
+            return (
+                isinstance(constructor, LiteralConstructor)
+                and constructor.kind is LiteralKind.NUMERIC
+                and isinstance(constructor.value, decimal.Decimal)
+                and constructor.value.is_finite()
+            )
+        case TextType():
+            return (
+                isinstance(constructor, LiteralConstructor)
+                and constructor.kind is LiteralKind.TEXT
+            )
+        case JsonType():
+            return (
+                isinstance(constructor, LiteralConstructor)
+                and constructor.kind is LiteralKind.NULL
+            )
+        case (
+            TypeVarType()
+            | ListType()
+            | DictType()
+            | RecordType()
+            | ExceptionType()
+            | UnitType()
+            | AgentType()
+            | FunctionType()
+            | BottomType()
+        ):
+            return False
+        case _ as unsupported_type:
+            try:
+                assert_never(unsupported_type)
+            except AssertionError as exc:
+                raise MatchCompileInvariantError(
+                    f"unsupported semantic type {type(unsupported_type).__name__}"
+                ) from exc
+
+
+def pattern_cell_inhabits_type(cell: PatternCell, subject_type: Type) -> bool:
+    """Return whether a canonical cell can match a value of ``subject_type``."""
+    if isinstance(cell, WildcardCell):
+        return True
+    if not constructor_inhabits_type(cell.constructor, subject_type):
+        return False
+    if isinstance(cell.constructor, EnumConstructor):
+        return all(
+            pattern_cell_inhabits_type(argument, field.type)
+            for field, argument in zip(
+                cell.constructor.fields, cell.arguments, strict=True
+            )
+        )
+    return True
+
+
 def signature_for_type(subject_type: Type, table: TypeTable) -> Signature:
     """Return the complete constructor signature for every current semantic type.
 
@@ -264,15 +353,18 @@ def normalize_case(case: Case, checked: CheckedPatternOwner) -> NormalizedCase:
             span=case.subject.span,
         ),
     )
-    rows = tuple(
-        MatrixRow(
-            cells=(_normalize_pattern(branch.pattern, subject_type, checked),),
-            action_id=branch.node_id,
-            source_index=index,
-            source_pattern_id=branch.pattern.node_id,
-        )
-        for index, branch in enumerate(case.branches)
-    )
+    rows: list[MatrixRow] = []
+    for index, branch in enumerate(case.branches):
+        cell = _normalize_pattern(branch.pattern, subject_type, checked)
+        if pattern_cell_inhabits_type(cell, subject_type):
+            rows.append(
+                MatrixRow(
+                    cells=(cell,),
+                    action_id=branch.node_id,
+                    source_index=index,
+                    source_pattern_id=branch.pattern.node_id,
+                )
+            )
     actions = tuple(
         SourceAction(
             action_id=branch.node_id,
@@ -288,15 +380,18 @@ def normalize_case(case: Case, checked: CheckedPatternOwner) -> NormalizedCase:
         span=case.span,
         root=root,
         occurrences=(root,),
-        rows=rows,
+        rows=tuple(rows),
         actions=actions,
+        type_table=checked.type_env.type_table,
     )
 
 
 __all__ = [
     "CheckedPatternOwner",
     "MatchCompileInvariantError",
+    "constructor_inhabits_type",
     "normalize_case",
     "normalize_pattern",
+    "pattern_cell_inhabits_type",
     "signature_for_type",
 ]

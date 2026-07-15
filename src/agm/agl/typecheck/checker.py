@@ -1069,29 +1069,36 @@ class _Checker:
                         replace(obligation, target_type=region.engine.zonk(obligation.target_type))
                     )
             self._finalize_extern_provenance(region)
-            final_type = region.engine.zonk(typ)
-            final_node_types = {
-                node_id: region.engine.zonk(node_type)
-                for node_id, node_type in region.node_types.items()
-            }
-            final_param_types = {
-                node_id: tuple(region.engine.zonk(param_type) for param_type in param_types)
-                for node_id, param_types in region.function_call_param_types.items()
-            }
-            # Extern-target result types are already validated for leaked
-            # inference variables by ``_finalize_extern_provenance`` above (via
-            # ``_zonk_extern_targets``), so they are deliberately not re-walked
-            # here — this pass covers only node/param types and call sites.
-            region.engine.assert_no_inference_vars(
-                (
-                    *final_node_types.values(),
-                    *(t for ts in final_param_types.values() for t in ts),
-                    *(
-                        call_site.target_type
-                        for call_site in self._call_sites[region.call_sites_start :]
-                    ),
+            if region.engine.has_variables():
+                final_type = region.engine.zonk(typ)
+                final_node_types = {
+                    node_id: region.engine.zonk(node_type)
+                    for node_id, node_type in region.node_types.items()
+                }
+                final_param_types = {
+                    node_id: tuple(region.engine.zonk(param_type) for param_type in param_types)
+                    for node_id, param_types in region.function_call_param_types.items()
+                }
+                # Extern-target result types are already validated for leaked
+                # inference variables by ``_finalize_extern_provenance`` above (via
+                # ``_zonk_extern_targets``), so they are deliberately not re-walked
+                # here — this pass covers only node/param types and call sites.
+                region.engine.assert_no_inference_vars(
+                    (
+                        *final_node_types.values(),
+                        *(t for ts in final_param_types.values() for t in ts),
+                        *(
+                            call_site.target_type
+                            for call_site in self._call_sites[region.call_sites_start :]
+                        ),
+                    )
                 )
-            )
+            else:
+                # No inference variable was ever allocated, so the recorded types
+                # are already final — skip zonking and the leak-check entirely.
+                final_type = typ
+                final_node_types = region.node_types
+                final_param_types = region.function_call_param_types
             self._node_types.update(final_node_types)
             self._function_call_param_types.update(final_param_types)
             completed = True
@@ -2913,7 +2920,7 @@ class _Checker:
         make_type: Callable[[Type], Type],
         literal_name: str,
         span: SourceSpan,
-    ) -> Type | None:
+    ) -> Type:
         """Return an empty literal's provisional container shape.
 
         An uncontextualized empty literal introduces an element/value variable

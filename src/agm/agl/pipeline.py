@@ -1436,13 +1436,10 @@ def _run_typecheck_graph(
     capabilities: "HostCapabilities",
 ) -> "tuple[CheckedModuleGraph | None, tuple[Diagnostic, ...]]":
     """Run the graph typecheck pass without raising."""
-    from agm.agl.typecheck.env import AglTypeError
     from agm.agl.typecheck.graph import check_graph
 
     try:
         return check_graph(resolved_graph, capabilities), ()
-    except AglTypeError as exc:
-        return None, (exc.to_diagnostic(),)
     except AglError as exc:
         return None, (exc.to_diagnostic(),)
     except Exception as exc:
@@ -1563,12 +1560,10 @@ def _run_typecheck(
     capabilities: "HostCapabilities",
 ) -> "tuple[CheckedProgramType | None, tuple[Diagnostic, ...]]":
     """Run the typecheck pass without raising."""
-    from agm.agl.typecheck import AglTypeError, check
+    from agm.agl.typecheck import check
 
     try:
         return check(resolved, capabilities), ()
-    except AglTypeError as exc:
-        return None, (exc.to_diagnostic(),)
     except AglError as exc:
         return None, (exc.to_diagnostic(),)
     except Exception as exc:

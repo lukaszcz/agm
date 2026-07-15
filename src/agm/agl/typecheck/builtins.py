@@ -343,15 +343,9 @@ class BuiltinCallChecker:
             codec_name = "none"
             parse_policy = "default"
         else:
-            codec_name, effective_strict = self._resolve_codec(obligation)
-            self._check_schema_compilable(
-                target_type, codec_name, obligation.span, use="an agent output type"
-            )
-            spec = OutputContractSpec(target_type, codec_name, effective_strict)
-            assert not contains_inference_var(spec.target_type)
-            self._ctx._record_contract_spec(obligation.node_id, spec)
+            spec = self._record_parsed_contract(obligation, use="an agent output type")
+            codec_name = spec.codec_name
             parse_policy = obligation.parse_policy
-            self._warn_noop_parse_error_on_text(obligation)
         self._append_call_site(obligation, codec_name, parse_policy)
 
     def _warn_noop_parse_error_on_text(self, obligation: PendingBuiltinObligation) -> None:
@@ -556,6 +550,18 @@ class BuiltinCallChecker:
             )
         return codec_name, obligation.strict_json if codec_name == "json" else None
 
+    def _record_parsed_contract(
+        self, obligation: PendingBuiltinObligation, *, use: str
+    ) -> OutputContractSpec:
+        """Resolve the codec, validate the schema, and record the parsed output contract."""
+        codec_name, effective_strict = self._resolve_codec(obligation)
+        self._check_schema_compilable(obligation.target_type, codec_name, obligation.span, use=use)
+        spec = OutputContractSpec(obligation.target_type, codec_name, effective_strict)
+        assert not contains_inference_var(spec.target_type)
+        self._ctx._record_contract_spec(obligation.node_id, spec)
+        self._warn_noop_parse_error_on_text(obligation)
+        return spec
+
     def _finalize_exec(self, obligation: PendingBuiltinObligation) -> None:
         exec_result_type = self._ctx._env.get_type("ExecResult")
         is_structured = exec_result_type is not None and obligation.target_type == exec_result_type
@@ -570,17 +576,12 @@ class BuiltinCallChecker:
             spec = OutputContractSpec(
                 obligation.target_type, "text", None, structured_exec=True
             )
+            assert not contains_inference_var(spec.target_type)
+            self._ctx._record_contract_spec(obligation.node_id, spec)
             parse_policy = "default"
         else:
-            codec_name, effective_strict = self._resolve_codec(obligation)
-            self._check_schema_compilable(
-                obligation.target_type, codec_name, obligation.span, use="an exec output type"
-            )
-            spec = OutputContractSpec(obligation.target_type, codec_name, effective_strict)
+            spec = self._record_parsed_contract(obligation, use="an exec output type")
             parse_policy = obligation.parse_policy
-            self._warn_noop_parse_error_on_text(obligation)
-        assert not contains_inference_var(spec.target_type)
-        self._ctx._record_contract_spec(obligation.node_id, spec)
         self._append_call_site(obligation, spec.codec_name, parse_policy)
 
     # --- on_parse_error policy extraction ---

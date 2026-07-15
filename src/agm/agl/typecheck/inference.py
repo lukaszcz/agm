@@ -22,6 +22,7 @@ from agm.agl.semantics.types import (
     ListType,
     RecordType,
     Type,
+    contains_inference_var,
     replace_type_children,
     substitute,
     type_children,
@@ -101,6 +102,10 @@ class InferenceEngine:
         self._next_origin += 1
         return origin
 
+    def has_variables(self) -> bool:
+        """Return whether any flexible variable was ever allocated in this region."""
+        return self._next_variable > 0
+
     def fresh(self, display_hint: str = "") -> InferenceVarType:
         """Allocate one flexible variable owned by this engine."""
         variable = InferenceVarType(display_hint)
@@ -141,7 +146,11 @@ class InferenceEngine:
             zonked = self.zonk(solution)
             self._solution[root] = zonked
             return zonked
-        return replace_type_children(typ, tuple(self.zonk(child) for child in type_children(typ)))
+        children = type_children(typ)
+        zonked_children = tuple(self.zonk(child) for child in children)
+        if all(new is old for new, old in zip(zonked_children, children, strict=True)):
+            return typ
+        return replace_type_children(typ, zonked_children)
 
     def is_solved(self, variable: InferenceVarType) -> bool:
         """Return whether ``variable`` has a fully resolved final solution."""
@@ -409,7 +418,4 @@ class InferenceEngine:
         raise InferenceError(message, span=origin.span, related=related)
 
     def _contains_unresolved_variable(self, typ: Type) -> bool:
-        resolved = self.zonk(typ)
-        if isinstance(resolved, InferenceVarType):
-            return True
-        return any(self._contains_unresolved_variable(child) for child in type_children(resolved))
+        return contains_inference_var(self.zonk(typ))

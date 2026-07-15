@@ -69,7 +69,13 @@ from agm.agl.scope import resolve
 from agm.agl.scope.graph import resolve_graph
 from agm.agl.typecheck import check
 from agm.agl.typecheck.graph import check_graph
-from tests.agl.ir_harness import make_graph_from_files, write_companion_file, write_module_file
+from tests.agl.ir_harness import (
+    _compiled_checked,
+    _compiled_checked_graph,
+    make_graph_from_files,
+    write_companion_file,
+    write_module_file,
+)
 
 # ---------------------------------------------------------------------------
 # Full-pipeline helpers (parse -> resolve -> check -> lower)
@@ -104,7 +110,7 @@ def _lower_source(
     resolved = resolve(parse_program(source), origin_path=_PATH)
     checked = check(resolved, _CAPS)
     return lower_program(
-        checked,
+        _compiled_checked(checked),
         source_text=source,
         source_label="<extern-lowering-test>",
         validate=validate,
@@ -207,7 +213,7 @@ class TestGraphLowering:
             },
         )
         checked = check_graph(resolve_graph(graph), _CAPS)
-        executable = lower_graph(checked, validate=True)
+        executable = lower_graph(_compiled_checked_graph(checked), validate=True)
 
         lib_mid = ModuleId.from_dotted("lib.mod")
         desc = _only_extern(executable)

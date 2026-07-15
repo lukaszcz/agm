@@ -98,6 +98,7 @@ from agm.agl.syntax.nodes import Placeholder
 from agm.agl.typecheck import check
 from agm.agl.typecheck.env import CheckedProgram
 from tests._agl_helpers import enum_type, record_type, type_table_for
+from tests.agl.ir_harness import _compiled_checked, _compiled_checked_graph
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 
@@ -130,7 +131,7 @@ def test_lower_repl_entry_accumulates_tables_and_resolves_prior_symbols() -> Non
     first_checked = check(resolve(first_program), _caps())
 
     first = lower_repl_entry(
-        first_checked,
+        _compiled_checked(first_checked),
         image=image,
         source_text="let x = 41\n()",
         source_label="<repl:1>",
@@ -147,7 +148,10 @@ def test_lower_repl_entry_accumulates_tables_and_resolves_prior_symbols() -> Non
         seed_env=first_checked.type_env,
     )
     second = lower_repl_entry(
-        second_checked, image=image, source_text=second_source, source_label="<repl:2>"
+        _compiled_checked(second_checked),
+        image=image,
+        source_text=second_source,
+        source_label="<repl:2>",
     )
 
     assert first_symbols < set(second.program.symbols)
@@ -160,7 +164,7 @@ def _lower(source: str, *, validate: bool = True) -> ExecutableProgram:
     """Parse → check → lower the source; return ExecutableProgram."""
     checked = _check(source)
     return lower_program(
-        checked,
+        _compiled_checked(checked),
         source_text=source,
         source_label="<test>",
         validate=validate,
@@ -1774,7 +1778,7 @@ class TestLowerGraph:
         rg = resolve_graph(mg)
         cg = check_graph(rg, _caps())
 
-        prog = lower_graph(cg, validate=True)
+        prog = lower_graph(_compiled_checked_graph(cg), validate=True)
 
         # Both modules must appear
         assert len(prog.modules) == 2
@@ -1874,7 +1878,7 @@ class TestLowerGraph:
         rg = resolve_graph(mg)
         cg = check_graph(rg, _caps())
 
-        prog = lower_graph(cg, validate=True)
+        prog = lower_graph(_compiled_checked_graph(cg), validate=True)
 
         nominal_names = {desc.display_name for desc in prog.nominals.values()}
         nominal_ids = set(prog.nominals.keys())
@@ -1929,7 +1933,7 @@ class TestLowerGraph:
         cg = check_graph(rg, _caps())
 
         # validate=False (the default) skips validate_ir — covers the branch at graph.py:144
-        prog = lower_graph(cg)
+        prog = lower_graph(_compiled_checked_graph(cg))
         assert len(prog.modules) == 2
 
 

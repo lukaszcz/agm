@@ -295,9 +295,11 @@ def test_private_exception_definition_parses_and_checks() -> None:
 
 
 def test_single_module_lowerer_skips_builtin_function_definitions() -> None:
+    from tests.agl.ir_harness import _compiled_checked
+
     source = "builtin def print[T](value: T) -> unit\n()\n"
     checked = check(resolve(parse_program(source)), _CAPS)
-    lower_program(checked, source_text=source, source_label="<test>")
+    lower_program(_compiled_checked(checked), source_text=source, source_label="<test>")
 
 
 def test_source_declared_builtin_function_call_is_classified() -> None:

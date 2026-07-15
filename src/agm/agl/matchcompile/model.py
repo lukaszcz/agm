@@ -15,6 +15,7 @@ from typing import TypeAlias
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import EnumOwnerForm, EnumType, Type
+from agm.agl.syntax.nodes import Program
 from agm.agl.syntax.spans import SourceSpan
 
 
@@ -260,6 +261,7 @@ class MatchCaseContext:
     module_id: ModuleId
     enum_owner_forms: tuple[EnumOwnerForm, ...] = ()
     bare_enum_constructors: frozenset[tuple[ModuleId, str, str]] = frozenset()
+    owner_program: Program | None = field(default=None, repr=False, compare=False, hash=False)
 
 
 @dataclass(frozen=True, slots=True)

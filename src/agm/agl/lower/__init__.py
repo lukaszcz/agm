@@ -1,9 +1,10 @@
 """AgL lowering phase — compile-time IR emission.
 
-Transforms a type-checked ``CheckedProgram`` into an ``ExecutableProgram``
-for evaluation.  All implicit coercions are resolved at compile time and
-emitted as explicit ``IrCoerce`` nodes; the evaluator switches only on
-pre-resolved ``Coercion`` descriptors and never sniffs value types at runtime.
+Transforms a successful ``MatchCompiledProgram`` or
+``MatchCompiledModuleGraph`` into an ``ExecutableProgram`` for evaluation.
+All implicit coercions are resolved at compile time and emitted as explicit
+``IrCoerce`` nodes; the evaluator switches only on pre-resolved ``Coercion``
+descriptors and never sniffs value types at runtime.
 
 Public API
 ----------

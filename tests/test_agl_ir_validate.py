@@ -67,6 +67,7 @@ from agm.agl.ir import (
 )
 from agm.agl.ir.validate import InvalidIrError, validate_ir
 from agm.agl.modules.ids import ModuleId
+from tests.agl.ir_harness import _compiled_checked
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -243,7 +244,7 @@ class TestValidProgram:
         )
         checked = check(resolve(parse_program(source)), capabilities)
         program = lower_program(
-            checked,
+            _compiled_checked(checked),
             source_text=source,
             source_label="<test>",
             validate=False,

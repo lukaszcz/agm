@@ -2211,21 +2211,21 @@ class TestCase:
         err = reject_type('let x = 1\ncase x of | 1 => "a" | _ => 2')
         assert "incompatible" in str(err).lower() or "branches" in str(err).lower()
 
-    def test_case_non_exhaustive_enum_warns(self) -> None:
+    def test_case_non_exhaustive_enum_is_not_checker_owned(self) -> None:
         r = accept_type(
             "enum Status\n  | Pass\n  | Fail\nlet s = Pass()\n"
             'case s of | Status::Pass => 1'
         )
-        assert any("Non-exhaustive" in w.message for w in r.warnings)
+        assert r.warnings == ()
 
-    def test_case_exhaustive_enum_no_warn(self) -> None:
+    def test_case_exhaustive_enum_no_checker_warning(self) -> None:
         r = accept_type(
             "enum Status\n  | Pass\n  | Fail\nlet s = Pass()\n"
             'case s of | Status::Pass => 1 | Status::Fail => 2'
         )
         assert not any("Non-exhaustive" in w.message for w in r.warnings)
 
-    def test_case_wildcard_suppresses_exhaustiveness_warning(self) -> None:
+    def test_case_wildcard_has_no_checker_warning(self) -> None:
         r = accept_type("enum Status\n  | Pass\n  | Fail\nlet s = Pass()\ncase s of | _ => 1")
         assert not any("Non-exhaustive" in w.message for w in r.warnings)
 

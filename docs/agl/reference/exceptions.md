@@ -238,12 +238,14 @@ user-function activations.
 
 ### `MatchError`
 
-A `case` with no matching branch and no wildcard
-([Pattern matching](pattern-matching.md)).
+An explicitly raised match-related failure. Source `case` expressions are
+required to be exhaustive and never raise `MatchError` implicitly
+([Pattern matching](pattern-matching.md)). Like any concrete exception,
+`MatchError` may be constructed, raised, and caught by user code.
 
 ```text
-scrutinee_type: text   # type name of the unmatched value
-scrutinee: json        # structural JSON encoding of the unmatched value
+scrutinee_type: text   # type name of the rejected value
+scrutinee: json        # structural JSON encoding of the rejected value
 ```
 
 ### `ArithmeticError`
@@ -351,7 +353,7 @@ The general-purpose user abort; carries only the base fields.
 | Loop bound exhausted | `MaxIterationsExceeded` |
 | Non-positive range `for` step (`by k` with `k ≤ 0`) | `RangeError` |
 | Call-depth limit exceeded | `RecursionError` |
-| Non-exhaustive `case` at runtime | `MatchError` |
+| Explicit `raise MatchError(...)` | `MatchError` |
 | Division by zero | `ArithmeticError` |
 | Fallible `as` cast — source does not conform to target type | `CastError` |
 | `parse_json` — input is not well-formed JSON | `JsonParseError` |

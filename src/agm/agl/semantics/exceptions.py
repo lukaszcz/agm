@@ -49,7 +49,7 @@ class AglRaise(Exception):
     """Python carrier for a propagating AgL exception value.
 
     Raised by ``raise`` statements and by built-in operations that can fail
-    (parse failures, loop exhaustion, pattern-match failures, etc.).
+    (parse failures, loop exhaustion, arithmetic failures, etc.).
 
     ``exc`` is the ``ExceptionValue`` being propagated.
     ``span`` is the source span of the statement that raised this exception

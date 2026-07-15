@@ -409,6 +409,7 @@ def normalize_case(case: Case, checked: CheckedPatternOwner) -> NormalizedCase:
         module_id=module_id,
         enum_owner_forms=checked.type_env.enum_owner_forms(),
         bare_enum_constructors=_bare_enum_constructors(case_scope, checked),
+        owner_program=checked.resolved.program,
     )
     return NormalizedCase(
         case_node_id=case.node_id,

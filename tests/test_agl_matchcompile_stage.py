@@ -1,0 +1,879 @@
+"""Whole-program match-compilation artifact and diagnostic contracts."""
+
+from __future__ import annotations
+
+import decimal
+from collections.abc import MutableMapping
+from dataclasses import replace
+from pathlib import Path
+from typing import cast
+
+import pytest
+
+from agm.agl.lower import lower_graph, lower_program
+from agm.agl.matchcompile import (
+    CompiledCase,
+    Constructor,
+    DecisionBranch,
+    DecisionFail,
+    DecisionLeaf,
+    DecisionSwitch,
+    LiteralConstructor,
+    MatchCompilationResult,
+    MatchCompiledModuleGraph,
+    MatchCompiledProgram,
+    MatchCompileInvariantError,
+    MatchIssue,
+    NonExhaustiveIssue,
+    OccurrenceAllocator,
+    PatternMatrix,
+    RedundantArmIssue,
+    Specialization,
+    compile_case,
+    compile_graph_matches,
+    compile_program_matches,
+    diagnostic_from_match_issue,
+    diagnostics_from_match_issues,
+    normalize_case,
+    validate_compiled_case,
+)
+from agm.agl.matchcompile import compiler as compiler_module
+from agm.agl.matchcompile import stage as stage_module
+from agm.agl.modules.ids import ENTRY_ID
+from agm.agl.modules.roots import RootSet
+from agm.agl.parser import parse_program
+from agm.agl.pipeline import (
+    PipelineDriver,
+    PreparedGraph,
+    _run_matchcompile,
+    _run_matchcompile_graph,
+)
+from agm.agl.scope import resolve
+from agm.agl.scope.graph import resolve_graph
+from agm.agl.syntax.nodes import Case
+from agm.agl.syntax.visitor import walk
+from agm.agl.typecheck import check
+from agm.agl.typecheck.env import CheckedProgram
+from agm.agl.typecheck.graph import CheckedModule, CheckedModuleGraph, check_graph
+from tests.agl.ir_harness import base_caps, make_graph_from_files
+
+
+def _checked(source: str) -> CheckedProgram:
+    return check(resolve(parse_program(source)), base_caps())
+
+
+def _compiled(source: str) -> MatchCompiledProgram:
+    result = compile_program_matches(_checked(source))
+    assert isinstance(result.compiled, MatchCompiledProgram)
+    return result.compiled
+
+
+def _prepared_graph(source: str, *, roots: frozenset[Path] = frozenset()) -> PreparedGraph:
+    return PipelineDriver.prepare_program(
+        source,
+        entry_path=None,
+        roots=RootSet(roots=roots),
+        default_stdlib=False,
+    )
+
+
+def _first_case(checked: CheckedProgram | CheckedModule) -> Case:
+    cases: list[Case] = []
+
+    def collect(node: object) -> None:
+        if isinstance(node, Case):
+            cases.append(node)
+
+    walk(checked.resolved.program, collect)
+    assert cases
+    return cases[0]
+
+
+def _semantic_replay_corruptions(
+    cases: tuple[CompiledCase, ...],
+) -> tuple[tuple[str, int, CompiledCase], ...]:
+    bool_case, open_case, pair_case = cases
+    bool_root = cast(DecisionSwitch, bool_case.root)
+    open_root = cast(DecisionSwitch, open_case.root)
+    pair_root = cast(DecisionSwitch, pair_case.root)
+    pair_switch = cast(DecisionSwitch, pair_root.keyed_children[0].decision)
+    pair_right = pair_case.occurrences[2]
+    open_branch = open_root.keyed_children[0]
+
+    return (
+        (
+            "swapped keyed leaves",
+            0,
+            replace(
+                bool_case,
+                root=replace(
+                    bool_root,
+                    keyed_children=(
+                        replace(
+                            bool_root.keyed_children[0],
+                            decision=bool_root.keyed_children[1].decision,
+                        ),
+                        replace(
+                            bool_root.keyed_children[1],
+                            decision=bool_root.keyed_children[0].decision,
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        (
+            "swapped binder branch and default leaves",
+            1,
+            replace(
+                open_case,
+                root=replace(
+                    open_root,
+                    keyed_children=(
+                        replace(open_branch, decision=cast(DecisionLeaf, open_root.default)),
+                    ),
+                    default=open_branch.decision,
+                ),
+            ),
+        ),
+        (
+            "wrong observed literal head",
+            1,
+            replace(
+                open_case,
+                root=replace(
+                    open_root,
+                    keyed_children=(
+                        replace(
+                            open_branch,
+                            constructor=replace(
+                                cast(LiteralConstructor, open_branch.constructor),
+                                value=decimal.Decimal(2),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        (
+            "swapped binder-bearing keyed leaves",
+            2,
+            replace(
+                pair_case,
+                root=replace(
+                    pair_root,
+                    keyed_children=(
+                        replace(
+                            pair_root.keyed_children[0],
+                            decision=replace(
+                                pair_switch,
+                                keyed_children=(
+                                    replace(
+                                        pair_switch.keyed_children[0],
+                                        decision=pair_switch.keyed_children[1].decision,
+                                    ),
+                                    replace(
+                                        pair_switch.keyed_children[1],
+                                        decision=pair_switch.keyed_children[0].decision,
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        (
+            "wrong qba-selected occurrence",
+            2,
+            replace(
+                pair_case,
+                root=replace(
+                    pair_root,
+                    keyed_children=(
+                        replace(
+                            pair_root.keyed_children[0],
+                            decision=replace(
+                                pair_switch,
+                                occurrence=pair_right,
+                                free_occurrences=(pair_right.id,),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
+_SEMANTIC_REPLAY_SOURCE = (
+    "enum Pair\n"
+    "  | pair(left: bool, right: bool)\n"
+    "let pair_value = pair(left = false, right = true)\n"
+    "case true of | true => 1 | false => 2\n"
+    "case 1 of | 1 => 3 | captured => captured\n"
+    "case pair_value of\n"
+    "  | pair(left = true, right = when_true) => when_true\n"
+    "  | pair(left = false, right = when_false) => when_false\n"
+)
+
+
+def test_compiles_every_nested_case_once_into_immutable_total_mapping() -> None:
+    compiled = _compiled(
+        "case true of\n"
+        "  | true =>\n"
+        "      case false of\n"
+        "        | true => 1\n"
+        "        | false => 2\n"
+        "  | false => 3\n"
+    )
+
+    assert len(compiled.cases) == 2
+    assert set(compiled.cases) == {case.case_node_id for case in compiled.cases.values()}
+    mutable_view = cast(MutableMapping[int, CompiledCase], compiled.cases)
+    with pytest.raises(TypeError):
+        mutable_view[999] = next(iter(compiled.cases.values()))
+
+
+def test_empty_case_program_produces_valid_empty_artifact() -> None:
+    compiled = _compiled("let x = 1\nx")
+    assert compiled.cases == {}
+
+
+def test_source_issues_are_all_sorted_adapted_and_prevent_artifact() -> None:
+    checked = _checked(
+        "case true of\n  | true => 1\n  | true => 2\ncase false of\n  | false => 3\n"
+    )
+    result = compile_program_matches(checked)
+
+    assert result.compiled is None
+    assert len(result.issues) == 3
+    diagnostics = diagnostics_from_match_issues(result.issues)
+    assert [diagnostic.line for diagnostic in diagnostics] == sorted(
+        diagnostic.line for diagnostic in diagnostics
+    )
+    assert all(diagnostic.severity == "error" for diagnostic in diagnostics)
+    assert any("false" in diagnostic.message for diagnostic in diagnostics)
+    assert any("Redundant" in diagnostic.message for diagnostic in diagnostics)
+
+    with pytest.raises(ValueError, match="sorted"):
+        MatchCompilationResult(compiled=None, issues=tuple(reversed(result.issues)))
+    with pytest.raises(ValueError, match="exactly one"):
+        MatchCompilationResult(compiled=None, issues=())
+    with pytest.raises(AssertionError, match="unsupported"):
+        diagnostic_from_match_issue(cast(MatchIssue, object()))
+
+
+def test_graph_issues_are_aggregated_and_sorted_across_module_sources(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import beta\nimport alpha\n()",
+            "alpha": (
+                "def alpha(x: bool) -> int =\n"
+                "  case x of\n"
+                "    | true => 1\n"
+                "    | true => 2\n"
+            ),
+            "beta": (
+                "def beta(x: bool) -> int =\n"
+                "  case x of\n"
+                "    | true => 1\n"
+                "    | true => 2\n"
+            ),
+        },
+    )
+    checked_graph = check_graph(resolve_graph(graph), base_caps())
+
+    result = compile_graph_matches(checked_graph)
+
+    assert result.compiled is None
+    assert [type(issue) for issue in result.issues] == [
+        NonExhaustiveIssue,
+        RedundantArmIssue,
+        NonExhaustiveIssue,
+        RedundantArmIssue,
+    ]
+    assert [Path(issue.span.source.label).name for issue in result.issues] == [
+        "alpha.agl",
+        "alpha.agl",
+        "beta.agl",
+        "beta.agl",
+    ]
+    assert [
+        (issue.span.start_line, issue.span.start_col) for issue in result.issues
+    ] == [(2, 3), (4, 7), (2, 3), (4, 7)]
+
+    diagnostics = diagnostics_from_match_issues(result.issues)
+    assert all(diagnostic.severity == "error" for diagnostic in diagnostics)
+    assert [
+        (
+            Path(diagnostic.source_label).name if diagnostic.source_label is not None else None,
+            diagnostic.line,
+            diagnostic.column,
+        )
+        for diagnostic in diagnostics
+    ] == [
+        ("alpha.agl", 2, 3),
+        ("alpha.agl", 4, 7),
+        ("beta.agl", 2, 3),
+        ("beta.agl", 4, 7),
+    ]
+
+
+def test_program_artifact_rejects_missing_extra_mismatched_and_cross_program_cases() -> None:
+    first = _compiled("case true of | true => 1 | false => 2")
+    case_id, compiled_case = next(iter(first.cases.items()))
+
+    with pytest.raises(MatchCompileInvariantError, match="missing"):
+        MatchCompiledProgram(first.checked, {})
+    with pytest.raises(MatchCompileInvariantError, match="extra"):
+        MatchCompiledProgram(first.checked, {case_id: compiled_case, 999: compiled_case})
+
+    mismatched = replace(
+        compiled_case,
+        normalized=replace(compiled_case.normalized, case_node_id=case_id + 1),
+    )
+    with pytest.raises(MatchCompileInvariantError, match="does not match"):
+        MatchCompiledProgram(first.checked, {case_id: mismatched})
+
+    wrong_span = replace(
+        compiled_case,
+        normalized=replace(
+            compiled_case.normalized,
+            span=replace(
+                compiled_case.normalized.span,
+                end_col=compiled_case.normalized.span.end_col + 1,
+            ),
+        ),
+    )
+    with pytest.raises(MatchCompileInvariantError, match="source provenance"):
+        MatchCompiledProgram(first.checked, {case_id: wrong_span})
+
+    second_checked = _checked("case true of | true => 1 | false => 2")
+    with pytest.raises(MatchCompileInvariantError, match="different checked program"):
+        MatchCompiledProgram(second_checked, first.cases)
+
+    invalid_checked = _checked("case true of | true => 1")
+    invalid_case = _first_case(invalid_checked)
+    invalid_compiled = compile_case(normalize_case(invalid_case, invalid_checked))
+    with pytest.raises(MatchCompileInvariantError, match="contains issues"):
+        MatchCompiledProgram(invalid_checked, {invalid_case.node_id: invalid_compiled})
+
+
+def test_program_artifact_rejects_compiled_case_semantic_corruption() -> None:
+    compiled = _compiled(
+        "case true of | true => 1 | false => 2\ncase false of | true => 3 | false => 4"
+    )
+    first_id, second_id = tuple(compiled.cases)
+    first = compiled.cases[first_id]
+    second = compiled.cases[second_id]
+    first_root = cast(DecisionSwitch, first.root)
+
+    corruptions = (
+        replace(first, root=second.root, occurrences=second.occurrences),
+        replace(
+            first,
+            root=DecisionLeaf(999, ()),
+            reachable_action_ids=(999,),
+        ),
+        replace(first, reachable_action_ids=tuple(reversed(first.reachable_action_ids))),
+        replace(
+            first,
+            root=replace(
+                first_root,
+                keyed_children=(
+                    DecisionBranch(
+                        first_root.keyed_children[0].constructor,
+                        DecisionFail(),
+                    ),
+                    *first_root.keyed_children[1:],
+                ),
+            ),
+        ),
+    )
+    for corrupted in corruptions:
+        cases = dict(compiled.cases)
+        cases[first_id] = corrupted
+        with pytest.raises(MatchCompileInvariantError):
+            MatchCompiledProgram(compiled.checked, cases)
+
+    invalid_checked = _checked("case true of | true => 1")
+    invalid_case = _first_case(invalid_checked)
+    invalid_compiled = compile_case(normalize_case(invalid_case, invalid_checked))
+    stripped = replace(invalid_compiled, issues=())
+    with pytest.raises(MatchCompileInvariantError):
+        MatchCompiledProgram(invalid_checked, {invalid_case.node_id: stripped})
+
+    corrupted_cases = dict(compiled.cases)
+    corrupted_cases[first_id] = replace(first, reachable_action_ids=())
+    object.__setattr__(compiled, "cases", corrupted_cases)
+    with pytest.raises(MatchCompileInvariantError):
+        lower_program(compiled, source_text="", source_label="<corrupt>")
+
+
+def test_program_artifact_replays_source_semantics_against_every_decision_edge() -> None:
+    compiled = _compiled(_SEMANTIC_REPLAY_SOURCE)
+    case_ids = tuple(compiled.cases)
+    cases = tuple(compiled.cases.values())
+
+    MatchCompiledProgram(compiled.checked, compiled.cases)
+    for _, case_index, corrupted_case in _semantic_replay_corruptions(cases):
+        corrupted_cases = dict(compiled.cases)
+        corrupted_cases[case_ids[case_index]] = corrupted_case
+        with pytest.raises(MatchCompileInvariantError, match="semantic replay"):
+            MatchCompiledProgram(compiled.checked, corrupted_cases)
+
+
+def test_semantic_replay_rejects_terminal_and_ledger_rule_corruption() -> None:
+    compiled = _compiled(_SEMANTIC_REPLAY_SOURCE)
+    bool_case, _, pair_case = tuple(compiled.cases.values())
+    bool_root = cast(DecisionSwitch, bool_case.root)
+    leaf = cast(DecisionLeaf, bool_root.keyed_children[0].decision)
+    empty_case = compile_case(replace(bool_case.normalized, rows=()))
+
+    corruptions = (
+        replace(empty_case, root=leaf),
+        replace(bool_case, root=leaf),
+        replace(bool_case, root=replace(bool_root, default=leaf)),
+        replace(pair_case, occurrences=pair_case.occurrences[:-1]),
+    )
+    for corrupted in corruptions:
+        with pytest.raises(MatchCompileInvariantError, match="semantic replay"):
+            compiler_module._validate_semantic_replay(corrupted)
+
+
+def test_semantic_replay_rejects_incompatible_shared_decision_identity() -> None:
+    compiled = _compiled("case true of | true => 1 | false => 2")
+    compiled_case = next(iter(compiled.cases.values()))
+    root = cast(DecisionSwitch, compiled_case.root)
+    shared_leaf = root.keyed_children[0].decision
+    forged_root = replace(
+        root,
+        keyed_children=(
+            root.keyed_children[0],
+            replace(root.keyed_children[1], decision=shared_leaf),
+        ),
+    )
+
+    with pytest.raises(MatchCompileInvariantError, match="incompatible states"):
+        compiler_module._validate_semantic_replay(replace(compiled_case, root=forged_root))
+
+
+def test_semantic_replay_memo_rejects_divergent_node_for_one_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compiled = _compiled("case true of | true => 1 | false => 2")
+    compiled_case = next(iter(compiled.cases.values()))
+    root = cast(DecisionSwitch, compiled_case.root)
+
+    def same_state_specialize(
+        matrix: PatternMatrix,
+        column: int,
+        constructor: Constructor,
+        allocator: OccurrenceAllocator,
+    ) -> Specialization:
+        del column, constructor
+        return Specialization(matrix, allocator)
+
+    monkeypatch.setattr(compiler_module, "specialize", same_state_specialize)
+    with pytest.raises(MatchCompileInvariantError, match="divergent decision identities"):
+        compiler_module._validate_semantic_replay(compiled_case)
+
+    first_branch = replace(root.keyed_children[0])
+    second_branch = replace(root.keyed_children[1])
+    cyclic_root = replace(root, keyed_children=(first_branch, second_branch))
+    object.__setattr__(first_branch, "decision", cyclic_root)
+    object.__setattr__(second_branch, "decision", cyclic_root)
+    compiler_module._validate_semantic_replay(replace(compiled_case, root=cyclic_root))
+
+
+def test_valid_shared_dag_passes_strong_compiled_case_validation() -> None:
+    compiled = _compiled(
+        "enum Pair\n"
+        "  | pair(left: bool, right: bool)\n"
+        "let value = pair(left = false, right = false)\n"
+        "case value of | pair(left = false, right = false) => 1 | _ => 2"
+    )
+    compiled_case = next(iter(compiled.cases.values()))
+    root = cast(DecisionSwitch, compiled_case.root)
+    left = cast(DecisionSwitch, root.keyed_children[0].decision)
+    right = cast(DecisionSwitch, left.keyed_children[0].decision)
+
+    assert right.default is left.default
+    validate_compiled_case(compiled_case)
+    MatchCompiledProgram(compiled.checked, compiled.cases)
+
+
+def test_valid_shared_dag_passes_graph_semantic_replay_validation(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "enum Pair\n"
+                "  | pair(left: bool, right: bool)\n"
+                "let value = pair(left = false, right = false)\n"
+                "case value of | pair(left = false, right = false) => 1 | _ => 2"
+            )
+        },
+    )
+    checked_graph = check_graph(resolve_graph(graph), base_caps())
+    result = compile_graph_matches(checked_graph)
+    assert isinstance(result.compiled, MatchCompiledModuleGraph)
+    compiled = result.compiled
+    compiled_case = next(iter(compiled.cases_by_module[ENTRY_ID].values()))
+    root = cast(DecisionSwitch, compiled_case.root)
+    left = cast(DecisionSwitch, root.keyed_children[0].decision)
+    right = cast(DecisionSwitch, left.keyed_children[0].decision)
+
+    assert right.default is left.default
+    MatchCompiledModuleGraph(checked_graph, compiled.cases_by_module)
+
+
+def test_duplicate_source_case_ids_are_rejected_by_compilation_and_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checked = _checked("case true of | true => 1 | false => 2")
+    source_case = _first_case(checked)
+    monkeypatch.setattr(stage_module, "_source_cases", lambda _program: (source_case, source_case))
+
+    with pytest.raises(MatchCompileInvariantError, match="duplicate"):
+        stage_module._expected_case_map(checked.resolved.program)
+    with pytest.raises(MatchCompileInvariantError, match="duplicate"):
+        compile_program_matches(checked)
+
+
+def test_graph_compiles_imported_cases_and_rejects_wrong_module_provenance(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import lib\n()",
+            "lib": "def f(x: bool) -> int =\n  case x of | true => 1 | false => 2",
+        },
+    )
+    checked_graph = check_graph(resolve_graph(graph), base_caps())
+    result = compile_graph_matches(checked_graph)
+    assert isinstance(result.compiled, MatchCompiledModuleGraph)
+    compiled_graph = result.compiled
+
+    with pytest.raises(MatchCompileInvariantError, match="module mismatch"):
+        MatchCompiledModuleGraph(checked_graph, {})
+
+    library_id = next(module_id for module_id in checked_graph.modules if module_id != ENTRY_ID)
+    library_cases = compiled_graph.cases_by_module[library_id]
+    assert len(library_cases) == 1
+    case_id, compiled_case = next(iter(library_cases.items()))
+    wrong_context = replace(compiled_case.normalized.case_context, module_id=ENTRY_ID)
+    wrong_case = replace(
+        compiled_case,
+        normalized=replace(compiled_case.normalized, case_context=wrong_context),
+    )
+    corrupted = dict(compiled_graph.cases_by_module)
+    corrupted[library_id] = {case_id: wrong_case}
+    with pytest.raises(MatchCompileInvariantError, match="belongs to module"):
+        MatchCompiledModuleGraph(checked_graph, corrupted)
+
+
+def test_graph_artifact_rejects_compiled_case_semantic_corruption(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "case true of | true => 1 | false => 2\ncase false of | true => 3 | false => 4"
+            )
+        },
+    )
+    checked_graph = check_graph(resolve_graph(graph), base_caps())
+    result = compile_graph_matches(checked_graph)
+    assert isinstance(result.compiled, MatchCompiledModuleGraph)
+    compiled = result.compiled
+    entry_cases = compiled.cases_by_module[ENTRY_ID]
+    first_id, second_id = tuple(entry_cases)
+    first = entry_cases[first_id]
+    second = entry_cases[second_id]
+    first_root = cast(DecisionSwitch, first.root)
+
+    corruptions = (
+        replace(first, root=second.root, occurrences=second.occurrences),
+        replace(
+            first,
+            root=DecisionLeaf(999, ()),
+            reachable_action_ids=(999,),
+        ),
+        replace(first, reachable_action_ids=tuple(reversed(first.reachable_action_ids))),
+        replace(
+            first,
+            root=replace(
+                first_root,
+                keyed_children=(
+                    DecisionBranch(
+                        first_root.keyed_children[0].constructor,
+                        DecisionFail(),
+                    ),
+                    *first_root.keyed_children[1:],
+                ),
+            ),
+        ),
+    )
+    for corrupted_case in corruptions:
+        corrupted_modules = {
+            module_id: dict(module_cases)
+            for module_id, module_cases in compiled.cases_by_module.items()
+        }
+        corrupted_modules[ENTRY_ID][first_id] = corrupted_case
+        with pytest.raises(MatchCompileInvariantError):
+            MatchCompiledModuleGraph(checked_graph, corrupted_modules)
+
+    invalid_graph = make_graph_from_files(
+        tmp_path / "invalid",
+        {"entry": "case true of | true => 1"},
+    )
+    invalid_checked_graph = check_graph(resolve_graph(invalid_graph), base_caps())
+    invalid_owner = invalid_checked_graph.modules[ENTRY_ID]
+    invalid_case = _first_case(invalid_owner)
+    invalid_compiled = compile_case(normalize_case(invalid_case, invalid_owner))
+    stripped = replace(invalid_compiled, issues=())
+    with pytest.raises(MatchCompileInvariantError):
+        MatchCompiledModuleGraph(
+            invalid_checked_graph,
+            {ENTRY_ID: {invalid_case.node_id: stripped}},
+        )
+
+    corrupted_modules = {
+        module_id: dict(module_cases)
+        for module_id, module_cases in compiled.cases_by_module.items()
+    }
+    corrupted_modules[ENTRY_ID][first_id] = replace(first, reachable_action_ids=())
+    object.__setattr__(compiled, "cases_by_module", corrupted_modules)
+    with pytest.raises(MatchCompileInvariantError):
+        lower_graph(compiled)
+
+
+def test_graph_artifact_replays_source_semantics_against_every_decision_edge(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph_from_files(tmp_path, {"entry": _SEMANTIC_REPLAY_SOURCE})
+    checked_graph = check_graph(resolve_graph(graph), base_caps())
+    result = compile_graph_matches(checked_graph)
+    assert isinstance(result.compiled, MatchCompiledModuleGraph)
+    compiled = result.compiled
+    entry_cases = compiled.cases_by_module[ENTRY_ID]
+    case_ids = tuple(entry_cases)
+    cases = tuple(entry_cases.values())
+
+    MatchCompiledModuleGraph(checked_graph, compiled.cases_by_module)
+    for _, case_index, corrupted_case in _semantic_replay_corruptions(cases):
+        corrupted_modules = {
+            module_id: dict(module_cases)
+            for module_id, module_cases in compiled.cases_by_module.items()
+        }
+        corrupted_modules[ENTRY_ID][case_ids[case_index]] = corrupted_case
+        with pytest.raises(MatchCompileInvariantError, match="semantic replay"):
+            MatchCompiledModuleGraph(checked_graph, corrupted_modules)
+
+
+def test_graph_reports_error_from_unexecuted_imported_module(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import lib\n()",
+            "lib": "def f(x: bool) -> int =\n  case x of | true => 1",
+        },
+    )
+    checked_graph = check_graph(resolve_graph(graph), base_caps())
+    result = compile_graph_matches(checked_graph)
+    assert result.compiled is None
+    assert len(result.issues) == 1
+
+
+def test_pipeline_nonraising_helpers_defend_against_wrong_artifact_kind(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    single = _compiled("let x = 1\nx")
+    graph = make_graph_from_files(tmp_path, {"entry": "()"})
+    checked_graph = check_graph(resolve_graph(graph), base_caps())
+    graph_result = compile_graph_matches(checked_graph)
+    assert isinstance(graph_result.compiled, MatchCompiledModuleGraph)
+
+    monkeypatch.setattr(
+        "agm.agl.matchcompile.compile_program_matches", lambda _checked: graph_result
+    )
+    compiled, diagnostics = _run_matchcompile(single.checked)
+    assert compiled is None
+    assert "graph artifact" in diagnostics[0].message
+
+    single_result = MatchCompilationResult(compiled=single, issues=())
+    monkeypatch.setattr(
+        "agm.agl.matchcompile.compile_graph_matches", lambda _checked: single_result
+    )
+    compiled_graph, diagnostics = _run_matchcompile_graph(checked_graph)
+    assert compiled_graph is None
+    assert "single-program artifact" in diagnostics[0].message
+
+
+def test_discovery_and_startup_config_surface_match_errors() -> None:
+    runtime = PipelineDriver()
+    discovery = runtime.discover_params(
+        runtime.prepare("param n: int = 1\ncase true of | true => n")
+    )
+    assert discovery.compiled is None
+    assert any("Non-exhaustive" in item.message for item in discovery.diagnostics)
+
+    prepared_graph = PipelineDriver.prepare_program(
+        "config log = true\ncase true of | true => ()",
+        entry_path=None,
+        roots=RootSet(roots=frozenset()),
+        default_stdlib=False,
+    )
+    startup = runtime.collect_startup_config_graph(prepared_graph, names={"log"})
+    assert not startup.ok
+    assert any("Non-exhaustive" in item.message for item in startup.diagnostics)
+
+
+@pytest.mark.parametrize("check_only", [False, True])
+def test_single_discovery_and_cached_run_compile_matches_once(
+    monkeypatch: pytest.MonkeyPatch, check_only: bool
+) -> None:
+    compile_count = 0
+
+    def counted_compile(checked: CheckedProgram) -> MatchCompilationResult:
+        nonlocal compile_count
+        compile_count += 1
+        return compile_program_matches(checked)
+
+    monkeypatch.setattr(
+        "agm.agl.matchcompile.compile_program_matches",
+        counted_compile,
+    )
+    runtime = PipelineDriver()
+    prepared = runtime.prepare(
+        "param selected: bool = true\n"
+        "case selected of | true => 1 | false => 0"
+    )
+
+    discovery = runtime.discover_params(prepared)
+    assert discovery.compiled is not None
+    result = runtime.run_prepared(
+        prepared,
+        compiled=discovery.compiled,
+        check_only=check_only,
+    )
+
+    assert result.ok, result.diagnostics
+    assert compile_count == 1
+
+
+@pytest.mark.parametrize("check_only", [False, True])
+def test_graph_discovery_and_cached_run_compile_matches_once(
+    monkeypatch: pytest.MonkeyPatch, check_only: bool
+) -> None:
+    compile_count = 0
+
+    def counted_compile(checked_graph: CheckedModuleGraph) -> MatchCompilationResult:
+        nonlocal compile_count
+        compile_count += 1
+        return compile_graph_matches(checked_graph)
+
+    monkeypatch.setattr(
+        "agm.agl.matchcompile.compile_graph_matches",
+        counted_compile,
+    )
+    runtime = PipelineDriver()
+    prepared = _prepared_graph(
+        "param selected: bool = true\n"
+        "case selected of | true => 1 | false => 0"
+    )
+
+    discovery = runtime.discover_params_graph(prepared)
+    assert discovery.compiled_graph is not None
+    result = runtime.run_prepared_graph(
+        prepared,
+        compiled_graph=discovery.compiled_graph,
+        check_only=check_only,
+    )
+
+    assert result.ok, result.diagnostics
+    assert compile_count == 1
+
+
+def test_startup_discovery_and_execution_reuse_one_graph_match_compilation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compile_count = 0
+
+    def counted_compile(checked_graph: CheckedModuleGraph) -> MatchCompilationResult:
+        nonlocal compile_count
+        compile_count += 1
+        return compile_graph_matches(checked_graph)
+
+    monkeypatch.setattr(
+        "agm.agl.matchcompile.compile_graph_matches",
+        counted_compile,
+    )
+    runtime = PipelineDriver()
+    prepared = _prepared_graph(
+        "config log = case true of | true => false | false => true\n"
+        "case true of | true => 1 | false => 0"
+    )
+
+    startup = runtime.collect_startup_config_graph(prepared, names={"log"})
+    assert startup.ok, startup.diagnostics
+    assert startup.compiled_graph is not None
+    discovery = runtime.discover_params_graph(
+        prepared,
+        compiled_graph=startup.compiled_graph,
+    )
+    assert discovery.compiled_graph is startup.compiled_graph
+    result = runtime.run_prepared_graph(
+        prepared,
+        compiled_graph=discovery.compiled_graph,
+    )
+
+    assert result.ok, result.diagnostics
+    assert compile_count == 1
+
+
+def test_match_invalid_unreachable_case_fails_single_dry_run() -> None:
+    result = PipelineDriver().run(
+        "def dormant(x: bool) -> int =\n"
+        "  case x of\n"
+        "    | true => 1\n"
+        "()",
+        check_only=True,
+    )
+
+    assert not result.ok
+    assert result.error is None
+    assert result.bindings == {}
+    assert [(diagnostic.severity, diagnostic.line) for diagnostic in result.diagnostics] == [
+        ("error", 2)
+    ]
+
+
+def test_match_invalid_unreachable_import_fails_graph_check_only(tmp_path: Path) -> None:
+    (tmp_path / "invalid.agl").write_text(
+        "def dormant(x: bool) -> int =\n"
+        "  case x of\n"
+        "    | true => 1\n"
+    )
+    prepared = _prepared_graph(
+        "import invalid\n()",
+        roots=frozenset({tmp_path}),
+    )
+
+    result = PipelineDriver().run_prepared_graph(prepared, check_only=True)
+
+    assert not result.ok
+    assert result.error is None
+    assert result.bindings == {}
+    assert [
+        (
+            diagnostic.severity,
+            Path(diagnostic.source_label).name
+            if diagnostic.source_label is not None
+            else None,
+            diagnostic.line,
+        )
+        for diagnostic in result.diagnostics
+    ] == [("error", "invalid.agl", 2)]

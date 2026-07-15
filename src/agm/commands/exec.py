@@ -51,6 +51,7 @@ from agm.agent.config import default_agent_runner
 from agm.agent.runner import split_command
 from agm.agl import PipelineDriver
 from agm.agl.diagnostics import format_diagnostic
+from agm.agl.matchcompile import MatchCompiledModuleGraph
 from agm.agl.modules.roots import assemble_roots
 from agm.agl.runtime.agents import runner_backed_agent_factory
 from agm.agl.runtime.externs import ExternRegistry
@@ -344,6 +345,7 @@ def run(args: ExecArgs) -> None:
 
     shared_extern_registry = ExternRegistry()
     startup_values: dict[str, Value] = {}
+    startup_compiled_graph: MatchCompiledModuleGraph | None = None
     if prepared.resolved_graph is not None and not dry_run.enabled():
         startup_runtime = PipelineDriver(
             default_loop_limit=resolved_loop_limit,
@@ -370,6 +372,7 @@ def run(args: ExecArgs) -> None:
             print(startup_result.error.to_message(include_trace_id=True), file=sys.stderr)
             raise SystemExit(2)
         startup_values = startup_result.values if startup_result.ok else {}
+        startup_compiled_graph = startup_result.compiled_graph
 
     # Resolve + validate the trace log file up front.  --dry-run is
     # side-effect-free: no trace is written regardless of --log-file.
@@ -472,7 +475,9 @@ def run(args: ExecArgs) -> None:
     for d in decls:
         runtime.register_agent(d.name, factory)
 
-    discovery = runtime.discover_params_graph(prepared)
+    discovery = runtime.discover_params_graph(
+        prepared, compiled_graph=startup_compiled_graph
+    )
     for diag in discovery.warnings:
         print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
 
@@ -517,7 +522,7 @@ def run(args: ExecArgs) -> None:
         param_values=external_params,
         check_only=dry_run.enabled(),
         log_file=log_file,
-        checked_graph=discovery.checked_graph,
+        compiled_graph=discovery.compiled_graph,
         config_cli=config_cli,
         config_base=config_base,
     )

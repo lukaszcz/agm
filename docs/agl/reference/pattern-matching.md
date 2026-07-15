@@ -196,23 +196,48 @@ serves to disambiguate when two enums share a variant name (see
 2. Branch patterns are tried **in order**; the first matching branch runs.
 3. Pattern variables are bound as immutable values in a fresh branch scope
    ([Bindings and scope](bindings-and-scope.md)).
-4. If no branch matches, **`MatchError`** is raised, carrying the
-   scrutinee's type name and its JSON representation
-   ([Exceptions](exceptions.md)).
+4. Every possible scrutinee value must match a branch, and every branch must
+   be selectable for at least one value. Violations are static errors, so a
+   valid `case` always selects a branch.
 
-## Exhaustiveness
+## Exhaustiveness and redundancy
 
-Exhaustiveness is **advisory, not enforced**. When a `case` scrutinizes an
-enum and its constructor patterns do not cover every variant — and no
-wildcard or variable binder is present — the checker emits a *warning*:
+Every `case` must be **exhaustive**: its arms, taken together, must cover every
+value of the scrutinee type. Coverage includes the complete nested pattern,
+not only the outer constructor. For example, matching `Some(true)` and `None`
+does not cover `Some(false)`.
 
-```text
-Non-exhaustive case on enum 'Review': missing variant(s) Fail.
-An unmatched value raises MatchError at runtime.
+Enum variants and the two boolean values form closed domains and can be
+covered by listing every remaining constructor or literal. This rule applies
+recursively to enum payloads: a payload of enum or `bool` type may itself be
+covered with a complete set of nested patterns.
+
+The domains of `int`, `decimal`, `text`, `json`, and an unresolved type
+parameter are open. A finite set of literals cannot exhaust such a domain;
+the remaining values require an irrefutable wildcard or variable-binder
+pattern. The same requirement applies when an open domain occurs inside a
+constructor payload.
+
+Every arm must also be **non-redundant**. Because matching uses source order,
+an arm is redundant when all values it could match are already covered by
+earlier arms. Duplicate arms and arms after a wildcard are common examples.
+Partial overlap is allowed when the later arm still matches at least one new
+value.
+
+`MatchError` is an ordinary constructible exception, not an automatic `case`
+fallback. To reject part of a domain deliberately, cover it with a final arm
+that explicitly raises the exception ([Exceptions](exceptions.md)):
+
+```agl
+case response of
+  | Complete(output) => output
+  | _ => raise MatchError(
+      message = "response rejected by this workflow",
+      trace_id = "",
+      scrutinee_type = "Response",
+      scrutinee = response as json,
+    )
 ```
-
-The program still runs; an unmatched value raises `MatchError`. Scrutinees
-of non-enum type are not analyzed for exhaustiveness.
 
 ## `is` versus `case`
 

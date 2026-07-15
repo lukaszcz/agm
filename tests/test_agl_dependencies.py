@@ -40,6 +40,7 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
             (
                 "agm.agl.ir",
                 "agm.agl.lower",
+                "agm.agl.matchcompile",
                 "agm.agl.modules.ids",
                 "agm.agl.scope",
                 "agm.agl.semantics",

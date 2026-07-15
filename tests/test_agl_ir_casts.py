@@ -48,11 +48,13 @@ def _lower(source: str):
     from agm.agl.parser import parse_program
     from agm.agl.scope import resolve
     from agm.agl.typecheck import check
-    from tests.agl.ir_harness import base_caps
+    from tests.agl.ir_harness import _compiled_checked, base_caps
 
     prog = parse_program(source)
     checked = check(resolve(prog), base_caps())
-    return lower_program(checked, source_text=source, source_label="<test>", validate=True)
+    return lower_program(
+        _compiled_checked(checked), source_text=source, source_label="<test>", validate=True
+    )
 
 
 # ---------------------------------------------------------------------------

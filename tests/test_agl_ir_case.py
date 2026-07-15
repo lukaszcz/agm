@@ -7,8 +7,7 @@ Covers IrCase with all pattern kinds:
 - nullary bare-variant patterns (VarPattern as nullary constructor)
 - constructor patterns with field destructuring
 - nested patterns (constructor containing literal/binder/nested-constructor)
-- non-exhaustive no-match raises MatchError with correct scrutinee_type/scrutinee
-- first-match ordering (earlier arm shadows later)
+- non-exhaustive and redundant source cases are rejected before lowering
 - case binders do NOT leak into top-level results name-set
 - golden lowering: each plan kind (wildcard/bind→SymbolId/literal→IrConst/variant/constructor)
 - defensive evaluator tests (hand-built IR): variant/constructor plan on non-enum → InvalidIrError
@@ -57,12 +56,8 @@ from agm.agl.ir.program import (
 from agm.agl.ir.validate import InvalidIrError, validate_ir
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
 from agm.agl.semantics.exceptions import AglRaise
-from agm.agl.semantics.values import (
-    IntValue,
-    JsonValue,
-    TextValue,
-)
-from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises
+from agm.agl.semantics.values import IntValue, TextValue
+from tests.agl.ir_harness import _compiled_checked, evaluate_ir
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -186,8 +181,10 @@ r"""
     assert ir["r"] == TextValue("got null")
 
 
-def test_case_first_match_ordering() -> None:
-    """Earlier arm shadows a later arm that would also match."""
+def test_case_redundant_later_arm_is_rejected() -> None:
+    """An earlier identical arm makes the later arm a static error."""
+    from agm.agl import PipelineDriver
+
     src = """\
 let x: int = 1
 let r = case x of
@@ -195,8 +192,9 @@ let r = case x of
   | 1 => "second"
   | _ => "other"
 r"""
-    ir = evaluate_ir(src)
-    assert ir["r"] == TextValue("first")
+    result = PipelineDriver().run(src)
+    assert not result.ok
+    assert any("Redundant" in diagnostic.message for diagnostic in result.diagnostics)
 
 
 # ---------------------------------------------------------------------------
@@ -386,38 +384,38 @@ r"""
 
 
 # ---------------------------------------------------------------------------
-# IR evaluation tests — no-match raises MatchError
+# Static match-compilation failures
 # ---------------------------------------------------------------------------
 
 
-def test_case_no_match_raises_match_error() -> None:
-    """Non-exhaustive case raises MatchError with scrutinee_type and scrutinee."""
+def test_case_no_match_is_rejected_before_lowering() -> None:
+    """An open-domain case without a catch-all is a static error."""
+    from agm.agl import PipelineDriver
+
     src = """\
 let x: int = 5
 let r = case x of
   | 1 => "one"
   | 2 => "two"
 r"""
-    ir_exc = evaluate_ir_raises(src)
-    # IR pipeline must raise MatchError
-    assert ir_exc.display_name == "MatchError"
-    # scrutinee_type must match
-    assert ir_exc.fields["scrutinee_type"] == TextValue("int")
-    # scrutinee JSON must match (trace_id normalized by evaluate_ir_raises)
-    assert ir_exc.fields["scrutinee"] == JsonValue(5)
+    result = PipelineDriver().run(src)
+    assert not result.ok
+    assert any("Non-exhaustive" in diagnostic.message for diagnostic in result.diagnostics)
 
 
-def test_case_no_match_enum_scrutinee_type() -> None:
-    """MatchError scrutinee_type for an enum value uses the enum display_name."""
+def test_case_no_match_enum_reports_missing_constructor() -> None:
+    """An enum witness names the missing constructor."""
+    from agm.agl import PipelineDriver
+
     src = """\
 enum Color | Red | Blue
 let c = Color::Red()
 let r = case c of
   | Blue() => "blue"
 r"""
-    ir_exc = evaluate_ir_raises(src)
-    assert ir_exc.display_name == "MatchError"
-    assert ir_exc.fields["scrutinee_type"] == TextValue("Color")
+    result = PipelineDriver().run(src)
+    assert not result.ok
+    assert any("Red" in diagnostic.message for diagnostic in result.diagnostics)
 
 
 # ---------------------------------------------------------------------------
@@ -465,7 +463,9 @@ def _lower(source: str) -> ExecutableProgram:
     prog = parse_program(source)
     resolved = resolve(prog)
     checked = check(resolved, caps)
-    return lower_program(checked, source_text=source, source_label="<test>", validate=True)
+    return lower_program(
+        _compiled_checked(checked), source_text=source, source_label="<test>", validate=True
+    )
 
 
 def _find_r_bind(executable: ExecutableProgram) -> IrBind:

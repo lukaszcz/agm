@@ -15,6 +15,12 @@ from agm.agl.ir.ids import SymbolId
 from agm.agl.ir.program import ExecutableProgram, ExternFunctionBody
 from agm.agl.lower import lower_program
 from agm.agl.lower.graph import lower_graph
+from agm.agl.matchcompile import (
+    MatchCompiledModuleGraph,
+    MatchCompiledProgram,
+    compile_graph_matches,
+    compile_program_matches,
+)
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.loader import ModuleGraph, load_graph
 from agm.agl.modules.roots import RootSet
@@ -27,10 +33,32 @@ from agm.agl.scope.graph import resolve_graph
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import ExceptionValue, Value
 from agm.agl.typecheck import check
-from agm.agl.typecheck.graph import check_graph
+from agm.agl.typecheck.graph import CheckedModuleGraph, check_graph
 from agm.core.process import ProcessCaptureResult
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parents[2] / "stdlib"
+
+
+def _compiled_program(source: str, *, caps: HostCapabilities | None = None) -> MatchCompiledProgram:
+    checked = check(resolve(parse_program(source)), caps or base_caps())
+    result = compile_program_matches(checked)
+    assert isinstance(result.compiled, MatchCompiledProgram)
+    return result.compiled
+
+
+def _compiled_checked(checked: object) -> MatchCompiledProgram:
+    from agm.agl.typecheck import CheckedProgram
+
+    assert isinstance(checked, CheckedProgram)
+    result = compile_program_matches(checked)
+    assert isinstance(result.compiled, MatchCompiledProgram)
+    return result.compiled
+
+
+def _compiled_checked_graph(checked: CheckedModuleGraph) -> MatchCompiledModuleGraph:
+    result = compile_graph_matches(checked)
+    assert isinstance(result.compiled, MatchCompiledModuleGraph)
+    return result.compiled
 
 
 def _roots(*paths: Path) -> RootSet:
@@ -67,9 +95,9 @@ def _run_ir(
     caps: HostCapabilities | None = None,
     registry: AgentRegistry | None = None,
 ) -> tuple[dict[str, Value], str]:
-    checked = check(resolve(parse_program(source)), caps or base_caps())
+    compiled = _compiled_program(source, caps=caps)
     executable = lower_program(
-        checked, source_text=source, source_label="<ir-test>", validate=True
+        compiled, source_text=source, source_label="<ir-test>", validate=True
     )
     params = _build_ir_param_values(executable, param_values) if param_values else None
     output = io.StringIO()
@@ -146,7 +174,7 @@ def _prepare_extern_program(
     resolved = resolve(parse_program(source), origin_path=entry_path)
     checked = check(resolved, caps or extern_caps())
     executable = lower_program(
-        checked,
+        _compiled_checked(checked),
         source_text=source,
         source_label="<extern-ir-test>",
         validate=True,
@@ -216,7 +244,7 @@ def make_graph_from_files(tmp_path: Path, modules: dict[str, str]) -> ModuleGrap
 
 def _checked_graph(
     entry_source: str, modules: dict[str, str], tmp_path: Path
-) -> object:
+) -> CheckedModuleGraph:
     root = tmp_path / "root"
     root.mkdir(parents=True, exist_ok=True)
     for dotted, source in modules.items():
@@ -228,7 +256,8 @@ def _checked_graph(
 def evaluate_ir_graph(
     entry_source: str, modules: dict[str, str], tmp_path: Path
 ) -> dict[str, Value]:
-    executable = lower_graph(_checked_graph(entry_source, modules, tmp_path), validate=True)
+    checked = _checked_graph(entry_source, modules, tmp_path)
+    executable = lower_graph(_compiled_checked_graph(checked), validate=True)
     result = IrInterpreter(executable).run()
     return result
 
@@ -236,7 +265,8 @@ def evaluate_ir_graph(
 def evaluate_ir_graph_raises(
     entry_source: str, modules: dict[str, str], tmp_path: Path
 ) -> ExceptionValue:
-    executable = lower_graph(_checked_graph(entry_source, modules, tmp_path), validate=True)
+    checked = _checked_graph(entry_source, modules, tmp_path)
+    executable = lower_graph(_compiled_checked_graph(checked), validate=True)
     try:
         IrInterpreter(executable).run()
     except AglRaise as exc:

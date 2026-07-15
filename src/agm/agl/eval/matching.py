@@ -1,10 +1,12 @@
-"""Shared match-error helpers for case-expression pattern matching.
+"""Defensive match-error helpers for directly constructed recursive-plan IR.
 
 This module provides ``_describe_value`` (maps a runtime ``Value`` to its
 AgL type-name string) and ``make_match_error`` (builds a ``MatchError``
 ``ExceptionValue`` with ``scrutinee_type`` and ``scrutinee`` fields).
 
-The IR evaluator delegates here so match diagnostics have one implementation.
+Valid source cases are statically exhaustive, and lowering never relies on
+this defensive fallback. User-visible ``MatchError`` values come from explicit
+source construction and raising.
 
 Allowed imports: stdlib, ``agm.agl.semantics.values``, ``agm.agl.semantics.exceptions``,
 ``agm.agl.runtime.serialize``.  No syntax, scope, or typecheck imports.
@@ -75,7 +77,7 @@ def _describe_value(value: Value) -> str:
 
 
 def make_match_error(subject: Value, *, trace_id: str = "") -> ExceptionValue:
-    """Build a ``MatchError`` ``ExceptionValue`` for a non-matching *subject*.
+    """Build the defensive ``MatchError`` for inconsistent hand-built IR.
 
     Fields:
     - ``message``: human-readable description including the scrutinee type.

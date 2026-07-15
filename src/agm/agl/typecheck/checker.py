@@ -25,7 +25,7 @@ Rules implemented
 11. Lambdas — inferred or annotated return type.
 12. Block typing — last item is the block's value; LetDecl/VarDecl at end is error.
 13. ``if`` with no ``else`` yields ``unit``; with ``else`` branches must unify.
-14. ``case`` — exhaustiveness warning on enum scrutinees.
+14. ``case`` — validates subject, pattern, and branch types.
 15. ``loop`` — yields ``unit``; until/while conditions must be bool; bound must be int.
 16. ``try/catch`` — body and handler types must unify.
 17. ``raise``/``return`` — yield ``BottomType`` (bottom, assignable to any target).
@@ -1942,8 +1942,6 @@ class _Checker:
             self._bind_pattern_types(branch.pattern, subj_type, branch)
             bt = self._check_expr(branch.body, expected=expected)
             branch_types.append(bt)
-        self._warn_non_exhaustive(subj_type, [b.pattern for b in node.branches], node.span)
-
         result = self._unify_branch_types(branch_types, node.span, "Case expression")
         self._set_extern_expr_targets(
             node.node_id,
@@ -2772,45 +2770,6 @@ class _Checker:
                 f"destructure the fields explicitly.",
                 span=pattern.span,
             )
-
-    def _warn_non_exhaustive(
-        self, subj_type: Type, patterns: list[Pattern], span: SourceSpan
-    ) -> None:
-        """Emit a warning when an enum ``case`` leaves some variants uncovered."""
-        if not isinstance(subj_type, EnumType):
-            return
-        covered: set[str] = set()
-        for pattern in patterns:
-            if isinstance(pattern, WildcardPattern):
-                return
-            if isinstance(pattern, VarPattern):
-                if pattern.node_id not in self._resolved.bare_variant_patterns:
-                    return  # a genuine binder is a catch-all
-                covered.add(pattern.name)
-                continue
-            assert isinstance(pattern, ConstructorPattern), (
-                f"unexpected pattern kind on enum scrutinee: {type(pattern).__name__}"
-            )
-            covered.add(pattern.name)
-        missing = [
-            name for name in self._env.type_table.enum_variants(subj_type) if name not in covered
-        ]
-        if not missing:
-            return
-        self._warnings.append(
-            Diagnostic(
-                message=(
-                    f"Non-exhaustive case on enum '{subj_type.name}': missing "
-                    f"variant(s) {', '.join(missing)}. An unmatched value raises "
-                    f"MatchError at runtime."
-                ),
-                line=span.start_line,
-                column=span.start_col,
-                end_line=span.end_line,
-                end_column=span.end_col,
-                severity="warning",
-            )
-        )
 
     # ------------------------------------------------------------------
     # Branch unification

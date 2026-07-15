@@ -50,11 +50,11 @@ class EntryResult:
         ``value_type``; supplied whenever a type-focused echo may expand a
         record or enum handle to its field / constructor declarations.
     ``diagnostics``
-        Pre-execution error diagnostics (parse/scope/typecheck/contract/unset
-        param).  Empty on success.
+        Pre-execution error diagnostics (parse/scope/typecheck/matchcompile/
+        contract/unset param).  Empty on success.
     ``warnings``
-        Advisory warnings from the type checker (e.g. non-exhaustive ``case``),
-        surfaced on every non-parse/scope path.
+        Advisory warnings from the lexer and static passes (for example a TAB
+        or unused declared agent), surfaced on every non-parse/scope path.
     ``error``
         The uncaught AgL exception mapped to a ``RunError`` when the entry raised
         during evaluation; ``None`` otherwise.

@@ -2317,30 +2317,24 @@ class TestMaxIterationsExceededSchema:
         assert lines == ["finished", "false"]
 
 
-class TestExhaustivenessWarningSurfaces:
-    """a non-exhaustive enum ``case`` warns without failing the run.
+class TestExhaustivenessErrorSurfaces:
+    """A non-exhaustive enum ``case`` is rejected before execution."""
 
-    The exhaustiveness diagnostic is a warning, so ``ok`` stays ``True`` and the
-    warning is visible on ``result.warnings`` (never in ``result.diagnostics``)
-    while the program executes.
-    """
-
-    def test_warning_surfaces_and_run_succeeds(self, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_error_surfaces_and_run_does_not_execute(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         rt = PipelineDriver()
         program = (
             'enum R\n  | Pass\n  | Fail\nlet r: R = Pass()\ncase r of\n  | Pass() => print "ok"\n'
         )
         result = rt.run(program)
-        # Warning, not error: the run still succeeds.
-        assert result.ok is True
+        assert result.ok is False
         assert result.error is None
-        # Successful runs carry no error diagnostics; the warning is separate.
-        assert result.diagnostics == []
-        assert len(result.warnings) == 1
-        assert result.warnings[0].severity == "warning"
-        assert "Fail" in result.warnings[0].message
-        # The matched branch executed.
-        assert capsys.readouterr().out == "ok\n"
+        assert len(result.diagnostics) == 1
+        assert result.diagnostics[0].severity == "error"
+        assert "Fail" in result.diagnostics[0].message
+        assert result.warnings == []
+        assert capsys.readouterr().out == ""
 
 
 class TestShellExecTimeoutProperty:
@@ -3505,8 +3499,9 @@ class TestDiscoverParamsDefensivePaths:
 class TestRunPreparedDefensivePaths:
     """Edge-case coverage for run_prepared (single-file) and run_prepared_graph."""
 
-    def test_run_prepared_with_precomputed_checked(self) -> None:
-        """run_prepared skips typecheck when pre-computed checked is passed."""
+    def test_run_prepared_with_precomputed_compiled(self) -> None:
+        """run_prepared skips static passes when a compiled artifact is passed."""
+        from agm.agl.matchcompile import MatchCompiledProgram, compile_program_matches
         from agm.agl.typecheck import check
 
         prepared = PipelineDriver.prepare("let x = 1\nx")
@@ -3514,8 +3509,9 @@ class TestRunPreparedDefensivePaths:
         rt = PipelineDriver()
         env = rt.host_environment()
         precomputed = check(prepared.resolved, env.capabilities)
-        # Pass the pre-computed checked: the branch `if checked is None:` is skipped.
-        result = rt.run_prepared(prepared, checked=precomputed)
+        match_result = compile_program_matches(precomputed)
+        assert isinstance(match_result.compiled, MatchCompiledProgram)
+        result = rt.run_prepared(prepared, compiled=match_result.compiled)
         assert result.ok is True
 
     def test_run_prepared_typecheck_failure(self) -> None:
@@ -3597,10 +3593,11 @@ class TestRunPreparedDefensivePaths:
         assert result.ok is False
         assert any("Contract error" in d.message for d in result.diagnostics)
 
-    def test_run_prepared_graph_with_prechecked_graph_decodes_param_from_ir(
+    def test_run_prepared_graph_with_precompiled_graph_decodes_param_from_ir(
         self, tmp_path: pathlib.Path
     ) -> None:
-        """A prechecked graph executes supplied params through IR metadata."""
+        """A precompiled graph executes supplied params through IR metadata."""
+        from agm.agl.matchcompile import MatchCompiledModuleGraph, compile_graph_matches
         from agm.agl.modules.roots import RootSet
         from agm.agl.typecheck.graph import check_graph as real_check_graph
 
@@ -3610,6 +3607,11 @@ class TestRunPreparedDefensivePaths:
         )
         rt = PipelineDriver()
         env = rt.host_environment()
-        checked_graph = real_check_graph(prepared.resolved_graph, env.capabilities)  # type: ignore[arg-type]
-        result = rt.run_prepared_graph(prepared, param_values={"n": 7}, checked_graph=checked_graph)
+        assert prepared.resolved_graph is not None
+        checked_graph = real_check_graph(prepared.resolved_graph, env.capabilities)
+        match_result = compile_graph_matches(checked_graph)
+        assert isinstance(match_result.compiled, MatchCompiledModuleGraph)
+        result = rt.run_prepared_graph(
+            prepared, param_values={"n": 7}, compiled_graph=match_result.compiled
+        )
         assert result.ok

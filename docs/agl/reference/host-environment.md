@@ -13,8 +13,9 @@ A conforming host processes a program in this order:
 
 1. **Parse** — syntax errors abort here.
 2. **Name resolution** — scope errors abort here.
-3. **Type checking** against the host's *capability catalog* — type errors
-   abort here; warnings are collected.
+3. **Static validation** against the host's *capability catalog* — type
+   errors, non-exhaustive cases, and redundant case arms abort here; warnings
+   are collected.
 4. **Param validation** — externally provided values are checked against the
    program's `param` declarations.
 5. **Contract materialization** — every agent-call and `exec` site's output
@@ -22,8 +23,7 @@ A conforming host processes a program in this order:
 6. **Execution.**
 
 A failure in steps 1–5 means **nothing executes**: no statement runs, no
-agent is called, no shell command is spawned. Static checking stops at the
-first error. Warnings (for example a non-exhaustive `case`, or a useless
+agent is called, no shell command is spawned. Warnings (for example a useless
 `on_parse_error` on a `text` target) are reported on every path and never
 prevent execution.
 

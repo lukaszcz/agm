@@ -25,7 +25,7 @@ from agm.agl.scope import resolve
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import BoolValue, DecimalValue, IntValue, TextValue
 from agm.agl.typecheck import check
-from tests.agl.ir_harness import base_caps, evaluate_ir
+from tests.agl.ir_harness import _compiled_checked, base_caps, evaluate_ir
 
 # ---------------------------------------------------------------------------
 # Basic function call tests
@@ -133,7 +133,7 @@ def test_call_depth_guard_ir_only() -> None:
     caps = base_caps()
     checked = check(resolved, caps)
     executable = lower_program(
-        checked, source_text=source, source_label="<test>", validate=True
+        _compiled_checked(checked), source_text=source, source_label="<test>", validate=True
     )
     interp = IrInterpreter(executable, max_call_depth=10)
     with pytest.raises(AglRaise) as exc_info:

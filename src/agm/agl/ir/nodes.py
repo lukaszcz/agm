@@ -737,9 +737,9 @@ class IrCase:
     """IR case expression: eval ``subject`` once; try each arm in order.
 
     The value of an ``IrCase`` is the body of the first arm whose plan
-    matches the subject.  If no arm matches, raises ``AglRaise`` with a
-    ``MatchError`` exception (built via ``make_match_error`` from
-    ``agm.agl.eval.matching``).
+    matches the subject. Valid lowering input has already passed exhaustive,
+    non-redundant source-case validation, so executable programs do not depend
+    on an unmatched-arm fallback.
 
     Semantics mirror legacy ``_eval_case`` first-match ordering exactly.
     Pattern binders (``IrBindPlan``) write their bindings into the current

@@ -492,6 +492,11 @@ class TestTypeOf:
         with pytest.raises(AglTypeError):
             s.type_of("s + 1")
 
+    def test_type_of_propagates_match_compilation_error(self) -> None:
+        s = ReplSession()
+        with pytest.raises(AglError, match="Non-exhaustive"):
+            s.type_of("case true of | true => 1")
+
 
 # ---------------------------------------------------------------------------
 # Atomic-on-error
@@ -1049,14 +1054,15 @@ class TestDumpSource:
 
 
 class TestWarnings:
-    def test_non_exhaustive_case_warning_surfaced(self) -> None:
+    def test_non_exhaustive_case_error_surfaced(self) -> None:
         s = ReplSession()
         s.eval_entry("enum R\n  | Pass\n  | Fail")
         s.eval_entry("let r: R = Pass")
         r = s.eval_entry("case r of\n  | Pass() => ()")
-        assert r.ok  # warnings never fail an entry
-        assert len(r.warnings) == 1
-        assert "Fail" in r.warnings[0].message
+        assert not r.ok
+        assert len(r.diagnostics) == 1
+        assert "Fail" in r.diagnostics[0].message
+        assert r.warnings == []
 
     def test_tab_warning_surfaced(self) -> None:
         # A TAB character in the entry source surfaces a per-entry advisory
@@ -1066,13 +1072,14 @@ class TestWarnings:
         assert r.ok
         assert any("TAB" in w.message or "tab" in w.message for w in r.warnings)
 
-    def test_warning_on_check_only_path(self) -> None:
+    def test_match_error_on_check_only_path(self) -> None:
         s = ReplSession()
         s.eval_entry("enum R\n  | Pass\n  | Fail")
         s.eval_entry("let r: R = Pass")
         r = s.eval_entry("case r of\n  | Pass() => ()", check_only=True)
-        assert r.ok
-        assert len(r.warnings) == 1
+        assert not r.ok
+        assert len(r.diagnostics) == 1
+        assert r.warnings == []
 
 
 # ---------------------------------------------------------------------------
@@ -1948,6 +1955,34 @@ class TestImports:
         r = s.eval_entry("import mylib\nadd(1, 2)", check_only=True)
         assert r.ok, r.diagnostics
         # check_only does not promote session state.
+        assert s.bindings() == []
+
+    def test_check_only_graph_mode_rejects_invalid_unreachable_import(
+        self, tmp_path: Path
+    ) -> None:
+        lib = tmp_path / "invalid.agl"
+        lib.write_text(
+            "def dormant(x: bool) -> int =\n"
+            "  case x of\n"
+            "    | true => 1\n"
+        )
+        s = self._make_session_with_root(tmp_path)
+
+        r = s.eval_entry("import invalid\n()", check_only=True)
+
+        assert not r.ok
+        assert r.error is None
+        assert r.warnings == []
+        assert [
+            (
+                diagnostic.severity,
+                Path(diagnostic.source_label).name
+                if diagnostic.source_label is not None
+                else None,
+                diagnostic.line,
+            )
+            for diagnostic in r.diagnostics
+        ] == [("error", "invalid.agl", 2)]
         assert s.bindings() == []
 
     def test_agent_decl_in_graph_mode(self, tmp_path: Path) -> None:

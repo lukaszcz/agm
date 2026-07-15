@@ -15,6 +15,7 @@ source (.agl)
   → AST          (plain dataclasses — the firewall)
   → scope        (name resolution; full static pass)
   → typecheck    (full static pass; selects concrete operations)
+  → match compile (exhaustiveness, redundancy, and decision artifacts)
   → lower + link (closed, typeless executable program)
   → IR eval      (interpreter over the linked program)
         ↘ host runtime: agents, shell execution, the Python FFI registry, codecs, rendering, trace store
@@ -45,7 +46,7 @@ AgL has no separate statement category. Every construct — bindings, assignment
 
 ## Single-File and Graph Modes
 
-AgL supports file-based modules. A single-file program runs through the single-module passes; a program with imports runs through graph-aware variants of scope, typecheck, and lowering that operate over the whole module graph at once. The two modes share the same AST, value model, and evaluator. Module loading and the graph passes are described in [modules.md](modules.md).
+AgL supports file-based modules. A single-file program runs through the single-module passes; a program with imports runs through graph-aware variants of scope, typecheck, match compilation, and lowering that operate over the whole module graph at once. The two modes share the same AST, value model, and evaluator. Module loading and the graph passes are described in [modules.md](modules.md).
 
 ## Package Map
 
@@ -56,7 +57,7 @@ AgL supports file-based modules. A single-file program runs through the single-m
 | AST | `src/agm/agl/syntax/` |
 | Scope / name resolution | `src/agm/agl/scope/` |
 | Type checking | `src/agm/agl/typecheck/` |
-| Pattern-match compiler model / normalization | `src/agm/agl/matchcompile/` |
+| Pattern-match compilation, artifacts, and diagnostics | `src/agm/agl/matchcompile/` |
 | Semantic foundation (values, types, exceptions) | `src/agm/agl/semantics/` |
 | Lowering / linking | `src/agm/agl/lower/` |
 | Execution IR (data model) | `src/agm/agl/ir/` |

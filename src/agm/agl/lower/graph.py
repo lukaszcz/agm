@@ -1,7 +1,7 @@
 """Whole-graph module lowering for the AgL typeless execution IR.
 
-``lower_graph`` links a :class:`~agm.agl.typecheck.graph.CheckedModuleGraph`
-into a single :class:`~agm.agl.ir.program.ExecutableProgram` with one shared
+``lower_graph`` links a match-compiled module graph into a single
+:class:`~agm.agl.ir.program.ExecutableProgram` with one shared
 symbol/function/nominal table and per-module initializer sequences.
 """
 
@@ -28,17 +28,20 @@ from agm.agl.lower.lowerer import (
     _LinkState,
     _Lowerer,
 )
+from agm.agl.matchcompile import (
+    MatchCompiledModuleGraph,
+    validate_match_compiled_graph,
+)
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.semantics.types import EnumType, ExceptionType, RecordType
 from agm.agl.syntax.nodes import AgentDecl, FuncDef
-from agm.agl.typecheck.graph import CheckedModuleGraph
 from agm.util.text import normalize_newlines
 
 __all__ = ["lower_graph"]
 
 
 def lower_graph(
-    checked_graph: CheckedModuleGraph,
+    compiled_graph: MatchCompiledModuleGraph,
     *,
     validate: bool = False,
     _link: _LinkState | None = None,
@@ -46,13 +49,15 @@ def lower_graph(
     _entry_source_text: str | None = None,
     contract_payloads: Mapping[int, ContractPayload] | None = None,
 ) -> ExecutableProgram:
-    """Lower a whole-graph :class:`~agm.agl.typecheck.graph.CheckedModuleGraph` to an
+    """Lower a whole-graph match-compiled artifact to an
     :class:`~agm.agl.ir.program.ExecutableProgram`.
 
-    :param checked_graph: the type-checked module graph to lower.
+    :param compiled_graph: the statically match-compiled module graph to lower.
     :param validate: when ``True``, run ``validate_ir(deep=True)`` before returning.
     :returns: the linked ``ExecutableProgram`` ready for evaluation.
     """
+    validate_match_compiled_graph(compiled_graph)
+    checked_graph = compiled_graph.checked_graph
     link = _link if _link is not None else _LinkState()
 
     # Every per-module TypeEnvironment shares one TypeTable instance (built

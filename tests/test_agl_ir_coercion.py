@@ -49,7 +49,7 @@ from agm.agl.semantics.values import (
     Value,
 )
 from agm.agl.typecheck import check
-from tests.agl.ir_harness import base_caps, evaluate_ir
+from tests.agl.ir_harness import _compiled_checked, base_caps, evaluate_ir
 
 # ---------------------------------------------------------------------------
 # Shared pipeline helper for structural IR assertions
@@ -58,7 +58,9 @@ from tests.agl.ir_harness import base_caps, evaluate_ir
 
 def _lower(source: str) -> ExecutableProgram:
     checked = check(resolve(parse_program(source)), base_caps())
-    return lower_program(checked, source_text=source, source_label="<test>", validate=True)
+    return lower_program(
+        _compiled_checked(checked), source_text=source, source_label="<test>", validate=True
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,8 @@
 """Single-module lowerer for the AgL typeless execution IR.
 
-Transforms a ``CheckedProgram`` into an ``ExecutableProgram`` for the supported
-node subset.  Every implicit coercion is inserted explicitly at compile time via
+Transforms a successful match-compiled program artifact into an
+``ExecutableProgram`` for the supported node subset. Every implicit coercion is
+inserted explicitly at compile time via
 ``compile_coercion``; the evaluator switches only on pre-resolved ``Coercion``
 descriptors and never inspects value types at runtime.
 
@@ -139,6 +140,7 @@ from agm.agl.ir.program import (
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.coercions import compile_coercion
 from agm.agl.lower.conversions import compile_recipe
+from agm.agl.matchcompile import MatchCompiledProgram, validate_match_compiled_program
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CORE_ID, ModuleId
 from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind
 from agm.agl.semantics.type_table import TypeTable
@@ -486,15 +488,17 @@ class _Lowerer:
     # table (via the base frame, which always contains all module-level bindings);
     # agent_binding/constructor_binding are not frame values in the IR
     # (host prep / constructors are handled elsewhere) so they are not captures here.
-    _CAPTURABLE_KINDS = frozenset({
-        BinderKind.let_binding,
-        BinderKind.var_binding,
-        BinderKind.param_binding,
-        BinderKind.catch_binder,
-        BinderKind.pattern_binding,
-        BinderKind.agent_binding,
-        BinderKind.loop_var_binding,
-    })
+    _CAPTURABLE_KINDS = frozenset(
+        {
+            BinderKind.let_binding,
+            BinderKind.var_binding,
+            BinderKind.param_binding,
+            BinderKind.catch_binder,
+            BinderKind.pattern_binding,
+            BinderKind.agent_binding,
+            BinderKind.loop_var_binding,
+        }
+    )
 
     def _pattern_binding_ids(self, pattern: Pattern, out: set[int]) -> None:
         """Collect node_ids of the variable binders a pattern introduces."""
@@ -512,16 +516,20 @@ class _Lowerer:
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
 
-    def _record_capture(self, node_id: int, local_ids: set[int],
-                        captured: dict[int, BindingRef]) -> None:
+    def _record_capture(
+        self, node_id: int, local_ids: set[int], captured: dict[int, BindingRef]
+    ) -> None:
         ref = self._checked.resolved.resolution.get(node_id)
-        if (ref is not None
-                and ref.decl_node_id not in local_ids
-                and ref.kind in self._CAPTURABLE_KINDS):
+        if (
+            ref is not None
+            and ref.decl_node_id not in local_ids
+            and ref.kind in self._CAPTURABLE_KINDS
+        ):
             captured[ref.decl_node_id] = ref
 
-    def _scan_captures(self, node: Item, local_ids: set[int],
-                       captured: dict[int, BindingRef]) -> None:
+    def _scan_captures(
+        self, node: Item, local_ids: set[int], captured: dict[int, BindingRef]
+    ) -> None:
         """Single boundary-aware pass collecting a function body's free-var captures.
 
         Registers every in-body binder (let/var/pattern/catch) into ``local_ids``
@@ -536,9 +544,21 @@ class _Lowerer:
             case VarRef():
                 self._record_capture(node.node_id, local_ids, captured)
             # Boundaries + declarations introduce no value captures for THIS function:
-            case (Lambda() | FuncDef() | RecordDef() | EnumDef() | ExceptionDef() | TypeAlias()
-                  | ParamDecl() | ProgramDecl() | AgentDecl() | ConfigDecl() | ImportDecl()
-                  | ExportDecl() | InfixDecl()):
+            case (
+                Lambda()
+                | FuncDef()
+                | RecordDef()
+                | EnumDef()
+                | ExceptionDef()
+                | TypeAlias()
+                | ParamDecl()
+                | ProgramDecl()
+                | AgentDecl()
+                | ConfigDecl()
+                | ImportDecl()
+                | ExportDecl()
+                | InfixDecl()
+            ):
                 return
             case LetDecl() | VarDecl():
                 local_ids.add(node.node_id)
@@ -661,10 +681,7 @@ class _Lowerer:
             # Capturing them would snapshot module lets and require module vars to
             # exist before a top-level function closure can be hoisted.
             symbol_desc = self._link.symbols[sym]
-            if (
-                isinstance(symbol_desc.owner, ModuleId)
-                and symbol_desc.public_name is not None
-            ):
+            if isinstance(symbol_desc.owner, ModuleId) and symbol_desc.public_name is not None:
                 continue
             captures.append(IrCapture(symbol=sym, by_cell=ref.mutable))
         return tuple(captures)
@@ -719,9 +736,7 @@ class _Lowerer:
             ir_params.append(IrFunctionParam(symbol=psym, default=default_ir))
 
         sig = self._checked.type_env.get_function_signature_by_node_id(funcdef.node_id)
-        assert sig is not None, (
-            f"compiler bug: no function signature for {funcdef.name!r}"
-        )
+        assert sig is not None, f"compiler bug: no function signature for {funcdef.name!r}"
         param_labels = tuple(repr(p.type) for p in sig.params)
         result_label = repr(sig.result)
 
@@ -743,8 +758,8 @@ class _Lowerer:
         fn_id = self._link.fn_node_to_id[funcdef.node_id]
         fn_sym = self._link.fn_node_to_sym[funcdef.node_id]
 
-        ir_params, sig, param_decl_ids, param_labels, result_label = (
-            self._lower_declared_params(funcdef, fn_id)
+        ir_params, sig, param_decl_ids, param_labels, result_label = self._lower_declared_params(
+            funcdef, fn_id
         )
         captures = self._compute_captures(funcdef, param_decl_ids)
         with self._return_context(sig.result):
@@ -781,8 +796,8 @@ class _Lowerer:
         fn_id = self._link.fn_node_to_id[funcdef.node_id]
         fn_sym = self._link.fn_node_to_sym[funcdef.node_id]
 
-        ir_params, sig, _param_decl_ids, param_labels, result_label = (
-            self._lower_declared_params(funcdef, fn_id)
+        ir_params, sig, _param_decl_ids, param_labels, result_label = self._lower_declared_params(
+            funcdef, fn_id
         )
 
         desc = FunctionDescriptor(
@@ -923,17 +938,13 @@ class _Lowerer:
     def _binding_type(self, decl_node_id: int) -> Type:
         """Return the checker-recorded type for a declaration node (compiler-error if missing)."""
         t = self._checked.type_env.get_binding_type(decl_node_id)
-        assert t is not None, (
-            f"compiler bug: no binding type for decl_node_id={decl_node_id!r}"
-        )
+        assert t is not None, f"compiler bug: no binding type for decl_node_id={decl_node_id!r}"
         return t
 
     def _node_type(self, node_id: int) -> Type:
         """Return the checker-recorded type for an expression node (compiler-error if missing)."""
         t = self._checked.node_types.get(node_id)
-        assert t is not None, (
-            f"compiler bug: no node_type for node_id={node_id!r}"
-        )
+        assert t is not None, f"compiler bug: no node_type for node_id={node_id!r}"
         return t
 
     # ------------------------------------------------------------------
@@ -1035,14 +1046,10 @@ class _Lowerer:
                     # Nullary constructor used as a value → construct immediately.
                     # AgL grammar requires ≥1 field in a record, so a nullary
                     # record VarRef is impossible under the current grammar.
-                    return self._lower_nullary_constructor(
-                        nid, cref.owner_name, cref.variant, span
-                    )
+                    return self._lower_nullary_constructor(nid, cref.owner_name, cref.variant, span)
 
                 ref = self._checked.resolved.resolution.get(nid)
-                assert ref is not None, (
-                    f"compiler bug: no resolution for VarRef node_id={nid!r}"
-                )
+                assert ref is not None, f"compiler bug: no resolution for VarRef node_id={nid!r}"
                 sym = self._sym_for_decl(ref.decl_node_id)
                 return IrLoad(location=self._loc(span), symbol=sym)
 
@@ -1125,9 +1132,7 @@ class _Lowerer:
             case Cast(expr=operand, test_only=test_only, span=span, node_id=nid):
                 spec = self._checked.cast_specs[nid]
                 source_type = self._node_type(operand.node_id)
-                recipe = compile_recipe(
-                    source_type, spec.target_type, spec.kind, self._type_table
-                )
+                recipe = compile_recipe(source_type, spec.target_type, spec.kind, self._type_table)
                 inner = self.lower_expr(operand)
                 if not test_only:
                     return IrConvert(
@@ -1200,9 +1205,7 @@ class _Lowerer:
             # Case expression
             # ----------------------------------------------------------
             case Case(subject=subject_expr, branches=branches, span=span, node_id=nid):
-                return self._lower_case(
-                    subject_expr, branches, span, self._node_type(nid)
-                )
+                return self._lower_case(subject_expr, branches, span, self._node_type(nid))
 
             # ----------------------------------------------------------
             # loop expression → IrLoop (desugared by _lower_loop)
@@ -1541,9 +1544,7 @@ class _Lowerer:
         # Item 4: bound check — if __count >= __n => inner_if
         if n_sym is not None and count_sym is not None:
             until_source = (
-                self._source_slice(until_cond_expr.span)
-                if until_cond_expr is not None
-                else "false"
+                self._source_slice(until_cond_expr.span) if until_cond_expr is not None else "false"
             )
             # Inner if: if __count == 0 => IrBreak else => IrRaise(MaxIterationsExceeded)
             inner_if = IrIf(
@@ -1574,9 +1575,7 @@ class _Lowerer:
                                             location=loc,
                                             segments=(
                                                 IrTemplateText("Loop exhausted after "),
-                                                IrTemplateValue(
-                                                    IrLoad(location=loc, symbol=n_sym)
-                                                ),
+                                                IrTemplateValue(IrLoad(location=loc, symbol=n_sym)),
                                                 IrTemplateText(" iterations"),
                                             ),
                                         ),
@@ -1698,9 +1697,7 @@ class _Lowerer:
     # Operator helpers
     # ------------------------------------------------------------------
 
-    def _lower_binary_op(
-        self, op: BinOp, left: Expr, right: Expr, span: SourceSpan
-    ) -> IrExpr:
+    def _lower_binary_op(self, op: BinOp, left: Expr, right: Expr, span: SourceSpan) -> IrExpr:
         """Lower a BinaryOp to the appropriate IR node."""
         loc = self._loc(span)
 
@@ -1728,9 +1725,7 @@ class _Lowerer:
             return self._lower_ordering(op, left, right, loc)
         assert_never(op)  # pragma: no cover
 
-    def _lower_arith(
-        self, op: BinOp, left: Expr, right: Expr, loc: Location
-    ) -> IrArith:
+    def _lower_arith(self, op: BinOp, left: Expr, right: Expr, loc: Location) -> IrArith:
         """Lower an arithmetic binary op (ADD/SUB/MUL)."""
         left_type = self._node_type(left.node_id)
         right_type = self._node_type(right.node_id)
@@ -1763,9 +1758,7 @@ class _Lowerer:
             rhs=self.lower_coerced(right, common),
         )
 
-    def _lower_equality(
-        self, op: BinOp, left: Expr, right: Expr, loc: Location
-    ) -> IrCompare:
+    def _lower_equality(self, op: BinOp, left: Expr, right: Expr, loc: Location) -> IrCompare:
         """Lower EQ/NEQ: use STRUCTURAL kind with numeric widening if needed."""
         left_type = self._node_type(left.node_id)
         right_type = self._node_type(right.node_id)
@@ -1782,9 +1775,7 @@ class _Lowerer:
             rhs=self.lower_coerced(right, common),
         )
 
-    def _lower_ordering(
-        self, op: BinOp, left: Expr, right: Expr, loc: Location
-    ) -> IrCompare:
+    def _lower_ordering(self, op: BinOp, left: Expr, right: Expr, loc: Location) -> IrCompare:
         """Lower LT/LE/GT/GE with kind based on operand types."""
         left_type = self._node_type(left.node_id)
         right_type = self._node_type(right.node_id)
@@ -1819,9 +1810,7 @@ class _Lowerer:
             kind = ContainsKind.TEXT
             item_ir = self.lower_expr(item)
         else:  # pragma: no cover
-            raise AssertionError(
-                f"compiler bug: IN on non-container type {container_type!r}"
-            )
+            raise AssertionError(f"compiler bug: IN on non-container type {container_type!r}")
         return IrContains(
             location=loc,
             kind=kind,
@@ -1973,10 +1962,7 @@ class _Lowerer:
                 )
             # (b) VarRef callee resolving via BinderKind.constructor_binding.
             callee_ref = self._checked.resolved.resolution.get(callee.node_id)
-            if (
-                callee_ref is not None
-                and callee_ref.kind is BinderKind.constructor_binding
-            ):
+            if callee_ref is not None and callee_ref.kind is BinderKind.constructor_binding:
                 return self._lower_named_constructor_call(
                     nid,
                     callee.name,
@@ -1984,10 +1970,7 @@ class _Lowerer:
                     span,
                 )
             # (c) Direct user function call
-            if (
-                callee_ref is not None
-                and callee_ref.kind is BinderKind.function_binding
-            ):
+            if callee_ref is not None and callee_ref.kind is BinderKind.function_binding:
                 return self._lower_direct_call(call_node, callee_ref, nid, span)
 
         # Indirect/value call: callee is an arbitrary expression (lambda, let-bound
@@ -2077,8 +2060,7 @@ class _Lowerer:
         # Obtain the callee's FunctionType to drive per-arg coercions.
         callee_fn_type = self._node_type(call_node.callee.node_id)
         assert isinstance(callee_fn_type, FunctionType), (
-            f"compiler bug: indirect call callee has non-FunctionType node_type"
-            f" {callee_fn_type!r}"
+            f"compiler bug: indirect call callee has non-FunctionType node_type {callee_fn_type!r}"
         )
         arg_irs: list[IrExpr] = [
             self.lower_coerced(arg, callee_fn_type.params[i])
@@ -2328,10 +2310,7 @@ class _Lowerer:
             param_symbols=param_symbols,
             span=span,
         )
-        arg_slots = {
-            field_name: cast(IrExpr, slot)
-            for field_name, slot in zip(field_order, slots)
-        }
+        arg_slots = {field_name: cast(IrExpr, slot) for field_name, slot in zip(field_order, slots)}
         return self._lower_constructor_from_slots(
             result_type,
             owner_name,
@@ -2519,8 +2498,7 @@ class _Lowerer:
         else:
             resolved = self._checked.type_env.resolve_named_type(exc_type)
             assert isinstance(resolved, ExceptionType), (
-                f"compiler bug: catch clause type {exc_type!r} did not resolve "
-                "to an ExceptionType"
+                f"compiler bug: catch clause type {exc_type!r} did not resolve to an ExceptionType"
             )
             nominal = NominalId(resolved.module_id, resolved.name)
             display_name = resolved.name
@@ -2593,8 +2571,9 @@ class _Lowerer:
             case ConstructorPattern(name=variant_name):
                 field_plans: list[tuple[str, IrMatchPlan]] = [
                     (fname, self._compile_plan(sub_pat))
-                    for fname, sub_pat
-                    in self._checked.argument_bindings.constructor_patterns[pattern.node_id]
+                    for fname, sub_pat in self._checked.argument_bindings.constructor_patterns[
+                        pattern.node_id
+                    ]
                 ]
                 return IrConstructorPlan(
                     variant=variant_name,
@@ -2708,8 +2687,8 @@ class _Lowerer:
         spec = self._checked.contract_specs.get(call_node.node_id)
         assert spec is not None, "exec always has a contract spec after checking"
         structured_exec = spec.structured_exec
-        json_schema_str, fmt_instr, decode_schema, decode_defs = (
-            self._contract_payload_for_spec(call_node.node_id, spec)
+        json_schema_str, fmt_instr, decode_schema, decode_defs = self._contract_payload_for_spec(
+            call_node.node_id, spec
         )
         contract_req = ContractRequest(
             codec_name=spec.codec_name,
@@ -2749,8 +2728,11 @@ class _Lowerer:
                 callee_name = None
             if callee_name == "Retry":
                 n_val = next(
-                    (arg.value.value for arg in policy_expr.named_args
-                     if arg.name == "n" and isinstance(arg.value, IntLit)),
+                    (
+                        arg.value.value
+                        for arg in policy_expr.named_args
+                        if arg.name == "n" and isinstance(arg.value, IntLit)
+                    ),
                     0,
                 )
                 return 1 + n_val
@@ -2980,11 +2962,13 @@ class _Lowerer:
         steps: list[IrIndexStep] = []
         container_type = self._collect_index_steps_from_obj(target.obj, root_type, steps)
         kind = self._kind_for_container(container_type)
-        steps.append(IrIndexStep(
-            kind=kind,
-            index=self.lower_expr(target.index),
-            location=self._loc(target.span),
-        ))
+        steps.append(
+            IrIndexStep(
+                kind=kind,
+                index=self.lower_expr(target.index),
+                location=self._loc(target.span),
+            )
+        )
         slot_type = self._elem_type_for_container(container_type)
         ir_val = self.lower_coerced(rhs, slot_type)
         return IrAssign(
@@ -3022,11 +3006,13 @@ class _Lowerer:
         if isinstance(obj, IndexAccess):
             parent_type = self._collect_index_steps_from_obj(obj.obj, root_type, out)
             kind = self._kind_for_container(parent_type)
-            out.append(IrIndexStep(
-                kind=kind,
-                index=self.lower_expr(obj.index),
-                location=self._loc(obj.span),
-            ))
+            out.append(
+                IrIndexStep(
+                    kind=kind,
+                    index=self.lower_expr(obj.index),
+                    location=self._loc(obj.span),
+                )
+            )
             return self._elem_type_for_container(parent_type)
         raise AssertionError(  # pragma: no cover
             f"compiler bug: unexpected expr in indexed assignment path: {type(obj).__name__}"
@@ -3125,7 +3111,7 @@ class _Lowerer:
         _add_builtin_nominals(self._link.nominals, table)
 
     def lower(self) -> ExecutableProgram:
-        """Lower the checked program to an ``ExecutableProgram``."""
+        """Lower this validated program payload to an ``ExecutableProgram``."""
         self._build_nominals()
 
         body = self._checked.resolved.program.body
@@ -3196,16 +3182,16 @@ class _Lowerer:
 
 
 def lower_program(
-    checked: CheckedProgram,
+    compiled: MatchCompiledProgram,
     *,
     source_text: str,
     source_label: str,
     validate: bool = False,
     contract_payloads: Mapping[int, ContractPayload] | None = None,
 ) -> ExecutableProgram:
-    """Lower a single-module ``CheckedProgram`` to an ``ExecutableProgram``.
+    """Lower a single-module match-compiled artifact to an ``ExecutableProgram``.
 
-    :param checked: the type-checked program to lower.
+    :param compiled: the statically match-compiled program to lower.
     :param source_text: the normalised source text (used in the sources table).
     :param source_label: human-readable label for the source (display_name).
     :param validate: when ``True``, run ``validate_ir`` before returning.
@@ -3213,6 +3199,8 @@ def lower_program(
     :raises NotImplementedError: for unsupported AST nodes.
     :raises AssertionError: for missing checker side-table entries (compiler bugs).
     """
+    validate_match_compiled_program(compiled)
+    checked = compiled.checked
     link = _LinkState()
     source_id = SourceId(link.next_source)
     link.next_source += 1

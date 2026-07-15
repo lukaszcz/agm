@@ -84,14 +84,15 @@ case result of
 ```
 
 The scrutinee is evaluated once; patterns are tried in order; the first
-match's body runs in a fresh branch scope with the pattern's bindings; if
-nothing matches, `MatchError` is raised.
+match's body runs in a fresh branch scope with the pattern's bindings. The
+arms must cover every possible scrutinee value, and no arm may be fully
+covered by earlier arms; either violation is a static error.
 
 When all branches have a common type `T`, the `case` expression has type `T`.
 When used in a position where `|` would be ambiguous, a `case` expression
 must be parenthesized.
 
-Pattern forms, static checks, and the non-exhaustiveness warning are
+Pattern forms, exhaustiveness, and redundancy rules are
 described in [Pattern matching](pattern-matching.md).
 
 ### `case` as a value-producing expression

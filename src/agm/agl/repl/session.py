@@ -1,10 +1,11 @@
 """UI-free incremental session core for the AgL REPL (``ReplSession``).
 
 ``ReplSession`` keeps a **persistent incremental environment**: each entry is
-parsed → resolved → typechecked → evaluated **exactly once** against accumulated
-session state (symbols, types, declarations, runtime values).  Agent calls fire
-exactly once and are never replayed, because each entry executes ONLY its own
-statements — references to earlier bindings read stored runtime ``Value``s.
+parsed → resolved → typechecked → match-compiled → lowered → evaluated
+**exactly once** against accumulated session state (symbols, types,
+declarations, runtime values). Agent calls fire exactly once and are never
+replayed, because each entry executes ONLY its own statements — references to
+earlier bindings read stored runtime ``Value``s.
 
 The driver reproduces ``PipelineDriver.run``'s IR pipeline incrementally. A
 persistent link image and base frame retain IDs, metadata, closures, values, and
@@ -279,11 +280,11 @@ class ReplSession:
     # ------------------------------------------------------------------
 
     def eval_entry(self, text: str, *, check_only: bool = False) -> EntryResult:
-        """Parse → resolve → check → (eval) one entry against the session.
+        """Parse → resolve → typecheck → matchcompile → lower/eval one entry.
 
         Completed runtime initializers are promoted even when a later initializer
-        fails. ``check_only`` runs the static pipeline without linking, executing,
-        promoting, or advancing the node-id counter.
+        fails. ``check_only`` stops after match compilation without lowering,
+        executing, promoting, or advancing the node-id counter.
 
         REPL-only fallback: when the entry fails to evaluate as a program, the
         loop tries to read it as a bare type expression (e.g. ``int``, a declared
@@ -450,11 +451,11 @@ class ReplSession:
         return cgraph.modules[ENTRY_ID].type_env
 
     def _eval_entry_pipeline(self, text: str, *, check_only: bool = False) -> EntryResult:
-        """Parse → resolve → check → (eval) one entry against the session (core).
+        """Run the resolve → typecheck → matchcompile → lower/eval entry core.
 
         Completed runtime initializers are promoted even when a later initializer
-        fails. ``check_only`` runs the static pipeline without linking, executing,
-        promoting, or advancing the node-id counter.
+        fails. ``check_only`` stops after match compilation without lowering,
+        executing, promoting, or advancing the node-id counter.
         """
         from agm.agl.lexer import tab_warning_collector
         from agm.agl.parser import AglSyntaxError, parse_program_seeded
@@ -1031,10 +1032,11 @@ class ReplSession:
     def type_of(self, text: str) -> str:
         """Return the canonical display type of *text* as an expression entry.
 
-        Resolves against the session scope and checks against the session type
-        env WITHOUT evaluating, promoting, or advancing the node-id counter.
-        Raises the underlying ``AglSyntaxError``/``AglScopeError``/``AglTypeError``
-        on failure, or ``AglError`` if *text* is not a single expression.
+        Resolves against the session scope, typechecks against the session
+        environment, and match-compiles before reporting the type. It never
+        lowers, evaluates, promotes, or advances the node-id counter. Raises the
+        underlying ``AglSyntaxError``/``AglScopeError``/``AglTypeError`` on
+        failure, or ``AglError`` for match errors or a non-expression entry.
         """
         from agm.agl.parser import parse_program_seeded
         from agm.agl.scope import resolve
@@ -1061,6 +1063,12 @@ class ReplSession:
             ambient_agents=self._ambient_agents(host_env),
         )
         checked = check(resolved, host_env.capabilities, seed_env=self._type_env)
+        from agm.agl.matchcompile import compile_program_matches, diagnostics_from_match_issues
+
+        match_result = compile_program_matches(checked)
+        if match_result.compiled is None:
+            diagnostic = diagnostics_from_match_issues(match_result.issues)[0]
+            raise AglError(diagnostic.message)
         typ = checked.node_types.get(expr_item.node_id)
         assert typ is not None
         from agm.agl.repl.type_display import format_type_for_repl

@@ -3,6 +3,7 @@
 `Diagnostic` is the user-visible error record: a human-readable message and
 a 1-based source location.  `AglError` is the base class for all fatal pipeline
 errors raised *before* evaluation begins (lex, parse, scope, typecheck).
+Match-compilation failures use the same pre-execution diagnostic channel.
 
 ``SourceSpan`` is defined in ``agm.agl.syntax.spans`` and re-exported here
 for backward compatibility (the lexer and other callers use

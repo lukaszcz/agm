@@ -212,8 +212,8 @@ class TestStartupConfigCollection:
         rt = PipelineDriver()
         prepared = _prepare_graph(source)
         discovery = rt.discover_params_graph(prepared)
-        assert discovery.checked_graph is not None
-        executable = lower_graph(discovery.checked_graph, validate=True)
+        assert discovery.compiled_graph is not None
+        executable = lower_graph(discovery.compiled_graph, validate=True)
         return IrInterpreter(executable)
 
     def test_unresolved_prepared_graph_returns_diagnostic(self) -> None:
@@ -246,16 +246,16 @@ class TestStartupConfigCollection:
         assert not result.ok
         assert result.diagnostics
 
-    def test_startup_config_uses_provided_checked_graph(self) -> None:
+    def test_startup_config_uses_provided_compiled_graph(self) -> None:
         rt = PipelineDriver()
         prepared = _prepare_graph("config log = true\n")
         discovery = rt.discover_params_graph(prepared)
-        assert discovery.checked_graph is not None
+        assert discovery.compiled_graph is not None
 
         result = rt.collect_startup_config_graph(
             prepared,
             names={"log"},
-            checked_graph=discovery.checked_graph,
+            compiled_graph=discovery.compiled_graph,
         )
 
         assert result.ok

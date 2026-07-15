@@ -210,16 +210,16 @@ disable tracing entirely.
 | Code | Meaning |
 |------|---------|
 | `0` | The workflow completed successfully |
-| `1` | Pre-execution failure: unreadable file, static lex/parse/scope/typecheck diagnostics, host configuration error, or param validation failure |
+| `1` | Pre-execution failure: unreadable file, static language diagnostics (including invalid `case` coverage), host configuration error, or param validation failure |
 | `2` | The workflow executed but ended with an uncaught AgL exception |
 
 ### Diagnostics and warnings
 
-- Error-severity diagnostics (static lex/parse/scope/typecheck errors, host
-  configuration errors, param validation failures) and uncaught AgL exceptions are
+- Error-severity diagnostics (static language errors, including non-exhaustive or
+  redundant `case` arms, host configuration errors, param validation failures) and uncaught AgL exceptions are
   printed to stderr and determine the exit code per the table above.
-- Advisory **warnings** (for example a non-exhaustive `case` over an enum that omits
-  some variants) are a separate channel. They are printed to stderr with a `warning:`
+- Advisory **warnings** (for example an unused declared agent) are a separate
+  channel. They are printed to stderr with a `warning:`
   prefix (`warning: line N: message`) to disambiguate them from errors, and they never
   affect the exit code — the program still runs to completion. Program `print` output
   goes to stdout, kept clean of diagnostics.
@@ -234,7 +234,7 @@ agm repl [--strict-json|--no-strict-json]
 
 Start an interactive read-eval-print loop for AgL. Unlike `agm exec`, which runs a
 whole program from a fresh environment, the REPL keeps a **persistent session**: each
-entry is parsed, type-checked, and evaluated once against an environment that
+entry is parsed, statically checked (including pattern coverage), and evaluated once against an environment that
 accumulates bindings, types, and declarations across entries, so earlier results stay
 available and agent calls fire exactly once.
 
@@ -325,8 +325,8 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
   for `agm exec`. With `--log-file` each evaluated entry appends its JSONL trace records
   (one trace *run* per entry) to `PATH`. The three are mutually exclusive, and
   `--dry-run` writes no trace.
-- `--dry-run`: Type-check only. Each entry runs the full static pipeline (parse /
-  resolve / typecheck) but is **never evaluated**, so no agent or `exec` calls fire and
+- `--dry-run`: Statically check only. Each entry runs the full static pipeline (parse /
+  resolve / typecheck / match compilation) but is **never evaluated**, so no agent or `exec` calls fire and
   no bindings are persisted. The inferred type is echoed instead of a value
   (`name : Type` for a binding, `: Type` for a bare expression), making it a quick way
   to explore types interactively.

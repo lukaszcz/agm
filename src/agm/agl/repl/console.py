@@ -728,9 +728,9 @@ def run_console(
     rendered via :func:`agm.agl.repl.render.render_entry_result`.
 
     When *check_only* is set the REPL is in dry-run mode: each entry is run
-    through the full static pipeline (parse / resolve / typecheck) only — no
-    evaluation, no agent/exec calls, and no bindings are persisted — and its
-    inferred type is echoed.
+    through the full static pipeline (parse / resolve / typecheck / match
+    compilation) only — no evaluation, no agent/exec calls, and no bindings
+    are persisted — and its inferred type is echoed.
 
     *theme* selects the initial colour palette; *on_theme_save* is called with
     the new theme name whenever ``:theme`` switches the active theme (use it to

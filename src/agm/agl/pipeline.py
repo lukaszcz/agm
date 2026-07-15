@@ -1,6 +1,6 @@
 """PipelineDriver — top-of-stack orchestrator for the AgL execution pipeline.
 
-Drives the full ``parse → scope → typecheck → lower/link → IR eval`` pipeline:
+Drives the full ``parse → scope → typecheck → matchcompile → lower/link → IR eval`` pipeline:
 registers agents/codecs, validates host params, materializes output
 contracts, and executes the program (or stops after static checking for
 ``agm exec --dry-run``).  Structured outputs use the JSON codec with
@@ -18,7 +18,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, TypeVar
 
-from agm.agl.diagnostics import Diagnostic
+from agm.agl.diagnostics import Diagnostic, diagnostic_from_span
 from agm.agl.eval.ir_interpreter import IrInterpreter
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.params import _materialize_ir_contracts, _prepare_ir_params
@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from agm.agl.capabilities import HostCapabilities
     from agm.agl.ir.contracts import ContractPayload
     from agm.agl.ir.program import ExecutableProgram
+    from agm.agl.matchcompile import MatchCompiledModuleGraph, MatchCompiledProgram
     from agm.agl.modules.ids import ModuleId
     from agm.agl.modules.roots import RootSet
     from agm.agl.runtime.agents import AgentRegistry
@@ -51,6 +52,7 @@ if TYPE_CHECKING:
     from agm.agl.semantics.values import ExceptionValue, Value
     from agm.agl.syntax.nodes import AgentDecl as AgentDeclNode
     from agm.agl.syntax.nodes import Program
+    from agm.agl.syntax.spans import SourceSpan
     from agm.agl.typecheck.env import CheckedProgram as CheckedProgramType
     from agm.agl.typecheck.env import OutputContractSpec, TypeEnvironment
     from agm.agl.typecheck.graph import CheckedModuleGraph
@@ -72,6 +74,8 @@ class ParamDiscovery:
     warnings: tuple[Diagnostic, ...]
     checked_graph: "CheckedModuleGraph | None" = None
     configs: tuple[ConfigDeclInfo, ...] = ()
+    compiled: "MatchCompiledProgram | None" = None
+    compiled_graph: "MatchCompiledModuleGraph | None" = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,12 +246,12 @@ class RunResult:
         uncaught AgL exception.  ``warnings`` never affect ``ok``.
     ``diagnostics``
         Pre-execution FAILURES only: error-severity items from
-        lex/parse/scope/typecheck/param-validation.  Each entry has a
+        lex/parse/scope/typecheck/matchcompile/param-validation.  Each entry has a
         ``.message`` (str) and a ``.line`` (int, 1-based).  Warnings are a
         SEPARATE channel and NEVER appear here; on a successful run this list is
         empty.
     ``warnings``
-        Advisory warning-severity diagnostics (e.g. non-exhaustive ``case``)
+        Advisory warning-severity diagnostics (e.g. an unused declared agent)
         surfaced on EVERY path — success, static failure, param-validation
         failure, and uncaught exception.  Same ``Diagnostic`` type as
         ``diagnostics`` but with ``.severity == "warning"``.  Reported to the
@@ -289,6 +293,7 @@ class StartupConfigResult:
     warnings: list[Diagnostic] = field(default_factory=list)
     values: dict[str, Value] = field(default_factory=dict)
     checked_graph: "CheckedModuleGraph | None" = None
+    compiled_graph: "MatchCompiledModuleGraph | None" = None
 
 
 class PipelineDriver:
@@ -500,7 +505,12 @@ class PipelineDriver:
         return PipelineDriver.prepare(source).declared_agents
 
     def discover_params(self, prepared: PreparedProgram) -> ParamDiscovery:
-        """Typecheck-only discovery for typed ``param`` declarations."""
+        """Discover typed ``param`` declarations from a resolved program.
+
+        Runs typechecking and match compilation after :meth:`prepare` has
+        resolved the source. The successful artifact is returned for reuse by
+        :meth:`run_prepared`, avoiding repeated static passes before lowering.
+        """
         from agm.agl.syntax.nodes import ParamDecl
 
         if prepared.resolved is None:
@@ -514,13 +524,26 @@ class PipelineDriver:
 
         capabilities = self.host_environment().capabilities
         checked, tc_diagnostics = _run_typecheck(prepared.resolved, capabilities)
-        all_warnings = (*prepared.warnings, *(checked.warnings if checked is not None else ()))
+        all_warnings_list = list(prepared.warnings)
+        if checked is not None:
+            _append_checker_warnings(all_warnings_list, checked)
+        all_warnings = tuple(all_warnings_list)
         if checked is None:
             return ParamDiscovery(
                 params=(),
                 program_name=prepared.program_name,
                 checked=None,
                 diagnostics=tc_diagnostics,
+                warnings=all_warnings,
+            )
+
+        compiled, match_diagnostics = _run_matchcompile(checked)
+        if compiled is None:
+            return ParamDiscovery(
+                params=(),
+                program_name=prepared.program_name,
+                checked=checked,
+                diagnostics=match_diagnostics,
                 warnings=all_warnings,
             )
 
@@ -551,6 +574,7 @@ class PipelineDriver:
             diagnostics=(),
             warnings=all_warnings,
             configs=configs,
+            compiled=compiled,
         )
 
     def run(
@@ -564,8 +588,8 @@ class PipelineDriver:
         """Parse, analyse, and (unless ``check_only``) execute an AgL program.
 
         Pipeline:
-            parse → resolve → check (with HostCapabilities) →
-            validate params → materialize contracts → eval
+            parse → resolve → typecheck (with HostCapabilities) →
+            matchcompile → lower → validate params → materialize contracts → eval
 
         Convenience wrapper: ``run(source)`` is exactly
         ``run_prepared(prepare(source))``.  A host that needs the declared-agent
@@ -574,12 +598,12 @@ class PipelineDriver:
         once.
 
         When ``check_only`` is ``True`` (``agm exec --dry-run``) the runtime
-        runs the full static pipeline, param validation, and contract
-        materialization, then STOPS before executing any statement: a clean
-        program returns ``ok=True`` with no bindings and produces no program
-        output; static/param errors still return ``ok=False``.  On a clean
-        ``check_only`` run the 
-        ``RunResult.call_sites`` (printed by ``agm exec --dry-run``).
+        runs through match compilation and lowering, validates params, and
+        materializes contracts, then STOPS before executing any statement: a
+        clean program returns ``ok=True`` with no bindings and produces no
+        program output; static/param errors still return ``ok=False``. On a
+        clean ``check_only`` run, ``RunResult.call_sites`` contains the static
+        call inventory printed by ``agm exec --dry-run``.
 
         ``log_file`` is the path of the JSONL trace file to write.  When
         ``None`` (the default) no trace is written.  Dry-run (``check_only``)
@@ -601,15 +625,17 @@ class PipelineDriver:
         param_values: Mapping[str, object] | None = None,
         check_only: bool = False,
         log_file: "Path | None" = None,
-        checked: "CheckedProgramType | None" = None,
+        compiled: "MatchCompiledProgram | None" = None,
         config_cli: "Mapping[str, Value] | None" = None,
         config_base: "Mapping[str, Value] | None" = None,
     ) -> RunResult:
         """Execute an already parsed + scoped program (no re-parsing).
 
-        Resumes the pipeline at type checking: reconcile agents → check →
-        validate params → materialize contracts → eval.  See :meth:`run` for the
-        ``check_only`` / ``log_file`` semantics.  When *prepared* carries a
+        Resumes the pipeline at type checking: reconcile agents → typecheck →
+        matchcompile → lower → validate params → materialize contracts →
+        eval. A supplied ``compiled`` artifact reuses the exact prepared
+        program's typecheck and match-compilation results. See :meth:`run` for
+        the ``check_only`` / ``log_file`` semantics. When *prepared* carries a
         captured parse/scope failure (``resolved is None``), its diagnostics are
         surfaced unchanged and nothing executes.
         """
@@ -632,6 +658,24 @@ class PipelineDriver:
         program = prepared.program
         assert program is not None  # resolved set ⇒ parse succeeded
         source = prepared.source
+
+        if compiled is not None:
+            from agm.agl.modules.ids import ENTRY_ID
+
+            cache_diagnostic = _cached_artifact_provenance_diagnostic(
+                prepared_entry=ENTRY_ID,
+                prepared_modules={ENTRY_ID: resolved},
+                compiled_entry=ENTRY_ID,
+                compiled_modules={ENTRY_ID: compiled.checked.resolved},
+                span=program.span,
+            )
+            if cache_diagnostic is not None:
+                return RunResult(
+                    ok=False,
+                    diagnostics=[cache_diagnostic],
+                    error=None,
+                    warnings=warnings,
+                )
 
         # ----------------------------------------------------------------
         # Build the host environment (registry + capabilities + codecs +
@@ -662,7 +706,7 @@ class PipelineDriver:
         # ----------------------------------------------------------------
         # [3] Type checking
         # ----------------------------------------------------------------
-        if checked is None:
+        if compiled is None:
             checked, tc_diagnostics = _run_typecheck(resolved, capabilities)
             if checked is None:
                 return RunResult(
@@ -671,9 +715,20 @@ class PipelineDriver:
                     error=None,
                     warnings=warnings,
                 )
+        else:
+            checked = compiled.checked
 
-        # Collect warnings from typecheck.
-        warnings.extend(checked.warnings)
+        _append_checker_warnings(warnings, checked)
+
+        if compiled is None:
+            compiled, match_diagnostics = _run_matchcompile(checked)
+            if compiled is None:
+                return RunResult(
+                    ok=False,
+                    diagnostics=list(match_diagnostics),
+                    error=None,
+                    warnings=warnings,
+                )
 
         contract_payloads, contract_errors = _materialize_custom_contract_payloads(
             checked.contract_specs,
@@ -691,7 +746,7 @@ class PipelineDriver:
         from agm.agl.lower import lower_program
 
         executable = lower_program(
-            checked,
+            compiled,
             source_text=source,
             source_label="<entry>",
             validate=True,
@@ -932,11 +987,18 @@ class PipelineDriver:
             entry_source, entry_path, roots, resolved_graph, (), all_warnings, companion_paths
         )
 
-    def discover_params_graph(self, prepared: PreparedGraph) -> ParamDiscovery:
-        """Typecheck-only discovery for typed ``param`` declarations in a graph.
+    def discover_params_graph(
+        self,
+        prepared: PreparedGraph,
+        *,
+        compiled_graph: "MatchCompiledModuleGraph | None" = None,
+    ) -> ParamDiscovery:
+        """Discover typed ``param`` declarations from a resolved module graph.
 
-        Graph-mode analogue of :meth:`discover_params`.  Reads typed param
-        declarations from the entry module of *prepared.resolved_graph*.
+        Graph-mode analogue of :meth:`discover_params`. Runs typechecking and
+        match compilation, then reads the entry module. A supplied artifact is
+        reused; otherwise the successful artifact is returned for later
+        lowering by :meth:`run_prepared_graph`.
         """
         from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.syntax.nodes import ParamDecl
@@ -951,13 +1013,31 @@ class PipelineDriver:
                 checked_graph=None,
             )
 
-        capabilities = self.host_environment().capabilities
-        checked_graph, tc_diagnostics = _run_typecheck_graph(
-            prepared.resolved_graph, capabilities
-        )
+        if compiled_graph is not None:
+            cache_diagnostic = _cached_graph_artifact_provenance_diagnostic(
+                prepared.resolved_graph, compiled_graph
+            )
+            if cache_diagnostic is not None:
+                return ParamDiscovery(
+                    params=(),
+                    program_name=prepared.program_name,
+                    checked=None,
+                    diagnostics=(cache_diagnostic,),
+                    warnings=prepared.warnings,
+                    checked_graph=None,
+                )
+
+        if compiled_graph is None:
+            capabilities = self.host_environment().capabilities
+            checked_graph, tc_diagnostics = _run_typecheck_graph(
+                prepared.resolved_graph, capabilities
+            )
+        else:
+            checked_graph = compiled_graph.checked_graph
+            tc_diagnostics = ()
         all_warnings_list: list[Diagnostic] = list(prepared.warnings)
         if checked_graph is not None:
-            all_warnings_list.extend(checked_graph.warnings)
+            _append_checker_warnings(all_warnings_list, checked_graph)
         all_warnings = tuple(all_warnings_list)
 
         if checked_graph is None:
@@ -969,6 +1049,18 @@ class PipelineDriver:
                 warnings=all_warnings,
                 checked_graph=None,
             )
+
+        if compiled_graph is None:
+            compiled_graph, match_diagnostics = _run_matchcompile_graph(checked_graph)
+            if compiled_graph is None:
+                return ParamDiscovery(
+                    params=(),
+                    program_name=prepared.program_name,
+                    checked=None,
+                    diagnostics=match_diagnostics,
+                    warnings=all_warnings,
+                    checked_graph=checked_graph,
+                )
 
         entry_cm = checked_graph.modules.get(ENTRY_ID)
         if entry_cm is None:
@@ -1023,6 +1115,7 @@ class PipelineDriver:
             warnings=all_warnings,
             checked_graph=checked_graph,
             configs=configs,
+            compiled_graph=compiled_graph,
         )
 
     def collect_startup_config_graph(
@@ -1030,16 +1123,18 @@ class PipelineDriver:
         prepared: PreparedGraph,
         *,
         names: set[str],
-        checked_graph: "CheckedModuleGraph | None" = None,
+        compiled_graph: "MatchCompiledModuleGraph | None" = None,
         config_cli: "Mapping[str, Value] | None" = None,
         config_base: "Mapping[str, Value] | None" = None,
     ) -> StartupConfigResult:
         """Evaluate entry-module source config declarations needed at startup.
 
         ``runner``, ``log``, and ``log-file`` must be known before the normal
-        runtime creates its agent factory and trace sink.  This prepass reuses
-        the loaded graph, typechecks/lowers it once, and evaluates entry
-        initializers only until the requested config bindings are available.
+        runtime creates its agent factory and trace sink. This prepass reuses
+        the resolved graph, then typechecks, match-compiles, lowers, and
+        evaluates entry initializers only until the requested config bindings
+        are available. A supplied match-compiled artifact skips the repeated
+        static passes.
         """
         warnings: list[Diagnostic] = list(prepared.warnings)
 
@@ -1051,6 +1146,21 @@ class PipelineDriver:
                 warnings=warnings,
                 checked_graph=None,
             )
+
+        if compiled_graph is not None:
+            cache_diagnostic = _cached_graph_artifact_provenance_diagnostic(
+                prepared.resolved_graph, compiled_graph
+            )
+            if cache_diagnostic is not None:
+                return StartupConfigResult(
+                    ok=False,
+                    diagnostics=[cache_diagnostic],
+                    error=None,
+                    warnings=warnings,
+                    values={},
+                    checked_graph=None,
+                    compiled_graph=None,
+                )
 
         from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.syntax.nodes import ConfigDecl
@@ -1074,17 +1184,21 @@ class PipelineDriver:
                 error=None,
                 warnings=warnings,
                 values={},
-                checked_graph=checked_graph,
+                checked_graph=(
+                    compiled_graph.checked_graph if compiled_graph is not None else None
+                ),
+                compiled_graph=compiled_graph,
             )
 
         host_env = self.host_environment()
         capabilities = host_env.capabilities
-        if checked_graph is None:
+        if compiled_graph is None:
             checked_graph, tc_diagnostics = _run_typecheck_graph(
                 prepared.resolved_graph, capabilities
             )
         else:
             tc_diagnostics = ()
+            checked_graph = compiled_graph.checked_graph
         if checked_graph is None:
             return StartupConfigResult(
                 ok=False,
@@ -1094,7 +1208,18 @@ class PipelineDriver:
                 checked_graph=None,
             )
 
-        warnings.extend(checked_graph.warnings)
+        _append_checker_warnings(warnings, checked_graph)
+
+        if compiled_graph is None:
+            compiled_graph, match_diagnostics = _run_matchcompile_graph(checked_graph)
+            if compiled_graph is None:
+                return StartupConfigResult(
+                    ok=False,
+                    diagnostics=list(match_diagnostics),
+                    error=None,
+                    warnings=warnings,
+                    checked_graph=checked_graph,
+                )
 
         contract_payloads, contract_errors = _materialize_graph_custom_contract_payloads(
             checked_graph,
@@ -1107,6 +1232,7 @@ class PipelineDriver:
                 error=None,
                 warnings=warnings,
                 checked_graph=checked_graph,
+                compiled_graph=compiled_graph,
             )
 
         # Extern companions: import and resolve every declared extern up front,
@@ -1126,6 +1252,7 @@ class PipelineDriver:
                 error=None,
                 warnings=warnings,
                 checked_graph=checked_graph,
+                compiled_graph=compiled_graph,
             ),
         )
         if startup_failure is not None:
@@ -1135,7 +1262,7 @@ class PipelineDriver:
         from agm.agl.semantics.exceptions import AglRaise
 
         executable = lower_graph(
-            checked_graph,
+            compiled_graph,
             validate=True,
             contract_payloads=contract_payloads,
         )
@@ -1150,6 +1277,7 @@ class PipelineDriver:
                 error=None,
                 warnings=warnings,
                 checked_graph=checked_graph,
+                compiled_graph=compiled_graph,
             )
         interp = IrInterpreter(
             executable,
@@ -1172,6 +1300,7 @@ class PipelineDriver:
                 error=exception_value_to_run_error(exc.exc, span=exc.span),
                 warnings=warnings,
                 checked_graph=checked_graph,
+                compiled_graph=compiled_graph,
             )
         return StartupConfigResult(
             ok=True,
@@ -1180,6 +1309,7 @@ class PipelineDriver:
             warnings=warnings,
             values=values,
             checked_graph=checked_graph,
+            compiled_graph=compiled_graph,
         )
 
     def _wire_externs_or_fail(
@@ -1216,24 +1346,24 @@ class PipelineDriver:
         param_values: Mapping[str, object] | None = None,
         check_only: bool = False,
         log_file: "Path | None" = None,
-        checked_graph: "CheckedModuleGraph | None" = None,
+        compiled_graph: "MatchCompiledModuleGraph | None" = None,
         config_cli: "Mapping[str, Value] | None" = None,
         config_base: "Mapping[str, Value] | None" = None,
     ) -> RunResult:
         """Execute an already loaded + scoped module graph (no re-loading).
 
-        Graph-mode analogue of :meth:`run_prepared`.  Resumes the pipeline at
-        type checking: ``check_graph`` → ``lower_graph`` → ``IrInterpreter``.
-        Agents are entry-program-owned.
+        Graph-mode analogue of :meth:`run_prepared`. Resumes the pipeline at
+        type checking: ``check_graph`` → match compilation → ``lower_graph``
+        → ``IrInterpreter``. Agents are entry-program-owned.
 
         When *prepared* carries a load/scope failure (``resolved_graph is
         None``), its diagnostics are surfaced unchanged and nothing executes.
 
-        ``checked_graph``
-            When the caller has already type-checked the graph (e.g. via
-            :meth:`discover_params_graph`), pass the result here to skip the
-            second redundant ``check_graph`` call.  ``None`` (the default)
-            runs type checking here as before.
+        ``compiled_graph``
+            When the caller has already typechecked and match-compiled the graph
+            (for example via :meth:`discover_params_graph`), pass the result
+            here to skip those static passes. ``None`` runs them here. Both
+            paths still lower before the check-only stop or evaluation.
         """
         if param_values is None:
             param_values = {}
@@ -1249,6 +1379,18 @@ class PipelineDriver:
             )
         resolved_graph = prepared.resolved_graph
 
+        if compiled_graph is not None:
+            cache_diagnostic = _cached_graph_artifact_provenance_diagnostic(
+                resolved_graph, compiled_graph
+            )
+            if cache_diagnostic is not None:
+                return RunResult(
+                    ok=False,
+                    diagnostics=[cache_diagnostic],
+                    error=None,
+                    warnings=warnings,
+                )
+
         host_env = self.host_environment()
         registry = host_env.registry
         capabilities = host_env.capabilities
@@ -1263,12 +1405,13 @@ class PipelineDriver:
                 warnings=list(warnings),
             )
 
-        # Type checking — skip if the caller already has a checked graph
-        # (e.g. from discover_params_graph) to avoid running check_graph twice.
-        if checked_graph is None:
+        # Reuse a supplied match-compiled graph rather than repeating its
+        # typecheck and match-compilation passes.
+        if compiled_graph is None:
             checked_graph, tc_diagnostics = _run_typecheck_graph(resolved_graph, capabilities)
         else:
             tc_diagnostics = ()
+            checked_graph = compiled_graph.checked_graph
         if checked_graph is None:
             return RunResult(
                 ok=False,
@@ -1277,7 +1420,17 @@ class PipelineDriver:
                 warnings=warnings,
             )
 
-        warnings.extend(checked_graph.warnings)
+        _append_checker_warnings(warnings, checked_graph)
+
+        if compiled_graph is None:
+            compiled_graph, match_diagnostics = _run_matchcompile_graph(checked_graph)
+            if compiled_graph is None:
+                return RunResult(
+                    ok=False,
+                    diagnostics=list(match_diagnostics),
+                    error=None,
+                    warnings=warnings,
+                )
 
         contract_payloads, contract_errors = _materialize_graph_custom_contract_payloads(
             checked_graph,
@@ -1315,7 +1468,7 @@ class PipelineDriver:
         from agm.agl.lower import lower_graph
 
         executable = lower_graph(
-            checked_graph,
+            compiled_graph,
             validate=True,
             contract_payloads=contract_payloads,
         )
@@ -1412,6 +1565,64 @@ class PipelineDriver:
 # ---------------------------------------------------------------------------
 
 
+def _append_checker_warnings(
+    warnings: list[Diagnostic],
+    checked: "CheckedProgramType | CheckedModuleGraph",
+) -> None:
+    """Append one checked artifact's warnings at the typecheck phase boundary."""
+    warnings.extend(checked.warnings)
+
+
+def _cached_artifact_provenance_diagnostic(
+    *,
+    prepared_entry: "ModuleId",
+    prepared_modules: "Mapping[ModuleId, ResolvedProgram]",
+    compiled_entry: "ModuleId",
+    compiled_modules: "Mapping[ModuleId, ResolvedProgram]",
+    span: "SourceSpan | None",
+) -> Diagnostic | None:
+    """Reject a cached artifact unless it wraps the exact prepared resolutions.
+
+    Object identity is the provenance contract: structurally equal programs
+    prepared in separate passes are not interchangeable compiler inputs.
+    """
+    same_provenance = (
+        prepared_entry == compiled_entry
+        and prepared_modules.keys() == compiled_modules.keys()
+        and all(
+            compiled_modules[module_id] is prepared_resolved
+            for module_id, prepared_resolved in prepared_modules.items()
+        )
+    )
+    if same_provenance:
+        return None
+    message = "Cached match-compilation artifact does not belong to the prepared source."
+    if span is None:
+        return Diagnostic(message=message, line=1)
+    return diagnostic_from_span(message, span)
+
+
+def _cached_graph_artifact_provenance_diagnostic(
+    resolved_graph: "ResolvedModuleGraph",
+    compiled_graph: "MatchCompiledModuleGraph",
+) -> Diagnostic | None:
+    """Adapt graph artifacts to the shared cached-provenance validator."""
+    entry_module = resolved_graph.modules.get(resolved_graph.entry_id)
+    return _cached_artifact_provenance_diagnostic(
+        prepared_entry=resolved_graph.entry_id,
+        prepared_modules={
+            module_id: module.resolved
+            for module_id, module in resolved_graph.modules.items()
+        },
+        compiled_entry=compiled_graph.checked_graph.entry_id,
+        compiled_modules={
+            module_id: module.resolved
+            for module_id, module in compiled_graph.checked_graph.modules.items()
+        },
+        span=entry_module.resolved.program.span if entry_module is not None else None,
+    )
+
+
 def _run_typecheck_graph(
     resolved_graph: "ResolvedModuleGraph",
     capabilities: "HostCapabilities",
@@ -1426,6 +1637,27 @@ def _run_typecheck_graph(
         return None, (exc.to_diagnostic(),)
     except Exception as exc:
         return None, (Diagnostic(message=f"Type error: {exc}", line=1),)
+
+
+def _run_matchcompile_graph(
+    checked_graph: "CheckedModuleGraph",
+) -> "tuple[MatchCompiledModuleGraph | None, tuple[Diagnostic, ...]]":
+    """Run whole-graph match compilation without raising."""
+    from agm.agl.matchcompile import (
+        MatchCompiledModuleGraph,
+        compile_graph_matches,
+        diagnostics_from_match_issues,
+    )
+
+    try:
+        result = compile_graph_matches(checked_graph)
+        if result.compiled is None:
+            return None, diagnostics_from_match_issues(result.issues)
+        if not isinstance(result.compiled, MatchCompiledModuleGraph):
+            raise TypeError("graph match compilation returned a single-program artifact")
+        return result.compiled, ()
+    except Exception as exc:
+        return None, (Diagnostic(message=f"Match compilation error: {exc}", line=1),)
 
 
 def static_config_values(program: "Program") -> dict[str, bool | int | str]:
@@ -1550,6 +1782,27 @@ def _run_typecheck(
         return None, (exc.to_diagnostic(),)
     except Exception as exc:
         return None, (Diagnostic(message=f"Type error: {exc}", line=1),)
+
+
+def _run_matchcompile(
+    checked: "CheckedProgramType",
+) -> "tuple[MatchCompiledProgram | None, tuple[Diagnostic, ...]]":
+    """Run single-program match compilation without raising."""
+    from agm.agl.matchcompile import (
+        MatchCompiledProgram,
+        compile_program_matches,
+        diagnostics_from_match_issues,
+    )
+
+    try:
+        result = compile_program_matches(checked)
+        if result.compiled is None:
+            return None, diagnostics_from_match_issues(result.issues)
+        if not isinstance(result.compiled, MatchCompiledProgram):
+            raise TypeError("single match compilation returned a graph artifact")
+        return result.compiled, ()
+    except Exception as exc:
+        return None, (Diagnostic(message=f"Match compilation error: {exc}", line=1),)
 
 
 def _extern_declaration_sort_key(pair: "tuple[ModuleId, str]") -> "tuple[tuple[str, ...], str]":

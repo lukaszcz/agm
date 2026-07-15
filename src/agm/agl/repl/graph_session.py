@@ -1,9 +1,10 @@
 """Multi-module REPL graph-mode pipeline collaborator.
 
-Implements the build_repl_graph → resolve_graph → check_graph → incremental
-link/exec pipeline for REPL entries that contain import declarations or have
-cached library modules from prior entries.  Driven by ``ReplSession`` via the
-narrow ``GraphSessionCtx`` Protocol.  Must NOT import ``session`` (no cycle).
+Implements the build_repl_graph → resolve_graph → check_graph → match
+compilation → incremental link/exec pipeline for REPL entries that contain
+import declarations or have cached library modules from prior entries. Driven
+by ``ReplSession`` via the narrow ``GraphSessionCtx`` Protocol. Must NOT import
+``session`` (no cycle).
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ if TYPE_CHECKING:
     from agm.agl.ir.ids import Location, NominalId
     from agm.agl.ir.program import NominalDescriptor
     from agm.agl.lower import LinkImage
+    from agm.agl.matchcompile import MatchCompiledModuleGraph
     from agm.agl.modules.ids import ModuleId
     from agm.agl.modules.loader import LoadedModule
     from agm.agl.modules.roots import RootSet
@@ -132,8 +134,8 @@ class GraphSession:
         """Graph-mode pipeline for REPL entries that have imports or cached lib modules.
 
         Builds the module graph from the already-parsed *pipeline_program*, runs
-        the full scope/typecheck pass with the session context, then evaluates
-        or returns a check-only result.
+        the full scope/typecheck/match-compilation passes with the session
+        context, then returns a check-only result or lowers and evaluates.
         """
         from agm.agl.modules.errors import (
             AmbiguousModule,
@@ -205,6 +207,18 @@ class GraphSession:
             *cgraph.warnings,
         ]
 
+        from agm.agl.matchcompile import compile_graph_matches, diagnostics_from_match_issues
+
+        match_result = compile_graph_matches(cgraph)
+        if match_result.compiled is None:
+            return self._ctx._fail(
+                list(diagnostics_from_match_issues(match_result.issues)), warnings
+            )
+        compiled_graph = match_result.compiled
+        from agm.agl.matchcompile import MatchCompiledModuleGraph
+
+        assert isinstance(compiled_graph, MatchCompiledModuleGraph)
+
         checked = self._checked_program_from_module(entry_cm)
         if check_only:
             return self._ctx._build_check_only_result(orig_program, checked, warnings)
@@ -230,6 +244,7 @@ class GraphSession:
             checked=checked,
             entry_cm=entry_cm,
             cgraph=cgraph,
+            compiled_graph=compiled_graph,
             host_env=host_env,
             warnings=warnings,
             new_next_id=new_next_id,
@@ -304,6 +319,7 @@ class GraphSession:
         checked: CheckedProgram,
         entry_cm: CheckedModule,
         cgraph: CheckedModuleGraph,
+        compiled_graph: MatchCompiledModuleGraph,
         host_env: HostEnvironment,
         warnings: list[Diagnostic],
         new_next_id: int,
@@ -343,7 +359,7 @@ class GraphSession:
 
         nominal_snapshot = self._ctx._link_image.snapshot_nominals()
         lowered = lower_repl_graph(
-            cgraph,
+            compiled_graph,
             image=self._ctx._link_image,
             source_text=text,
             validate=True,

@@ -55,7 +55,7 @@ from agm.agl.semantics.values import (
     UnitValue,
 )
 from agm.agl.typecheck import AglTypeError
-from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises
+from tests.agl.ir_harness import _compiled_checked, evaluate_ir, evaluate_ir_raises
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -540,7 +540,7 @@ def _lower(source: str) -> object:
     resolved = resolve(prog)
     checked = check(resolved, caps)
     return lower_program(
-        checked,
+        _compiled_checked(checked),
         source_text=source,
         source_label="<test>",
         validate=True,

@@ -12,7 +12,7 @@ AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-c
 - **Command layer** — one module per command/command-group; each orchestrates domain logic but holds little of its own.
 - **Domain layer** — project/workspace layout, git integration, sandboxing, tmux, configuration, and agent invocation.
 - **Primitive layer** — process execution, environment handling, filesystem and TOML I/O, and a cross-cutting dry-run facility, plus pure generic utility helpers.
-- **AgL subsystem** — a complete language implementation (lexer → parser → AST → scope → typecheck → lower → IR eval) plus its host runtime, lazily imported so non-AgL commands stay fast to start.
+- **AgL subsystem** — a complete language implementation (lexer → parser → AST → scope → typecheck → match compilation → lower → IR eval) plus its host runtime, lazily imported so non-AgL commands stay fast to start.
 
 ## Architecture and Design Decisions
 

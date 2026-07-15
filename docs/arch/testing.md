@@ -4,7 +4,7 @@ The test suite mirrors the architecture: the AgL pipeline is tested pass by pass
 
 ## Strategy
 
-- **AgL passes** are tested individually — lexer, parser, AST, scope, typecheck, lowering, IR, and evaluator each have their own suites — plus end-to-end acceptance suites that run whole programs.
+- **AgL passes** are tested individually — lexer, parser, AST, scope, typecheck, match compilation, lowering, IR, and evaluator each have their own suites — plus end-to-end acceptance suites that run whole programs.
 - **Commands** are tested at the CLI boundary, exercising user workflows rather than internal call sequences.
 - **Domain and primitives** (project layout, git, config, process/env) have unit tests for their behavior and edge cases.
 

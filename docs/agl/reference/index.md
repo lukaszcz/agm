@@ -29,7 +29,8 @@ oriented orchestration language whose core ideas are:
   `:=` updates; equality is `==`, while a single `=` is a binder and
   named-argument separator, never assignment.
 - **Failures are exceptions.** Parse failures, cast failures, loop exhaustion,
-  match failures, recursion depth, and shell errors are typed, catchable exceptions.
+  explicitly raised match errors, recursion depth, and shell errors are typed,
+  catchable exceptions.
 - **Blocks use indentation**, with deterministic inline forms for one-liner
   workflows.
 
@@ -106,12 +107,11 @@ fixed by the language.
 
 AgL distinguishes three failure layers:
 
-1. **Static errors** — syntax, scope, and type errors. A program with a
-   static error never executes any expression and never calls any agent.
-   Static checking stops at the first error.
-2. **Static warnings** — advisory diagnostics (for example, a non-exhaustive
-   `case` over an enum, or `on_parse_error` on a `text` target). Warnings
-   never prevent execution.
+1. **Static errors** — syntax, scope, type, case-exhaustiveness, and
+   case-redundancy errors. A program with a static error never executes any
+   expression and never calls any agent.
+2. **Static warnings** — advisory diagnostics such as `on_parse_error` on a
+   `text` target. Warnings never prevent execution.
 3. **Runtime exceptions** — typed, catchable in-language values such as
    `AgentParseError`, `MaxIterationsExceeded`, or `RecursionError`. Uncaught
    exceptions terminate the program. See [Exceptions](exceptions.md).

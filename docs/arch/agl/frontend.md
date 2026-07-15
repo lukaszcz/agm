@@ -1,6 +1,6 @@
 # AgL Frontend
 
-The frontend turns source text into a fully resolved, type-checked program. It is four passes — lexer, parser, scope, typecheck — over one shared AST. Everything here is static: no agent calls, no shell execution, no evaluation. See [index.md](index.md) for how the frontend sits in the overall pipeline.
+The frontend turns source text into a fully resolved, type-checked, match-compiled program. It is five passes — lexer, parser, scope, typecheck, match compilation — over one shared AST and immutable side-table artifacts. Everything here is static: no agent calls, no shell execution, no evaluation. See [index.md](index.md) for how the frontend sits in the overall pipeline.
 
 ## Lexer and Parser
 
@@ -28,7 +28,7 @@ Agents must be declared in source; the scope pass binds each declared agent as a
 
 The semantic type model lives in the `semantics` foundation package and is consumed by the typecheck pass. Alongside the ordinary scalar, container, record, and enum types it carries the types the expression-oriented design needs: a unit type for side-effecting expressions, a positional function type, an opaque agent type, a bottom type for `raise`, and rigid type variables for generics. `RecordType`/`EnumType`/`ExceptionType` are lightweight handles — `(module_id, name, type_args)` for records/enums, `(module_id, name)` for exceptions (never generic) — carrying no field/variant data of their own; nominal identity is by name and owning module (in graph mode), not by structure, and is exactly the handle's identity tuple.
 
-`semantics/type_table.py` holds a `TypeTable`: a registry of `TypeDef`s (a declaration's type parameters and field/variant type templates, plus `abstract`/`base` metadata for exceptions) keyed by `(module_id, name)` — the sole source of record/enum field/variant shapes and exception field/hierarchy shapes. The type builder registers a `TypeDef` for every user-declared record, enum, and exception as its body is resolved, and a module graph's per-module environments share one instance. An exception's `TypeDef.fields` holds only its own fields; `TypeTable.exception_fields` flattens the `extends` base chain on demand (memoized). Built-in prelude and exception shapes (`ExecResult`, `ParsePolicy`, `OutputContract`, `OutputContractOption`, `AgentRequest`, the generic `Option`, and every built-in exception) are explicit `TypeDef` literals in the same module, the single definition shared by table seeding, builtin-shape validation, and scope-pass constructor-candidate seeding. Because handles carry no shape, every field/variant type — the typecheck pass (member access, enum pattern typing and exhaustiveness, constructor checking), the table-aware `comparable_types` it also hosts, compile-time schema derivation (`type_schema.py`), and lowering (constructor construction, nominal descriptors, coercions, conversions) — is looked up through the table by handle.
+`semantics/type_table.py` holds a `TypeTable`: a registry of `TypeDef`s (a declaration's type parameters and field/variant type templates, plus `abstract`/`base` metadata for exceptions) keyed by `(module_id, name)` — the sole source of record/enum field/variant shapes and exception field/hierarchy shapes. The type builder registers a `TypeDef` for every user-declared record, enum, and exception as its body is resolved, and a module graph's per-module environments share one instance. An exception's `TypeDef.fields` holds only its own fields; `TypeTable.exception_fields` flattens the `extends` base chain on demand (memoized). Built-in prelude and exception shapes (`ExecResult`, `ParsePolicy`, `OutputContract`, `OutputContractOption`, `AgentRequest`, the generic `Option`, and every built-in exception) are explicit `TypeDef` literals in the same module, the single definition shared by table seeding, builtin-shape validation, and scope-pass constructor-candidate seeding. Because handles carry no shape, every field/variant type — the typecheck pass (member access, enum pattern typing, constructor checking), match compilation (closed signatures and exhaustiveness), the table-aware `comparable_types` it also hosts, compile-time schema derivation (`type_schema.py`), and lowering (constructor construction, nominal descriptors, coercions, conversions) — is looked up through the table by handle.
 
 Recursive record/enum/exception declarations (same-module, mutual, generic, and cross-module) are legal, with no uniformity restriction on a generic self-reference's argument (polymorphic recursion — a declaration may reference itself at a different, larger argument, e.g. `Perfect[T]` referencing `Perfect[Pair[T, T]]`). Because handles resolve regardless of build order, nothing in nominal body resolution needs the declaration graph to be acyclic; graph mode resolves transparent aliases lazily because aliases have no nominal handle shell, while alias cycles remain illegal. Once every declaration's body is resolved, `semantics/analyses.py` runs a least-fixpoint **inhabitation** check over the whole `TypeTable` — treating `list`/`dict` fields and type variables as always-inhabited "guards", and treating abstract exception roots as inhabited only through constructible descendants — and rejects the first declaration that can never produce a finite value (checked in source order for a single module, and by sorted key for a module graph's whole-graph pre-pass). The same module also replaces the old recursive comparability walk: `TypeTable.has_no_value_equality` (behind `comparable_types`) consults a declaration-level "no equality" flag plus per-declaration "equality-relevant parameters", both precomputed by the same style of fixpoint and cached on the table (invalidated on any registration change), so a cyclic declaration graph never causes unbounded recursion when checking `=`/`!=`.
 
@@ -83,8 +83,23 @@ generic instantiations can select different valid aliases; transformed, reordere
 arguments use the same exact one-sided matcher. Candidate
 collection never expands a concrete instantiation closure, while declaration shapes continue to be
 resolved lazily through the checked `TypeTable`, keeping polymorphic recursion finite. Witness
-rendering remains separate from semantic enum identity and the closed witness data model. Artifact totality and
-pipeline diagnostic adaptation belong to the following match-compilation stage boundary. The
+rendering remains separate from semantic enum identity and the closed witness data model.
+
+Whole-program entry points walk every nested source `Case` exactly once after checking, including
+cases in every reachable module. They return either a frozen `MatchCompiledProgram` /
+`MatchCompiledModuleGraph` with a total immutable case mapping, or all structured non-exhaustive and
+redundant-arm issues sorted by source location. Issue adaptation at the package boundary produces
+ordinary error diagnostics, and no artifact is constructed on failure. Artifact validation is a
+semantic trust boundary: it binds every normalized case back to the exact checked source, verifies
+the complete occurrence ledger and identity-aware DAG interfaces, and replays the compiler rules
+from the canonical root matrix to prove each stored switch, edge, default, and leaf implements its
+exact specialized state. It then recomputes reachable actions and failure-derived issues without
+constructing a second decision DAG. It also checks module and exact checked-program ownership.
+Lowering accepts only these successful artifacts; parameter discovery, startup config, dry-run, execution,
+and REPL checks cache and reuse them rather than re-running match compilation. Pipeline cache
+consumers accept an artifact only when its checked program wraps the exact resolved object from the
+prepared source; graph caches additionally require the exact entry, module set, and resolved object
+for every module. The
 package may consume syntax, scope, semantic, and typecheck data, but dependency contracts prevent it
 from importing lowering, IR, evaluation, or runtime services.
 
@@ -98,6 +113,6 @@ An `extern def` (Python FFI) shares the `builtin def` signature path end to end 
 - `src/agm/agl/scope/` — name resolution and the resolved-program side tables.
 - `src/agm/agl/typecheck/` — type checking, built-in typing rules, casts, and generics.
 - `src/agm/agl/matchcompile/` — checked-pattern normalization, matrix decomposition / selection,
-  and the compiler-private decision model.
+  decision compilation, whole-program artifacts, and static diagnostic adaptation.
 - `src/agm/agl/semantics/` — the shared value model, semantic types, and exceptions.
 - Tests: `tests/test_agl_lexer.py`, `tests/test_agl_parser.py`, `tests/test_agl_ast.py`, `tests/test_agl_scope.py`, `tests/test_agl_typecheck.py`, `tests/test_agl_types.py`.

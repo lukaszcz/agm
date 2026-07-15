@@ -512,8 +512,8 @@ let next: text = case action of
 ```
 
 All branch result types must agree after `int → decimal` widening. An outer
-expected type propagates into every branch. If no pattern matches,
-`MatchError` is raised.
+expected type propagates into every branch. The patterns must be exhaustive
+and non-redundant, as described in [Pattern matching](pattern-matching.md).
 
 A `case` expression is the loosest expression form: in positions where a
 following `|` could be ambiguous (branch bodies, `if`/`until` conditions) it

@@ -532,15 +532,10 @@ class TestExecCommandEdgePaths:
         captured = capsys.readouterr()
         assert "error:" in captured.err
 
-    def test_non_exhaustive_case_warns_but_exits_0(
+    def test_non_exhaustive_case_errors_and_exits_1(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """a non-exhaustive enum ``case`` is a warning, not an error.
-
-        The program still runs to completion: exit 0 (``run`` returns ``None``),
-        with the exhaustiveness warning printed to stderr and program output on
-        stdout.
-        """
+        """A non-exhaustive enum ``case`` fails statically before execution."""
         agl_file = tmp_path / "test.agl"
         agl_file.write_text(
             "enum R\n"
@@ -551,13 +546,12 @@ class TestExecCommandEdgePaths:
             '  | Pass() => print "passed"\n'
         )
 
-        assert exec_command.run(_exec_args(agl_file)) is None
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args(agl_file))
+        assert exc_info.value.code == 1
         captured = capsys.readouterr()
-        # The matched branch ran (no MatchError, since the value is Pass).
-        assert captured.out == "passed\n"
-        # The exhaustiveness warning names the missing variant on stderr, with a
-        # ``warning:`` prefix to disambiguate from errors.
-        assert "warning:" in captured.err
+        assert captured.out == ""
+        assert "error:" in captured.err
         assert "Non-exhaustive" in captured.err
         assert "Fail" in captured.err
 
@@ -639,7 +633,7 @@ class TestExecCommandWarnings:
         agl_file.write_text("let x = 1\n")
 
         warning = Diagnostic(
-            message="case is non-exhaustive",
+            message="declared agent 'reviewer' is unused",
             line=7,
             column=3,
             end_line=7,
@@ -664,7 +658,7 @@ class TestExecCommandWarnings:
         # ok=True even with a warning: returns normally (exit 0).
         assert exec_command.run(_exec_args(agl_file)) is None
         captured = capsys.readouterr()
-        assert f"{agl_file}:7:3-7: warning: case is non-exhaustive" in captured.err
+        assert f"{agl_file}:7:3-7: warning: declared agent 'reviewer' is unused" in captured.err
 
     def test_error_diagnostic_still_exits_1(
         self,
@@ -1025,6 +1019,41 @@ class TestExecCommandExitCodes:
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(args)
         assert exc_info.value.code == 1
+
+    def test_dry_run_unreachable_match_error_exits_1_before_execution(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from agm.cli_support.args import ExecArgs
+        from agm.core import dry_run
+
+        monkeypatch.setattr(dry_run, "_ENABLED", True)
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "def dormant(x: bool) -> int =\n"
+            "  case x of\n"
+            "    | true => 1\n"
+            'print "unreachable"\n'
+        )
+        args = ExecArgs(
+            file=str(agl_file),
+            param_tokens=[],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=False,
+            log_file=None,
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(args)
+
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert ": error:" in captured.err
 
     def test_static_error_exits_1_not_2(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"
@@ -2426,7 +2455,7 @@ class TestExecStartupConfigPrepass:
             prepared: object,
             *,
             names: set[str],
-            checked_graph: object = None,
+            compiled_graph: object = None,
             config_cli: object = None,
             config_base: object = None,
         ) -> StartupConfigResult:
@@ -2463,7 +2492,7 @@ class TestExecStartupConfigPrepass:
             prepared: object,
             *,
             names: set[str],
-            checked_graph: object = None,
+            compiled_graph: object = None,
             config_cli: object = None,
             config_base: object = None,
         ) -> StartupConfigResult:
@@ -3529,10 +3558,10 @@ class TestConfigBaseOptionKeys:
         """Patch PipelineDriver.run_prepared_graph to capture the config_base kwarg."""
         from collections.abc import Mapping
 
+        from agm.agl.matchcompile import MatchCompiledModuleGraph
         from agm.agl.pipeline import PipelineDriver as RealRuntime
         from agm.agl.pipeline import PreparedGraph, RunResult
         from agm.agl.semantics.values import Value
-        from agm.agl.typecheck.graph import CheckedModuleGraph
 
         captured: dict[str, object] = {}
 
@@ -3544,7 +3573,7 @@ class TestConfigBaseOptionKeys:
                 param_values: Mapping[str, object] | None = None,
                 check_only: bool = False,
                 log_file: Path | None = None,
-                checked_graph: CheckedModuleGraph | None = None,
+                compiled_graph: MatchCompiledModuleGraph | None = None,
                 config_cli: Mapping[str, Value] | None = None,
                 config_base: Mapping[str, Value] | None = None,
             ) -> RunResult:
@@ -3555,7 +3584,7 @@ class TestConfigBaseOptionKeys:
                     param_values=param_values,
                     check_only=check_only,
                     log_file=log_file,
-                    checked_graph=checked_graph,
+                    compiled_graph=compiled_graph,
                     config_cli=config_cli,
                     config_base=config_base,
                 )
@@ -3699,10 +3728,10 @@ class TestRawStringRoundTrip:
     ) -> dict[str, object]:
         from collections.abc import Mapping
 
+        from agm.agl.matchcompile import MatchCompiledModuleGraph
         from agm.agl.pipeline import PipelineDriver as RealRuntime
         from agm.agl.pipeline import PreparedGraph, RunResult
         from agm.agl.semantics.values import Value
-        from agm.agl.typecheck.graph import CheckedModuleGraph
 
         captured: dict[str, object] = {}
 
@@ -3714,7 +3743,7 @@ class TestRawStringRoundTrip:
                 param_values: Mapping[str, object] | None = None,
                 check_only: bool = False,
                 log_file: Path | None = None,
-                checked_graph: CheckedModuleGraph | None = None,
+                compiled_graph: MatchCompiledModuleGraph | None = None,
                 config_cli: Mapping[str, Value] | None = None,
                 config_base: Mapping[str, Value] | None = None,
             ) -> RunResult:
@@ -3724,7 +3753,7 @@ class TestRawStringRoundTrip:
                     param_values=param_values,
                     check_only=check_only,
                     log_file=log_file,
-                    checked_graph=checked_graph,
+                    compiled_graph=compiled_graph,
                     config_cli=config_cli,
                     config_base=config_base,
                 )
@@ -3813,10 +3842,10 @@ class TestF1StemVsProgramNameBug:
         """
         from collections.abc import Mapping
 
+        from agm.agl.matchcompile import MatchCompiledModuleGraph
         from agm.agl.pipeline import PipelineDriver as RealRuntime
         from agm.agl.pipeline import PreparedGraph, RunResult
         from agm.agl.semantics.values import EnumValue, TextValue, Value
-        from agm.agl.typecheck.graph import CheckedModuleGraph
         from agm.config.context import ConfigContext
 
         home = tmp_path / "home"
@@ -3845,7 +3874,7 @@ class TestF1StemVsProgramNameBug:
                 param_values: Mapping[str, object] | None = None,
                 check_only: bool = False,
                 log_file: Path | None = None,
-                checked_graph: CheckedModuleGraph | None = None,
+                compiled_graph: MatchCompiledModuleGraph | None = None,
                 config_cli: Mapping[str, Value] | None = None,
                 config_base: Mapping[str, Value] | None = None,
             ) -> RunResult:
@@ -3856,7 +3885,7 @@ class TestF1StemVsProgramNameBug:
                     param_values=param_values,
                     check_only=check_only,
                     log_file=log_file,
-                    checked_graph=checked_graph,
+                    compiled_graph=compiled_graph,
                     config_cli=config_cli,
                     config_base=config_base,
                 )

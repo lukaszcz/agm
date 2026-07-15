@@ -10,6 +10,7 @@ import pytest
 
 from agm.core.process import ProcessCaptureResult
 from tests.agl.ir_harness import (
+    _compiled_checked,
     evaluate_ir_raises_with_shell,
     evaluate_ir_with_shell,
     shell_caps,
@@ -257,7 +258,7 @@ def test_t10_golden_lowering() -> None:
     resolved = resolve(program)
     checked = check(resolved, caps)
     executable = lower_program(
-        checked,
+        _compiled_checked(checked),
         source_text=source,
         source_label="<test>",
         validate=True,

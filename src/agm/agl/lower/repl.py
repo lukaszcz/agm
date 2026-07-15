@@ -10,10 +10,13 @@ from agm.agl.ir.ids import NominalId, SourceId, SymbolId
 from agm.agl.ir.program import ExecutableProgram, NominalDescriptor, SourceFile
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.lowerer import _LinkState, _Lowerer
+from agm.agl.matchcompile import (
+    MatchCompiledModuleGraph,
+    MatchCompiledProgram,
+    validate_match_compiled_program,
+)
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.syntax.nodes import Binder, Declaration
-from agm.agl.typecheck.env import CheckedProgram
-from agm.agl.typecheck.graph import CheckedModuleGraph
 from agm.util.text import normalize_newlines
 
 __all__ = ["LinkImage", "LoweredReplEntry", "lower_repl_entry", "lower_repl_graph"]
@@ -78,7 +81,7 @@ class LoweredReplEntry:
 
 
 def lower_repl_entry(
-    checked_entry: CheckedProgram,
+    compiled_entry: MatchCompiledProgram,
     *,
     image: LinkImage,
     source_text: str,
@@ -86,7 +89,9 @@ def lower_repl_entry(
     validate: bool = False,
     contract_payloads: Mapping[int, ContractPayload] | None = None,
 ) -> LoweredReplEntry:
-    """Link one checked REPL entry into ``image`` without resetting any IDs."""
+    """Link one match-compiled REPL entry into ``image`` without resetting any IDs."""
+    validate_match_compiled_program(compiled_entry)
+    checked_entry = compiled_entry.checked
     link = image._state
     source_id = SourceId(link.next_source)
     link.next_source += 1
@@ -116,14 +121,14 @@ def lower_repl_entry(
 
 
 def lower_repl_graph(
-    checked_graph: CheckedModuleGraph,
+    compiled_graph: MatchCompiledModuleGraph,
     *,
     image: LinkImage,
     source_text: str,
     validate: bool = False,
     contract_payloads: Mapping[int, ContractPayload] | None = None,
 ) -> LoweredReplEntry:
-    """Incrementally link a checked module graph into a REPL image."""
+    """Incrementally link a match-compiled module graph into a REPL image."""
     from agm.agl.lower.graph import lower_graph
 
     # NOTE: ``image._linked_modules`` is intentionally NOT updated here. Linking
@@ -132,13 +137,14 @@ def lower_repl_graph(
     # from the session's cached ``LoadedModule`` set. The session calls
     # ``LinkImage.mark_linked`` once the entry has evaluated successfully.
     program = lower_graph(
-        checked_graph,
+        compiled_graph,
         validate=validate,
         _link=image._state,
         _already_linked=frozenset(image._linked_modules),
         _entry_source_text=source_text,
         contract_payloads=contract_payloads,
     )
+    checked_graph = compiled_graph.checked_graph
     entry = checked_graph.modules[checked_graph.entry_id].resolved.program
     last = entry.body.items[-1]
     marker = (

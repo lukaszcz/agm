@@ -1,6 +1,6 @@
 # AgL Execution
 
-Execution is everything after type checking: lowering the checked AST into a closed, typeless program, evaluating it, and the host runtime that backs agents, shell calls, codecs, and rendering. The checked frontend objects never reach the evaluator — lowering is the boundary. See [index.md](index.md) for the surrounding pipeline.
+Execution is everything after successful match compilation: lowering the checked and match-compiled artifact into a closed, typeless program, evaluating it, and the host runtime that backs agents, shell calls, codecs, and rendering. Frontend artifacts never reach the evaluator — lowering is the boundary. Lowering currently unwraps the checked object and emits recursive match-plan IR; the match-compiled artifact is nevertheless the mandatory gate, and no checked-only public lowering path exists. See [index.md](index.md) for the surrounding pipeline.
 
 ## Lowering and Linking
 

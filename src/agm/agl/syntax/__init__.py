@@ -1,8 +1,9 @@
 """Public API for the AgL AST package (agm.agl.syntax).
 
 This package is the *firewall* between the Lark-aware front-end (lexer +
-parser) and all downstream passes (scope, typecheck, eval).  Nothing in this
-package imports Lark or any other AgL-internal module except ``spans``.
+parser) and all downstream passes (scope, typecheck, match compilation,
+lowering, and evaluation). Nothing in this package imports Lark or any other
+AgL-internal module except ``spans``.
 
 Usage::
 

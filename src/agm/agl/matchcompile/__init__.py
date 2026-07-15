@@ -2,7 +2,12 @@
 
 from agm.agl.semantics.types import EnumOwnerForm, EnumOwnerFormKind
 
-from .compiler import CompiledCase, compile_case, validate_decision_dag
+from .compiler import (
+    CompiledCase,
+    compile_case,
+    validate_compiled_case,
+    validate_decision_dag,
+)
 from .diagnostics import (
     BoolWitness,
     EnumWitness,
@@ -76,6 +81,18 @@ from .normalize import (
     pattern_cell_inhabits_type,
     signature_for_type,
 )
+from .stage import (
+    MatchCompilationResult,
+    MatchCompiledArtifact,
+    MatchCompiledModuleGraph,
+    MatchCompiledProgram,
+    compile_graph_matches,
+    compile_program_matches,
+    diagnostic_from_match_issue,
+    diagnostics_from_match_issues,
+    validate_match_compiled_graph,
+    validate_match_compiled_program,
+)
 
 __all__ = [
     "BinderAssignment",
@@ -105,6 +122,10 @@ __all__ = [
     "LiteralWitness",
     "LiteralValue",
     "MatchCaseContext",
+    "MatchCompilationResult",
+    "MatchCompiledArtifact",
+    "MatchCompiledModuleGraph",
+    "MatchCompiledProgram",
     "MatchCompileInvariantError",
     "MatchIssue",
     "MatchWitness",
@@ -134,8 +155,12 @@ __all__ = [
     "WildcardWitness",
     "WitnessField",
     "compile_case",
+    "compile_graph_matches",
+    "compile_program_matches",
     "constructor_inhabits_type",
     "default_matrix",
+    "diagnostic_from_match_issue",
+    "diagnostics_from_match_issues",
     "head_constructors",
     "issue_sort_key",
     "matrix_from_normalized",
@@ -146,6 +171,9 @@ __all__ = [
     "select_qba_column",
     "signature_for_type",
     "specialize",
+    "validate_compiled_case",
     "validate_decision_dag",
     "validate_matrix",
+    "validate_match_compiled_graph",
+    "validate_match_compiled_program",
 ]

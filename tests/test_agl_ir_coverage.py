@@ -56,8 +56,11 @@ def test_arithmetic_mixed_and_defensive_edges() -> None:
 def test_describe_every_runtime_value_kind() -> None:
     nominal = NominalId(ENTRY_ID, "Thing")
     values = [
+        (EnumValue(nominal, "Enum", "Case", {}), "Enum"),
         (RecordValue(nominal, "Record", {}), "Record"),
         (ExceptionValue(nominal, "Problem", {}), "Problem"),
+        (TextValue("text"), "text"),
+        (IntValue(1), "int"),
         (DecimalValue(decimal.Decimal("1.5")), "decimal"),
         (BoolValue(True), "bool"),
         (JsonValue(None), "json"),

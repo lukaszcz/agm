@@ -18,6 +18,8 @@ try
     | mode == "match" =>
       case mode of
         | "never" => ()
+        | _ =>
+            raise MatchError(message = "no match", scrutinee_type = "text", scrutinee = mode)
     | else =>
       print "calm"
   print "body end"

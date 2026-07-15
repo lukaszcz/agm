@@ -239,6 +239,7 @@ def _run_with_json_codec(
     from agm.agl.lower import lower_program
     from agm.agl.runtime.codec import JsonCodec, OutputCodec, TextCodec
     from agm.agl.runtime.params import _materialize_ir_contracts
+    from tests.agl.ir_harness import _compiled_checked
 
     checked = _check_program_with_json(body)
     text_codec = TextCodec()
@@ -249,7 +250,10 @@ def _run_with_json_codec(
     }
     registry = AgentRegistry(named=named or {}, default_agent=default_agent)
     executable = lower_program(
-        checked, source_text="<direct-ast>", source_label="<test>", validate=True
+        _compiled_checked(checked),
+        source_text="<direct-ast>",
+        source_label="<test>",
+        validate=True,
     )
     contracts, errors = _materialize_ir_contracts(executable, codecs)
     assert errors == []

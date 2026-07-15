@@ -479,9 +479,13 @@ class TestBuiltinExceptionTraceId:
 
     def test_match_error_trace_id_non_empty_without_logging(self) -> None:
         rt = PipelineDriver()
-        # A case statement with no matching pattern raises MatchError.
+        # Explicit source raising retains the ordinary MatchError runtime contract.
         result = rt.run(
-            "case 5 of\n  | 0 => ()\n",
+            "case 5 of\n"
+            "  | 0 => ()\n"
+            "  | _ =>\n"
+            "      raise MatchError(message = \"no match\", "
+            "scrutinee_type = \"int\", scrutinee = 5)\n",
             log_file=None,
         )
         assert not result.ok

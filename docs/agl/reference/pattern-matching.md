@@ -230,11 +230,11 @@ covered by listing every remaining constructor or literal. This rule applies
 recursively to enum payloads: a payload of enum or `bool` type may itself be
 covered with a complete set of nested patterns.
 
-The domains of `int`, `decimal`, `text`, `json`, and an unresolved type
-parameter are open. A finite set of literals cannot exhaust such a domain;
-the remaining values require an irrefutable wildcard or variable-binder
-pattern. The same requirement applies when an open domain occurs inside a
-constructor payload.
+The domains of `int`, `decimal`, `text`, `json`, lists, dictionaries, records,
+exceptions, `unit`, agents, functions, and an unresolved type parameter are open.
+A finite set of literals cannot exhaust such a domain; the remaining values
+require an irrefutable wildcard or variable-binder pattern. The same requirement
+applies when an open domain occurs inside a constructor payload.
 
 Every arm must also be **non-redundant**. Because matching uses source order,
 an arm is redundant when all values it could match are already covered by

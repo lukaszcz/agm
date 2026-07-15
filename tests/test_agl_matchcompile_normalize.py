@@ -35,9 +35,9 @@ from agm.agl.matchcompile.model import (
 from agm.agl.matchcompile.normalize import (
     MatchCompileInvariantError,
     constructor_inhabits_type,
-    pattern_cell_inhabits_type,
     normalize_case,
     normalize_pattern,
+    pattern_cell_inhabits_type,
     signature_for_type,
 )
 from agm.agl.modules.ids import ENTRY_ID, ModuleId

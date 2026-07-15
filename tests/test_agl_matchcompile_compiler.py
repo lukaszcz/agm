@@ -368,6 +368,20 @@ def test_open_domains_require_catch_all_with_symbolic_complement(
     assert "other than" in render_witness(issue.witness)
 
 
+def test_every_arm_on_a_bottom_scrutinee_is_redundant() -> None:
+    _, case, compiled = _compile(
+        "exception E extends Exception\n"
+        "  code: int\n"
+        'case (raise E(message = "x", code = 1)) of | _ => 1 | value => 2'
+    )
+
+    assert not any(isinstance(issue, NonExhaustiveIssue) for issue in compiled.issues)
+    redundant = [issue for issue in compiled.issues if isinstance(issue, RedundantArmIssue)]
+    assert [issue.action_id for issue in redundant] == [
+        branch.node_id for branch in case.branches
+    ]
+
+
 def test_duplicate_subsumed_and_uninhabited_arms_are_each_redundant() -> None:
     _, case, compiled = _compile(
         "let value: int = 1\ncase value of | 1 => 1 | 1.0 => 2 | _ => 3 | 1.5 => 4"

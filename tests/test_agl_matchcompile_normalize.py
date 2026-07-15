@@ -35,6 +35,7 @@ from agm.agl.matchcompile.model import (
 from agm.agl.matchcompile.normalize import (
     MatchCompileInvariantError,
     constructor_inhabits_type,
+    pattern_cell_inhabits_type,
     normalize_case,
     normalize_pattern,
     signature_for_type,
@@ -147,7 +148,6 @@ def test_signatures_are_closed_for_boolean_and_enum_in_declaration_order() -> No
         UnitType(),
         AgentType(),
         FunctionType((IntType(),), IntType()),
-        BottomType(),
     ],
 )
 def test_every_current_non_closed_type_has_an_explicit_open_signature(
@@ -155,6 +155,19 @@ def test_every_current_non_closed_type_has_an_explicit_open_signature(
 ) -> None:
     checked = _check("()")
     assert signature_for_type(subject_type, checked.type_env.type_table) == OpenSignature()
+
+
+def test_bottom_has_an_empty_closed_signature_and_no_inhabiting_patterns() -> None:
+    checked = _check("()")
+
+    assert signature_for_type(BottomType(), checked.type_env.type_table) == ClosedSignature(())
+    assert not pattern_cell_inhabits_type(
+        WildcardCell(
+            binder=None,
+            provenance=SourcePatternProvenance(0, SourceSpan(1, 1, 1, 1, 0, 0)),
+        ),
+        BottomType(),
+    )
 
 
 def test_flexible_inference_types_cannot_enter_match_normalization() -> None:

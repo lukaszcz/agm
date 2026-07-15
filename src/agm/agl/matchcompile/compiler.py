@@ -531,7 +531,10 @@ def _issues(
         if action.action_id not in reachable
     ]
     constraints = _first_failure_constraints(root, normalized.type_table)
-    if constraints is not None:
+    root_signature = signature_for_type(normalized.root.type, normalized.type_table)
+    if constraints is not None and not (
+        isinstance(root_signature, ClosedSignature) and not root_signature.constructors
+    ):
         constraint_map = dict(constraints)
         issues.append(
             NonExhaustiveIssue(

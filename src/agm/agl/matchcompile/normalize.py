@@ -195,6 +195,8 @@ def constructor_inhabits_type(constructor: Constructor, subject_type: Type) -> b
 
 def pattern_cell_inhabits_type(cell: PatternCell, subject_type: Type) -> bool:
     """Return whether a canonical cell can match a value of ``subject_type``."""
+    if isinstance(subject_type, BottomType):
+        return False
     if isinstance(cell, WildcardCell):
         return True
     if not constructor_inhabits_type(cell.constructor, subject_type):
@@ -233,6 +235,8 @@ def signature_for_type(subject_type: Type, table: TypeTable) -> Signature:
             raise MatchCompileInvariantError(
                 "flexible inference type escaped checked output"
             )
+        case BottomType():
+            return ClosedSignature(())
         case (
             TextType()
             | JsonType()
@@ -246,7 +250,6 @@ def signature_for_type(subject_type: Type, table: TypeTable) -> Signature:
             | UnitType()
             | AgentType()
             | FunctionType()
-            | BottomType()
         ):
             return OpenSignature()
         case _ as unreachable:

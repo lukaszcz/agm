@@ -1,0 +1,4 @@
+let value = false
+case value of
+  | false => ()
+  | false => ()

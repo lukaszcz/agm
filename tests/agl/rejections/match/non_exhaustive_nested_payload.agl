@@ -1,0 +1,8 @@
+enum Box
+  | box(flag: bool)
+  | empty
+
+let value = box(flag = false)
+case value of
+  | box(flag = false) => ()
+  | empty => ()

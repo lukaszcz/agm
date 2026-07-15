@@ -1,0 +1,12 @@
+import alpha qualified as a
+import beta qualified as b
+
+param items: bool
+
+case a::make(items) of
+  | a::Choice::same => print "alpha same"
+  | a::Choice::item(value) => print "alpha ${value}"
+
+case b::make(items) of
+  | b::Choice::same => print "beta same"
+  | b::Choice::item(value) => print "beta ${value}"

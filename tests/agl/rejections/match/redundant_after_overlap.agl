@@ -1,0 +1,9 @@
+enum Pair
+  | pair(left: bool, right: bool)
+
+let value = pair(left = false, right = false)
+case value of
+  | pair(left = false) => ()
+  | pair(right = false) => ()
+  | pair(left = false, right = false) => ()
+  | _ => ()

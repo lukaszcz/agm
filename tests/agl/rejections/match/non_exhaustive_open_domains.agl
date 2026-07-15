@@ -1,0 +1,9 @@
+case 1 of
+  | 1 => ()
+
+case "known" of
+  | "known" => ()
+
+let data: json = null
+case data of
+  | null => ()

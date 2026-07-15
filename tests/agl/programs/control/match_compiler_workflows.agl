@@ -1,0 +1,31 @@
+# Decision compilation preserves source priority even when qba selects the
+# right payload column first. The effectful root is an agent call, so the
+# scenario's exact call-count assertion also proves one scrutinee evaluation.
+enum Bit
+  | zero
+  | one
+
+enum Pair
+  | pair(left: Bit, right: Bit)
+
+param integer: int
+param decimal_number: decimal
+
+agent picker
+
+def pick() -> Pair = ask("Pick a pair.", agent = picker)
+
+case pick() of
+  | pair(right = zero) => print "right-zero first"
+  | pair(left = zero) => print "left-zero second"
+  | pair(left, right) => print "default binders ${left}/${right}"
+
+# Numeric pattern keys use runtime semantic equality across int/decimal
+# spellings while remaining typed by the subject domain.
+case integer of
+  | 1.0 => print "int numeric equal"
+  | _ => print "int numeric remainder"
+
+case decimal_number of
+  | 1 => print "decimal numeric equal"
+  | _ => print "decimal numeric remainder"

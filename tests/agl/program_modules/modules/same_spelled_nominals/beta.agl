@@ -1,0 +1,7 @@
+enum Choice
+  | same
+  | item(value: text)
+
+def make(item: bool) -> Choice =
+  if item => Choice::item(value = "seven")
+  else => Choice::same

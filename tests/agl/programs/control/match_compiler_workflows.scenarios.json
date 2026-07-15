@@ -1,0 +1,37 @@
+{
+  "scenarios": [
+    {
+      "name": "overlap_keeps_first_source_row",
+      "params": {"integer": 1, "decimal_number": 1.0},
+      "agents": {
+        "picker": ["{\"$case\": \"pair\", \"left\": {\"$case\": \"zero\"}, \"right\": {\"$case\": \"zero\"}}"]
+      },
+      "expect": {
+        "stdout": "right-zero first\nint numeric equal\ndecimal numeric equal\n",
+        "calls": {"picker": 1}
+      }
+    },
+    {
+      "name": "qba_falls_through_to_second_source_row",
+      "params": {"integer": 2, "decimal_number": 2.5},
+      "agents": {
+        "picker": ["{\"$case\": \"pair\", \"left\": {\"$case\": \"zero\"}, \"right\": {\"$case\": \"one\"}}"]
+      },
+      "expect": {
+        "stdout": "left-zero second\nint numeric remainder\ndecimal numeric remainder\n",
+        "calls": {"picker": 1}
+      }
+    },
+    {
+      "name": "default_row_binds_both_payloads",
+      "params": {"integer": -1, "decimal_number": -1.5},
+      "agents": {
+        "picker": ["{\"$case\": \"pair\", \"left\": {\"$case\": \"one\"}, \"right\": {\"$case\": \"one\"}}"]
+      },
+      "expect": {
+        "stdout": "default binders Bit::one/Bit::one\nint numeric remainder\ndecimal numeric remainder\n",
+        "calls": {"picker": 1}
+      }
+    }
+  ]
+}

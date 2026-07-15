@@ -1,0 +1,20 @@
+{
+  "scenarios": [
+    {
+      "name": "same_named_nullary_variants_keep_nominal_identity",
+      "module_roots": ["program_modules/modules/same_spelled_nominals"],
+      "params": {"items": false},
+      "expect": {
+        "stdout": "alpha same\nbeta same\n"
+      }
+    },
+    {
+      "name": "same_named_payload_variants_keep_nominal_identity",
+      "module_roots": ["program_modules/modules/same_spelled_nominals"],
+      "params": {"items": true},
+      "expect": {
+        "stdout": "alpha 7\nbeta seven\n"
+      }
+    }
+  ]
+}

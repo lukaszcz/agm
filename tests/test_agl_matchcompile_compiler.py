@@ -49,6 +49,7 @@ from agm.agl.matchcompile import (
     matrix_from_normalized,
     normalize_case,
     render_witness,
+    signature_for_type,
     validate_decision_dag,
 )
 from agm.agl.matchcompile import compiler as compiler_module
@@ -254,6 +255,24 @@ def _path_test_counts(root: Decision) -> tuple[int, ...]:
 
     visit(root, 0)
     return tuple(counts)
+
+
+def _nested_pair_value(
+    pair_type: EnumType,
+    bit_type: EnumType,
+    left: str,
+    right: str,
+) -> EnumValue:
+    bit_nominal = NominalId(bit_type.module_id, bit_type.name)
+    return EnumValue(
+        NominalId(pair_type.module_id, pair_type.name),
+        pair_type.name,
+        "pair",
+        {
+            "left": EnumValue(bit_nominal, bit_type.name, left, {}),
+            "right": EnumValue(bit_nominal, bit_type.name, right, {}),
+        },
+    )
 
 
 def test_irrefutable_leaf_finalizes_binder_and_has_no_issues() -> None:
@@ -465,6 +484,88 @@ def test_generated_finite_matrices_match_reference_reachability_and_failure() ->
                 expected_actions.add(expected)
         assert set(compiled.reachable_action_ids) == expected_actions
         assert _has_fail(compiled.root) is unmatched
+
+
+def test_generated_nested_multi_column_matrices_match_the_reference() -> None:
+    row_patterns = (
+        "pair(left = zero, right = zero)",
+        "pair(left = zero)",
+        "pair(right = one)",
+        "pair(left = one, right = one)",
+        "pair(left = left)",
+        "pair(right = right)",
+        "missing",
+        "_",
+    )
+    generated_indices = (
+        *itertools.product(range(len(row_patterns)), repeat=2),
+        (0, 2, 7),
+        (1, 2, 7),
+        (2, 1, 7),
+        (1, 3, 6),
+        (4, 5, 6),
+        (0, 0, 7),
+        (7, 0, 6),
+    )
+    for indices in generated_indices:
+        patterns = [row_patterns[index] for index in indices]
+        source = (
+            "enum Bit\n  | zero\n  | one\n"
+            "enum Subject\n"
+            "  | pair(left: Bit, right: Bit)\n"
+            "  | missing\n"
+            "let value: Subject = missing\ncase value of\n"
+            + "\n".join(f"  | {pattern} => {action}" for action, pattern in enumerate(patterns))
+        )
+        checked, case, compiled = _compile(source)
+        pair_type = cast(EnumType, compiled.normalized.root.type)
+        pair_constructor = cast(
+            EnumConstructor,
+            cast(ClosedSignature, signature_for_type(pair_type, checked.type_env.type_table))
+            .constructors[0],
+        )
+        bit_type = cast(EnumType, pair_constructor.fields[0].type)
+        values: tuple[Value, ...] = (
+            *(
+                _nested_pair_value(pair_type, bit_type, left, right)
+                for left, right in itertools.product(("zero", "one"), repeat=2)
+            ),
+            EnumValue(
+                NominalId(pair_type.module_id, pair_type.name),
+                pair_type.name,
+                "missing",
+                {},
+            ),
+        )
+        expected_actions: set[int] = set()
+        unmatched = False
+        for value in values:
+            expected = reference_action(case, checked, value)
+            assert _decision_action(compiled, value) == expected
+            unmatched |= expected is None
+            if expected is not None:
+                expected_actions.add(expected)
+        assert set(compiled.reachable_action_ids) == expected_actions
+        assert _has_fail(compiled.root) is unmatched
+        validate_decision_dag(compiled.root)
+
+
+@pytest.mark.parametrize(
+    ("size", "unique_nodes", "decision_references", "paths"),
+    [(2, 10, 12, 8), (3, 13, 16, 16), (4, 16, 20, 32)],
+)
+def test_paper_diagonal_matrices_have_stable_structural_counts(
+    size: int,
+    unique_nodes: int,
+    decision_references: int,
+    paths: int,
+) -> None:
+    _, _, compiled = _compile(_diagonal_source(size, exhaustive=True))
+
+    assert _decision_references(compiled.root) == (unique_nodes, decision_references)
+    assert len(_path_test_counts(compiled.root)) == paths
+    assert unique_nodes < decision_references
+    validate_decision_dag(compiled.root)
 
 
 def test_compiled_decisions_are_acyclic_single_test_paths_and_locally_shared() -> None:

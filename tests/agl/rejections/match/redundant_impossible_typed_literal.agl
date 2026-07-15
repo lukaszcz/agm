@@ -1,0 +1,4 @@
+let value: int = 1
+case value of
+  | 1.5 => ()
+  | _ => ()

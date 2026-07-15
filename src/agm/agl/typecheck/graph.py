@@ -101,6 +101,8 @@ from agm.agl.typecheck.env import (
     ParamSpec,
     PartialCallSpec,
     TypeEnvironment,
+    _assert_checked_types_closed,
+    assert_checked_output_closed,
 )
 
 # ---------------------------------------------------------------------------
@@ -176,6 +178,27 @@ class CheckedModuleGraph:
     entry_id: ModuleId
     graph_type_table: dict[tuple[ModuleId, str], Type]
     warnings: tuple[Diagnostic, ...]
+
+
+def _assert_checked_module_closed(module: CheckedModule) -> None:
+    """Assert that one graph module is safe to pass to the lowerer."""
+    assert_checked_output_closed(
+        node_types=module.node_types,
+        contract_specs=module.contract_specs,
+        call_sites=module.call_sites,
+        type_env=module.type_env,
+        function_signatures=module.function_signatures,
+        cast_specs=module.cast_specs,
+        argument_bindings=module.argument_bindings,
+        owner=f"checked module {module.module_id.dotted()}",
+    )
+
+
+def assert_checked_module_graph_closed(checked: CheckedModuleGraph) -> None:
+    """Assert that all graph-level checked output is safe to lower."""
+    for module in checked.modules.values():
+        _assert_checked_module_closed(module)
+    _assert_checked_types_closed(checked.graph_type_table.values(), owner="checked module graph")
 
 
 # ---------------------------------------------------------------------------
@@ -932,9 +955,11 @@ def check_graph(
         checked_modules[mid] = cm
         all_warnings.extend(cm.warnings)
 
-    return CheckedModuleGraph(
+    checked = CheckedModuleGraph(
         modules=checked_modules,
         entry_id=resolved_graph.entry_id,
         graph_type_table=graph_type_table,
         warnings=tuple(all_warnings),
     )
+    assert_checked_module_graph_closed(checked)
+    return checked

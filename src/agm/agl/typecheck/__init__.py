@@ -48,8 +48,14 @@ from agm.agl.typecheck.env import (
     ParamSpec,
     PartialCallSpec,
     TypeEnvironment,
+    assert_checked_program_closed,
 )
-from agm.agl.typecheck.graph import CheckedModule, CheckedModuleGraph, check_graph
+from agm.agl.typecheck.graph import (
+    CheckedModule,
+    CheckedModuleGraph,
+    assert_checked_module_graph_closed,
+    check_graph,
+)
 
 __all__ = [
     "AgentType",
@@ -80,6 +86,8 @@ __all__ = [
     "TypeEnvironment",
     "TypeVarType",
     "UnitType",
+    "assert_checked_module_graph_closed",
+    "assert_checked_program_closed",
     "check",
     "contains_type_var",
     "free_type_vars",

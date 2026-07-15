@@ -17,6 +17,7 @@ Tests deliberately do *not* pin internal implementation details.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import cast
 
 import pytest
@@ -112,6 +113,7 @@ from agm.agl.typecheck import (
     TextType,
     TypeEnvironment,
     UnitType,
+    assert_checked_program_closed,
     check,
 )
 from agm.agl.typecheck.builder import _TypeBuilder
@@ -868,6 +870,104 @@ class TestTypeEnvironment:
             kind=BinderKind.let_binding,
         )
         assert env.resolve_binding(ref) is None
+
+
+class TestCheckedOutputClosure:
+    """The checker publishes only closed, runtime-ready type decisions."""
+
+    @staticmethod
+    def _checked_with_all_type_bearing_side_tables() -> CheckedProgram:
+        return accept_type(
+            "def id[T](value: T) -> T = value\n"
+            "let direct = id(1)\n"
+            "let partial: (int) -> int = id(?)\n"
+            'let parsed: int = ask("number", format = "json")\n'
+            'let converted = "1" as int\n'
+            "direct"
+        )
+
+    def test_closed_output_accepts_rigid_declaration_variables(self) -> None:
+        checked = self._checked_with_all_type_bearing_side_tables()
+        assert_checked_program_closed(checked)
+        assert checked.function_signatures["id"].result == TypeVarType("T")
+
+    @pytest.mark.parametrize(
+        "category",
+        (
+            "node",
+            "binding_environment",
+            "direct_call_parameters",
+            "contract",
+            "call_site",
+            "cast",
+            "signature_parameter",
+            "signature",
+            "partial_call_type",
+        ),
+    )
+    def test_closed_output_rejects_flexible_variables_in_every_published_category(
+        self, category: str
+    ) -> None:
+        checked = self._checked_with_all_type_bearing_side_tables()
+        flexible = InferenceVarType("leak")
+
+        if category == "node":
+            checked = replace(checked, node_types={**checked.node_types, -1: flexible})
+        elif category == "binding_environment":
+            checked.type_env.set_binding_type(-1, flexible)
+        elif category == "direct_call_parameters":
+            bindings = replace(
+                checked.argument_bindings,
+                function_param_types={
+                    **checked.argument_bindings.function_param_types,
+                    -1: (flexible,),
+                },
+            )
+            checked = replace(checked, argument_bindings=bindings)
+        elif category == "contract":
+            node_id, spec = next(iter(checked.contract_specs.items()))
+            checked = replace(
+                checked,
+                contract_specs={
+                    **checked.contract_specs,
+                    node_id: replace(spec, target_type=flexible),
+                },
+            )
+        elif category == "call_site":
+            checked = replace(
+                checked,
+                call_sites=(replace(checked.call_sites[0], target_type=flexible),),
+            )
+        elif category == "cast":
+            node_id, spec = next(iter(checked.cast_specs.items()))
+            checked = replace(
+                checked,
+                cast_specs={**checked.cast_specs, node_id: replace(spec, target_type=flexible)},
+            )
+        elif category.startswith("signature"):
+            signature = checked.function_signatures["id"]
+            if category == "signature_parameter":
+                signature = replace(
+                    signature,
+                    params=(replace(signature.params[0], type=flexible),),
+                    type_params=(),
+                )
+            else:
+                signature = replace(signature, result=flexible, type_params=())
+            checked = replace(
+                checked,
+                function_signatures={**checked.function_signatures, "id": signature},
+            )
+        else:
+            partial = checked.resolved.program.body.items[2]
+            assert isinstance(partial, LetDecl)
+            checked = replace(
+                checked,
+                node_types={**checked.node_types, partial.value.node_id: flexible},
+            )
+
+        with pytest.raises(AssertionError, match="inference variable leaked"):
+            assert_checked_program_closed(checked)
 
 
 # ---------------------------------------------------------------------------
@@ -5821,7 +5921,7 @@ class TestGenericFunctionInferenceRegions:
             for typ in param_types
         )
 
-    def test_generic_constructor_function_conflict_retains_legacy_matching(self) -> None:
+    def test_generic_constructor_function_conflict_is_rejected(self) -> None:
         reject_type(
             "record Pair[T]\n"
             "  left: T -> T\n"
@@ -6215,16 +6315,16 @@ class TestGenerics:
         )
 
     # ------------------------------------------------------------------
-    # _match structural: DictType and FunctionType recursion
+    # Structural inference through dict and function types
     # ------------------------------------------------------------------
 
-    def test_match_dict_T_inferred(self) -> None:
-        # dict[text, T] param: matching infers T from a dict[text, int] value
+    def test_dict_type_argument_is_inferred(self) -> None:
+        # dict[text, T] parameter infers T from a dict[text, int] value.
         r = accept_type('def first_val[T](d: dict[text, T]) -> T = d["k"]\nfirst_val({"k": 1})')
         assert r.resolved.program is not None
 
-    def test_match_function_T_inferred(self) -> None:
-        # (T) -> T param: matching against a concrete function infers T
+    def test_function_type_argument_is_inferred(self) -> None:
+        # A (T) -> T parameter infers T from a concrete function value.
         r = accept_type(
             "def apply[T](f: (T) -> T, x: T) -> T = f(x)\n"
             "def inc(n: int) -> int = n + 1\n"
@@ -6233,19 +6333,18 @@ class TestGenerics:
         assert r.resolved.program is not None
 
     # ------------------------------------------------------------------
-    # _match_unsolved: DictType and FunctionType structural recursion
+    # Contextual completion through structural result types
     # ------------------------------------------------------------------
 
-    def test_match_unsolved_dict_T_from_expected(self) -> None:
+    def test_dict_type_argument_is_completed_from_expected_type(self) -> None:
         # empty[T]() -> dict[text, T]: T inferred from expected dict[text, text]
         r = accept_type(
             "def empty_dict[T]() -> dict[text, T] = {}\nlet d: dict[text, text] = empty_dict()\nd"
         )
         assert r.resolved.program is not None
 
-    def test_match_unsolved_non_matching_result_type_ignored(self) -> None:
-        # When sig.result is a concrete type, _match_unsolved is a no-op —
-        # the type mismatch is caught by the final assignability check instead.
+    def test_concrete_result_type_mismatch_is_rejected(self) -> None:
+        # A concrete result cannot satisfy an incompatible expected type.
         err = reject_type('def f[T](x: T) -> text = "hi"\nlet n: int = f(1)\nn')
         assert (
             "text" in str(err).lower() or "int" in str(err).lower() or "assign" in str(err).lower()
@@ -6309,13 +6408,11 @@ class TestGenerics:
         )
 
     # ------------------------------------------------------------------
-    # _match: non-TypeVar/List/Dict/Function template (1300->exit) and
-    # FunctionType arity mismatch (1301->exit)
+    # Concrete generic parameters and function arity
     # ------------------------------------------------------------------
 
-    def test_match_concrete_param_in_generic_def(self) -> None:
-        # Concrete param (int) → _match(IntType(), IntType(), ...) falls off
-        # the elif chain (1300->exit); T inferred from second param
+    def test_concrete_parameter_in_generic_def(self) -> None:
+        # The concrete first parameter agrees while the second infers T.
         r = accept_type('def f[T](x: int, y: T) -> T = y\nf(1, "hi")')
         assert r.resolved.program is not None
 
@@ -6332,9 +6429,8 @@ class TestGenerics:
             or "assign" in str(err).lower()
         )
 
-    def test_constructor_match_function_arity_mismatch_falls_off(self) -> None:
-        # A generic constructor still uses its legacy one-sided matcher. Its
-        # (T) -> T field cannot infer T from an arity-mismatched function.
+    def test_constructor_function_arity_mismatch_is_rejected(self) -> None:
+        # A (T) -> T field cannot unify with an arity-mismatched function.
         err = reject_type(
             "record Box[T]\n"
             "  value: T -> T\n"
@@ -7044,10 +7140,7 @@ class TestGenericCoverageEdgeCases:
 
 
 class TestNestedGenericInference:
-    """Regression tests for _match recursing into generic RecordType/EnumType type_args.
-
-    These verify that nested-generic inference works WITHOUT explicit ::[…] or annotations.
-    """
+    """Regression tests for structural generic inference through nominal arguments."""
 
     def test_def_call_unwrap_infers_u_from_box(self) -> None:
         # def-call path: unwrap(b = Box(value = 1)) must infer U=int without annotation.
@@ -7917,7 +8010,7 @@ class TestGenericNominalModuleId:
             "Both had module_id=ENTRY_ID before the fix."
         )
 
-    def test_generic_match_does_not_infer_through_different_module_id(self) -> None:
+    def test_generic_completion_respects_different_module_ids(self) -> None:
         """Contextual generic completion respects nominal module identity."""
         from agm.agl.modules.ids import ModuleId
         from agm.agl.typecheck.inference import ConstraintRole, InferenceEngine

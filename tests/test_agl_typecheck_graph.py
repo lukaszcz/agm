@@ -7,6 +7,7 @@ pre-pass."""
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -15,7 +16,7 @@ from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.scope.graph import resolve_graph
 from agm.agl.scope.symbols import AglScopeError
-from agm.agl.semantics.types import contains_inference_var
+from agm.agl.semantics.types import InferenceVarType, contains_inference_var
 from agm.agl.typecheck import (
     AgentType,
     AglTypeError,
@@ -31,6 +32,7 @@ from agm.agl.typecheck import (
     TextType,
     Type,
     TypeVarType,
+    assert_checked_module_graph_closed,
     check,
     check_graph,
 )
@@ -2791,6 +2793,30 @@ def test_imported_generic_occurrences_are_fresh_and_checked_output_is_closed(
             *(site.target_type for site in module.call_sites),
         ]
         assert not any(contains_inference_var(typ) for typ in published_types)
+
+
+def test_checked_module_graph_rejects_a_flexible_graph_type(tmp_path: Path) -> None:
+    graph = _check_graph(
+        tmp_path,
+        {
+            "lib": "record Box\n  value: int",
+            "entry": "import lib\nlib::Box(value = 1)",
+        },
+    )
+    key = next(iter(graph.graph_type_table))
+    leaked = replace(
+        graph,
+        graph_type_table={**graph.graph_type_table, key: InferenceVarType("leak")},
+    )
+
+    with pytest.raises(AssertionError, match="inference variable leaked"):
+        assert_checked_module_graph_closed(leaked)
+
+    entry = graph.modules[ENTRY_ID]
+    leaked_module = replace(entry, node_types={**entry.node_types, -1: InferenceVarType("leak")})
+    leaked = replace(graph, modules={**graph.modules, ENTRY_ID: leaked_module})
+    with pytest.raises(AssertionError, match="inference variable leaked"):
+        assert_checked_module_graph_closed(leaked)
 
 
 def test_imported_generic_conflict_keeps_source_labels_for_both_constraints(tmp_path: Path) -> None:

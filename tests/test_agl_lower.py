@@ -12,6 +12,8 @@ Pipeline helper: reuses the ``parse_resolve_check`` pattern from
 from __future__ import annotations
 
 import decimal
+from collections.abc import Mapping
+from dataclasses import fields, is_dataclass
 from pathlib import Path
 
 import pytest
@@ -167,6 +169,34 @@ def _lower(source: str, *, validate: bool = True) -> ExecutableProgram:
     )
 
 
+def _contains_flexible_inference_state(value: object, seen: set[int]) -> bool:
+    """Recursively inspect IR data without treating declared rigid variables as leaks."""
+    from agm.agl.semantics.types import InferenceVarType
+
+    if isinstance(value, InferenceVarType):
+        return True
+    if isinstance(value, (str, bytes, int, float, bool, type(None))):
+        return False
+    value_id = id(value)
+    if value_id in seen:
+        return False
+    seen.add(value_id)
+    if isinstance(value, Mapping):
+        return any(
+            _contains_flexible_inference_state(key, seen)
+            or _contains_flexible_inference_state(item, seen)
+            for key, item in value.items()
+        )
+    if isinstance(value, tuple | list | frozenset):
+        return any(_contains_flexible_inference_state(item, seen) for item in value)
+    if is_dataclass(value):
+        return any(
+            _contains_flexible_inference_state(getattr(value, field.name), seen)
+            for field in fields(value)
+        )
+    return False
+
+
 def _function_body(desc: FunctionDescriptor) -> object:
     assert isinstance(desc.impl, IrFunctionBody)
     return desc.impl.body
@@ -186,6 +216,22 @@ def _make_lowerer(checked: CheckedProgram, source: str) -> "_Lowerer":
     normalized = normalize_newlines(source)
     link.sources[source_id] = SourceFile(display_name="<test>", normalized_text=normalized)
     return _Lowerer(checked, link, ENTRY_ID, source_id, source)
+
+
+def test_lowering_erases_flexible_state_from_generic_direct_nested_and_partial_calls() -> None:
+    executable = _lower(
+        "record Box[T]\n"
+        "  value: T\n"
+        "def id[T](value: T) -> T = value\n"
+        "def app[T](func: T -> T, value: T) -> T = func(value)\n"
+        "let direct = id(1)\n"
+        "let nested = app(id, app(id, 2))\n"
+        "let make_box: (int) -> Box[int] = Box(value = ?)\n"
+        "let boxed = make_box(nested)\n"
+        "boxed"
+    )
+
+    assert not _contains_flexible_inference_state(executable, set())
 
 
 # ---------------------------------------------------------------------------

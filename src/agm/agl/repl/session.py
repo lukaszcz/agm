@@ -260,30 +260,10 @@ class ReplSession:
 
     @staticmethod
     def _assert_checked_state_closed(checked: "CheckedProgram") -> None:
-        """Assert that a checked entry contains no region-local flexible types."""
-        from agm.agl.semantics.types import contains_inference_var
+        """Assert that a checked entry satisfies the shared lowering boundary."""
+        from agm.agl.typecheck.env import assert_checked_program_closed
 
-        checked.type_env.assert_closed()
-        types = (
-            *checked.node_types.values(),
-            *(spec.target_type for spec in checked.contract_specs.values()),
-            *(call.target_type for call in checked.call_sites),
-            *(signature.result for signature in checked.function_signatures.values()),
-            *(
-                param.type
-                for signature in checked.function_signatures.values()
-                for param in signature.params
-            ),
-            *(spec.target_type for spec in checked.cast_specs.values()),
-            *(
-                param_type
-                for param_types in checked.argument_bindings.function_param_types.values()
-                for param_type in param_types
-            ),
-        )
-        assert not any(contains_inference_var(typ) for typ in types), (
-            "inference variable leaked from a checked REPL entry"
-        )
+        assert_checked_program_closed(checked)
 
     # ------------------------------------------------------------------
     # Registration (delegated to the internal runtime — shared validation)

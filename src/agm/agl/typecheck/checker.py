@@ -164,6 +164,7 @@ from agm.agl.typecheck.env import (
     ParamSpec,
     PartialCallSpec,
     TypeEnvironment,
+    assert_checked_program_closed,
 )
 from agm.agl.typecheck.inference import (
     ConstraintRole,
@@ -3254,7 +3255,9 @@ def check_prepared(
 
     checker = _Checker(env=env, resolved=resolved, capabilities=capabilities)
     checker.check_program(resolved.program)
-    return checker.result(resolved)
+    checked = checker.result(resolved)
+    assert_checked_program_closed(checked)
+    return checked
 
 
 # ---------------------------------------------------------------------------

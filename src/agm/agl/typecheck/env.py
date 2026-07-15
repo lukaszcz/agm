@@ -327,6 +327,67 @@ class CheckedProgram:
     partial_calls: dict[int, PartialCallSpec]
 
 
+def _assert_checked_types_closed(types: Iterable[Type], *, owner: str) -> None:
+    """Reject solver-local types that escape a checked-output boundary."""
+    if any(contains_inference_var(typ) for typ in types):
+        raise AssertionError(f"inference variable leaked from checked output ({owner})")
+
+
+def assert_checked_output_closed(
+    *,
+    node_types: Mapping[int, Type],
+    contract_specs: Mapping[int, OutputContractSpec],
+    call_sites: Iterable[CallSiteRecord],
+    type_env: "TypeEnvironment",
+    function_signatures: Mapping[str, FunctionSignature],
+    cast_specs: Mapping[int, CastSpec],
+    argument_bindings: ArgumentBindings,
+    owner: str,
+) -> None:
+    """Assert that all type-bearing checked metadata is concrete or rigid.
+
+    Partial-call routing is deliberately absent: it is syntax-and-binding metadata
+    only; its function type is published in ``node_types``.  Rigid declaration
+    variables remain valid in generic templates and signatures, while flexible
+    ``InferenceVarType`` instances are a compiler invariant failure here.
+    """
+    type_env.assert_closed()
+    _assert_checked_types_closed(
+        (
+            *node_types.values(),
+            *(spec.target_type for spec in contract_specs.values()),
+            *(site.target_type for site in call_sites),
+            *(signature.result for signature in function_signatures.values()),
+            *(
+                param.type
+                for signature in function_signatures.values()
+                for param in signature.params
+            ),
+            *(spec.target_type for spec in cast_specs.values()),
+            *(
+                param_type
+                for param_types in argument_bindings.function_param_types.values()
+                for param_type in param_types
+            ),
+        ),
+        owner=owner,
+    )
+
+
+def assert_checked_program_closed(checked: CheckedProgram) -> None:
+    """Assert that a single-module checked program is safe to lower."""
+    assert_checked_output_closed(
+        node_types=checked.node_types,
+        contract_specs=checked.contract_specs,
+        call_sites=checked.call_sites,
+        type_env=checked.type_env,
+        function_signatures=checked.function_signatures,
+        cast_specs=checked.cast_specs,
+        argument_bindings=checked.argument_bindings,
+        owner="checked program",
+    )
+
+
 # ---------------------------------------------------------------------------
 # TypeEnvironment — mutable state during type checking
 # ---------------------------------------------------------------------------
@@ -816,6 +877,10 @@ class TypeEnvironment:
         flexible ``InferenceVarType`` nodes are owned by an expression region
         and must be finalized before an environment is seeded or retained.
         """
+        constructor_sigs = (
+            *self._constructor_sigs.values(),
+            *(self._graph_ctor_sig_table or {}).values(),
+        )
         types: list[Type] = [
             *self._types.values(),
             *self._binding_types.values(),
@@ -828,12 +893,14 @@ class TypeEnvironment:
             ),
             *(sig.result for sig in self._function_signatures_by_node_id.values()),
             *(generic.template for generic in self._generic_types.values()),
+            *(alias.template for alias in self._graph_alias_table.values()),
             *(
-                template
-                for sig in self._constructor_sigs.values()
-                for template in sig.field_templates
+                generic.template
+                for generic in (self._graph_generic_table or {}).values()
             ),
-            *(sig.result_template for sig in self._constructor_sigs.values()),
+            *(self._graph_type_table or {}).values(),
+            *(template for sig in constructor_sigs for template in sig.field_templates),
+            *(sig.result_template for sig in constructor_sigs),
             *(
                 field_type
                 for typedef in self._type_table.entries()

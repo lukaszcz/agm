@@ -12,7 +12,7 @@ AGL_ROOT = Path(__file__).parents[1] / "src" / "agm" / "agl"
 
 def _agl_imports(package: str) -> list[tuple[Path, str]]:
     imports: list[tuple[Path, str]] = []
-    for path in sorted((AGL_ROOT / package).glob("*.py")):
+    for path in sorted((AGL_ROOT / package).rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module is not None:
@@ -95,6 +95,18 @@ def test_execution_package_dependency_contract(
         f"{path.relative_to(AGL_ROOT)} imports {module}"
         for path, module in _agl_imports(package)
         if not _is_allowed(module, allowed)
+    ]
+
+    assert violations == []
+
+
+@pytest.mark.parametrize("package", ("lower", "ir", "eval", "runtime"))
+def test_execution_packages_do_not_import_the_inference_engine(package: str) -> None:
+    violations = [
+        f"{path.relative_to(AGL_ROOT)} imports {module}"
+        for path, module in _agl_imports(package)
+        if module == "agm.agl.typecheck.inference"
+        or module.startswith("agm.agl.typecheck.inference.")
     ]
 
     assert violations == []

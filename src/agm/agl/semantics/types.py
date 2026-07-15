@@ -28,7 +28,7 @@ Type hierarchy
 - ``TypeVarType(name)`` — a rigid type variable bound by an enclosing generic
   declaration.
 - ``InferenceVarType(display_hint)`` — an internal, identity-based flexible
-  variable owned by a future inference solver; it is not source-spellable.
+  variable owned by a checker inference region; it is not source-spellable.
 
 ``Type`` is the closed union of all semantic types.
 

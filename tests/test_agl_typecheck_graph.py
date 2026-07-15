@@ -2753,6 +2753,21 @@ def test_graph_infers_unannotated_local_def_despite_imported_same_name(tmp_path:
     assert graph.modules[ENTRY_ID].function_signatures["relay"].result == TextType()
 
 
+def test_cross_module_higher_order_generic_inference(tmp_path: Path) -> None:
+    """Imported rank-1 schemes constrain one another within the entry expression."""
+    graph = _check_graph(
+        tmp_path,
+        {
+            "app": "def app[T](f: T -> T, value: T) -> T = f(value)",
+            "identity": "def id[T](value: T) -> T = value",
+            "entry": "import app qualified\nimport identity qualified\n"
+            "let result = app::app(identity::id, 0)\nresult",
+        },
+    )
+
+    assert _binding_value_type(graph, ENTRY_ID, "result") == IntType()
+
+
 def test_imported_generic_occurrences_are_fresh_and_checked_output_is_closed(
     tmp_path: Path,
 ) -> None:

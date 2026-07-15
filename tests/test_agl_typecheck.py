@@ -5876,6 +5876,14 @@ class TestGenericFunctionInferenceRegions:
         assert checked.type_env.get_binding_type(binding.node_id) == DecimalType()
         self._assert_finalized(checked)
 
+    def test_generic_arguments_reject_coercions_and_json_as_equality_evidence(self) -> None:
+        reject_type("def same[T](left: T, right: T) -> T = left\nsame(1, 2.0)")
+        reject_type(
+            "def same[T](left: T, right: T) -> T = left\n"
+            "let value: json = 2\n"
+            "same(1, value)"
+        )
+
     def test_context_completes_empty_collection_arguments_after_their_shape_is_known(self) -> None:
         checked = accept_type(
             "def id[T](value: T) -> T = value\n"
@@ -5897,6 +5905,17 @@ class TestGenericFunctionInferenceRegions:
         )
         self._assert_finalized(checked)
         reject_type('def id[T](x: T) -> T = x\nid(raise Abort(message = "stop"))')
+
+    def test_bottom_does_not_prevent_sibling_evidence_from_solving_a_generic_call(self) -> None:
+        checked = accept_type(
+            'def choose[T](left: T, right: T) -> T = right\n'
+            'let result = choose(raise Abort(message = "stop"), 0)\n'
+            "result"
+        )
+        result = checked.resolved.program.body.items[1]
+        assert isinstance(result, LetDecl)
+        assert checked.type_env.get_binding_type(result.node_id) == IntType()
+        self._assert_finalized(checked)
 
     def test_unannotated_generic_value_cannot_escape_binding_region(self) -> None:
         reject_type("def id[T](x: T) -> T = x\nlet f = id\nf(0)")

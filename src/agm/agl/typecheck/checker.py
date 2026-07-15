@@ -437,8 +437,8 @@ class _Checker:
         self._builtins = BuiltinCallChecker(self)
         self._constructors = ConstructorChecker(self)
         # Function return contexts. The top entry is either an annotated expected
-        # result type or None for inference; the matching collector records return
-        # operand types in inference mode.
+        # result type or None for inference; the return collector records operand
+        # types in inference mode.
         self._return_expected_stack: list[Type | None] = []
         self._return_collected_stack: list[list[Type]] = []
         self._return_extern_targets_stack: list[list[_ExternTarget]] = []

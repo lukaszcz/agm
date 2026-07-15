@@ -634,6 +634,7 @@ class PipelineDriver:
         check_only: bool = False,
         log_file: "Path | None" = None,
         compiled: "MatchCompiledProgram | None" = None,
+        checked: "CheckedProgramType | None" = None,
         config_cli: "Mapping[str, Value] | None" = None,
         config_base: "Mapping[str, Value] | None" = None,
     ) -> RunResult:
@@ -718,7 +719,7 @@ class PipelineDriver:
         # ----------------------------------------------------------------
         # [3] Type checking
         # ----------------------------------------------------------------
-        if compiled is None:
+        if compiled is None and checked is None:
             checked, tc_diagnostics = _run_typecheck(resolved, capabilities)
             if checked is None:
                 return RunResult(
@@ -727,9 +728,10 @@ class PipelineDriver:
                     error=None,
                     warnings=warnings,
                 )
-        else:
+        elif compiled is not None:
             checked = compiled.checked
 
+        assert checked is not None
         _append_checker_warnings(warnings, checked)
 
         if compiled is None:
@@ -1154,6 +1156,7 @@ class PipelineDriver:
         *,
         names: set[str],
         compiled_graph: "MatchCompiledModuleGraph | None" = None,
+        checked_graph: "CheckedModuleGraph | None" = None,
         config_cli: "Mapping[str, Value] | None" = None,
         config_base: "Mapping[str, Value] | None" = None,
     ) -> StartupConfigResult:
@@ -1380,6 +1383,7 @@ class PipelineDriver:
         check_only: bool = False,
         log_file: "Path | None" = None,
         compiled_graph: "MatchCompiledModuleGraph | None" = None,
+        checked_graph: "CheckedModuleGraph | None" = None,
         config_cli: "Mapping[str, Value] | None" = None,
         config_base: "Mapping[str, Value] | None" = None,
     ) -> RunResult:

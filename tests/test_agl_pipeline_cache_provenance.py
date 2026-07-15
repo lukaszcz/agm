@@ -130,17 +130,24 @@ def test_graph_discovery_rejects_cached_artifact_with_different_module_set(
 
 
 def test_single_run_rechecks_cached_artifact_when_host_capabilities_change() -> None:
-    source = 'ask("cached")'
-    cached_by = PipelineDriver(default_agent=lambda _prompt: "answer")
-    prepared = cached_by.prepare(source)
-    discovery = cached_by.discover_params(prepared)
+    from agm.agl.runtime.codec import TextCodec
+
+    class ExtraCodec(TextCodec):
+        @property
+        def name(self) -> str:
+            return "extra"
+
+    source = "let value = 1\nvalue"
+    runtime = PipelineDriver()
+    prepared = runtime.prepare(source)
+    discovery = runtime.discover_params(prepared)
     assert discovery.compiled is not None
 
-    result = PipelineDriver().run_prepared(prepared, compiled=discovery.compiled)
+    runtime.register_codec(ExtraCodec())
+    result = runtime.run_prepared(prepared, compiled=discovery.compiled)
 
-    assert not result.ok
-    assert result.error is None
-    assert result.diagnostics
+    assert result.ok
+    assert result.diagnostics == []
 
 
 def test_graph_cache_without_capability_provenance_is_rechecked() -> None:

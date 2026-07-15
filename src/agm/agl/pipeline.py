@@ -696,7 +696,7 @@ class PipelineDriver:
                     error=None,
                     warnings=warnings,
                 )
-            if compiled.capabilities is None:
+            if compiled.capabilities != capabilities:
                 compiled = None
 
         # ----------------------------------------------------------------
@@ -1055,7 +1055,7 @@ class PipelineDriver:
                     warnings=prepared.warnings,
                     checked_graph=None,
                 )
-            if compiled_graph.capabilities is None:
+            if compiled_graph.capabilities != capabilities:
                 compiled_graph = None
 
         if compiled_graph is None:
@@ -1196,7 +1196,7 @@ class PipelineDriver:
                     checked_graph=None,
                     compiled_graph=None,
                 )
-            if compiled_graph.capabilities is None:
+            if compiled_graph.capabilities != capabilities:
                 compiled_graph = None
 
         from agm.agl.modules.ids import ENTRY_ID
@@ -1429,7 +1429,7 @@ class PipelineDriver:
                     error=None,
                     warnings=warnings,
                 )
-            if compiled_graph.capabilities is None:
+            if compiled_graph.capabilities != capabilities:
                 compiled_graph = None
 
         registry = host_env.registry
@@ -1635,7 +1635,6 @@ def _cached_artifact_provenance_diagnostic(
             compiled_modules[module_id] is prepared_resolved
             for module_id, prepared_resolved in prepared_modules.items()
         )
-        and (cached_capabilities is None or cached_capabilities == capabilities)
     )
     if same_provenance:
         return None

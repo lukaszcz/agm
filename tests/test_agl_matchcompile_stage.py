@@ -72,6 +72,7 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
         "EnumConstructor",
         "EnumWitness",
         "EnumWitnessQualification",
+        "FieldOccurrenceProvenance",
         "LiteralKind",
         "LiteralWitness",
         "MatchCompilationResult",
@@ -96,7 +97,7 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
     }
     assert not hasattr(matchcompile, "EnumOwnerForm")
     assert not hasattr(matchcompile, "EnumOwnerFormKind")
-    assert not hasattr(matchcompile, "FieldOccurrenceProvenance")
+    assert hasattr(matchcompile, "FieldOccurrenceProvenance")
     assert matchcompile.EnumWitnessQualification is not EnumOwnerForm
 
 

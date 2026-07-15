@@ -695,6 +695,8 @@ class PipelineDriver:
                     error=None,
                     warnings=warnings,
                 )
+            if compiled.capabilities is None:
+                compiled = None
 
         # ----------------------------------------------------------------
         # [2b] Source↔host agent reconciliation
@@ -1051,6 +1053,8 @@ class PipelineDriver:
                     warnings=prepared.warnings,
                     checked_graph=None,
                 )
+            if compiled_graph.capabilities is None:
+                compiled_graph = None
 
         if compiled_graph is None:
             checked_graph, tc_diagnostics = _run_typecheck_graph(
@@ -1086,7 +1090,7 @@ class PipelineDriver:
                     checked_graph=checked_graph,
                 )
 
-        compiled_graph = _with_cached_capabilities(compiled_graph, capabilities)
+            compiled_graph = _with_cached_capabilities(compiled_graph, capabilities)
 
         entry_cm = checked_graph.modules.get(ENTRY_ID)
         if entry_cm is None:
@@ -1189,6 +1193,8 @@ class PipelineDriver:
                     checked_graph=None,
                     compiled_graph=None,
                 )
+            if compiled_graph.capabilities is None:
+                compiled_graph = None
 
         from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.syntax.nodes import ConfigDecl
@@ -1419,6 +1425,8 @@ class PipelineDriver:
                     error=None,
                     warnings=warnings,
                 )
+            if compiled_graph.capabilities is None:
+                compiled_graph = None
 
         registry = host_env.registry
 
@@ -1623,7 +1631,7 @@ def _cached_artifact_provenance_diagnostic(
             compiled_modules[module_id] is prepared_resolved
             for module_id, prepared_resolved in prepared_modules.items()
         )
-        and cached_capabilities == capabilities
+        and (cached_capabilities is None or cached_capabilities == capabilities)
     )
     if same_provenance:
         return None

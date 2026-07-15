@@ -285,6 +285,41 @@ def test_case_without_default_requires_complete_enum_domain() -> None:
         validate_ir(program)
 
 
+def test_case_without_default_allows_complete_enum_domain() -> None:
+    enum_nominal = NominalId(module_id=MOD_A, declared_name="Result")
+    program = _make_program(
+        initializers=(
+            IrCase(
+                location=LOC,
+                subject=IrConstInt(location=LOC, value=1),
+                arms=(
+                    IrCaseArm(
+                        key=IrEnumCaseKey(nominal=enum_nominal, variant="Ok"),
+                        field_bindings=(),
+                        body=IrConstUnit(location=LOC),
+                    ),
+                    IrCaseArm(
+                        key=IrEnumCaseKey(nominal=enum_nominal, variant="Error"),
+                        field_bindings=(),
+                        body=IrConstUnit(location=LOC),
+                    ),
+                ),
+                default=None,
+            ),
+        ),
+        nominals={
+            enum_nominal: NominalDescriptor(
+                nominal=enum_nominal,
+                display_name="Result",
+                kind=NominalKind.ENUM,
+                variants=(VariantDescriptor("Ok", ()), VariantDescriptor("Error", ())),
+            )
+        },
+    )
+
+    validate_ir(program)
+
+
 # ===========================================================================
 # Valid program
 # ===========================================================================

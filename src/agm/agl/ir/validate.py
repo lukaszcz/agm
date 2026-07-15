@@ -595,7 +595,9 @@ def _validate_case_arm(arm: IrCaseArm, ctx: _Context) -> None:
             raise InvalidIrError(f"IrCaseArm binds field {field_name!r} more than once")
         field_names.add(field_name)
         if symbol in binding_symbols:
-            raise InvalidIrError(f"IrCaseArm binds destination symbol {symbol.value!r} more than once")
+            raise InvalidIrError(
+                f"IrCaseArm binds destination symbol {symbol.value!r} more than once"
+            )
         binding_symbols.add(symbol)
         if valid_fields is not None and field_name not in valid_fields:
             raise InvalidIrError(

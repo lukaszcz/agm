@@ -2,29 +2,30 @@
 
 [← Index](index.md)
 
-Patterns appear in `case` statements ([Control flow](control-flow.md)) and
-`case` expressions ([Expressions](expressions.md)). Every branch is
-introduced by `|`, including the first.
+Patterns appear in `case` expressions ([Control flow](control-flow.md),
+[Expressions](expressions.md)). The `|` before the first branch is optional;
+each additional branch is introduced by `|`.
 
 ## Pattern forms
 
 ```ebnf
 pattern        ::= "_"                                    (* wildcard *)
                  | literal                                (* literal pattern *)
-                 | NAME                                   (* variable binder *)
-                 | constructor_pattern
-                 | qual_constructor_pattern               (* module-qualified constructor *)
+                 | name                                   (* binder or bare constructor *)
+                 | name "(" pattern_fields? ")"          (* unqualified constructor *)
+                 | qual_prefix type_qual? name
+                     ("(" pattern_fields? ")")?           (* qualified constructor *)
 
-constructor_pattern      ::= NAME ("." NAME)? ("(" pattern_fields? ")")?
-                           | NAME "." NAME                (* qualified nullary *)
-qual_constructor_pattern ::= qual_prefix NAME ("." NAME)? ("(" pattern_fields? ")")?
-
-qual_prefix    ::= NAME ("." NAME)* "::"   (* module-qualified prefix *)
-               | "::"                      (* current-module prefix *)
+qual_prefix    ::= module_path "::"         (* module or type prefix *)
+                 | "::"                     (* current-module prefix *)
+type_qual      ::= name "::"                (* owning type after a module prefix *)
+module_path    ::= NAME ("." NAME)*
+name           ::= NAME | OP_NAME
+field_name     ::= NAME | "agent" | "to" | "downto" | "by"
 
 pattern_fields ::= pattern_field ("," pattern_field)* ","?
 pattern_field  ::= pattern                                (* positional sub-pattern *)
-                 | NAME "=" pattern                       (* named sub-pattern: field = subpattern *)
+                 | field_name "=" pattern                 (* named sub-pattern *)
 ```
 
 ### Wildcard `_`
@@ -88,16 +89,21 @@ payload. A pattern is a constructor pattern when it is one of:
 - a **bare name that denotes an in-scope constructor** — matches that variant
   (nullary variants only; see below),
 - a **call form** `name(…)`, where the parentheses may be empty, or
-- a **qualified** `Enum::variant`.
+- a **qualified** `Enum::variant` or `module::Enum::variant` form.
 
 ```agl
-Pass                       # nullary variant — bare name that names a constructor
-Pass()                     # nullary variant, explicit call form
-Review::Pass                # nullary variant, qualified (aliases resolve transparently)
-Fail(issues)               # shorthand: binds field 'issues' to name 'issues'
-Fail(issues = xs)          # binds field 'issues' to name 'xs'
-Fail(issues = ["stuck"])   # nested literal pattern on a field
+enum Review
+  | Pass
+  | Fail(reason: text)
+
+def summarize(review: Review) -> text =
+  case review of
+    | Review::Pass => "passed"              # qualified nullary constructor
+    | Fail(reason = "stuck") => "blocked"  # nested scalar literal
+    | Fail(reason = other) => other          # named binder
 ```
+
+The first branch could equivalently use bare `Pass` or explicit `Pass()`.
 
 A **bare** constructor name matches **nullary** variants only. A bare name for a
 variant that has fields is a static error directing you to an explicit form, so
@@ -108,7 +114,8 @@ the bare form is a convenience for the common nullary case.
 #### Module-qualified constructor patterns
 
 When a type comes from an imported module, the constructor may be prefixed
-with a module qualifier:
+with a module qualifier. Both the module/type boundary and the type/variant
+boundary use `::`:
 
 ```agl
 import mylib
@@ -118,10 +125,13 @@ case value of
   | mylib::Color::Blue => print "blue"
 ```
 
-The `qual_prefix` form (a module qualifier `module::`) or the self-reference
-form (`::`) may appear before the constructor name. This is useful when two
-open-imported modules export enum types with the same variant name, since
-qualification always disambiguates.
+The prefix may name an owning type (`Color::Red`), a module and owning type
+(`mylib::Color::Red`), or the current module (`::Color::Red`). A module may
+also qualify an exposed constructor directly (`mylib::Red`). This is useful
+when two open-imported modules export enum types with the same variant name,
+since qualification always disambiguates. Dotted names occur only inside a
+module path such as `company.colors::Color::Red`; constructor qualification
+itself uses `::`, never `.`.
 
 **Payload sub-patterns** follow the same positional-greedy binding as calls:
 
@@ -146,11 +156,19 @@ case r of
 ```
 
 Named sub-patterns nest arbitrarily — the sub-pattern may be a wildcard, literal,
-binder, or another constructor pattern:
+binder, or another constructor pattern. Here the final binder is required because
+`int` is an open domain:
 
 ```agl
-Fail(issues = ["stuck"])   # nested literal pattern
-Fail(issues = xs)          # binds field 'issues' to pattern variable xs
+enum Response
+  | Complete
+  | Failed(code: int)
+
+def describe(response: Response) -> text =
+  case response of
+    | Complete => "complete"
+    | Failed(code = 503) => "unavailable"  # nested scalar literal
+    | Failed(code = code) => "error ${code}"  # named binder covers other ints
 ```
 
 Static rules:

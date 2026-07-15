@@ -278,9 +278,10 @@ class ResolvedProgram:
     ``bare_variant_patterns``
         ``node_id`` of every ``VarPattern`` whose bare name denotes an in-scope
         constructor binding and is therefore a (nullary) constructor pattern
-        rather than a variable binder.  The checker validates that the name is a
-        nullary variant of the scrutinee enum; the interpreter matches it
-        positionally without binding.
+        rather than a variable binder.  Resolution records this classification,
+        the checker validates that the name is a nullary variant of the scrutinee
+        enum, and match compilation consumes the classification when normalizing
+        the source pattern into a decision artifact.
     ``case_scopes``
         Maps every source ``Case.node_id`` to the exact lexical scope active
         when the resolver entered that case.  Downstream diagnostics use this

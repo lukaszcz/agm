@@ -204,21 +204,17 @@ def _call_custom_codec_parse(
 
 def _literal_key_value(key: IrLiteralCaseKey) -> Value:
     """Materialize the runtime value represented by one typeless scalar key."""
-    match key.kind:
-        case IrLiteralKind.NUMERIC:
-            assert isinstance(key.scalar_value, decimal.Decimal)
-            return DecimalValue(key.scalar_value)
-        case IrLiteralKind.BOOL:
-            assert isinstance(key.scalar_value, bool)
-            return BoolValue(key.scalar_value)
-        case IrLiteralKind.TEXT:
-            assert isinstance(key.scalar_value, str)
-            return TextValue(key.scalar_value)
-        case IrLiteralKind.NULL:
-            assert key.scalar_value is None
-            return JsonValue(None)
-        case _ as unreachable:  # pragma: no cover
-            assert_never(unreachable)
+    if key.kind is IrLiteralKind.NUMERIC:
+        assert isinstance(key.scalar_value, decimal.Decimal)
+        return DecimalValue(key.scalar_value)
+    if key.kind is IrLiteralKind.BOOL:
+        assert isinstance(key.scalar_value, bool)
+        return BoolValue(key.scalar_value)
+    if key.kind is IrLiteralKind.TEXT:
+        assert isinstance(key.scalar_value, str)
+        return TextValue(key.scalar_value)
+    assert key.scalar_value is None
+    return JsonValue(None)
 
 
 # ---------------------------------------------------------------------------
@@ -997,8 +993,8 @@ class IrInterpreter:
                             return mul(kind, lhs_val, rhs_val)
                         case ArithOp.DIV:
                             return div(lhs_val, rhs_val)
-                        case _ as unreachable_case_key:  # pragma: no cover
-                            assert_never(unreachable_case_key)
+                        case _ as unreachable:  # pragma: no cover
+                            assert_never(unreachable)
                 except AglDivisionByZero:
                     raise AglRaise(
                         _make_exc_value(
@@ -1213,17 +1209,15 @@ class IrInterpreter:
             case IrCase(subject=subject_expr, arms=arms, default=default):
                 subject_val = self._eval(subject_expr)
                 for arm in arms:
-                    match arm.key:
-                        case IrEnumCaseKey(nominal=nominal, variant=variant):
-                            selected = (
-                                isinstance(subject_val, EnumValue)
-                                and subject_val.nominal == nominal
-                                and subject_val.variant == variant
-                            )
-                        case IrLiteralCaseKey() as key:
-                            selected = value_eq(subject_val, _literal_key_value(key))
-                        case _ as unreachable:  # pragma: no cover
-                            assert_never(unreachable)
+                    key = arm.key
+                    if isinstance(key, IrEnumCaseKey):
+                        selected = (
+                            isinstance(subject_val, EnumValue)
+                            and subject_val.nominal == key.nominal
+                            and subject_val.variant == key.variant
+                        )
+                    else:
+                        selected = value_eq(subject_val, _literal_key_value(key))
                     if not selected:
                         continue
                     if arm.field_bindings:

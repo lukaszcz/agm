@@ -46,62 +46,31 @@ Output contracts (the schema and format metadata that agent/`exec` calls need) a
 
 ## Pattern-Match Compiler Boundary
 
-`matchcompile/` is an IR-independent consumer of checked pattern metadata. Its immutable model
-represents typed constructor signatures, compiler-local value occurrences, canonical matrix rows,
-source binder/action provenance, and decision nodes. Normalization expands partial enum patterns to
-declaration-order cells using the checker's argument bindings and the shared `TypeTable`; boolean and
-enum domains have closed signatures, while all other current semantic types are explicitly
-classified as open domains. Numeric literal keys use the same integer/decimal equality
-canonicalization as execution; normalization drops source rows whose typed constructors cannot
-denote runtime values (while retaining the complete ordered action provenance), and matrix
-boundaries recheck that inhabitation recursively. Immutable matrix states track active and
-path-available occurrences plus the exact constructor decompositions selected on their path;
-specialization/defaulting preserve source priority and migrate binder provenance, while a
-persistent case-local allocator gives introduced fields stable identities without becoming
-semantic path state. Order-insensitive available occurrences, path decompositions, and binder
-environments are canonicalized at matrix construction, so equivalent operation paths form the same
-immutable compilation key while active column and source-row order remain semantic. Allocators can
-be created only for a freshly normalized case, then evolve persistently across sibling and
-descendant specializations; a case-identity token prevents structurally equal matrices from mixing
-those ledgers. Each case also carries its checked `TypeTable` as identity-only compiler context,
-allowing matrix boundaries to validate enum heads and path decompositions against canonical
-declaration-order signatures without changing semantic matrix keys. Column choice is isolated
-behind the deterministic `qba` selector. Recursive compilation memoizes those canonical states and
-hash-conses complete immutable decisions within one source case, producing an acyclic DAG whose
-nodes expose the occurrence interface later lowering must provide. The per-case result retains its
-root and full occurrence ledger even when invalid: an identity-aware DAG traversal derives reachable
-source actions, redundant-arm issues, and one structured missing witness from the first failure path.
-The resolver records an exact lexical-scope snapshot for every source case. Graph checking also
-retains each module's immutable import environment as an explicit checked-module contract.
-Normalization asks the checked type environment for a finite immutable set of enum-owner forms:
-local, self-qualified, open-imported, and import-handle-qualified. Each form retains its exposed
-spelling, resolved source identity, and alias-transparent semantic template. The checker uses the
-same form resolution and exact template match for constructor-pattern owners, so every retained
-witness form is writable under the source's real exposure, ambiguity, and handle-conflict rules.
-Witness construction matches those forms against each concrete enum occurrence, so different
-generic instantiations can select different valid aliases; transformed, reordered, and fixed alias
-arguments use the same exact one-sided matcher. Candidate
-collection never expands a concrete instantiation closure, while declaration shapes continue to be
-resolved lazily through the checked `TypeTable`, keeping polymorphic recursion finite. Witness
-rendering remains separate from semantic enum identity and the closed witness data model.
+`matchcompile/` consumes checked pattern metadata without depending on lowering, the execution IR,
+the evaluator, or runtime services. It normalizes source patterns into typed pattern matrices,
+preserves source priority while choosing tests with the deterministic `qba` heuristic, and compiles
+each source `case` into a locally shared immutable decision DAG. Enum and boolean domains use their
+complete checked signatures; scalar and unresolved type-variable domains remain open. The same DAG
+provides reachable-arm information and deterministic structured witnesses, so exhaustiveness and
+redundancy diagnostics cannot disagree with the executable decision structure.
 
-Whole-program entry points walk every nested source `Case` exactly once after checking, including
-cases in every reachable module. They return either a frozen `MatchCompiledProgram` /
-`MatchCompiledModuleGraph` with a total immutable case mapping, or all structured non-exhaustive and
-redundant-arm issues sorted by source location. Issue adaptation at the package boundary produces
-ordinary error diagnostics, and no artifact is constructed on failure. Artifact validation is a
-semantic trust boundary: it binds every normalized case back to the exact checked source, verifies
-the complete occurrence ledger and identity-aware DAG interfaces, and replays the compiler rules
-from the canonical root matrix to prove each stored switch, edge, default, and leaf implements its
-exact specialized state. It then recomputes reachable actions and failure-derived issues without
-constructing a second decision DAG. It also checks module and exact checked-program ownership.
-Lowering accepts only these successful artifacts; parameter discovery, startup config, dry-run, execution,
-and REPL checks cache and reuse them rather than re-running match compilation. Pipeline cache
-consumers accept an artifact only when its checked program wraps the exact resolved object from the
-prepared source; graph caches additionally require the exact entry, module set, and resolved object
-for every module. The
-package may consume syntax, scope, semantic, and typecheck data, but dependency contracts prevent it
-from importing lowering, IR, evaluation, or runtime services.
+Whole-program entry points visit every nested case after type checking, including cases in all
+reachable modules. Success yields a distinct `MatchCompiledProgram` or
+`MatchCompiledModuleGraph` that wraps the exact checked artifact and carries a total case-to-DAG
+mapping; any issue yields sorted static diagnostics and no artifact. Artifact validation checks
+source ownership, mapping totality, and decision semantics before lowering trusts the result.
+Parameter discovery, startup config, dry-run, execution, and REPL paths cache and reuse the same
+artifact rather than bypassing or repeating the stage.
+
+The package-level API is deliberately limited to whole-program artifacts and stage entry points,
+structured issues/witnesses and their diagnostic adapters, plus the small decision contract used by
+lowering. Matrix/QBA machinery, normalization, allocation, source-owner metadata, and validation
+helpers used only by white-box tests stay in their defining submodules. Enum owner forms remain a
+type-checker API; match diagnostics expose a separate rendering-only qualification value.
+
+The package's main implementation seams are `normalize.py` (checked patterns and signatures),
+`matrix.py` (matrix decomposition and column selection), `compiler.py` / `diagnostics.py` (decision
+DAGs and issues), and `stage.py` (whole-program artifacts and diagnostic adaptation).
 
 An `extern def` (Python FFI) shares the `builtin def` signature path end to end — body-less construction, header validation, signature registration — plus extern-only checks: the declared name must be a valid, non-keyword Python identifier, and no function or agent type may occur anywhere in its parameter or return types (a type variable is fine; sealing enforces parametricity for it at runtime — see [execution.md](execution.md)). Calls to an extern typecheck exactly like calls to an ordinary function and are additionally recorded in the dry-run call-site inventory, including indirect calls through first-class function values and partial applications. The placement rule — externs are only allowed in a file-backed module — is a scope-pass check keyed on whether the module's loader-recorded origin path is present.
 

@@ -4,7 +4,7 @@ AgL has a file-based module system. A program with `import` declarations is comp
 
 ## Module Identity and Roots
 
-A module is identified by a dotted path mapping to a relative file path; a sentinel id keys the entry program. Modules are found by searching an unordered, canonicalized set of *roots* — the invocation directory, the installed standard library, a global library root, configured roots, and roots from CLI flags. Resolution searches all roots and requires exactly one match: zero matches is "not found", two distinct files for the same module id is "ambiguous". There is deliberately no first-root-wins shadowing. Wildcard imports glob matching files across all roots under global-uniqueness rules. Source-checkout runs skip an installed stdlib that still uses legacy constructor qualification so tests and local execution use the matching checked-out stdlib.
+A module is identified by a dotted path mapping to a relative file path; a sentinel id keys the entry program. Modules are found by searching an unordered, canonicalized set of *roots* — the invocation directory, the installed standard library, a global library root, configured roots, and roots from CLI flags. Resolution searches all roots and requires exactly one match: zero matches is "not found", two distinct files for the same module id is "ambiguous". There is deliberately no first-root-wins shadowing. Wildcard imports glob matching files across all roots under global-uniqueness rules.
 
 ## Loading
 

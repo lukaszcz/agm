@@ -549,13 +549,9 @@ def _literal_key_is_valid(key: IrLiteralCaseKey) -> bool:
 
 
 def _case_family(arm: IrCaseArm) -> tuple[str, object]:
-    match arm.key:
-        case IrEnumCaseKey(nominal=nominal):
-            return "enum", nominal
-        case IrLiteralCaseKey(kind=kind):
-            return "literal", kind
-        case _ as unreachable:  # pragma: no cover
-            assert_never(unreachable)
+    if isinstance(arm.key, IrEnumCaseKey):
+        return "enum", arm.key.nominal
+    return "literal", arm.key.kind
 
 
 def _validate_case_arm(arm: IrCaseArm, ctx: _Context) -> None:

@@ -416,7 +416,14 @@ def _witness_for_occurrence(
         )
         for index, field in enumerate(constructor.fields)
     )
-    qualification: EnumWitnessQualification | None = None if spelling.bare else spelling
+    if spelling.bare:
+        qualification = None
+    else:
+        assert spelling.owner_name is not None
+        qualification = EnumWitnessQualification(
+            owner_name=spelling.owner_name,
+            module_qualifier=spelling.module_qualifier,
+        )
     return EnumWitness(
         constructor.enum_type,
         constructor.variant,

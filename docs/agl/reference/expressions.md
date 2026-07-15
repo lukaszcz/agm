@@ -59,17 +59,22 @@ static error.
 ## Constructors
 
 ```ebnf
-constructor ::= NAME ("." NAME)? type_args? constructor_args?
+constructor ::= constructor_ref value_type_args? constructor_args?
+constructor_ref ::= name
+                  | qual_prefix name
+                  | qual_prefix? type_ref "::" name
+type_ref    ::= name ("[" type_expr ("," type_expr)* "]")?
+qual_prefix ::= module_path "::" | "::"
 constructor_args ::= "(" (ctor_arg ("," ctor_arg)* ","?)? ")"
-type_args   ::= "::" "[" type_expr ("," type_expr)* "]"
+value_type_args ::= "::" "[" type_expr ("," type_expr)* "]"
 ctor_arg    ::= expr              (* positional *)
-              | NAME "=" expr     (* named: field = value *)
+              | field_name "=" expr
 ```
 
 Constructor arguments follow the same **positional-greedy** binding as function
 calls — positional arguments fill positional-capable (pos-only/standard) field
 slots left to right; named arguments (`field = value`) follow. The optional
-`::[…]` pins the type arguments of a generic constructor (see
+value-position `::[…]` pins the type arguments of a generic constructor (see
 [Generic constructors](#generic-constructors)).
 
 **Per-type field zones.** The zone of each field depends on the declaration:
@@ -498,10 +503,12 @@ The left operand must have enum type; the variant must belong to that enum.
 
 ## `case` expressions
 
-A `case` **expression** selects among single-expression branches:
+A `case` expression selects among pattern branches whose bodies may be a
+single expression or an indented suite:
 
 ```ebnf
-case_expr ::= "case" expr "of" "|"? pattern "=>" or_expr ("|" pattern "=>" or_expr)*
+case_expr   ::= "case" or_expr "of" "|"? case_branch ("|" case_branch)*
+case_branch ::= pattern "=>" (suite | or_expr)
 ```
 
 ```agl
@@ -515,29 +522,28 @@ All branch result types must agree after `int → decimal` widening. An outer
 expected type propagates into every branch. The patterns must be exhaustive
 and non-redundant, as described in [Pattern matching](pattern-matching.md).
 
-A `case` expression is the loosest expression form: in positions where a
-following `|` could be ambiguous (branch bodies, `if`/`until` conditions) it
-must be parenthesized. A bare `case` at block level is always a `case`
-**statement form** (same grammar production — the same `case` keyword leads
-both).
+A `case` expression is one of the loosest expression forms: in positions where
+a following `|` could be ambiguous (branch bodies, `if`/`until` conditions) it
+must be parenthesized. The same expression form is valid at block level; AgL
+has no separate `case` statement.
 
 ## `if` expressions
 
 An `if` **expression** selects among branches by boolean condition:
 
 ```ebnf
-if_expr        ::= "if" "|"? if_expr_branch ("|" if_expr_branch)* if_else_branch
-if_expr_branch ::= or_expr "=>" or_expr
-if_else_branch ::= "|"? "else" "=>" or_expr
+if_expr        ::= "if" "|"? if_expr_branch ("|" if_expr_branch)* if_else_branch?
+if_expr_branch ::= or_expr "=>" (suite | or_expr)
+if_else_branch ::= "|"? "else" "=>" (suite | or_expr)
 ```
 
 ```agl
 let label: text = if | score > 90 => "A" | score > 75 => "B" | else => "C"
 ```
 
-The `else` branch is **required** — an `if` without `else` is a
-**statement** (type `unit`, below), not an expression. All branch result
-types must agree after `int → decimal` widening.
+The `else` branch is optional. With `else`, all branch result types must agree
+after `int → decimal` widening. Without `else`, the `if` remains an expression
+but has type `unit`, as described below.
 
 ## Expressions with type `unit`
 
@@ -554,8 +560,8 @@ effect, not their value:
 | `()` | `unit` | the printable unit literal |
 
 An `if` without `else` always has type `unit`, and each branch body must also
-have type `unit`. A `case` or `do` loop likewise has type `unit` and returns
-`void`.
+have type `unit`. A loop likewise has type `unit` and returns `void`; a `case`
+has the common type of its branch bodies.
 
 `unit` values may appear anywhere in a block, including as the final
 expression. A function declared `-> unit` has its body checked against

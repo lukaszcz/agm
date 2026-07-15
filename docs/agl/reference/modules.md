@@ -21,13 +21,6 @@ The core standard library module is `std.core`. It defines common names such as
 `Option[T]`, `ExecResult`, `ParsePolicy`, `AgentRequest`, built-in exception
 types, and the host-implemented built-in functions.
 
-The stdlib is a normal module tree. In the source checkout it lives under
-`stdlib/`; `just install` copies it to `.agm/stdlib/`, so `std.core` normally
-resolves from `.agm/stdlib/std/core.agl` and can be replaced without
-reinstalling AGM. During source-checkout development, AGM skips an installed
-stdlib that still uses legacy constructor qualification and falls back to the
-checkout's `stdlib/` tree.
-
 For batch execution, `std.core` is opened unqualified in the entry module by
 default. This is equivalent to an implicit leading:
 
@@ -153,8 +146,8 @@ import foo.bar.* as A
 ```
 
 produces qualifier handles `A` (for `foo.bar`) and `A.baz` (for `foo.bar.baz`),
-so `foo.bar::x` becomes `A::x` and `foo.bar.baz::y` becomes `A.baz::y`.  The
-original handles `foo.bar` and `foo.bar.baz` are no longer registered.
+so `foo.bar::x` becomes `A::x` and `foo.bar.baz::y` becomes `A.baz::y`. The
+handles `foo.bar` and `foo.bar.baz` are not registered for that import.
 
 ## Re-exporting
 

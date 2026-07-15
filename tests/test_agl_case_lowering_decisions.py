@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import decimal
+
+import pytest
+
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir import (
     ExecutableProgram,
@@ -9,16 +13,15 @@ from agm.agl.ir import (
     IrCase,
     IrEnumCaseKey,
     IrLiteralCaseKey,
+    IrLiteralKind,
     IrSequence,
 )
 from agm.agl.lower import lower_program
 from agm.agl.matchcompile import (
     MatchCompiledProgram,
-    Occurrence,
-    OccurrenceId,
-    PathDecomposition,
     compile_program_matches,
 )
+from agm.agl.matchcompile.model import Occurrence, OccurrenceId, PathDecomposition
 from agm.agl.parser import parse_program
 from agm.agl.scope import resolve
 from agm.agl.syntax.nodes import (
@@ -90,6 +93,49 @@ def test_enum_arm_binds_only_demanded_immediate_field_for_nested_switch() -> Non
     assert tuple(name for name, _ in enum_arm.field_bindings) == ("left",)
     assert isinstance(enum_arm.body, IrCase)
     assert all(isinstance(arm.key, IrLiteralCaseKey) for arm in enum_arm.body.arms)
+
+
+@pytest.mark.parametrize(
+    ("source", "expected_kind", "expected_scalar"),
+    [
+        (
+            "let value = true\n"
+            "let result = case value of | true => 1 | false => 0\n"
+            "()",
+            IrLiteralKind.BOOL,
+            True,
+        ),
+        (
+            "let value = 1\nlet result = case value of | 1 => 1 | _ => 0\n()",
+            IrLiteralKind.NUMERIC,
+            decimal.Decimal(1),
+        ),
+        (
+            'let value = "x"\nlet result = case value of | "x" => 1 | _ => 0\n()',
+            IrLiteralKind.TEXT,
+            "x",
+        ),
+        (
+            "let value: json = null\n"
+            "let result = case value of | null => 1 | _ => 0\n"
+            "()",
+            IrLiteralKind.NULL,
+            None,
+        ),
+    ],
+)
+def test_literal_patterns_lower_to_canonical_one_level_keys(
+    source: str,
+    expected_kind: IrLiteralKind,
+    expected_scalar: decimal.Decimal | bool | str | None,
+) -> None:
+    lowered = _public_binding(_lower(source), "result").value
+    assert isinstance(lowered, IrSequence)
+    switch = lowered.items[1]
+    assert isinstance(switch, IrCase)
+    keys = tuple(arm.key for arm in switch.arms)
+    assert all(isinstance(key, IrLiteralCaseKey) for key in keys)
+    assert IrLiteralCaseKey(expected_kind, expected_scalar) in keys
 
 
 def test_shared_decision_node_remains_shared_ir_object() -> None:

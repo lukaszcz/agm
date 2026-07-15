@@ -9,7 +9,7 @@ from typing import TypeAlias
 from agm.agl.semantics.types import EnumType, Type
 from agm.agl.syntax.spans import SourceSpan
 
-from .model import EnumConstructorSpelling, LiteralConstructor, LiteralKind
+from .model import LiteralConstructor, LiteralKind
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,7 +40,17 @@ class WitnessField:
     witness: MatchWitness
 
 
-EnumWitnessQualification = EnumConstructorSpelling
+@dataclass(frozen=True, slots=True)
+class EnumWitnessQualification:
+    """Source-level enum owner spelling used to render one witness.
+
+    This diagnostic value deliberately omits the type-checker's owner-form
+    resolution metadata.  Consumers need only the selected owner name and its
+    optional module qualifier.
+    """
+
+    owner_name: str
+    module_qualifier: tuple[str, ...] | None
 
 
 @dataclass(frozen=True, slots=True)

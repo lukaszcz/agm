@@ -10,21 +10,23 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.ids import NominalId
-from agm.agl.matchcompile import (
+from agm.agl.matchcompile.matrix import (
+    OccurrenceAllocator,
+    PatternMatrix,
+    default_matrix,
+    head_constructors,
+    matrix_from_normalized,
+    specialize,
+)
+from agm.agl.matchcompile.model import (
     BinderAssignment,
     Constructor,
     ConstructorCell,
     EnumConstructor,
     MatrixRow,
-    OccurrenceAllocator,
-    PatternMatrix,
     WildcardCell,
-    default_matrix,
-    head_constructors,
-    matrix_from_normalized,
-    normalize_case,
-    specialize,
 )
+from agm.agl.matchcompile.normalize import normalize_case
 from agm.agl.parser import parse_program
 from agm.agl.scope import resolve
 from agm.agl.semantics.values import (

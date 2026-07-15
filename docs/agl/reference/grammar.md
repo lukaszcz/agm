@@ -230,14 +230,15 @@ each opening `[` must be adjacent to the target name or preceding index:
 ## Loops
 
 ```ebnf
-loop        ::= for_clause? while_clause? "do" loop_bound? body loop_end
-for_clause  ::= "for" name "in" or_expr range_tail? _NL?
+loop        ::= for_clause? while_clause? "do" loop_bound?
+                (suite loop_end? | inline_body loop_end)
+for_clause  ::= "for" name "in" or_expr range_tail? NEWLINE?
 range_tail  ::= ("to" | "downto") or_expr ("by" or_expr)?
-while_clause::= "while" or_expr _NL?
+while_clause::= "while" or_expr NEWLINE?
 loop_bound  ::= "[" or_expr "]"           (* int; n <= 0 runs zero iterations *)
-body        ::= suite | inline_body
 loop_end    ::= "until" or_expr | "done"   (* omitted terminator allowed in suite form *)
-inline_body ::= item (";" item)*
+inline_body ::= inline_item (";" inline_item)*
+inline_item ::= let_decl | var_decl | assign_expr | or_expr
 ```
 
 At most one `for` and one `while` clause, in that order. `done` and an
@@ -263,14 +264,14 @@ type `T`.
 ## `case`
 
 ```ebnf
-case_expr    ::= "case" expr "of" "|"? case_branch ("|" case_branch)*
+case_expr    ::= "case" or_expr "of" "|"? case_branch ("|" case_branch)*
 case_branch  ::= pattern "=>" (suite | or_expr)
 ```
 
 ## `try` / `catch`
 
 ```ebnf
-try_expr      ::= "try" (suite | inline_body) catch_clause+
+try_expr      ::= "try" (suite | or_expr (";" or_expr)*) catch_clause+
 catch_clause  ::= "catch" catch_pattern "=>" (suite | or_expr)
 catch_pattern ::= name ("as" name)?
                 | "_" ("as" name)?
@@ -282,22 +283,21 @@ catch_pattern ::= name ("as" name)?
 pattern        ::= "_"
                  | INT | DECIMAL | "true" | "false" | "null" | STRING
                  | name
-                 | constructor_pattern
-                 | qual_constructor_pattern
-
-constructor_pattern      ::= name ("(" pattern_fields? ")")?
-qualified_type           ::= name ("[" type_expr ("," type_expr)* "]")?
-qual_constructor_pattern ::= qual_prefix? qualified_type "::" name
-                             ("(" pattern_fields? ")")?
+                 | name "(" pattern_fields? ")"
+                 | qual_prefix type_qual? name ("(" pattern_fields? ")")?
+qual_prefix    ::= module_path "::" | "::"
+type_qual      ::= name "::"
 pattern_fields ::= pattern_field ("," pattern_field)* ","?
 pattern_field  ::= pattern              (* positional sub-pattern *)
-                 | name "=" pattern     (* named sub-pattern: field = subpattern *)
+                 | field_name "=" pattern
+                                           (* named sub-pattern: field = subpattern *)
 ```
 
-A `qual_constructor_pattern` is a **qualified** variant pattern
-(`Option::some(value)` or `module::Option::some(value)`), naming the owning enum
-and the variant; it is required when an unqualified variant name is ambiguous
-across enums ([Generics](generics.md), [Pattern matching](pattern-matching.md)).
+A qualified variant pattern (`Option::some(value)` or
+`module::Option::some(value)`) names the owning enum and variant with `::`; it
+is required when an unqualified variant name is ambiguous across enums
+([Generics](generics.md), [Pattern matching](pattern-matching.md)). Type
+arguments are carried by the scrutinee type rather than written in a pattern.
 
 In a constructor pattern, **positional sub-patterns** (`pattern` without a
 `name "="` prefix) fill positional-capable (pos-only/standard) constructor fields
@@ -309,7 +309,8 @@ A `STRING` pattern may not contain interpolation.
 ## Expressions
 
 ```ebnf
-expr      ::= case_expr | if_expr | infix_expr
+expr      ::= case_expr | if_expr | loop | try_expr | raise_expr
+            | return_expr | lambda_expr | or_expr
 
 infix_expr    ::= infix_operand (infix_op infix_operand)*
 infix_operand ::= "not"* is_expr
@@ -339,32 +340,25 @@ postfix        ::= postfix "." name                (* runtime field access *)
                | postfix "::" "[" type_expr ("," type_expr)* "]" "(" arg_list? ")"
                | atom
 
-qual_prefix    ::= NAME ("." NAME)* "::"   (* dotted module path followed by :: *)
-               | "::"                      (* self-reference: current module *)
+qualified_type ::= name ("[" type_expr ("," type_expr)* "]")?
 
 atom           ::= INT | DECIMAL | "true" | "false" | "null"
                | "(" ")"                           (* unit literal *)
                | list_literal
                | dict_literal
                | name                              (* variable / constructor reference *)
-               | qual_prefix name                  (* module-qualified ref *)
+               | qual_prefix type_qual? name       (* qualified ref / constructor *)
                | qual_prefix? qualified_type "::" name
-                                                    (* type-qualified constructor ref *)
+                                                    (* applied-type-qualified constructor *)
                | template
                | "(" expr ")"                      (* parenthesized expr *)
-               | lambda_expr
-               | assign_expr
-               | do_until
-               | raise_expr
-               | return_expr
 
 atom_no_call   ::= (* same as atom but excludes "(" — prevents sugar conflict *)
                INT | DECIMAL | "true" | "false" | "null"
                | list_literal | dict_literal | name
                | template
 
-qualified_constructor ::= qual_prefix? qualified_type "::" name
-                        | name
+qualified_constructor ::= qual_prefix type_qual? name | name
 
 raise_expr  ::= "raise" expr
 return_expr ::= "return" or_expr?

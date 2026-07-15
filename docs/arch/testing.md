@@ -14,7 +14,7 @@ The guiding rule is to test user workflows and observable behavior, not implemen
 
 Some tests guard architectural properties rather than feature behavior:
 
-- **Package layering.** A dependency-contract test asserts the AgL package boundaries — `semantics` as the foundation leaf, the IR depending only on its own data, the evaluator never importing the frontend, the runtime staying eval-free, and the pipeline on top.
+- **Package layering.** A dependency-contract test asserts the AgL package boundaries — `semantics` as the foundation leaf, match compilation importing no IR/lowering/evaluator/runtime code, the IR importing no frontend or match-compiler code, the evaluator never importing the frontend, the runtime staying eval-free, and the pipeline on top.
 - **End-to-end acceptance.** Whole-program suites for single-file and multi-file AgL programs are part of the standing gate and must stay green.
 - **Coverage.** The project maintains 100% test coverage of `src/` and 100% command coverage in end-to-end tests.
 

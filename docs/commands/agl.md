@@ -311,7 +311,7 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
   `[v]iew` option to print the full text) and asks `[Y]es / [n]o / [a]lways`. `yes` runs
   the call, `no` aborts the entry (rolling its bindings back), and `always` switches the
   session to auto mode for the rest of the session.
-- `exec` shell calls are **not** gated in this version; only agent calls are confirmed.
+- `exec` shell calls are **not** gated; only agent calls are confirmed.
 
 ### Options
 

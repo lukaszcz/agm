@@ -83,10 +83,11 @@ body and all catch handler bodies (with `int → decimal` widening). A
 `try`/`catch` in a value position binds a typed result:
 
 ```ebnf
-try_expr      ::= "try" block catch_clause+
+try_expr      ::= "try" (suite | or_expr (";" or_expr)*) catch_clause+
 catch_clause  ::= "catch" catch_pattern "=>" branch_body
-catch_pattern ::= NAME ("as" NAME)?
-                | "_" ("as" NAME)?
+catch_pattern ::= name ("as" name)?
+                | "_" ("as" name)?
+branch_body   ::= suite | or_expr
 ```
 
 ```agl

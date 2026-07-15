@@ -139,18 +139,20 @@ from agm.agl.ir.program import (
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.coercions import compile_coercion
 from agm.agl.lower.conversions import compile_recipe
-from agm.agl.matchcompile import (
+from agm.agl.matchcompile.compiler import CompiledCase
+from agm.agl.matchcompile.model import (
     BoolConstructor,
-    CompiledCase,
+    Constructor,
     Decision,
     DecisionLeaf,
     DecisionSwitch,
     EnumConstructor,
     FieldOccurrenceProvenance,
-    LiteralConstructor,
     LiteralKind,
-    MatchCompiledProgram,
     OccurrenceId,
+)
+from agm.agl.matchcompile.stage import (
+    MatchCompiledProgram,
     validate_match_compiled_program,
 )
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CORE_ID, ModuleId
@@ -357,7 +359,7 @@ class _Lowerer:
         module_id: ModuleId,
         source_id: SourceId,
         source_text: str,
-        cases: Mapping[int, CompiledCase] | None = None,
+        cases: Mapping[int, CompiledCase],
         *,
         contract_payloads: Mapping[int, ContractPayload] | None = None,
     ) -> None:
@@ -366,7 +368,7 @@ class _Lowerer:
         self._module_id = module_id
         self._source_id = source_id
         self._source_text = normalize_newlines(source_text)
-        self._compiled_cases = cases if cases is not None else {}
+        self._compiled_cases = cases
         self._params: list[IrParam] = []
         # Shared TypeTable built during checking; resolves record/enum field
         # and variant shapes for constructor lowering, nominal descriptors,
@@ -2614,7 +2616,7 @@ class _Lowerer:
                 source_branch.body, result_type
             )
 
-        def case_key(constructor: object) -> IrCaseKey:
+        def case_key(constructor: Constructor) -> IrCaseKey:
             if isinstance(constructor, EnumConstructor):
                 return IrEnumCaseKey(
                     NominalId(
@@ -2625,19 +2627,14 @@ class _Lowerer:
                 )
             if isinstance(constructor, BoolConstructor):
                 return IrLiteralCaseKey(IrLiteralKind.BOOL, constructor.value)
-            assert isinstance(constructor, LiteralConstructor)
-            match constructor.kind:
-                case LiteralKind.NUMERIC:
-                    assert isinstance(constructor.value, decimal.Decimal)
-                    return IrLiteralCaseKey(IrLiteralKind.NUMERIC, constructor.value)
-                case LiteralKind.TEXT:
-                    assert isinstance(constructor.value, str)
-                    return IrLiteralCaseKey(IrLiteralKind.TEXT, constructor.value)
-                case LiteralKind.NULL:
-                    assert constructor.value is None
-                    return IrLiteralCaseKey(IrLiteralKind.NULL, None)
-                case _ as unreachable:  # pragma: no cover
-                    assert_never(unreachable)
+            if constructor.kind is LiteralKind.NUMERIC:
+                assert isinstance(constructor.value, decimal.Decimal)
+                return IrLiteralCaseKey(IrLiteralKind.NUMERIC, constructor.value)
+            if constructor.kind is LiteralKind.TEXT:
+                assert isinstance(constructor.value, str)
+                return IrLiteralCaseKey(IrLiteralKind.TEXT, constructor.value)
+            assert constructor.value is None
+            return IrLiteralCaseKey(IrLiteralKind.NULL, None)
 
         def lower_decision(decision: Decision, available: frozenset[OccurrenceId]) -> IrExpr:
             missing = set(decision.free_occurrences) - available

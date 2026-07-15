@@ -78,7 +78,7 @@ until final is Pass
 | [Bindings and scope](bindings-and-scope.md) | `let`, `var`, `:=`, `param`, `program`, `agent`, `def`, lexical scoping, shadowing |
 | [Expressions](expressions.md) | Literals, constructors, calls, operators, `as`/`as?` cast operators, `render`, `parse_json`, `case`/`if` expressions, `unit`-typed forms, expected-type propagation |
 | [Functions](functions.md) | `def` declarations, `fn` lambdas, optional/named arguments, function types, first-class values, recursion and depth limit |
-| [Pattern matching](pattern-matching.md) | Patterns, matching semantics, exhaustiveness |
+| [Pattern matching](pattern-matching.md) | Patterns, source priority, exhaustiveness, redundancy |
 | [Generics](generics.md) | Type parameters on `def`/`record`/`enum`/`type`, type application, inference and `::[…]` override, generic constructor values, strict parametricity, invariance, erasure |
 | [Control flow](control-flow.md) | `if`, `case`, unified loops (`for`/`while`/`do`/`until`/`done`), `break`, `continue` |
 | [Strings and interpolation](strings-and-interpolation.md) | Templates, escapes, `${…}` interpolation, uniform rendering rules |

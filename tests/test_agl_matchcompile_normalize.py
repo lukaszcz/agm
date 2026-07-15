@@ -11,7 +11,7 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.ids import NominalId
-from agm.agl.matchcompile import (
+from agm.agl.matchcompile.model import (
     BinderAssignment,
     BoolConstructor,
     ClosedSignature,
@@ -25,13 +25,15 @@ from agm.agl.matchcompile import (
     FieldOccurrenceProvenance,
     LiteralConstructor,
     LiteralKind,
-    MatchCompileInvariantError,
     Occurrence,
     OccurrenceId,
     OmittedFieldProvenance,
     OpenSignature,
     SourcePatternProvenance,
     WildcardCell,
+)
+from agm.agl.matchcompile.normalize import (
+    MatchCompileInvariantError,
     constructor_inhabits_type,
     normalize_case,
     normalize_pattern,

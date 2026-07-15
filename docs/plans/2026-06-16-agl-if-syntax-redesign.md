@@ -37,9 +37,11 @@ contexts. We reuse that proven shape rather than inventing a new one.
    position must have an `else` branch; otherwise the type checker raises a clear
    error. This makes every `if`-expression total and gives it a single, always-
    defined result type — no nullable/optional machinery needed (AgL has none).
-   *(Note: this is intentionally stricter than `case_expr`, which permits a
-   runtime `MatchError` on non-exhaustive match. `if` has no patterns to drive
-   exhaustiveness, so a static `else` requirement is the clean analogue.)*
+   For comparison, every `case` is also total statically: match compilation
+   proves its patterns exhaustive before lowering. `if` has no patterns to
+   analyze, so requiring `else` is its direct totality rule. `MatchError` is
+   raised only when user code constructs and raises it explicitly, never as an
+   implicit `case` failure.
 
 2. **`if` expressions are allowed bare in general expression positions**, exactly
    like `case_expr`: unparenthesized wherever a general `expr` is accepted, but

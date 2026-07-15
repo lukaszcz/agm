@@ -11,7 +11,17 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.ids import NominalId
-from agm.agl.matchcompile import (
+from agm.agl.matchcompile.matrix import (
+    OccurrenceAllocator,
+    PatternMatrix,
+    QbaScore,
+    default_matrix,
+    head_constructors,
+    matrix_from_normalized,
+    select_qba_column,
+    specialize,
+)
+from agm.agl.matchcompile.model import (
     BinderAssignment,
     BoolConstructor,
     ConstructorCell,
@@ -20,21 +30,15 @@ from agm.agl.matchcompile import (
     FieldOccurrenceProvenance,
     LiteralConstructor,
     LiteralKind,
-    MatchCompileInvariantError,
     MatrixRow,
     Occurrence,
-    OccurrenceAllocator,
     OccurrenceId,
     PathDecomposition,
-    PatternMatrix,
-    QbaScore,
     WildcardCell,
-    default_matrix,
-    head_constructors,
-    matrix_from_normalized,
+)
+from agm.agl.matchcompile.normalize import (
+    MatchCompileInvariantError,
     normalize_case,
-    select_qba_column,
-    specialize,
 )
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.parser import parse_program

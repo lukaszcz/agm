@@ -10,35 +10,37 @@ from typing import cast
 
 import pytest
 
+import agm.agl.matchcompile as matchcompile
+import agm.agl.matchcompile.compiler as compiler_module
+import agm.agl.matchcompile.stage as stage_module
 from agm.agl.lower import lower_graph, lower_program
 from agm.agl.matchcompile import (
+    MatchCompilationResult,
+    MatchCompiledModuleGraph,
+    MatchCompiledProgram,
+    MatchIssue,
+    NonExhaustiveIssue,
+    RedundantArmIssue,
+    compile_graph_matches,
+    compile_program_matches,
+    diagnostic_from_match_issue,
+    diagnostics_from_match_issues,
+)
+from agm.agl.matchcompile.compiler import (
     CompiledCase,
+    compile_case,
+    validate_compiled_case,
+)
+from agm.agl.matchcompile.matrix import OccurrenceAllocator, PatternMatrix, Specialization
+from agm.agl.matchcompile.model import (
     Constructor,
     DecisionBranch,
     DecisionFail,
     DecisionLeaf,
     DecisionSwitch,
     LiteralConstructor,
-    MatchCompilationResult,
-    MatchCompiledModuleGraph,
-    MatchCompiledProgram,
-    MatchCompileInvariantError,
-    MatchIssue,
-    NonExhaustiveIssue,
-    OccurrenceAllocator,
-    PatternMatrix,
-    RedundantArmIssue,
-    Specialization,
-    compile_case,
-    compile_graph_matches,
-    compile_program_matches,
-    diagnostic_from_match_issue,
-    diagnostics_from_match_issues,
-    normalize_case,
-    validate_compiled_case,
 )
-from agm.agl.matchcompile import compiler as compiler_module
-from agm.agl.matchcompile import stage as stage_module
+from agm.agl.matchcompile.normalize import MatchCompileInvariantError, normalize_case
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import parse_program
@@ -52,10 +54,50 @@ from agm.agl.scope import resolve
 from agm.agl.scope.graph import resolve_graph
 from agm.agl.syntax.nodes import Case
 from agm.agl.syntax.visitor import walk
-from agm.agl.typecheck import check
+from agm.agl.typecheck import EnumOwnerForm, check
 from agm.agl.typecheck.env import CheckedProgram
 from agm.agl.typecheck.graph import CheckedModule, CheckedModuleGraph, check_graph
 from tests.agl.ir_harness import base_caps, make_graph_from_files
+
+
+def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
+    assert set(matchcompile.__all__) == {
+        "BoolConstructor",
+        "BoolWitness",
+        "CompiledCase",
+        "Constructor",
+        "Decision",
+        "DecisionLeaf",
+        "DecisionSwitch",
+        "EnumConstructor",
+        "EnumWitness",
+        "EnumWitnessQualification",
+        "LiteralKind",
+        "LiteralWitness",
+        "MatchCompilationResult",
+        "MatchCompiledArtifact",
+        "MatchCompiledModuleGraph",
+        "MatchCompiledProgram",
+        "MatchIssue",
+        "MatchWitness",
+        "NonExhaustiveIssue",
+        "OccurrenceId",
+        "OpenComplementWitness",
+        "RedundantArmIssue",
+        "WildcardWitness",
+        "WitnessField",
+        "compile_graph_matches",
+        "compile_program_matches",
+        "diagnostic_from_match_issue",
+        "diagnostics_from_match_issues",
+        "render_witness",
+        "validate_match_compiled_graph",
+        "validate_match_compiled_program",
+    }
+    assert not hasattr(matchcompile, "EnumOwnerForm")
+    assert not hasattr(matchcompile, "EnumOwnerFormKind")
+    assert not hasattr(matchcompile, "FieldOccurrenceProvenance")
+    assert matchcompile.EnumWitnessQualification is not EnumOwnerForm
 
 
 def _checked(source: str) -> CheckedProgram:

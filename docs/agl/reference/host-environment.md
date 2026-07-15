@@ -13,9 +13,9 @@ A conforming host processes a program in this order:
 
 1. **Parse** — syntax errors abort here.
 2. **Name resolution** — scope errors abort here.
-3. **Static validation** against the host's *capability catalog* — type
-   errors, non-exhaustive cases, and redundant case arms abort here; warnings
-   are collected.
+3. **Static validation** against the host's *capability catalog*. Any type
+   error, non-exhaustive case, or redundant case arm aborts here. Independent
+   advisory diagnostics are collected separately.
 4. **Param validation** — externally provided values are checked against the
    program's `param` declarations.
 5. **Contract materialization** — every agent-call and `exec` site's output

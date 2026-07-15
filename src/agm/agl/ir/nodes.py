@@ -555,11 +555,9 @@ class IrVariantIs:
     """IR enum-variant membership test (``is`` / ``is not``).
 
     Evaluates ``value`` (always an ``EnumValue`` in well-lowered IR) and yields
-    ``BoolValue((value.variant == variant) != negated)``.  The boolean depends
-    only on the variant string and ``negated`` — matching the legacy
-    interpreter, which does not compare the nominal (the checker guarantees the
-    operand's enum type).  ``nominal`` records the tested enum for
-    completeness and validation.
+    ``BoolValue((value.variant == variant) != negated)``. The boolean depends
+    only on the variant string and ``negated`` because the checker guarantees
+    the operand's enum type. ``nominal`` records the tested enum for validation.
     """
 
     location: Location

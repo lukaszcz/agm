@@ -71,7 +71,7 @@ with `:=` inside a branch persists after the `if`.
 ## `case`
 
 ```ebnf
-case_expr        ::= "case" expr "of" "|"? case_branch ("|" case_branch)*
+case_expr        ::= "case" or_expr "of" "|"? case_branch ("|" case_branch)*
 case_branch      ::= pattern "=>" branch_body
 ```
 
@@ -112,13 +112,15 @@ AgL has one uniform loop construct covering every loop shape — `for`,
 an optional bound and a body:
 
 ```ebnf
-loop        ::= for_clause? while_clause? "do" loop_bound? body loop_end
-for_clause  ::= "for" name "in" or_expr range_tail? _NL?
+loop        ::= for_clause? while_clause? "do" loop_bound?
+                (suite loop_end? | inline_seq loop_end)
+for_clause  ::= "for" name "in" or_expr range_tail? NEWLINE?
 range_tail  ::= ("to" | "downto") or_expr ("by" or_expr)?
-while_clause::= "while" or_expr _NL?
+while_clause::= "while" or_expr NEWLINE?
 loop_bound  ::= "[" or_expr "]"
 loop_end    ::= "until" or_expr | "done"
-body        ::= suite | inline_seq
+inline_seq  ::= inline_item (";" inline_item)*
+inline_item ::= binder | or_expr
 ```
 
 A loop may begin with **at most one `for`** clause and **at most one

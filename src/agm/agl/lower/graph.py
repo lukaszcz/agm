@@ -28,7 +28,7 @@ from agm.agl.lower.lowerer import (
     _LinkState,
     _Lowerer,
 )
-from agm.agl.matchcompile import (
+from agm.agl.matchcompile.stage import (
     MatchCompiledModuleGraph,
     validate_match_compiled_graph,
 )

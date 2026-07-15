@@ -1,6 +1,6 @@
 # AgL Pattern Matching Decision Trees — Implementation Plan
 
-Status: planned · Date: 2026-07-15 · **Every** design decision below is owner-approved.
+Status: implemented · Date: 2026-07-15 · **Every** design decision below is owner-approved.
 
 This is the authoritative implementation plan for replacing recursive runtime match plans with
 compile-time pattern-matrix compilation. It covers the compiler algorithm, static diagnostics,

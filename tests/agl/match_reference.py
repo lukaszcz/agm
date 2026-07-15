@@ -11,16 +11,16 @@ import decimal
 from typing import assert_never
 
 from agm.agl.eval.arith import value_eq
-from agm.agl.matchcompile import (
+from agm.agl.matchcompile.matrix import PatternMatrix
+from agm.agl.matchcompile.model import (
     BoolConstructor,
-    CheckedPatternOwner,
     EnumConstructor,
     LiteralConstructor,
     LiteralKind,
     PatternCell,
-    PatternMatrix,
     WildcardCell,
 )
+from agm.agl.matchcompile.normalize import CheckedPatternOwner
 from agm.agl.semantics.types import EnumType, Type
 from agm.agl.semantics.values import (
     BoolValue,

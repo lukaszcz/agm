@@ -2218,17 +2218,6 @@ class TestCase:
         )
         assert r.warnings == ()
 
-    def test_case_exhaustive_enum_no_checker_warning(self) -> None:
-        r = accept_type(
-            "enum Status\n  | Pass\n  | Fail\nlet s = Pass()\n"
-            'case s of | Status::Pass => 1 | Status::Fail => 2'
-        )
-        assert not any("Non-exhaustive" in w.message for w in r.warnings)
-
-    def test_case_wildcard_has_no_checker_warning(self) -> None:
-        r = accept_type("enum Status\n  | Pass\n  | Fail\nlet s = Pass()\ncase s of | _ => 1")
-        assert not any("Non-exhaustive" in w.message for w in r.warnings)
-
     def test_case_literal_incompatible_with_scrutinee(self) -> None:
         err = reject_type('let x = "hello"\ncase x of | 42 => 1 | _ => 2')
         assert "incompatible" in str(err).lower() or "pattern" in str(err).lower()

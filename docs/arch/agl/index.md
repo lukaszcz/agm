@@ -17,6 +17,7 @@ source (.agl)
   → typecheck    (full static pass; selects concrete operations)
   → match compile (exhaustiveness, redundancy, and decision artifacts)
   → lower + link (closed, typeless executable program)
+  → deep IR validation
   → IR eval      (interpreter over the linked program)
         ↘ host runtime: agents, shell execution, the Python FFI registry, codecs, rendering, trace store
 ```

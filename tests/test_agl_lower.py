@@ -12,6 +12,7 @@ Pipeline helper: reuses the ``parse_resolve_check`` pattern from
 from __future__ import annotations
 
 import decimal
+from inspect import Parameter, signature
 from pathlib import Path
 
 import pytest
@@ -79,6 +80,7 @@ from agm.agl.ir.program import ExecutableProgram, FunctionDescriptor, IrFunction
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower import LinkImage, compile_coercion, lower_program, lower_repl_entry
 from agm.agl.lower.lowerer import _Lowerer
+from agm.agl.matchcompile import MatchCompiledProgram, compile_program_matches
 from agm.agl.parser import parse_program, parse_program_seeded
 from agm.agl.scope import resolve
 from agm.agl.semantics.types import (
@@ -93,7 +95,7 @@ from agm.agl.semantics.types import (
     TypeVarType,
     UnitType,
 )
-from agm.agl.syntax.nodes import Placeholder
+from agm.agl.syntax.nodes import Case, Placeholder
 from agm.agl.typecheck import check
 from agm.agl.typecheck.env import CheckedProgram
 from tests._agl_helpers import enum_type, record_type, type_table_for
@@ -176,7 +178,7 @@ def _function_body(desc: FunctionDescriptor) -> object:
 
 
 def _make_lowerer(checked: CheckedProgram, source: str) -> "_Lowerer":
-    """Create a _Lowerer with a fresh _LinkState for unit tests."""
+    """Match-compile ``checked`` and create a lowerer with fresh link state."""
     from agm.agl.ir.ids import SourceId
     from agm.agl.ir.program import SourceFile
     from agm.agl.lower.lowerer import _LinkState, _Lowerer
@@ -188,7 +190,33 @@ def _make_lowerer(checked: CheckedProgram, source: str) -> "_Lowerer":
     link.next_source += 1
     normalized = normalize_newlines(source)
     link.sources[source_id] = SourceFile(display_name="<test>", normalized_text=normalized)
-    return _Lowerer(checked, link, ENTRY_ID, source_id, source)
+    match_result = compile_program_matches(checked)
+    assert isinstance(match_result.compiled, MatchCompiledProgram)
+    compiled = match_result.compiled
+    return _Lowerer(compiled.checked, link, ENTRY_ID, source_id, source, compiled.cases)
+
+
+def test_direct_lowerer_helper_requires_successful_match_compilation() -> None:
+    source = "case true of | true => 1"
+
+    with pytest.raises(AssertionError):
+        _make_lowerer(_check(source), source)
+
+
+def test_private_lowerer_requires_complete_case_mapping_argument() -> None:
+    cases = signature(_Lowerer).parameters["cases"]
+
+    assert cases.default is Parameter.empty
+
+
+def test_direct_lowerer_helper_passes_complete_compiled_case_mapping() -> None:
+    source = "case true of | true => 1 | false => 2"
+    checked = _check(source)
+    lowerer = _make_lowerer(checked, source)
+    case = checked.resolved.program.body.items[0]
+
+    assert isinstance(case, Case)
+    assert set(lowerer._compiled_cases) == {case.node_id}
 
 
 # ---------------------------------------------------------------------------

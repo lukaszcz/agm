@@ -11,14 +11,31 @@ from typing import cast
 
 import pytest
 
+import agm.agl.matchcompile.compiler as compiler_module
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.ids import NominalId
 from agm.agl.matchcompile import (
+    BoolWitness,
+    EnumWitness,
+    EnumWitnessQualification,
+    LiteralWitness,
+    NonExhaustiveIssue,
+    OpenComplementWitness,
+    RedundantArmIssue,
+    WildcardWitness,
+    WitnessField,
+    render_witness,
+)
+from agm.agl.matchcompile.compiler import (
+    CompiledCase,
+    compile_case,
+    validate_decision_dag,
+)
+from agm.agl.matchcompile.matrix import OccurrenceAllocator, matrix_from_normalized
+from agm.agl.matchcompile.model import (
     BinderAssignment,
     BoolConstructor,
-    BoolWitness,
     ClosedSignature,
-    CompiledCase,
     ConstructorCell,
     Decision,
     DecisionBranch,
@@ -27,32 +44,18 @@ from agm.agl.matchcompile import (
     DecisionSwitch,
     EnumConstructor,
     EnumConstructorSpelling,
-    EnumOwnerForm,
-    EnumOwnerFormKind,
-    EnumWitness,
-    EnumWitnessQualification,
     FieldOccurrenceProvenance,
     LiteralKind,
-    LiteralWitness,
     MatchCaseContext,
-    MatchCompileInvariantError,
-    NonExhaustiveIssue,
     Occurrence,
-    OccurrenceAllocator,
     OccurrenceId,
-    OpenComplementWitness,
-    RedundantArmIssue,
     WildcardCell,
-    WildcardWitness,
-    WitnessField,
-    compile_case,
-    matrix_from_normalized,
-    normalize_case,
-    render_witness,
-    signature_for_type,
-    validate_decision_dag,
 )
-from agm.agl.matchcompile import compiler as compiler_module
+from agm.agl.matchcompile.normalize import (
+    MatchCompileInvariantError,
+    normalize_case,
+    signature_for_type,
+)
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
 from agm.agl.parser import parse_program
 from agm.agl.scope import resolve
@@ -62,7 +65,13 @@ from agm.agl.semantics.types import EnumType, IntType, TypeTemplate
 from agm.agl.semantics.values import BoolValue, EnumValue, Value
 from agm.agl.syntax.nodes import Case
 from agm.agl.syntax.visitor import walk
-from agm.agl.typecheck import CheckedProgram, check, check_graph
+from agm.agl.typecheck import (
+    CheckedProgram,
+    EnumOwnerForm,
+    EnumOwnerFormKind,
+    check,
+    check_graph,
+)
 from tests.agl.ir_harness import make_graph_from_files
 from tests.agl.match_reference import reference_action
 
@@ -1746,6 +1755,8 @@ def test_source_spelling_model_rejects_inconsistent_structures() -> None:
             type_template=TypeTemplate(EnumType("Choice")),
         )
     assert EnumOwnerForm("Choice", None).match(EnumType("Choice")) is None
+    assert EnumOwnerForm("Choice", ("module",)).kind is EnumOwnerFormKind.QUALIFIED_IMPORT
+    assert EnumOwnerForm("Choice", ()).kind is EnumOwnerFormKind.SELF
 
 
 def test_normalization_requires_case_scope_provenance() -> None:

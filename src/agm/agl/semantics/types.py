@@ -369,6 +369,157 @@ Type = (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class TypeTemplate:
+    """Resolved semantic type template with its declared inference variables."""
+
+    template: Type
+    type_params: tuple[str, ...] = ()
+
+    def match(self, concrete: Type) -> TypeTemplateMatch | None:
+        """Match this template exactly against one concrete semantic type."""
+        return match_type_template(self.template, concrete, self.type_params)
+
+
+@dataclass(frozen=True, slots=True)
+class TypeTemplateMatch:
+    """Exact one-sided match of declared type parameters to a concrete type."""
+
+    bindings: tuple[tuple[str, Type], ...]
+
+    @property
+    def type_arguments(self) -> tuple[Type, ...]:
+        """Return inferred arguments in declared parameter order."""
+        return tuple(argument for _, argument in self.bindings)
+
+
+def match_type_template(
+    template: Type,
+    concrete: Type,
+    type_params: tuple[str, ...],
+) -> TypeTemplateMatch | None:
+    """Match ``template`` exactly against ``concrete`` from one side.
+
+    Only ``TypeVarType`` names declared in ``type_params`` are inference
+    variables. Repeated occurrences must agree, nominal identity is exact,
+    and every declared parameter must be inferred. The result is immutable
+    and ordered like ``type_params`` so alias argument reordering and fixed
+    subterms require no caller-specific logic.
+    """
+    parameters = frozenset(type_params)
+    inferred: dict[str, Type] = {}
+
+    def visit_nominal(
+        pattern: RecordType | EnumType, actual: RecordType | EnumType
+    ) -> bool:
+        return (
+            pattern.module_id == actual.module_id
+            and pattern.name == actual.name
+            and len(pattern.type_args) == len(actual.type_args)
+            and all(
+                visit(pattern_arg, actual_arg)
+                for pattern_arg, actual_arg in zip(
+                    pattern.type_args, actual.type_args, strict=True
+                )
+            )
+        )
+
+    def visit(pattern: Type, actual: Type) -> bool:
+        if isinstance(pattern, TypeVarType) and pattern.name in parameters:
+            previous = inferred.get(pattern.name)
+            if previous is None:
+                inferred[pattern.name] = actual
+                return True
+            return previous == actual
+        if isinstance(pattern, ListType):
+            return isinstance(actual, ListType) and visit(pattern.elem, actual.elem)
+        if isinstance(pattern, DictType):
+            return isinstance(actual, DictType) and visit(pattern.value, actual.value)
+        if isinstance(pattern, FunctionType):
+            return (
+                isinstance(actual, FunctionType)
+                and len(pattern.params) == len(actual.params)
+                and all(
+                    visit(pattern_param, actual_param)
+                    for pattern_param, actual_param in zip(
+                        pattern.params, actual.params, strict=True
+                    )
+                )
+                and visit(pattern.result, actual.result)
+            )
+        if isinstance(pattern, RecordType):
+            return isinstance(actual, RecordType) and visit_nominal(pattern, actual)
+        if isinstance(pattern, EnumType):
+            return isinstance(actual, EnumType) and visit_nominal(pattern, actual)
+        return pattern == actual
+
+    if not visit(template, concrete) or any(
+        parameter not in inferred for parameter in type_params
+    ):
+        return None
+    return TypeTemplateMatch(
+        tuple((parameter, inferred[parameter]) for parameter in type_params)
+    )
+
+
+class EnumOwnerFormKind(_enum.Enum):
+    """Checked source forms capable of owning an enum constructor spelling."""
+
+    LOCAL = "local"
+    SELF = "self"
+    OPEN_IMPORT = "open_import"
+    QUALIFIED_IMPORT = "qualified_import"
+
+
+@dataclass(frozen=True, slots=True)
+class EnumOwnerForm:
+    """One immutable checked enum-owner source form.
+
+    Source identity and template metadata are excluded from display equality;
+    they retain the checked resolution needed to validate a concrete enum
+    without reinterpreting import syntax downstream.
+    """
+
+    owner_name: str | None
+    module_qualifier: tuple[str, ...] | None
+    bare: bool = False
+    kind: EnumOwnerFormKind | None = field(default=None, compare=False)
+    source_module_id: ModuleId | None = field(default=None, compare=False, repr=False)
+    source_name: str | None = field(default=None, compare=False, repr=False)
+    type_template: TypeTemplate | None = field(default=None, compare=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.owner_name is None and self.module_qualifier is not None:
+            raise ValueError("a bare constructor spelling cannot have a module qualifier")
+        if self.bare and self.owner_name is not None:
+            raise ValueError("a type-qualified constructor spelling cannot be bare")
+        if self.owner_name is None:
+            return
+        kind = self.kind
+        if kind is None:
+            if self.module_qualifier is None:
+                kind = EnumOwnerFormKind.LOCAL
+            elif self.module_qualifier:
+                kind = EnumOwnerFormKind.QUALIFIED_IMPORT
+            else:
+                kind = EnumOwnerFormKind.SELF
+            object.__setattr__(self, "kind", kind)
+        if kind in (EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.OPEN_IMPORT):
+            if self.module_qualifier is not None:
+                raise ValueError("an unqualified enum owner form cannot have an import handle")
+        elif kind is EnumOwnerFormKind.SELF:
+            if self.module_qualifier != ():
+                raise ValueError("a self-qualified enum owner form requires an empty qualifier")
+        elif not self.module_qualifier:
+            raise ValueError("a qualified-import enum owner form requires an import handle")
+
+    def match(self, concrete: Type) -> TypeTemplateMatch | None:
+        """Match this checked owner form against one concrete semantic type."""
+        if self.type_template is None:
+            return None
+        return self.type_template.match(concrete)
+
+
 def _format_type(typ: Type, *, parenthesize_function: bool = False) -> str:
     if isinstance(typ, FunctionType):
         rendered = _format_function_type(typ)

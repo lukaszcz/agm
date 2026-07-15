@@ -59,7 +59,7 @@ from agm.agl.syntax.nodes import (
     TypeAlias,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import ImportMode
+from agm.agl.syntax.types import AppliedT, ImportMode, NameT
 
 
 def _mid_sort_key(m: ModuleId) -> tuple[str, ...]:
@@ -164,6 +164,7 @@ def _build_cross_module_constructor_candidates(
                     variant=None,
                     owner_decl_node_id=decl.node_id,
                     type_params=decl.type_params,
+                    owner_module_id=mid,
                 )
                 candidates.setdefault(exposed_name, []).append(cref)
             elif isinstance(decl, EnumDef):
@@ -177,6 +178,7 @@ def _build_cross_module_constructor_candidates(
                         variant=variant.name,
                         owner_decl_node_id=decl.node_id,
                         type_params=decl.type_params,
+                        owner_module_id=mid,
                     )
                     candidates.setdefault(variant.name, []).append(cref)
     return (
@@ -426,14 +428,17 @@ def resolve_graph(
                     private_info[key] = True
                 else:
                     all_public_types[key] = item
-                    # RecordDef/EnumDef/ExceptionDef use constructor_binding so
-                    # cross-module constructor refs (mylib::Color::Red) are
-                    # detected as type-qualified. TypeAlias uses let_binding
-                    # (it's not constructible).
+                    # A syntactically nominal alias can transparently name a
+                    # record, enum, or another alias. Scope admits that shape
+                    # as a possible constructor owner and leaves semantic
+                    # target validation to type checking. Container,
+                    # function, and primitive aliases remain definitively
+                    # non-constructible at this boundary.
                     kind = (
-                        BinderKind.let_binding
-                        if isinstance(item, TypeAlias)
-                        else BinderKind.constructor_binding
+                        BinderKind.constructor_binding
+                        if not isinstance(item, TypeAlias)
+                        or isinstance(item.type_expr, (NameT, AppliedT))
+                        else BinderKind.let_binding
                     )
                     decl_info[key] = (item.node_id, item.span, kind)
 

@@ -1859,12 +1859,6 @@ class _Lowerer:
             if owner_module is not None and not owner_module.is_entry
             else self._checked.type_env.get_generic_type(owner_name)
         )
-        if gdef is None:
-            imported = self._checked.type_env.get_open_imported_generic_type(owner_name)
-            if imported is not None:
-                imported_module, imported_name, gdef = imported
-                owner_module = imported_module
-                owner_name = imported_name
         if gdef is not None:  # pragma: no cover
             tmpl = gdef.template  # pragma: no cover
             if isinstance(tmpl, RecordType):  # pragma: no cover

@@ -732,6 +732,20 @@ def test_later_module_parameterized_alias_bare_reference_is_rejected(
         )
 
 
+def test_resolve_named_type_treats_open_parameterized_alias_as_non_concrete(
+    tmp_path: Path,
+) -> None:
+    checked = _check_graph(
+        tmp_path,
+        {
+            "entry": "import library.remote using Alias\n()",
+            "library.remote": "type Alias[T] = list[T]",
+        },
+    )
+
+    assert checked.modules[ENTRY_ID].type_env.resolve_named_type("Alias") is None
+
+
 def test_later_module_cross_alias_cycle_is_rejected(tmp_path: Path) -> None:
     """Lazy cross-module alias resolution rejects transparent alias cycles."""
     with pytest.raises(AglTypeError, match="part of a cycle"):

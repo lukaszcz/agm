@@ -12,8 +12,9 @@ import enum
 from dataclasses import dataclass, field
 from typing import TypeAlias
 
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.semantics.type_table import TypeTable
-from agm.agl.semantics.types import EnumType, Type
+from agm.agl.semantics.types import EnumOwnerForm, EnumType, Type
 from agm.agl.syntax.spans import SourceSpan
 
 
@@ -238,6 +239,9 @@ class SourceAction:
     pattern_span: SourceSpan
 
 
+EnumConstructorSpelling: TypeAlias = EnumOwnerForm
+
+
 @dataclass(frozen=True, slots=True)
 class MatrixRow:
     """One source-priority row in a canonical pattern matrix."""
@@ -247,6 +251,15 @@ class MatrixRow:
     source_index: int
     source_pattern_id: int
     binder_assignments: tuple[BinderAssignment, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class MatchCaseContext:
+    """Per-case frontend context used only for diagnostics and allocation identity."""
+
+    module_id: ModuleId
+    enum_owner_forms: tuple[EnumOwnerForm, ...] = ()
+    bare_enum_constructors: frozenset[tuple[ModuleId, str, str]] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,8 +273,11 @@ class NormalizedCase:
     rows: tuple[MatrixRow, ...]
     actions: tuple[SourceAction, ...]
     type_table: TypeTable = field(repr=False, compare=False, hash=False)
-    case_context: object = field(
-        default_factory=object, repr=False, compare=False, hash=False
+    case_context: MatchCaseContext = field(
+        default_factory=lambda: MatchCaseContext(ENTRY_ID),
+        repr=False,
+        compare=False,
+        hash=False,
     )
 
     def __post_init__(self) -> None:
@@ -293,6 +309,11 @@ class NormalizedCase:
 class DecisionFail:
     """A path on which no source row matches."""
 
+    @property
+    def free_occurrences(self) -> tuple[OccurrenceId, ...]:
+        """Occurrences which must be available when this decision is entered."""
+        return ()
+
 
 @dataclass(frozen=True, slots=True)
 class DecisionLeaf:
@@ -300,6 +321,15 @@ class DecisionLeaf:
 
     action_id: int
     binder_assignments: tuple[BinderAssignment, ...]
+
+    @property
+    def free_occurrences(self) -> tuple[OccurrenceId, ...]:
+        """Occurrences read to initialize source binders before the action."""
+        occurrences: list[OccurrenceId] = []
+        for assignment in self.binder_assignments:
+            if assignment.occurrence not in occurrences:
+                occurrences.append(assignment.occurrence)
+        return tuple(occurrences)
 
 
 @dataclass(frozen=True, slots=True)
@@ -317,6 +347,7 @@ class DecisionSwitch:
     occurrence: Occurrence
     keyed_children: tuple[DecisionBranch, ...]
     default: Decision | None
+    free_occurrences: tuple[OccurrenceId, ...] = ()
 
 
 Decision: TypeAlias = DecisionFail | DecisionLeaf | DecisionSwitch
@@ -336,10 +367,12 @@ __all__ = [
     "DecisionLeaf",
     "DecisionSwitch",
     "EnumConstructor",
+    "EnumConstructorSpelling",
     "FieldOccurrenceProvenance",
     "LiteralConstructor",
     "LiteralKind",
     "LiteralValue",
+    "MatchCaseContext",
     "MatrixRow",
     "NormalizedCase",
     "Occurrence",

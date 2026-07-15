@@ -34,12 +34,14 @@ from agm.agl.semantics.types import (
     ListType,
     RecordType,
     TextType,
+    TypeTemplateMatch,
     TypeVarType,
     UnitType,
     contains_type_var,
     free_type_vars,
     is_assignable,
     is_json_shaped,
+    match_type_template,
     substitute,
 )
 from agm.agl.typecheck.env import TypeEnvironment
@@ -367,6 +369,16 @@ class TestTypeEnvironmentPrelude:
         assert isinstance(t, EnumType)
         assert t.name == "ParsePolicy"
 
+    def test_source_type_match_requires_graph_context(self) -> None:
+        env = TypeEnvironment()
+
+        assert (
+            env.match_source_type_qname(
+                ModuleId.from_dotted("library.remote"), "Remote", IntType()
+            )
+            is None
+        )
+
     def test_has_type_exec_result(self) -> None:
         env = TypeEnvironment()
         assert env.has_type("ExecResult") is True
@@ -565,6 +577,73 @@ class TestGenericNominalIdentity:
     def test_enum_repr_with_type_args(self) -> None:
         e = EnumType("Option", type_args=(TextType(),))
         assert repr(e) == "Option[text]"
+
+
+class TestTypeTemplateMatch:
+    def test_transformed_nominal_arguments_bind_in_declared_order(self) -> None:
+        module = ModuleId.from_dotted("library.remote")
+        template = EnumType(
+            "Remote",
+            type_args=(
+                RecordType(
+                    "Pair",
+                    type_args=(TypeVarType("B"), TypeVarType("A")),
+                    module_id=module,
+                ),
+            ),
+            module_id=module,
+        )
+        concrete = EnumType(
+            "Remote",
+            type_args=(
+                RecordType(
+                    "Pair",
+                    type_args=(IntType(), TextType()),
+                    module_id=module,
+                ),
+            ),
+            module_id=module,
+        )
+
+        match = match_type_template(template, concrete, ("A", "B"))
+
+        assert match == TypeTemplateMatch((("A", TextType()), ("B", IntType())))
+        assert match.type_arguments == (TextType(), IntType())
+
+    def test_nested_containers_and_functions_require_consistent_binding(self) -> None:
+        variable = TypeVarType("T")
+        template = FunctionType(
+            params=(ListType(variable), DictType(variable)),
+            result=variable,
+        )
+        matching = FunctionType(
+            params=(ListType(IntType()), DictType(IntType())),
+            result=IntType(),
+        )
+        conflicting = FunctionType(
+            params=(ListType(IntType()), DictType(TextType())),
+            result=IntType(),
+        )
+
+        assert match_type_template(template, matching, ("T",)) is not None
+        assert match_type_template(template, conflicting, ("T",)) is None
+
+    def test_shape_nominal_and_rigid_leaf_mismatches_do_not_match(self) -> None:
+        module = ModuleId.from_dotted("library.remote")
+
+        assert match_type_template(ListType(IntType()), DictType(IntType()), ()) is None
+        assert (
+            match_type_template(
+                EnumType("Remote", module_id=module),
+                EnumType("Other", module_id=module),
+                (),
+            )
+            is None
+        )
+        assert match_type_template(TypeVarType("Rigid"), IntType(), ()) is None
+
+    def test_unresolved_phantom_parameter_does_not_match(self) -> None:
+        assert match_type_template(IntType(), IntType(), ("T",)) is None
 
 
 # ---------------------------------------------------------------------------

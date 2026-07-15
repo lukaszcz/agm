@@ -135,12 +135,16 @@ class ConstructorRef:
         constructor.
     ``type_params``
         The owner's declared type parameters (empty tuple if non-generic).
+    ``owner_module_id``
+        Semantic owner module, retained so same-named constructors from
+        different modules remain distinguishable in resolver side tables.
     """
 
     owner_name: str
     variant: str | None
     owner_decl_node_id: int
     type_params: tuple[str, ...]
+    owner_module_id: ModuleId = ENTRY_ID
 
 
 # ---------------------------------------------------------------------------
@@ -277,6 +281,11 @@ class ResolvedProgram:
         rather than a variable binder.  The checker validates that the name is a
         nullary variant of the scrutinee enum; the interpreter matches it
         positionally without binding.
+    ``case_scopes``
+        Maps every source ``Case.node_id`` to the exact lexical scope active
+        when the resolver entered that case.  Downstream diagnostics use this
+        provenance to determine which constructor spellings are valid at the
+        case site without reimplementing lexical lookup.
     """
 
     program: Program
@@ -294,6 +303,7 @@ class ResolvedProgram:
         default_factory=dict
     )
     bare_variant_patterns: frozenset[int] = frozenset()
+    case_scopes: dict[int, ScopeNode] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

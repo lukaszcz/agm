@@ -34,6 +34,8 @@ from agm.agl.semantics.types import (
     CastSpec,
     DecimalType,
     DictType,
+    EnumOwnerForm,
+    EnumOwnerFormKind,
     EnumType,
     ExceptionType,
     FunctionType,
@@ -43,6 +45,8 @@ from agm.agl.semantics.types import (
     RecordType,
     TextType,
     Type,
+    TypeTemplate,
+    TypeTemplateMatch,
     TypeVarType,
     UnitType,
 )
@@ -662,9 +666,12 @@ class TypeEnvironment:
             candidates = self._import_env.unqualified.get(name, frozenset())
             type_candidates = [qn for qn in candidates if self._is_graph_type_candidate(qn)]
             if len(type_candidates) == 1:
-                return self._resolve_graph_qname_as_bare_type(
-                    type_candidates[0], name, span=None
-                )
+                try:
+                    return self._resolve_graph_qname_as_bare_type(
+                        type_candidates[0], name, span=None
+                    )
+                except AglTypeError:
+                    return None
         return None
 
     def _is_graph_type_candidate(self, qname: QName) -> bool:
@@ -1201,6 +1208,187 @@ class TypeEnvironment:
         if self._graph_type_table is None:
             return None
         return self._graph_type_table.get((module_id, name))
+
+    def match_source_type_qname(
+        self,
+        module_id: ModuleId,
+        name: str,
+        concrete: Type,
+    ) -> TypeTemplateMatch | None:
+        """Alias-transparently match a checked source type QName to ``concrete``.
+
+        This is the public checked-type boundary for downstream consumers that
+        retain source import names. It exposes only an immutable semantic match,
+        not the mutable graph type/generic/alias registries. Non-generic aliases,
+        generic aliases, alias chains, transformed arguments, and ordinary
+        nominal declarations all share the exact template matcher.
+        """
+        template = self.source_type_template_qname(module_id, name)
+        return None if template is None else template.match(concrete)
+
+    def source_type_template_qname(
+        self, module_id: ModuleId, name: str
+    ) -> TypeTemplate | None:
+        """Return immutable checked template data for one source type QName.
+
+        Graph aliases are already cycle-checked and resolved by the checked
+        program boundary. Own-module fallback supports the single-program path
+        without exposing any mutable type-environment registry.
+        """
+        key = (module_id, name)
+        alias_def = self._graph_alias_table.get(key)
+        if alias_def is not None:
+            return TypeTemplate(alias_def.template, alias_def.type_params)
+        if self._graph_generic_table is not None:
+            generic_def = self._graph_generic_table.get(key)
+            if generic_def is not None:
+                return TypeTemplate(generic_def.template, generic_def.type_params)
+        if self._graph_type_table is not None:
+            resolved = self._graph_type_table.get(key)
+            if resolved is not None:
+                return TypeTemplate(resolved)
+        if module_id != self._module_id:
+            return None
+        local_generic = self._generic_types.get(name)
+        if local_generic is not None:
+            return TypeTemplate(local_generic.template, local_generic.type_params)
+        alias_expr = self._alias_targets.get(name)
+        if alias_expr is not None:
+            type_params = self._alias_type_params.get(name, ())
+            template = self.resolve_type_expr(
+                alias_expr,
+                _resolving=frozenset({name}),
+                type_vars=frozenset(type_params),
+            )
+            return TypeTemplate(template, type_params)
+        resolved = self._types.get(name)
+        return None if resolved is None else TypeTemplate(resolved)
+
+    def _own_source_type_names(self) -> frozenset[str]:
+        names = set(self._types) | set(self._alias_targets) | set(self._generic_types)
+        names.update(
+            name
+            for module_id, name in self._graph_alias_table
+            if module_id == self._module_id
+        )
+        if self._graph_generic_table is not None:
+            names.update(
+                name
+                for module_id, name in self._graph_generic_table
+                if module_id == self._module_id
+            )
+        if self._graph_type_table is not None:
+            names.update(
+                name
+                for module_id, name in self._graph_type_table
+                if module_id == self._module_id
+            )
+        return frozenset(names)
+
+    def resolve_enum_owner_form(
+        self,
+        kind: EnumOwnerFormKind,
+        owner_name: str,
+        module_qualifier: tuple[str, ...] | None = None,
+    ) -> EnumOwnerForm | None:
+        """Resolve one exact enum-owner source form through checked visibility."""
+        source_module_id: ModuleId
+        source_name: str
+        expected_qualifier: tuple[str, ...] | None
+        if kind in (EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.SELF):
+            if owner_name not in self._own_source_type_names():
+                return None
+            if (
+                kind is EnumOwnerFormKind.LOCAL
+                and self.has_qualified_import_handle((owner_name,))
+            ):
+                return None
+            source_module_id = self._module_id
+            source_name = owner_name
+            expected_qualifier = None if kind is EnumOwnerFormKind.LOCAL else ()
+        elif kind is EnumOwnerFormKind.OPEN_IMPORT:
+            if (
+                self._import_env is None
+                or owner_name in self._own_source_type_names()
+                or self.has_qualified_import_handle((owner_name,))
+            ):
+                return None
+            type_qnames = tuple(
+                qname
+                for qname in self._import_env.unqualified.get(
+                    owner_name, frozenset()
+                )
+                if self._is_graph_type_candidate(qname)
+            )
+            if len(type_qnames) != 1:
+                return None
+            source_module_id, source_name = type_qnames[0]
+            expected_qualifier = None
+        else:
+            if (
+                self._import_env is None
+                or module_qualifier is None
+                or not module_qualifier
+            ):
+                return None
+            qname = self._import_env.qualified.get(module_qualifier, {}).get(owner_name)
+            if qname is None or not self._is_graph_type_candidate(qname):
+                return None
+            source_module_id, source_name = qname
+            expected_qualifier = module_qualifier
+        template = self.source_type_template_qname(source_module_id, source_name)
+        assert template is not None
+        return EnumOwnerForm(
+            owner_name,
+            expected_qualifier,
+            kind=kind,
+            source_module_id=source_module_id,
+            source_name=source_name,
+            type_template=template,
+        )
+
+    def resolve_unqualified_enum_owner_form(
+        self, owner_name: str
+    ) -> EnumOwnerForm | None:
+        """Resolve ``Owner::variant`` with local-before-open precedence."""
+        if owner_name in self._own_source_type_names():
+            return self.resolve_enum_owner_form(EnumOwnerFormKind.LOCAL, owner_name)
+        return self.resolve_enum_owner_form(EnumOwnerFormKind.OPEN_IMPORT, owner_name)
+
+    def enum_owner_forms(self) -> tuple[EnumOwnerForm, ...]:
+        """Enumerate finite checked owner forms writable in this environment."""
+        forms: set[EnumOwnerForm] = set()
+        for owner_name in self._own_source_type_names():
+            for kind in (EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.SELF):
+                form = self.resolve_enum_owner_form(kind, owner_name)
+                if form is not None:
+                    forms.add(form)
+        if self._import_env is not None:
+            for owner_name in self._import_env.unqualified:
+                form = self.resolve_enum_owner_form(
+                    EnumOwnerFormKind.OPEN_IMPORT, owner_name
+                )
+                if form is not None:
+                    forms.add(form)
+            for handle, exposed_names in self._import_env.qualified.items():
+                for owner_name in exposed_names:
+                    form = self.resolve_enum_owner_form(
+                        EnumOwnerFormKind.QUALIFIED_IMPORT,
+                        owner_name,
+                        handle,
+                    )
+                    if form is not None:
+                        forms.add(form)
+
+        def form_key(form: EnumOwnerForm) -> tuple[str, tuple[str, ...], str]:
+            assert form.kind is not None
+            return (
+                form.owner_name or "",
+                form.module_qualifier or (),
+                form.kind.value,
+            )
+
+        return tuple(sorted(forms, key=form_key))
 
     def get_generic_type_from_module(
         self, module_id: ModuleId, name: str

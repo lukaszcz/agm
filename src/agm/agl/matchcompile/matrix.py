@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from typing import TypeAlias, cast
 
+from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import (
     EnumType,
@@ -22,6 +23,7 @@ from .model import (
     EnumConstructor,
     FieldOccurrenceProvenance,
     LiteralKind,
+    MatchCaseContext,
     MatrixRow,
     NormalizedCase,
     Occurrence,
@@ -142,8 +144,11 @@ class PatternMatrix:
     available_occurrences: tuple[Occurrence, ...]
     type_table: TypeTable = dataclass_field(repr=False, compare=False, hash=False)
     path_decompositions: tuple[PathDecomposition, ...] = ()
-    case_context: object = dataclass_field(
-        default_factory=object, repr=False, compare=False, hash=False
+    case_context: MatchCaseContext = dataclass_field(
+        default_factory=lambda: MatchCaseContext(ENTRY_ID),
+        repr=False,
+        compare=False,
+        hash=False,
     )
 
     def __post_init__(self) -> None:
@@ -371,7 +376,9 @@ class OccurrenceAllocator:
     next_id: int
     next_creation_order: int
     type_table: TypeTable = dataclass_field(repr=False, compare=False, hash=False)
-    case_context: object = dataclass_field(repr=False, compare=False, hash=False)
+    case_context: MatchCaseContext = dataclass_field(
+        repr=False, compare=False, hash=False
+    )
 
     @classmethod
     def for_case(cls, case: NormalizedCase) -> OccurrenceAllocator:
@@ -402,6 +409,12 @@ class OccurrenceAllocator:
             case.type_table,
             case.case_context,
         )
+
+    @property
+    def occurrences(self) -> tuple[Occurrence, ...]:
+        """Return every case-local occurrence allocated so far in creation order."""
+        known = _known_occurrences(self)
+        return tuple(sorted(known.values(), key=_occurrence_sort_key))
 
 
 def _known_occurrences(allocator: OccurrenceAllocator) -> dict[OccurrenceId, Occurrence]:

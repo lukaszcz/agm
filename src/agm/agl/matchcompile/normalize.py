@@ -5,6 +5,8 @@ from __future__ import annotations
 import decimal
 from typing import assert_never
 
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.scope.symbols import BinderKind, ScopeNode
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import (
     AgentType,
@@ -50,6 +52,7 @@ from .model import (
     EnumConstructor,
     LiteralConstructor,
     LiteralKind,
+    MatchCaseContext,
     MatrixRow,
     NormalizedCase,
     Occurrence,
@@ -69,6 +72,26 @@ CheckedPatternOwner = CheckedProgram | CheckedModule
 
 class MatchCompileInvariantError(RuntimeError):
     """A checked-program invariant required by match compilation was violated."""
+
+
+def _bare_enum_constructors(
+    scope: ScopeNode,
+    checked: CheckedPatternOwner,
+) -> frozenset[tuple[ModuleId, str, str]]:
+    """Collect declaration-level bare variants valid in the exact case scope."""
+    result: set[tuple[ModuleId, str, str]] = set()
+    for variant, candidates in checked.resolved.constructor_candidates.items():
+        binding = scope.lookup(variant)
+        if (
+            binding is None
+            or binding.kind is not BinderKind.constructor_binding
+            or len(candidates) != 1
+            or candidates[0].variant is None
+        ):
+            continue
+        candidate = candidates[0]
+        result.add((candidate.owner_module_id, candidate.owner_name, variant))
+    return frozenset(result)
 
 
 def _enum_constructor(
@@ -375,6 +398,18 @@ def normalize_case(case: Case, checked: CheckedPatternOwner) -> NormalizedCase:
         )
         for index, branch in enumerate(case.branches)
     )
+    try:
+        case_scope = checked.resolved.case_scopes[case.node_id]
+    except KeyError as exc:
+        raise MatchCompileInvariantError(
+            f"missing resolver scope provenance for case node {case.node_id}"
+        ) from exc
+    module_id = checked.module_id if isinstance(checked, CheckedModule) else ENTRY_ID
+    case_context = MatchCaseContext(
+        module_id=module_id,
+        enum_owner_forms=checked.type_env.enum_owner_forms(),
+        bare_enum_constructors=_bare_enum_constructors(case_scope, checked),
+    )
     return NormalizedCase(
         case_node_id=case.node_id,
         span=case.span,
@@ -383,6 +418,7 @@ def normalize_case(case: Case, checked: CheckedPatternOwner) -> NormalizedCase:
         rows=tuple(rows),
         actions=actions,
         type_table=checked.type_env.type_table,
+        case_context=case_context,
     )
 
 

@@ -66,9 +66,27 @@ descendant specializations; a case-identity token prevents structurally equal ma
 those ledgers. Each case also carries its checked `TypeTable` as identity-only compiler context,
 allowing matrix boundaries to validate enum heads and path decompositions against canonical
 declaration-order signatures without changing semantic matrix keys. Column choice is isolated
-behind the deterministic `qba` selector. The package may consume syntax, scope, semantic, and
-typecheck data, but dependency contracts prevent it from importing lowering, IR, evaluation, or
-runtime services.
+behind the deterministic `qba` selector. Recursive compilation memoizes those canonical states and
+hash-conses complete immutable decisions within one source case, producing an acyclic DAG whose
+nodes expose the occurrence interface later lowering must provide. The per-case result retains its
+root and full occurrence ledger even when invalid: an identity-aware DAG traversal derives reachable
+source actions, redundant-arm issues, and one structured missing witness from the first failure path.
+The resolver records an exact lexical-scope snapshot for every source case. Graph checking also
+retains each module's immutable import environment as an explicit checked-module contract.
+Normalization asks the checked type environment for a finite immutable set of enum-owner forms:
+local, self-qualified, open-imported, and import-handle-qualified. Each form retains its exposed
+spelling, resolved source identity, and alias-transparent semantic template. The checker uses the
+same form resolution and exact template match for constructor-pattern owners, so every retained
+witness form is writable under the source's real exposure, ambiguity, and handle-conflict rules.
+Witness construction matches those forms against each concrete enum occurrence, so different
+generic instantiations can select different valid aliases; transformed, reordered, and fixed alias
+arguments use the same exact one-sided matcher. Candidate
+collection never expands a concrete instantiation closure, while declaration shapes continue to be
+resolved lazily through the checked `TypeTable`, keeping polymorphic recursion finite. Witness
+rendering remains separate from semantic enum identity and the closed witness data model. Artifact totality and
+pipeline diagnostic adaptation belong to the following match-compilation stage boundary. The
+package may consume syntax, scope, semantic, and typecheck data, but dependency contracts prevent it
+from importing lowering, IR, evaluation, or runtime services.
 
 An `extern def` (Python FFI) shares the `builtin def` signature path end to end — body-less construction, header validation, signature registration — plus extern-only checks: the declared name must be a valid, non-keyword Python identifier, and no function or agent type may occur anywhere in its parameter or return types (a type variable is fine; sealing enforces parametricity for it at runtime — see [execution.md](execution.md)). Calls to an extern typecheck exactly like calls to an ordinary function and are additionally recorded in the dry-run call-site inventory, including indirect calls through first-class function values and partial applications. The placement rule — externs are only allowed in a file-backed module — is a scope-pass check keyed on whether the module's loader-recorded origin path is present.
 

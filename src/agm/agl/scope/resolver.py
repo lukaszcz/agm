@@ -40,7 +40,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 from agm.agl.diagnostics import Diagnostic
-from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
 from agm.agl.scope.symbols import (
     BUILTIN_CALL_NAMES,
     AglScopeError,
@@ -241,6 +241,8 @@ class _Resolver:
         # VarPattern.node_id of bare names that denote a constructor (nullary
         # variant patterns), not variable binders.
         self._bare_variant_patterns: set[int] = set()
+        # Case.node_id -> exact lexical scope active at the case site.
+        self._case_scopes: dict[int, ScopeNode] = {}
         # Loop-context flag: True when resolving inside a loop body (while_cond,
         # body, or until_cond). Reset to False across fn/def boundaries so that
         # `break`/`continue` cannot cross a function boundary into an outer loop.
@@ -338,6 +340,7 @@ class _Resolver:
             constructor_refs=dict(self._constructor_refs),
             qualified_constructor_refs=dict(self._qualified_constructor_refs),
             bare_variant_patterns=frozenset(self._bare_variant_patterns),
+            case_scopes=dict(self._case_scopes),
         )
 
     # ------------------------------------------------------------------
@@ -461,6 +464,7 @@ class _Resolver:
                 variant=None,
                 owner_decl_node_id=_BUILTIN_CONSTRUCTOR_NODE_ID,
                 type_params=(),
+                owner_module_id=PRELUDE_ID,
             )
             self._add_constructor_candidate(exc_name, cref)
 
@@ -481,6 +485,7 @@ class _Resolver:
                             variant=variant_name,
                             owner_decl_node_id=_BUILTIN_CONSTRUCTOR_NODE_ID,
                             type_params=(),
+                            owner_module_id=PRELUDE_ID,
                         )
                         self._add_constructor_candidate(variant_name, cref)
             else:
@@ -489,6 +494,7 @@ class _Resolver:
                     variant=None,
                     owner_decl_node_id=_BUILTIN_CONSTRUCTOR_NODE_ID,
                     type_params=(),
+                    owner_module_id=PRELUDE_ID,
                 )
                 self._add_constructor_candidate(type_name, cref)
 
@@ -501,7 +507,18 @@ class _Resolver:
         with genuine constructor overloading across distinct types).
         """
         existing = self._constructor_candidates.get(ctor_key, [])
-        if any(c.owner_name == cref.owner_name for c in existing):
+        if any(
+            (c.owner_module_id, c.owner_name)
+            == (cref.owner_module_id, cref.owner_name)
+            or (
+                (
+                    c.owner_decl_node_id == _BUILTIN_CONSTRUCTOR_NODE_ID
+                    or cref.owner_decl_node_id == _BUILTIN_CONSTRUCTOR_NODE_ID
+                )
+                and c.owner_name == cref.owner_name
+            )
+            for c in existing
+        ):
             return
         existing.append(cref)
         self._constructor_candidates[ctor_key] = existing
@@ -522,6 +539,7 @@ class _Resolver:
                     variant=None,
                     owner_decl_node_id=item.node_id,
                     type_params=item.type_params,
+                    owner_module_id=self._module_id,
                 )
                 self._add_constructor_candidate(item.name, cref)
             elif isinstance(item, EnumDef):
@@ -531,6 +549,7 @@ class _Resolver:
                         variant=variant.name,
                         owner_decl_node_id=item.node_id,
                         type_params=item.type_params,
+                        owner_module_id=self._module_id,
                     )
                     self._add_constructor_candidate(variant.name, cref)
             elif isinstance(item, ExceptionDef):
@@ -539,6 +558,7 @@ class _Resolver:
                     variant=None,
                     owner_decl_node_id=item.node_id,
                     type_params=(),
+                    owner_module_id=self._module_id,
                 )
                 self._add_constructor_candidate(item.name, cref)
 
@@ -577,6 +597,7 @@ class _Resolver:
                 ),
                 decl_node_id=rep.owner_decl_node_id,
                 kind=BinderKind.constructor_binding,
+                module_id=rep.owner_module_id,
             )
             scope.define(name, ref)
 
@@ -731,6 +752,22 @@ class _Resolver:
     def _current_scope(self) -> ScopeNode:
         assert self._scope is not None, "resolver used outside of run()"
         return self._scope
+
+    @staticmethod
+    def _snapshot_scope(scope: ScopeNode) -> ScopeNode:
+        """Copy a lexical scope chain at one source position.
+
+        Scope nodes continue accumulating sequential block bindings during
+        resolution.  Case provenance must instead retain precisely the names
+        visible when the case was entered, so later declarations cannot
+        retroactively change diagnostic spellings.
+        """
+        parent = (
+            None
+            if scope.parent is None
+            else _Resolver._snapshot_scope(scope.parent)
+        )
+        return ScopeNode(scope.node_id, parent, dict(scope.bindings))
 
     @contextmanager
     def _child_scope(self, node_id: int) -> Iterator[ScopeNode]:
@@ -1547,6 +1584,7 @@ class _Resolver:
             self._resolve_expr_or_block(branch.body)
 
     def _resolve_case(self, node: Case) -> None:
+        self._case_scopes[node.node_id] = self._snapshot_scope(self._current_scope())
         self._resolve_expr(node.subject)
         for branch in node.branches:
             with self._child_scope(branch.node_id) as branch_scope:

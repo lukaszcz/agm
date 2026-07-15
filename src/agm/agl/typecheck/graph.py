@@ -137,6 +137,10 @@ class CheckedModule:
     ``type_env``
         The module-aware :class:`~agm.agl.typecheck.env.TypeEnvironment`
         built during the pass.
+    ``import_env``
+        The immutable source import environment used to resolve this module.
+        It is retained explicitly so later checked-program consumers can use
+        source aliases and exposure rules without reaching into ``type_env``.
     """
 
     module_id: ModuleId
@@ -148,6 +152,7 @@ class CheckedModule:
     function_signatures: dict[str, FunctionSignature]
     cast_specs: dict[int, CastSpec]
     type_env: TypeEnvironment
+    import_env: ImportEnv
     source_text: str
     argument_bindings: ArgumentBindings
     partial_calls: dict[int, PartialCallSpec]
@@ -803,6 +808,7 @@ def _check_module(
         function_signatures=cp.function_signatures,
         cast_specs=cp.cast_specs,
         type_env=cp.type_env,
+        import_env=import_env,
         source_text=source_text,
         argument_bindings=cp.argument_bindings,
         partial_calls=cp.partial_calls,

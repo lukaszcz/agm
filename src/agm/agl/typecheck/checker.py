@@ -64,6 +64,8 @@ from agm.agl.semantics.types import (
     CastSpec,
     DecimalType,
     DictType,
+    EnumOwnerForm,
+    EnumOwnerFormKind,
     EnumType,
     ExceptionType,
     FunctionType,
@@ -2443,32 +2445,24 @@ class _Checker:
                 module_qualifier, enum_type.name, enum_type, span
             )
 
-    def _check_variant_qualifier(
-        self, qualifier: str, enum_type: EnumType, span: SourceSpan
+    def _require_enum_owner_match(
+        self,
+        form: EnumOwnerForm,
+        enum_type: EnumType,
+        rendered_owner: str,
+        span: SourceSpan,
     ) -> None:
-        # The qualifier names an enum type. A generic enum's bare name is not
-        # resolvable as a concrete type (bare generic names are rejected), so
-        # resolve it through the generic-template namespace; its declared name
-        # is the qualifier itself. ``enum_type`` is the scrutinee's already
-        # instantiated type, whose ``.name`` is the bare enum name.
-        gdef = self._env.get_generic_type(qualifier)
-        type_mismatch: bool
-        if gdef is not None:
-            resolved_name = qualifier if gdef.kind == "enum" else None
-            type_mismatch = resolved_name != enum_type.name
-        else:
-            resolved = self._env.resolve_named_type(qualifier)
-            resolved_name = resolved.name if isinstance(resolved, EnumType) else None
-            # Compare by full identity (name + module_id) so foo::Color ≠ bar::Color.
-            type_mismatch = resolved != enum_type
-        if resolved_name is None:
+        """Require one checked owner form to match the concrete subject enum."""
+        if form.match(enum_type) is None:
+            template = form.type_template
+            resolved = None if template is None else template.template
+            if not isinstance(resolved, EnumType):
+                raise AglTypeError(
+                    f"'{rendered_owner}' is not a known enum type.",
+                    span=span,
+                )
             raise AglTypeError(
-                f"'{qualifier}' is not a known enum type.",
-                span=span,
-            )
-        if type_mismatch:
-            raise AglTypeError(
-                f"Qualifier '{qualifier}' resolves to enum '{resolved_name}', "
+                f"Qualifier '{rendered_owner}' resolves to enum '{resolved.name}', "
                 f"but the value has enum type '{enum_type.name}'.",
                 span=span,
             )
@@ -2483,19 +2477,19 @@ class _Checker:
         """Validate a lone ``prefix::Variant`` qualifier."""
         if len(module_qualifier.segments) == 1:
             qualifier = module_qualifier.segments[0]
-            type_known = (
-                self._env.get_generic_type(qualifier) is not None
-                or self._env.resolve_named_type(qualifier) is not None
+            form = self._env.resolve_unqualified_enum_owner_form(qualifier)
+            local_form = self._env.resolve_enum_owner_form(
+                EnumOwnerFormKind.SELF, qualifier
             )
             handle_match = self._env.has_qualified_import_handle(module_qualifier.segments)
-            if type_known and handle_match:
+            if local_form is not None and handle_match:
                 raise AglTypeError(
                     f"Qualifier '{qualifier}' is both a type name and an import handle; "
                     "rename the import alias to disambiguate.",
                     span=span,
                 )
-            if type_known:
-                self._check_variant_qualifier(qualifier, enum_type, span)
+            if form is not None:
+                self._require_enum_owner_match(form, enum_type, qualifier, span)
                 return
 
         self._check_module_qualified_variant(module_qualifier, enum_name, enum_type, span)
@@ -2508,34 +2502,27 @@ class _Checker:
         span: SourceSpan,
     ) -> None:
         """Validate a module-qualified enum-type qualifier, e.g. ``mylib::Color``."""
-        from agm.agl.syntax.types import NameT
-        fake_name_t = NameT(
-            name=enum_name,
-            span=span,
-            node_id=-1,
-            module_qualifier=module_qualifier,
+        kind = (
+            EnumOwnerFormKind.SELF
+            if not module_qualifier.segments
+            else EnumOwnerFormKind.QUALIFIED_IMPORT
         )
-        try:
-            resolved = self._env.resolve_type_expr(fake_name_t, span=span)
-        except AglTypeError as exc:
-            raise AglTypeError(
-                f"'{'.'.join(module_qualifier.segments)}::{enum_name}' "
-                "is not a known enum type.",
-                span=span,
-            ) from exc
-        if not isinstance(resolved, EnumType):
-            raise AglTypeError(
-                f"'{'.'.join(module_qualifier.segments)}::{enum_name}' "
-                "is not a known enum type.",
-                span=span,
+        form = self._env.resolve_enum_owner_form(
+            kind, enum_name, module_qualifier.segments
+        )
+        if form is not None:
+            owner = (
+                f"::{enum_name}"
+                if not module_qualifier.segments
+                else f"{'.'.join(module_qualifier.segments)}::{enum_name}"
             )
-        if resolved != enum_type:
-            raise AglTypeError(
-                f"Qualifier '{'.'.join(module_qualifier.segments)}::{enum_name}' "
-                f"resolves to enum '{resolved.name}', "
-                f"but the value has enum type '{enum_type.name}'.",
-                span=span,
-            )
+            self._require_enum_owner_match(form, enum_type, owner, span)
+            return
+        raise AglTypeError(
+            f"'{'.'.join(module_qualifier.segments)}::{enum_name}' "
+            "is not a known enum type.",
+            span=span,
+        )
 
     # --- field access ---
 

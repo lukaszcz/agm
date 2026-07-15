@@ -49,8 +49,10 @@ Output contracts (the schema and format metadata that agent/`exec` calls need) a
 `matchcompile/` consumes checked pattern metadata without depending on lowering, the execution IR,
 the evaluator, or runtime services. It normalizes source patterns into typed pattern matrices,
 preserves source priority while choosing tests with the deterministic `qba` heuristic, and compiles
-each source `case` into a locally shared immutable decision DAG. Enum and boolean domains use their
-complete checked signatures; scalar and unresolved type-variable domains remain open. The same DAG
+each source `case` into a locally shared immutable decision DAG. Compilation and artifact validation
+summarize live matrix state and path facts at DAG joins, preserving sharing rather than expanding
+historical paths. Enum and boolean domains use their complete checked signatures; scalar and
+unresolved type-variable domains remain open. The same DAG
 provides reachable-arm information and deterministic structured witnesses, so exhaustiveness and
 redundancy diagnostics cannot disagree with the executable decision structure.
 

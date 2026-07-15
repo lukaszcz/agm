@@ -128,6 +128,20 @@ def test_graph_discovery_rejects_cached_artifact_with_different_module_set(
     _assert_cache_mismatch(iter(rejected.diagnostics))
 
 
+def test_single_run_rechecks_cached_artifact_when_host_capabilities_change() -> None:
+    source = 'ask("cached")'
+    cached_by = PipelineDriver(default_agent=lambda _prompt: "answer")
+    prepared = cached_by.prepare(source)
+    discovery = cached_by.discover_params(prepared)
+    assert discovery.compiled is not None
+
+    result = PipelineDriver().run_prepared(prepared, compiled=discovery.compiled)
+
+    assert not result.ok
+    assert result.error is None
+    assert result.diagnostics
+
+
 def test_graph_cache_mismatch_without_prepared_entry_uses_fallback_location() -> None:
     prepared, discovery = _compiled_graph("let value = 1\nvalue")
     assert prepared.resolved_graph is not None

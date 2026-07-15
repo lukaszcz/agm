@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TypeAlias
+from typing import TYPE_CHECKING, TypeAlias
 
 from agm.agl.diagnostics import Diagnostic, diagnostic_from_span
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
@@ -23,6 +23,9 @@ from .diagnostics import (
     render_witness,
 )
 from .normalize import MatchCompileInvariantError, normalize_case
+
+if TYPE_CHECKING:
+    from agm.agl.capabilities import HostCapabilities
 
 
 def _immutable_cases(cases: Mapping[int, CompiledCase]) -> Mapping[int, CompiledCase]:
@@ -43,6 +46,7 @@ class MatchCompiledProgram:
 
     checked: CheckedProgram
     cases: Mapping[int, CompiledCase]
+    capabilities: HostCapabilities | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "cases", _immutable_cases(self.cases))
@@ -55,6 +59,7 @@ class MatchCompiledModuleGraph:
 
     checked_graph: CheckedModuleGraph
     cases_by_module: Mapping[ModuleId, Mapping[int, CompiledCase]]
+    capabilities: HostCapabilities | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "cases_by_module", _immutable_module_cases(self.cases_by_module))

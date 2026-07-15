@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, TypeVar, overload
 
 from agm.agl.diagnostics import AglError, Diagnostic, diagnostic_from_span
 from agm.agl.eval.ir_interpreter import IrInterpreter
@@ -553,6 +553,8 @@ class PipelineDriver:
                 warnings=all_warnings,
             )
 
+        compiled = _with_cached_capabilities(compiled, capabilities)
+
         assert prepared.program is not None
         infos: list[ParamDeclInfo] = []
         for item in prepared.program.body.items:
@@ -665,6 +667,15 @@ class PipelineDriver:
         assert program is not None  # resolved set ⇒ parse succeeded
         source = prepared.source
 
+        # ----------------------------------------------------------------
+        # Build the host environment (registry + capabilities + codecs +
+        # renderers) from registrations.  Shared with ``ReplSession`` so the
+        # incremental driver wires identical agent/codec/renderer backing.
+        # ----------------------------------------------------------------
+        host_env = self.host_environment()
+        registry = host_env.registry
+        capabilities = host_env.capabilities
+
         if compiled is not None:
             from agm.agl.modules.ids import ENTRY_ID
 
@@ -673,6 +684,8 @@ class PipelineDriver:
                 prepared_modules={ENTRY_ID: resolved},
                 compiled_entry=ENTRY_ID,
                 compiled_modules={ENTRY_ID: compiled.checked.resolved},
+                cached_capabilities=compiled.capabilities,
+                capabilities=capabilities,
                 span=program.span,
             )
             if cache_diagnostic is not None:
@@ -682,15 +695,6 @@ class PipelineDriver:
                     error=None,
                     warnings=warnings,
                 )
-
-        # ----------------------------------------------------------------
-        # Build the host environment (registry + capabilities + codecs +
-        # renderers) from registrations.  Shared with ``ReplSession`` so the
-        # incremental driver wires identical agent/codec/renderer backing.
-        # ----------------------------------------------------------------
-        host_env = self.host_environment()
-        registry = host_env.registry
-        capabilities = host_env.capabilities
 
         # ----------------------------------------------------------------
         # [2b] Source↔host agent reconciliation
@@ -735,6 +739,7 @@ class PipelineDriver:
                     error=None,
                     warnings=warnings,
                 )
+            compiled = _with_cached_capabilities(compiled, capabilities)
 
         contract_payloads, contract_errors = _materialize_custom_contract_payloads(
             checked.contract_specs,
@@ -1032,9 +1037,10 @@ class PipelineDriver:
                 checked_graph=None,
             )
 
+        capabilities = self.host_environment().capabilities
         if compiled_graph is not None:
             cache_diagnostic = _cached_graph_artifact_provenance_diagnostic(
-                prepared.resolved_graph, compiled_graph
+                prepared.resolved_graph, compiled_graph, capabilities
             )
             if cache_diagnostic is not None:
                 return ParamDiscovery(
@@ -1047,7 +1053,6 @@ class PipelineDriver:
                 )
 
         if compiled_graph is None:
-            capabilities = self.host_environment().capabilities
             checked_graph, tc_diagnostics = _run_typecheck_graph(
                 prepared.resolved_graph, capabilities
             )
@@ -1080,6 +1085,8 @@ class PipelineDriver:
                     warnings=all_warnings,
                     checked_graph=checked_graph,
                 )
+
+        compiled_graph = _with_cached_capabilities(compiled_graph, capabilities)
 
         entry_cm = checked_graph.modules.get(ENTRY_ID)
         if entry_cm is None:
@@ -1166,9 +1173,11 @@ class PipelineDriver:
                 checked_graph=None,
             )
 
+        host_env = self.host_environment()
+        capabilities = host_env.capabilities
         if compiled_graph is not None:
             cache_diagnostic = _cached_graph_artifact_provenance_diagnostic(
-                prepared.resolved_graph, compiled_graph
+                prepared.resolved_graph, compiled_graph, capabilities
             )
             if cache_diagnostic is not None:
                 return StartupConfigResult(
@@ -1209,8 +1218,6 @@ class PipelineDriver:
                 compiled_graph=compiled_graph,
             )
 
-        host_env = self.host_environment()
-        capabilities = host_env.capabilities
         if compiled_graph is None:
             checked_graph, tc_diagnostics = _run_typecheck_graph(
                 prepared.resolved_graph, capabilities
@@ -1239,6 +1246,7 @@ class PipelineDriver:
                     warnings=warnings,
                     checked_graph=checked_graph,
                 )
+            compiled_graph = _with_cached_capabilities(compiled_graph, capabilities)
 
         contract_payloads, contract_errors = _materialize_graph_custom_contract_payloads(
             checked_graph,
@@ -1398,9 +1406,11 @@ class PipelineDriver:
             )
         resolved_graph = prepared.resolved_graph
 
+        host_env = self.host_environment()
+        capabilities = host_env.capabilities
         if compiled_graph is not None:
             cache_diagnostic = _cached_graph_artifact_provenance_diagnostic(
-                resolved_graph, compiled_graph
+                resolved_graph, compiled_graph, capabilities
             )
             if cache_diagnostic is not None:
                 return RunResult(
@@ -1410,9 +1420,7 @@ class PipelineDriver:
                     warnings=warnings,
                 )
 
-        host_env = self.host_environment()
         registry = host_env.registry
-        capabilities = host_env.capabilities
 
         # Agent reconciliation against entry module's declared agents.
         reconciliation_errors = _reconcile_agents(registry, resolved_graph.entry_agents)
@@ -1450,6 +1458,7 @@ class PipelineDriver:
                     error=None,
                     warnings=warnings,
                 )
+            compiled_graph = _with_cached_capabilities(compiled_graph, capabilities)
 
         contract_payloads, contract_errors = _materialize_graph_custom_contract_payloads(
             checked_graph,
@@ -1598,6 +1607,8 @@ def _cached_artifact_provenance_diagnostic(
     prepared_modules: "Mapping[ModuleId, ResolvedProgram]",
     compiled_entry: "ModuleId",
     compiled_modules: "Mapping[ModuleId, ResolvedProgram]",
+    cached_capabilities: "HostCapabilities | None",
+    capabilities: "HostCapabilities",
     span: "SourceSpan | None",
 ) -> Diagnostic | None:
     """Reject a cached artifact unless it wraps the exact prepared resolutions.
@@ -1612,6 +1623,7 @@ def _cached_artifact_provenance_diagnostic(
             compiled_modules[module_id] is prepared_resolved
             for module_id, prepared_resolved in prepared_modules.items()
         )
+        and cached_capabilities == capabilities
     )
     if same_provenance:
         return None
@@ -1624,6 +1636,7 @@ def _cached_artifact_provenance_diagnostic(
 def _cached_graph_artifact_provenance_diagnostic(
     resolved_graph: "ResolvedModuleGraph",
     compiled_graph: "MatchCompiledModuleGraph",
+    capabilities: "HostCapabilities",
 ) -> Diagnostic | None:
     """Adapt graph artifacts to the shared cached-provenance validator."""
     entry_module = resolved_graph.modules.get(resolved_graph.entry_id)
@@ -1638,8 +1651,32 @@ def _cached_graph_artifact_provenance_diagnostic(
             module_id: module.resolved
             for module_id, module in compiled_graph.checked_graph.modules.items()
         },
+        cached_capabilities=compiled_graph.capabilities,
+        capabilities=capabilities,
         span=entry_module.resolved.program.span if entry_module is not None else None,
     )
+
+
+@overload
+def _with_cached_capabilities(
+    compiled: "MatchCompiledProgram", capabilities: "HostCapabilities"
+) -> "MatchCompiledProgram": ...
+
+
+@overload
+def _with_cached_capabilities(
+    compiled: "MatchCompiledModuleGraph", capabilities: "HostCapabilities"
+) -> "MatchCompiledModuleGraph": ...
+
+
+def _with_cached_capabilities(
+    compiled: "MatchCompiledProgram | MatchCompiledModuleGraph",
+    capabilities: "HostCapabilities",
+) -> "MatchCompiledProgram | MatchCompiledModuleGraph":
+    """Stamp cached artifacts with the host contract used for type checking."""
+    from dataclasses import replace
+
+    return replace(compiled, capabilities=capabilities)
 
 
 def _run_typecheck_graph(

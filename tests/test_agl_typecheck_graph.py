@@ -725,6 +725,33 @@ def test_later_module_alias_available_to_entry_type_body_via_open_import(
     assert _binding_value_type(cg, ENTRY_ID, "b") == RecordType("Box", module_id=ENTRY_ID)
 
 
+def test_imported_generic_alias_to_record_constructs_transparently(tmp_path: Path) -> None:
+    """A qualified generic alias constructs its nominal record target."""
+    checked = _check_graph(
+        tmp_path,
+        {
+            "entry": "import lib qualified\nlet box = lib::Alias(value = 1)\nbox",
+            "lib": "record Box[T]\n  value: T\ntype Alias[T] = Box[T]",
+        },
+    )
+
+    assert _binding_value_type(
+        checked, ENTRY_ID, "box"
+    ) == RecordType("Box", (IntType(),), module_id=ModuleId.from_dotted("lib"))
+
+
+def test_imported_generic_alias_to_non_nominal_is_a_type_error(tmp_path: Path) -> None:
+    """A constructor-classified alias with a non-nominal target fails normally."""
+    with pytest.raises(AglTypeError):
+        _check_graph(
+            tmp_path,
+            {
+                "entry": "import lib qualified\nlib::Alias(value = 1)",
+                "lib": "type Alias[T] = list[T]",
+            },
+        )
+
+
 def test_later_module_parameterized_alias_available_to_entry_type_body(
     tmp_path: Path,
 ) -> None:

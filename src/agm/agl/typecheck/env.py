@@ -1396,6 +1396,24 @@ class TypeEnvironment:
             return None
         return self._graph_type_table.get((module_id, name))
 
+    def resolve_constructible_type_by_module_id(
+        self, module_id: ModuleId, name: str
+    ) -> RecordType | EnumType | ExceptionType | None:
+        """Resolve a graph type name or transparent alias to a nominal target.
+
+        Scope tentatively classifies aliases with a named or applied body as
+        constructor bindings. This confirms that classification after aliases
+        have resolved, without exposing a non-nominal alias to constructor
+        lookup.
+        """
+        template = self.source_type_template_qname(module_id, name)
+        if template is None:
+            return None
+        target = template.template
+        if isinstance(target, (RecordType, EnumType, ExceptionType)):
+            return target
+        return None
+
     def match_source_type_qname(
         self,
         module_id: ModuleId,

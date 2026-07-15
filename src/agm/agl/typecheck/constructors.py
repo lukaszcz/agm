@@ -718,6 +718,20 @@ class ConstructorChecker:
 
     # --- Cross-module constructor value/call (public entry points) ---
 
+    def _resolve_cross_module_nominal_constructor(
+        self, callee_ref: BindingRef, span: SourceSpan
+    ) -> tuple[RecordType | EnumType | ExceptionType, GenericTypeDef | None]:
+        """Resolve a tentative cross-module constructor binding to its nominal target."""
+        owner = self._ctx._env.resolve_constructible_type_by_module_id(
+            callee_ref.module_id, callee_ref.name
+        )
+        if owner is None:
+            raise AglTypeError(
+                f"'{callee_ref.name}' is a type name, not a constructible nominal type.",
+                span=span,
+            )
+        return owner, self._ctx._env.get_generic_type_from_module(owner.module_id, owner.name)
+
     def check_cross_module_constructor_as_value(
         self, callee_ref: BindingRef, *, span: SourceSpan, expected: Type | None
     ) -> Type:
@@ -751,8 +765,26 @@ class ConstructorChecker:
                 gdef=gdef,
                 source_name=callee_ref.name,
             )
-        owner = self._ctx._env.resolve_type_by_module_id(callee_ref.module_id, callee_ref.name)
-        assert isinstance(owner, (RecordType, EnumType, ExceptionType))
+        owner, target_gdef = self._resolve_cross_module_nominal_constructor(callee_ref, span)
+        if target_gdef is not None:
+            sig = self._ctx._env.get_ctor_sig_from_module(owner.module_id, owner.name, None)
+            assert sig is not None, (
+                f"GenericTypeDef '{owner.name}' in '{owner.module_id.dotted()}' "
+                "has no constructor signature in the graph table"
+            )
+            return self.check_generic_constructor_as_value(
+                ctor_ref=ConstructorRef(
+                    owner_name=owner.name,
+                    variant=None,
+                    owner_decl_node_id=callee_ref.decl_node_id,
+                    type_params=target_gdef.type_params,
+                ),
+                span=span,
+                expected=expected,
+                sig=sig,
+                gdef=target_gdef,
+                source_name=owner.name,
+            )
         if isinstance(owner, RecordType):
             return self.check_constructor_as_value(owner=owner, variant=None, span=span)
         raise AglTypeError(
@@ -769,26 +801,26 @@ class ConstructorChecker:
         span: SourceSpan,
     ) -> Type:
         """Instantiate a module-qualified generic record constructor value."""
-        gdef = self._ctx._env.get_generic_type_from_module(callee_ref.module_id, callee_ref.name)
+        owner, gdef = self._resolve_cross_module_nominal_constructor(callee_ref, span)
         if gdef is None or not isinstance(gdef.template, RecordType):
             raise AglTypeError(
                 f"'{callee_ref.name}' is not a generic constructor and does not accept "
                 "type arguments.",
                 span=span,
             )
-        sig = self._ctx._env.get_ctor_sig_from_module(callee_ref.module_id, callee_ref.name, None)
+        sig = self._ctx._env.get_ctor_sig_from_module(owner.module_id, owner.name, None)
         assert sig is not None, (
-            f"GenericTypeDef '{callee_ref.name}' in '{callee_ref.module_id.dotted()}' "
+            f"GenericTypeDef '{owner.name}' in '{owner.module_id.dotted()}' "
             "has no constructor signature in the graph table"
         )
         return self._instantiate_constructor_value(
-            owner_name=callee_ref.name,
+            owner_name=owner.name,
             variant=None,
             type_params=gdef.type_params,
             type_args=type_args,
             sig=sig,
             gdef=gdef,
-            source_name=callee_ref.name,
+            source_name=owner.name,
             span=span,
         )
 
@@ -806,26 +838,23 @@ class ConstructorChecker:
         resolved to a ``constructor_binding`` in a non-entry module.
         """
         assert isinstance(node.callee, VarRef)
-        # Cross-module generic constructor — both explicit (lib::Box[int](v = 1)) and
-        # inferred (lib::Box(value = 1)) routes go here.
-        gdef = self._ctx._env.get_generic_type_from_module(callee_ref.module_id, callee_ref.name)
+        owner_type, gdef = self._resolve_cross_module_nominal_constructor(callee_ref, node.span)
         if gdef is not None:
             ctor_sig = self._ctx._env.get_ctor_sig_from_module(
-                callee_ref.module_id, callee_ref.name, None
+                owner_type.module_id, owner_type.name, None
             )
             assert ctor_sig is not None, (
-                f"GenericTypeDef '{callee_ref.name}' in '{callee_ref.module_id.dotted()}' "
+                f"GenericTypeDef '{owner_type.name}' in '{owner_type.module_id.dotted()}' "
                 "has no constructor signature in the graph table"
-            )
-            ctor_ref = ConstructorRef(
-                owner_name=callee_ref.name,
-                variant=None,
-                owner_decl_node_id=callee_ref.decl_node_id,
-                type_params=gdef.type_params,
             )
             return self._check_generic_constructor_call(
                 node_type_args=node.type_args,
-                ctor_ref=ctor_ref,
+                ctor_ref=ConstructorRef(
+                    owner_name=owner_type.name,
+                    variant=None,
+                    owner_decl_node_id=callee_ref.decl_node_id,
+                    type_params=gdef.type_params,
+                ),
                 positional=node.args,
                 named=node.named_args,
                 span=node.span,
@@ -841,14 +870,11 @@ class ConstructorChecker:
                 "type arguments.",
                 span=node.span,
             )
-        owner_type = self._ctx._env.resolve_type_by_module_id(callee_ref.module_id, callee_ref.name)
-        # The scope resolver sets constructor_binding for RecordDef, EnumDef, and
-        # ExceptionDef, all of which map to their respective semantic types in the
-        # graph type table.
-        assert isinstance(owner_type, (RecordType, EnumType, ExceptionType)), (
-            f"constructor_binding for '{callee_ref.name}' in "
-            f"'{callee_ref.module_id.dotted()}' resolved to {type(owner_type).__name__}"
-        )
+        if isinstance(owner_type, EnumType):
+            raise AglTypeError(
+                f"'{callee_ref.name}' is an enum type, not a record constructor.",
+                span=node.span,
+            )
         self._reject_abstract_exception_constructor(owner_type, node.span)
         return self._check_constructor_call(
             owner=owner_type, variant=None, positional=node.args, named=node.named_args,

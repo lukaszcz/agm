@@ -344,6 +344,9 @@ def run(args: ExecArgs) -> None:
         resolved_timeout = config.timeout
 
     shared_extern_registry = ExternRegistry()
+    # The startup pass must advertise the same declared-agent capabilities as
+    # the execution pass so its compiled artifact remains reusable.
+    decls = prepared.declared_agents
     startup_values: dict[str, Value] = {}
     startup_compiled_graph: MatchCompiledModuleGraph | None = None
     if prepared.resolved_graph is not None and not dry_run.enabled():
@@ -354,6 +357,8 @@ def run(args: ExecArgs) -> None:
             shell_exec_timeout=resolved_timeout,
         )
         startup_runtime.share_extern_registry(shared_extern_registry)
+        for declaration in decls:
+            startup_runtime.register_agent(declaration.name, lambda _request: "")
         startup_result = startup_runtime.collect_startup_config_graph(
             prepared,
             names={"runner", "log", "log-file"},
@@ -426,7 +431,6 @@ def run(args: ExecArgs) -> None:
     # below, so the source is never loaded or scoped twice.  On a source with
     # load/scope errors ``declared_agents`` is ``()`` and ``run_prepared_graph``
     # resurfaces the captured diagnostic (exit 1).
-    decls = prepared.declared_agents
     source_hints = {d.name: d.runner for d in decls if d.runner is not None}
     # Config wins over source hints (dict merge: later keys override earlier).
     per_agent_cmds = {**source_hints, **config.agents}

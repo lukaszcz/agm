@@ -876,6 +876,25 @@ class TestExecCommandExitCodes:
         result = exec_command.run(args)
         assert result is None
 
+    def test_startup_artifact_with_declared_agents_preserves_params(
+        self, tmp_path: Path
+    ) -> None:
+        agl_file = tmp_path / "test.agl"
+        agl_file.write_text("agent worker\nconfig log = false\nparam value: int\nprint value\n")
+        from agm.cli_support.args import ExecArgs
+
+        args = ExecArgs(
+            file=str(agl_file),
+            param_tokens=["--value", "7"],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=False,
+            log_file=None,
+        )
+
+        assert exec_command.run(args) is None
+
     def test_missing_param_exits_1(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("param msg\nprint msg\n")

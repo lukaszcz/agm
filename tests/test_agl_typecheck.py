@@ -1270,6 +1270,10 @@ class TestAsk:
         err = reject_type('ask("Q")', capabilities=no_agent_caps())
         assert "agent" in str(err).lower() or "default" in str(err).lower()
 
+    def test_ask_non_text_no_default_agent_raises(self) -> None:
+        err = reject_type('let n: int = ask("Q")\nn', capabilities=no_agent_caps())
+        assert "agent" in str(err).lower() or "default" in str(err).lower()
+
     def test_ask_no_prompt_raises(self) -> None:
         err = reject_type("ask()")
         assert "prompt" in str(err).lower() or "argument" in str(err).lower()

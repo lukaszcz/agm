@@ -3,27 +3,32 @@
     {
       "name": "generic_before_and_after_concrete_evidence",
       "params": {"mode": "argument_order"},
-      "expect": {"stdout": "0\n0\n", "calls": {}}
+      "agents": {"ask": []},
+      "expect": {"stdout": "0\n0\n", "calls": {"ask": 0}}
     },
     {
       "name": "nested_multiple_quantifiers_and_fresh_occurrences",
       "params": {"mode": "nested_and_fresh"},
-      "expect": {"stdout": "n=2\n3\n1\nfresh\n", "calls": {}}
+      "agents": {"ask": []},
+      "expect": {"stdout": "n=2\n3\n1\nfresh\n", "calls": {"ask": 0}}
     },
     {
       "name": "generic_constructors_through_higher_order_functions",
       "params": {"mode": "constructors"},
-      "expect": {"stdout": "7\ntrue\ntrue\n", "calls": {}}
+      "agents": {"ask": []},
+      "expect": {"stdout": "7\ntrue\ntrue\n", "calls": {"ask": 0}}
     },
     {
       "name": "generic_partials_solved_by_sibling_and_result",
       "params": {"mode": "partial"},
-      "expect": {"stdout": "10\n11\n", "calls": {}}
+      "agents": {"ask": []},
+      "expect": {"stdout": "10\n11\n", "calls": {"ask": 0}}
     },
     {
       "name": "empty_literal_solved_later_in_expression",
       "params": {"mode": "empty_literal"},
-      "expect": {"stdout": "12\n", "calls": {}}
+      "agents": {"ask": []},
+      "expect": {"stdout": "12\n", "calls": {"ask": 0}}
     },
     {
       "name": "ask_target_solved_by_sibling_argument",
@@ -34,7 +39,8 @@
     {
       "name": "explicit_type_application_composes",
       "params": {"mode": "explicit"},
-      "expect": {"stdout": "12\n", "calls": {}}
+      "agents": {"ask": []},
+      "expect": {"stdout": "12\n", "calls": {"ask": 0}}
     }
   ]
 }

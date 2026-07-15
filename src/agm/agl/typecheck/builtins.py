@@ -302,7 +302,6 @@ class BuiltinCallChecker:
             obligation.kind is BuiltinObligationKind.ASK
             and not obligation.has_agent_argument
             and not self._ctx._caps.has_default_agent
-            and isinstance(target_type, TextType)
         ):
             raise AglTypeError(
                 "No default agent is configured; the built-in 'ask' call cannot run. "

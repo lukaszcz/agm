@@ -133,6 +133,14 @@ class ConstructorChecker:
         imported_gdef: GenericTypeDef | None = gdef
         imported_source_name = source_name or owner_name
         if sig is None:
+            imported_gdef = self._ctx._env.get_generic_type_from_module(
+                ctor_ref.owner_module_id, owner_name
+            )
+            if imported_gdef is not None:
+                sig = self._ctx._env.get_ctor_sig_from_module(
+                    ctor_ref.owner_module_id, owner_name, variant
+                )
+        if sig is None:
             sig = self._ctx._env.get_constructor_signature(owner_name, variant)
         if sig is None:
             # A generic constructor with no own-module signature must be open-imported
@@ -526,7 +534,11 @@ class ConstructorChecker:
         Falls back to the unqualified import map for cross-module types that
         are open-imported but not registered in the local environment.
         """
-        owner: Type | None = self._ctx._env.get_type(ref.owner_name)
+        owner = self._ctx._env.resolve_type_by_module_id(
+            ref.owner_module_id, ref.owner_name
+        )
+        if owner is None:
+            owner = self._ctx._env.get_type(ref.owner_name)
         if owner is None:
             owner = self._ctx._env.resolve_named_type(ref.owner_name)
         assert isinstance(owner, (RecordType, EnumType, ExceptionType)), (
@@ -879,12 +891,20 @@ class ConstructorChecker:
             # name: for an enum variant constructor (e.g. `some`), the callee name
             # is the variant, but only the enum TYPE name (`Option`) is registered
             # in the import map (enum variants travel with their enum).
-            imported = self._ctx._env.get_open_imported_generic_type(ctor_ref.owner_name)
-            if imported is not None:
-                module_id, source_name, gdef = imported
+            gdef = self._ctx._env.get_generic_type_from_module(
+                ctor_ref.owner_module_id, ctor_ref.owner_name
+            )
+            if gdef is not None:
                 sig = self._ctx._env.get_ctor_sig_from_module(
-                    module_id, source_name, ctor_ref.variant
+                    ctor_ref.owner_module_id, ctor_ref.owner_name, ctor_ref.variant
                 )
+            else:
+                imported = self._ctx._env.get_open_imported_generic_type(ctor_ref.owner_name)
+                if imported is not None:
+                    module_id, source_name, gdef = imported
+                    sig = self._ctx._env.get_ctor_sig_from_module(
+                        module_id, source_name, ctor_ref.variant
+                    )
             return self._check_generic_constructor_call(
                 node_type_args=node.type_args,
                 ctor_ref=ctor_ref,

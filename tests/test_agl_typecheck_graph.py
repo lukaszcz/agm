@@ -590,6 +590,38 @@ def test_unqualified_constructor_from_open_import(tmp_path: Path) -> None:
     assert _binding_value_type(cg, ENTRY_ID, "c") == EnumType("Color", module_id=mylib_id)
 
 
+def test_bare_constructor_uses_its_open_imported_owner_module(tmp_path: Path) -> None:
+    """Distinct bare variants may have same-named owners in separate open imports."""
+    modules = {
+        "entry": "import first\nimport second\nlet left = First\nlet right = Second\nright",
+        "first": "enum Choice\n  | First",
+        "second": "enum Choice\n  | Second",
+    }
+
+    checked = _check_graph(tmp_path, modules)
+
+    assert _binding_value_type(
+        checked, ENTRY_ID, "left"
+    ) == EnumType("Choice", module_id=ModuleId.from_dotted("first"))
+    assert _binding_value_type(
+        checked, ENTRY_ID, "right"
+    ) == EnumType("Choice", module_id=ModuleId.from_dotted("second"))
+
+
+def test_generic_bare_constructor_uses_its_open_imported_owner_module(tmp_path: Path) -> None:
+    modules = {
+        "entry": "import first\nimport second\nlet left = First(value = 1)\nleft",
+        "first": "enum Choice[T]\n  | First(value: T)",
+        "second": "enum Choice[T]\n  | Second(value: T)",
+    }
+
+    checked = _check_graph(tmp_path, modules)
+
+    assert _binding_value_type(
+        checked, ENTRY_ID, "left"
+    ) == EnumType("Choice", (IntType(),), module_id=ModuleId.from_dotted("first"))
+
+
 # ---------------------------------------------------------------------------
 # Extra: graph_type_table is populated with all modules
 # ---------------------------------------------------------------------------

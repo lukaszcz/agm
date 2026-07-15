@@ -1227,13 +1227,15 @@ class PipelineDriver:
                 compiled_graph=compiled_graph,
             )
 
-        if compiled_graph is None:
+        if compiled_graph is not None:
+            tc_diagnostics = ()
+            checked_graph = compiled_graph.checked_graph
+        elif checked_graph is None:
             checked_graph, tc_diagnostics = _run_typecheck_graph(
                 prepared.resolved_graph, capabilities
             )
         else:
             tc_diagnostics = ()
-            checked_graph = compiled_graph.checked_graph
         if checked_graph is None:
             return StartupConfigResult(
                 ok=False,
@@ -1446,11 +1448,13 @@ class PipelineDriver:
 
         # Reuse a supplied match-compiled graph rather than repeating its
         # typecheck and match-compilation passes.
-        if compiled_graph is None:
+        if compiled_graph is not None:
+            tc_diagnostics = ()
+            checked_graph = compiled_graph.checked_graph
+        elif checked_graph is None:
             checked_graph, tc_diagnostics = _run_typecheck_graph(resolved_graph, capabilities)
         else:
             tc_diagnostics = ()
-            checked_graph = compiled_graph.checked_graph
         if checked_graph is None:
             return RunResult(
                 ok=False,

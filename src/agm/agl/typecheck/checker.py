@@ -42,7 +42,7 @@ from __future__ import annotations
 import keyword
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Literal, TypeGuard, assert_never
 
 from agm.agl.capabilities import HostCapabilities
@@ -215,6 +215,10 @@ class _InferenceRegion:
     node_types: dict[int, Type]
     function_call_param_types: dict[int, tuple[Type, ...]]
     finalization_obligations: list[_PendingFinalization]
+    added_side_table_keys: dict[str, set[int]] = field(default_factory=dict)
+    call_sites_start: int = 0
+    warnings_start: int = 0
+    return_target_lengths: tuple[int, ...] = ()
 
 
 _IndexLike = IndexAccess | IndexTarget
@@ -1023,24 +1027,20 @@ class _Checker:
             self._record_node_type(expr.node_id, typ)
             return self._inference_region.engine.zonk(typ)
 
-        region = _InferenceRegion(InferenceEngine(), {}, {}, [])
+        region = _InferenceRegion(
+            InferenceEngine(),
+            {},
+            {},
+            [],
+            {},
+            len(self._call_sites),
+            len(self._warnings),
+            tuple(len(targets) for targets in self._return_extern_targets_stack),
+        )
         # Some side tables are written while an expression is being checked,
         # while call-site metadata remains typed obligations until region close.
-        # Keep a checkpoint so an error while finalizing cannot publish either
-        # provisional work or partially materialized call-site metadata.
-        side_table_checkpoint = (
-            self._function_call_bindings.copy(),
-            self._constructor_call_bindings.copy(),
-            self._constructor_pattern_bindings.copy(),
-            self._partial_calls.copy(),
-            self._contract_specs.copy(),
-            list(self._call_sites),
-            list(self._warnings),
-            self._cast_specs.copy(),
-            self._extern_expr_targets.copy(),
-            self._extern_binding_targets.copy(),
-            tuple(tuple(targets) for targets in self._return_extern_targets_stack),
-        )
+        # The region records only its additions, so rollback never copies state
+        # accumulated by earlier independently checked expressions.
         completed = False
         self._inference_region = region
         try:
@@ -1068,7 +1068,7 @@ class _Checker:
                     self._finalize_extern_call_obligation(
                         replace(obligation, target_type=region.engine.zonk(obligation.target_type))
                     )
-            self._finalize_extern_provenance(region.engine)
+            self._finalize_extern_provenance(region)
             final_type = region.engine.zonk(typ)
             final_node_types = {
                 node_id: region.engine.zonk(node_type)
@@ -1078,19 +1078,36 @@ class _Checker:
                 node_id: tuple(region.engine.zonk(param_type) for param_type in param_types)
                 for node_id, param_types in region.function_call_param_types.items()
             }
+            extern_expr_keys = region.added_side_table_keys.get("extern_expr_targets", set())
+            extern_binding_keys = region.added_side_table_keys.get(
+                "extern_binding_targets", set()
+            )
             region.engine.assert_no_inference_vars(
                 (
                     *final_node_types.values(),
                     *(t for ts in final_param_types.values() for t in ts),
-                    *(call_site.target_type for call_site in self._call_sites),
+                    *(
+                        call_site.target_type
+                        for call_site in self._call_sites[region.call_sites_start :]
+                    ),
                     *(
                         target.result_type
-                        for targets in (
-                            *self._extern_expr_targets.values(),
-                            *self._extern_binding_targets.values(),
-                            *self._return_extern_targets_stack,
+                        for node_id in extern_expr_keys
+                        for target in self._extern_expr_targets.get(node_id, ())
+                    ),
+                    *(
+                        target.result_type
+                        for node_id in extern_binding_keys
+                        for target in self._extern_binding_targets.get(node_id, ())
+                    ),
+                    *(
+                        target.result_type
+                        for targets, start in zip(
+                            self._return_extern_targets_stack,
+                            region.return_target_lengths,
+                            strict=True,
                         )
-                        for target in targets
+                        for target in targets[start:]
                     ),
                 )
             )
@@ -1102,33 +1119,7 @@ class _Checker:
             raise AglTypeError(str(exc), span=exc.span, related=exc.related) from exc
         finally:
             if not completed:
-                (
-                    function_call_bindings,
-                    constructor_call_bindings,
-                    constructor_pattern_bindings,
-                    partial_calls,
-                    contract_specs,
-                    call_sites,
-                    warnings,
-                    cast_specs,
-                    extern_expr_targets,
-                    extern_binding_targets,
-                    return_target_groups,
-                ) = side_table_checkpoint
-                self._function_call_bindings = function_call_bindings
-                self._constructor_call_bindings = constructor_call_bindings
-                self._constructor_pattern_bindings = constructor_pattern_bindings
-                self._partial_calls = partial_calls
-                self._contract_specs = contract_specs
-                self._call_sites = call_sites
-                self._warnings = warnings
-                self._cast_specs = cast_specs
-                self._extern_expr_targets = extern_expr_targets
-                self._extern_binding_targets = extern_binding_targets
-                for targets, saved_targets in zip(
-                    self._return_extern_targets_stack, return_target_groups, strict=True
-                ):
-                    targets[:] = saved_targets
+                self._rollback_region_side_tables(region)
             self._inference_region = None
 
     def _register_builtin_obligation(self, obligation: PendingBuiltinObligation) -> None:
@@ -1539,7 +1530,7 @@ class _Checker:
                     "use a JSON-serializable data type.",
                     span=node.span,
                 )
-        self._cast_specs[node.node_id] = CastSpec(target_type=target_type, kind=kind)
+        self._record_cast_spec(node.node_id, CastSpec(target_type=target_type, kind=kind))
         return BoolType() if node.test_only else target_type
 
     # --- Call dispatch ---
@@ -1581,6 +1572,78 @@ class _Checker:
             result=result,
         )
 
+    def _record_side_table_addition(
+        self, table_name: str, table: Mapping[int, object], node_id: int
+    ) -> None:
+        """Remember an insertion so a failed region can remove just its delta."""
+        region = self._inference_region
+        if region is not None and node_id not in table:
+            region.added_side_table_keys.setdefault(table_name, set()).add(node_id)
+
+    def _rollback_region_side_tables(self, region: _InferenceRegion) -> None:
+        """Discard provisional side-table additions and append-only suffixes."""
+        for table_name, table in (
+            ("function_call_bindings", self._function_call_bindings),
+            ("constructor_call_bindings", self._constructor_call_bindings),
+            ("constructor_pattern_bindings", self._constructor_pattern_bindings),
+            ("partial_calls", self._partial_calls),
+            ("contract_specs", self._contract_specs),
+            ("cast_specs", self._cast_specs),
+            ("extern_expr_targets", self._extern_expr_targets),
+            ("extern_binding_targets", self._extern_binding_targets),
+        ):
+            for node_id in region.added_side_table_keys.get(table_name, set()):
+                table.pop(node_id, None)
+        del self._call_sites[region.call_sites_start :]
+        del self._warnings[region.warnings_start :]
+        for targets, start in zip(
+            self._return_extern_targets_stack, region.return_target_lengths, strict=True
+        ):
+            del targets[start:]
+
+    def _record_contract_spec(self, node_id: int, spec: OutputContractSpec) -> None:
+        """Store a region-owned output contract specification."""
+        self._record_side_table_addition("contract_specs", self._contract_specs, node_id)
+        self._contract_specs[node_id] = spec
+
+    def _record_cast_spec(self, node_id: int, spec: CastSpec) -> None:
+        """Store a region-owned cast specification."""
+        self._record_side_table_addition("cast_specs", self._cast_specs, node_id)
+        self._cast_specs[node_id] = spec
+
+    def _record_function_call_binding(
+        self, node_id: int, binding: tuple[Expr | None, ...]
+    ) -> None:
+        """Store a region-owned declared-call argument binding."""
+        self._record_side_table_addition(
+            "function_call_bindings", self._function_call_bindings, node_id
+        )
+        self._function_call_bindings[node_id] = binding
+
+    def _record_constructor_pattern_binding(
+        self, node_id: int, binding: tuple[tuple[str, Pattern], ...]
+    ) -> None:
+        """Store a region-owned constructor-pattern argument binding."""
+        self._record_side_table_addition(
+            "constructor_pattern_bindings", self._constructor_pattern_bindings, node_id
+        )
+        self._constructor_pattern_bindings[node_id] = binding
+
+    def _record_constructor_call_binding(self, node_id: int, binding: dict[str, Expr]) -> None:
+        """Store a region-owned constructor-call argument binding."""
+        self._record_side_table_addition(
+            "constructor_call_bindings", self._constructor_call_bindings, node_id
+        )
+        self._constructor_call_bindings[node_id] = binding
+
+    def _append_warning(self, warning: Diagnostic) -> None:
+        """Append a warning produced while finalizing the active region."""
+        self._warnings.append(warning)
+
+    def _append_call_site(self, call_site: CallSiteRecord) -> None:
+        """Append a call site produced while finalizing the active region."""
+        self._call_sites.append(call_site)
+
     def _record_partial_call(
         self,
         node: Call,
@@ -1589,6 +1652,7 @@ class _Checker:
         *,
         callee_kind: Literal["declared", "constructor", "value"] = "declared",
     ) -> None:
+        self._record_side_table_addition("partial_calls", self._partial_calls, node.node_id)
         self._partial_calls[node.node_id] = PartialCallSpec(
             argument_holes=tuple(
                 hole_indices[expr.node_id] if isinstance(expr, Placeholder) else None
@@ -1600,6 +1664,9 @@ class _Checker:
     def _set_extern_expr_targets(self, node_id: int, targets: _ExternTargets) -> None:
         """Record or clear extern provenance for a function-valued expression."""
         if targets:
+            self._record_side_table_addition(
+                "extern_expr_targets", self._extern_expr_targets, node_id
+            )
             self._extern_expr_targets[node_id] = targets
         else:
             self._extern_expr_targets.pop(node_id, None)
@@ -1607,6 +1674,9 @@ class _Checker:
     def _set_extern_binding_targets(self, node_id: int, targets: _ExternTargets) -> None:
         """Record or clear extern provenance for a function-valued binding."""
         if targets:
+            self._record_side_table_addition(
+                "extern_binding_targets", self._extern_binding_targets, node_id
+            )
             self._extern_binding_targets[node_id] = targets
         else:
             self._extern_binding_targets.pop(node_id, None)
@@ -1675,7 +1745,7 @@ class _Checker:
             raise AglTypeError(
                 "Cannot infer a concrete target type for this extern call.", span=obligation.span
             )
-        self._call_sites.append(
+        self._append_call_site(
             CallSiteRecord(
                 node_id=obligation.node_id,
                 callee=obligation.callee,
@@ -1697,18 +1767,26 @@ class _Checker:
         engine.assert_no_inference_vars(target.result_type for target in zonked)
         return self._merge_extern_targets(zonked)
 
-    def _finalize_extern_provenance(self, engine: InferenceEngine) -> None:
-        """Publish only zonked extern provenance from the completed region."""
-        self._extern_expr_targets = {
-            node_id: self._zonk_extern_targets(targets, engine)
-            for node_id, targets in self._extern_expr_targets.items()
-        }
-        self._extern_binding_targets = {
-            node_id: self._zonk_extern_targets(targets, engine)
-            for node_id, targets in self._extern_binding_targets.items()
-        }
-        for targets in self._return_extern_targets_stack:
-            targets[:] = self._zonk_extern_targets(tuple(targets), engine)
+    def _finalize_extern_provenance(self, region: _InferenceRegion) -> None:
+        """Publish only the completed region's zonked extern provenance."""
+        for node_id in region.added_side_table_keys.get("extern_expr_targets", set()):
+            targets = self._extern_expr_targets.get(node_id)
+            if targets is not None:
+                self._extern_expr_targets[node_id] = self._zonk_extern_targets(
+                    targets, region.engine
+                )
+        for node_id in region.added_side_table_keys.get("extern_binding_targets", set()):
+            targets = self._extern_binding_targets.get(node_id)
+            if targets is not None:
+                self._extern_binding_targets[node_id] = self._zonk_extern_targets(
+                    targets, region.engine
+                )
+        for return_targets, start in zip(
+            self._return_extern_targets_stack, region.return_target_lengths, strict=True
+        ):
+            return_targets[start:] = self._zonk_extern_targets(
+                tuple(return_targets[start:]), region.engine
+            )
 
     def _check_call_dispatch(
         self,
@@ -1834,7 +1912,7 @@ class _Checker:
         check_args: bool = True,
     ) -> Type:
         """Record direct-call side tables and build the result type."""
-        self._function_call_bindings[node.node_id] = binding
+        self._record_function_call_binding(node.node_id, binding)
         self._record_function_call_param_types(node.node_id, tuple(p.type for p in params))
         if hole_indices:
             self._record_partial_call(node, binding, hole_indices)
@@ -3059,7 +3137,7 @@ class _Checker:
                     bound_pairs.append((fname, bound_pat))
                     field_type = vfields[fname]
                     self._bind_pattern_types(bound_pat, field_type, pattern)
-            self._constructor_pattern_bindings[pattern.node_id] = tuple(bound_pairs)
+            self._record_constructor_pattern_binding(pattern.node_id, tuple(bound_pairs))
 
     def _check_bare_variant_pattern(self, pattern: VarPattern, subj_type: Type) -> None:
         """Validate a bare-name nullary variant pattern (``| Red =>``).
@@ -3114,7 +3192,7 @@ class _Checker:
         ]
         if not missing:
             return
-        self._warnings.append(
+        self._append_warning(
             Diagnostic(
                 message=(
                     f"Non-exhaustive case on enum '{subj_type.name}': missing "

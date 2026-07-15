@@ -20,6 +20,7 @@ from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.scope.imports import ImportEnv, QName
 from agm.agl.scope.symbols import BindingRef, ResolvedProgram
+from agm.agl.semantics.persistent import PersistentDict
 from agm.agl.semantics.type_table import (
     BUILTIN_PRELUDE_TYPE_DEFS,
     TypeTable,
@@ -372,6 +373,7 @@ def assert_checked_output_closed(
         ),
         owner=owner,
     )
+    type_env.seal()
 
 
 def assert_checked_program_closed(checked: CheckedProgram) -> None:
@@ -457,7 +459,7 @@ class TypeEnvironment:
         # alias targets — name → resolved Type (cycle detection uses seen set)
         self._alias_targets: dict[str, object] = {}  # stores raw TypeExpr until resolved
         # Binding node_id → Type (populated as declarations are checked).
-        self._binding_types: dict[int, Type] = {}
+        self._binding_types: PersistentDict[int, Type] = PersistentDict()
         # Function signatures — name → FunctionSignature (for declared-name calls).
         self._function_signatures: dict[str, FunctionSignature] = {}
         # Generic type definitions — name → GenericTypeDef.
@@ -514,6 +516,7 @@ class TypeEnvironment:
         ] | None = graph_ctor_sig_table
         self._import_env: ImportEnv | None = import_env
         self._module_id: ModuleId = module_id
+        self._sealed = False
         # Built-in exception types are always available.
         for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
             self._types[exc_name] = exc_type
@@ -546,6 +549,20 @@ class TypeEnvironment:
         """The shared ``TypeTable`` populated alongside ``_types`` (dual-write)."""
         return self._type_table
 
+    @property
+    def is_sealed(self) -> bool:
+        """Whether this environment has been validated and frozen for seeding."""
+        return self._sealed
+
+    def _assert_mutable(self) -> None:
+        if self._sealed:
+            raise AssertionError("cannot mutate a sealed type environment")
+
+    def seal(self) -> None:
+        """Validate this environment once and freeze it as checked output."""
+        self.assert_closed()
+        self._sealed = True
+
     # --- Type namespace queries ---
 
     def has_type(self, name: str) -> bool:
@@ -559,6 +576,7 @@ class TypeEnvironment:
         return self._import_env is not None and handle in self._import_env.qualified
 
     def register_type(self, name: str, typ: Type) -> None:
+        self._assert_mutable()
         self._types[name] = typ
 
     def unregister_name(self, name: str) -> None:
@@ -582,6 +600,7 @@ class TypeEnvironment:
         ``_BUILTIN_TYPE_NAMES``), so the builder never calls this for them,
         but the guard makes the helper safe to call defensively.
         """
+        self._assert_mutable()
         if name in BUILTIN_EXCEPTIONS or name in BUILTIN_PRELUDE_TYPE_NAMES:
             return
         self._types.pop(name, None)
@@ -604,6 +623,7 @@ class TypeEnvironment:
         ``type_params`` must be provided for parameterized type aliases (e.g.
         ``type Wrapper[T] = list[T]``); defaults to ``()`` for plain aliases.
         """
+        self._assert_mutable()
         self._alias_targets[name] = target_expr
         self._alias_type_params[name] = type_params
 
@@ -615,6 +635,7 @@ class TypeEnvironment:
 
     def register_generic_type(self, name: str, gdef: GenericTypeDef) -> None:
         """Register a generic type definition under *name*."""
+        self._assert_mutable()
         self._generic_types[name] = gdef
 
     def get_generic_type(self, name: str) -> GenericTypeDef | None:
@@ -693,6 +714,7 @@ class TypeEnvironment:
 
     def register_constructor_signature(self, sig: ConstructorSignature) -> None:
         """Register a constructor signature for a record or enum variant."""
+        self._assert_mutable()
         self._constructor_sigs[(sig.owner_name, sig.variant)] = sig
 
     def get_constructor_signature(
@@ -773,6 +795,7 @@ class TypeEnvironment:
     # --- Function signature table ---
 
     def register_function_signature(self, name: str, sig: FunctionSignature) -> None:
+        self._assert_mutable()
         self._function_signatures[name] = sig
 
     def get_function_signature(self, name: str) -> FunctionSignature | None:
@@ -791,6 +814,7 @@ class TypeEnvironment:
         is globally unique, signatures from different modules never
         collide here even when two modules define functions with the same name.
         """
+        self._assert_mutable()
         self._function_signatures_by_node_id[node_id] = sig
 
     def get_function_signature_by_node_id(self, node_id: int) -> FunctionSignature | None:
@@ -817,6 +841,7 @@ class TypeEnvironment:
         extern (own-module or imported) are recorded as dry-run call sites the
         same way ``ask``/``exec`` calls are.
         """
+        self._assert_mutable()
         self._extern_node_ids.add(node_id)
 
     def is_extern_node_id(self, node_id: int) -> bool:
@@ -826,6 +851,7 @@ class TypeEnvironment:
     # --- Binding type table ---
 
     def set_binding_type(self, node_id: int, typ: Type) -> None:
+        self._assert_mutable()
         self._binding_types[node_id] = typ
 
     def get_binding_type(self, node_id: int) -> Type | None:
@@ -833,6 +859,7 @@ class TypeEnvironment:
 
     def remove_binding_types(self, node_ids: Iterable[int]) -> None:
         """Forget binding-type metadata for the given declaration node ids."""
+        self._assert_mutable()
         for node_id in node_ids:
             self._binding_types.pop(node_id, None)
             self._function_signatures_by_node_id.pop(node_id, None)
@@ -853,6 +880,7 @@ class TypeEnvironment:
         globally unique).  Function names need separate handling because their
         convenient name-keyed signature table is not keyed by declaration id.
         """
+        self._assert_mutable()
         node_id_set = set(node_ids)
         self.remove_binding_types(node_id_set)
         for node_id in node_id_set:
@@ -883,7 +911,7 @@ class TypeEnvironment:
         )
         types: list[Type] = [
             *self._types.values(),
-            *self._binding_types.values(),
+            *self._binding_types.changed_values(),
             *(param.type for sig in self._function_signatures.values() for param in sig.params),
             *(sig.result for sig in self._function_signatures.values()),
             *(
@@ -1462,6 +1490,7 @@ class TypeEnvironment:
         fields: tuple[tuple[str, ParamKind], ...],
     ) -> None:
         """Register ordered (field_name, ParamKind) pairs for a constructor."""
+        self._assert_mutable()
         self._constructor_field_kinds[(owner_name, variant)] = fields
 
     def get_constructor_field_kinds(
@@ -1550,7 +1579,9 @@ class TypeEnvironment:
         cleared before copying so cross-kind REPL redefinitions do not leave old
         generic/constructor/alias tables behind. See :meth:`TypeTable.merge_from`.
         """
-        other.assert_closed()
+        self._assert_mutable()
+        if not other.is_sealed:
+            raise AssertionError("cannot seed from an unsealed type environment")
         builtin = frozenset(BUILTIN_EXCEPTIONS) | BUILTIN_PRELUDE_TYPE_NAMES
         incoming_type_names = {
             name for name in other._types if name not in builtin
@@ -1566,7 +1597,7 @@ class TypeEnvironment:
             if name not in builtin:
                 self._types[name] = typ
         self._alias_targets.update(other._alias_targets)
-        self._binding_types.update(other._binding_types)
+        self._binding_types = other._binding_types.fork()
         self._function_signatures.update(other._function_signatures)
         self._generic_types.update(other._generic_types)
         self._constructor_sigs.update(other._constructor_sigs)
@@ -1584,6 +1615,7 @@ class TypeEnvironment:
         checked-entry metadata and restore the previous session definition when
         one existed.
         """
+        self._assert_mutable()
         builtin = frozenset(BUILTIN_EXCEPTIONS) | BUILTIN_PRELUDE_TYPE_NAMES
         for name in names:
             if name in builtin:

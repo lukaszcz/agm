@@ -646,7 +646,31 @@ class TestTypeEnvironment:
         source.set_binding_type(1, InferenceVarType())
 
         with pytest.raises(AssertionError, match="inference variable"):
+            source.seal()
+
+    def test_persistent_binding_snapshot_tracks_only_local_changes(self) -> None:
+        from agm.agl.semantics.persistent import PersistentDict
+
+        source: PersistentDict[int, IntType] = PersistentDict()
+        source[1] = IntType()
+        child = source.fork()
+        child[2] = IntType()
+
+        assert tuple(child) == (1, 2)
+        assert len(child) == 2
+        assert child.changed_values() == (IntType(),)
+
+    def test_sealed_environment_rejects_mutation_and_is_required_for_seeding(self) -> None:
+        source = TypeEnvironment()
+        with pytest.raises(AssertionError, match="unsealed"):
             TypeEnvironment().seed_from(source)
+
+        source.seal()
+        assert source.is_sealed
+        with pytest.raises(AssertionError, match="sealed"):
+            source.set_binding_type(1, IntType())
+        with pytest.raises(AssertionError, match="sealed"):
+            source.register_type("Later", RecordType("Later"))
 
     def test_seed_from_copies_types_and_bindings(self) -> None:
         env1 = TypeEnvironment()
@@ -655,6 +679,7 @@ class TestTypeEnvironment:
         env1.set_binding_type(99, IntType())
         sig = FunctionSignature(params=(), result=UnitType())
         env1.register_function_signature("h", sig)
+        env1.seal()
 
         env2 = TypeEnvironment()
         env2.seed_from(env1)
@@ -664,6 +689,7 @@ class TestTypeEnvironment:
 
     def test_seed_preserves_own_builtins(self) -> None:
         env1 = TypeEnvironment()
+        env1.seal()
         env2 = TypeEnvironment()
         env2.seed_from(env1)
         assert env2.has_type("Abort")
@@ -914,7 +940,10 @@ class TestCheckedOutputClosure:
         if category == "node":
             checked = replace(checked, node_types={**checked.node_types, -1: flexible})
         elif category == "binding_environment":
-            checked.type_env.set_binding_type(-1, flexible)
+            leaked_env = TypeEnvironment()
+            leaked_env.seed_from(checked.type_env)
+            leaked_env.set_binding_type(-1, flexible)
+            checked = replace(checked, type_env=leaked_env)
         elif category == "direct_call_parameters":
             bindings = replace(
                 checked.argument_bindings,
@@ -5684,6 +5713,7 @@ class TestResolveTypeExprTypeVars:
         template = RecordType("Box")
         gdef = GenericTypeDef(kind="record", type_params=("T",), template=template)
         env1.register_generic_type("Box", gdef)
+        env1.seal()
         env2 = TypeEnvironment()
         env2.seed_from(env1)
         assert env2.get_generic_type("Box") == gdef
@@ -5699,6 +5729,7 @@ class TestResolveTypeExprTypeVars:
             type_params=("T",),
         )
         env1.register_constructor_signature(sig)
+        env1.seal()
         env2 = TypeEnvironment()
         env2.seed_from(env1)
         assert env2.get_constructor_signature("Box", None) == sig
@@ -5714,6 +5745,7 @@ class TestResolveTypeExprTypeVars:
             _ListT(elem=NameT(name="T", span=sp, node_id=1), span=sp, node_id=2),
             type_params=("T",),
         )
+        env1.seal()
         env2 = TypeEnvironment()
         env2.seed_from(env1)
         assert env2.get_alias_type_params("Wrapper") == ("T",)

@@ -392,6 +392,7 @@ class TestTypeEnvironmentPrelude:
 class TestSeedFrom:
     def test_prelude_present_after_seed(self) -> None:
         source = TypeEnvironment()
+        source.seal()
         target = TypeEnvironment()
         target.seed_from(source)
         # Prelude types are still available.
@@ -405,6 +406,7 @@ class TestSeedFrom:
         # Manually inject a different type under the prelude name in source._types.
         # We reach inside _types to simulate a hypothetical collision.
         getattr(source, "_types")["ExecResult"] = RecordType(name="ExecResult")
+        source.seal()
         target = TypeEnvironment()
         target.seed_from(source)
         # Target's ExecResult must be the original prelude, not the source's fake.
@@ -416,6 +418,7 @@ class TestSeedFrom:
         source = TypeEnvironment()
         user_record = RecordType(name="MyRecord")
         source.register_type("MyRecord", user_record)
+        source.seal()
         target = TypeEnvironment()
         target.seed_from(source)
         assert target.get_type("MyRecord") == user_record
@@ -423,6 +426,7 @@ class TestSeedFrom:
     def test_seed_does_not_copy_builtin_exceptions(self) -> None:
         # Built-in exceptions are present by default; seeding must not duplicate.
         source = TypeEnvironment()
+        source.seal()
         target = TypeEnvironment()
         target.seed_from(source)
         # Still exactly one ExecError (an ExceptionType), not duplicated.

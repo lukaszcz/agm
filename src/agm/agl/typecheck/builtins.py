@@ -89,9 +89,11 @@ class BuiltinCheckCtx(Protocol):
 
     _env: TypeEnvironment
     _caps: HostCapabilities
-    _contract_specs: dict[int, OutputContractSpec]
-    _call_sites: list[CallSiteRecord]
-    _warnings: list[Diagnostic]
+    def _record_contract_spec(self, node_id: int, spec: OutputContractSpec) -> None: ...
+
+    def _append_call_site(self, call_site: CallSiteRecord) -> None: ...
+
+    def _append_warning(self, warning: Diagnostic) -> None: ...
     _current_type_vars: frozenset[str]
 
     def _check_expr(self, expr: Expr, *, expected: Type | None) -> Type: ...
@@ -323,7 +325,7 @@ class BuiltinCallChecker:
             )
             spec = OutputContractSpec(target_type, codec_name, effective_strict)
             assert not contains_inference_var(spec.target_type)
-            self._ctx._contract_specs[obligation.node_id] = spec
+            self._ctx._record_contract_spec(obligation.node_id, spec)
             parse_policy = obligation.parse_policy
             self._warn_noop_parse_error_on_text(obligation)
         self._append_call_site(obligation, codec_name, parse_policy)
@@ -334,7 +336,7 @@ class BuiltinCallChecker:
             obligation.has_parse_error_option and isinstance(obligation.target_type, TextType)
         ):
             return
-        self._ctx._warnings.append(
+        self._ctx._append_warning(
             Diagnostic(
                 message=(
                     "'on_parse_error' has no effect on a text target: a text result "
@@ -352,7 +354,7 @@ class BuiltinCallChecker:
         self, obligation: PendingBuiltinObligation, codec_name: str, parse_policy: str
     ) -> None:
         assert not contains_inference_var(obligation.target_type)
-        self._ctx._call_sites.append(
+        self._ctx._append_call_site(
             CallSiteRecord(
                 node_id=obligation.node_id,
                 callee=obligation.kind.value,
@@ -545,7 +547,7 @@ class BuiltinCallChecker:
             parse_policy = obligation.parse_policy
             self._warn_noop_parse_error_on_text(obligation)
         assert not contains_inference_var(spec.target_type)
-        self._ctx._contract_specs[obligation.node_id] = spec
+        self._ctx._record_contract_spec(obligation.node_id, spec)
         self._append_call_site(obligation, spec.codec_name, parse_policy)
 
     # --- on_parse_error policy extraction ---

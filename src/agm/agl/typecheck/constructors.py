@@ -44,8 +44,8 @@ class ConstructorCheckCtx(Protocol):
     _env: TypeEnvironment
     _resolved: ResolvedProgram
     _current_type_vars: frozenset[str]
-    _constructor_call_bindings: dict[int, dict[str, Expr]]
 
+    def _record_constructor_call_binding(self, node_id: int, binding: dict[str, Expr]) -> None: ...
 
     def _record_partial_call(
         self,
@@ -422,7 +422,7 @@ class ConstructorChecker:
                     span, role=ConstraintRole.EXPECTED_RESULT, subject=owner_name
                 ),
             )
-        self._ctx._constructor_call_bindings[node.node_id] = dict(bound_exprs)
+        self._ctx._record_constructor_call_binding(node.node_id, dict(bound_exprs))
         if hole_indices:
             self._ctx._record_partial_call(
                 node,
@@ -489,7 +489,7 @@ class ConstructorChecker:
         fields, _context_desc = self._constructor_fields_and_context(owner, variant)
 
         if node is not None:
-            self._ctx._constructor_call_bindings[node.node_id] = dict(bound_exprs)
+            self._ctx._record_constructor_call_binding(node.node_id, dict(bound_exprs))
             if hole_indices:
                 binding: tuple[Expr | None, ...] = tuple(
                     bound_exprs[fname] for fname, _fkind in field_kinds

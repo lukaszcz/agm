@@ -157,6 +157,7 @@ class ReplSession:
         # as call callees or in expressions.  This is seeded into every entry's
         # fresh TypeEnvironment via seed_from, so it is always available.
         self._type_env.set_binding_type(-1, self._make_agent_type())
+        self._type_env.seal()
         self._link_image = LinkImage()
         self._ir_base_frame: Frame = {}
         self._next_node_id: int = 0
@@ -898,24 +899,32 @@ class ReplSession:
                 self._session_scope.bindings[name] = ref
                 if partial and name in entry_names:
                     installed.append(name)
-        previous_type_env = TypeEnvironment()
-        previous_type_env.seed_from(self._type_env)
-        self._type_env.seed_from(checked.type_env)
-        if partial and unpromoted_type_names:
-            self._type_env.restore_type_names_from(previous_type_env, unpromoted_type_names)
-        if partial:
-            unpromoted_binding_node_ids |= self._node_ids_from_failure(program, failure_span)
-            unpromoted_function_names = (
-                item.name
-                for item in program.body.items
-                if isinstance(item, FuncDef) and not _before_failure(item.span.end_offset)
-            )
-            self._type_env.restore_binding_metadata_from(
-                previous_type_env,
-                unpromoted_binding_node_ids,
-                unpromoted_function_names,
-            )
-        self._type_env.remove_binding_types(stale_binding_node_ids)
+        if not partial and not stale_binding_node_ids:
+            # The checked environment already includes the prior sealed session
+            # state and is itself sealed at the checked-output boundary. Reuse it
+            # directly instead of copying the accumulated session a second time.
+            self._type_env = checked.type_env
+        else:
+            previous_type_env = TypeEnvironment()
+            previous_type_env.seed_from(self._type_env)
+            self._type_env = TypeEnvironment()
+            self._type_env.seed_from(checked.type_env)
+            if partial and unpromoted_type_names:
+                self._type_env.restore_type_names_from(previous_type_env, unpromoted_type_names)
+            if partial:
+                unpromoted_binding_node_ids |= self._node_ids_from_failure(program, failure_span)
+                unpromoted_function_names = (
+                    item.name
+                    for item in program.body.items
+                    if isinstance(item, FuncDef) and not _before_failure(item.span.end_offset)
+                )
+                self._type_env.restore_binding_metadata_from(
+                    previous_type_env,
+                    unpromoted_binding_node_ids,
+                    unpromoted_function_names,
+                )
+            self._type_env.remove_binding_types(stale_binding_node_ids)
+            self._type_env.seal()
 
         promoted_agents = {
             item.name
@@ -1202,6 +1211,7 @@ class ReplSession:
         self._type_env = TypeEnvironment()
         # Re-seed the sentinel AgentType for ambient agents (see __init__).
         self._type_env.set_binding_type(-1, self._make_agent_type())
+        self._type_env.seal()
         self._link_image = LinkImage()
         self._ir_base_frame = {}
         self._next_node_id = 0

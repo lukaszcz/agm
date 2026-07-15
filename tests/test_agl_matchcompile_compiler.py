@@ -726,6 +726,7 @@ def test_imported_enum_witness_uses_full_module_qualification_only_when_ambiguou
     tmp_path: Path, ambiguous: bool
 ) -> None:
     other_import = "import other\n" if ambiguous else ""
+    pattern = "library.remote::Remote::empty" if ambiguous else "empty"
     compiled = _compile_graph_case(
         tmp_path,
         {
@@ -736,7 +737,7 @@ def test_imported_enum_witness_uses_full_module_qualification_only_when_ambiguou
                 f"{other_import}"
                 "let value: library.remote::Remote[int] = "
                 "library.remote::Remote::empty\n"
-                f"case value of | {'library.remote::Remote::empty' if ambiguous else 'empty'} => 0\n"
+                f"case value of | {pattern} => 0\n"
             ),
         },
     )

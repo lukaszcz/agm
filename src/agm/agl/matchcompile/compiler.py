@@ -458,19 +458,16 @@ def _source_spelling(
         assert spelling.owner_name is not None
         qualifier = spelling.module_qualifier
         if qualifier is None:
-            return (
-                2,
-                spelling.owner_name,
-                candidate.kind is not EnumOwnerFormKind.LOCAL,
-            )
-        if qualifier:
+            text = spelling.owner_name
+        elif qualifier:
             text = f"{'.'.join(qualifier)}::{spelling.owner_name}"
-            return (
-                len(qualifier) + 2,
-                text,
-                candidate.kind is not EnumOwnerFormKind.QUALIFIED_IMPORT,
-            )
-        return 3, f"::{spelling.owner_name}", False
+        else:
+            text = f"::{spelling.owner_name}"
+        return (
+            len(text),
+            text,
+            candidate.kind is not EnumOwnerFormKind.LOCAL,
+        )
 
     return min(matches, key=candidate_key)
 

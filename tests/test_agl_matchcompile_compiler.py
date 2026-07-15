@@ -963,6 +963,19 @@ def test_rendered_local_generic_alias_owner_round_trips_through_checker() -> Non
     )
 
 
+def test_witness_prefers_shortest_valid_enum_owner_spelling() -> None:
+    declaration = "enum R[T]\n  | empty\n  | item(value: T)\ntype LongAlias[T] = R[T]\n"
+    _, _, compiled = _compile(
+        declaration
+        + "def inspect(item: int, value: R[int]) -> int =\n"
+        + "  case value of | R::empty => 0\n"
+        + "inspect(1, R::empty)\n"
+    )
+    witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
+
+    assert render_witness(witness) == "R::item(value = _)"
+
+
 def test_imported_generic_alias_with_fixed_argument_matches_enum_owner(
     tmp_path: Path,
 ) -> None:

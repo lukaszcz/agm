@@ -187,7 +187,7 @@ class InferenceEngine:
         origin: ConstraintOrigin,
         inherited: tuple[ConstraintOrigin, ...],
     ) -> None:
-        evidence = self._merge_origins(inherited, self._origins_in(left), self._origins_in(right))
+        original_left, original_right = left, right
         left = self.zonk(left)
         right = self.zonk(right)
         if left == right:
@@ -201,6 +201,12 @@ class InferenceEngine:
         if isinstance(right, InferenceVarType):
             self._bind(right, left, origin)
             return
+        # Full-subtree evidence is only consumed by the structural-recursion and
+        # mismatch branches below, so it is computed here — after the fast paths
+        # that return without it — rather than on every recursive step.
+        evidence = self._merge_origins(
+            inherited, self._origins_in(original_left), self._origins_in(original_right)
+        )
         if isinstance(left, ListType) and isinstance(right, ListType):
             self._unify(left.elem, right.elem, origin, evidence)
             return

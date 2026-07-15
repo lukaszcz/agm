@@ -199,6 +199,10 @@ def assert_checked_module_graph_closed(checked: CheckedModuleGraph) -> None:
     for module in checked.modules.values():
         _assert_checked_module_closed(module)
     _assert_checked_types_closed(checked.graph_type_table.values(), owner="checked module graph")
+    # The remaining whole-graph tables (the shared TypeTable and the generic /
+    # alias / constructor maps) are the same instances on every module env, so
+    # validate them once here rather than on every per-module seal.
+    checked.modules[checked.entry_id].type_env.assert_shared_tables_closed()
 
 
 # ---------------------------------------------------------------------------

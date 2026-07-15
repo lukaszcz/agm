@@ -1078,10 +1078,10 @@ class _Checker:
                 node_id: tuple(region.engine.zonk(param_type) for param_type in param_types)
                 for node_id, param_types in region.function_call_param_types.items()
             }
-            extern_expr_keys = region.added_side_table_keys.get("extern_expr_targets", set())
-            extern_binding_keys = region.added_side_table_keys.get(
-                "extern_binding_targets", set()
-            )
+            # Extern-target result types are already validated for leaked
+            # inference variables by ``_finalize_extern_provenance`` above (via
+            # ``_zonk_extern_targets``), so they are deliberately not re-walked
+            # here — this pass covers only node/param types and call sites.
             region.engine.assert_no_inference_vars(
                 (
                     *final_node_types.values(),
@@ -1089,25 +1089,6 @@ class _Checker:
                     *(
                         call_site.target_type
                         for call_site in self._call_sites[region.call_sites_start :]
-                    ),
-                    *(
-                        target.result_type
-                        for node_id in extern_expr_keys
-                        for target in self._extern_expr_targets.get(node_id, ())
-                    ),
-                    *(
-                        target.result_type
-                        for node_id in extern_binding_keys
-                        for target in self._extern_binding_targets.get(node_id, ())
-                    ),
-                    *(
-                        target.result_type
-                        for targets, start in zip(
-                            self._return_extern_targets_stack,
-                            region.return_target_lengths,
-                            strict=True,
-                        )
-                        for target in targets[start:]
                     ),
                 )
             )

@@ -352,7 +352,6 @@ def assert_checked_output_closed(
     variables remain valid in generic templates and signatures, while flexible
     ``InferenceVarType`` instances are a compiler invariant failure here.
     """
-    type_env.assert_closed()
     _assert_checked_types_closed(
         (
             *node_types.values(),
@@ -388,6 +387,7 @@ def assert_checked_program_closed(checked: CheckedProgram) -> None:
         argument_bindings=checked.argument_bindings,
         owner="checked program",
     )
+    checked.type_env.assert_shared_tables_closed()
 
 
 # ---------------------------------------------------------------------------
@@ -899,16 +899,17 @@ class TypeEnvironment:
                 self._function_signatures[name] = signature
 
     def assert_closed(self) -> None:
-        """Assert that this environment contains no solver-local type variables.
+        """Assert that this env's module-local metadata has no solver variables.
 
         Rigid ``TypeVarType`` nodes are valid inside persisted rank-1 schemes;
         flexible ``InferenceVarType`` nodes are owned by an expression region
         and must be finalized before an environment is seeded or retained.
+
+        Only per-module state is walked here.  The whole-graph tables that every
+        module env of a graph shares (the ``TypeTable`` and the ``_graph_*``
+        maps) are validated once per graph by :meth:`assert_shared_tables_closed`
+        rather than redundantly on every per-module seal.
         """
-        constructor_sigs = (
-            *self._constructor_sigs.values(),
-            *(self._graph_ctor_sig_table or {}).values(),
-        )
         types: list[Type] = [
             *self._types.values(),
             *self._binding_types.changed_values(),
@@ -921,12 +922,29 @@ class TypeEnvironment:
             ),
             *(sig.result for sig in self._function_signatures_by_node_id.values()),
             *(generic.template for generic in self._generic_types.values()),
-            *(alias.template for alias in self._graph_alias_table.values()),
             *(
-                generic.template
-                for generic in (self._graph_generic_table or {}).values()
+                template
+                for sig in self._constructor_sigs.values()
+                for template in sig.field_templates
             ),
-            *(self._graph_type_table or {}).values(),
+            *(sig.result_template for sig in self._constructor_sigs.values()),
+        ]
+        if any(contains_inference_var(typ) for typ in types):
+            raise AssertionError("inference variable leaked into a persistent type environment")
+
+    def assert_shared_tables_closed(self) -> None:
+        """Assert the whole-graph tables shared across module envs are closed.
+
+        The ``TypeTable`` and the cross-module ``_graph_*`` maps are the same
+        instances on every module env of a graph, so they are validated once per
+        graph (or once per single-module program) instead of on every seal.  The
+        graph type table itself is validated by the caller from the authoritative
+        :class:`CheckedModuleGraph` field, so it is not re-walked here.
+        """
+        constructor_sigs = tuple((self._graph_ctor_sig_table or {}).values())
+        types: list[Type] = [
+            *(alias.template for alias in self._graph_alias_table.values()),
+            *(generic.template for generic in (self._graph_generic_table or {}).values()),
             *(template for sig in constructor_sigs for template in sig.field_templates),
             *(sig.result_template for sig in constructor_sigs),
             *(

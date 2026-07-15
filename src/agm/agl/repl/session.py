@@ -907,10 +907,14 @@ class ReplSession:
         else:
             previous_type_env = TypeEnvironment()
             previous_type_env.seed_from(self._type_env)
-            self._type_env = TypeEnvironment()
-            self._type_env.seed_from(checked.type_env)
+            # Build the replacement env in a local so a mid-promotion failure
+            # leaves the session's still-sealed ``self._type_env`` untouched;
+            # publishing an unsealed env would brick ``seed_from`` on every
+            # subsequent entry.  Only the final sealed env is committed.
+            new_type_env = TypeEnvironment()
+            new_type_env.seed_from(checked.type_env)
             if partial and unpromoted_type_names:
-                self._type_env.restore_type_names_from(previous_type_env, unpromoted_type_names)
+                new_type_env.restore_type_names_from(previous_type_env, unpromoted_type_names)
             if partial:
                 unpromoted_binding_node_ids |= self._node_ids_from_failure(program, failure_span)
                 unpromoted_function_names = (
@@ -918,13 +922,14 @@ class ReplSession:
                     for item in program.body.items
                     if isinstance(item, FuncDef) and not _before_failure(item.span.end_offset)
                 )
-                self._type_env.restore_binding_metadata_from(
+                new_type_env.restore_binding_metadata_from(
                     previous_type_env,
                     unpromoted_binding_node_ids,
                     unpromoted_function_names,
                 )
-            self._type_env.remove_binding_types(stale_binding_node_ids)
-            self._type_env.seal()
+            new_type_env.remove_binding_types(stale_binding_node_ids)
+            new_type_env.seal()
+            self._type_env = new_type_env
 
         promoted_agents = {
             item.name

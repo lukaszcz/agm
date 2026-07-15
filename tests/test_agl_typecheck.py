@@ -648,6 +648,20 @@ class TestTypeEnvironment:
         with pytest.raises(AssertionError, match="inference variable"):
             source.seal()
 
+    def test_shared_tables_validation_rejects_a_flexible_variable(self) -> None:
+        # The whole-graph tables shared across module envs are validated once,
+        # separately from each per-module seal; a leaked flexible variable in one
+        # is still caught.
+        source = TypeEnvironment(
+            graph_generic_table={
+                (ENTRY_ID, "Box"): GenericTypeDef(
+                    kind="record", type_params=("T",), template=InferenceVarType("leak")
+                )
+            }
+        )
+        with pytest.raises(AssertionError, match="inference variable"):
+            source.assert_shared_tables_closed()
+
     def test_persistent_binding_snapshot_tracks_only_local_changes(self) -> None:
         from agm.agl.semantics.persistent import PersistentDict
 
@@ -1300,6 +1314,24 @@ class TestAsk:
         err = reject_type('let x = ask("Q", strict_json = true)\nx')
         assert "strict_json" in str(err).lower() or "json" in str(err).lower()
 
+    def test_ask_strict_json_mismatch_diagnostic_targets_the_argument(self) -> None:
+        # The diagnostic underlines the offending strict_json argument, not the
+        # whole call span (even when another option precedes it).
+        src = 'let x = ask("Q", format = "text", strict_json = true)\nx'
+        err = reject_type(src)
+        assert err.span is not None
+        fragment = src[err.span.start_offset : err.span.end_offset]
+        assert "strict_json" in fragment
+        assert "ask" not in fragment
+
+    def test_ask_unit_parse_option_diagnostic_targets_the_argument(self) -> None:
+        src = 'let r: unit = ask("Q", strict_json = true)\nr'
+        err = reject_type(src)
+        assert err.span is not None
+        fragment = src[err.span.start_offset : err.span.end_offset]
+        assert "strict_json" in fragment
+        assert "ask" not in fragment
+
     def test_ask_format_non_string_raises(self) -> None:
         err = reject_type('let n: int = ask("Q", format = 42)\nn')
         assert "format" in str(err).lower() or "static" in str(err).lower()
@@ -1593,6 +1625,16 @@ class TestExec:
     def test_exec_strict_json_without_json_raises(self) -> None:
         err = reject_type('let x: text = exec("ls", strict_json = true)\nx')
         assert "strict_json" in str(err).lower() or "json" in str(err).lower()
+
+    def test_exec_structured_parse_option_diagnostic_targets_the_argument(self) -> None:
+        # A default (structured ExecResult) exec rejects parse-shaping options,
+        # underlining the offending argument rather than the whole call.
+        src = 'let r = exec("ls", format = "text")\nr'
+        err = reject_type(src)
+        assert err.span is not None
+        fragment = src[err.span.start_offset : err.span.end_offset]
+        assert "format" in fragment
+        assert "exec" not in fragment
 
     def test_exec_format_non_string_raises(self) -> None:
         err = reject_type('let n: int = exec("ls", format = 42)\nn')
@@ -6334,8 +6376,7 @@ class TestGenerics:
                     format_name=None,
                     strict_json=None,
                     parse_policy="default",
-                    has_parse_error_option=False,
-                    has_parse_shaping_option=False,
+                    parse_option_spans=(),
                     has_agent_argument=False,
                 )
             )

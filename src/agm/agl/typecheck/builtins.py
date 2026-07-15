@@ -74,9 +74,36 @@ class PendingBuiltinObligation:
     format_name: str | None
     strict_json: bool | None
     parse_policy: str
-    has_parse_error_option: bool
-    has_parse_shaping_option: bool
+    # (name, span) of every parse-shaping named arg present, in canonical order.
+    # Retained so region-close diagnostics point at the offending argument rather
+    # than the whole call span.
+    parse_option_spans: tuple[tuple[str, SourceSpan], ...]
     has_agent_argument: bool
+
+    @property
+    def has_parse_shaping_option(self) -> bool:
+        """Whether any of ``format`` / ``strict_json`` / ``on_parse_error`` is set."""
+        return bool(self.parse_option_spans)
+
+    @property
+    def has_parse_error_option(self) -> bool:
+        """Whether the ``on_parse_error`` option is set."""
+        return any(name == "on_parse_error" for name, _ in self.parse_option_spans)
+
+    def strict_json_span(self) -> SourceSpan:
+        """Return the span of the ``strict_json`` option.
+
+        Precondition: :attr:`strict_json` is not ``None`` (the option was
+        supplied), which guarantees a matching entry is present.
+        """
+        return next(span for name, span in self.parse_option_spans if name == "strict_json")
+
+    def first_parse_option(self) -> tuple[str, SourceSpan]:
+        """Return the first parse-shaping option's ``(name, span)``.
+
+        Precondition: :attr:`has_parse_shaping_option` is true.
+        """
+        return self.parse_option_spans[0]
 
 
 # ---------------------------------------------------------------------------
@@ -249,10 +276,7 @@ class BuiltinCallChecker:
                 format_name=format_name,
                 strict_json=strict_json,
                 parse_policy=parse_policy,
-                has_parse_error_option="on_parse_error" in named,
-                has_parse_shaping_option=any(
-                    name in named for name in ("format", "strict_json", "on_parse_error")
-                ),
+                parse_option_spans=self._collect_parse_option_spans(named),
                 has_agent_argument="agent" in named,
             )
         )
@@ -310,10 +334,11 @@ class BuiltinCallChecker:
             )
         if isinstance(target_type, UnitType):
             if obligation.has_parse_shaping_option:
+                option_name, offending_span = obligation.first_parse_option()
                 raise AglTypeError(
-                    f"{callee} returning unit does not accept parse options; unit responses "
+                    f"{callee} returning unit does not accept '{option_name}'; unit responses "
                     "are ignored and have no output contract.",
-                    span=obligation.span,
+                    span=offending_span,
                 )
             codec_name = "none"
             parse_policy = "default"
@@ -406,10 +431,7 @@ class BuiltinCallChecker:
                 format_name=format_name,
                 strict_json=strict_json,
                 parse_policy=parse_policy,
-                has_parse_error_option="on_parse_error" in named,
-                has_parse_shaping_option=any(
-                    name in named for name in ("format", "strict_json", "on_parse_error")
-                ),
+                parse_option_spans=self._collect_parse_option_spans(named),
                 has_agent_argument=False,
             )
         )
@@ -507,6 +529,17 @@ class BuiltinCallChecker:
             parse_policy = self._extract_parse_policy_str(parse_na.value, parse_na.span)
         return format_name, strict_json, parse_policy
 
+    @staticmethod
+    def _collect_parse_option_spans(
+        named: dict[str, NamedArg],
+    ) -> tuple[tuple[str, SourceSpan], ...]:
+        """Capture the spans of the parse-shaping named args for later diagnostics."""
+        return tuple(
+            (name, named[name].span)
+            for name in ("format", "strict_json", "on_parse_error")
+            if name in named
+        )
+
     def _resolve_codec(self, obligation: PendingBuiltinObligation) -> tuple[str, bool | None]:
         """Select and validate the codec after the target type is concrete."""
         if obligation.format_name is None:
@@ -519,7 +552,7 @@ class BuiltinCallChecker:
             raise AglTypeError(
                 f"'strict_json' is only valid when the codec is 'json'; the selected codec "
                 f"for this call is '{codec_name}'.",
-                span=obligation.span,
+                span=obligation.strict_json_span(),
             )
         return codec_name, obligation.strict_json if codec_name == "json" else None
 
@@ -528,10 +561,11 @@ class BuiltinCallChecker:
         is_structured = exec_result_type is not None and obligation.target_type == exec_result_type
         if is_structured:
             if obligation.has_parse_shaping_option:
+                option_name, offending_span = obligation.first_parse_option()
                 raise AglTypeError(
-                    "exec returning ExecResult does not accept parse options; those options "
+                    f"exec returning ExecResult does not accept '{option_name}'; those options "
                     "apply only when parsing stdout into a typed value.",
-                    span=obligation.span,
+                    span=offending_span,
                 )
             spec = OutputContractSpec(
                 obligation.target_type, "text", None, structured_exec=True

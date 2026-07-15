@@ -241,6 +241,7 @@ class _Resolver:
         # VarPattern.node_id of bare names that denote a constructor (nullary
         # variant patterns), not variable binders.
         self._bare_variant_patterns: set[int] = set()
+        self._bare_variant_refs: dict[int, ConstructorRef] = {}
         # Case.node_id -> exact lexical scope active at the case site.
         self._case_scopes: dict[int, ScopeNode] = {}
         # Loop-context flag: True when resolving inside a loop body (while_cond,
@@ -340,6 +341,7 @@ class _Resolver:
             constructor_refs=dict(self._constructor_refs),
             qualified_constructor_refs=dict(self._qualified_constructor_refs),
             bare_variant_patterns=frozenset(self._bare_variant_patterns),
+            bare_variant_refs=dict(self._bare_variant_refs),
             case_scopes=dict(self._case_scopes),
         )
 
@@ -1729,11 +1731,13 @@ class _Resolver:
         Raises ``AglScopeError`` on duplicate names within the same pattern.
         """
         if isinstance(pattern, VarPattern):
-            if self._pattern_name_is_constructor(pattern, scope):
+            constructor_ref = self._pattern_constructor_ref(pattern, scope)
+            if constructor_ref is not None:
                 # A bare name that denotes an in-scope constructor is a nullary
-                # constructor pattern, not a variable binder.  The checker
-                # validates it is a nullary variant of the scrutinee enum.
+                # constructor pattern, not a variable binder. Preserve its
+                # resolved nominal owner for checking and match compilation.
                 self._bare_variant_patterns.add(pattern.node_id)
+                self._bare_variant_refs[pattern.node_id] = constructor_ref
                 return
             self._check_not_reserved(pattern.name, pattern.span)
             ref = BindingRef(
@@ -1760,23 +1764,22 @@ class _Resolver:
     def _bind_pattern_field_vars(self, pf: PatternField, scope: ScopeNode) -> None:
         self._bind_pattern_vars(pf.pattern, scope)
 
-    def _pattern_name_is_constructor(self, pattern: VarPattern, scope: ScopeNode) -> bool:
-        """True when a bare pattern name denotes an in-scope constructor binding.
-
-        A bare name in pattern position is a constructor pattern (not a variable
-        binder) exactly when, as a value reference, it would denote a constructor
-        — a lexically visible or open-imported record/enum constructor.  A nearer
-        non-constructor binding shadows the constructor, in which case the bare
-        name is an ordinary binder.  The checker then verifies the name is a
-        nullary variant of the scrutinee enum.
-        """
+    def _pattern_constructor_ref(
+        self, pattern: VarPattern, scope: ScopeNode
+    ) -> ConstructorRef | None:
+        """Resolve a bare pattern constructor, preserving its nominal owner."""
         ref = scope.lookup(pattern.name)
-        if ref is not None:
-            # A nearer ordinary binding shadows the constructor → binder.
-            return ref.kind is BinderKind.constructor_binding
-        # Not lexically visible: an open-imported constructor still counts — its
-        # candidates are seeded into the candidate table from the import env.
-        return bool(self._constructor_candidates.get(pattern.name))
+        if ref is not None and ref.kind is not BinderKind.constructor_binding:
+            return None
+        candidates = self._constructor_candidates.get(pattern.name, ())
+        if len(candidates) == 1:
+            return candidates[0]
+        if len(candidates) > 1:
+            raise AglScopeError(
+                f"Constructor name '{pattern.name}' is ambiguous; qualify it with its type.",
+                span=pattern.span,
+            )
+        return None
 
 
 # ---------------------------------------------------------------------------

@@ -3126,6 +3126,18 @@ class _Checker:
                 f"non-enum type '{subj_type!r}'.",
                 span=pattern.span,
             )
+        constructor_ref = self._resolved.bare_variant_refs.get(pattern.node_id)
+        if constructor_ref is None:
+            raise AssertionError("missing resolved constructor ref for bare variant pattern")
+        if (
+            constructor_ref.owner_module_id != subj_type.module_id
+            or constructor_ref.owner_name != subj_type.name
+            or constructor_ref.variant != pattern.name
+        ):
+            raise AglTypeError(
+                f"Variant '{pattern.name}' does not belong to enum '{subj_type.name}'.",
+                span=pattern.span,
+            )
         enum_variants = self._env.type_table.enum_variants(subj_type)
         if pattern.name not in enum_variants:
             raise AglTypeError(

@@ -304,6 +304,7 @@ class ResolvedProgram:
         default_factory=dict
     )
     bare_variant_patterns: frozenset[int] = frozenset()
+    bare_variant_refs: dict[int, ConstructorRef] = field(default_factory=dict)
     case_scopes: dict[int, ScopeNode] = field(default_factory=dict)
 
 

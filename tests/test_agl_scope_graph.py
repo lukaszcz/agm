@@ -1669,3 +1669,21 @@ class TestExportDecl:
             for ref in entry.resolved.resolution.values()
             if ref.name == "foo" and ref.module_id == lib_id
         ) == 2
+
+
+def test_bare_pattern_constructor_ambiguity_requires_qualification(tmp_path: Path) -> None:
+    graph = _make_graph_from_files(
+        tmp_path,
+        {
+            "foreign": "enum Foreign\n  | same",
+            "entry": (
+                "import foreign\n"
+                "enum Local\n  | same\n"
+                "let value: Local = Local::same\n"
+                "case value of | same => 1"
+            ),
+        },
+    )
+
+    with pytest.raises(AglScopeError, match="ambiguous"):
+        resolve_graph(graph)

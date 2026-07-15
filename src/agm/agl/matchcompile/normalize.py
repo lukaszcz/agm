@@ -81,17 +81,15 @@ def _bare_enum_constructors(
 ) -> frozenset[tuple[ModuleId, str, str]]:
     """Collect declaration-level bare variants valid in the exact case scope."""
     result: set[tuple[ModuleId, str, str]] = set()
-    for variant, candidates in checked.resolved.constructor_candidates.items():
-        binding = scope.lookup(variant)
+    for candidate in checked.resolved.bare_variant_refs.values():
+        binding = scope.lookup(candidate.variant or "")
         if (
             binding is None
             or binding.kind is not BinderKind.constructor_binding
-            or len(candidates) != 1
-            or candidates[0].variant is None
+            or candidate.variant is None
         ):
             continue
-        candidate = candidates[0]
-        result.add((candidate.owner_module_id, candidate.owner_name, variant))
+        result.add((candidate.owner_module_id, candidate.owner_name, candidate.variant))
     return frozenset(result)
 
 
@@ -298,7 +296,24 @@ def _normalize_pattern(
                 raise MatchCompileInvariantError(
                     "resolver-classified bare variant has a non-enum checked type"
                 )
-            constructor = _enum_constructor(subject_type, name, checked.type_env.type_table)
+            constructor_ref = checked.resolved.bare_variant_refs.get(node_id)
+            if constructor_ref is None or constructor_ref.variant != name:
+                raise MatchCompileInvariantError(
+                    "missing or inconsistent resolved constructor ref for bare variant"
+                )
+            constructor = _enum_constructor(
+                EnumType(
+                    constructor_ref.owner_name,
+                    subject_type.type_args,
+                    constructor_ref.owner_module_id,
+                ),
+                name,
+                checked.type_env.type_table,
+            )
+            if constructor.enum_type != subject_type:
+                raise MatchCompileInvariantError(
+                    "resolved bare variant owner does not match its checked scrutinee type"
+                )
             if constructor.arity != 0:
                 raise MatchCompileInvariantError(
                     f"resolver-classified bare variant {name!r} is not nullary"

@@ -426,6 +426,7 @@ def run(args: ExecArgs) -> None:
             default_strict_json=resolved_strict_json,
             default_agent=bootstrap_factory,
             shell_exec_timeout=resolved_timeout,
+            default_call_depth_limit=resolved_call_depth_limit,
         )
         startup_runtime.share_extern_registry(shared_extern_registry)
         for declaration in decls:

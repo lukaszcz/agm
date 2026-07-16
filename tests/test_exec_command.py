@@ -2500,6 +2500,7 @@ def _exec_args_no_log(
     *,
     strict_json: bool | None = None,
     max_iters: int | None = None,
+    max_call_depth: int | None = None,
     runner: str | None = None,
     no_log: bool = True,
     log_file: str | None = None,
@@ -2511,6 +2512,7 @@ def _exec_args_no_log(
         param_tokens=[],
         strict_json=strict_json,
         max_iters=max_iters,
+        max_call_depth=max_call_depth,
         runner=runner,
         no_log=no_log,
         log_file=log_file,
@@ -2519,6 +2521,18 @@ def _exec_args_no_log(
 
 
 class TestExecStartupConfigPrepass:
+    def test_startup_config_uses_configured_call_depth(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("config log = false\ndef loop() -> int = loop()\nloop()\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file, max_call_depth=1))
+
+        assert exc_info.value.code == 2
+        assert "RecursionError" in capsys.readouterr().err
+
     def test_startup_diagnostics_exit_1_and_print_warnings(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:

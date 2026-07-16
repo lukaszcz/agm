@@ -2800,17 +2800,6 @@ class _Checker:
         form = self._env.resolve_enum_owner_form(
             kind, enum_name, module_qualifier.segments
         )
-        if form is None and module_qualifier.segments and enum_name == enum_type.name:
-            form = next(
-                (
-                    candidate
-                    for candidate in self._env.enum_owner_forms()
-                    if candidate.kind is EnumOwnerFormKind.QUALIFIED_IMPORT
-                    and candidate.module_qualifier == module_qualifier.segments
-                    and candidate.match(enum_type) is not None
-                ),
-                None,
-            )
         if form is not None:
             owner = (
                 f"::{enum_name}"

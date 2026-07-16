@@ -1067,6 +1067,29 @@ def test_unknown_enum_owner_form_is_not_visible(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "enum_use",
+    (
+        "case value of | mylib::Color::Red => 1 | _ => 0",
+        "value is mylib::Color::Red",
+    ),
+)
+def test_renamed_import_hides_original_enum_name_in_patterns_and_is_tests(
+    tmp_path: Path, enum_use: str
+) -> None:
+    modules = {
+        "entry": (
+            "import mylib using Color as C\n"
+            "let value: mylib::C = mylib::C::Red\n"
+            f"{enum_use}"
+        ),
+        "mylib": "enum Color | Red | Blue",
+    }
+
+    with pytest.raises(AglTypeError, match="not a known enum type"):
+        _check_graph(tmp_path, modules)
+
+
 def test_pattern_type_name_import_handle_ambiguity_errors(tmp_path: Path) -> None:
     modules = {
         "entry": (

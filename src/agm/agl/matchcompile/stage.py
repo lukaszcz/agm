@@ -43,7 +43,11 @@ class MatchCompiledProgram:
 
     checked: CheckedProgram
     cases: Mapping[int, CompiledCase]
-    capabilities: object | None = None
+
+    @property
+    def capabilities(self) -> object | None:
+        """Capabilities are inseparable from the checked artifact."""
+        return self.checked.capabilities
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "cases", _immutable_cases(self.cases))
@@ -56,7 +60,11 @@ class MatchCompiledModuleGraph:
 
     checked_graph: CheckedModuleGraph
     cases_by_module: Mapping[ModuleId, Mapping[int, CompiledCase]]
-    capabilities: object | None = None
+
+    @property
+    def capabilities(self) -> object | None:
+        """Capabilities are inseparable from the checked graph artifact."""
+        return self.checked_graph.capabilities
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "cases_by_module", _immutable_module_cases(self.cases_by_module))

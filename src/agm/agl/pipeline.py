@@ -1770,7 +1770,14 @@ def _with_cached_capabilities(
     """Stamp cached artifacts with the host contract used for type checking."""
     from dataclasses import replace
 
-    return replace(compiled, capabilities=capabilities)
+    from agm.agl.matchcompile import MatchCompiledProgram
+
+    if isinstance(compiled, MatchCompiledProgram):
+        return replace(compiled, checked=replace(compiled.checked, capabilities=capabilities))
+    return replace(
+        compiled,
+        checked_graph=replace(compiled.checked_graph, capabilities=capabilities),
+    )
 
 
 def _run_typecheck_graph(

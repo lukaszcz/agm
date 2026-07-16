@@ -512,6 +512,17 @@ class TestStartupConfigCollection:
         assert exc_info.value.span is not None
 
 
+def test_generic_constructor_alias_value_lowers_to_target_nominal() -> None:
+    result = _run(
+        "record Box[T]\n"
+        "  value: T\n"
+        "type Alias[T] = Box[T]\n"
+        "let factory: (int) -> Box[int] = Alias\n"
+        "factory(1)\n"
+    )
+    assert result.ok
+
+
 # ---------------------------------------------------------------------------
 # Discovery returns ConfigDeclInfo
 # ---------------------------------------------------------------------------

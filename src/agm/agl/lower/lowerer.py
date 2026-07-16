@@ -1033,7 +1033,7 @@ class _Lowerer:
                     owner_name, variant_name, qcr_mid = qcr
                     node_typ = self._node_type(nid)
                     if isinstance(node_typ, FunctionType):
-                        nominal, display = self._nominal_for_cref_owner(owner_name, qcr_mid)
+                        nominal, display = self._nominal_for_constructor_result(node_typ.result)
                         return IrMakeConstructor(
                             location=self._loc(span),
                             nominal=nominal,
@@ -1048,11 +1048,7 @@ class _Lowerer:
                     node_typ = self._node_type(nid)
                     if isinstance(node_typ, FunctionType):
                         # Constructor with fields used as a value → IrMakeConstructor.
-                        binding = self._checked.resolved.resolution.get(nid)
-                        owner_module = binding.module_id if binding is not None else None
-                        nominal, display = self._nominal_for_cref_owner(
-                            cref.owner_name, owner_module
-                        )
+                        nominal, display = self._nominal_for_constructor_result(node_typ.result)
                         return IrMakeConstructor(
                             location=self._loc(span),
                             nominal=nominal,
@@ -1849,6 +1845,12 @@ class _Lowerer:
     # ------------------------------------------------------------------
     # Constructor lowering helpers
     # ------------------------------------------------------------------
+
+    def _nominal_for_constructor_result(self, typ: Type) -> tuple[NominalId, str]:
+        """Return the runtime nominal represented by a constructor function result."""
+        if isinstance(typ, (RecordType, EnumType, ExceptionType)):
+            return NominalId(typ.module_id, typ.name), typ.name
+        raise AssertionError(f"constructor function has non-nominal result {typ!r}")
 
     def _nominal_for_cref_owner(
         self, owner_name: str, owner_module: ModuleId | None = None

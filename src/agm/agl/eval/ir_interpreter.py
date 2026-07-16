@@ -752,7 +752,7 @@ class IrInterpreter:
 
             for mod in self._program.modules.values():
                 module_values = self.module_initializer_values.setdefault(mod.module_id, [])
-                for node in mod.initializers:
+                for node in mod.initializers[len(module_values) :]:
                     try:
                         value = self._eval_initializer(node)
                         self.initializer_values.append(value)
@@ -762,6 +762,12 @@ class IrInterpreter:
                             exc.span = node.location
                         raise
         return self._collect_results()
+
+    def resume(self, *, registry: AgentRegistry, trace: TraceStore) -> dict[str, Value]:
+        """Continue a startup-config prepass with the final host services."""
+        self._registry = registry
+        self._trace = trace
+        return self.run()
 
     def collect_entry_config_values(self, names: set[str]) -> dict[str, Value]:
         """Evaluate initializers until entry-module config values for *names* are bound.

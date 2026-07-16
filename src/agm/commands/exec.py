@@ -423,6 +423,7 @@ def run(args: ExecArgs) -> None:
     # The startup pass must advertise the same declared-agent capabilities as
     # the execution pass so its compiled artifact remains reusable.
     startup_values: dict[str, Value] = {}
+    startup_result = None
     if prepared.resolved_graph is not None and not dry_run.enabled():
         startup_runtime = PipelineDriver(
             default_loop_limit=resolved_loop_limit,
@@ -540,15 +541,18 @@ def run(args: ExecArgs) -> None:
     # Reuse the ``PreparedGraph`` from above — no second parse/scope of the source.
     # Pass the already-computed checked_graph from discovery so the graph is
     # type-checked exactly once (mirroring the single-file run_prepared path).
-    result = runtime.run_prepared_graph(
-        prepared,
-        param_values=external_params,
-        check_only=dry_run.enabled(),
-        log_file=log_file,
-        compiled_graph=discovery.compiled_graph,
-        config_cli=config_cli,
-        config_base=config_base,
-    )
+    if startup_result is not None and startup_result.interpreter is not None:
+        result = runtime.resume_startup_config(startup_result, log_file=log_file)
+    else:
+        result = runtime.run_prepared_graph(
+            prepared,
+            param_values=external_params,
+            check_only=dry_run.enabled(),
+            log_file=log_file,
+            compiled_graph=discovery.compiled_graph,
+            config_cli=config_cli,
+            config_base=config_base,
+        )
 
     # Warnings live on their own channel and never affect the exit code;
     # ``result.diagnostics`` holds only error-severity pre-execution failures.

@@ -2268,8 +2268,10 @@ class TestExecAgentPrecedence:
         bootstrap = _install_marker_runner(
             tmp_path / "bin", env, name="bootstrap-runner", marker="BOOTSTRAP"
         )
+        bootstrap_calls = tmp_path / "bootstrap-calls"
         bootstrap.write_text(
             "#!/bin/bash\n"
+            f"echo bootstrap >> {bootstrap_calls}\n"
             "echo 'final-runner %{PROMPT_FILE}'\n"
         )
         _install_marker_runner(tmp_path / "bin", env, name="final-runner", marker="FINAL")
@@ -2289,6 +2291,7 @@ class TestExecAgentPrecedence:
         assert result.returncode == 0, f"stderr: {result.stderr}"
         assert "FINAL" in result.stdout
         assert "BOOTSTRAP" not in result.stdout
+        assert bootstrap_calls.read_text().splitlines() == ["bootstrap"]
 
     def test_config_beats_source_hint(self, tmp_path: Path) -> None:
         """A config [exec.agents] entry overrides the source runner hint."""

@@ -294,6 +294,7 @@ class StartupConfigResult:
     values: dict[str, Value] = field(default_factory=dict)
     checked_graph: "CheckedModuleGraph | None" = None
     compiled_graph: "MatchCompiledModuleGraph | None" = None
+    interpreter: IrInterpreter | None = None
 
 
 class PipelineDriver:
@@ -1389,6 +1390,52 @@ class PipelineDriver:
             values=values,
             checked_graph=checked_graph,
             compiled_graph=compiled_graph,
+            interpreter=interp,
+        )
+
+    def resume_startup_config(
+        self, startup: StartupConfigResult, *, log_file: "Path | None"
+    ) -> RunResult:
+        """Continue a successful startup-config prepass without replaying it."""
+        assert startup.interpreter is not None
+        from agm.agl.runtime.trace import TraceStore
+        from agm.agl.semantics.exceptions import AglRaise
+
+        trace = TraceStore(path=log_file)
+        if log_file is not None:
+            from agm.core.fs import mkdir
+
+            mkdir(log_file.parent, parents=True, exist_ok=True)
+        trace.run_start()
+        try:
+            bindings = startup.interpreter.resume(
+                registry=self.host_environment().registry, trace=trace
+            )
+        except AglRaise as exc:
+            error = exception_value_to_run_error(exc.exc, span=exc.span)
+            trace.exception(
+                type_name=error.type_name,
+                message=str(error.fields.get("message", "")),
+                trace_id=str(error.fields.get("trace_id", "")),
+                span=exc.span,
+            )
+            trace.run_end(ok=False)
+            return RunResult(
+                ok=False,
+                diagnostics=[],
+                error=error,
+                warnings=startup.warnings,
+                trace_path=log_file,
+            )
+
+        trace.run_end(ok=True)
+        return RunResult(
+            ok=True,
+            diagnostics=[],
+            error=None,
+            warnings=startup.warnings,
+            bindings=bindings,
+            trace_path=log_file,
         )
 
     def _wire_externs_or_fail(

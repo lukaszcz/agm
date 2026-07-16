@@ -1109,7 +1109,7 @@ class ReplSession:
         # Throwaway ids: type_of never promotes and never advances the session
         # counter, so seeding at ``_next_node_id`` is safe — all promoted ids are
         # strictly below it, making this parse's ids disjoint from the session's.
-        program, _ = parse_program_seeded(
+        program, next_node_id = parse_program_seeded(
             text, start_id=self._next_node_id, ambient_infix=self._accumulated_infix
         )
         items = program.body.items
@@ -1122,7 +1122,7 @@ class ReplSession:
         graph_program = self._graph_session._inject_accumulated_imports(program)
         graph, _next_node_id, _new_modules = build_repl_graph(
             graph_program,
-            self._next_node_id,
+            next_node_id,
             path=None,
             cached=self._loaded_lib_modules,
             roots=self._ensure_roots(),

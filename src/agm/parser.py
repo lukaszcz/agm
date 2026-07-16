@@ -575,6 +575,7 @@ _HELP_TEXTS: dict[str, str] = {
         Options:
           --strict-json         Require bare JSON output from agents (no recovery).
           --no-strict-json      Use lenient JSON recovery (default).
+          --max-iters N         Cap unbounded loops; off by default (CLI > source > config).
           --max-call-depth N    Override the maximum recursion call depth
                                 (CLI > config; source pragmas are not applied in the REPL).
           --runner COMMAND      Override the default agent runner command.

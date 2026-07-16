@@ -1,4 +1,4 @@
-Read ${TASKS_DIR}/TASK_INDEX.md. Update ${TASKS_DIR}/PROGRESS.md to track task progress - completed and remaining tasks, next unblocked task (not yet completed and not blocked by other tasks). Check against codebase sources. For the most recently completed task, verify the implementation against the corresponding task file and if not fully finished re-open the task with a description of what is missing.
+Read ${TASKS_DIR}/TASK_INDEX.md. Update ${TASKS_DIR}/PROGRESS.md to track task progress - completed and remaining tasks, next unblocked task (not yet completed and not blocked by other tasks). Check against codebase sources. For the most recently completed task, verify the implementation against the corresponding task file and if not fully finished re-open the task with a short one-line description of what is missing.
 
 Commit in ${TASKS_DIR} (separate repo) after updating ${TASKS_DIR}/PROGRESS.md.
 

@@ -1852,40 +1852,6 @@ class _Lowerer:
             return NominalId(typ.module_id, typ.name), typ.name
         raise AssertionError(f"constructor function has non-nominal result {typ!r}")
 
-    def _nominal_for_cref_owner(
-        self, owner_name: str, owner_module: ModuleId | None = None
-    ) -> tuple[NominalId, str]:
-        """Return (NominalId, display_name) for a constructor owner by name.
-
-        Uses the resolved type's own ``module_id`` (which equals ``ENTRY_ID``
-        for single-module programs and ``PRELUDE_ID`` for built-ins).
-        """
-        typ = (
-            self._checked.type_env.resolve_type_by_module_id(owner_module, owner_name)
-            if owner_module is not None and not owner_module.is_entry
-            else self._checked.type_env.get_type(owner_name)
-        )
-        if isinstance(typ, RecordType):
-            return NominalId(typ.module_id, typ.name), typ.name
-        if isinstance(typ, EnumType):
-            return NominalId(typ.module_id, typ.name), typ.name
-        if isinstance(typ, ExceptionType):  # pragma: no cover
-            # Exception constructors as first-class values are rejected by the checker.
-            return NominalId(typ.module_id, typ.name), typ.name
-        # Fallback for generic types: get from GenericTypeDef template.  # pragma: no cover
-        gdef = (
-            self._checked.type_env.get_generic_type_from_module(owner_module, owner_name)
-            if owner_module is not None and not owner_module.is_entry
-            else self._checked.type_env.get_generic_type(owner_name)
-        )
-        if gdef is not None:  # pragma: no cover
-            tmpl = gdef.template  # pragma: no cover
-            if isinstance(tmpl, RecordType):  # pragma: no cover
-                return NominalId(tmpl.module_id, owner_name), owner_name  # pragma: no cover
-            if isinstance(tmpl, EnumType):  # pragma: no cover
-                return NominalId(tmpl.module_id, owner_name), owner_name  # pragma: no cover
-        return NominalId(ENTRY_ID, owner_name), owner_name  # pragma: no cover
-
     def _lower_nullary_constructor(
         self,
         ref_node_id: int,

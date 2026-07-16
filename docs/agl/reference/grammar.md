@@ -14,6 +14,7 @@ Notation: `::=` defines a production; `|` separates alternatives; `?`, `*`,
 
 ```ebnf
 name       ::= NAME | OP_NAME
+field_name ::= name | "agent" | "to" | "downto" | "by"
 
 program    ::= block EOF
 

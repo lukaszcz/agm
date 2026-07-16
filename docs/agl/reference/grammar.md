@@ -25,6 +25,8 @@ item       ::= import_decl                  (* header position only *)
              | modifier? record_def         (* root only *)
              | modifier? enum_def           (* root only *)
              | modifier? type_alias         (* root only; "builtin" not allowed *)
+             | modifier? exception_def      (* root only *)
+             | export_decl                  (* root only *)
              | param_decl                   (* root only *)
              | program_decl                 (* root only *)
              | agent_decl                   (* root only *)
@@ -96,7 +98,7 @@ record_body      ::= param_marker? NEWLINE INDENT block_entry (NEWLINE block_ent
                    | "(" field_list? ")"
                    | field_list
 block_entry      ::= field_def | param_marker
-field_def        ::= name ":" type_expr
+field_def        ::= field_name ":" type_expr
 
 enum_def         ::= "enum" name type_params? "="? enum_body
 enum_body        ::= enum_variant_seq
@@ -107,7 +109,7 @@ variant_def      ::= name variant_payload?
 variant_payload  ::= "(" field_list? ")"
 field_list       ::= field_entry ("," field_entry)* ","?
 field_entry      ::= field_inline | param_marker
-field_inline     ::= name ":" type_expr
+field_inline     ::= field_name ":" type_expr
 
 exception_def    ::= "exception" name exception_base? exception_body
 exception_base   ::= "extends" name
@@ -152,6 +154,7 @@ type_expr ::= "unit"
             | qual_prefix name         (* module-qualified type *)
             | "list" "[" type_expr "]"
             | "dict" "[" "text" "," type_expr "]"
+            | "agent"
             | func_type
 
 func_type ::= type_atom "->" type_expr
@@ -163,6 +166,7 @@ type_atom ::= "unit" | "text" | "json" | "bool" | "int" | "decimal"
             | qual_prefix name
             | "list" "[" type_expr "]"
             | "dict" "[" "text" "," type_expr "]"
+            | "agent"
 type_list ::= type_expr ("," type_expr)* ","?
 ```
 
@@ -180,7 +184,7 @@ inline_binder_block ::= (let_decl | var_decl | assign_expr)
                         (";" (let_decl | var_decl | assign_expr))* ";" expr
 param_list      ::= param_entry ("," param_entry)* ","?
 param_entry     ::= param | param_marker
-param           ::= name ":" type_expr ("=" expr)?
+param           ::= field_name ":" type_expr ("=" expr)?
 ```
 
 The `def` body is a single expression (which may be an indented `suite` or a
@@ -390,8 +394,8 @@ the body. Parameter types are always required.
 arg_list        ::= arg ("," arg)* ","?
 arg             ::= expr                         (* positional *)
                   | placeholder_arg              (* positional hole *)
-                  | name "=" expr                (* named *)
-                  | name "=" placeholder_arg     (* named hole *)
+                  | field_name "=" expr          (* named *)
+                  | field_name "=" placeholder_arg (* named hole *)
 placeholder_arg ::= "?" | "?<digits>"
 ```
 
@@ -416,7 +420,7 @@ list_literal ::= "[" (expr ("," expr)* ","?)? "]"
 
 dict_literal ::= "{" (dict_entry ("," dict_entry)* ","?)? "}"
 dict_entry   ::= STRING ":" expr        (* no interpolation in keys *)
-               | name ":" expr          (* shorthand for the string key *)
+               | field_name ":" expr    (* shorthand for the string key *)
 ```
 
 ## Templates

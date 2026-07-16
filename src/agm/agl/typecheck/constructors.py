@@ -128,6 +128,11 @@ class ConstructorChecker:
         owner_name = ctor_ref.owner_name
         variant = ctor_ref.variant
         type_params = ctor_ref.type_params
+        # Local aliases are transparent constructor spellings. Their own name
+        # has no signature; retrieve it from the target nominal instead.
+        resolved_owner_name = self._ctx._env.resolve_constructor_owner_name(owner_name)
+        if resolved_owner_name is not None:
+            owner_name = resolved_owner_name
         # Cross-module callers may supply the graph-table signature up front;
         # otherwise resolve it through the constructor's recorded owner module.
         if sig is None:

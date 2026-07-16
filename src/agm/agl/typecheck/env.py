@@ -729,6 +729,22 @@ class TypeEnvironment:
         """Return the constructor signature for *owner_name* / *variant*, or ``None``."""
         return self._constructor_sigs.get((owner_name, variant))
 
+    def resolve_constructor_owner_name(self, name: str) -> str | None:
+        """Resolve local nominal aliases to the name holding their constructor metadata."""
+        from agm.agl.syntax.types import AppliedT, NameT
+
+        seen: set[str] = set()
+        while name not in seen:
+            seen.add(name)
+            target = self._alias_targets.get(name)
+            if target is None:
+                return name
+            if isinstance(target, (NameT, AppliedT)) and target.module_qualifier is None:
+                name = target.name
+                continue
+            return None
+        return None
+
     def resolve_named_type(self, name: str) -> Type | None:
         """Resolve a type *name* alias-transparently to a semantic ``Type``.
 

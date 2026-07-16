@@ -7281,6 +7281,17 @@ class TestGenericCoverageEdgeCases:
         err = reject_type("enum E[T]\n  | A(x: T, x: T)")
         assert "duplicate" in str(err).lower() or "field" in str(err).lower()
 
+    def test_generic_local_alias_constructor_as_value(self) -> None:
+        """A generic local alias preserves its target constructor signature."""
+        result = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "type Alias[T] = Box[T]\n"
+            "let factory: (int) -> Box[int] = Alias\n"
+            "factory"
+        )
+        assert result.resolved.program is not None
+
     def test_generic_constructor_as_value_no_context_rejected(self) -> None:
         """Unsolvable type param error in _check_generic_constructor_as_value."""
         err = reject_type("enum Option[T]\n  | none\n  | some(value: T)\nnone")

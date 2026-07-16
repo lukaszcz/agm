@@ -788,6 +788,26 @@ class TestAppendJsonl:
 
 
 class TestTraceStoreProperties:
+    def test_activate_disables_trace_when_buffer_flush_fails(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from agm.agl.runtime.trace import TraceStore
+
+        def fail_append(_path: Path, _record: dict[str, object]) -> None:
+            raise OSError("disk unavailable")
+
+        trace = TraceStore(path=None, buffer=True)
+        trace.run_start()
+        monkeypatch.setattr("agm.agl.runtime.trace.append_jsonl", fail_append)
+
+        trace.activate(tmp_path / "trace.jsonl")
+        trace.run_end(ok=True)
+
+        assert capsys.readouterr().err.count("trace logging disabled") == 1
+
     def test_trace_store_path_property(self, tmp_path: Path) -> None:
         from agm.agl.runtime.trace import TraceStore
 

@@ -115,6 +115,7 @@ from agm.agl.ir.operations import (
     UnaryOp,
 )
 from agm.agl.ir.program import (
+    ExecutableModule,
     ExecutableProgram,
     ExternFunctionBody,
     FunctionDescriptor,
@@ -253,6 +254,9 @@ class _DataclassValue(Protocol):
     """Typed view of the field names exposed by frozen IR dataclasses."""
 
     __match_args__: tuple[str, ...]
+
+
+_STARTUP_STATE_CONFIG_NAMES = frozenset({"strict-json", "max-iters", "timeout"})
 
 
 # ---------------------------------------------------------------------------
@@ -794,18 +798,26 @@ class IrInterpreter:
             for index, node in enumerate(entry_module.initializers)
             if isinstance(node, IrConfigBind) and node.public_name in names
         }
-        required_indices = self._startup_dependency_indices(
-            entry_module.initializers, target_indices
+        required_initializers = self._startup_dependency_initializers(
+            entry_module, target_indices
         )
         with decimal.localcontext(AGL_DECIMAL_CONTEXT):
             self._install_entry_function_closures()
             self._install_entry_params()
-            for index in sorted(required_indices):
-                node = entry_module.initializers[index]
-                self._eval_and_record_initializer(entry_module.module_id, index, node)
-                if isinstance(node, IrConfigBind) and node.public_name in names:
-                    bound = self._frame[node.symbol]
-                    found[node.public_name] = bound.value if isinstance(bound, Cell) else bound
+            for module in self._program.modules.values():
+                for index, node in enumerate(module.initializers):
+                    if (module.module_id, index) not in required_initializers:
+                        continue
+                    self._eval_and_record_initializer(module.module_id, index, node)
+                    if (
+                        module is entry_module
+                        and isinstance(node, IrConfigBind)
+                        and node.public_name in names
+                    ):
+                        bound = self._frame[node.symbol]
+                        found[node.public_name] = (
+                            bound.value if isinstance(bound, Cell) else bound
+                        )
         return found
 
     def _eval_and_record_initializer(self, module_id: ModuleId, index: int, node: IrExpr) -> None:
@@ -823,9 +835,10 @@ class IrInterpreter:
         self._executed_initializer_indices[module_id].add(index)
 
     @staticmethod
-    def _loaded_symbols(value: object) -> set[SymbolId]:
-        """Return the symbols loaded by an IR value without evaluating it."""
+    def _ir_dependencies(value: object) -> tuple[set[SymbolId], set[FunctionId]]:
+        """Return symbol and callable dependencies reachable from an IR value."""
         loaded: set[SymbolId] = set()
+        called: set[FunctionId] = set()
         seen: set[int] = set()
 
         def visit(item: object) -> None:
@@ -835,6 +848,15 @@ class IrInterpreter:
             if isinstance(item, IrLoad):
                 loaded.add(item.symbol)
                 return
+            if isinstance(item, IrDirectCall):
+                called.add(item.function_id)
+                visit(item.arguments)
+                return
+            if isinstance(item, IrMakeClosure):
+                called.add(item.function_id)
+                for capture in item.captures:
+                    loaded.add(capture.symbol)
+                return
             if is_dataclass(item):
                 dataclass_item = cast(_DataclassValue, item)
                 for name in dataclass_item.__match_args__:
@@ -842,33 +864,69 @@ class IrInterpreter:
             elif isinstance(item, tuple):
                 for child in item:
                     visit(child)
-            elif isinstance(item, dict):
-                for child in item.values():
-                    visit(child)
 
         visit(value)
-        return loaded
+        return loaded, called
 
-    def _startup_dependency_indices(
-        self, initializers: tuple[IrExpr, ...], target_indices: set[int]
-    ) -> set[int]:
-        """Find target config initializers and the earlier bindings they load."""
-        binding_indices = {
-            node.symbol: index
-            for index, node in enumerate(initializers)
+    def _startup_dependency_initializers(
+        self, entry_module: ExecutableModule, target_indices: set[int]
+    ) -> set[tuple[ModuleId, int]]:
+        """Find startup configs plus their transitive symbol and callable dependencies."""
+        binding_initializers = {
+            node.symbol: (module.module_id, index)
+            for module in self._program.modules.values()
+            for index, node in enumerate(module.initializers)
             if isinstance(node, (IrBind, IrConfigBind))
         }
-        required = set(target_indices)
-        pending = set().union(
-            *(self._loaded_symbols(initializers[index]) for index in target_indices)
+        required = {
+            (entry_module.module_id, index)
+            for index in target_indices
+        }
+        last_target = max(target_indices)
+        required.update(
+            (entry_module.module_id, index)
+            for index, node in enumerate(entry_module.initializers[:last_target])
+            if isinstance(node, IrConfigBind)
+            and node.public_name in _STARTUP_STATE_CONFIG_NAMES
         )
-        while pending:
-            symbol = pending.pop()
-            index = binding_indices.get(symbol)
-            if index is None or index in required:
+
+        pending_symbols: set[SymbolId] = set()
+        pending_functions: set[FunctionId] = set()
+        seen_symbols: set[SymbolId] = set()
+        seen_functions: set[FunctionId] = set()
+
+        def add_dependencies(value: object) -> None:
+            symbols, functions = self._ir_dependencies(value)
+            pending_symbols.update(symbols - seen_symbols)
+            pending_functions.update(functions - seen_functions)
+
+        module_by_id = self._program.modules
+        for module_id, index in required:
+            add_dependencies(module_by_id[module_id].initializers[index])
+
+        while pending_symbols or pending_functions:
+            while pending_functions:
+                function_id = pending_functions.pop()
+                seen_functions.add(function_id)
+                descriptor = self._program.functions[function_id]
+                if descriptor.function_symbol not in seen_symbols:
+                    pending_symbols.add(descriptor.function_symbol)
+                for param in descriptor.params:
+                    if param.default is not None:
+                        add_dependencies(param.default)
+                if isinstance(descriptor.impl, IrFunctionBody):
+                    add_dependencies(descriptor.impl.body)
+
+            if not pending_symbols:
                 continue
-            required.add(index)
-            pending.update(self._loaded_symbols(initializers[index]))
+            symbol = pending_symbols.pop()
+            seen_symbols.add(symbol)
+            initializer = binding_initializers.get(symbol)
+            if initializer is None or initializer in required:
+                continue
+            required.add(initializer)
+            module_id, index = initializer
+            add_dependencies(module_by_id[module_id].initializers[index])
         return required
 
     def _install_entry_params(self) -> None:

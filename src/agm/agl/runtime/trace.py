@@ -119,8 +119,7 @@ class TraceStore:
         }
         record.update(extra)
         if self._path is None:
-            if self._buffer:
-                self._buffered_records.append(record)
+            self._buffered_records.append(record)
             return
         try:
             append_jsonl(self._path, record)

@@ -2583,28 +2583,29 @@ class TestExecStartupConfigPrepass:
         from agm.agl.pipeline import PipelineDriver, StartupConfigResult
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("config log = true\nprint 1\n")
+        agl_file.write_text("agent unused\nconfig log = true\nprint 1\n")
         warning = Diagnostic(message="startup warning", line=1, severity="warning")
         error = Diagnostic(message="startup error", line=1)
 
         def fake_collect(
             self: PipelineDriver,
-            prepared: object,
+            prepared: Any,
             *,
             names: set[str],
             compiled_graph: object = None,
-            checked_graph: object = None,
+            checked_graph: Any = None,
             param_values: object = None,
             config_cli: object = None,
             config_base: object = None,
         ) -> StartupConfigResult:
             assert compiled_graph is not None
             assert checked_graph is compiled_graph.checked_graph
+            duplicate_warning = prepared.warnings[0]
             return StartupConfigResult(
                 ok=False,
                 diagnostics=[error],
                 error=None,
-                warnings=[warning],
+                warnings=[duplicate_warning, warning],
             )
 
         monkeypatch.setattr(PipelineDriver, "collect_startup_config_graph", fake_collect)
@@ -2616,6 +2617,7 @@ class TestExecStartupConfigPrepass:
         captured = capsys.readouterr()
         assert "warning: startup warning" in captured.err
         assert "error: startup error" in captured.err
+        assert captured.err.count("warning:") == 2
 
     def test_startup_error_exits_2_and_prints_warnings(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -2624,26 +2626,27 @@ class TestExecStartupConfigPrepass:
         from agm.agl.pipeline import PipelineDriver, RunError, StartupConfigResult
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("config runner = \"runner\"\nprint 1\n")
+        agl_file.write_text('agent unused\nconfig runner = "runner"\nprint 1\n')
         warning = Diagnostic(message="startup warning", line=1, severity="warning")
         error = RunError(type_name="Abort", fields={"message": "boom"}, line=1, col=1)
 
         def fake_collect(
             self: PipelineDriver,
-            prepared: object,
+            prepared: Any,
             *,
             names: set[str],
             compiled_graph: object = None,
-            checked_graph: object = None,
+            checked_graph: Any = None,
             param_values: object = None,
             config_cli: object = None,
             config_base: object = None,
         ) -> StartupConfigResult:
+            duplicate_warning = prepared.warnings[0]
             return StartupConfigResult(
                 ok=False,
                 diagnostics=[],
                 error=error,
-                warnings=[warning],
+                warnings=[duplicate_warning, warning],
             )
 
         monkeypatch.setattr(PipelineDriver, "collect_startup_config_graph", fake_collect)
@@ -2655,6 +2658,7 @@ class TestExecStartupConfigPrepass:
         captured = capsys.readouterr()
         assert "warning: startup warning" in captured.err
         assert "AgL exception: Abort: boom" in captured.err
+        assert captured.err.count("warning:") == 2
 
     def test_startup_config_extern_shares_companion_state_with_run(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

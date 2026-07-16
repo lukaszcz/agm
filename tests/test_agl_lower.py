@@ -249,6 +249,14 @@ def test_direct_lowerer_helper_passes_complete_compiled_case_mapping() -> None:
     assert set(lowerer._compiled_cases) == {case.node_id}
 
 
+def test_constructor_result_nominal_rejects_non_nominal_type() -> None:
+    source = "1"
+    lowerer = _make_lowerer(_check(source), source)
+
+    with pytest.raises(AssertionError, match="non-nominal result"):
+        lowerer._nominal_for_constructor_result(IntType())
+
+
 def test_lowering_erases_flexible_state_from_generic_direct_nested_and_partial_calls() -> None:
     executable = _lower(
         "record Box[T]\n"

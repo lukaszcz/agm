@@ -597,6 +597,33 @@ class TestTypeEnvironment:
         with pytest.raises(AglTypeError, match="cycle"):
             env.resolve_type_expr(NameT(name="A", span=sp, node_id=3))
 
+    def test_constructor_owner_resolution_rejects_qualified_alias_target(self) -> None:
+        from agm.agl.syntax.types import NameT, Qualifier
+
+        env = TypeEnvironment()
+        span = mk_span()
+        env.register_alias(
+            "Alias",
+            NameT(
+                name="Remote",
+                span=span,
+                node_id=1,
+                module_qualifier=Qualifier(segments=("lib",), span=span, node_id=2),
+            ),
+        )
+
+        assert env.resolve_constructor_owner_name("Alias") is None
+
+    def test_constructor_owner_resolution_rejects_alias_cycle(self) -> None:
+        from agm.agl.syntax.types import NameT
+
+        env = TypeEnvironment()
+        span = mk_span()
+        env.register_alias("A", NameT(name="B", span=span, node_id=1))
+        env.register_alias("B", NameT(name="A", span=span, node_id=2))
+
+        assert env.resolve_constructor_owner_name("A") is None
+
     def test_binding_type_roundtrip(self) -> None:
         env = TypeEnvironment()
         env.set_binding_type(42, IntType())
@@ -7252,6 +7279,148 @@ class TestGenericEnumQualifiersAndTypeVarScoping:
 
 class TestGenericCoverageEdgeCases:
     """Tests for code paths not yet exercised by the main test classes."""
+
+    def test_generic_constructor_value_keeps_owner_when_alias_is_not_local(self) -> None:
+        from unittest.mock import MagicMock
+
+        from agm.agl.scope.symbols import ConstructorRef
+        from agm.agl.typecheck.constructors import ConstructorChecker
+
+        ctx = MagicMock()
+        ctx._env.source_type_template.return_value = None
+        ctx._env.resolve_constructor_owner_name.return_value = None
+        expected = FunctionType((IntType(),), RecordType("Alias", (IntType(),)))
+        ctx._instantiate_generic_constructor_value.return_value = expected
+        checker = ConstructorChecker(ctx)
+        signature = ConstructorSignature(
+            owner_name="Alias",
+            variant=None,
+            field_names=("value",),
+            field_templates=(TypeVarType("T"),),
+            result_template=RecordType("Alias", (TypeVarType("T"),)),
+            type_params=("T",),
+        )
+
+        result = checker.check_generic_constructor_as_value(
+            ctor_ref=ConstructorRef(
+                owner_name="Alias",
+                variant=None,
+                owner_decl_node_id=1,
+                type_params=("T",),
+            ),
+            span=mk_span(),
+            expected=expected,
+            sig=signature,
+        )
+
+        assert result == expected
+
+    @pytest.mark.parametrize(
+        ("target_from_module", "signature_from_module"),
+        [(False, False), (True, True)],
+    )
+    def test_imported_generic_alias_constructor_resolves_target_metadata(
+        self,
+        target_from_module: bool,
+        signature_from_module: bool,
+    ) -> None:
+        from unittest.mock import MagicMock, patch
+
+        from agm.agl.scope.symbols import ConstructorRef
+        from agm.agl.semantics.types import TypeTemplate
+        from agm.agl.typecheck.constructors import ConstructorChecker
+
+        span = mk_span()
+        callee = VarRef(name="Alias", span=span, node_id=1)
+        call = Call(callee=callee, args=(), named_args=(), span=span, node_id=2)
+        ctx = MagicMock()
+        ctx._resolved.constructor_refs = {
+            callee.node_id: ConstructorRef(
+                owner_name="Alias",
+                variant=None,
+                owner_decl_node_id=3,
+                type_params=("X",),
+            )
+        }
+        source_template = TypeTemplate(
+            RecordType("Box", (TypeVarType("X"),)),
+            ("X",),
+        )
+        target_gdef = GenericTypeDef(
+            kind="record",
+            type_params=("T",),
+            template=RecordType("Box", (TypeVarType("T"),)),
+        )
+        target_signature = ConstructorSignature(
+            owner_name="Box",
+            variant=None,
+            field_names=("value",),
+            field_templates=(TypeVarType("T"),),
+            result_template=target_gdef.template,
+            type_params=("T",),
+        )
+        ctx._env.get_generic_type_from_module.side_effect = [
+            None,
+            target_gdef if target_from_module else None,
+        ]
+        ctx._env.source_type_template_qname.return_value = source_template
+        ctx._env.get_generic_type.return_value = (
+            None if target_from_module else target_gdef
+        )
+        ctx._env.get_ctor_sig_from_module.return_value = (
+            target_signature if signature_from_module else None
+        )
+        ctx._env.get_constructor_signature.return_value = target_signature
+        checker = ConstructorChecker(ctx)
+        expected = RecordType("Box", (IntType(),))
+
+        with patch.object(
+            ConstructorChecker,
+            "_check_generic_constructor_call",
+            return_value=expected,
+        ):
+            result = checker.check_constructor_callee_call(call)
+
+        assert result == expected
+
+    def test_imported_generic_alias_without_target_metadata_uses_normal_error_path(
+        self,
+    ) -> None:
+        from unittest.mock import MagicMock, patch
+
+        from agm.agl.scope.symbols import ConstructorRef
+        from agm.agl.semantics.types import TypeTemplate
+        from agm.agl.typecheck.constructors import ConstructorChecker
+
+        span = mk_span()
+        callee = VarRef(name="Alias", span=span, node_id=1)
+        call = Call(callee=callee, args=(), named_args=(), span=span, node_id=2)
+        ctx = MagicMock()
+        ctx._resolved.constructor_refs = {
+            callee.node_id: ConstructorRef(
+                owner_name="Alias",
+                variant=None,
+                owner_decl_node_id=3,
+                type_params=("X",),
+            )
+        }
+        ctx._env.get_generic_type_from_module.return_value = None
+        ctx._env.source_type_template_qname.return_value = TypeTemplate(
+            RecordType("Missing", (TypeVarType("X"),)),
+            ("X",),
+        )
+        ctx._env.get_generic_type.return_value = None
+        checker = ConstructorChecker(ctx)
+        expected = RecordType("Missing", (IntType(),))
+
+        with patch.object(
+            ConstructorChecker,
+            "_check_generic_constructor_call",
+            return_value=expected,
+        ):
+            result = checker.check_constructor_callee_call(call)
+
+        assert result == expected
 
     def test_generic_field_type_references_generic_record(self) -> None:
         """AppliedT branch (record path) in _ensure_referenced_type_built."""

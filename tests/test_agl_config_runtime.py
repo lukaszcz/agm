@@ -26,6 +26,7 @@ from agm.agl.runtime.params import convert_config_value
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import OPTION_TEXT_TYPE, TextType, Type
 from agm.agl.semantics.values import BoolValue, EnumValue, IntValue, TextValue, Value
+from agm.core.process import ProcessCaptureResult
 
 
 def _run(
@@ -246,6 +247,14 @@ class TestStartupConfigCollection:
         assert not result.ok
         assert result.diagnostics
 
+    def test_startup_config_missing_required_param_returns_diagnostic(self) -> None:
+        prepared = _prepare_graph("param enabled: bool\nconfig log = enabled\n")
+
+        result = PipelineDriver().collect_startup_config_graph(prepared, names={"log"})
+
+        assert not result.ok
+        assert result.diagnostics
+
     def test_startup_config_uses_provided_compiled_graph(self) -> None:
         rt = PipelineDriver()
         prepared = _prepare_graph("config log = true\n")
@@ -384,6 +393,100 @@ class TestStartupConfigCollection:
         assert result.ok, result.error or result.diagnostics
         assert result.values["runner"] == TextValue("claude")
 
+    def test_startup_config_can_call_imported_function(self, tmp_path: Path) -> None:
+        entry_path = tmp_path / "prog.agl"
+        entry_path.write_text("import lib\nconfig runner = lib::choose()\n")
+        (tmp_path / "lib.agl").write_text('def choose() -> text = "claude"\n')
+        prepared = PipelineDriver.prepare_program(
+            entry_path.read_text(),
+            entry_path=entry_path,
+            roots=RootSet(roots=frozenset({tmp_path})),
+            default_stdlib=False,
+        )
+
+        result = PipelineDriver().collect_startup_config_graph(prepared, names={"runner"})
+
+        assert result.ok, result.error or result.diagnostics
+        assert result.values["runner"] == TextValue("claude")
+
+    def test_startup_config_function_can_read_earlier_binding(self) -> None:
+        prepared = _prepare_graph(
+            'let selected = "claude"\n'
+            "def choose() -> text = selected\n"
+            "config runner = choose()\n"
+        )
+
+        result = PipelineDriver().collect_startup_config_graph(prepared, names={"runner"})
+
+        assert result.ok, result.error or result.diagnostics
+        assert result.values["runner"] == TextValue("claude")
+
+    def test_startup_config_lambda_can_capture_earlier_binding(self) -> None:
+        prepared = _prepare_graph(
+            "def make(prefix: text) -> () -> text = "
+            'fn() -> text => prefix + "aude"\n'
+            'let choose = make("cl")\n'
+            "config runner = choose()\n"
+        )
+
+        result = PipelineDriver().collect_startup_config_graph(prepared, names={"runner"})
+
+        assert result.ok, result.error or result.diagnostics
+        assert result.values["runner"] == TextValue("claude")
+
+    def test_startup_config_function_default_can_read_earlier_binding(self) -> None:
+        prepared = _prepare_graph(
+            'let suffix = "aude"\n'
+            "def choose(prefix: text, ending: text = suffix) -> text = prefix + ending\n"
+            'config runner = choose("cl")\n'
+        )
+
+        result = PipelineDriver().collect_startup_config_graph(prepared, names={"runner"})
+
+        assert result.ok, result.error or result.diagnostics
+        assert result.values["runner"] == TextValue("claude")
+
+    def test_startup_config_calls_through_function_value_alias(self) -> None:
+        prepared = _prepare_graph(
+            'def choose() -> text = "claude"\n'
+            "let invoke: () -> text = choose\n"
+            "config runner = invoke()\n"
+        )
+
+        result = PipelineDriver().collect_startup_config_graph(prepared, names={"runner"})
+
+        assert result.ok, result.error or result.diagnostics
+        assert result.values["runner"] == TextValue("claude")
+
+    def test_startup_config_preserves_earlier_strict_json_state(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fenced_json(
+            _cmd: list[str],
+            **_kwargs: object,
+        ) -> ProcessCaptureResult:
+            return ProcessCaptureResult(
+                returncode=0,
+                stdout="```json\ntrue\n```\n",
+                stderr="",
+                elapsed=0.01,
+                timed_out=False,
+                spawn_error=None,
+                spawn_errno=None,
+            )
+
+        monkeypatch.setattr("agm.core.process.run_capture_result", fenced_json)
+        prepared = _prepare_graph(
+            "config strict-json = true\n"
+            'config log = exec("choose", format = "json")\n'
+        )
+
+        result = PipelineDriver().collect_startup_config_graph(prepared, names={"log"})
+
+        assert not result.ok
+        assert result.error is not None
+        assert result.error.type_name == "AgentParseError"
+
     def test_startup_config_extern_wiring_failure_returns_diagnostic(
         self, tmp_path: Path
     ) -> None:
@@ -412,6 +515,16 @@ class TestStartupConfigCollection:
     def test_interpreter_collect_returns_empty_when_no_targets(self) -> None:
         interp = self._interpreter_for("let x = 1\nx\n")
         assert interp.collect_entry_config_values({"log"}) == {}
+
+    def test_interpreter_initializer_recording_is_idempotent(self) -> None:
+        interp = self._interpreter_for("config log = true\n")
+        entry_module = interp._program.modules[interp._program.entry_module]
+        node = entry_module.initializers[0]
+
+        interp._eval_and_record_initializer(entry_module.module_id, 0, node)
+        interp._eval_and_record_initializer(entry_module.module_id, 0, node)
+
+        assert len(interp.initializer_values) == 1
 
     def test_interpreter_resume_does_not_reinstall_param_defaults(
         self, monkeypatch: pytest.MonkeyPatch
@@ -510,6 +623,19 @@ class TestStartupConfigCollection:
         with pytest.raises(AglRaise) as exc_info:
             interp.collect_entry_config_values({"log"})
         assert exc_info.value.span is not None
+
+    def test_resume_startup_config_without_buffered_trace_starts_trace(self) -> None:
+        runtime = PipelineDriver()
+        startup = runtime.collect_startup_config_graph(
+            _prepare_graph("config log = true\n"),
+            names={"log"},
+        )
+        assert startup.ok
+        startup.trace = None
+
+        result = runtime.resume_startup_config(startup, log_file=None)
+
+        assert result.ok
 
 
 def test_generic_constructor_alias_value_lowers_to_target_nominal() -> None:

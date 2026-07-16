@@ -320,6 +320,20 @@ def test_prechecked_artifacts_compile_without_rechecking_single_and_graph_paths(
     assert graph_run.ok, graph_run.diagnostics
 
 
+def test_startup_config_preserves_checked_graph_when_no_value_is_requested() -> None:
+    runtime = PipelineDriver()
+    prepared = _prepare_graph("let value = 1\nvalue")
+    discovery = runtime.discover_params_graph(prepared)
+    assert discovery.checked_graph is not None
+
+    result = runtime.collect_startup_config_graph(
+        prepared, names={"log"}, checked_graph=discovery.checked_graph
+    )
+
+    assert result.ok
+    assert result.checked_graph is discovery.checked_graph
+
+
 def test_startup_config_validates_cached_artifact_even_when_no_value_is_requested() -> None:
     _prepared_a, discovery_a = _compiled_graph("let a = 1\na")
     prepared_b = _prepare_graph("let b = 2\nb")

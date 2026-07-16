@@ -1248,7 +1248,9 @@ class PipelineDriver:
                 warnings=warnings,
                 values={},
                 checked_graph=(
-                    compiled_graph.checked_graph if compiled_graph is not None else None
+                    compiled_graph.checked_graph
+                    if compiled_graph is not None
+                    else checked_graph
                 ),
                 compiled_graph=compiled_graph,
             )

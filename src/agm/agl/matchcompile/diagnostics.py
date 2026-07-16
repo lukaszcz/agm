@@ -105,7 +105,7 @@ def _render_literal(kind: LiteralKind, value: decimal.Decimal | str | None) -> s
     if kind is LiteralKind.NULL:
         return "null"
     assert isinstance(value, decimal.Decimal)
-    return str(value)
+    return format(value, "f")
 
 
 def render_witness(witness: MatchWitness) -> str:

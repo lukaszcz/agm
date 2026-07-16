@@ -128,6 +128,7 @@ class ConstructorChecker:
         owner_name = ctor_ref.owner_name
         variant = ctor_ref.variant
         type_params = ctor_ref.type_params
+        source_template = self._ctx._env.source_type_template(owner_name)
         # Local aliases are transparent constructor spellings. Their own name
         # has no signature; retrieve it from the target nominal instead.
         resolved_owner_name = self._ctx._env.resolve_constructor_owner_name(owner_name)
@@ -146,6 +147,25 @@ class ConstructorChecker:
         if sig is None:
             sig = self._ctx._env.get_constructor_signature(owner_name, variant)
         assert sig is not None, f"No constructor signature for {owner_name}.{variant}"
+        if source_template is not None and resolved_owner_name is not None:
+            target_gdef = self._ctx._env.get_generic_type(owner_name)
+            assert target_gdef is not None, f"No generic type definition for {owner_name}"
+            target_match = TypeTemplate(target_gdef.template, target_gdef.type_params).match(
+                source_template.template
+            )
+            assert target_match is not None
+            target_subst = dict(target_match.bindings)
+            sig = ConstructorSignature(
+                owner_name=ctor_ref.owner_name,
+                variant=variant,
+                field_names=sig.field_names,
+                field_templates=tuple(
+                    substitute(field, target_subst) for field in sig.field_templates
+                ),
+                result_template=source_template.template,
+                type_params=source_template.type_params,
+            )
+            type_params = source_template.type_params
 
         return self._ctx._instantiate_generic_constructor_value(
             type_params=type_params,

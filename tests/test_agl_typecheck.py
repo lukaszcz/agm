@@ -7286,7 +7286,7 @@ class TestGenericCoverageEdgeCases:
         result = accept_type(
             "record Box[T]\n"
             "  value: T\n"
-            "type Alias[T] = Box[T]\n"
+            "type Alias[X] = Box[X]\n"
             "let factory: (int) -> Box[int] = Alias\n"
             "factory"
         )

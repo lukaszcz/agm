@@ -120,7 +120,10 @@ to the program-section / exec-section / engine-default layers.
 `timeout`) take effect at the point the declaration executes in declaration order;
 expressions that follow see the updated setting. The remaining keys (`runner`,
 `log`, `log-file`) are start-resolved before the program runs; place them near the
-top of the program so the agent factory and trace infrastructure see them.
+top of the program so the agent factory and trace infrastructure see them. If such
+an expression calls an agent, it uses a bootstrap factory configured from the CLI,
+config-file/default runner floor, and normal per-agent overrides; a computed `runner`
+value applies to the factory for the main program, not to its own computation.
 
 **Error surface.** A source `config timeout = "…"` value is a runtime-evaluated
 expression; a bad value raises a runtime error (exit 2). A bad `--timeout` or

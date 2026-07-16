@@ -343,22 +343,40 @@ def run(args: ExecArgs) -> None:
     else:
         resolved_timeout = config.timeout
 
+    # Startup config runs before a source ``config runner`` value can choose
+    # the final default runner. It therefore dispatches agents through the
+    # resolved CLI/config/default floor. Named agents retain their normal
+    # config > source-hint > default precedence during that bootstrap pass.
+    decls = prepared.declared_agents
+    source_hints = {d.name: d.runner for d in decls if d.runner is not None}
+    per_agent_cmds = {**source_hints, **config.agents}
+    bootstrap_runner_cmd = args.runner or config.runner or base_runner_cmd
+    split_command(bootstrap_runner_cmd, kind="runner")
+    for declaration in decls:
+        cmd = per_agent_cmds.get(declaration.name)
+        if cmd is not None:
+            split_command(cmd, kind="runner")
+    bootstrap_factory = runner_backed_agent_factory(
+        default_runner_cmd=bootstrap_runner_cmd,
+        per_agent_cmds=per_agent_cmds,
+        idle_timeout=resolved_timeout,
+    )
+
     shared_extern_registry = ExternRegistry()
     # The startup pass must advertise the same declared-agent capabilities as
     # the execution pass so its compiled artifact remains reusable.
-    decls = prepared.declared_agents
     startup_values: dict[str, Value] = {}
     startup_compiled_graph: MatchCompiledModuleGraph | None = None
     if prepared.resolved_graph is not None and not dry_run.enabled():
         startup_runtime = PipelineDriver(
             default_loop_limit=resolved_loop_limit,
             default_strict_json=resolved_strict_json,
-            default_agent=lambda _request: "",
+            default_agent=bootstrap_factory,
             shell_exec_timeout=resolved_timeout,
         )
         startup_runtime.share_extern_registry(shared_extern_registry)
         for declaration in decls:
-            startup_runtime.register_agent(declaration.name, lambda _request: "")
+            startup_runtime.register_agent(declaration.name, bootstrap_factory)
         startup_result = startup_runtime.collect_startup_config_graph(
             prepared,
             names={"runner", "log", "log-file"},
@@ -431,22 +449,6 @@ def run(args: ExecArgs) -> None:
     # below, so the source is never loaded or scoped twice.  On a source with
     # load/scope errors ``declared_agents`` is ``()`` and ``run_prepared_graph``
     # resurfaces the captured diagnostic (exit 1).
-    source_hints = {d.name: d.runner for d in decls if d.runner is not None}
-    # Config wins over source hints (dict merge: later keys override earlier).
-    per_agent_cmds = {**source_hints, **config.agents}
-
-    # Validate each DECLARED agent's resolved runner command eagerly, honouring
-    # the same pre-execution contract as the default runner above: a malformed
-    # (e.g. unclosed quote) or empty per-agent command — from a source `agent`
-    # runner hint or an `[exec.agents.<name>]` config entry — exits 1 before any
-    # statement runs, rather than failing lazily mid-execution at dispatch.
-    # Only declared (dispatchable) agents are checked; a config entry for an
-    # agent the program never declares is inert and never validated.
-    for d in decls:
-        cmd = per_agent_cmds.get(d.name)
-        if cmd is not None:
-            split_command(cmd, kind="runner")
-
     # One factory backs ``prompt`` (the default) and every declared name; it
     # dispatches by ``request.agent`` against ``per_agent_cmds``, falling back
     # to the default runner (the floor).  ``command_with_prompt_target``

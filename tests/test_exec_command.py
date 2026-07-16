@@ -2232,6 +2232,34 @@ class TestExecAgentPrecedence:
         env.setdefault("HOME", str(Path.home()))
         return env
 
+    def test_startup_config_agent_uses_bootstrap_runner(self, tmp_path: Path) -> None:
+        """An agent call in source config is real, not a placeholder response."""
+        env = self._base_env()
+        bootstrap = _install_marker_runner(
+            tmp_path / "bin", env, name="bootstrap-runner", marker="BOOTSTRAP"
+        )
+        bootstrap.write_text(
+            "#!/bin/bash\n"
+            "echo 'final-runner %{PROMPT_FILE}'\n"
+        )
+        _install_marker_runner(tmp_path / "bin", env, name="final-runner", marker="FINAL")
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            'config runner = ask("choose a runner")\n'
+            'let answer = ask("do it")\n'
+            "print answer\n"
+        )
+        config_dir = tmp_path / ".agm"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text('[exec]\nrunner = "bootstrap-runner"\n')
+
+        result = self._run_agm_exec([str(agl_file), "--no-log"], env=env, cwd=tmp_path)
+
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        assert "FINAL" in result.stdout
+        assert "BOOTSTRAP" not in result.stdout
+
     def test_config_beats_source_hint(self, tmp_path: Path) -> None:
         """A config [exec.agents] entry overrides the source runner hint."""
         env = self._base_env()
@@ -3087,7 +3115,7 @@ class TestExecSourceConfigPrecedence:
         monkeypatch.setattr(exec_command, "runner_backed_agent_factory", spy_factory)
 
         exec_command.run(_exec_args_no_log(agl_file))
-        assert captured_runner == ["my-runner"]
+        assert captured_runner[-1:] == ["my-runner"]
 
     def test_source_runner_non_literal_flows_into_agent_factory(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -3119,7 +3147,7 @@ class TestExecSourceConfigPrecedence:
         monkeypatch.setattr(exec_command, "runner_backed_agent_factory", spy_factory)
 
         exec_command.run(_exec_args_no_log(agl_file))
-        assert captured_runner == ["computed-runner"]
+        assert captured_runner[-1:] == ["computed-runner"]
 
     def test_cli_runner_overrides_source_runner(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -3151,7 +3179,7 @@ class TestExecSourceConfigPrecedence:
         monkeypatch.setattr(exec_command, "runner_backed_agent_factory", spy_factory)
 
         exec_command.run(_exec_args_no_log(agl_file, runner="cli-runner"))
-        assert captured_runner == ["cli-runner"]
+        assert captured_runner[-1:] == ["cli-runner"]
 
 
 def _exec_args_inline_no_log(

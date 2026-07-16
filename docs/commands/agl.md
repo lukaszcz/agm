@@ -193,7 +193,11 @@ The three eval-consumed keys (`strict-json`, `max-iters`, `timeout`) take effect
 their declaration point (**effect-at-binding**): expressions after the declaration see
 the updated setting. The remaining keys (`runner`, `log`, `log-file`) are
 **start-resolved** — declare them at the top of the program so the agent factory and
-trace infrastructure see the chosen values before anything runs.
+trace infrastructure see the chosen values before anything runs. If a start-resolved
+config expression calls an agent (for example, to compute `config runner`), that call
+uses a bootstrap agent factory: CLI/config/default runner settings and the normal
+per-agent config/source-hint precedence. Its resulting `runner` value configures the
+factory used by the main program, not the call that computed it.
 
 Note: `config timeout` governs only the **shell-exec** timeout. The agent idle timeout
 is start-resolved from CLI / `[exec]` and cannot be changed mid-program.

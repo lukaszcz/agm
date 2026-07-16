@@ -262,29 +262,20 @@ class ConstructorChecker:
 
         e.g. ``Option[int]::some`` or ``Option[int]::none``.
         """
-        gdef = (
-            self._ctx._env.get_generic_type_from_module(owner_module_id, owner_name)
-            if owner_module_id is not None
-            else self._ctx._env.get_generic_type(owner_name)
+        generic_constructor = self._resolve_qualified_generic_enum_constructor(
+            owner_name=owner_name, variant=variant, owner_module_id=owner_module_id
         )
-        if gdef is None:
+        if generic_constructor is None:
             raise AglTypeError(
                 f"'{owner_name}' is not a generic constructor and does not accept "
                 "type arguments.",
                 span=span,
             )
-        sig = (
-            self._ctx._env.get_ctor_sig_from_module(owner_module_id, owner_name, variant)
-            if owner_module_id is not None
-            else self._ctx._env.get_constructor_signature(owner_name, variant)
-        )
-        assert sig is not None, (
-            f"Generic enum '{owner_name}' has no constructor signature for '{variant}'"
-        )
+        gdef, sig, type_params = generic_constructor
         return self._instantiate_constructor_value(
             owner_name=owner_name,
             variant=variant,
-            type_params=gdef.type_params,
+            type_params=type_params,
             type_args=type_args,
             sig=sig,
             gdef=gdef,
@@ -525,18 +516,16 @@ class ConstructorChecker:
         )
         return owner
 
-    # --- Qualified constructor as value (public entry point) ---
+    # --- Qualified enum constructors (public entry points) ---
 
-    def check_qualified_constructor_as_value(
+    def _resolve_qualified_generic_enum_constructor(
         self,
         *,
         owner_name: str,
         variant: str,
         owner_module_id: ModuleId | None,
-        span: SourceSpan,
-        expected: Type | None,
-    ) -> Type:
-        """Type a qualified constructor (``Owner::variant``) used in value position."""
+    ) -> tuple[GenericTypeDef, ConstructorSignature, tuple[str, ...]] | None:
+        """Resolve a generic enum constructor through a declaration or transparent alias."""
         gdef = (
             self._ctx._env.get_generic_type_from_module(owner_module_id, owner_name)
             if owner_module_id is not None
@@ -551,13 +540,71 @@ class ConstructorChecker:
             assert sig is not None, (
                 f"Generic enum '{owner_name}' has no constructor signature for '{variant}'"
             )
+            return gdef, sig, gdef.type_params
+
+        source = (
+            self._ctx._env.source_type_template_qname(owner_module_id, owner_name)
+            if owner_module_id is not None
+            else self._ctx._env.source_type_template(owner_name)
+        )
+        if source is None or not isinstance(source.template, EnumType):
+            return None
+        target = source.template
+        target_gdef = self._ctx._env.get_generic_type_from_module(target.module_id, target.name)
+        if target_gdef is None:
+            local_gdef = self._ctx._env.get_generic_type(target.name)
+            if local_gdef is not None and local_gdef.template.module_id == target.module_id:
+                target_gdef = local_gdef
+        if target_gdef is None:
+            return None
+        target_sig = self._ctx._env.get_ctor_sig_from_module(target.module_id, target.name, variant)
+        if target_sig is None:
+            target_sig = self._ctx._env.get_constructor_signature(target.name, variant)
+        assert target_sig is not None, (
+            f"Generic enum '{target.name}' has no constructor signature for '{variant}'"
+        )
+        target_match = TypeTemplate(target_gdef.template, target_gdef.type_params).match(
+            source.template
+        )
+        assert target_match is not None
+        target_subst = dict(target_match.bindings)
+        return (
+            target_gdef,
+            ConstructorSignature(
+                owner_name=owner_name,
+                variant=variant,
+                field_names=target_sig.field_names,
+                field_templates=tuple(
+                    substitute(field, target_subst) for field in target_sig.field_templates
+                ),
+                result_template=source.template,
+                type_params=source.type_params,
+            ),
+            source.type_params,
+        )
+
+    def check_qualified_constructor_as_value(
+        self,
+        *,
+        owner_name: str,
+        variant: str,
+        owner_module_id: ModuleId | None,
+        span: SourceSpan,
+        expected: Type | None,
+    ) -> Type:
+        """Type a qualified constructor (``Owner::variant``) used in value position."""
+        generic_constructor = self._resolve_qualified_generic_enum_constructor(
+            owner_name=owner_name, variant=variant, owner_module_id=owner_module_id
+        )
+        if generic_constructor is not None:
+            gdef, sig, type_params = generic_constructor
             # owner_decl_node_id is unused on the as-value path (only owner_name,
             # variant, and type_params are consumed); pass the 0 placeholder.
             ctor_ref = ConstructorRef(
                 owner_name=owner_name,
                 variant=variant,
                 owner_decl_node_id=0,
-                type_params=gdef.type_params,
+                type_params=type_params,
             )
             return self.check_generic_constructor_as_value(
                 ctor_ref=ctor_ref,
@@ -663,26 +710,16 @@ class ConstructorChecker:
         hole_indices: Mapping[int, int] | None = None,
     ) -> Type:
         """Validate and dispatch a qualified constructor (EnumName::variant)."""
-        # Check if this is a generic enum type.
-        gdef = (
-            self._ctx._env.get_generic_type_from_module(owner_module_id, owner_name)
-            if owner_module_id is not None
-            else self._ctx._env.get_generic_type(owner_name)
+        generic_constructor = self._resolve_qualified_generic_enum_constructor(
+            owner_name=owner_name, variant=variant, owner_module_id=owner_module_id
         )
-        if gdef is not None:
-            sig = (
-                self._ctx._env.get_ctor_sig_from_module(owner_module_id, owner_name, variant)
-                if owner_module_id is not None
-                else self._ctx._env.get_constructor_signature(owner_name, variant)
-            )
-            assert sig is not None, (
-                f"Generic enum '{owner_name}' has no constructor signature for '{variant}'"
-            )
+        if generic_constructor is not None:
+            gdef, sig, type_params = generic_constructor
             ctor_ref = ConstructorRef(
                 owner_name=owner_name,
                 variant=variant,
                 owner_decl_node_id=0,
-                type_params=gdef.type_params,
+                type_params=type_params,
             )
             return self._check_generic_constructor_call(
                 node_type_args=type_args,

@@ -3734,6 +3734,19 @@ class TestTypeDeclarations:
         r = accept_type("type Pair[A, B] = dict[text, json]\nlet p: Pair[int, text] = {a: 1}\np")
         assert r.resolved.program is not None
 
+    def test_parameterized_alias_to_generic_enum_constructs_variant(self) -> None:
+        checked = accept_type(
+            "enum Option[T]\n"
+            "  | some(value: T)\n"
+            "type Maybe[T] = Option[T]\n"
+            "let inferred = Maybe::some(value = 1)\n"
+            "let value = Maybe[int]::some(value = 2)\n"
+            "value"
+        )
+        value = checked.resolved.program.body.items[-2]
+        assert isinstance(value, LetDecl)
+        assert checked.type_env.get_binding_type(value.node_id) == EnumType("Option", (IntType(),))
+
     def test_parameterized_alias_arity_mismatch_rejected(self) -> None:
         err = reject_type("type Wrap[A] = list[A]\nlet w: Wrap[int, text] = [1]\nw")
         assert "type argument" in str(err).lower()

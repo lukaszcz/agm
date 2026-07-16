@@ -730,6 +730,21 @@ def test_later_module_alias_available_to_entry_type_body_via_open_import(
     assert _binding_value_type(cg, ENTRY_ID, "b") == RecordType("Box", module_id=ENTRY_ID)
 
 
+def test_imported_generic_alias_to_enum_constructs_variant(tmp_path: Path) -> None:
+    """A qualified generic alias retains its enum variant constructor signature."""
+    checked = _check_graph(
+        tmp_path,
+        {
+            "entry": "import lib qualified\nlet value = lib::Alias[int]::some(value = 1)\nvalue",
+            "lib": "enum Option[T]\n  | some(value: T)\ntype Alias[T] = Option[T]",
+        },
+    )
+
+    assert _binding_value_type(checked, ENTRY_ID, "value") == EnumType(
+        "Option", (IntType(),), module_id=ModuleId.from_dotted("lib")
+    )
+
+
 def test_imported_generic_alias_to_record_constructs_transparently(tmp_path: Path) -> None:
     """A qualified generic alias constructs its nominal record target."""
     checked = _check_graph(

@@ -35,6 +35,17 @@ def _compiled_graph(source: str) -> tuple[PreparedGraph, ParamDiscovery]:
     return prepared, discovery
 
 
+def _change_capabilities(runtime: PipelineDriver) -> None:
+    from agm.agl.runtime.codec import TextCodec
+
+    class ExtraCodec(TextCodec):
+        @property
+        def name(self) -> str:
+            return "extra"
+
+    runtime.register_codec(ExtraCodec())
+
+
 def _assert_cache_mismatch(diagnostics: Iterator[object]) -> None:
     items = list(diagnostics)
     assert items
@@ -164,6 +175,22 @@ def test_graph_cache_derives_capability_provenance_from_checked_graph() -> None:
     assert discovery.compiled_graph is compiled
 
 
+def test_graph_artifact_is_rechecked_when_host_capabilities_change() -> None:
+    runtime = PipelineDriver()
+    prepared = _prepare_graph("let value = 1\nvalue")
+    assert prepared.resolved_graph is not None
+    compiled = compile_graph_matches(
+        check_graph(prepared.resolved_graph, runtime.host_environment().capabilities)
+    ).compiled
+    assert isinstance(compiled, MatchCompiledModuleGraph)
+    _change_capabilities(runtime)
+
+    discovery = runtime.discover_params_graph(prepared, compiled_graph=compiled)
+
+    assert discovery.compiled_graph is not None
+    assert discovery.compiled_graph is not compiled
+
+
 def test_startup_graph_cache_derives_capability_provenance_from_checked_graph() -> None:
     runtime = PipelineDriver()
     prepared = _prepare_graph("config log = true\nlog")
@@ -179,6 +206,25 @@ def test_startup_graph_cache_derives_capability_provenance_from_checked_graph() 
 
     assert result.ok
     assert result.compiled_graph is compiled
+
+
+def test_startup_and_run_recheck_graph_artifacts_when_host_capabilities_change() -> None:
+    runtime = PipelineDriver()
+    prepared = _prepare_graph("config log = true\nlog")
+    assert prepared.resolved_graph is not None
+    compiled = compile_graph_matches(
+        check_graph(prepared.resolved_graph, runtime.host_environment().capabilities)
+    ).compiled
+    assert isinstance(compiled, MatchCompiledModuleGraph)
+    _change_capabilities(runtime)
+
+    startup = runtime.collect_startup_config_graph(
+        prepared, names={"log"}, compiled_graph=compiled
+    )
+    run = runtime.run_prepared_graph(prepared, check_only=True, compiled_graph=compiled)
+
+    assert startup.ok
+    assert run.ok
 
 
 def test_graph_cache_mismatch_without_prepared_entry_uses_fallback_location() -> None:

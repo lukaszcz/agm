@@ -1770,20 +1770,9 @@ def _with_cached_capabilities(
     compiled: "MatchCompiledProgram | MatchCompiledModuleGraph",
     capabilities: "HostCapabilities",
 ) -> "MatchCompiledProgram | MatchCompiledModuleGraph":
-    """Stamp cached artifacts with the host contract used for type checking."""
-    from dataclasses import replace
-
-    if compiled.capabilities == capabilities:
-        return compiled
-
-    from agm.agl.matchcompile import MatchCompiledProgram
-
-    if isinstance(compiled, MatchCompiledProgram):
-        return replace(compiled, checked=replace(compiled.checked, capabilities=capabilities))
-    return replace(
-        compiled,
-        checked_graph=replace(compiled.checked_graph, capabilities=capabilities),
-    )
+    """Return a compiled artifact whose checked input already has provenance."""
+    _ = capabilities
+    return compiled
 
 
 def _run_typecheck_graph(

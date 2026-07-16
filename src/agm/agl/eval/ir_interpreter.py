@@ -18,6 +18,7 @@ from __future__ import annotations
 import decimal
 import inspect
 from collections.abc import Mapping
+from dataclasses import is_dataclass
 from typing import TYPE_CHECKING, Protocol, assert_never, cast
 
 from agm.agl.eval._decimal import AGL_DECIMAL_CONTEXT
@@ -248,6 +249,12 @@ class _ReturnSignal(Exception):
         self.value = value
 
 
+class _DataclassValue(Protocol):
+    """Typed view of the field names exposed by frozen IR dataclasses."""
+
+    __match_args__: tuple[str, ...]
+
+
 # ---------------------------------------------------------------------------
 # Coercion helper — module-level for test access
 # ---------------------------------------------------------------------------
@@ -369,6 +376,7 @@ class IrInterpreter:
         self._config_base: Mapping[str, Value] = config_base if config_base is not None else {}
         self.initializer_values: list[Value] = []
         self.module_initializer_values: dict[ModuleId, list[Value]] = {}
+        self._executed_initializer_indices: dict[ModuleId, set[int]] = {}
         self._call_depth: int = 0
         self._trace: TraceStore = trace if trace is not None else noop_trace()
         self._max_call_depth: int = max_call_depth
@@ -752,16 +760,10 @@ class IrInterpreter:
             self._install_entry_params()
 
             for mod in self._program.modules.values():
-                module_values = self.module_initializer_values.setdefault(mod.module_id, [])
-                for node in mod.initializers[len(module_values) :]:
-                    try:
-                        value = self._eval_initializer(node)
-                        self.initializer_values.append(value)
-                        module_values.append(value)
-                    except AglRaise as exc:
-                        if exc.span is None:
-                            exc.span = node.location
-                        raise
+                for index, node in enumerate(mod.initializers):
+                    if index in self._executed_initializer_indices.get(mod.module_id, set()):
+                        continue
+                    self._eval_and_record_initializer(mod.module_id, index, node)
         return self._collect_results()
 
     def resume(self, *, registry: AgentRegistry, trace: TraceStore) -> dict[str, Value]:
@@ -779,44 +781,94 @@ class IrInterpreter:
         """
         found: dict[str, Value] = {}
         entry_module = self._program.modules[self._program.entry_module]
-        target_count = sum(
-            1
+        if not any(
+            isinstance(node, IrConfigBind) and node.public_name in names
             for node in entry_module.initializers
-            if isinstance(node, IrConfigBind) and node.public_name in names
-        )
-        if target_count == 0:
+        ):
             return found
 
-        seen_targets = 0
+        target_indices = {
+            index
+            for index, node in enumerate(entry_module.initializers)
+            if isinstance(node, IrConfigBind) and node.public_name in names
+        }
+        required_indices = self._startup_dependency_indices(
+            entry_module.initializers, target_indices
+        )
         with decimal.localcontext(AGL_DECIMAL_CONTEXT):
             self._install_entry_function_closures()
             self._install_entry_params()
-            for mod in self._program.modules.values():
-                module_values = self.module_initializer_values.setdefault(mod.module_id, [])
-                for node in mod.initializers:
-                    try:
-                        value = self._eval_initializer(node)
-                        self.initializer_values.append(value)
-                        module_values.append(value)
-                    except AglRaise as exc:
-                        if exc.span is None:
-                            exc.span = node.location
-                        raise
-                    if mod.module_id == self._program.entry_module:
-                        for sym, desc in self._program.symbols.items():
-                            if desc.owner != self._program.entry_module:
-                                continue
-                            public_name = desc.public_name
-                            if public_name in names and sym in self._frame:
-                                bound = self._frame[sym]
-                                found[public_name] = (
-                                    bound.value if isinstance(bound, Cell) else bound
-                                )
-                        if isinstance(node, IrConfigBind) and node.public_name in names:
-                            seen_targets += 1
-                        if seen_targets >= target_count:
-                            return found
+            for index in sorted(required_indices):
+                node = entry_module.initializers[index]
+                self._eval_and_record_initializer(entry_module.module_id, index, node)
+                if isinstance(node, IrConfigBind) and node.public_name in names:
+                    bound = self._frame[node.symbol]
+                    found[node.public_name] = bound.value if isinstance(bound, Cell) else bound
         return found
+        return found
+
+    def _eval_and_record_initializer(self, module_id: ModuleId, index: int, node: IrExpr) -> None:
+        """Evaluate one initializer once, retaining its result for a later resume."""
+        if index in self._executed_initializer_indices.setdefault(module_id, set()):
+            return
+        try:
+            value = self._eval_initializer(node)
+        except AglRaise as exc:
+            if exc.span is None:
+                exc.span = node.location
+            raise
+        self.initializer_values.append(value)
+        self.module_initializer_values.setdefault(module_id, []).append(value)
+        self._executed_initializer_indices[module_id].add(index)
+
+    @staticmethod
+    def _loaded_symbols(value: object) -> set[SymbolId]:
+        """Return the symbols loaded by an IR value without evaluating it."""
+        loaded: set[SymbolId] = set()
+        seen: set[int] = set()
+
+        def visit(item: object) -> None:
+            if id(item) in seen:
+                return
+            seen.add(id(item))
+            if isinstance(item, IrLoad):
+                loaded.add(item.symbol)
+                return
+            if is_dataclass(item):
+                dataclass_item = cast(_DataclassValue, item)
+                for name in dataclass_item.__match_args__:
+                    visit(cast(object, object.__getattribute__(dataclass_item, name)))
+            elif isinstance(item, tuple):
+                for child in item:
+                    visit(child)
+            elif isinstance(item, dict):
+                for child in item.values():
+                    visit(child)
+
+        visit(value)
+        return loaded
+
+    def _startup_dependency_indices(
+        self, initializers: tuple[IrExpr, ...], target_indices: set[int]
+    ) -> set[int]:
+        """Find target config initializers and the earlier bindings they load."""
+        binding_indices = {
+            node.symbol: index
+            for index, node in enumerate(initializers)
+            if isinstance(node, (IrBind, IrConfigBind))
+        }
+        required = set(target_indices)
+        pending = set().union(
+            *(self._loaded_symbols(initializers[index]) for index in target_indices)
+        )
+        while pending:
+            symbol = pending.pop()
+            index = binding_indices.get(symbol)
+            if index is None or index in required:
+                continue
+            required.add(index)
+            pending.update(self._loaded_symbols(initializers[index]))
+        return required
 
     def _install_entry_params(self) -> None:
         """Install resolved entry parameters before evaluating initializers."""

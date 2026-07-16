@@ -2262,6 +2262,29 @@ class TestExecAgentPrecedence:
         assert result.returncode == 1
         assert not marker.exists()
 
+    def test_startup_prepass_leaves_unrelated_agent_calls_for_final_runner(
+        self, tmp_path: Path
+    ) -> None:
+        env = self._base_env()
+        _install_marker_runner(tmp_path / "bin", env, name="bootstrap-runner", marker="BOOTSTRAP")
+        _install_marker_runner(tmp_path / "bin", env, name="final-runner", marker="FINAL")
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            'let answer = ask("do it")\n'
+            'config runner = "final-runner"\n'
+            "print answer\n"
+        )
+        config_dir = tmp_path / ".agm"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text('[exec]\nrunner = "bootstrap-runner"\n')
+
+        result = self._run_agm_exec([str(agl_file), "--no-log"], env=env, cwd=tmp_path)
+
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        assert "FINAL" in result.stdout
+        assert "BOOTSTRAP" not in result.stdout
+
     def test_startup_config_agent_uses_bootstrap_runner(self, tmp_path: Path) -> None:
         """An agent call in source config is real, not a placeholder response."""
         env = self._base_env()

@@ -2536,6 +2536,7 @@ class TestExecStartupConfigPrepass:
             *,
             names: set[str],
             compiled_graph: object = None,
+            param_values: object = None,
             config_cli: object = None,
             config_base: object = None,
         ) -> StartupConfigResult:
@@ -2573,6 +2574,7 @@ class TestExecStartupConfigPrepass:
             *,
             names: set[str],
             compiled_graph: object = None,
+            param_values: object = None,
             config_cli: object = None,
             config_base: object = None,
         ) -> StartupConfigResult:

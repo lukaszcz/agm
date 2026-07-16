@@ -185,9 +185,7 @@ def run(args: ExecArgs) -> None:
     # override config; CLI overrides source (CLI > source > config).
     # ----------------------------------------------------------------
     try:
-        mr_config = load_module_roots(
-            home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd
-        )
+        mr_config = load_module_roots(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
     except ValueError as exc:
         print(f"Error: invalid module roots configuration: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
@@ -392,9 +390,7 @@ def run(args: ExecArgs) -> None:
         except ValueError as exc:
             exit_with_usage_error(["exec"], f"error: {exc}")
 
-        config_param_values = {
-            k: v for k, v in program_table.items() if k not in ENGINE_KEY_NAMES
-        }
+        config_param_values = {k: v for k, v in program_table.items() if k not in ENGINE_KEY_NAMES}
         declared_names = {p.name for p in discovery.params}
         resolved_params, config_warnings = resolve_param_values(
             declared_names,
@@ -443,13 +439,19 @@ def run(args: ExecArgs) -> None:
         )
         if startup_result.diagnostics:
             for diag in startup_result.warnings:
-                print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
+                if diag not in discovery.warnings:
+                    print(
+                        format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr
+                    )
             for diag in startup_result.diagnostics:
                 print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
             raise SystemExit(1)
         if startup_result.error is not None:
             for diag in startup_result.warnings:
-                print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
+                if diag not in discovery.warnings:
+                    print(
+                        format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr
+                    )
             print(startup_result.error.to_message(include_trace_id=True), file=sys.stderr)
             raise SystemExit(2)
         startup_values = startup_result.values if startup_result.ok else {}
@@ -476,10 +478,7 @@ def run(args: ExecArgs) -> None:
     # shared loop default (the same default used by agm loop/review).
     # ----------------------------------------------------------------
     runner_cmd = (
-        args.runner
-        or _text_value(startup_values, "runner")
-        or config.runner
-        or base_runner_cmd
+        args.runner or _text_value(startup_values, "runner") or config.runner or base_runner_cmd
     )
 
     # Validate the resolved runner command eagerly: malformed quoting (e.g.

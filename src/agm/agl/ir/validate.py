@@ -1014,6 +1014,8 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
                             f"IrMakeClosure capture references symbol_id={cap.symbol!r}"
                             " which is not in program.symbols"
                         )
+                    if ctx.check_payload_dominance and cap.symbol in ctx.payload_symbols:
+                        ctx.requirement_collectors[-1].add(cap.symbol)
 
         case IrDirectCall(function_id=fn_id, arguments=arguments):
             _validate_location(node.location, ctx)

@@ -236,6 +236,50 @@ def test_case_arm_cannot_bind_multiple_fields_to_one_symbol() -> None:
         validate_ir(program)
 
 
+def test_case_rejects_closure_capture_outside_payload_dominance() -> None:
+    enum_nominal = NominalId(module_id=MOD_A, declared_name="Payload")
+    closure = _make_closure(FN0, captures=(IrCapture(symbol=SYM1, by_cell=False),))
+    program = _make_program(
+        initializers=(
+            IrCase(
+                location=LOC,
+                subject=IrConstInt(location=LOC, value=1),
+                arms=(
+                    IrCaseArm(
+                        key=IrEnumCaseKey(nominal=enum_nominal, variant="Empty"),
+                        field_bindings=(),
+                        body=closure,
+                    ),
+                    IrCaseArm(
+                        key=IrEnumCaseKey(nominal=enum_nominal, variant="Full"),
+                        field_bindings=(("value", SYM1),),
+                        body=closure,
+                    ),
+                ),
+                default=None,
+            ),
+        ),
+        symbols={
+            SYM0: _sym_desc_imm(),
+            SYM1: SymbolDescriptor(
+                SYM1, mutable=False, public_name=None, owner=MOD_A, synthetic=True
+            ),
+        },
+        nominals={
+            enum_nominal: NominalDescriptor(
+                nominal=enum_nominal,
+                display_name="Payload",
+                kind=NominalKind.ENUM,
+                variants=(VariantDescriptor("Empty", ()), VariantDescriptor("Full", ("value",))),
+            )
+        },
+        functions={FN0: _make_fn_desc(fn_sym=SYM0)},
+    )
+
+    with pytest.raises(InvalidIrError, match="payload symbol"):
+        validate_ir(program)
+
+
 def test_case_arm_cannot_bind_a_private_source_symbol() -> None:
     enum_nominal = NominalId(module_id=MOD_A, declared_name="Box")
     program = _make_program(
@@ -604,18 +648,14 @@ class TestDeepTierSymbolDescriptor:
 
     def test_symbol_owner_module_missing(self) -> None:
         """SymbolDescriptor.owner (when ModuleId) must exist in program.modules."""
-        bad = SymbolDescriptor(
-            symbol_id=SYM0, mutable=False, public_name="z", owner=MOD_B
-        )
+        bad = SymbolDescriptor(symbol_id=SYM0, mutable=False, public_name="z", owner=MOD_B)
         prog = _make_program(symbols=_symbols_with_sym0(bad))
         with pytest.raises(InvalidIrError, match="owner"):
             validate_ir(prog)
 
     def test_symbol_owner_function_id_is_violation_when_not_in_functions(self) -> None:
         """FunctionId owner is a violation when the function is not in program.functions."""
-        bad = SymbolDescriptor(
-            symbol_id=SYM0, mutable=False, public_name="z", owner=FN0
-        )
+        bad = SymbolDescriptor(symbol_id=SYM0, mutable=False, public_name="z", owner=FN0)
         prog = _make_program(symbols=_symbols_with_sym0(bad))
         # FN0 is not in program.functions, so it's still a violation
         with pytest.raises(InvalidIrError, match="not in program.functions"):
@@ -647,9 +687,7 @@ class TestDeepTierNominalDescriptor:
 
     def test_nominal_key_mismatch_skipped_when_shallow(self) -> None:
         nom_wrong = NominalId(module_id=MOD_A, declared_name="Bar")
-        nom_desc = NominalDescriptor(
-            nominal=nom_wrong, display_name="Foo", kind=NominalKind.RECORD
-        )
+        nom_desc = NominalDescriptor(nominal=nom_wrong, display_name="Foo", kind=NominalKind.RECORD)
         prog = _make_program(nominals={NOM0: nom_desc})
         validate_ir(prog, deep=False)
 
@@ -726,9 +764,7 @@ class TestDeepTierSymbolResolution:
     def test_ir_config_bind_dangling_symbol(self) -> None:
         """IrConfigBind referencing a SymbolId not in program.symbols raises."""
         dangling = SymbolId(value=555)
-        node = IrConfigBind(
-            location=LOC, symbol=dangling, public_name="max-iters", value=None
-        )
+        node = IrConfigBind(location=LOC, symbol=dangling, public_name="max-iters", value=None)
         prog = _make_program(initializers=(node,))
         with pytest.raises(InvalidIrError, match="555"):
             validate_ir(prog)
@@ -736,9 +772,7 @@ class TestDeepTierSymbolResolution:
     def test_ir_config_bind_deep_false_skips_symbol_check(self) -> None:
         """deep=False skips symbol resolution for IrConfigBind."""
         dangling = SymbolId(value=555)
-        node = IrConfigBind(
-            location=LOC, symbol=dangling, public_name="max-iters", value=None
-        )
+        node = IrConfigBind(location=LOC, symbol=dangling, public_name="max-iters", value=None)
         prog = _make_program(initializers=(node,))
         validate_ir(prog, deep=False)  # dangling symbol not checked; no exception
 
@@ -1099,9 +1133,7 @@ class TestIrIndexValidation:
                 IrBind(
                     LOC,
                     SYM0,
-                    IrIndex(
-                        bad_loc, IndexKind.LIST, IrMakeList(LOC, ()), IrConstInt(LOC, 0)
-                    ),
+                    IrIndex(bad_loc, IndexKind.LIST, IrMakeList(LOC, ()), IrConstInt(LOC, 0)),
                 ),
             )
         )
@@ -1157,6 +1189,7 @@ class TestIrRenderTemplateValidation:
         )
         with pytest.raises(InvalidIrError, match="source_id"):
             validate_ir(prog, deep=True)
+
 
 # ===========================================================================
 # FunctionDescriptor table, IrMakeClosure, IrDirectCall
@@ -1511,9 +1544,7 @@ class TestPrintParseJsonValidation:
         """IrParseJson with valid location and inner expr passes validation."""
         from agm.agl.ir import IrParseJson
 
-        node = IrParseJson(
-            location=LOC, value=IrConstText(location=LOC, value="null")
-        )
+        node = IrParseJson(location=LOC, value=IrConstText(location=LOC, value="null"))
         prog = _make_program(initializers=(node,))
         validate_ir(prog, deep=False)  # no exception
 
@@ -1528,9 +1559,7 @@ class TestPrintParseJsonValidation:
             start_line=1,
             start_col=0,
         )
-        node = IrParseJson(
-            location=bad_loc, value=IrConstText(location=LOC, value="null")
-        )
+        node = IrParseJson(location=bad_loc, value=IrConstText(location=LOC, value="null"))
         prog = _make_program(initializers=(node,))
         with pytest.raises(InvalidIrError, match="start_offset"):
             validate_ir(prog, deep=False)
@@ -1706,7 +1735,7 @@ class TestIrExecValidation:
         """Build a program with a custom initializer and contracts table."""
 
         em = ExecutableModule(module_id=MOD_A, initializers=(node,))  # type: ignore[arg-type]
-        sf = SourceFile(display_name="main.agl", normalized_text="exec(\"x\")\n()")
+        sf = SourceFile(display_name="main.agl", normalized_text='exec("x")\n()')
         nom_desc = NominalDescriptor(nominal=NOM0, display_name="Foo", kind=NominalKind.RECORD)
         return ExecutableProgram(
             entry_module=MOD_A,

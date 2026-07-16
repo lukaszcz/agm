@@ -876,6 +876,13 @@ class TestExecCommandExitCodes:
         result = exec_command.run(args)
         assert result is None
 
+    def test_startup_config_can_read_supplied_param(self, tmp_path: Path) -> None:
+        """Startup config uses the same resolved parameter values as the main run."""
+        agl_file = tmp_path / "test.agl"
+        agl_file.write_text('param chosen: text\nconfig runner = chosen\nprint chosen\n')
+
+        assert exec_command.run(_exec_args(agl_file, param_tokens=["--chosen", "echo"])) is None
+
     def test_startup_artifact_with_declared_agents_preserves_params(
         self, tmp_path: Path
     ) -> None:

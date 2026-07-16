@@ -748,21 +748,7 @@ class IrInterpreter:
         """
         with decimal.localcontext(AGL_DECIMAL_CONTEXT):
             self._install_entry_function_closures()
-            # Install entry params into the base frame before any initializer.
-            for ir_param in self._program.params:
-                if ir_param.symbol in self._param_values:
-                    # Host-provided value takes priority.
-                    self._frames[0][ir_param.symbol] = self._param_values[ir_param.symbol]
-                elif ir_param.default is not None:
-                    # Evaluate the default expression in the base frame.
-                    value = self._eval(ir_param.default)
-                    self._frames[0][ir_param.symbol] = value
-                else:
-                    # Required param without a value — host-prep bug.
-                    raise InvalidIrError(
-                        f"Required param {ir_param.public_name!r} has no value;"
-                        " the host must supply a value for required params before calling run()"
-                    )
+            self._install_entry_params()
 
             for mod in self._program.modules.values():
                 module_values = self.module_initializer_values.setdefault(mod.module_id, [])
@@ -797,6 +783,7 @@ class IrInterpreter:
         seen_targets = 0
         with decimal.localcontext(AGL_DECIMAL_CONTEXT):
             self._install_entry_function_closures()
+            self._install_entry_params()
             for mod in self._program.modules.values():
                 module_values = self.module_initializer_values.setdefault(mod.module_id, [])
                 for node in mod.initializers:
@@ -823,6 +810,19 @@ class IrInterpreter:
                         if seen_targets >= target_count:
                             return found
         return found
+
+    def _install_entry_params(self) -> None:
+        """Install resolved entry parameters before evaluating initializers."""
+        for ir_param in self._program.params:
+            if ir_param.symbol in self._param_values:
+                self._frames[0][ir_param.symbol] = self._param_values[ir_param.symbol]
+            elif ir_param.default is not None:
+                self._frames[0][ir_param.symbol] = self._eval(ir_param.default)
+            else:
+                raise InvalidIrError(
+                    f"Required param {ir_param.public_name!r} has no value;"
+                    " the host must supply a value for required params before calling run()"
+                )
 
     def _eval_initializer(self, node: IrExpr) -> Value:
         match node:

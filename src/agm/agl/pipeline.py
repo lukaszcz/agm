@@ -1165,6 +1165,7 @@ class PipelineDriver:
         names: set[str],
         compiled_graph: "MatchCompiledModuleGraph | None" = None,
         checked_graph: "CheckedModuleGraph | None" = None,
+        param_values: Mapping[str, object] | None = None,
         config_cli: "Mapping[str, Value] | None" = None,
         config_base: "Mapping[str, Value] | None" = None,
     ) -> StartupConfigResult:
@@ -1343,6 +1344,19 @@ class PipelineDriver:
                 checked_graph=checked_graph,
                 compiled_graph=compiled_graph,
             )
+        ir_param_values, param_errors = _prepare_ir_params(
+            executable, {} if param_values is None else param_values
+        )
+        if param_errors:
+            return StartupConfigResult(
+                ok=False,
+                diagnostics=param_errors,
+                error=None,
+                warnings=warnings,
+                checked_graph=checked_graph,
+                compiled_graph=compiled_graph,
+            )
+
         interp = IrInterpreter(
             executable,
             registry=host_env.registry,
@@ -1350,6 +1364,7 @@ class PipelineDriver:
             strict_json=self._default_strict_json,
             shell_exec_timeout=self._shell_exec_timeout,
             max_call_depth=self._default_call_depth_limit,
+            param_values=ir_param_values,
             host_contracts=host_contracts,
             config_cli=config_cli,
             config_base=config_base,

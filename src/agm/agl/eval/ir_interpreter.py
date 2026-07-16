@@ -375,6 +375,7 @@ class IrInterpreter:
         self._param_values: Mapping[SymbolId, Value] = (
             param_values if param_values is not None else {}
         )
+        self._entry_params_installed = False
         self._registry: AgentRegistry = registry if registry is not None else AgentRegistry(
             named={}, default_agent=None
         )
@@ -819,6 +820,8 @@ class IrInterpreter:
 
     def _install_entry_params(self) -> None:
         """Install resolved entry parameters before evaluating initializers."""
+        if self._entry_params_installed:
+            return
         for ir_param in self._program.params:
             if ir_param.symbol in self._param_values:
                 self._frames[0][ir_param.symbol] = self._param_values[ir_param.symbol]
@@ -829,6 +832,7 @@ class IrInterpreter:
                     f"Required param {ir_param.public_name!r} has no value;"
                     " the host must supply a value for required params before calling run()"
                 )
+        self._entry_params_installed = True
 
     def _eval_initializer(self, node: IrExpr) -> Value:
         match node:

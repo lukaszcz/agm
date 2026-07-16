@@ -413,6 +413,29 @@ class TestStartupConfigCollection:
         interp = self._interpreter_for("let x = 1\nx\n")
         assert interp.collect_entry_config_values({"log"}) == {}
 
+    def test_interpreter_resume_does_not_reinstall_param_defaults(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from agm.agl.ir.nodes import IrExpr
+
+        interp = self._interpreter_for("param value: int = 1\nconfig log = true\nvalue\n")
+        default = interp._program.params[0].default
+        assert default is not None
+        original_eval = interp._eval
+        calls = 0
+
+        def count_default(node: IrExpr) -> Value:
+            nonlocal calls
+            if node is default:
+                calls += 1
+            return original_eval(node)
+
+        monkeypatch.setattr(interp, "_eval", count_default)
+        interp.collect_entry_config_values({"log"})
+        interp.run()
+
+        assert calls == 1
+
     def test_interpreter_collect_skips_non_entry_symbols(self) -> None:
         from agm.agl.ir.ids import SymbolId
         from agm.agl.ir.program import SymbolDescriptor

@@ -539,6 +539,7 @@ def _literal_key_is_valid(key: IrLiteralCaseKey) -> bool:
     return (
         key.kind is IrLiteralKind.NUMERIC
         and isinstance(value, decimal.Decimal)
+        and value.is_finite()
         or key.kind is IrLiteralKind.BOOL
         and isinstance(value, bool)
         or key.kind is IrLiteralKind.TEXT

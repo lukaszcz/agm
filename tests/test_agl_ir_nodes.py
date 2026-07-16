@@ -44,6 +44,8 @@ from agm.agl.ir import (
     IrExpr,
     IrIndexStep,
     IrLoad,
+    IrLiteralCaseKey,
+    IrLiteralKind,
     IrMakeDict,
     IrMakeList,
     IrSequence,
@@ -90,6 +92,11 @@ def loc(source_id: SourceId = SID0) -> Location:
 
 
 LOC = loc()
+
+
+def test_literal_case_keys_reject_non_finite_decimals() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        IrLiteralCaseKey(IrLiteralKind.NUMERIC, decimal.Decimal("sNaN"))
 
 
 # ---------------------------------------------------------------------------

@@ -710,7 +710,10 @@ class IrLiteralCaseKey:
         if self.kind is IrLiteralKind.NUMERIC:
             if isinstance(value, bool) or not isinstance(value, (int, decimal.Decimal)):
                 raise ValueError("numeric case keys require an int or Decimal scalar")
-            object.__setattr__(self, "scalar_value", decimal.Decimal(value))
+            decimal_value = decimal.Decimal(value)
+            if not decimal_value.is_finite():
+                raise ValueError("numeric case keys require a finite Decimal scalar")
+            object.__setattr__(self, "scalar_value", decimal_value)
             return
         valid = (
             self.kind is IrLiteralKind.BOOL

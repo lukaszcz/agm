@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import decimal
+import json
 from dataclasses import dataclass
 from typing import TypeAlias
 
@@ -100,7 +101,7 @@ MatchIssue: TypeAlias = NonExhaustiveIssue | RedundantArmIssue
 def _render_literal(kind: LiteralKind, value: decimal.Decimal | str | None) -> str:
     if kind is LiteralKind.TEXT:
         assert isinstance(value, str)
-        return repr(value)
+        return json.dumps(value, ensure_ascii=False)
     if kind is LiteralKind.NULL:
         return "null"
     assert isinstance(value, decimal.Decimal)

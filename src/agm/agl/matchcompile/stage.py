@@ -100,6 +100,78 @@ def _source_cases(program: Program) -> tuple[Case, ...]:
     return tuple(cases)
 
 
+def _compile_owner_cases(
+    owner: CheckedProgram | CheckedModule,
+) -> tuple[dict[int, CompiledCase], list[MatchIssue]]:
+    cases: dict[int, CompiledCase] = {}
+    issues: list[MatchIssue] = []
+    for source_case in _source_cases(owner.resolved.program):
+        if source_case.node_id in cases:
+            raise MatchCompileInvariantError(
+                f"duplicate source case node id {source_case.node_id} in one program"
+            )
+        compiled = compile_case(normalize_case(source_case, owner))
+        cases[source_case.node_id] = compiled
+        issues.extend(compiled.issues)
+    return cases, issues
+
+
+def compile_program_matches(checked: CheckedProgram) -> MatchCompilationResult:
+    """Compile every case in a checked single program without raising for source issues."""
+    cases, issues = _compile_owner_cases(checked)
+    sorted_issues = tuple(sorted(issues, key=issue_sort_key))
+    if sorted_issues:
+        return MatchCompilationResult(compiled=None, issues=sorted_issues)
+    return MatchCompilationResult(
+        compiled=MatchCompiledProgram(checked=checked, cases=cases), issues=()
+    )
+
+
+def compile_graph_matches(checked_graph: CheckedModuleGraph) -> MatchCompilationResult:
+    """Compile every case in every reachable checked module without source-error raises."""
+    cases_by_module: dict[ModuleId, Mapping[int, CompiledCase]] = {}
+    issues: list[MatchIssue] = []
+    for module_id, checked_module in checked_graph.modules.items():
+        module_cases, module_issues = _compile_owner_cases(checked_module)
+        cases_by_module[module_id] = module_cases
+        issues.extend(module_issues)
+    sorted_issues = tuple(sorted(issues, key=issue_sort_key))
+    if sorted_issues:
+        return MatchCompilationResult(compiled=None, issues=sorted_issues)
+    return MatchCompilationResult(
+        compiled=MatchCompiledModuleGraph(
+            checked_graph=checked_graph, cases_by_module=cases_by_module
+        ),
+        issues=(),
+    )
+
+
+def diagnostic_from_match_issue(issue: MatchIssue) -> Diagnostic:
+    """Adapt one structured compiler issue to the ordinary static diagnostic channel."""
+    if isinstance(issue, NonExhaustiveIssue):
+        message = f"Non-exhaustive case; missing pattern: {render_witness(issue.witness)}."
+    elif isinstance(issue, RedundantArmIssue):
+        message = "Redundant case arm; this pattern can never be selected."
+    else:
+        raise AssertionError(f"unsupported match issue: {type(issue).__name__}")
+    return diagnostic_from_span(message, issue.span)
+
+
+def diagnostics_from_match_issues(issues: tuple[MatchIssue, ...]) -> tuple[Diagnostic, ...]:
+    """Adapt and deterministically order match issues for pipeline consumers."""
+    return tuple(diagnostic_from_match_issue(issue) for issue in sorted(issues, key=issue_sort_key))
+
+
+# ---------------------------------------------------------------------------
+# Optional self-validation
+#
+# Invariant self-checks that re-verify this module's own output.  They never
+# change the compiler's result and run only when optional match-compilation
+# validation is enabled (see ``optional_validation.py``); the test harness
+# turns them on so every compile in the suite is validated.
+# ---------------------------------------------------------------------------
+
+
 def _expected_case_map(program: Program) -> dict[int, Case]:
     expected: dict[int, Case] = {}
     for case in _source_cases(program):
@@ -184,68 +256,6 @@ def validate_match_compiled_graph(compiled: MatchCompiledModuleGraph) -> None:
             module_id=module_id,
             cases=compiled.cases_by_module[module_id],
         )
-
-
-def _compile_owner_cases(
-    owner: CheckedProgram | CheckedModule,
-) -> tuple[dict[int, CompiledCase], list[MatchIssue]]:
-    cases: dict[int, CompiledCase] = {}
-    issues: list[MatchIssue] = []
-    for source_case in _source_cases(owner.resolved.program):
-        if source_case.node_id in cases:
-            raise MatchCompileInvariantError(
-                f"duplicate source case node id {source_case.node_id} in one program"
-            )
-        compiled = compile_case(normalize_case(source_case, owner))
-        cases[source_case.node_id] = compiled
-        issues.extend(compiled.issues)
-    return cases, issues
-
-
-def compile_program_matches(checked: CheckedProgram) -> MatchCompilationResult:
-    """Compile every case in a checked single program without raising for source issues."""
-    cases, issues = _compile_owner_cases(checked)
-    sorted_issues = tuple(sorted(issues, key=issue_sort_key))
-    if sorted_issues:
-        return MatchCompilationResult(compiled=None, issues=sorted_issues)
-    return MatchCompilationResult(
-        compiled=MatchCompiledProgram(checked=checked, cases=cases), issues=()
-    )
-
-
-def compile_graph_matches(checked_graph: CheckedModuleGraph) -> MatchCompilationResult:
-    """Compile every case in every reachable checked module without source-error raises."""
-    cases_by_module: dict[ModuleId, Mapping[int, CompiledCase]] = {}
-    issues: list[MatchIssue] = []
-    for module_id, checked_module in checked_graph.modules.items():
-        module_cases, module_issues = _compile_owner_cases(checked_module)
-        cases_by_module[module_id] = module_cases
-        issues.extend(module_issues)
-    sorted_issues = tuple(sorted(issues, key=issue_sort_key))
-    if sorted_issues:
-        return MatchCompilationResult(compiled=None, issues=sorted_issues)
-    return MatchCompilationResult(
-        compiled=MatchCompiledModuleGraph(
-            checked_graph=checked_graph, cases_by_module=cases_by_module
-        ),
-        issues=(),
-    )
-
-
-def diagnostic_from_match_issue(issue: MatchIssue) -> Diagnostic:
-    """Adapt one structured compiler issue to the ordinary static diagnostic channel."""
-    if isinstance(issue, NonExhaustiveIssue):
-        message = f"Non-exhaustive case; missing pattern: {render_witness(issue.witness)}."
-    elif isinstance(issue, RedundantArmIssue):
-        message = "Redundant case arm; this pattern can never be selected."
-    else:
-        raise AssertionError(f"unsupported match issue: {type(issue).__name__}")
-    return diagnostic_from_span(message, issue.span)
-
-
-def diagnostics_from_match_issues(issues: tuple[MatchIssue, ...]) -> tuple[Diagnostic, ...]:
-    """Adapt and deterministically order match issues for pipeline consumers."""
-    return tuple(diagnostic_from_match_issue(issue) for issue in sorted(issues, key=issue_sort_key))
 
 
 __all__ = [

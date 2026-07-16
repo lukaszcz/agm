@@ -107,37 +107,6 @@ class _FailureAnalysis:
     analyzed_decision_ids: tuple[int, ...]
 
 
-@dataclass(frozen=True, slots=True)
-class _ReplayFailRule:
-    """The compiler rule expected for an empty canonical matrix state."""
-
-
-@dataclass(frozen=True, slots=True)
-class _ReplayLeafRule:
-    """The exact leaf semantics expected for an irrefutable first row."""
-
-    action_id: int
-    binder_assignments: tuple[BinderAssignment, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class _ReplaySwitchRule:
-    """The exact local switch semantics expected for one refutable state."""
-
-    occurrence: Occurrence
-    heads: tuple[Constructor, ...]
-    has_default: bool
-
-
-_ReplayRule: TypeAlias = _ReplayFailRule | _ReplayLeafRule | _ReplaySwitchRule
-_CompileStateKey: TypeAlias = tuple[tuple[Occurrence, ...], tuple[MatrixRow, ...]]
-
-
-def _compile_state_key(matrix: PatternMatrix) -> _CompileStateKey:
-    """Return the live matrix state that determines all later compilation work."""
-    return matrix.occurrences, matrix.rows
-
-
 def _constructor_index(constructor: Constructor, signature: ClosedSignature) -> int:
     try:
         return signature.constructors.index(constructor)
@@ -249,8 +218,7 @@ class _CaseCompiler:
                 "switch",
                 decision.occurrence,
                 tuple(
-                    (branch.constructor, id(branch.decision))
-                    for branch in decision.keyed_children
+                    (branch.constructor, id(branch.decision)) for branch in decision.keyed_children
                 ),
                 None if decision.default is None else id(decision.default),
                 decision.free_occurrences,
@@ -574,6 +542,67 @@ def _issues(
             )
         )
     return reachable_in_source_order, tuple(sorted(issues, key=issue_sort_key))
+
+
+def compile_case(normalized: NormalizedCase) -> CompiledCase:
+    """Compile one normalized source case and derive all structured issues from its DAG.
+
+    The decision DAG and its structured issues are the compiler's product. The
+    invariant self-checks (``validate_decision_dag``, ``validate_compiled_case``)
+    only re-verify that product and run when optional match-compilation
+    validation is enabled (see :mod:`.optional_validation`).
+    """
+    compiler = _CaseCompiler(normalized)
+    root, allocator = compiler.compile(
+        matrix_from_normalized(normalized), OccurrenceAllocator.for_case(normalized)
+    )
+    run_optional_validation(lambda: validate_decision_dag(root))
+    occurrences = allocator.occurrences
+    reachable, issues = _issues(normalized, root, occurrences)
+    compiled = CompiledCase(normalized, root, occurrences, reachable, issues)
+    run_optional_validation(lambda: validate_compiled_case(compiled))
+    return compiled
+
+
+# ---------------------------------------------------------------------------
+# Optional self-validation
+#
+# Invariant self-checks that re-verify this module's own output.  They never
+# change the compiler's result and run only when optional match-compilation
+# validation is enabled (see ``optional_validation.py``); the test harness
+# turns them on so every compile in the suite is validated.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class _ReplayFailRule:
+    """The compiler rule expected for an empty canonical matrix state."""
+
+
+@dataclass(frozen=True, slots=True)
+class _ReplayLeafRule:
+    """The exact leaf semantics expected for an irrefutable first row."""
+
+    action_id: int
+    binder_assignments: tuple[BinderAssignment, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _ReplaySwitchRule:
+    """The exact local switch semantics expected for one refutable state."""
+
+    occurrence: Occurrence
+    heads: tuple[Constructor, ...]
+    has_default: bool
+
+
+_ReplayRule: TypeAlias = _ReplayFailRule | _ReplayLeafRule | _ReplaySwitchRule
+_CompileStateKey: TypeAlias = tuple[tuple[Occurrence, ...], tuple[MatrixRow, ...]]
+
+
+def _compile_state_key(matrix: PatternMatrix) -> _CompileStateKey:
+    """Return the live matrix state that determines all later compilation work."""
+    return matrix.occurrences, matrix.rows
 
 
 @dataclass(frozen=True, slots=True)
@@ -1116,26 +1145,6 @@ def validate_decision_dag(root: Decision) -> None:
 
     acyclic(root)
     _validate_decision_dataflow(root, frozenset(), None)
-
-
-def compile_case(normalized: NormalizedCase) -> CompiledCase:
-    """Compile one normalized source case and derive all structured issues from its DAG.
-
-    The decision DAG and its structured issues are the compiler's product. The
-    invariant self-checks (``validate_decision_dag``, ``validate_compiled_case``)
-    only re-verify that product and run when optional match-compilation
-    validation is enabled (see :mod:`.optional_validation`).
-    """
-    compiler = _CaseCompiler(normalized)
-    root, allocator = compiler.compile(
-        matrix_from_normalized(normalized), OccurrenceAllocator.for_case(normalized)
-    )
-    run_optional_validation(lambda: validate_decision_dag(root))
-    occurrences = allocator.occurrences
-    reachable, issues = _issues(normalized, root, occurrences)
-    compiled = CompiledCase(normalized, root, occurrences, reachable, issues)
-    run_optional_validation(lambda: validate_compiled_case(compiled))
-    return compiled
 
 
 __all__ = [

@@ -95,8 +95,7 @@ def _canonical_constructor(
 ) -> Constructor:
     if not constructor_inhabits_type(constructor, subject_type):
         raise MatchCompileInvariantError(
-            f"constructor is incompatible with or uninhabited by occurrence type "
-            f"{subject_type!r}"
+            f"constructor is incompatible with or uninhabited by occurrence type {subject_type!r}"
         )
     if not isinstance(constructor, EnumConstructor):
         return constructor
@@ -122,15 +121,6 @@ def _canonical_constructor(
             "enum constructor does not exactly match its checked signature"
         )
     return canonical
-
-
-def _validate_cell(cell: PatternCell, subject_type: Type, type_table: TypeTable) -> None:
-    if isinstance(cell, WildcardCell):
-        return
-    constructor = _canonical_constructor(cell.constructor, subject_type, type_table)
-    if isinstance(constructor, EnumConstructor):
-        for field, argument in zip(constructor.fields, cell.arguments, strict=True):
-            _validate_cell(argument, field.type, type_table)
 
 
 def _cell_binder_ids(cell: PatternCell) -> tuple[int, ...]:
@@ -189,12 +179,8 @@ def _binder_assignment_sort_key(
 
 def _canonicalize_matrix(matrix: PatternMatrix) -> None:
     """Canonicalize order-insensitive state before a frozen matrix can escape."""
-    available_occurrences = tuple(
-        sorted(matrix.available_occurrences, key=_occurrence_sort_key)
-    )
-    available_by_id = {
-        occurrence.id: occurrence for occurrence in available_occurrences
-    }
+    available_occurrences = tuple(sorted(matrix.available_occurrences, key=_occurrence_sort_key))
+    available_by_id = {occurrence.id: occurrence for occurrence in available_occurrences}
 
     def binder_assignment_key(assignment: BinderAssignment) -> tuple[int, int, int]:
         return _binder_assignment_sort_key(assignment, available_by_id)
@@ -214,145 +200,10 @@ def _canonicalize_matrix(matrix: PatternMatrix) -> None:
         )
         for row in matrix.rows
     )
-    path_decompositions = tuple(
-        sorted(matrix.path_decompositions, key=_decomposition_sort_key)
-    )
+    path_decompositions = tuple(sorted(matrix.path_decompositions, key=_decomposition_sort_key))
     object.__setattr__(matrix, "available_occurrences", available_occurrences)
     object.__setattr__(matrix, "rows", rows)
     object.__setattr__(matrix, "path_decompositions", path_decompositions)
-
-
-def _validate_matrix(matrix: PatternMatrix) -> None:
-    available_by_id: dict[OccurrenceId, Occurrence] = {}
-    for occurrence in matrix.available_occurrences:
-        if occurrence.id in available_by_id:
-            raise MatchCompileInvariantError("available occurrence ids must be unique")
-        available_by_id[occurrence.id] = occurrence
-
-    active_ids: set[OccurrenceId] = set()
-    for occurrence in matrix.occurrences:
-        if occurrence.id in active_ids:
-            raise MatchCompileInvariantError("active occurrence ids must be unique")
-        active_ids.add(occurrence.id)
-        if available_by_id.get(occurrence.id) != occurrence:
-            raise MatchCompileInvariantError(
-                f"active occurrence {occurrence.id.value} is not available on this path"
-            )
-
-    _validate_path_decompositions(matrix, available_by_id, active_ids)
-
-    source_indices = tuple(row.source_index for row in matrix.rows)
-    if any(later < earlier for earlier, later in zip(source_indices, source_indices[1:])):
-        raise MatchCompileInvariantError("matrix rows do not retain source order")
-
-    for row in matrix.rows:
-        if len(row.cells) != len(matrix.occurrences):
-            raise MatchCompileInvariantError(
-                "matrix row width does not match occurrence-vector width"
-            )
-        binder_ids = [binder_id for cell in row.cells for binder_id in _cell_binder_ids(cell)]
-        for assignment in row.binder_assignments:
-            if assignment.occurrence not in available_by_id:
-                raise MatchCompileInvariantError(
-                    f"binder assignment refers to unavailable occurrence "
-                    f"{assignment.occurrence.value}"
-                )
-            binder_ids.append(assignment.binder.node_id)
-        if len(set(binder_ids)) != len(binder_ids):
-            raise MatchCompileInvariantError("a row binds the same source binder more than once")
-
-        for cell, occurrence in zip(row.cells, matrix.occurrences, strict=True):
-            _validate_cell(cell, occurrence.type, matrix.type_table)
-
-
-def _validate_path_decompositions(
-    matrix: PatternMatrix,
-    available_by_id: dict[OccurrenceId, Occurrence],
-    active_ids: set[OccurrenceId],
-) -> None:
-    child_owner: dict[OccurrenceId, int] = {}
-    decomposed_parents: set[OccurrenceId] = set()
-
-    for decomposition_index, decomposition in enumerate(matrix.path_decompositions):
-        parent = available_by_id.get(decomposition.parent.id)
-        if parent != decomposition.parent:
-            raise MatchCompileInvariantError(
-                "path decomposition parent is not exactly available on this path"
-            )
-        if decomposition.parent.id in decomposed_parents:
-            raise MatchCompileInvariantError(
-                f"path decomposition tests parent {decomposition.parent.id.value} more than once"
-            )
-        canonical_constructor = _canonical_constructor(
-            decomposition.constructor,
-            decomposition.parent.type,
-            matrix.type_table,
-        )
-
-        parent_provenance = decomposition.parent.provenance
-        if isinstance(parent_provenance, FieldOccurrenceProvenance):
-            if decomposition.parent.id not in child_owner:
-                raise MatchCompileInvariantError(
-                    "path decomposition parent is not dominated by an earlier decomposition"
-                )
-
-        fields = (
-            canonical_constructor.fields
-            if isinstance(canonical_constructor, EnumConstructor)
-            else ()
-        )
-        if len(decomposition.children) != len(fields):
-            raise MatchCompileInvariantError(
-                "path decomposition child group is incomplete for its constructor"
-            )
-        for field_index, (field, child) in enumerate(
-            zip(fields, decomposition.children, strict=True)
-        ):
-            if available_by_id.get(child.id) != child:
-                raise MatchCompileInvariantError(
-                    "path decomposition child is not exactly available on this path"
-                )
-            if child.id in child_owner:
-                raise MatchCompileInvariantError(
-                    f"field occurrence {child.id.value} belongs to multiple path decompositions"
-                )
-            provenance = child.provenance
-            if (
-                not isinstance(provenance, FieldOccurrenceProvenance)
-                or provenance.parent != decomposition.parent.id
-                or provenance.constructor != decomposition.constructor
-                or provenance.field_name != field.name
-                or provenance.field_index != field_index
-                or child.type != field.type
-            ):
-                raise MatchCompileInvariantError(
-                    f"field occurrence {child.id.value} does not match its path decomposition "
-                    "in exact declaration order"
-                )
-            child_owner[child.id] = decomposition_index
-
-        decomposed_parents.add(decomposition.parent.id)
-
-    for occurrence in matrix.available_occurrences:
-        if (
-            isinstance(occurrence.provenance, FieldOccurrenceProvenance)
-            and occurrence.id not in child_owner
-        ):
-            raise MatchCompileInvariantError(
-                f"field occurrence {occurrence.id.value} does not belong to a path decomposition"
-            )
-
-    tested_and_active = decomposed_parents & active_ids
-    if tested_and_active:
-        identifier = min(tested_and_active)
-        raise MatchCompileInvariantError(
-            f"decomposed parent occurrence {identifier.value} remains active"
-        )
-
-
-def validate_matrix(matrix: PatternMatrix) -> None:
-    """Recheck all matrix operation-boundary invariants."""
-    _validate_matrix(matrix)
 
 
 def matrix_from_normalized(case: NormalizedCase) -> PatternMatrix:
@@ -382,17 +233,13 @@ class OccurrenceAllocator:
     next_id: int
     next_creation_order: int
     type_table: TypeTable = dataclass_field(repr=False, compare=False, hash=False)
-    case_context: MatchCaseContext = dataclass_field(
-        repr=False, compare=False, hash=False
-    )
+    case_context: MatchCaseContext = dataclass_field(repr=False, compare=False, hash=False)
 
     @classmethod
     def for_case(cls, case: NormalizedCase) -> OccurrenceAllocator:
         """Create the sole root allocator for one normalized source case."""
         if not isinstance(case, NormalizedCase):
-            raise MatchCompileInvariantError(
-                "occurrence allocator requires a normalized case root"
-            )
+            raise MatchCompileInvariantError("occurrence allocator requires a normalized case root")
         next_id = (
             max(
                 (occurrence.id.value for occurrence in case.occurrences),
@@ -428,28 +275,6 @@ def _known_occurrences(allocator: OccurrenceAllocator) -> dict[OccurrenceId, Occ
     for allocation in allocator.allocations:
         known.update((occurrence.id, occurrence) for occurrence in allocation.children)
     return known
-
-
-def _validate_allocator(matrix: PatternMatrix, allocator: OccurrenceAllocator) -> None:
-    if allocator.case_context is not matrix.case_context:
-        raise MatchCompileInvariantError(
-            "occurrence allocator belongs to a different case compilation"
-        )
-    if allocator.type_table is not matrix.type_table:
-        raise MatchCompileInvariantError(
-            "occurrence allocator belongs to a different compiler context"
-        )
-    known = _known_occurrences(allocator)
-    if any(known.get(occurrence.id) != occurrence for occurrence in matrix.available_occurrences):
-        raise MatchCompileInvariantError(
-            "occurrence allocator does not belong to this matrix compilation"
-        )
-    if allocator.next_id <= max((identifier.value for identifier in known), default=-1):
-        raise MatchCompileInvariantError("occurrence allocator next id is not fresh")
-    if allocator.next_creation_order <= max(
-        (occurrence.creation_order for occurrence in known.values()), default=-1
-    ):
-        raise MatchCompileInvariantError("occurrence allocator next creation order is not fresh")
 
 
 def _allocate_children(
@@ -490,27 +315,6 @@ def _allocate_children(
         type_table=allocator.type_table,
         case_context=allocator.case_context,
     )
-
-
-def _check_column(matrix: PatternMatrix, column: int) -> None:
-    if not 0 <= column < len(matrix.occurrences):
-        raise MatchCompileInvariantError(
-            f"matrix column {column} is outside width {len(matrix.occurrences)}"
-        )
-
-
-def _validate_operation(
-    matrix: PatternMatrix,
-    *,
-    column: int | None = None,
-    allocator: OccurrenceAllocator | None = None,
-) -> None:
-    """Re-check the operation-boundary invariants of one matrix operation."""
-    validate_matrix(matrix)
-    if column is not None:
-        _check_column(matrix, column)
-    if allocator is not None:
-        _validate_allocator(matrix, allocator)
 
 
 def _head_constructors(matrix: PatternMatrix, column: int) -> tuple[Constructor, ...]:
@@ -560,9 +364,7 @@ def specialize(
     allocator: OccurrenceAllocator,
 ) -> Specialization:
     """Specialize one selected occurrence for an observed constructor head."""
-    run_optional_validation(
-        lambda: _validate_operation(matrix, column=column, allocator=allocator)
-    )
+    run_optional_validation(lambda: _validate_operation(matrix, column=column, allocator=allocator))
     observed_keys = {_constructor_key(head) for head in _head_constructors(matrix, column)}
     if _constructor_key(constructor) not in observed_keys:
         raise MatchCompileInvariantError(
@@ -711,6 +513,201 @@ def select_qba_column(matrix: PatternMatrix) -> QbaSelection:
         key=rank,
     )
     return QbaSelection(index=index, occurrence=matrix.occurrences[index], score=score)
+
+
+# ---------------------------------------------------------------------------
+# Optional self-validation
+#
+# Invariant self-checks that re-verify this module's own output.  They never
+# change the compiler's result and run only when optional match-compilation
+# validation is enabled (see ``optional_validation.py``); the test harness
+# turns them on so every compile in the suite is validated.
+# ---------------------------------------------------------------------------
+
+
+def _validate_cell(cell: PatternCell, subject_type: Type, type_table: TypeTable) -> None:
+    if isinstance(cell, WildcardCell):
+        return
+    constructor = _canonical_constructor(cell.constructor, subject_type, type_table)
+    if isinstance(constructor, EnumConstructor):
+        for field, argument in zip(constructor.fields, cell.arguments, strict=True):
+            _validate_cell(argument, field.type, type_table)
+
+
+def _validate_matrix(matrix: PatternMatrix) -> None:
+    available_by_id: dict[OccurrenceId, Occurrence] = {}
+    for occurrence in matrix.available_occurrences:
+        if occurrence.id in available_by_id:
+            raise MatchCompileInvariantError("available occurrence ids must be unique")
+        available_by_id[occurrence.id] = occurrence
+
+    active_ids: set[OccurrenceId] = set()
+    for occurrence in matrix.occurrences:
+        if occurrence.id in active_ids:
+            raise MatchCompileInvariantError("active occurrence ids must be unique")
+        active_ids.add(occurrence.id)
+        if available_by_id.get(occurrence.id) != occurrence:
+            raise MatchCompileInvariantError(
+                f"active occurrence {occurrence.id.value} is not available on this path"
+            )
+
+    _validate_path_decompositions(matrix, available_by_id, active_ids)
+
+    source_indices = tuple(row.source_index for row in matrix.rows)
+    if any(later < earlier for earlier, later in zip(source_indices, source_indices[1:])):
+        raise MatchCompileInvariantError("matrix rows do not retain source order")
+
+    for row in matrix.rows:
+        if len(row.cells) != len(matrix.occurrences):
+            raise MatchCompileInvariantError(
+                "matrix row width does not match occurrence-vector width"
+            )
+        binder_ids = [binder_id for cell in row.cells for binder_id in _cell_binder_ids(cell)]
+        for assignment in row.binder_assignments:
+            if assignment.occurrence not in available_by_id:
+                raise MatchCompileInvariantError(
+                    f"binder assignment refers to unavailable occurrence "
+                    f"{assignment.occurrence.value}"
+                )
+            binder_ids.append(assignment.binder.node_id)
+        if len(set(binder_ids)) != len(binder_ids):
+            raise MatchCompileInvariantError("a row binds the same source binder more than once")
+
+        for cell, occurrence in zip(row.cells, matrix.occurrences, strict=True):
+            _validate_cell(cell, occurrence.type, matrix.type_table)
+
+
+def _validate_path_decompositions(
+    matrix: PatternMatrix,
+    available_by_id: dict[OccurrenceId, Occurrence],
+    active_ids: set[OccurrenceId],
+) -> None:
+    child_owner: dict[OccurrenceId, int] = {}
+    decomposed_parents: set[OccurrenceId] = set()
+
+    for decomposition_index, decomposition in enumerate(matrix.path_decompositions):
+        parent = available_by_id.get(decomposition.parent.id)
+        if parent != decomposition.parent:
+            raise MatchCompileInvariantError(
+                "path decomposition parent is not exactly available on this path"
+            )
+        if decomposition.parent.id in decomposed_parents:
+            raise MatchCompileInvariantError(
+                f"path decomposition tests parent {decomposition.parent.id.value} more than once"
+            )
+        canonical_constructor = _canonical_constructor(
+            decomposition.constructor,
+            decomposition.parent.type,
+            matrix.type_table,
+        )
+
+        parent_provenance = decomposition.parent.provenance
+        if isinstance(parent_provenance, FieldOccurrenceProvenance):
+            if decomposition.parent.id not in child_owner:
+                raise MatchCompileInvariantError(
+                    "path decomposition parent is not dominated by an earlier decomposition"
+                )
+
+        fields = (
+            canonical_constructor.fields
+            if isinstance(canonical_constructor, EnumConstructor)
+            else ()
+        )
+        if len(decomposition.children) != len(fields):
+            raise MatchCompileInvariantError(
+                "path decomposition child group is incomplete for its constructor"
+            )
+        for field_index, (field, child) in enumerate(
+            zip(fields, decomposition.children, strict=True)
+        ):
+            if available_by_id.get(child.id) != child:
+                raise MatchCompileInvariantError(
+                    "path decomposition child is not exactly available on this path"
+                )
+            if child.id in child_owner:
+                raise MatchCompileInvariantError(
+                    f"field occurrence {child.id.value} belongs to multiple path decompositions"
+                )
+            provenance = child.provenance
+            if (
+                not isinstance(provenance, FieldOccurrenceProvenance)
+                or provenance.parent != decomposition.parent.id
+                or provenance.constructor != decomposition.constructor
+                or provenance.field_name != field.name
+                or provenance.field_index != field_index
+                or child.type != field.type
+            ):
+                raise MatchCompileInvariantError(
+                    f"field occurrence {child.id.value} does not match its path decomposition "
+                    "in exact declaration order"
+                )
+            child_owner[child.id] = decomposition_index
+
+        decomposed_parents.add(decomposition.parent.id)
+
+    for occurrence in matrix.available_occurrences:
+        if (
+            isinstance(occurrence.provenance, FieldOccurrenceProvenance)
+            and occurrence.id not in child_owner
+        ):
+            raise MatchCompileInvariantError(
+                f"field occurrence {occurrence.id.value} does not belong to a path decomposition"
+            )
+
+    tested_and_active = decomposed_parents & active_ids
+    if tested_and_active:
+        identifier = min(tested_and_active)
+        raise MatchCompileInvariantError(
+            f"decomposed parent occurrence {identifier.value} remains active"
+        )
+
+
+def validate_matrix(matrix: PatternMatrix) -> None:
+    """Recheck all matrix operation-boundary invariants."""
+    _validate_matrix(matrix)
+
+
+def _validate_allocator(matrix: PatternMatrix, allocator: OccurrenceAllocator) -> None:
+    if allocator.case_context is not matrix.case_context:
+        raise MatchCompileInvariantError(
+            "occurrence allocator belongs to a different case compilation"
+        )
+    if allocator.type_table is not matrix.type_table:
+        raise MatchCompileInvariantError(
+            "occurrence allocator belongs to a different compiler context"
+        )
+    known = _known_occurrences(allocator)
+    if any(known.get(occurrence.id) != occurrence for occurrence in matrix.available_occurrences):
+        raise MatchCompileInvariantError(
+            "occurrence allocator does not belong to this matrix compilation"
+        )
+    if allocator.next_id <= max((identifier.value for identifier in known), default=-1):
+        raise MatchCompileInvariantError("occurrence allocator next id is not fresh")
+    if allocator.next_creation_order <= max(
+        (occurrence.creation_order for occurrence in known.values()), default=-1
+    ):
+        raise MatchCompileInvariantError("occurrence allocator next creation order is not fresh")
+
+
+def _check_column(matrix: PatternMatrix, column: int) -> None:
+    if not 0 <= column < len(matrix.occurrences):
+        raise MatchCompileInvariantError(
+            f"matrix column {column} is outside width {len(matrix.occurrences)}"
+        )
+
+
+def _validate_operation(
+    matrix: PatternMatrix,
+    *,
+    column: int | None = None,
+    allocator: OccurrenceAllocator | None = None,
+) -> None:
+    """Re-check the operation-boundary invariants of one matrix operation."""
+    validate_matrix(matrix)
+    if column is not None:
+        _check_column(matrix, column)
+    if allocator is not None:
+        _validate_allocator(matrix, allocator)
 
 
 __all__ = [

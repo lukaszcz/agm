@@ -168,13 +168,31 @@ class _Context:
     validator is re-entrant and thread-safe.
     """
 
-    __slots__ = ("active_exprs", "deep", "program", "validated_exprs")
+    __slots__ = (
+        "active_exprs",
+        "check_payload_dominance",
+        "deep",
+        "dominating_payload_symbols",
+        "payload_symbols",
+        "program",
+        "validated_exprs",
+    )
 
-    def __init__(self, program: ExecutableProgram, *, deep: bool) -> None:
+    def __init__(
+        self,
+        program: ExecutableProgram,
+        *,
+        deep: bool,
+        payload_symbols: set[SymbolId],
+        check_payload_dominance: bool = False,
+    ) -> None:
         self.program = program
         self.deep = deep
-        self.active_exprs: set[int] = set()
-        self.validated_exprs: set[int] = set()
+        self.check_payload_dominance = check_payload_dominance
+        self.payload_symbols = payload_symbols
+        self.dominating_payload_symbols: frozenset[SymbolId] = frozenset()
+        self.active_exprs: set[tuple[int, frozenset[SymbolId]]] = set()
+        self.validated_exprs: set[tuple[int, frozenset[SymbolId]]] = set()
 
 
 # ---------------------------------------------------------------------------
@@ -619,7 +637,6 @@ def _validate_case_arm(arm: IrCaseArm, ctx: _Context) -> None:
                     "IrCaseArm field binding symbols must be private immutable "
                     "synthetic temporaries"
                 )
-    _validate_expr(arm.body, ctx)
 
 
 def _validate_case(node: IrCase, ctx: _Context) -> None:
@@ -634,6 +651,15 @@ def _validate_case(node: IrCase, ctx: _Context) -> None:
         elif arm_family != family:
             raise InvalidIrError("IrCase arms use incompatible discriminant families")
         _validate_case_arm(arm, ctx)
+        ctx.payload_symbols.update(symbol for _field_name, symbol in arm.field_bindings)
+        prior_payload_symbols = ctx.dominating_payload_symbols
+        ctx.dominating_payload_symbols = prior_payload_symbols | frozenset(
+            symbol for _field_name, symbol in arm.field_bindings
+        )
+        try:
+            _validate_expr(arm.body, ctx)
+        finally:
+            ctx.dominating_payload_symbols = prior_payload_symbols
         if arm.key in seen_keys:
             raise InvalidIrError(f"IrCase contains duplicate runtime key {arm.key!r}")
         seen_keys.add(arm.key)
@@ -668,16 +694,17 @@ def _validate_case(node: IrCase, ctx: _Context) -> None:
 def _validate_expr(node: IrExpr, ctx: _Context) -> None:
     """Validate each shared expression once while rejecting identity cycles."""
     identifier = id(node)
-    if identifier in ctx.active_exprs:
+    validation_state = (identifier, ctx.dominating_payload_symbols)
+    if validation_state in ctx.active_exprs:
         raise InvalidIrError("IR expression graph contains a cycle")
-    if identifier in ctx.validated_exprs:
+    if validation_state in ctx.validated_exprs:
         return
-    ctx.active_exprs.add(identifier)
+    ctx.active_exprs.add(validation_state)
     try:
         _validate_expr_node(node, ctx)
     finally:
-        ctx.active_exprs.remove(identifier)
-    ctx.validated_exprs.add(identifier)
+        ctx.active_exprs.remove(validation_state)
+    ctx.validated_exprs.add(validation_state)
 
 
 def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
@@ -723,6 +750,15 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
                     raise InvalidIrError(
                         f"IrLoad references symbol_id={node.symbol.value!r}"
                         " which is not in program.symbols"
+                    )
+                if (
+                    ctx.check_payload_dominance
+                    and node.symbol in ctx.payload_symbols
+                    and node.symbol not in ctx.dominating_payload_symbols
+                ):
+                    raise InvalidIrError(
+                        f"IrLoad references payload symbol_id={node.symbol.value!r}"
+                        " outside a binding IrCaseArm"
                     )
 
         case IrBind():
@@ -1074,7 +1110,12 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _validate_program_tables(program: ExecutableProgram) -> None:
+def _validate_program_tables(
+    program: ExecutableProgram,
+    payload_symbols: set[SymbolId],
+    *,
+    check_payload_dominance: bool = False,
+) -> None:
     """Run deep cross-reference checks on the top-level program tables."""
 
     # 1. entry_module
@@ -1123,7 +1164,12 @@ def _validate_program_tables(program: ExecutableProgram) -> None:
             )
 
     # 4. functions table consistency
-    fn_ctx = _Context(program, deep=True)
+    fn_ctx = _Context(
+        program,
+        deep=True,
+        payload_symbols=payload_symbols,
+        check_payload_dominance=check_payload_dominance,
+    )
     for fn_key, fn_desc in program.functions.items():
         if fn_desc.function_id != fn_key:
             raise InvalidIrError(
@@ -1236,14 +1282,32 @@ def validate_ir(program: ExecutableProgram, *, deep: bool = True) -> None:
     :raises InvalidIrError: on the first violation found, with a message
         identifying the offending node or table entry.
     """
-    ctx = _Context(program, deep=deep)
+    payload_symbols: set[SymbolId] = set()
+    ctx = _Context(program, deep=deep, payload_symbols=payload_symbols)
 
     if deep:
-        _validate_program_tables(program)
+        _validate_program_tables(program, payload_symbols)
 
     for _module_id, em in program.modules.items():
         for node in em.initializers:
             _validate_expr(node, ctx)
+
+    if deep:
+        # The first traversal inventories every field-binding symbol. Re-run
+        # with that complete inventory so shared DAG nodes are checked on every
+        # payload-binding path, independent of traversal order.
+        _validate_program_tables(
+            program, payload_symbols, check_payload_dominance=True
+        )
+        dominance_ctx = _Context(
+            program,
+            deep=True,
+            payload_symbols=payload_symbols,
+            check_payload_dominance=True,
+        )
+        for _module_id, em in program.modules.items():
+            for node in em.initializers:
+                _validate_expr(node, dominance_ctx)
 
     # Cheap-tier param validation (location checks only — deep is in _validate_program_tables).
     if not deep:

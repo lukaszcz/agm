@@ -24,7 +24,7 @@ enum variant or an IR-owned canonical scalar literal; numeric keys use the runti
 equality convention. Enum arms carry named immediate-field bindings, while defaults represent
 compiled remainder edges. Deep validation checks key families, runtime-semantic uniqueness,
 nominal and field metadata, private immutable temporary symbols, and the complete expression DAG.
-It validates shared nodes once by identity while rejecting cycles.
+It validates shared nodes by identity while rejecting cycles; nodes reached under different enum-payload bindings are also checked in each dominance context.
 
 ### Single-Loop Primitive and Desugar
 

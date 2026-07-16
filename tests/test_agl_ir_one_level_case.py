@@ -245,6 +245,33 @@ def test_validation_rejects_literal_fields_and_shallow_enum_fields_skip_tables()
     validate_ir(_program(shallow), deep=False)
 
 
+def test_deep_validation_rejects_shared_case_body_without_payload_dominance() -> None:
+    """Every path to a shared body must bind each payload symbol it loads."""
+    shared_body = IrLoad(_LOC, _PAYLOAD)
+    case = IrCase(
+        _LOC,
+        IrConstInt(_LOC, 0),
+        (
+            IrCaseArm(IrEnumCaseKey(_COLOR, "Plain"), (), shared_body),
+            IrCaseArm(
+                IrEnumCaseKey(_COLOR, "With"),
+                (("value", _PAYLOAD),),
+                shared_body,
+            ),
+        ),
+        None,
+    )
+
+    with pytest.raises(InvalidIrError):
+        validate_ir(
+            _program(
+                case,
+                symbols={_PAYLOAD: _private_symbol()},
+                nominals={_COLOR: _color_descriptor()},
+            )
+        )
+
+
 def test_validation_accepts_shared_dag_and_rejects_cycle() -> None:
     shared = IrConstInt(_LOC, 7)
     case = IrCase(

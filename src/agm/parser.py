@@ -494,7 +494,7 @@ _HELP_TEXTS: dict[str, str] = {
     "exec": textwrap.dedent("""\
         agm exec [--strict-json|--no-strict-json] [--max-iters N]
                  [--max-call-depth N] [--runner COMMAND]
-                 [--timeout DURATION|--no-timeout]
+                 [--timeout DURATION|--no-timeout] [--dry-run]
                  [--log|--log-file PATH|--no-log] [--no-log-file]
                  [--no-stdlib] [-I DIR]...
                  (FILE | -c COMMAND) [--PARAM VALUE]...
@@ -523,6 +523,8 @@ _HELP_TEXTS: dict[str, str] = {
                                 to some(DURATION). Mutually exclusive with --no-timeout.
           --no-timeout          Remove any configured shell-exec timeout and bind
                                 config timeout to none. Mutually exclusive with --timeout.
+          --dry-run             Run the full static pipeline and validate parameters,
+                                but do not execute the workflow.
           --log                 Enable trace logging (auto timestamped path).
           --log-file PATH       Write trace log to PATH.
           --no-log-file         Clear the source-level log-file binding only; use
@@ -547,8 +549,8 @@ _HELP_TEXTS: dict[str, str] = {
           2  The workflow executed but ended with an uncaught AgL exception.
     """),
     "repl": textwrap.dedent("""\
-        agm repl [--strict-json|--no-strict-json] [--max-call-depth N]
-                 [--runner COMMAND] [--confirm-agents]
+        agm repl [--strict-json|--no-strict-json] [--max-iters N] [--max-call-depth N]
+                 [--runner COMMAND] [--confirm-agents] [--dry-run]
                  [--quiet] [--log|--log-file PATH|--no-log]
 
         Start an interactive read-eval-print loop for AgL.  Each entry is

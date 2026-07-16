@@ -2,8 +2,8 @@
 
 | Command | Description |
 |---------|-------------|
-| `agm exec [--strict-json\|--no-strict-json] [--max-iters N] [--max-call-depth N] [--runner COMMAND] [--log\|--log-file PATH\|--no-log] [--no-stdlib] [-I DIR]... (FILE \| -c COMMAND) [--PARAM VALUE]...` | Execute an AgL workflow program |
-| `agm repl [--strict-json\|--no-strict-json] [--max-iters N] [--max-call-depth N] [--runner COMMAND] [--confirm-agents] [--quiet] [--log\|--log-file PATH\|--no-log]` | Start an interactive AgL REPL |
+| `agm exec [--strict-json\|--no-strict-json] [--max-iters N] [--max-call-depth N] [--runner COMMAND] [--timeout DURATION\|--no-timeout] [--dry-run] [--log\|--log-file PATH\|--no-log] [--no-log-file] [--no-stdlib] [-I DIR]... (FILE \| -c COMMAND) [--PARAM VALUE]...` | Execute an AgL workflow program |
+| `agm repl [--strict-json\|--no-strict-json] [--max-iters N] [--max-call-depth N] [--runner COMMAND] [--confirm-agents] [--quiet] [--dry-run] [--log\|--log-file PATH\|--no-log]` | Start an interactive AgL REPL |
 
 AGM runs AgL (Agent Language) workflow programs two ways: `agm exec` runs a whole
 program from a fresh environment, and `agm repl` evaluates entries interactively in a
@@ -15,7 +15,8 @@ documented in the [AgL language reference](../agl/reference/index.md).
 ```text
 agm exec [--strict-json|--no-strict-json]
          [--max-iters N] [--max-call-depth N] [--runner COMMAND]
-         [--log|--log-file PATH|--no-log]
+         [--timeout DURATION|--no-timeout] [--dry-run]
+         [--log|--log-file PATH|--no-log] [--no-log-file]
          [--no-stdlib]
          [-I DIR]...
          (FILE | -c COMMAND) [--PARAM VALUE]...
@@ -229,7 +230,7 @@ disable tracing entirely.
 ```text
 agm repl [--strict-json|--no-strict-json]
          [--max-iters N] [--max-call-depth N] [--runner COMMAND] [--confirm-agents]
-         [--quiet] [--log|--log-file PATH|--no-log]
+         [--quiet] [--dry-run] [--log|--log-file PATH|--no-log]
 ```
 
 Start an interactive read-eval-print loop for AgL. Unlike `agm exec`, which runs a

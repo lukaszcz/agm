@@ -247,7 +247,10 @@ class _CaseCompiler:
             key = (
                 "switch",
                 decision.occurrence,
-                tuple((branch.constructor, id(branch.decision)) for branch in decision.keyed_children),
+                tuple(
+                    (branch.constructor, id(branch.decision))
+                    for branch in decision.keyed_children
+                ),
                 None if decision.default is None else id(decision.default),
                 decision.free_occurrences,
             )

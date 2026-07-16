@@ -3259,6 +3259,7 @@ class _Checker:
                 constructor_patterns=self._constructor_pattern_bindings,
             ),
             partial_calls=self._partial_calls,
+            capabilities=self._caps,
         )
 
 

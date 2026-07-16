@@ -460,13 +460,9 @@ class PipelineDriver:
             try:
                 program = parse_program(source)
             except AglSyntaxError as exc:
-                return PreparedProgram(
-                    source, None, None, (exc.to_diagnostic(),), tuple(tab_sink)
-                )
+                return PreparedProgram(source, None, None, (exc.to_diagnostic(),), tuple(tab_sink))
             except AglError as exc:
-                return PreparedProgram(
-                    source, None, None, (exc.to_diagnostic(),), tuple(tab_sink)
-                )
+                return PreparedProgram(source, None, None, (exc.to_diagnostic(),), tuple(tab_sink))
             except Exception as exc:
                 return PreparedProgram(
                     source,
@@ -480,9 +476,7 @@ class PipelineDriver:
         try:
             resolved = resolve(program)
         except AglScopeError as exc:
-            return PreparedProgram(
-                source, program, None, (exc.to_diagnostic(),), warnings
-            )
+            return PreparedProgram(source, program, None, (exc.to_diagnostic(),), warnings)
         except AglError as exc:
             return PreparedProgram(source, program, None, (exc.to_diagnostic(),), warnings)
         except Exception as exc:
@@ -495,9 +489,7 @@ class PipelineDriver:
             )
 
         # Scope warnings (e.g. a declared-but-uncalled agent) join the lex ones.
-        return PreparedProgram(
-            source, program, resolved, (), (*warnings, *resolved.warnings)
-        )
+        return PreparedProgram(source, program, resolved, (), (*warnings, *resolved.warnings))
 
     @staticmethod
     def declared_agents(source: str) -> tuple[AgentDeclInfo, ...]:
@@ -561,8 +553,7 @@ class PipelineDriver:
             if isinstance(item, ParamDecl):
                 param_type = checked.type_env.get_binding_type(item.node_id)
                 assert param_type is not None, (
-                    f"Param {item.name!r} has no recorded binding type; "
-                    "checker invariant violated."
+                    f"Param {item.name!r} has no recorded binding type; checker invariant violated."
                 )
                 infos.append(
                     ParamDeclInfo(
@@ -677,9 +668,9 @@ class PipelineDriver:
         registry = host_env.registry
         capabilities = host_env.capabilities
 
-        if compiled is not None:
-            from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.modules.ids import ENTRY_ID
 
+        if compiled is not None:
             cache_diagnostic = _cached_artifact_provenance_diagnostic(
                 prepared_entry=ENTRY_ID,
                 prepared_modules={ENTRY_ID: resolved},
@@ -698,6 +689,25 @@ class PipelineDriver:
                 )
             if compiled.capabilities != capabilities:
                 compiled = None
+        if checked is not None and compiled is None:
+            cache_diagnostic = _cached_checked_artifact_provenance_diagnostic(
+                prepared_entry=ENTRY_ID,
+                prepared_modules={ENTRY_ID: resolved},
+                checked_entry=ENTRY_ID,
+                checked_modules={ENTRY_ID: checked.resolved},
+                cached_capabilities=checked.capabilities,
+                capabilities=capabilities,
+                span=program.span,
+            )
+            if cache_diagnostic is not None:
+                return RunResult(
+                    ok=False,
+                    diagnostics=[cache_diagnostic],
+                    error=None,
+                    warnings=warnings,
+                )
+            if checked.capabilities != capabilities:
+                checked = None
 
         # ----------------------------------------------------------------
         # [2b] Source↔host agent reconciliation
@@ -806,9 +816,7 @@ class PipelineDriver:
         if param_errors:
             return RunResult(ok=False, diagnostics=param_errors, error=None, warnings=warnings)
 
-        host_contracts, contract_errors = _materialize_ir_contracts(
-            executable, host_env.codecs
-        )
+        host_contracts, contract_errors = _materialize_ir_contracts(executable, host_env.codecs)
         if contract_errors:
             return RunResult(
                 ok=False,
@@ -1125,8 +1133,7 @@ class PipelineDriver:
             if isinstance(item, ParamDecl):
                 param_type = entry_cm.type_env.get_binding_type(item.node_id)
                 assert param_type is not None, (
-                    f"Param {item.name!r} has no recorded binding type; "
-                    "checker invariant violated."
+                    f"Param {item.name!r} has no recorded binding type; checker invariant violated."
                 )
                 infos.append(
                     ParamDeclInfo(
@@ -1198,6 +1205,22 @@ class PipelineDriver:
                 )
             if compiled_graph.capabilities != capabilities:
                 compiled_graph = None
+        if checked_graph is not None and compiled_graph is None:
+            cache_diagnostic = _cached_checked_graph_artifact_provenance_diagnostic(
+                prepared.resolved_graph, checked_graph, capabilities
+            )
+            if cache_diagnostic is not None:
+                return StartupConfigResult(
+                    ok=False,
+                    diagnostics=[cache_diagnostic],
+                    error=None,
+                    warnings=warnings,
+                    values={},
+                    checked_graph=None,
+                    compiled_graph=None,
+                )
+            if checked_graph.capabilities != capabilities:
+                checked_graph = None
 
         from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.syntax.nodes import ConfigDecl
@@ -1434,6 +1457,19 @@ class PipelineDriver:
                 )
             if compiled_graph.capabilities != capabilities:
                 compiled_graph = None
+        if checked_graph is not None and compiled_graph is None:
+            cache_diagnostic = _cached_checked_graph_artifact_provenance_diagnostic(
+                resolved_graph, checked_graph, capabilities
+            )
+            if cache_diagnostic is not None:
+                return RunResult(
+                    ok=False,
+                    diagnostics=[cache_diagnostic],
+                    error=None,
+                    warnings=warnings,
+                )
+            if checked_graph.capabilities != capabilities:
+                checked_graph = None
 
         registry = host_env.registry
 
@@ -1562,9 +1598,7 @@ class PipelineDriver:
         if self._host_env_cache is not None:
             from dataclasses import replace
 
-            self._host_env_cache = replace(
-                self._host_env_cache, extern_registry=extern_registry
-            )
+            self._host_env_cache = replace(self._host_env_cache, extern_registry=extern_registry)
 
     def update_defaults(
         self,
@@ -1660,8 +1694,7 @@ def _cached_graph_artifact_provenance_diagnostic(
     return _cached_artifact_provenance_diagnostic(
         prepared_entry=resolved_graph.entry_id,
         prepared_modules={
-            module_id: module.resolved
-            for module_id, module in resolved_graph.modules.items()
+            module_id: module.resolved for module_id, module in resolved_graph.modules.items()
         },
         compiled_entry=compiled_graph.checked_graph.entry_id,
         compiled_modules={
@@ -1669,6 +1702,50 @@ def _cached_graph_artifact_provenance_diagnostic(
             for module_id, module in compiled_graph.checked_graph.modules.items()
         },
         cached_capabilities=compiled_graph.capabilities,
+        capabilities=capabilities,
+        span=entry_module.resolved.program.span if entry_module is not None else None,
+    )
+
+
+def _cached_checked_artifact_provenance_diagnostic(
+    *,
+    prepared_entry: "ModuleId",
+    prepared_modules: "Mapping[ModuleId, ResolvedProgram]",
+    checked_entry: "ModuleId",
+    checked_modules: "Mapping[ModuleId, ResolvedProgram]",
+    cached_capabilities: object | None,
+    capabilities: "HostCapabilities",
+    span: "SourceSpan | None",
+) -> Diagnostic | None:
+    """Reject a checked artifact from a different prepared source."""
+    return _cached_artifact_provenance_diagnostic(
+        prepared_entry=prepared_entry,
+        prepared_modules=prepared_modules,
+        compiled_entry=checked_entry,
+        compiled_modules=checked_modules,
+        cached_capabilities=cached_capabilities,
+        capabilities=capabilities,
+        span=span,
+    )
+
+
+def _cached_checked_graph_artifact_provenance_diagnostic(
+    resolved_graph: "ResolvedModuleGraph",
+    checked_graph: "CheckedModuleGraph",
+    capabilities: "HostCapabilities",
+) -> Diagnostic | None:
+    """Adapt checked graph artifacts to the shared provenance validator."""
+    entry_module = resolved_graph.modules.get(resolved_graph.entry_id)
+    return _cached_checked_artifact_provenance_diagnostic(
+        prepared_entry=resolved_graph.entry_id,
+        prepared_modules={
+            module_id: module.resolved for module_id, module in resolved_graph.modules.items()
+        },
+        checked_entry=checked_graph.entry_id,
+        checked_modules={
+            module_id: module.resolved for module_id, module in checked_graph.modules.items()
+        },
+        cached_capabilities=checked_graph.capabilities,
         capabilities=capabilities,
         span=entry_module.resolved.program.span if entry_module is not None else None,
     )
@@ -1773,8 +1850,7 @@ def _collect_config_infos(
         if isinstance(item, ConfigDecl):
             cfg_type = type_env.get_binding_type(item.node_id)
             assert cfg_type is not None, (
-                f"Config {item.name!r} has no recorded binding type; "
-                "checker invariant violated."
+                f"Config {item.name!r} has no recorded binding type; checker invariant violated."
             )
             infos.append(
                 ConfigDeclInfo(
@@ -2089,9 +2165,7 @@ def exception_value_to_run_error(
     from agm.agl.runtime.serialize import value_to_json_obj
     from agm.agl.syntax.spans import SourceSpan
 
-    fields: dict[str, object] = {
-        k: value_to_json_obj(v) for k, v in exc.fields.items()
-    }
+    fields: dict[str, object] = {k: value_to_json_obj(v) for k, v in exc.fields.items()}
     line: int | None = None
     col: int | None = None
     if isinstance(span, (SourceSpan, Location)):

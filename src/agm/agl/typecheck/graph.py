@@ -183,6 +183,7 @@ class CheckedModuleGraph:
     entry_id: ModuleId
     graph_type_table: dict[tuple[ModuleId, str], Type]
     warnings: tuple[Diagnostic, ...]
+    capabilities: HostCapabilities | None = None
 
 
 def _assert_checked_module_closed(module: CheckedModule) -> None:
@@ -917,7 +918,7 @@ def check_graph(
     # Resolves parameter/return TypeExprs for every top-level FuncDef in every
     # module using the graph_type_table (so cross-module type refs in annotations
     # resolve), WITHOUT checking any function body.  Keyed by FuncDef.node_id
-    #.
+    # .
     graph_func_sig_table = _build_graph_func_sig_table(
         resolved_graph,
         graph_type_table,
@@ -941,9 +942,9 @@ def check_graph(
     all_warnings: list[Diagnostic] = []
 
     # Check non-entry modules first, then entry.
-    ordered_mids = [
-        mid for mid in resolved_graph.modules if not mid.is_entry
-    ] + [resolved_graph.entry_id]
+    ordered_mids = [mid for mid in resolved_graph.modules if not mid.is_entry] + [
+        resolved_graph.entry_id
+    ]
 
     for mid in ordered_mids:
         rmod = resolved_graph.modules[mid]
@@ -970,6 +971,7 @@ def check_graph(
         entry_id=resolved_graph.entry_id,
         graph_type_table=graph_type_table,
         warnings=tuple(all_warnings),
+        capabilities=capabilities,
     )
     assert_checked_module_graph_closed(checked)
     return checked

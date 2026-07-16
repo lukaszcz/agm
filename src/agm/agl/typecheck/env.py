@@ -16,6 +16,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Literal
 
+from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.scope.imports import ImportEnv, QName
@@ -224,7 +225,7 @@ class OutputContractSpec:
     ``structured_exec``
         ``True`` for the structured ``exec`` form (target is ``ExecResult``):
         returns the raw result record, does not parse stdout, does not raise
-        on nonzero exit.  ``False`` (the default) for all other calls.  
+        on nonzero exit.  ``False`` (the default) for all other calls.
         must branch on this flag to skip the codec/parse pipeline entirely.
     """
 
@@ -330,6 +331,7 @@ class CheckedProgram:
     cast_specs: dict[int, CastSpec]
     argument_bindings: ArgumentBindings
     partial_calls: dict[int, PartialCallSpec]
+    capabilities: HostCapabilities | None = None
 
 
 def _assert_checked_types_closed(types: Iterable[Type], *, owner: str) -> None:
@@ -442,12 +444,12 @@ class TypeEnvironment:
         graph_alias_keys: frozenset[tuple[ModuleId, str]] | None = None,
         graph_alias_resolver: Callable[[ModuleId, str, SourceSpan | None], Type | None]
         | None = None,
-        graph_ctor_sig_table: Mapping[
-            tuple[ModuleId, str, str | None], ConstructorSignature
-        ] | None = None,
+        graph_ctor_sig_table: Mapping[tuple[ModuleId, str, str | None], ConstructorSignature]
+        | None = None,
         graph_ctor_field_kinds_table: Mapping[
             tuple[ModuleId, str, str | None], tuple[tuple[str, ParamKind], ...]
-        ] | None = None,
+        ]
+        | None = None,
         import_env: ImportEnv | None = None,
         module_id: ModuleId = ENTRY_ID,
         type_table: TypeTable | None = None,
@@ -494,16 +496,16 @@ class TypeEnvironment:
             tuple[str, str | None], tuple[tuple[str, ParamKind], ...]
         ] = {}
         # Cross-module constructor field-kinds table: (ModuleId, owner_name, variant) → kinds.
-        self._graph_ctor_field_kinds_table: Mapping[
-            tuple[ModuleId, str, str | None], tuple[tuple[str, ParamKind], ...]
-        ] | None = graph_ctor_field_kinds_table
+        self._graph_ctor_field_kinds_table: (
+            Mapping[tuple[ModuleId, str, str | None], tuple[tuple[str, ParamKind], ...]] | None
+        ) = graph_ctor_field_kinds_table
         # Graph-mode context: None in single-program path.
         self._graph_type_table: Mapping[tuple[ModuleId, str], Type] | None = graph_type_table
         # Cross-module generic type definitions: (ModuleId, name) → GenericTypeDef.
         # Populated by the graph type pre-pass for qualified generic constructor calls.
-        self._graph_generic_table: Mapping[
-            tuple[ModuleId, str], GenericTypeDef
-        ] | None = graph_generic_table
+        self._graph_generic_table: Mapping[tuple[ModuleId, str], GenericTypeDef] | None = (
+            graph_generic_table
+        )
         # Cross-module parameterized type aliases: (ModuleId, name) → GenericAliasDef.
         self._graph_alias_table: Mapping[tuple[ModuleId, str], GenericAliasDef] = (
             graph_alias_table if graph_alias_table is not None else {}
@@ -511,13 +513,13 @@ class TypeEnvironment:
         self._graph_alias_keys: frozenset[tuple[ModuleId, str]] = (
             graph_alias_keys if graph_alias_keys is not None else frozenset()
         )
-        self._graph_alias_resolver: Callable[
-            [ModuleId, str, SourceSpan | None], Type | None
-        ] | None = graph_alias_resolver
+        self._graph_alias_resolver: (
+            Callable[[ModuleId, str, SourceSpan | None], Type | None] | None
+        ) = graph_alias_resolver
         # Cross-module constructor signatures: (ModuleId, owner_name, variant) → sig.
-        self._graph_ctor_sig_table: Mapping[
-            tuple[ModuleId, str, str | None], ConstructorSignature
-        ] | None = graph_ctor_sig_table
+        self._graph_ctor_sig_table: (
+            Mapping[tuple[ModuleId, str, str | None], ConstructorSignature] | None
+        ) = graph_ctor_sig_table
         self._import_env: ImportEnv | None = import_env
         self._module_id: ModuleId = module_id
         self._sealed = False
@@ -811,9 +813,7 @@ class TypeEnvironment:
     def all_function_signatures(self) -> dict[str, FunctionSignature]:
         return dict(self._function_signatures)
 
-    def register_function_signature_by_node_id(
-        self, node_id: int, sig: FunctionSignature
-    ) -> None:
+    def register_function_signature_by_node_id(self, node_id: int, sig: FunctionSignature) -> None:
         """Register a function signature keyed by its declaration ``node_id``.
 
         Used by the graph pre-pass to seed every module's env with ALL
@@ -1069,9 +1069,7 @@ class TypeEnvironment:
             name = type_expr.name
             eff_span = span if span is not None else type_expr.span
             resolved_args = tuple(
-                self.resolve_type_expr(
-                    a, span=None, _resolving=_resolving, type_vars=type_vars
-                )
+                self.resolve_type_expr(a, span=None, _resolving=_resolving, type_vars=type_vars)
                 for a in type_expr.args
             )
             qualifier = type_expr.module_qualifier
@@ -1285,9 +1283,7 @@ class TypeEnvironment:
                     return typ
             elif len(type_candidates) > 1:
                 # Ambiguous: multiple modules export this type name.
-                sorted_candidates = sorted(
-                    f"{qn[0].dotted()}::{qn[1]}" for qn in type_candidates
-                )
+                sorted_candidates = sorted(f"{qn[0].dotted()}::{qn[1]}" for qn in type_candidates)
                 raise AglTypeError(
                     f"Ambiguous type '{name}': it is exported by multiple modules "
                     f"({', '.join(sorted_candidates)}). "
@@ -1382,9 +1378,7 @@ class TypeEnvironment:
         """
         return frozenset(self._types) | frozenset(self._alias_targets)
 
-    def resolve_type_by_module_id(
-        self, module_id: ModuleId, name: str
-    ) -> Type | None:
+    def resolve_type_by_module_id(self, module_id: ModuleId, name: str) -> Type | None:
         """Directly look up a type by owning module and name in the graph type table.
 
         Used for cross-module constructor references when the owning module is
@@ -1431,9 +1425,11 @@ class TypeEnvironment:
         template = self.source_type_template_qname(module_id, name)
         return None if template is None else template.match(concrete)
 
-    def source_type_template_qname(
-        self, module_id: ModuleId, name: str
-    ) -> TypeTemplate | None:
+    def source_type_template(self, name: str) -> TypeTemplate | None:
+        """Return immutable checked template data for an own-module source type."""
+        return self.source_type_template_qname(self._module_id, name)
+
+    def source_type_template_qname(self, module_id: ModuleId, name: str) -> TypeTemplate | None:
         """Return immutable checked template data for one source type QName.
 
         Graph aliases are already cycle-checked and resolved by the checked
@@ -1472,9 +1468,7 @@ class TypeEnvironment:
     def _own_source_type_names(self) -> frozenset[str]:
         names = set(self._types) | set(self._alias_targets) | set(self._generic_types)
         names.update(
-            name
-            for module_id, name in self._graph_alias_table
-            if module_id == self._module_id
+            name for module_id, name in self._graph_alias_table if module_id == self._module_id
         )
         if self._graph_generic_table is not None:
             names.update(
@@ -1484,9 +1478,7 @@ class TypeEnvironment:
             )
         if self._graph_type_table is not None:
             names.update(
-                name
-                for module_id, name in self._graph_type_table
-                if module_id == self._module_id
+                name for module_id, name in self._graph_type_table if module_id == self._module_id
             )
         return frozenset(names)
 
@@ -1503,10 +1495,7 @@ class TypeEnvironment:
         if kind in (EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.SELF):
             if owner_name not in self._own_source_type_names():
                 return None
-            if (
-                kind is EnumOwnerFormKind.LOCAL
-                and self.has_qualified_import_handle((owner_name,))
-            ):
+            if kind is EnumOwnerFormKind.LOCAL and self.has_qualified_import_handle((owner_name,)):
                 return None
             source_module_id = self._module_id
             source_name = owner_name
@@ -1520,9 +1509,7 @@ class TypeEnvironment:
                 return None
             type_qnames = tuple(
                 qname
-                for qname in self._import_env.unqualified.get(
-                    owner_name, frozenset()
-                )
+                for qname in self._import_env.unqualified.get(owner_name, frozenset())
                 if self._is_graph_type_candidate(qname)
             )
             if len(type_qnames) != 1:
@@ -1530,11 +1517,7 @@ class TypeEnvironment:
             source_module_id, source_name = type_qnames[0]
             expected_qualifier = None
         else:
-            if (
-                self._import_env is None
-                or module_qualifier is None
-                or not module_qualifier
-            ):
+            if self._import_env is None or module_qualifier is None or not module_qualifier:
                 return None
             qname = self._import_env.qualified.get(module_qualifier, {}).get(owner_name)
             if qname is None or not self._is_graph_type_candidate(qname):
@@ -1563,9 +1546,7 @@ class TypeEnvironment:
             for qname in self._import_env.unqualified.get(name, frozenset())
         )
 
-    def resolve_unqualified_enum_owner_form(
-        self, owner_name: str
-    ) -> EnumOwnerForm | None:
+    def resolve_unqualified_enum_owner_form(self, owner_name: str) -> EnumOwnerForm | None:
         """Resolve ``Owner::variant`` with local-before-open precedence."""
         if owner_name in self._own_source_type_names():
             return self.resolve_enum_owner_form(EnumOwnerFormKind.LOCAL, owner_name)
@@ -1581,9 +1562,7 @@ class TypeEnvironment:
                     forms.add(form)
         if self._import_env is not None:
             for owner_name in self._import_env.unqualified:
-                form = self.resolve_enum_owner_form(
-                    EnumOwnerFormKind.OPEN_IMPORT, owner_name
-                )
+                form = self.resolve_enum_owner_form(EnumOwnerFormKind.OPEN_IMPORT, owner_name)
                 if form is not None:
                     forms.add(form)
             for handle, exposed_names in self._import_env.qualified.items():
@@ -1606,9 +1585,7 @@ class TypeEnvironment:
 
         return tuple(sorted(forms, key=form_key))
 
-    def get_generic_type_from_module(
-        self, module_id: ModuleId, name: str
-    ) -> GenericTypeDef | None:
+    def get_generic_type_from_module(self, module_id: ModuleId, name: str) -> GenericTypeDef | None:
         """Look up a cross-module ``GenericTypeDef`` by owning module and name.
 
         Used to detect and instantiate generic constructors referenced via a
@@ -1646,8 +1623,7 @@ class TypeEnvironment:
         matches = self._open_imported_generic_type_matches(name)
         if len(matches) > 1:
             labels = sorted(
-                f"{module_id.dotted()}::{source_name}"
-                for module_id, source_name, _ in matches
+                f"{module_id.dotted()}::{source_name}" for module_id, source_name, _ in matches
             )
             raise AglTypeError(
                 f"Ambiguous generic type '{name}': it is exported by multiple modules "
@@ -1697,9 +1673,7 @@ class TypeEnvironment:
         if self._import_env is None or self._graph_generic_table is None:
             return []
         matches: list[tuple[ModuleId, str, GenericTypeDef]] = []
-        for module_id, source_name in self._import_env.unqualified.get(
-            exposed_name, frozenset()
-        ):
+        for module_id, source_name in self._import_env.unqualified.get(exposed_name, frozenset()):
             gdef = self._graph_generic_table.get((module_id, source_name))
             if gdef is not None:
                 matches.append((module_id, source_name, gdef))
@@ -1818,9 +1792,12 @@ class TypeEnvironment:
         if not other.is_sealed:
             raise AssertionError("cannot seed from an unsealed type environment")
         builtin = frozenset(BUILTIN_EXCEPTIONS) | BUILTIN_PRELUDE_TYPE_NAMES
-        incoming_type_names = {
-            name for name in other._types if name not in builtin
-        } | set(other._alias_targets) | set(other._generic_types) | set(other._alias_type_params)
+        incoming_type_names = (
+            {name for name in other._types if name not in builtin}
+            | set(other._alias_targets)
+            | set(other._generic_types)
+            | set(other._alias_type_params)
+        )
         incoming_type_names |= {owner_name for owner_name, _variant in other._constructor_sigs}
         incoming_type_names |= {
             owner_name for owner_name, _variant in other._constructor_field_kinds

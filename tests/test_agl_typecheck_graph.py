@@ -16,7 +16,11 @@ from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.scope.graph import resolve_graph
 from agm.agl.scope.symbols import AglScopeError
-from agm.agl.semantics.types import InferenceVarType, contains_inference_var
+from agm.agl.semantics.types import (
+    EnumOwnerFormKind,
+    InferenceVarType,
+    contains_inference_var,
+)
 from agm.agl.typecheck import (
     AgentType,
     AglTypeError,
@@ -1050,6 +1054,17 @@ def test_is_test_type_name_import_handle_ambiguity_errors(tmp_path: Path) -> Non
     }
     with pytest.raises(AglTypeError, match="both a type name and an import handle"):
         _check_graph(tmp_path, modules)
+
+
+def test_unknown_enum_owner_form_is_not_visible(tmp_path: Path) -> None:
+    checked = _check_graph(tmp_path, {"entry": "enum Color | Red\n0"})
+
+    assert (
+        checked.modules[ENTRY_ID].type_env.resolve_enum_owner_form(
+            EnumOwnerFormKind.SELF, "Missing"
+        )
+        is None
+    )
 
 
 def test_pattern_type_name_import_handle_ambiguity_errors(tmp_path: Path) -> None:

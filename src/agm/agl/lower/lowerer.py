@@ -1066,6 +1066,16 @@ class _Lowerer:
 
                 ref = self._checked.resolved.resolution.get(nid)
                 assert ref is not None, f"compiler bug: no resolution for VarRef node_id={nid!r}"
+                if ref.kind is BinderKind.constructor_binding:
+                    node_typ = self._node_type(nid)
+                    assert isinstance(node_typ, FunctionType)
+                    assert isinstance(node_typ.result, RecordType)
+                    return IrMakeConstructor(
+                        location=self._loc(span),
+                        nominal=NominalId(node_typ.result.module_id, node_typ.result.name),
+                        display_name=node_typ.result.name,
+                        variant=None,
+                    )
                 sym = self._sym_for_decl(ref.decl_node_id)
                 return IrLoad(location=self._loc(span), symbol=sym)
 

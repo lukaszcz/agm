@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from agm.agl.ir.ids import NominalId
+from agm.agl.modules.ids import ModuleId
 from agm.agl.semantics.values import BoolValue, EnumValue, IntValue, RecordValue, TextValue
 from agm.agl.typecheck import AglTypeError
 from tests.agl.ir_harness import evaluate_ir_graph, evaluate_ir_graph_raises
@@ -26,6 +28,23 @@ let x = 10
     r = evaluate_ir_graph(entry_source, {"lib": lib_source}, tmp_path)
     assert r["result"] == IntValue(7)
     assert r["x"] == IntValue(10)
+
+
+def test_imported_alias_constructor_value_lowers(tmp_path: Path) -> None:
+    result = evaluate_ir_graph(
+        """
+import lib qualified
+let factory: (int) -> lib::Box[int] = lib::Alias
+let box = factory(1)
+box
+""",
+        {"lib": "record Box[T]\n  value: T\ntype Alias[T] = Box[T]"},
+        tmp_path,
+    )
+
+    assert result["box"] == RecordValue(
+        NominalId(ModuleId.from_dotted("lib"), "Box"), "Box", {"value": IntValue(1)}
+    )
 
 
 def test_cross_module_mutual_recursion(tmp_path: Path) -> None:

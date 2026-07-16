@@ -175,6 +175,8 @@ class _Context:
         "dominating_payload_symbols",
         "payload_symbols",
         "program",
+        "payload_requirements",
+        "requirement_collectors",
         "validated_exprs",
     )
 
@@ -191,8 +193,13 @@ class _Context:
         self.check_payload_dominance = check_payload_dominance
         self.payload_symbols = payload_symbols
         self.dominating_payload_symbols: frozenset[SymbolId] = frozenset()
-        self.active_exprs: set[tuple[int, frozenset[SymbolId]]] = set()
-        self.validated_exprs: set[tuple[int, frozenset[SymbolId]]] = set()
+        self.active_exprs: set[int] = set()
+        self.validated_exprs: set[int] = set()
+        # A cached expression's free payload requirements are independent of
+        # its incoming case-arm bindings.  This preserves DAG sharing while
+        # still checking that every incoming path supplies those bindings.
+        self.payload_requirements: dict[int, frozenset[SymbolId]] = {}
+        self.requirement_collectors: list[set[SymbolId]] = []
 
 
 # ---------------------------------------------------------------------------
@@ -657,7 +664,10 @@ def _validate_case(node: IrCase, ctx: _Context) -> None:
             symbol for _field_name, symbol in arm.field_bindings
         )
         try:
-            _validate_expr(arm.body, ctx)
+            requirements = _validate_expr(arm.body, ctx, merge_requirements=False)
+            ctx.requirement_collectors[-1].update(
+                requirements - frozenset(symbol for _field_name, symbol in arm.field_bindings)
+            )
         finally:
             ctx.dominating_payload_symbols = prior_payload_symbols
         if arm.key in seen_keys:
@@ -691,20 +701,37 @@ def _validate_case(node: IrCase, ctx: _Context) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _validate_expr(node: IrExpr, ctx: _Context) -> None:
-    """Validate each shared expression once while rejecting identity cycles."""
+def _validate_expr(
+    node: IrExpr, ctx: _Context, *, merge_requirements: bool = True
+) -> frozenset[SymbolId]:
+    """Validate a DAG node once and check its free payload requirements."""
     identifier = id(node)
-    validation_state = (identifier, ctx.dominating_payload_symbols)
-    if validation_state in ctx.active_exprs:
+    if identifier in ctx.active_exprs:
         raise InvalidIrError("IR expression graph contains a cycle")
-    if validation_state in ctx.validated_exprs:
-        return
-    ctx.active_exprs.add(validation_state)
-    try:
-        _validate_expr_node(node, ctx)
-    finally:
-        ctx.active_exprs.remove(validation_state)
-    ctx.validated_exprs.add(validation_state)
+
+    requirements = ctx.payload_requirements.get(identifier)
+    if requirements is None:
+        ctx.active_exprs.add(identifier)
+        ctx.requirement_collectors.append(set())
+        try:
+            _validate_expr_node(node, ctx)
+            requirements = frozenset(ctx.requirement_collectors[-1])
+        finally:
+            ctx.requirement_collectors.pop()
+            ctx.active_exprs.remove(identifier)
+        ctx.validated_exprs.add(identifier)
+        ctx.payload_requirements[identifier] = requirements
+
+    if ctx.check_payload_dominance:
+        missing = requirements - ctx.dominating_payload_symbols
+        if missing:
+            symbol = next(iter(missing))
+            raise InvalidIrError(
+                f"IrLoad references payload symbol_id={symbol.value!r} outside a binding IrCaseArm"
+            )
+    if merge_requirements and ctx.requirement_collectors:
+        ctx.requirement_collectors[-1].update(requirements)
+    return requirements
 
 
 def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
@@ -751,15 +778,8 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
                         f"IrLoad references symbol_id={node.symbol.value!r}"
                         " which is not in program.symbols"
                     )
-                if (
-                    ctx.check_payload_dominance
-                    and node.symbol in ctx.payload_symbols
-                    and node.symbol not in ctx.dominating_payload_symbols
-                ):
-                    raise InvalidIrError(
-                        f"IrLoad references payload symbol_id={node.symbol.value!r}"
-                        " outside a binding IrCaseArm"
-                    )
+                if ctx.check_payload_dominance and node.symbol in ctx.payload_symbols:
+                    ctx.requirement_collectors[-1].add(node.symbol)
 
         case IrBind():
             _validate_location(node.location, ctx)

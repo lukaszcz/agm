@@ -5,7 +5,7 @@ from __future__ import annotations
 import decimal
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
-from typing import TypeAlias, cast
+from typing import TypeAlias
 
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.semantics.type_table import TypeTable
@@ -17,9 +17,9 @@ from agm.agl.semantics.types import (
 from .model import (
     BinderAssignment,
     BoolConstructor,
-    ClosedSignature,
     Constructor,
     ConstructorCell,
+    ConstructorField,
     EnumConstructor,
     FieldOccurrenceProvenance,
     LiteralKind,
@@ -36,7 +36,6 @@ from .model import (
 from .normalize import (
     MatchCompileInvariantError,
     constructor_inhabits_type,
-    signature_for_type,
 )
 
 
@@ -101,17 +100,23 @@ def _canonical_constructor(
     if not isinstance(constructor, EnumConstructor):
         return constructor
 
-    signature = cast(ClosedSignature, signature_for_type(subject_type, type_table))
-    key = _constructor_key(constructor)
-    canonical = next(
-        (
-            candidate
-            for candidate in signature.constructors
-            if _constructor_key(candidate) == key
-        ),
-        None,
+    assert isinstance(subject_type, EnumType)
+    try:
+        fields = type_table.enum_variants(subject_type).get(constructor.variant)
+    except (KeyError, AssertionError) as exc:
+        raise MatchCompileInvariantError(
+            f"cannot resolve enum signature for checked type {subject_type!r}"
+        ) from exc
+    if fields is None:
+        raise MatchCompileInvariantError(
+            "enum constructor does not exactly match its checked signature"
+        )
+    canonical = EnumConstructor(
+        subject_type,
+        constructor.variant,
+        tuple(ConstructorField(name, field_type) for name, field_type in fields.items()),
     )
-    if canonical is None or canonical != constructor:
+    if canonical != constructor:
         raise MatchCompileInvariantError(
             "enum constructor does not exactly match its checked signature"
         )

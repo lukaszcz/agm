@@ -5,6 +5,7 @@ from __future__ import annotations
 import decimal
 import itertools
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
@@ -61,7 +62,7 @@ from agm.agl.parser import parse_program
 from agm.agl.scope import resolve
 from agm.agl.scope.graph import resolve_graph
 from agm.agl.semantics.type_table import TypeTable
-from agm.agl.semantics.types import EnumType, IntType, TypeTemplate
+from agm.agl.semantics.types import EnumType, IntType, Type, TypeTemplate
 from agm.agl.semantics.values import BoolValue, EnumValue, Value
 from agm.agl.syntax.nodes import Case
 from agm.agl.syntax.visitor import walk
@@ -224,6 +225,12 @@ def _unique_decision_ids(root: Decision) -> frozenset[int]:
 
     visit(root)
     return frozenset(unique)
+
+
+def _wide_enum_source(size: int) -> str:
+    variants = "".join(f"  | item{index}\n" for index in range(size))
+    branches = "".join(f"  | item{index} => {index}\n" for index in range(size))
+    return f"enum Choice\n{variants}let value: Choice = item0\ncase value of\n{branches}"
 
 
 def _diagonal_source(size: int, *, exhaustive: bool) -> str:
@@ -626,6 +633,25 @@ def test_large_paper_diagonal_matrix_validates_shared_dag_without_path_expansion
     _, _, compiled = _compile(_diagonal_source(15, exhaustive=True))
 
     validate_decision_dag(compiled.root)
+
+
+def test_wide_enum_match_does_not_rebuild_its_signature_per_matrix_cell(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    original = TypeTable.enum_variants
+
+    def count_enum_variants(self: TypeTable, handle: EnumType) -> Mapping[str, Mapping[str, Type]]:
+        nonlocal calls
+        calls += 1
+        return original(self, handle)
+
+    monkeypatch.setattr(TypeTable, "enum_variants", count_enum_variants)
+
+    size = 20
+    _compile(_wide_enum_source(size))
+
+    assert calls < 7 * size**2
 
 
 @pytest.mark.parametrize("exhaustive", [False, True])

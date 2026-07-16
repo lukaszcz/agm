@@ -782,6 +782,8 @@ class IrInterpreter:
         found: dict[str, Value] = {}
         entry_module = self._program.modules[self._program.entry_module]
         if not any(
+            module is entry_module for module in self._program.modules.values()
+        ) or not any(
             isinstance(node, IrConfigBind) and node.public_name in names
             for node in entry_module.initializers
         ):
@@ -804,7 +806,6 @@ class IrInterpreter:
                 if isinstance(node, IrConfigBind) and node.public_name in names:
                     bound = self._frame[node.symbol]
                     found[node.public_name] = bound.value if isinstance(bound, Cell) else bound
-        return found
         return found
 
     def _eval_and_record_initializer(self, module_id: ModuleId, index: int, node: IrExpr) -> None:

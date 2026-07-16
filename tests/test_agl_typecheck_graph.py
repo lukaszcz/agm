@@ -28,6 +28,7 @@ from agm.agl.typecheck import (
     ExceptionType,
     FunctionType,
     IntType,
+    ListType,
     RecordType,
     TextType,
     Type,
@@ -738,6 +739,20 @@ def test_imported_generic_alias_to_record_constructs_transparently(tmp_path: Pat
     assert _binding_value_type(
         checked, ENTRY_ID, "box"
     ) == RecordType("Box", (IntType(),), module_id=ModuleId.from_dotted("lib"))
+
+
+def test_imported_generic_alias_preserves_constructor_constraints(tmp_path: Path) -> None:
+    checked = _check_graph(
+        tmp_path,
+        {
+            "entry": "import lib qualified\nlet box = lib::Alias::[int](value = [1])\nbox",
+            "lib": "record Box[T]\n  value: T\ntype Alias[T] = Box[list[T]]",
+        },
+    )
+
+    assert _binding_value_type(checked, ENTRY_ID, "box") == RecordType(
+        "Box", (ListType(IntType()),), module_id=ModuleId.from_dotted("lib")
+    )
 
 
 def test_imported_generic_alias_to_non_nominal_is_a_type_error(tmp_path: Path) -> None:

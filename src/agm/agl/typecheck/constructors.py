@@ -19,6 +19,7 @@ from agm.agl.semantics.types import (
     FunctionType,
     RecordType,
     Type,
+    TypeTemplate,
     substitute,
 )
 from agm.agl.syntax.nodes import Call, Expr, NamedArg, ParamKind, Placeholder, VarRef
@@ -205,16 +206,10 @@ class ConstructorChecker:
             )
             for p, ta in zip(type_params, type_args)
         }
-        concrete_args = tuple(subst[p] for p in type_params)
         if not sig.field_names:
             # Nullary variant: instantiate the nominal type and construct it.
-            concrete_type = (
-                self._ctx._env.instantiate_from_gdef(
-                    source_name, gdef, concrete_args, span=span
-                )
-                if gdef is not None
-                else self._ctx._env.instantiate_nominal(owner_name, concrete_args, span=span)
-            )
+            concrete_type = substitute(sig.result_template, subst)
+            assert isinstance(concrete_type, (RecordType, EnumType, ExceptionType))
             return self._check_constructor_call(
                 owner=concrete_type, variant=variant, positional=(), named=(), span=span
             )
@@ -732,6 +727,35 @@ class ConstructorChecker:
             )
         return owner, self._ctx._env.get_generic_type_from_module(owner.module_id, owner.name)
 
+    def _resolve_cross_module_generic_constructor(
+        self, callee_ref: BindingRef, span: SourceSpan
+    ) -> tuple[
+        RecordType | EnumType | ExceptionType, GenericTypeDef, ConstructorSignature, tuple[str, ...]
+    ]:
+        """Resolve a generic constructor while retaining its source alias template."""
+        owner, target_gdef = self._resolve_cross_module_nominal_constructor(callee_ref, span)
+        assert target_gdef is not None
+        signature = self._ctx._env.get_ctor_sig_from_module(owner.module_id, owner.name, None)
+        assert signature is not None
+        source = self._ctx._env.source_type_template_qname(callee_ref.module_id, callee_ref.name)
+        assert source is not None
+        target_match = TypeTemplate(target_gdef.template, target_gdef.type_params).match(
+            source.template
+        )
+        assert target_match is not None
+        target_subst = dict(target_match.bindings)
+        effective_signature = ConstructorSignature(
+            owner_name=callee_ref.name,
+            variant=None,
+            field_names=signature.field_names,
+            field_templates=tuple(
+                substitute(field, target_subst) for field in signature.field_templates
+            ),
+            result_template=source.template,
+            type_params=source.type_params,
+        )
+        return owner, target_gdef, effective_signature, source.type_params
+
     def check_cross_module_constructor_as_value(
         self, callee_ref: BindingRef, *, span: SourceSpan, expected: Type | None
     ) -> Type:
@@ -767,23 +791,21 @@ class ConstructorChecker:
             )
         owner, target_gdef = self._resolve_cross_module_nominal_constructor(callee_ref, span)
         if target_gdef is not None:
-            sig = self._ctx._env.get_ctor_sig_from_module(owner.module_id, owner.name, None)
-            assert sig is not None, (
-                f"GenericTypeDef '{owner.name}' in '{owner.module_id.dotted()}' "
-                "has no constructor signature in the graph table"
+            _, target_gdef, sig, type_params = self._resolve_cross_module_generic_constructor(
+                callee_ref, span
             )
             return self.check_generic_constructor_as_value(
                 ctor_ref=ConstructorRef(
-                    owner_name=owner.name,
+                    owner_name=callee_ref.name,
                     variant=None,
                     owner_decl_node_id=callee_ref.decl_node_id,
-                    type_params=target_gdef.type_params,
+                    type_params=type_params,
                 ),
                 span=span,
                 expected=expected,
                 sig=sig,
                 gdef=target_gdef,
-                source_name=owner.name,
+                source_name=callee_ref.name,
             )
         if isinstance(owner, RecordType):
             return self.check_constructor_as_value(owner=owner, variant=None, span=span)
@@ -808,19 +830,15 @@ class ConstructorChecker:
                 "type arguments.",
                 span=span,
             )
-        sig = self._ctx._env.get_ctor_sig_from_module(owner.module_id, owner.name, None)
-        assert sig is not None, (
-            f"GenericTypeDef '{owner.name}' in '{owner.module_id.dotted()}' "
-            "has no constructor signature in the graph table"
-        )
+        _, gdef, sig, type_params = self._resolve_cross_module_generic_constructor(callee_ref, span)
         return self._instantiate_constructor_value(
-            owner_name=owner.name,
+            owner_name=callee_ref.name,
             variant=None,
-            type_params=gdef.type_params,
+            type_params=type_params,
             type_args=type_args,
             sig=sig,
             gdef=gdef,
-            source_name=owner.name,
+            source_name=callee_ref.name,
             span=span,
         )
 
@@ -840,20 +858,16 @@ class ConstructorChecker:
         assert isinstance(node.callee, VarRef)
         owner_type, gdef = self._resolve_cross_module_nominal_constructor(callee_ref, node.span)
         if gdef is not None:
-            ctor_sig = self._ctx._env.get_ctor_sig_from_module(
-                owner_type.module_id, owner_type.name, None
-            )
-            assert ctor_sig is not None, (
-                f"GenericTypeDef '{owner_type.name}' in '{owner_type.module_id.dotted()}' "
-                "has no constructor signature in the graph table"
+            _, gdef, ctor_sig, type_params = self._resolve_cross_module_generic_constructor(
+                callee_ref, node.span
             )
             return self._check_generic_constructor_call(
                 node_type_args=node.type_args,
                 ctor_ref=ConstructorRef(
-                    owner_name=owner_type.name,
+                    owner_name=callee_ref.name,
                     variant=None,
                     owner_decl_node_id=callee_ref.decl_node_id,
-                    type_params=gdef.type_params,
+                    type_params=type_params,
                 ),
                 positional=node.args,
                 named=node.named_args,

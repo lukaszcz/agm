@@ -472,6 +472,14 @@ class TestTypeOf:
             == "enum Result\n  | Ok(value: int)\n  | Err(message: text)\n  | Unknown"
         )
 
+    def test_type_of_resolves_prior_entry_constructor(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("enum Result\n  | Ok(value: int)\n  | Err(message: text)").ok
+
+        expected = "enum Result\n  | Ok(value: int)\n  | Err(message: text)"
+        assert s.type_of("Ok(value = 1)") == expected
+        assert s.type_of("Result::Ok(value = 1)") == expected
+
     def test_type_of_does_not_promote_or_advance(self) -> None:
         s = ReplSession()
         s.eval_entry("let x = 1")

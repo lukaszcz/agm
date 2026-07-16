@@ -1121,6 +1121,8 @@ class ReplSession:
             program,
             parent_scope=self._session_scope,
             ambient_agents=self._ambient_agents(host_env),
+            ambient_constructor_candidates=self._ambient_constructor_candidates,
+            ambient_type_names=self._ambient_type_names,
         )
         checked = check(resolved, host_env.capabilities, seed_env=self._type_env)
         from agm.agl.matchcompile import compile_program_matches, diagnostics_from_match_issues

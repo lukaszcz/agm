@@ -11,6 +11,7 @@ Covers:
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import stat
@@ -2284,6 +2285,25 @@ class TestExecAgentPrecedence:
         assert result.returncode == 0, f"stderr: {result.stderr}"
         assert "FINAL" in result.stdout
         assert "BOOTSTRAP" not in result.stdout
+
+    def test_startup_config_effects_are_written_to_the_final_trace(self, tmp_path: Path) -> None:
+        env = self._base_env()
+        _install_marker_runner(tmp_path / "bin", env, name="bootstrap-runner", marker="BOOTSTRAP")
+        trace_file = tmp_path / "trace.jsonl"
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('config runner = ask("choose a runner")\nprint "done"\n')
+        config_dir = tmp_path / ".agm"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text('[exec]\nrunner = "bootstrap-runner"\n')
+
+        result = self._run_agm_exec(
+            [str(agl_file), "--log-file", str(trace_file)], env=env, cwd=tmp_path
+        )
+
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        kinds = [json.loads(line)["kind"] for line in trace_file.read_text().splitlines()]
+        assert "agent_call_attempt" in kinds
+        assert "print" in kinds
 
     def test_startup_config_agent_uses_bootstrap_runner(self, tmp_path: Path) -> None:
         """An agent call in source config is real, not a placeholder response."""

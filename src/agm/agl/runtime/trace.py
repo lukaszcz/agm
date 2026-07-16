@@ -55,8 +55,10 @@ class TraceStore:
     When *path* is ``None`` every method is a no-op (no-log mode).
     """
 
-    def __init__(self, path: Path | None) -> None:
+    def __init__(self, path: Path | None, *, buffer: bool = False) -> None:
         self._path = path
+        self._buffer = buffer
+        self._buffered_records: list[dict[str, object]] = []
         self._run_id: str = new_trace_id()
         # Set once a trace write fails: logging is disabled for the rest of the
         # run and a single warning is emitted.  Program semantics are
@@ -74,6 +76,21 @@ class TraceStore:
         references no record is acceptable as long as the field is present.
         """
         return new_trace_id()
+
+    def activate(self, path: Path | None) -> None:
+        """Set the final path and flush events buffered before it was known."""
+        self._path = path
+        if path is None:
+            self._buffered_records.clear()
+            return
+        for record in self._buffered_records:
+            try:
+                append_jsonl(path, record)
+            except OSError as exc:
+                self._disabled = True
+                print(f"warning: trace logging disabled: {exc}", file=sys.stderr)
+                break
+        self._buffered_records.clear()
 
     @property
     def path(self) -> Path | None:
@@ -101,6 +118,10 @@ class TraceStore:
             "trace_id": trace_id,
         }
         record.update(extra)
+        if self._path is None:
+            if self._buffer:
+                self._buffered_records.append(record)
+            return
         try:
             append_jsonl(self._path, record)
         except OSError as exc:
@@ -109,13 +130,13 @@ class TraceStore:
 
     def run_start(self) -> None:
         """Record the start of a run (boundary marker)."""
-        if self._path is None:
+        if self._path is None and not self._buffer:
             return
         self._emit("run_start", new_trace_id(), {})
 
     def run_end(self, *, ok: bool) -> None:
         """Record the end of a run with the overall outcome."""
-        if self._path is None:
+        if self._path is None and not self._buffer:
             return
         self._emit("run_end", new_trace_id(), {"ok": ok})
 
@@ -133,7 +154,7 @@ class TraceStore:
         callers can always thread a valid ``trace_id`` through.
         """
         trace_id = new_trace_id()
-        if self._path is None:
+        if self._path is None and not self._buffer:
             return trace_id
         extra: dict[str, object] = {
             "agent": agent,
@@ -156,7 +177,7 @@ class TraceStore:
         span: "SourceSpan | Location | None" = None,
     ) -> None:
         """Record the outcome of a codec parse attempt."""
-        if self._path is None:
+        if self._path is None and not self._buffer:
             return
         extra: dict[str, object] = {
             "ok": ok,
@@ -177,7 +198,7 @@ class TraceStore:
         span: "SourceSpan | Location | None" = None,
     ) -> None:
         """Record a ``:=`` mutation of a mutable binding."""
-        if self._path is None:
+        if self._path is None and not self._buffer:
             return
         from agm.agl.runtime.serialize import dumps_exact
 
@@ -198,7 +219,7 @@ class TraceStore:
         span: "SourceSpan | Location | None" = None,
     ) -> None:
         """Record a ``print`` statement output."""
-        if self._path is None:
+        if self._path is None and not self._buffer:
             return
         extra: dict[str, object] = {"rendered": rendered}
         if span is not None:
@@ -225,7 +246,7 @@ class TraceStore:
         the ``exec_command`` record.
         """
         trace_id = new_trace_id()
-        if self._path is None:
+        if self._path is None and not self._buffer:
             return trace_id
         extra: dict[str, object] = {
             "command": command,
@@ -256,7 +277,7 @@ class TraceStore:
         cross-reference the exception record in the trace file with the raised
         exception.
         """
-        if self._path is None:
+        if self._path is None and not self._buffer:
             return
         extra: dict[str, object] = {
             "type_name": type_name,

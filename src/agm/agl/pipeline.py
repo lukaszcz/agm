@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.agents import AgentRegistry
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.externs import ExternRegistry
+    from agm.agl.runtime.trace import TraceStore
     from agm.agl.scope.graph import ResolvedModuleGraph
     from agm.agl.scope.symbols import ResolvedProgram
     from agm.agl.semantics.type_table import TypeTable
@@ -295,6 +296,7 @@ class StartupConfigResult:
     checked_graph: "CheckedModuleGraph | None" = None
     compiled_graph: "MatchCompiledModuleGraph | None" = None
     interpreter: IrInterpreter | None = None
+    trace: "TraceStore | None" = None
 
 
 class PipelineDriver:
@@ -1360,6 +1362,10 @@ class PipelineDriver:
                 compiled_graph=compiled_graph,
             )
 
+        from agm.agl.runtime.trace import TraceStore
+
+        trace = TraceStore(path=None, buffer=True)
+        trace.run_start()
         interp = IrInterpreter(
             executable,
             registry=host_env.registry,
@@ -1372,6 +1378,7 @@ class PipelineDriver:
             config_cli=config_cli,
             config_base=config_base,
             extern_registry=host_env.extern_registry,
+            trace=trace,
         )
         try:
             values = interp.collect_entry_config_values(names)
@@ -1393,6 +1400,7 @@ class PipelineDriver:
             checked_graph=checked_graph,
             compiled_graph=compiled_graph,
             interpreter=interp,
+            trace=trace,
         )
 
     def resume_startup_config(
@@ -1403,12 +1411,14 @@ class PipelineDriver:
         from agm.agl.runtime.trace import TraceStore
         from agm.agl.semantics.exceptions import AglRaise
 
-        trace = TraceStore(path=log_file)
+        trace = startup.trace if startup.trace is not None else TraceStore(path=log_file)
         if log_file is not None:
             from agm.core.fs import mkdir
 
             mkdir(log_file.parent, parents=True, exist_ok=True)
-        trace.run_start()
+        trace.activate(log_file)
+        if startup.trace is None:
+            trace.run_start()
         try:
             bindings = startup.interpreter.resume(
                 registry=self.host_environment().registry, trace=trace

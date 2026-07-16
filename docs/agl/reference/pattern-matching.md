@@ -107,8 +107,8 @@ The first branch could equivalently use bare `Pass` or explicit `Pass()`.
 
 A **bare** constructor name matches **nullary** variants only. A bare name for a
 variant that has fields is a static error directing you to an explicit form, so
-the discarded payload is acknowledged: write `Fail(...)`, `Fail(_)`, or
-destructure the fields. The call and qualified forms apply to every variant;
+the discarded payload is acknowledged: write `Fail()` or destructure the
+fields. Empty parentheses ignore every payload field, including named-only fields. The call and qualified forms apply to every variant;
 the bare form is a convenience for the common nullary case.
 
 #### Module-qualified constructor patterns

@@ -132,9 +132,9 @@ _sep: _NEWLINE | SEMICOLON
             | param_decl
             | program_decl
             | agent_decl
-            | config_decl
             | infix_decl
             | func_def
+            | builtin_var_def
             | builtin_record_def
             | builtin_enum_def
             | builtin_exception_def
@@ -228,10 +228,6 @@ program_decl: "program" name
 // The optional runner string must be a static literal (checked in transformer).
 agent_decl: AGENT name (EQ template)?
 
-// config_decl: "config" NAME [= expr] — root-only engine-key binding;
-// the optional value is a general expression resolved at runtime.
-config_decl: "config" name (EQ expr)?
-
 // infix declaration: user-defined symbolic binary operator associativity and priority.
 // Priority may be a literal integer or relative to an existing operator priority.
 infix_decl: "infixl" infix_op infix_priority? -> infixl_decl
@@ -263,6 +259,11 @@ builtin_func_def: "builtin" _NEWLINE? "def" name type_params? LPAR param_list? R
 // `builtin_func_def`: no body, mandatory return type. The `_NEWLINE?` lets
 // the modifier sit on its own line above the declaration.
 extern_func_def: "extern" _NEWLINE? "def" name type_params? LPAR param_list? RPAR THIN_ARROW type_expr
+
+// Host-implemented builtin mutable-setting declaration. Body-less: a name and a
+// mandatory type annotation, no `= expr`. `builtin` is a decorator-style
+// modifier (the `_NEWLINE?` lets it sit on its own line above the declaration).
+builtin_var_def: "builtin" _NEWLINE? "var" name type_ann
 
 builtin_record_def: "builtin" _NEWLINE? record_def
 builtin_enum_def: "builtin" _NEWLINE? enum_def

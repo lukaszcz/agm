@@ -86,32 +86,3 @@ def test_graph_run_rechecks_checked_artifact_when_capabilities_change() -> None:
     assert result.diagnostics
 
 
-def test_startup_config_rejects_checked_graph_from_different_prepared_graph() -> None:
-    runtime = PipelineDriver()
-    prepared_a = _prepare_graph("config log = true\nlog")
-    assert prepared_a.resolved_graph is not None
-    checked_a = check_graph(prepared_a.resolved_graph, runtime.host_environment().capabilities)
-    prepared_b = _prepare_graph("config log = false\nlog")
-
-    result = runtime.collect_startup_config_graph(
-        prepared_b, names={"log"}, checked_graph=checked_a
-    )
-
-    assert not result.ok
-    assert result.error is None
-    assert result.diagnostics
-
-
-def test_startup_config_rechecks_checked_graph_when_capabilities_change() -> None:
-    checking_runtime = PipelineDriver(default_agent=lambda _request: "result")
-    runtime = PipelineDriver()
-    prepared = _prepare_graph('config log = true\nlet value = ask "request"\nvalue')
-    assert prepared.resolved_graph is not None
-    checked = check_graph(prepared.resolved_graph, checking_runtime.host_environment().capabilities)
-    checked = replace(checked, capabilities=checking_runtime.host_environment().capabilities)
-
-    result = runtime.collect_startup_config_graph(prepared, names={"log"}, checked_graph=checked)
-
-    assert not result.ok
-    assert result.error is None
-    assert result.diagnostics

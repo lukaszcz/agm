@@ -1095,22 +1095,6 @@ class TestAssignStmtModuleId:
 
 
 # ---------------------------------------------------------------------------
-# Test: config declaration in non-entry errors
-# ---------------------------------------------------------------------------
-
-
-class TestConfigDeclInNonEntry:
-    def test_config_decl_in_non_entry_errors(self, tmp_path: Path) -> None:
-        """A config declaration in a non-entry module is an error."""
-        graph = _make_graph_from_files(tmp_path, {
-            "entry": "import mylib\n()",
-            "mylib": "config log = true",
-        })
-        with pytest.raises(AglScopeError, match="config"):
-            resolve_graph(graph)
-
-
-# ---------------------------------------------------------------------------
 # Test: type declarations in modules (RecordDef/EnumDef/TypeAlias)
 # ---------------------------------------------------------------------------
 
@@ -1671,7 +1655,11 @@ class TestExportDecl:
         ) == 2
 
 
-def test_bare_pattern_constructor_ambiguity_requires_qualification(tmp_path: Path) -> None:
+def test_bare_pattern_constructor_shared_spelling_defers_to_scrutinee(tmp_path: Path) -> None:
+    # 'same' is a variant of both the imported Foreign and the local Local.
+    # A bare pattern on a Local scrutinee is not an ambiguity error at scope
+    # resolution: both candidates are recorded and the scrutinee's enum type
+    # selects between them at check time.
     graph = _make_graph_from_files(
         tmp_path,
         {
@@ -1685,5 +1673,12 @@ def test_bare_pattern_constructor_ambiguity_requires_qualification(tmp_path: Pat
         },
     )
 
-    with pytest.raises(AglScopeError, match="ambiguous"):
-        resolve_graph(graph)
+    result = resolve_graph(graph)
+    entry = result.modules[ENTRY_ID]
+    case = entry.resolved.program.body.items[-1]
+    pattern = case.branches[0].pattern
+    assert pattern.node_id in entry.resolved.bare_variant_patterns
+    candidate_owners = {
+        ref.owner_name for ref in entry.resolved.bare_variant_candidates[pattern.node_id]
+    }
+    assert candidate_owners == {"Local", "Foreign"}

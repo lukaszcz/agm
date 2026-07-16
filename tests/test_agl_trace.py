@@ -808,6 +808,28 @@ class TestTraceStoreProperties:
 
         assert capsys.readouterr().err.count("trace logging disabled") == 1
 
+    def test_activate_none_stops_buffering(self) -> None:
+        """A buffered store activated with path=None must settle into no-log mode.
+
+        Regression: ``activate(None)`` used to clear the buffer but leave
+        buffering enabled, so every later event kept accumulating in memory
+        (never flushed, path is None) for the whole run.
+        """
+        from agm.agl.runtime.trace import TraceStore
+        from agm.agl.semantics.values import IntValue
+
+        trace = TraceStore(path=None, buffer=True)
+        trace.run_start()
+        trace.activate(None)
+        # Emit a variety of events after deactivation.
+        for _ in range(100):
+            trace.print_stmt(rendered="x", span=None)
+            trace.mutation(name="v", value=IntValue(1), span=None)
+        trace.run_end(ok=True)
+
+        # No events may be retained: the store is a genuine no-op now.
+        assert trace._buffered_records == []
+
     def test_trace_store_path_property(self, tmp_path: Path) -> None:
         from agm.agl.runtime.trace import TraceStore
 

@@ -26,13 +26,16 @@ Agents must be declared in source; the host backs declared names but never owns 
 
 `agm exec` wires the backings by reading the declared inventory and registering each name with a runner-backed factory. The runner command is chosen by precedence across config, a source runner hint, CLI flags, and a built-in default floor, so every declared agent resolves and also backs `ask`. The agent-runner mechanics are shared with the rest of AGM (see [agents.md](../agents.md)).
 
-## Config Declarations
+## Engine Settings
 
-`config KEY = VALUE` declarations let a program carry its own execution options. Each names a fixed engine key (`semantics/engine_keys.py`) and binds it as an immutable, runtime-resolved **readable value** — the unification of `config` and `param` into one declared-binding mechanism. The scope pass enforces root placement and creates the binding; typecheck validates the value against the engine-key type (an `Option[T]` key also accepts a bare inner `T`); the lowerer emits an `IrConfigBind` initializer whose evaluator resolves it as CLI override > source value > host default.
+The engine settings a program can tune — `runner`, `log`, `log-file`, `strict-json`, `max-iters`, `timeout` — are declared as `builtin var` bindings in the standard-library module `stdlib/std/config.agl`, one per setting (`src/agm/config/engine_keys.py` is the shared name/type catalog, mapped to AgL types by the semantics layer). A `builtin var` is a body-less, runtime-backed mutable binding: the scope and type passes treat it like any binding, and the lowerer routes reads to `IrBuiltinLoad` and writes to `IrBuiltinStore` (`lower/lowerer.py`), keyed by the setting name rather than an ordinary frame cell.
 
-Three engine keys — `strict-json`, `max-iters`, `timeout` — take effect at binding time: when `IrConfigBind` executes for one of these keys, the evaluator immediately updates the corresponding live interpreter field (`_strict_json`, `_loop_limit`, `_shell_exec_timeout`). The resolved value takes effect from that point forward, so subsequent `ask`, `do`, and `exec` calls within the program see the updated setting. The remaining keys (`runner`, `log`, `log-file`) are start-resolved by `agm exec` before the program runs; `exec` uses a narrow dependency-aware startup-config prepass through the same match-compiled/lowered graph. The slice follows bindings, closures, function bodies/defaults, and imported-module symbols, while retaining earlier live-setting configs so bootstrap evaluation uses ordinary runtime settings. Startup trace events are buffered until the resolved trace sink is available, and unrelated initializers remain for the normal run.
+The interpreter splits the six settings into two backings (`eval/ir_interpreter.py` `_store_builtin_setting` / `_load_builtin_setting`):
 
-`agm exec` passes the CLI/base value maps to the runtime (see [config.md](../config.md)). Config declarations are fully supported in the REPL: effect-at-binding applies per-entry and persists across entries; `:reset` clears all config bindings.
+- **Runtime-live** (`strict-json`, `max-iters`, `timeout`) update live interpreter fields (`_strict_json`, `_loop_limit`, `_shell_exec_timeout`), so the effect takes hold from the write onward for subsequent `ask`, loop, and `exec` evaluation.
+- **Host-consumed** (`runner`, `log`, `log-file`) update an in-interpreter register and, when a `HostSettingsReconfigurer` is present, reconfigure the live host service on write (`_reconfigure_host_service`, `runtime/host_settings.py`): a `runner` write rebuilds the default agent for later unnamed `ask` calls; `log`/`log-file` writes repoint the trace destination.
+
+Because a write is an ordinary positional statement, settings take effect in program order and `agm exec` runs the program in a **single phase** — there is no separate startup pass. The CLI and config-file layers seed the initial register/field values (see [config.md](../config.md)); a source write then overrides them from its point onward. In the REPL a write persists across entries the same way any mutation does; `:reset` restores the seeded defaults.
 
 ## Console and Confirmation
 
@@ -44,4 +47,4 @@ The REPL console adds interactivity around the session. Live agent calls are gat
 - `src/agm/agl/pipeline.py` — program preparation, parameter discovery, agent reconciliation, and host-environment assembly shared by `exec` and the REPL.
 - `src/agm/commands/exec.py` and `src/agm/commands/repl.py` — the hosting commands.
 - `src/agm/cli_support/exec_params.py` — parameter discovery and option wiring for `agm exec`.
-- Tests: `tests/test_agl_repl_session.py`, `tests/test_agl_repl_console.py`, `tests/test_agl_repl_agents.py`, `tests/test_agl_repl_themes.py`, `tests/test_agl_config_decl.py`, `tests/test_exec_command.py`.
+- Tests: `tests/test_agl_repl_session.py`, `tests/test_agl_repl_console.py`, `tests/test_agl_repl_agents.py`, `tests/test_agl_repl_themes.py`, `tests/test_agl_repl_builtin_settings.py`, `tests/test_agl_builtin_var.py`, `tests/test_agl_builtin_var_host.py`, `tests/test_exec_command.py`.

@@ -104,7 +104,6 @@ KW_IN = "in"
 KW_TRUE = "true"
 KW_FALSE = "false"
 KW_NULL = "null"
-KW_CONFIG = "config"
 KW_INFIXL = "infixl"
 KW_INFIXR = "infixr"
 KW_PRIO = "prio"
@@ -154,7 +153,6 @@ KEYWORDS: frozenset[str] = frozenset(
         KW_TRUE,
         KW_FALSE,
         KW_NULL,
-        KW_CONFIG,
         KW_INFIXL,
         KW_INFIXR,
         KW_PRIO,

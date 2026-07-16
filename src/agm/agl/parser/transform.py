@@ -397,15 +397,14 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
-    def config_decl(self, meta: Meta, args: _Args) -> syntax.ConfigDecl:
-        """config_decl: "config" name (EQ expr)?"""
+    def builtin_var_def(self, meta: Meta, args: _Args) -> syntax.BuiltinVarDecl:
+        """builtin_var_def: "builtin" _NEWLINE? "var" name type_ann"""
         name_tok = _find_name_token(args)
-        _, value = _extract_ann_and_optional_expr(args[1:])
-        span = self._span_from_meta(meta)
-        return syntax.ConfigDecl(
+        type_expr = _find_type_expr(args[1:])
+        return syntax.BuiltinVarDecl(
             name=str(name_tok),
-            value=value,
-            span=span,
+            type_ann=type_expr,
+            span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
@@ -824,6 +823,7 @@ class AstBuilder(Transformer):
                 name=lhs.name,
                 span=lhs.span,
                 node_id=self._next_id(),
+                module_qualifier=lhs.module_qualifier,
             )
         elif (
             isinstance(lhs, syntax.IndexAccess)
@@ -2997,11 +2997,6 @@ def _rewrite_item(
         return replace(
             item,
             default=None if item.default is None else _rewrite_expr(item.default, table, builder),
-        )
-    if isinstance(item, syntax.ConfigDecl):
-        return replace(
-            item,
-            value=None if item.value is None else _rewrite_expr(item.value, table, builder),
         )
     return item
 

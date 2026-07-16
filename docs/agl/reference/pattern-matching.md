@@ -111,6 +111,11 @@ the discarded payload is acknowledged: write `Fail()` or destructure the
 fields. Empty parentheses ignore every payload field, including named-only fields. The call and qualified forms apply to every variant;
 the bare form is a convenience for the common nullary case.
 
+When two enums share an unqualified variant spelling, a bare reference in
+expression position is a static ambiguity error ([Bindings and scope](bindings-and-scope.md)),
+but in a pattern the scrutinee's static type selects the intended enum, so a
+bare pattern needs no qualification.
+
 #### Module-qualified constructor patterns
 
 When a type comes from an imported module, the constructor may be prefixed

@@ -18,7 +18,7 @@ AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-c
 
 - **The command tree is the directory tree.** `src/agm/commands/` mirrors the CLI command hierarchy one-to-one, including nested groups (`config/`, `dep/`, `loop/`, `sync/`, `tmux/`, `workspace/`, `worktree/`). Finding a command's code is a path lookup.
 - **Commands orchestrate; primitives do.** Command modules wire config, project layout, git, and agents together. Reusable behavior lives in `util/`, `core/`, `project/`, `vcs/`, `config/`, and `agent/`, never copied into individual commands.
-- **Configuration is layered TOML.** Settings merge across install, home, project, and workspace scopes; per-command sections override base sections; AgL source config declarations and CLI flags override the file layers for the relevant commands.
+- **Configuration is layered TOML.** Settings merge across install, home, project, and workspace scopes; per-command sections override base sections; AgL source engine-setting writes and CLI flags override the file layers for the relevant commands.
 - **The filesystem is the project model.** A project is a directory layout (embedded or split) plus git worktrees and dependency checkouts. AGM detects state from disk rather than maintaining a separate database.
 - **Real agents are never run in tests, and never assumed.** Agent invocation is a subprocess boundary with timeout and output capture; runners are resolved from config and always have a default floor.
 - **AgL is firewalled, not isolated.** The firewall is semantic: its passes depend only on a stable AST, never on the parser, and it is reached only through the `exec`/`repl` commands and lazily imported. It still reuses the shared layers below it rather than reimplementing them.

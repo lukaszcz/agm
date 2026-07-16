@@ -195,7 +195,13 @@ def _compile_owner_cases(
             raise MatchCompileInvariantError(
                 f"duplicate source case node id {source_case.node_id} in one program"
             )
-        compiled = compile_case(normalize_case(source_case, owner))
+        # Clean cases are validated once at the artifact boundary
+        # (``MatchCompiled*.__post_init__``); skip the redundant per-case replay
+        # here.  Issue-bearing cases never reach that boundary (the stage returns
+        # issues without an artifact), so keep their per-case invariant check.
+        compiled = compile_case(normalize_case(source_case, owner), validate=False)
+        if compiled.issues:
+            validate_compiled_case(compiled)
         cases[source_case.node_id] = compiled
         issues.extend(compiled.issues)
     return cases, issues

@@ -97,8 +97,9 @@ class BinderKind(enum.Enum):
         A top-level ``def`` declaration (immutable value binding).
     ``agent_binding``
         An ``agent`` declaration (immutable value binding of type ``agent``).
-    ``config_binding``
-        A ``config`` declaration (immutable engine-setting binding).
+    ``builtin_var_binding``
+        A ``builtin var`` declaration (MUTABLE, runtime-register-backed engine
+        setting; readable and assignable with ``:=``).
     ``constructor_binding``
         A record constructor or enum variant binding (immutable value binding).
     ``loop_var_binding``
@@ -112,7 +113,7 @@ class BinderKind(enum.Enum):
     function_binding = "function_binding"
     agent_binding = "agent_binding"
     param_binding = "param_binding"
-    config_binding = "config_binding"
+    builtin_var_binding = "builtin_var_binding"
     constructor_binding = "constructor_binding"
     loop_var_binding = "loop_var_binding"
 
@@ -282,6 +283,13 @@ class ResolvedProgram:
         the checker validates that the name is a nullary variant of the scrutinee
         enum, and match compilation consumes the classification when normalizing
         the source pattern into a decision artifact.
+    ``bare_variant_candidates``
+        Maps each bare-variant ``VarPattern.node_id`` to every constructor its
+        spelling could denote.  When a spelling is shared across enums the
+        resolver cannot pick one — the scrutinee's enum type does that at check
+        time — so it records all candidates here and the checker selects the
+        matching one, recording it in ``bare_variant_refs``.  A single-candidate
+        (unambiguous) pattern is also resolved eagerly into ``bare_variant_refs``.
     ``case_scopes``
         Maps every source ``Case.node_id`` to the exact lexical scope active
         when the resolver entered that case.  Downstream diagnostics use this
@@ -305,6 +313,7 @@ class ResolvedProgram:
     )
     bare_variant_patterns: frozenset[int] = frozenset()
     bare_variant_refs: dict[int, ConstructorRef] = field(default_factory=dict)
+    bare_variant_candidates: dict[int, tuple[ConstructorRef, ...]] = field(default_factory=dict)
     case_scopes: dict[int, ScopeNode] = field(default_factory=dict)
 
 

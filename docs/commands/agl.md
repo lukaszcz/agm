@@ -79,7 +79,7 @@ like any other static error.
   `[n]` bound and no `for` clause) at `N` body executions, raising
   `MaxIterationsExceeded`. Self-bounded loops (`for`, `do[n]`) are never cut
   short by this valve. The valve is **off by default**; setting this option (or
-  `max-iters` in config / a source `config max-iters = N` declaration) turns it
+  `max-iters` in config / a source `std.config::max-iters := N` write) turns it
   on. See [Control flow](../agl/reference/control-flow.md).
 - `--max-call-depth N`: Override the maximum recursion call depth (CLI >
   `[exec] max-call-depth` config; the canonical default is 256). Exceeding it
@@ -89,8 +89,9 @@ like any other static error.
 - `--log` / `--log-file PATH` / `--no-log`: Control trace logging, which is **off by
   default**. `--log` enables it with an auto-generated timestamped path under
   `.agent-files/`; `--log-file PATH` writes a structured JSONL trace to `PATH`;
-  `--no-log` disables it, overriding a `config log = true` source declaration or
-  `[exec] log = true` setting. The three are mutually exclusive (at most one may be given).
+  `--no-log` disables it, providing the initial trace setting a program can still
+  override with a `std.config::log := true` write, and overriding a `[exec] log = true`
+  setting. The three are mutually exclusive (at most one may be given).
 - `--dry-run`: Run the full static pipeline, param validation, and contract
   materialization, then stop before evaluating any expression (static errors exit 1; a
   clean check exits 0 with no program output). A program declaring `extern def`
@@ -126,11 +127,15 @@ precedence (highest to lowest):
 |------|--------|
 | 1 | `[exec.agents.<name>]` (config, per-agent) — backs a declared name, overriding any source hint |
 | 2 | the source `agent NAME = "…"` runner string |
-| 3 | `--runner COMMAND` (CLI flag) |
-| 4 | `config runner = "…"` source declaration (default runner for all agents) |
+| 3 | a source `std.config::runner := "…"` write (default runner for all agents) |
+| 4 | `--runner COMMAND` (CLI flag) |
 | 5 | `[exec] runner` (config) |
 | 6 | `[loop] runner` (config) |
 | 7 | `claude -p` (built-in default) |
+
+A `std.config::runner` write applies **positionally**: it rebuilds the default
+agent used by subsequent unnamed `ask` calls and by later-dispatched declared
+agents without their own command, from the write point onward.
 
 A `[exec.agents.<name>]` entry for a name the program never declares is a host
 configuration error. Because the default runner is always the floor (rung 7), every
@@ -141,7 +146,7 @@ the rendered prompt-file path.
 ### Configuration
 
 The `[exec]` section in `config.toml` supplies the engine defaults that CLI flags and
-source config declarations can override:
+source `std.config` writes can override:
 
 ```toml
 [exec]
@@ -162,52 +167,60 @@ reviewer = "claude -p"      # per-agent runner commands; the name must be
 settings. The name `agents` is reserved for the structural `[exec.agents]` map and is
 never treated as a per-command override.
 
-#### Source-level config declarations
+#### Source-level engine settings (`std.config`)
 
-An AgL program may set exec options as **config declarations** at the program root.
-Each declaration is also a **readable immutable binding** usable in any expression:
+An AgL program may set its own exec options by importing the standard-library
+module `std.config` and writing its **engine settings** — mutable bindings backed
+by the live engine. Each setting is also readable through a qualified reference:
 
 ```agl
-config log = true             # enable trace logging for this program
-config log-file = "trace.log" # explicit trace path
-config strict-json = true     # require bare JSON from agents
-config max-iters = 10         # host safety valve cap for unbounded loops
-config runner = "claude -p"   # default agent runner
-config timeout = "30s"        # shell-exec idle timeout
+import std.config
+
+std.config::log := true             # enable trace logging for this program
+std.config::log-file := Some("trace.log")  # explicit trace path
+std.config::strict-json := true     # require bare JSON from agents
+std.config::max-iters := 10         # host safety valve cap for unbounded loops
+std.config::runner := "claude -p"   # default agent runner
+std.config::timeout := Some("30s")  # shell-exec idle timeout
+
 param spec
 let result = ask "Process ${spec}"
 print result
 ```
 
-Precedence differs by key type:
+Because the settings live in another module, a write must use a qualified target
+(`std.config::KEY := …`); a bare `KEY := …` is not a valid way to set one. The
+`Option[text]` settings (`log-file`, `timeout`) take a `Some("…")` or `None`
+value.
 
-- **Engine keys** (`runner`, `log`, `strict-json`, `max-iters`, `log-file`, `timeout`):
-  `CLI > source value > [<program>].X > [exec].X > engine default`
+Precedence differs by kind:
+
+- **Engine settings** (`runner`, `log`, `strict-json`, `max-iters`, `log-file`, `timeout`):
+  `source std.config::X write > CLI > [<program>].X > [exec].X > engine default`
 - **Param values** (`param NAME`):
   `CLI > [<program>].NAME > source default > required error`
 
-For example, `--no-log` overrides `config log = true`, and `config max-iters = 10`
-overrides `[exec] max-iters = 5`.
+The CLI flags and the config-file layers supply the setting's **initial** value; a
+source `std.config::X := …` write overrides them from its program point onward. For
+example, `--no-log` sets the initial state to off, but a later
+`std.config::log := true` write turns tracing on from that point, and
+`std.config::max-iters := 10` overrides `[exec] max-iters = 5`.
 
-The three eval-consumed keys (`strict-json`, `max-iters`, `timeout`) take effect at
-their declaration point (**effect-at-binding**): expressions after the declaration see
-the updated setting. The remaining keys (`runner`, `log`, `log-file`) are
-**start-resolved** — declare them at the top of the program so the agent factory and
-trace infrastructure see the chosen values before anything runs. If a start-resolved
-config expression calls an agent (for example, to compute `config runner`), that call
-uses a bootstrap agent factory: CLI/config/default runner settings and the normal
-per-agent config/source-hint precedence. Its resulting `runner` value configures the
-factory used by the main program, not the call that computed it.
+Every setting takes effect **positionally**, like an ordinary `var` mutation:
+statements after the write see the new value, statements before it do not. Writing
+`runner`, `log`, or `log-file` reconfigures the live default agent and trace
+destination for subsequent calls; writing `strict-json`, `max-iters`, or `timeout`
+changes how subsequent agent calls, loops, and `exec` calls behave.
 
-Note: `config timeout` governs only the **shell-exec** timeout. The agent idle timeout
-is start-resolved from CLI / `[exec]` and cannot be changed mid-program.
+Note: the `timeout` setting governs only the **shell-exec** timeout. The agent idle
+timeout is resolved from CLI / `[exec]` and cannot be changed mid-program.
 
-A bad `config timeout = "…"` source value is a runtime AgL error (exit 2), because
-source config declarations are runtime-evaluated expressions. A bad `--timeout` or
-`[exec].timeout` value is a pre-execution error (exit 1).
+A bad `std.config::timeout := "…"` value is a runtime AgL error (exit 2), because a
+source write is a runtime-evaluated expression. A bad `--timeout` or `[exec].timeout`
+value is a pre-execution error (exit 1).
 
-`--no-log-file` clears only the in-program `config log-file` binding; a log-file path
-set via `[exec] log-file` or auto-assigned by `--log` still applies. Use `--no-log` to
+`--no-log-file` clears only the initial `log-file` value; a log-file path set via
+`[exec] log-file` or auto-assigned by `--log` still applies. Use `--no-log` to
 disable tracing entirely.
 
 ### Exit codes
@@ -347,11 +360,12 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
   `<type: int>`) instead of reporting ``'X' is not defined.``. This is a REPL
   convenience only — the language is unchanged, and names that are also values (a record
   constructor, a binding) keep evaluating normally.
-- **Config declarations** (`config KEY = VALUE`) are fully supported at the REPL prompt.
-  Effect-at-binding applies immediately: the eval-consumed keys (`strict-json`, `max-iters`,
-  `timeout`) take effect from the next entry; the start-resolved keys (`runner`, `log`,
-  `log-file`) are set for subsequent entries in the session. `:reset` clears all config
-  bindings. CLI flags and `[exec]` config set session-wide defaults before the loop starts.
+- **Engine settings** are set at the REPL prompt by importing `std.config` and writing a
+  qualified target (`std.config::max-iters := 3`). The write takes effect positionally,
+  so subsequent entries in the session see the new value; writing `runner`, `log`, or
+  `log-file` reconfigures the live default agent and trace destination. `:reset` clears
+  the session, restoring the settings to the CLI/`[exec]` defaults set before the loop
+  starts.
 
 ### Exit codes
 

@@ -18,7 +18,6 @@ from __future__ import annotations
 import decimal
 import inspect
 from collections.abc import Mapping
-from dataclasses import is_dataclass
 from typing import TYPE_CHECKING, Protocol, assert_never, cast
 
 from agm.agl.eval._decimal import AGL_DECIMAL_CONTEXT
@@ -50,10 +49,11 @@ from agm.agl.ir.nodes import (
     IrBind,
     IrBlock,
     IrBreak,
+    IrBuiltinLoad,
+    IrBuiltinStore,
     IrCase,
     IrCoerce,
     IrCompare,
-    IrConfigBind,
     IrConstBool,
     IrConstDecimal,
     IrConstInt,
@@ -115,7 +115,6 @@ from agm.agl.ir.operations import (
     UnaryOp,
 )
 from agm.agl.ir.program import (
-    ExecutableModule,
     ExecutableProgram,
     ExternFunctionBody,
     FunctionDescriptor,
@@ -127,6 +126,7 @@ from agm.agl.runtime.agents import AgentRegistry
 from agm.agl.runtime.codec import ParseResult, _parse_contract_output
 from agm.agl.runtime.convert import StrictJsonParseError, parse_json_strict
 from agm.agl.runtime.externs import ExternRegistry
+from agm.agl.runtime.option import none_value, some_value
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.serialize import value_to_json_obj
 from agm.agl.runtime.trace import TraceStore, noop_trace
@@ -157,6 +157,7 @@ from agm.core.parse import parse_timeout as _parse_timeout
 
 if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract
+    from agm.agl.runtime.host_settings import HostSettingsReconfigurer
 
 __all__ = ["IrInterpreter", "_apply_coercion", "_make_exc_value"]
 
@@ -250,13 +251,14 @@ class _ReturnSignal(Exception):
         self.value = value
 
 
-class _DataclassValue(Protocol):
-    """Typed view of the field names exposed by frozen IR dataclasses."""
+# The engine keys whose ``builtin var`` store applies a live interpreter effect
+# (loop cap, strict-json mode, shell timeout): exactly the settings backed by a
+# live interpreter field.
+_RUNTIME_LIVE_ENGINE_KEYS = frozenset({"strict-json", "max-iters", "timeout"})
 
-    __match_args__: tuple[str, ...]
-
-
-_STARTUP_STATE_CONFIG_NAMES = frozenset({"strict-json", "max-iters", "timeout"})
+# Engine default for ``max-iters`` (the loop safety valve), reported when a
+# ``builtin var max-iters`` read finds the valve off (``_loop_limit is None``).
+_DEFAULT_MAX_ITERS = 5
 
 
 # ---------------------------------------------------------------------------
@@ -370,24 +372,20 @@ class IrInterpreter:
         shell_exec_timeout: float | None = None,
         host_contracts: Mapping[ContractId, "OutputContract"] | None = None,
         base_frame: Frame | None = None,
-        config_cli: Mapping[str, Value] | None = None,
-        config_base: Mapping[str, Value] | None = None,
         extern_registry: ExternRegistry | None = None,
+        host_reconfigurer: "HostSettingsReconfigurer | None" = None,
+        builtin_host_settings: Mapping[str, Value] | None = None,
     ) -> None:
         self._program = program
         self._frames: list[Frame] = [base_frame if base_frame is not None else {}]
-        self._config_cli: Mapping[str, Value] = config_cli if config_cli is not None else {}
-        self._config_base: Mapping[str, Value] = config_base if config_base is not None else {}
         self.initializer_values: list[Value] = []
         self.module_initializer_values: dict[ModuleId, list[Value]] = {}
-        self._executed_initializer_indices: dict[ModuleId, set[int]] = {}
         self._call_depth: int = 0
         self._trace: TraceStore = trace if trace is not None else noop_trace()
         self._max_call_depth: int = max_call_depth
         self._param_values: Mapping[SymbolId, Value] = (
             param_values if param_values is not None else {}
         )
-        self._entry_params_installed = False
         self._registry: AgentRegistry = registry if registry is not None else AgentRegistry(
             named={}, default_agent=None
         )
@@ -399,6 +397,22 @@ class IrInterpreter:
         # their own bound and are never cut short by this safety net.
         self._loop_limit: int | None = loop_limit
         self._shell_exec_timeout: float | None = shell_exec_timeout
+        # Registers for the HOST-CONSUMED ``builtin var`` engine settings
+        # (``runner``, ``log``, ``log-file``).  Unlike the three runtime-live
+        # keys (which reuse ``_strict_json`` / ``_loop_limit`` /
+        # ``_shell_exec_timeout``), these have no direct interpreter field; their
+        # values live here as AgL ``Value``s.  The registers start from the
+        # engine defaults and are overlaid with the host-supplied seed (resolved
+        # from the default → config-file → CLI layers) for the keys it provides.
+        # A ``host_reconfigurer`` (when present) reflects a write into the live
+        # host services — the agent registry's default agent and the trace store.
+        self._host_reconfigurer = host_reconfigurer
+        self._builtin_host_settings: dict[str, Value] = {
+            "runner": TextValue("claude"),
+            "log": BoolValue(False),
+            "log-file": none_value(),
+            **(dict(builtin_host_settings) if builtin_host_settings is not None else {}),
+        }
         self._host_contracts: Mapping[ContractId, OutputContract] = (
             host_contracts if host_contracts is not None else {}
         )
@@ -438,18 +452,29 @@ class IrInterpreter:
 
     @property
     def strict_json(self) -> bool:
-        """Current strict-JSON setting (may have been updated by a config binding)."""
+        """Current strict-JSON setting (may have been updated by a ``builtin var`` write)."""
         return self._strict_json
 
     @property
     def loop_limit(self) -> int | None:
-        """Current global max-iters valve (``None`` = OFF; may be updated by a config binding)."""
+        """Current global max-iters valve (``None`` = OFF; may be updated by a write)."""
         return self._loop_limit
 
     @property
     def shell_exec_timeout(self) -> float | None:
-        """Current shell-exec timeout (may have been updated by a config binding)."""
+        """Current shell-exec timeout (may have been updated by a ``builtin var`` write)."""
         return self._shell_exec_timeout
+
+    @property
+    def builtin_host_settings(self) -> dict[str, Value]:
+        """Current host-consumed register values (``runner``/``log``/``log-file``).
+
+        A snapshot copy of the register that backs the host-consumed ``builtin
+        var`` engine settings, reflecting any writes made during the run.  Hosts
+        that persist settings across runs (the REPL) read this back after a
+        successful run to seed the next run.
+        """
+        return dict(self._builtin_host_settings)
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -764,66 +789,12 @@ class IrInterpreter:
             self._install_entry_params()
 
             for mod in self._program.modules.values():
-                for index, node in enumerate(mod.initializers):
-                    if index in self._executed_initializer_indices.get(mod.module_id, set()):
-                        continue
-                    self._eval_and_record_initializer(mod.module_id, index, node)
+                for node in mod.initializers:
+                    self._eval_and_record_initializer(mod.module_id, node)
         return self._collect_results()
 
-    def resume(self, *, registry: AgentRegistry, trace: TraceStore) -> dict[str, Value]:
-        """Continue a startup-config prepass with the final host services."""
-        self._registry = registry
-        self._trace = trace
-        return self.run()
-
-    def collect_entry_config_values(self, names: set[str]) -> dict[str, Value]:
-        """Evaluate initializers until entry-module config values for *names* are bound.
-
-        This supports host settings that must be known before the normal program
-        run starts (currently ``runner``, ``log``, and ``log-file``).  The caller
-        is responsible for using this only for top-of-program startup config.
-        """
-        found: dict[str, Value] = {}
-        entry_module = self._program.modules[self._program.entry_module]
-        if not any(
-            module is entry_module for module in self._program.modules.values()
-        ) or not any(
-            isinstance(node, IrConfigBind) and node.public_name in names
-            for node in entry_module.initializers
-        ):
-            return found
-
-        target_indices = {
-            index
-            for index, node in enumerate(entry_module.initializers)
-            if isinstance(node, IrConfigBind) and node.public_name in names
-        }
-        required_initializers = self._startup_dependency_initializers(
-            entry_module, target_indices
-        )
-        with decimal.localcontext(AGL_DECIMAL_CONTEXT):
-            self._install_entry_function_closures()
-            self._install_entry_params()
-            for module in self._program.modules.values():
-                for index, node in enumerate(module.initializers):
-                    if (module.module_id, index) not in required_initializers:
-                        continue
-                    self._eval_and_record_initializer(module.module_id, index, node)
-                    if (
-                        module is entry_module
-                        and isinstance(node, IrConfigBind)
-                        and node.public_name in names
-                    ):
-                        bound = self._frame[node.symbol]
-                        found[node.public_name] = (
-                            bound.value if isinstance(bound, Cell) else bound
-                        )
-        return found
-
-    def _eval_and_record_initializer(self, module_id: ModuleId, index: int, node: IrExpr) -> None:
-        """Evaluate one initializer once, retaining its result for a later resume."""
-        if index in self._executed_initializer_indices.setdefault(module_id, set()):
-            return
+    def _eval_and_record_initializer(self, module_id: ModuleId, node: IrExpr) -> None:
+        """Evaluate one initializer, retaining its result for result collection."""
         try:
             value = self._eval_initializer(node)
         except AglRaise as exc:
@@ -832,107 +803,9 @@ class IrInterpreter:
             raise
         self.initializer_values.append(value)
         self.module_initializer_values.setdefault(module_id, []).append(value)
-        self._executed_initializer_indices[module_id].add(index)
-
-    @staticmethod
-    def _ir_dependencies(value: object) -> tuple[set[SymbolId], set[FunctionId]]:
-        """Return symbol and callable dependencies reachable from an IR value."""
-        loaded: set[SymbolId] = set()
-        called: set[FunctionId] = set()
-        seen: set[int] = set()
-
-        def visit(item: object) -> None:
-            if id(item) in seen:
-                return
-            seen.add(id(item))
-            if isinstance(item, IrLoad):
-                loaded.add(item.symbol)
-                return
-            if isinstance(item, IrDirectCall):
-                called.add(item.function_id)
-                visit(item.arguments)
-                return
-            if isinstance(item, IrMakeClosure):
-                called.add(item.function_id)
-                for capture in item.captures:
-                    loaded.add(capture.symbol)
-                return
-            if is_dataclass(item):
-                dataclass_item = cast(_DataclassValue, item)
-                for name in dataclass_item.__match_args__:
-                    visit(cast(object, object.__getattribute__(dataclass_item, name)))
-            elif isinstance(item, tuple):
-                for child in item:
-                    visit(child)
-
-        visit(value)
-        return loaded, called
-
-    def _startup_dependency_initializers(
-        self, entry_module: ExecutableModule, target_indices: set[int]
-    ) -> set[tuple[ModuleId, int]]:
-        """Find startup configs plus their transitive symbol and callable dependencies."""
-        binding_initializers = {
-            node.symbol: (module.module_id, index)
-            for module in self._program.modules.values()
-            for index, node in enumerate(module.initializers)
-            if isinstance(node, (IrBind, IrConfigBind))
-        }
-        required = {
-            (entry_module.module_id, index)
-            for index in target_indices
-        }
-        last_target = max(target_indices)
-        required.update(
-            (entry_module.module_id, index)
-            for index, node in enumerate(entry_module.initializers[:last_target])
-            if isinstance(node, IrConfigBind)
-            and node.public_name in _STARTUP_STATE_CONFIG_NAMES
-        )
-
-        pending_symbols: set[SymbolId] = set()
-        pending_functions: set[FunctionId] = set()
-        seen_symbols: set[SymbolId] = set()
-        seen_functions: set[FunctionId] = set()
-
-        def add_dependencies(value: object) -> None:
-            symbols, functions = self._ir_dependencies(value)
-            pending_symbols.update(symbols - seen_symbols)
-            pending_functions.update(functions - seen_functions)
-
-        module_by_id = self._program.modules
-        for module_id, index in required:
-            add_dependencies(module_by_id[module_id].initializers[index])
-
-        while pending_symbols or pending_functions:
-            while pending_functions:
-                function_id = pending_functions.pop()
-                seen_functions.add(function_id)
-                descriptor = self._program.functions[function_id]
-                if descriptor.function_symbol not in seen_symbols:
-                    pending_symbols.add(descriptor.function_symbol)
-                for param in descriptor.params:
-                    if param.default is not None:
-                        add_dependencies(param.default)
-                if isinstance(descriptor.impl, IrFunctionBody):
-                    add_dependencies(descriptor.impl.body)
-
-            if not pending_symbols:
-                continue
-            symbol = pending_symbols.pop()
-            seen_symbols.add(symbol)
-            initializer = binding_initializers.get(symbol)
-            if initializer is None or initializer in required:
-                continue
-            required.add(initializer)
-            module_id, index = initializer
-            add_dependencies(module_by_id[module_id].initializers[index])
-        return required
 
     def _install_entry_params(self) -> None:
         """Install resolved entry parameters before evaluating initializers."""
-        if self._entry_params_installed:
-            return
         for ir_param in self._program.params:
             if ir_param.symbol in self._param_values:
                 self._frames[0][ir_param.symbol] = self._param_values[ir_param.symbol]
@@ -943,7 +816,6 @@ class IrInterpreter:
                     f"Required param {ir_param.public_name!r} has no value;"
                     " the host must supply a value for required params before calling run()"
                 )
-        self._entry_params_installed = True
 
     def _eval_initializer(self, node: IrExpr) -> Value:
         match node:
@@ -1567,23 +1439,13 @@ class IrInterpreter:
                         exc.span = node.location
                     raise
 
-            case IrConfigBind(symbol=sym, public_name=public_name, value=value_expr):
-                # Config precedence: CLI --X > source value > config_base[X].
-                config_value: Value
-                if public_name in self._config_cli:
-                    config_value = self._config_cli[public_name]
-                elif value_expr is not None:
-                    config_value = self._eval(value_expr)
-                elif public_name in self._config_base:
-                    config_value = self._config_base[public_name]
-                else:
-                    raise InvalidIrError(
-                        f"IrConfigBind for {public_name!r} has no source value and no"
-                        " config_base entry; the host must supply a config_base default"
-                    )
-                self._frame[sym] = config_value
+            case IrBuiltinLoad(key=key):
+                return self._load_builtin_setting(key)
+
+            case IrBuiltinStore(key=key, value=value_expr):
+                stored = self._eval(value_expr)
                 try:
-                    self._apply_config_effect(public_name, config_value)
+                    self._store_builtin_setting(key, stored)
                 except AglRaise as exc:
                     exc.span = node.location
                     raise
@@ -1593,47 +1455,119 @@ class IrInterpreter:
                 assert_never(unreachable)
 
     # ------------------------------------------------------------------
+    # Builtin-var register access
+    # ------------------------------------------------------------------
+
+    def _load_builtin_setting(self, key: str) -> Value:
+        """Return the current value of the ``builtin var`` engine setting *key*.
+
+        The three runtime-live keys read the live interpreter fields; the three
+        host-consumed keys read their register in ``_builtin_host_settings``.
+        """
+        if key == "strict-json":
+            return BoolValue(self._strict_json)
+        if key == "max-iters":
+            # ``None`` means the loop safety valve is off; report the engine
+            # default so the ``int``-typed setting always reads a concrete value.
+            limit = self._loop_limit if self._loop_limit is not None else _DEFAULT_MAX_ITERS
+            return IntValue(limit)
+        if key == "timeout":
+            if self._shell_exec_timeout is None:
+                return none_value()
+            return some_value(TextValue(f"{self._shell_exec_timeout}s"))
+        return self._builtin_host_settings[key]
+
+    def _store_builtin_setting(self, key: str, value: Value) -> None:
+        """Store *value* into the ``builtin var`` engine setting *key*.
+
+        The three runtime-live keys route through ``_apply_config_effect`` so the
+        live effect (loop cap, strict-json mode, shell timeout) takes hold from
+        the write onward; the host-consumed keys update their register and, when
+        a host reconfigurer is present, reconfigure the live host service.
+        """
+        if key in _RUNTIME_LIVE_ENGINE_KEYS:
+            self._apply_config_effect(key, value)
+        else:
+            self._builtin_host_settings[key] = value
+            if self._host_reconfigurer is not None:
+                self._reconfigure_host_service(key)
+
+    def _reconfigure_host_service(self, key: str) -> None:
+        """Reflect a host-consumed register write into the live host service.
+
+        ``runner`` rebuilds the default agent; ``log``/``log-file`` recompute the
+        trace destination from the current register pair (either write repoints
+        the same trace store).  Requires ``self._host_reconfigurer`` to be set.
+        """
+        assert self._host_reconfigurer is not None
+        if key == "runner":
+            runner = self._builtin_host_settings["runner"]
+            assert isinstance(runner, TextValue)
+            try:
+                self._host_reconfigurer.reconfigure_runner(runner.value)
+            except ValueError as exc:
+                raise AglRaise(
+                    _make_exc_value(
+                        "ValueError",
+                        f"invalid runner: {exc}",
+                        trace_id=self._trace.new_event_id(),
+                    )
+                ) from exc
+        else:
+            log = self._builtin_host_settings["log"]
+            assert isinstance(log, BoolValue)
+            log_file_reg = self._builtin_host_settings["log-file"]
+            assert isinstance(log_file_reg, EnumValue)
+            log_file: str | None = None
+            if log_file_reg.variant == "Some":
+                payload = log_file_reg.fields["value"]
+                assert isinstance(payload, TextValue)
+                log_file = payload.value
+            self._host_reconfigurer.reconfigure_trace(enabled=log.value, log_file=log_file)
+
+    # ------------------------------------------------------------------
     # Engine-setting effect
     # ------------------------------------------------------------------
 
     def _apply_config_effect(self, public_name: str, config_value: Value) -> None:
-        """Apply the live engine-setting effect for a config binding.
+        """Apply the live engine-setting effect for a runtime-live engine key.
 
-        Called after every ``IrConfigBind`` resolves its value. Only
-        ``strict-json``, ``max-iters``, and ``timeout`` update live interpreter
-        state; all other keys are inert here.
+        Only ``strict-json``, ``max-iters``, and ``timeout`` update live
+        interpreter state; all other keys are inert here.
         """
         if public_name == "strict-json":
-            if isinstance(config_value, BoolValue):
-                self._strict_json = config_value.value
+            assert isinstance(config_value, BoolValue)
+            self._strict_json = config_value.value
         elif public_name == "max-iters":
-            if isinstance(config_value, IntValue):
-                if config_value.value <= 0:
+            assert isinstance(config_value, IntValue)
+            if config_value.value <= 0:
+                raise AglRaise(
+                    _make_exc_value(
+                        "ValueError",
+                        "invalid max-iters: expected a positive integer",
+                        trace_id=self._trace.new_event_id(),
+                    )
+                )
+            self._loop_limit = config_value.value
+        else:
+            assert public_name == "timeout"
+            assert isinstance(config_value, EnumValue)
+            if config_value.variant == "None":
+                self._shell_exec_timeout = None
+            else:
+                assert config_value.variant == "Some"
+                raw = config_value.fields.get("value")
+                assert isinstance(raw, TextValue)
+                try:
+                    self._shell_exec_timeout = _parse_timeout(raw.value)
+                except ValueError as exc:
                     raise AglRaise(
                         _make_exc_value(
                             "ValueError",
-                            "invalid config max-iters: expected a positive integer",
+                            f"invalid timeout: {exc}",
                             trace_id=self._trace.new_event_id(),
                         )
-                    )
-                self._loop_limit = config_value.value
-        elif public_name == "timeout":
-            if isinstance(config_value, EnumValue):
-                if config_value.variant == "None":
-                    self._shell_exec_timeout = None
-                elif config_value.variant == "Some":
-                    raw = config_value.fields.get("value")
-                    if isinstance(raw, TextValue):
-                        try:
-                            self._shell_exec_timeout = _parse_timeout(raw.value)
-                        except ValueError as exc:
-                            raise AglRaise(
-                                _make_exc_value(
-                                    "ValueError",
-                                    f"invalid config timeout: {exc}",
-                                    trace_id=self._trace.new_event_id(),
-                                )
-                            ) from exc
+                    ) from exc
 
     # ------------------------------------------------------------------
     # Result collection

@@ -57,6 +57,8 @@ __all__ = [
     "IrBind",
     "IrBlock",
     "IrBreak",
+    "IrBuiltinLoad",
+    "IrBuiltinStore",
     "IrCapture",
     "IrCase",
     "IrCaseArm",
@@ -64,7 +66,6 @@ __all__ = [
     "IrCatchHandler",
     "IrCoerce",
     "IrCompare",
-    "IrConfigBind",
     "IrConstBool",
     "IrConstDecimal",
     "IrConstInt",
@@ -1016,32 +1017,34 @@ class IrExec:
 
 
 # ---------------------------------------------------------------------------
-# Config binding node
+# Builtin-var register access nodes
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
-class IrConfigBind:
-    """IR config-binding: runtime resolution of one engine config key.
+class IrBuiltinLoad:
+    """IR read of a ``builtin var`` engine setting from its interpreter register.
 
-    Evaluates in declaration order as a module-body initializer (NOT hoisted
-    like ``IrParam``).  The evaluator resolves the binding value per the config
-    precedence chain:
-
-        CLI --X  >  source value (if ``value`` is not None)  >  config_base[X]
-
-    then binds ``symbol`` to the resolved value; the binding is immutable per
-    the scope pass.
-
-    ``symbol``      — the linker-allocated SymbolId for this config binding.
-    ``public_name`` — the kebab-case engine key (e.g. "max-iters").
-    ``value``       — lowered source expression; ``None`` for bare ``config X``.
+    ``key`` is the engine-key name (e.g. ``"max-iters"``).  Evaluating yields the
+    current register value as an AgL ``Value``.
     """
 
     location: Location
-    symbol: SymbolId
-    public_name: str
-    value: "IrExpr | None"
+    key: str
+
+
+@dataclass(frozen=True, slots=True)
+class IrBuiltinStore:
+    """IR write of a ``builtin var`` engine setting to its interpreter register.
+
+    ``key`` is the engine-key name; ``value`` is the new value.  For the
+    runtime-live keys the store also applies the corresponding live engine
+    effect (e.g. capping unguarded loops for ``max-iters``).  Yields ``unit``.
+    """
+
+    location: Location
+    key: str
+    value: "IrExpr"
 
 
 # ---------------------------------------------------------------------------
@@ -1105,5 +1108,6 @@ IrExpr = (
     | IrAsk
     | IrAskRequest
     | IrExec
-    | IrConfigBind
+    | IrBuiltinLoad
+    | IrBuiltinStore
 )

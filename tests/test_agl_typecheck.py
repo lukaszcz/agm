@@ -3276,6 +3276,44 @@ class TestConstructorRefDispatch:
         r = accept_type('enum Status\n  | Pass\n  | Fail\nStatus::Pass()')
         assert r.resolved.program is not None
 
+    def test_bare_variant_pattern_shared_spelling_disambiguated_by_scrutinee(self) -> None:
+        # 'Red' names a variant of both Color and Shade.  A bare pattern on a
+        # Color scrutinee is unambiguously Color::Red — the scrutinee's enum
+        # type selects among same-spelled constructors, so no qualification is
+        # required (regression: a shared spelling used to be rejected as an
+        # ambiguous constructor before the scrutinee could disambiguate it).
+        r = accept_type(
+            "enum Color\n  | Red\n  | Blue\n"
+            "enum Shade\n  | Red\n  | Green\n"
+            "let c: Color = Color::Blue\n"
+            "case c of | Red => 1 | Blue => 2"
+        )
+        assert r.resolved.program is not None
+
+    def test_bare_variant_pattern_wrong_enum_rejected(self) -> None:
+        # 'Green' is only a Shade variant; on a Color scrutinee no candidate
+        # belongs to the scrutinee's enum, so the bare pattern is rejected.
+        err = reject_type(
+            "enum Color\n  | Red\n  | Blue\n"
+            "enum Shade\n  | Green\n"
+            "let c: Color = Color::Blue\n"
+            "case c of | Green => 1 | _ => 2"
+        )
+        assert "does not belong" in str(err)
+
+    def test_bare_variant_pattern_ambiguous_wrong_enum_rejected(self) -> None:
+        # 'Red' is shared by Color and Shade (so the resolver defers the choice),
+        # but the scrutinee's enum Mono owns neither candidate — the checker's
+        # scrutinee-directed selection finds no match and rejects the pattern.
+        err = reject_type(
+            "enum Color\n  | Red\n  | Blue\n"
+            "enum Shade\n  | Red\n  | Green\n"
+            "enum Mono\n  | Only\n"
+            "let m: Mono = Mono::Only\n"
+            "case m of | Red => 1 | _ => 2"
+        )
+        assert "does not belong" in str(err)
+
     def test_bare_variant_pattern_rejects_missing_or_stale_resolver_metadata(self) -> None:
         resolved = resolve(
             parse_program(
@@ -3286,7 +3324,7 @@ class TestConstructorRefDispatch:
         assert isinstance(case, Case)
         pattern = case.branches[0].pattern
 
-        missing_ref = replace(resolved, bare_variant_refs={})
+        missing_ref = replace(resolved, bare_variant_refs={}, bare_variant_candidates={})
         with pytest.raises(AssertionError, match="missing resolved constructor ref"):
             check(missing_ref, default_capabilities())
 
@@ -4134,12 +4172,6 @@ class TestFunctionSignature:
 # ---------------------------------------------------------------------------
 # Config declaration (pass-through)
 # ---------------------------------------------------------------------------
-
-
-class TestConfigDeclPassthrough:
-    def test_config_decl_accepted(self) -> None:
-        r = accept_type("config log = true\n1")
-        assert r.resolved.program is not None
 
 
 # ---------------------------------------------------------------------------
@@ -8522,43 +8554,3 @@ class TestLambdaRequiredAfterDefaulted:
         """Named-only params are order-free: fn(*, x: int = 0, y: int) -> int => y is ok."""
         r = accept_type("fn(*, x: int = 0, y: int) -> int => y")
         assert r.resolved.program is not None
-
-
-# ---------------------------------------------------------------------------
-# Config declarations — typecheck
-# ---------------------------------------------------------------------------
-
-
-class TestConfigDecl:
-    def test_config_log_true_ok(self) -> None:
-        r = accept_type("config log = true\nprint 1")
-        assert r.resolved.program is not None
-
-    def test_config_log_wrong_type_errors(self) -> None:
-        reject_any('config log = "yes"\nprint 1')
-
-    def test_config_max_iters_ok(self) -> None:
-        r = accept_type("config max-iters = 5\nprint 1")
-        assert r.resolved.program is not None
-
-    def test_config_max_iters_wrong_type_errors(self) -> None:
-        reject_any('config max-iters = "x"\nprint 1')
-
-    def test_config_strict_json_ok(self) -> None:
-        r = accept_type("config strict-json = false\nprint 1")
-        assert r.resolved.program is not None
-
-    def test_config_runner_ok(self) -> None:
-        r = accept_type('config runner = "claude"\nprint 1')
-        assert r.resolved.program is not None
-
-    def test_config_binding_type_recorded(self) -> None:
-        from agm.agl.syntax.nodes import ConfigDecl
-
-        r = accept_type("config log = true\nprint 1")
-        prog = r.resolved.program
-        assert prog is not None
-        config_decl = prog.body.items[0]
-        assert isinstance(config_decl, ConfigDecl)
-        binding_type = r.type_env.get_binding_type(config_decl.node_id)
-        assert binding_type == BoolType()

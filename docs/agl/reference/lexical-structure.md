@@ -63,7 +63,7 @@ The following words are **always reserved** and can never be used as
 variable, agent, or function names:
 
 ```text
-record enum type param program agent config def fn let var for while do until done
+record enum type param program agent def fn let var for while do until done
 if else case of try catch raise return break continue exception extends builtin extern as as?
 and or not is in to downto by true false null
 ```

@@ -35,12 +35,12 @@ from agm.agl.syntax.nodes import (
     Block,
     BoolLit,
     Break,
+    BuiltinVarDecl,
     Call,
     Case,
     CaseBranch,
     Cast,
     CatchClause,
-    ConfigDecl,
     ConstructorPattern,
     Continue,
     DecimalLit,
@@ -181,7 +181,7 @@ class Visitor:
     def visit_ProgramDecl(self, node: ProgramDecl) -> None: ...
     def visit_AgentDecl(self, node: AgentDecl) -> None: ...
     def visit_FuncDef(self, node: FuncDef) -> None: ...
-    def visit_ConfigDecl(self, node: ConfigDecl) -> None: ...
+    def visit_BuiltinVarDecl(self, node: BuiltinVarDecl) -> None: ...
     def visit_InfixDecl(self, node: InfixDecl) -> None: ...
 
     # Binder nodes
@@ -285,7 +285,7 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         ProgramDecl,
         AgentDecl,
         FuncDef,
-        ConfigDecl,
+        BuiltinVarDecl,
         InfixDecl,
         # binder nodes
         LetDecl,
@@ -457,9 +457,8 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
         if node.body is not None:
             walk(node.body, callback)
 
-    elif isinstance(node, ConfigDecl):
-        if node.value is not None:
-            walk(node.value, callback)
+    elif isinstance(node, BuiltinVarDecl):
+        walk(node.type_ann, callback)
 
     elif isinstance(node, InfixDecl):
         pass  # leaf — operator metadata only

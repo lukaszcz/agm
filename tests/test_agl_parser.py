@@ -53,7 +53,6 @@ from agm.agl.syntax import (
     CaseBranch,
     Cast,
     CatchClause,
-    ConfigDecl,
     ConstructorPattern,
     DecimalLit,
     DictEntry,
@@ -632,25 +631,6 @@ class TestDeclarations:
         ag = first(parse('agent planner = "claude -p %{PROMPT_FILE}"'))
         assert isinstance(ag, AgentDecl)
         assert ag.runner == "claude -p %{PROMPT_FILE}"
-
-    def test_config_decl_bool(self) -> None:
-        cfg = first(parse("config log = true"))
-        assert isinstance(cfg, ConfigDecl)
-        assert cfg.name == "log"
-        assert isinstance(cfg.value, BoolLit)
-        assert cfg.value.value is True
-
-    def test_config_decl_int(self) -> None:
-        cfg = first(parse("config max-iters = 10"))
-        assert isinstance(cfg, ConfigDecl)
-        assert isinstance(cfg.value, IntLit)
-        assert cfg.value.value == 10
-
-    def test_config_decl_string(self) -> None:
-        cfg = first(parse('config runner = "claude"'))
-        assert isinstance(cfg, ConfigDecl)
-        assert isinstance(cfg.value, StringLit)
-        assert cfg.value.value == "claude"
 
     def test_exception_def_simple(self) -> None:
         exc = first(parse("exception MyErr(msg: text)"))
@@ -2544,24 +2524,6 @@ class TestLiteralPatternsCoverage:
         assert isinstance(pat, LiteralPattern)
         assert isinstance(pat.literal, StringLit)
         assert pat.literal.value == "hello"
-
-
-class TestDeclarationsCoverage:
-    """Covers config decl values not yet tested: false and decimal."""
-
-    def test_config_decl_false(self) -> None:
-        cfg = first(parse("config log = false"))
-        assert isinstance(cfg, ConfigDecl)
-        assert cfg.name == "log"
-        assert isinstance(cfg.value, BoolLit)
-        assert cfg.value.value is False
-
-    def test_config_decl_decimal(self) -> None:
-        cfg = first(parse("config rate = 1.5"))
-        assert isinstance(cfg, ConfigDecl)
-        assert cfg.name == "rate"
-        assert isinstance(cfg.value, DecimalLit)
-        assert cfg.value.value == decimal.Decimal("1.5")
 
 
 class TestTypeExprCoverage:

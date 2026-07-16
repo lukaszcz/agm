@@ -1299,54 +1299,6 @@ class TestTryScoping:
 
 
 # ---------------------------------------------------------------------------
-# Config declaration enforcement
-# ---------------------------------------------------------------------------
-
-
-def _is_config_binding(r: ResolvedProgram, name: str) -> bool:
-    ref = r.root_scope.bindings.get(name)
-    return ref is not None and ref.kind is BinderKind.config_binding
-
-
-class TestConfigDecl:
-    def test_config_at_header_accepted(self) -> None:
-        r = parse_and_resolve("config log = true\n()")
-        assert _is_config_binding(r, "log")
-
-    def test_config_after_statement_accepted(self) -> None:
-        r = parse_and_resolve("let x = 1\nconfig log = true\nx")
-        assert _is_config_binding(r, "log")
-
-    def test_config_nested_rejected(self) -> None:
-        err = reject_scope("if true =>\n  config log = true\n| else =>\n  ()\n")
-        _, msg = diag(err)
-        assert "config" in msg.lower()
-
-    def test_config_unknown_key_rejected(self) -> None:
-        err = reject_scope("config unknown_key = true\n()")
-        _, msg = diag(err)
-        assert "unknown" in msg.lower() or "Unknown" in msg
-
-    def test_config_duplicate_key_rejected(self) -> None:
-        err = reject_scope("config log = true\nconfig log = false\n()")
-        _, msg = diag(err)
-        assert "duplicate" in msg.lower()
-
-    def test_config_max_iters_accepted(self) -> None:
-        r = parse_and_resolve("config max-iters = 10\n()")
-        assert _is_config_binding(r, "max-iters")
-
-    def test_config_creates_readable_binding(self) -> None:
-        r = parse_and_resolve("config log = true\nlog")
-        assert _is_config_binding(r, "log")
-
-    def test_config_binding_assign_rejected(self) -> None:
-        err = reject_scope("config log = true\nlog := false")
-        _, msg = diag(err)
-        assert "config" in msg.lower()
-
-
-# ---------------------------------------------------------------------------
 # parent_scope seam (incremental REPL sessions)
 # ---------------------------------------------------------------------------
 

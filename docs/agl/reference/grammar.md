@@ -21,7 +21,7 @@ program    ::= block EOF
 block      ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
 
 item       ::= import_decl                  (* header position only *)
-             | config_decl                  (* root only *)
+             | builtin_var_def              (* root only; standard library only *)
              | modifier? record_def         (* root only *)
              | modifier? enum_def           (* root only *)
              | modifier? type_alias         (* root only; "builtin" not allowed *)
@@ -224,9 +224,15 @@ previously declared user operator.
 ```ebnf
 let_decl ::= "let" name (":" type_expr)? "=" expr
 var_decl ::= "var" name (":" type_expr)? "=" expr
+builtin_var_def ::= "builtin" "var" name ":" type_expr  (* body-less; standard library only *)
 assign_expr ::= assign_target ":=" expr
 assign_target ::= name ("[" expr "]")*
 ```
+
+A `builtin var` is a body-less, runtime-backed mutable binding with a mandatory
+type and no initializer; the `builtin` modifier may sit on the same line or the
+line directly above (like `builtin def`). It is a standard-library facility used
+by `std.config` to expose engine settings; ordinary programs do not write it.
 
 Assignment has type `unit` and returns `void`. In an indexed assignment target,
 each opening `[` must be adjacent to the target name or preceding index:
@@ -434,16 +440,6 @@ interpolation ::= "${" expr "}"
 
 Newlines are not permitted inside `${…}`. Triple-quoted templates are
 dedented as described in [Lexical structure](lexical-structure.md).
-
-## Config declarations
-
-```ebnf
-config_decl ::= "config" name ("=" expr)?
-```
-
-The value expression is optional (a bare `config name` resolves from the host
-default) and must have the engine-key's declared type; see
-[Program structure](program-structure.md).
 
 ## Deterministic-parse notes
 

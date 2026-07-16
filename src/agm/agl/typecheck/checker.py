@@ -53,6 +53,7 @@ from agm.agl.scope.symbols import (
     BinderKind,
     BindingRef,
     BuiltinKind,
+    ConstructorRef,
     ResolvedProgram,
 )
 from agm.agl.semantics.type_table import TypeTable, comparable_types
@@ -91,11 +92,11 @@ from agm.agl.syntax.nodes import (
     Block,
     BoolLit,
     Break,
+    BuiltinVarDecl,
     Call,
     Case,
     Cast,
     CatchClause,
-    ConfigDecl,
     ConstructorPattern,
     Continue,
     DecimalLit,
@@ -665,8 +666,8 @@ class _Checker:
             return UnitType()
         if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
             return UnitType()
-        if isinstance(item, ConfigDecl):
-            self._check_config(item)
+        if isinstance(item, BuiltinVarDecl):
+            self._check_builtin_var(item)
             return UnitType()
         if isinstance(item, AgentDecl):
             self._env.set_binding_type(item.node_id, AgentType())
@@ -901,33 +902,32 @@ class _Checker:
             return False
         assert_never(schema_type)  # pragma: no cover
 
-    def _check_config(self, stmt: ConfigDecl) -> None:
-        """Check a ``config`` declaration against the engine-key registry.
+    def _check_builtin_var(self, node: BuiltinVarDecl) -> None:
+        """Check a ``builtin var`` declaration against the engine-key registry.
 
-        For ``Option[T]`` engine keys (``log-file``, ``timeout``) the value
-        expression may be either an ``Option[T]`` or the inner type ``T``: a bare
-        ``T`` value is projected into ``some(value)`` by the lowerer.  For all
-        other keys the value, if present, must be assignable to the engine-key
-        type.  The engine-key type is recorded as the binding type either way.
+        The name whitelist that gates every builtin declaration applies here: a
+        ``builtin var`` must name a known engine key, and its declared type must
+        match the key's canonical type.  The canonical engine-key type is
+        recorded as the binding type.
         """
         from agm.agl.semantics.engine_keys import get_engine_key_type
 
-        declared_type = get_engine_key_type(stmt.name)
-        if declared_type is None:
-            return  # pragma: no cover — unknown keys rejected earlier by scope
-        if stmt.value is not None:
-            val_type = self._check_boundary_expr(stmt.value, expected=declared_type)
-            if isinstance(declared_type, EnumType) and declared_type.type_args:
-                inner = declared_type.type_args[0]
-                if not (is_assignable(val_type, declared_type) or is_assignable(val_type, inner)):
-                    raise AglTypeError(
-                        f"config '{stmt.name}' expects '{declared_type!r}' or "
-                        f"'{inner!r}', got '{val_type!r}'.",
-                        span=stmt.span,
-                    )
-            else:
-                self._assert_assignable(val_type, declared_type, stmt.span)
-        self._env.set_binding_type(stmt.node_id, declared_type)
+        key_type = get_engine_key_type(node.name)
+        if key_type is None:
+            raise AglTypeError(
+                f"Unknown builtin var '{node.name}'.",
+                span=node.span,
+            )
+        declared = self._env.resolve_type_expr(
+            node.type_ann, span=node.span, type_vars=frozenset()
+        )
+        if declared != key_type:
+            raise AglTypeError(
+                f"builtin var '{node.name}' must have type '{key_type!r}', "
+                f"got '{declared!r}'.",
+                span=node.span,
+            )
+        self._env.set_binding_type(node.node_id, key_type)
 
     @staticmethod
     def _binder_result(value_type: Type) -> Type:
@@ -3125,7 +3125,11 @@ class _Checker:
             )
         constructor_ref = self._resolved.bare_variant_refs.get(pattern.node_id)
         if constructor_ref is None:
-            raise AssertionError("missing resolved constructor ref for bare variant pattern")
+            # A spelling shared across enums: the resolver deferred the choice.
+            # The scrutinee's enum type selects the intended constructor; record
+            # it so match compilation reads a concrete ref downstream.
+            constructor_ref = self._select_bare_variant_ref(pattern, subj_type)
+            self._resolved.bare_variant_refs[pattern.node_id] = constructor_ref
         if (
             constructor_ref.owner_module_id != subj_type.module_id
             or constructor_ref.owner_name != subj_type.name
@@ -3149,6 +3153,30 @@ class _Checker:
                 f"destructure the fields explicitly.",
                 span=pattern.span,
             )
+
+    def _select_bare_variant_ref(self, pattern: VarPattern, subj_type: EnumType) -> ConstructorRef:
+        """Pick the constructor a bare pattern denotes among same-spelled candidates.
+
+        The resolver leaves the choice open when a spelling is owned by more
+        than one enum; the scrutinee's enum type resolves it here.  A pattern
+        classified as a bare variant always has candidates, so their absence is
+        an internal invariant violation, whereas a spelling that belongs to no
+        candidate of the scrutinee's enum is an ordinary type error.
+        """
+        candidates = self._resolved.bare_variant_candidates.get(pattern.node_id, ())
+        if not candidates:
+            raise AssertionError("missing resolved constructor ref for bare variant pattern")
+        for candidate in candidates:
+            if (
+                candidate.owner_module_id == subj_type.module_id
+                and candidate.owner_name == subj_type.name
+                and candidate.variant == pattern.name
+            ):
+                return candidate
+        raise AglTypeError(
+            f"Variant '{pattern.name}' does not belong to enum '{subj_type.name}'.",
+            span=pattern.span,
+        )
 
     # ------------------------------------------------------------------
     # Branch unification

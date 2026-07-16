@@ -51,7 +51,7 @@ from agm.agl.scope.symbols import (
     ResolvedProgram,
     ScopeNode,
 )
-from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES, RESERVED_PROGRAM_NAMES
+from agm.agl.semantics.engine_keys import RESERVED_PROGRAM_NAMES
 from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
@@ -72,11 +72,11 @@ from agm.agl.syntax.nodes import (
     Block,
     BoolLit,
     Break,
+    BuiltinVarDecl,
     Call,
     Case,
     Cast,
     CatchClause,
-    ConfigDecl,
     ConstructorPattern,
     Continue,
     DecimalLit,
@@ -100,6 +100,7 @@ from agm.agl.syntax.nodes import (
     LetDecl,
     ListLit,
     Loop,
+    NameTarget,
     NullLit,
     ParamDecl,
     Pattern,
@@ -150,7 +151,6 @@ _IMMUTABLE_BINDER_PHRASES: dict[BinderKind, str] = {
     BinderKind.function_binding: "it is a function (def) binding",
     BinderKind.agent_binding: "it is an agent binding",
     BinderKind.param_binding: "it is a parameter binding",
-    BinderKind.config_binding: "it is a config binding",
     BinderKind.constructor_binding: "it is a constructor binding",
     BinderKind.loop_var_binding: "it is a for-loop variable binding",
 }
@@ -225,8 +225,6 @@ class _Resolver:
         self._declared_functions: dict[str, FuncDef] = {}
         # Program-declared agent names that have been referenced as a VarRef.
         self._referenced_agents: set[str] = set()
-        # Names of config keys declared so far (duplicate detection).
-        self._declared_config_names: set[str] = set()
         # Header-only tracking for imports in non-entry modules (graph mode).
         self._seen_non_import_item: bool = False
         # Source-declared program name.
@@ -243,6 +241,7 @@ class _Resolver:
         # variant patterns), not variable binders.
         self._bare_variant_patterns: set[int] = set()
         self._bare_variant_refs: dict[int, ConstructorRef] = {}
+        self._bare_variant_candidates: dict[int, tuple[ConstructorRef, ...]] = {}
         # Case.node_id -> exact lexical scope active at the case site.
         self._case_scopes: dict[int, ScopeNode] = {}
         # Loop-context flag: True when resolving inside a loop body (while_cond,
@@ -343,6 +342,7 @@ class _Resolver:
             qualified_constructor_refs=dict(self._qualified_constructor_refs),
             bare_variant_patterns=frozenset(self._bare_variant_patterns),
             bare_variant_refs=dict(self._bare_variant_refs),
+            bare_variant_candidates=dict(self._bare_variant_candidates),
             case_scopes=dict(self._case_scopes),
         )
 
@@ -701,51 +701,27 @@ class _Resolver:
                 )
         return tuple(warnings)
 
-    # ------------------------------------------------------------------
-    # Config declarations
-    # ------------------------------------------------------------------
+    def _resolve_builtin_var(self, node: BuiltinVarDecl) -> None:
+        """Resolve a ``builtin var`` declaration into a mutable register binding.
 
-    def _resolve_config(self, node: ConfigDecl) -> None:
-        """Resolve a ``config`` declaration into a readable runtime binding.
-
-        A ``config`` declaration names a fixed engine key (kebab-case) and binds
-        it as an immutable, runtime-resolved value (like ``param``).  The value
-        expression — when present — is resolved here so any names it references
-        are checked; an absent value (bare ``config KEY``) is also legal and
-        resolves from the host's configured default at runtime.  Type checking of
-        the value against the engine-key type happens in the typecheck pass.
+        A ``builtin var`` names an engine setting backed by an interpreter
+        register.  It is MUTABLE (assignable with ``:=``) and readable.  Like
+        ``builtin def`` it is a host-provided declaration allowed only at the
+        module root; the typecheck pass validates that the name is a known
+        engine key (the name whitelist that gates every builtin declaration).
         """
         if not self._at_root:
             raise AglScopeError(
-                f"'config' declarations are only allowed at the program root, "
-                f"not inside a nested block (found 'config {node.name}' here).",
+                f"'builtin var' declarations are only allowed at the module root, "
+                f"not inside a nested block (found 'builtin var {node.name}' here).",
                 span=node.span,
             )
-        if node.name not in ENGINE_KEY_NAMES:
-            allowed = ", ".join(sorted(ENGINE_KEY_NAMES))
-            raise AglScopeError(
-                f"Unknown config key '{node.name}'. "
-                f"Allowed keys: {allowed}.",
-                span=node.span,
-            )
-        if node.name in self._declared_config_names:
-            raise AglScopeError(
-                f"Duplicate config declaration '{node.name}'.",
-                span=node.span,
-            )
-        self._declared_config_names.add(node.name)
-        # Resolve the value expression (if any) before defining the binding, so a
-        # config value cannot reference the binding it introduces.
-        if node.value is not None:
-            self._resolve_expr(node.value)
-        # Define an immutable readable binding so the config key is visible in
-        # the surrounding scope and resolved at runtime.
         ref = BindingRef(
             name=node.name,
-            mutable=False,
+            mutable=True,
             decl_span=node.span,
             decl_node_id=node.node_id,
-            kind=BinderKind.config_binding,
+            kind=BinderKind.builtin_var_binding,
             module_id=self._module_id,
         )
         self._define(node.name, ref)
@@ -895,17 +871,6 @@ class _Resolver:
         is_non_entry_root = is_graph_mode and not self._is_entry and self._at_root
 
         for item in items:
-            if isinstance(item, ConfigDecl):
-                if is_non_entry_root:
-                    # config declarations are not allowed in non-entry modules.
-                    raise AglScopeError(
-                        f"'config' declarations are only allowed in the entry module, "
-                        f"not inside a library module (found 'config {item.name}' here).",
-                        span=item.span,
-                    )
-                self._resolve_config(item)
-                # A config declaration is not a non-config item.
-                continue
             if isinstance(item, (ImportDecl, ExportDecl)):
                 if not self._at_root:
                     kind = "import" if isinstance(item, ImportDecl) else "export"
@@ -936,6 +901,11 @@ class _Resolver:
                 self._seen_non_import_item = True
             if isinstance(item, FuncDef):
                 self._resolve_funcdef(item)
+            elif isinstance(item, BuiltinVarDecl):
+                # ``builtin var`` is a host-provided declaration (like ``builtin
+                # def``): allowed at the root of BOTH the entry and library
+                # modules.  Placement (root-only) is enforced in the handler.
+                self._resolve_builtin_var(item)
             elif isinstance(item, AgentDecl):
                 if is_non_entry_root:
                     raise AglScopeError(
@@ -1087,6 +1057,10 @@ class _Resolver:
         self._define(node.name, ref)
 
     def _resolve_assign(self, node: AssignStmt) -> None:
+        target = node.target
+        if isinstance(target, NameTarget) and target.module_qualifier is not None:
+            self._resolve_qualified_assign(node, target)
+            return
         name = assign_target_root_name(node.target)
         if name is None:
             raise AglScopeError(
@@ -1109,6 +1083,31 @@ class _Resolver:
             )
         self._resolution[node.node_id] = ref
         self._resolve_assign_target_indexes(node.target)
+        self._resolve_expr(node.value)
+
+    def _resolve_qualified_assign(self, node: AssignStmt, target: NameTarget) -> None:
+        """Resolve a qualified assignment target (``MODQUAL::name := expr``).
+
+        Only ``builtin var`` bindings are assignable across a module boundary
+        (they are the sole mutable exported bindings); assigning any other
+        cross-module binding is rejected as immutable.
+        """
+        assert target.module_qualifier is not None
+        segments = target.module_qualifier.segments
+        if self._import_env is None or segments == ():
+            raise AglScopeError(
+                f"'{target.name}' is not declared; assignment requires an existing "
+                f"mutable binding.",
+                span=node.span,
+            )
+        ref = self._lookup_qualified_binding(segments, target.name, node.span)
+        if not ref.mutable:
+            raise AglScopeError(
+                f"Cannot assign to '{target.name}': "
+                f"{_immutable_binder_phrase(ref.kind)} (immutable).",
+                span=node.span,
+            )
+        self._resolution[node.node_id] = ref
         self._resolve_expr(node.value)
 
     def _resolve_assign_target_indexes(self, target: object) -> None:
@@ -1449,15 +1448,28 @@ class _Resolver:
             return
 
         # Qualified access: MODQUAL::name
-        handle = node.module_qualifier.segments
+        ref = self._lookup_qualified_binding(
+            node.module_qualifier.segments, node.name, node.span
+        )
+        self._resolution[node.node_id] = ref
+
+    def _lookup_qualified_binding(
+        self, handle: tuple[str, ...], name: str, span: SourceSpan
+    ) -> BindingRef:
+        """Resolve a ``MODQUAL::name`` reference to its cross-module ``BindingRef``.
+
+        Shared by qualified value references (:meth:`_resolve_varref_qualified`)
+        and qualified assignment targets (:meth:`_resolve_assign`).
+        """
+        assert self._import_env is not None
         qual_map = self._import_env.qualified.get(handle)
         if qual_map is None:
             qualifier_str = ".".join(handle)
             raise AglScopeError(
                 f"No module imported under qualifier '{qualifier_str}'.",
-                span=node.span,
+                span=span,
             )
-        qname = qual_map.get(node.name)
+        qname = qual_map.get(name)
         if qname is None:
             qualifier_str = ".".join(handle)
             # Determine the owning module for this handle: take any entry from the
@@ -1467,18 +1479,17 @@ class _Resolver:
             # because handles are only registered when names are added to them.
             owning_module: ModuleId = next(iter(qual_map.values()))[0]
             # Check if the name is private in the OWNING module (gives better error).
-            if self._private_info.get((owning_module, node.name)):
+            if self._private_info.get((owning_module, name)):
                 raise AglScopeError(
-                    f"'{node.name}' in module '{owning_module.dotted()}' is declared private "
+                    f"'{name}' in module '{owning_module.dotted()}' is declared private "
                     f"and cannot be accessed from outside the module.",
-                    span=node.span,
+                    span=span,
                 )
             raise AglScopeError(
-                f"'{node.name}' is not in the imported set of '{qualifier_str}'.",
-                span=node.span,
+                f"'{name}' is not in the imported set of '{qualifier_str}'.",
+                span=span,
             )
-        ref = self._make_cross_module_ref(qname[0], node.name, qname[1], node.span)
-        self._resolution[node.node_id] = ref
+        return self._make_cross_module_ref(qname[0], name, qname[1], span)
 
     def _lookup_own_root(self, name: str) -> BindingRef | None:
         """Look up *name* in the module's own root scope bindings only.
@@ -1525,7 +1536,10 @@ class _Resolver:
         )
         return BindingRef(
             name=src_name,
-            mutable=False,
+            # Only ``builtin var`` bindings are mutable across a module boundary;
+            # every other exported binding (functions, constructors, …) is
+            # immutable at the reference site.
+            mutable=kind is BinderKind.builtin_var_binding,
             decl_span=decl_span,
             decl_node_id=decl_node_id,
             kind=kind,
@@ -1741,13 +1755,17 @@ class _Resolver:
         Raises ``AglScopeError`` on duplicate names within the same pattern.
         """
         if isinstance(pattern, VarPattern):
-            constructor_ref = self._pattern_constructor_ref(pattern, scope)
-            if constructor_ref is not None:
+            candidates = self._pattern_constructor_candidates(pattern, scope)
+            if candidates:
                 # A bare name that denotes an in-scope constructor is a nullary
-                # constructor pattern, not a variable binder. Preserve its
-                # resolved nominal owner for checking and match compilation.
+                # constructor pattern, not a variable binder. Record every
+                # candidate its spelling could denote; when a single enum owns
+                # the spelling we resolve it eagerly, otherwise the checker
+                # disambiguates against the scrutinee's enum type.
                 self._bare_variant_patterns.add(pattern.node_id)
-                self._bare_variant_refs[pattern.node_id] = constructor_ref
+                self._bare_variant_candidates[pattern.node_id] = candidates
+                if len(candidates) == 1:
+                    self._bare_variant_refs[pattern.node_id] = candidates[0]
                 return
             self._check_not_reserved(pattern.name, pattern.span)
             ref = BindingRef(
@@ -1774,22 +1792,21 @@ class _Resolver:
     def _bind_pattern_field_vars(self, pf: PatternField, scope: ScopeNode) -> None:
         self._bind_pattern_vars(pf.pattern, scope)
 
-    def _pattern_constructor_ref(
+    def _pattern_constructor_candidates(
         self, pattern: VarPattern, scope: ScopeNode
-    ) -> ConstructorRef | None:
-        """Resolve a bare pattern constructor, preserving its nominal owner."""
+    ) -> tuple[ConstructorRef, ...]:
+        """Constructor candidates a bare pattern name could denote.
+
+        Returns the empty tuple when the name is an ordinary variable binder —
+        either it names no in-scope constructor, or a nearer non-constructor
+        binding shadows the constructor.  Otherwise it returns every candidate
+        the spelling could denote; a shared spelling yields more than one, and
+        the scrutinee's enum type selects among them at check time.
+        """
         ref = scope.lookup(pattern.name)
         if ref is not None and ref.kind is not BinderKind.constructor_binding:
-            return None
-        candidates = self._constructor_candidates.get(pattern.name, ())
-        if len(candidates) == 1:
-            return candidates[0]
-        if len(candidates) > 1:
-            raise AglScopeError(
-                f"Constructor name '{pattern.name}' is ambiguous; qualify it with its type.",
-                span=pattern.span,
-            )
-        return None
+            return ()
+        return tuple(self._constructor_candidates.get(pattern.name, ()))
 
 
 # ---------------------------------------------------------------------------

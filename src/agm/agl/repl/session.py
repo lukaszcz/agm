@@ -48,6 +48,13 @@ if TYPE_CHECKING:
 # Layout-only token types that carry no statement to evaluate.
 _TRIVIAL_TOKENS: frozenset[str] = frozenset({"_NEWLINE", "_INDENT", "_DEDENT"})
 
+# The three host-consumed engine settings backed by the interpreter's builtin
+# host-settings register.  Unlike the runtime-live keys (strict-json / max-iters
+# / timeout, which persist through ``_update_engine_settings``), these carry no
+# live interpreter field, so the session persists their register values across
+# entries in ``_persisted_host_settings``.
+_HOST_CONSUMED_ENGINE_KEYS: frozenset[str] = frozenset({"runner", "log", "log-file"})
+
 
 def has_runnable_statements(text: str) -> bool:
     """Return ``True`` when *text* contains at least one statement to evaluate.
@@ -124,9 +131,15 @@ class ReplSession:
         self._initial_strict_json = default_strict_json
         self._initial_shell_exec_timeout = shell_exec_timeout
         # The [exec] engine base for all six engine keys, provided by the host
-        # command (commands/repl.py).  Used in _build_config_base to supply the
-        # runner/log/log-file base values (the three static keys).
+        # command (commands/repl.py).  Supplies the runner/log/log-file base
+        # values (the three host-consumed keys) for the session register seed.
         self._engine_base: dict[str, Value] = dict(engine_base) if engine_base is not None else {}
+        # Persisted register values for the host-consumed engine settings
+        # (runner/log/log-file).  Seeded from the engine defaults overlaid with
+        # ``_engine_base``, threaded into every entry's interpreter, and read
+        # back after a successful entry so a ``std.config::KEY := VALUE`` write
+        # persists.
+        self._persisted_host_settings: dict[str, Value] = self._build_host_settings_base()
         # Trace destination: when set, each evaluated entry opens a fresh
         # ``TraceStore`` (its own ``run_id``) appending JSONL records to this one
         # file.  ``check_only`` entries write nothing (mirroring ``agm exec``).
@@ -598,57 +611,19 @@ class ReplSession:
             ok=False,
         )
 
-    def _build_config_base(
-        self, effective_config: "dict[str, object]"
-    ) -> "dict[str, Value]":
-        """Build the ``config_base`` dict for one entry.
+    def _build_host_settings_base(self) -> "dict[str, Value]":
+        """Seed the host-consumed register values for a fresh session.
 
-        Merges (lowest → highest precedence):
-        1. Engine defaults for all six keys (from :func:`build_engine_config_base`).
-        2. The session's ``_engine_base`` (exec-config values for the six keys
-           provided by the host command at construction; supplies runner/log/log-file
-           and the raw-string timeout, e.g. ``"30s"``).
-        3. The session's current persisted live settings for ``strict-json`` and
-           ``max-iters``, which may have been advanced by prior config declarations.
-           NOTE: ``timeout`` is intentionally excluded from step 3 — its base stays
-           as-is from ``engine_base``, preserving the raw written value (e.g. "30s"
-           not "30.0"). The timeout EFFECT chains correctly via the promoted float
-           stored in ``_shell_exec_timeout``.
-        4. Program-specific overrides from ``effective_config`` (the raw
-           ``[<program>]`` table).  Any engine key present there overrides the
-           base from steps 1–3.
+        Starts from the engine defaults for ``runner``/``log``/``log-file`` and
+        overlays the session's ``_engine_base`` values where present.
         """
-        from agm.agl.runtime.params import build_engine_config_base, convert_config_value
-        from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES, get_engine_key_type
-        from agm.agl.semantics.values import BoolValue, IntValue
+        from agm.agl.runtime.params import build_engine_config_base
 
-        # Step 1+2: start from engine defaults, then overlay the host engine_base.
-        # Engine defaults cover missing keys (e.g. in tests that omit engine_base);
-        # engine_base values (from commands/repl.py) override the defaults for the
-        # keys it provides, including the raw-string timeout.
-        config_base: dict[str, Value] = build_engine_config_base({})
-        config_base.update(self._engine_base)
-
-        # Step 3: override the two session-tracked live keys so prior
-        # ``config strict-json = true`` or ``config max-iters = N`` entries chain
-        # their effect-at-binding into subsequent entries.
-        config_base["strict-json"] = BoolValue(self._default_strict_json)
-        # When the valve is OFF (None) leave the engine default floor in place;
-        # otherwise override with the session-tracked cap.
-        if self._default_loop_limit is not None:
-            config_base["max-iters"] = IntValue(self._default_loop_limit)
-
-        # Step 4: apply program-specific overrides from [<program>].KEY.
-        for key_name in ENGINE_KEY_NAMES:
-            raw = effective_config.get(key_name)
-            if raw is not None:
-                key_type = get_engine_key_type(key_name)
-                assert key_type is not None
-                config_base[key_name] = convert_config_value(
-                    key_name, raw, key_type, self._type_env.type_table
-                )
-
-        return config_base
+        defaults = build_engine_config_base({})
+        return {
+            key: self._engine_base.get(key, defaults[key])
+            for key in _HOST_CONSUMED_ENGINE_KEYS
+        }
 
     def _update_engine_settings(
         self,
@@ -789,7 +764,6 @@ class ReplSession:
         """Advance static state in lockstep with installed IR frame symbols."""
         from agm.agl.syntax.nodes import (
             AgentDecl,
-            ConfigDecl,
             EnumDef,
             ExceptionDef,
             FuncDef,
@@ -806,7 +780,6 @@ class ReplSession:
         entry_root = checked.resolved.root_scope
         named_declarations = (
             AgentDecl,
-            ConfigDecl,
             EnumDef,
             ExceptionDef,
             FuncDef,
@@ -823,12 +796,7 @@ class ReplSession:
         for item in program.body.items:
             if isinstance(item, EnumDef):
                 entry_names.update(variant.name for variant in item.variants)
-        # Config-declared names: on partial failure these bindings are NEVER
-        # promoted, keeping the readable binding consistent with the un-promoted
-        # engine setting (which is only updated on full success).
-        config_decl_names: frozenset[str] = frozenset(
-            item.name for item in program.body.items if isinstance(item, ConfigDecl)
-        )
+
         def _before_failure(end_offset: int) -> bool:
             return not partial or (
                 failure_span is not None and end_offset <= failure_span.start_offset
@@ -880,10 +848,6 @@ class ReplSession:
             and not _before_failure(item.span.end_offset)
         }
         for name, ref in entry_root.bindings.items():
-            # Config bindings are promoted only on full success (alongside the
-            # engine setting), never on partial failure.
-            if partial and name in config_decl_names:
-                continue
             symbol = self._link_image.symbol_for_decl(ref.decl_node_id)
             declared_before_failure = (
                 failure_span is not None
@@ -1008,7 +972,6 @@ class ReplSession:
             AgentDecl,
             AssignStmt,
             Binder,
-            ConfigDecl,
             Declaration,
             EnumDef,
             FuncDef,
@@ -1038,7 +1001,6 @@ class ReplSession:
                 ProgramDecl,
                 FuncDef,
                 AgentDecl,
-                ConfigDecl,
             ),
         ):
             return "declaration", last.name
@@ -1230,7 +1192,7 @@ class ReplSession:
 
         Restores the three live engine settings (strict-json/max-iters/timeout)
         to their values at session construction, undoing any effect-at-binding
-        from ``config`` declarations entered during the session.
+        from ``std.config`` writes entered during the session.
         """
         from agm.agl.lower import LinkImage
         from agm.agl.scope.symbols import ScopeNode
@@ -1251,8 +1213,11 @@ class ReplSession:
         self._declared_agents = set()
         self._ambient_constructor_candidates = {}
         self._ambient_type_names = frozenset()
+        # Re-seed the host-consumed registers so a prior ``std.config::runner``
+        # (etc.) write does not bleed past :reset.
+        self._persisted_host_settings = self._build_host_settings_base()
         # Restore live engine settings to the session's initial defaults so that
-        # promoted ``config`` effects from prior entries do not bleed past :reset.
+        # promoted ``std.config`` effects from prior entries do not bleed past :reset.
         self._update_engine_settings(
             strict_json=self._initial_strict_json,
             loop_limit=self._initial_loop_limit,

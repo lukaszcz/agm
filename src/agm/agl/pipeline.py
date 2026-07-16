@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, TypeVar, overload
+from typing import TYPE_CHECKING, TypeVar
 
 from agm.agl.diagnostics import AglError, Diagnostic, diagnostic_from_span
 from agm.agl.eval.ir_interpreter import IrInterpreter
@@ -29,7 +29,6 @@ from agm.agl.runtime.types import (
     CallSiteInfo as CallSiteInfo,
 )
 from agm.agl.runtime.types import (
-    ConfigDeclInfo,
     HostEnvironment,
     ParamDeclInfo,
 )
@@ -46,7 +45,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.agents import AgentRegistry
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.externs import ExternRegistry
-    from agm.agl.runtime.trace import TraceStore
+    from agm.agl.runtime.host_settings import HostSettingsPolicy
     from agm.agl.scope.graph import ResolvedModuleGraph
     from agm.agl.scope.symbols import ResolvedProgram
     from agm.agl.semantics.type_table import TypeTable
@@ -55,7 +54,7 @@ if TYPE_CHECKING:
     from agm.agl.syntax.nodes import Program
     from agm.agl.syntax.spans import SourceSpan
     from agm.agl.typecheck.env import CheckedProgram as CheckedProgramType
-    from agm.agl.typecheck.env import OutputContractSpec, TypeEnvironment
+    from agm.agl.typecheck.env import OutputContractSpec
     from agm.agl.typecheck.graph import CheckedModuleGraph
 
 _ResultT = TypeVar("_ResultT")
@@ -74,7 +73,6 @@ class ParamDiscovery:
     diagnostics: tuple[Diagnostic, ...]
     warnings: tuple[Diagnostic, ...]
     checked_graph: "CheckedModuleGraph | None" = None
-    configs: tuple[ConfigDeclInfo, ...] = ()
     compiled: "MatchCompiledProgram | None" = None
     compiled_graph: "MatchCompiledModuleGraph | None" = None
 
@@ -284,21 +282,6 @@ class RunResult:
     trace_path: Path | None = field(default=None)
 
 
-@dataclass(slots=True)
-class StartupConfigResult:
-    """Result of evaluating start-resolved source ``config`` declarations."""
-
-    ok: bool
-    diagnostics: list[Diagnostic]
-    error: RunError | None
-    warnings: list[Diagnostic] = field(default_factory=list)
-    values: dict[str, Value] = field(default_factory=dict)
-    checked_graph: "CheckedModuleGraph | None" = None
-    compiled_graph: "MatchCompiledModuleGraph | None" = None
-    interpreter: IrInterpreter | None = None
-    trace: "TraceStore | None" = None
-
-
 class PipelineDriver:
     """Host API for the AgL interpreter.
 
@@ -330,10 +313,9 @@ class PipelineDriver:
         applies the canonical default (``IrInterpreter.DEFAULT_MAX_CALL_DEPTH``).
         Resolved by the caller as ``--max-call-depth`` > ``[exec] max-call-depth``.
     extern_registry : ExternRegistry or None
-        Optional shared Python FFI registry. Hosts that perform a startup
-        config prepass before the real run pass the same registry to both
-        drivers so companion module imports and module state are shared across
-        one program invocation.
+        Optional shared Python FFI registry. Hosts that run several drivers
+        across one program invocation pass the same registry to each so
+        companion module imports and module state are shared.
     """
 
     def __init__(
@@ -548,8 +530,6 @@ class PipelineDriver:
                 warnings=all_warnings,
             )
 
-        compiled = _with_cached_capabilities(compiled, capabilities)
-
         assert prepared.program is not None
         infos: list[ParamDeclInfo] = []
         for item in prepared.program.body.items:
@@ -568,14 +548,12 @@ class PipelineDriver:
                     )
                 )
         infos.sort(key=lambda info: (info.line, info.col))
-        configs = _collect_config_infos(prepared.program, checked.type_env)
         return ParamDiscovery(
             params=tuple(infos),
             program_name=prepared.program_name,
             checked=checked,
             diagnostics=(),
             warnings=all_warnings,
-            configs=configs,
             compiled=compiled,
         )
 
@@ -629,8 +607,6 @@ class PipelineDriver:
         log_file: "Path | None" = None,
         compiled: "MatchCompiledProgram | None" = None,
         checked: "CheckedProgramType | None" = None,
-        config_cli: "Mapping[str, Value] | None" = None,
-        config_base: "Mapping[str, Value] | None" = None,
     ) -> RunResult:
         """Execute an already parsed + scoped program (no re-parsing).
 
@@ -756,7 +732,6 @@ class PipelineDriver:
                     error=None,
                     warnings=warnings,
                 )
-            compiled = _with_cached_capabilities(compiled, capabilities)
 
         contract_payloads, contract_errors = _materialize_custom_contract_payloads(
             checked.contract_specs,
@@ -789,8 +764,6 @@ class PipelineDriver:
             check_only=check_only,
             log_file=log_file,
             warnings=warnings,
-            config_cli=config_cli,
-            config_base=config_base,
         )
 
     def _execute_ir(
@@ -802,8 +775,8 @@ class PipelineDriver:
         check_only: bool,
         log_file: "Path | None",
         warnings: list[Diagnostic],
-        config_cli: "Mapping[str, Value] | None" = None,
-        config_base: "Mapping[str, Value] | None" = None,
+        host_settings_policy: "HostSettingsPolicy | None" = None,
+        builtin_host_settings: "Mapping[str, Value] | None" = None,
     ) -> RunResult:
         """Run a freshly lowered ``executable`` — the shared tail of the
         single-program and module-graph pipelines.
@@ -862,6 +835,15 @@ class PipelineDriver:
             mkdir(log_file.parent, parents=True, exist_ok=True)
         trace.run_start()
 
+        if host_settings_policy is not None:
+            from agm.agl.runtime.host_settings import HostSettingsReconfigurer
+
+            reconfigurer: HostSettingsReconfigurer | None = HostSettingsReconfigurer(
+                registry=registry, trace=trace, policy=host_settings_policy
+            )
+        else:
+            reconfigurer = None
+
         interp = IrInterpreter(
             executable,
             registry=registry,
@@ -872,9 +854,9 @@ class PipelineDriver:
             max_call_depth=self._default_call_depth_limit,
             param_values=ir_param_values,
             host_contracts=host_contracts,
-            config_cli=config_cli,
-            config_base=config_base,
             extern_registry=host_env.extern_registry,
+            host_reconfigurer=reconfigurer,
+            builtin_host_settings=builtin_host_settings,
         )
 
         try:
@@ -1104,8 +1086,6 @@ class PipelineDriver:
                     checked_graph=checked_graph,
                 )
 
-            compiled_graph = _with_cached_capabilities(compiled_graph, capabilities)
-
         entry_cm = checked_graph.modules.get(ENTRY_ID)
         if entry_cm is None:
             return ParamDiscovery(
@@ -1149,7 +1129,6 @@ class PipelineDriver:
                     )
                 )
         infos.sort(key=lambda info: (info.line, info.col))
-        configs = _collect_config_infos(entry_cm.resolved.program, entry_cm.type_env)
         return ParamDiscovery(
             params=tuple(infos),
             program_name=prepared.program_name,
@@ -1157,297 +1136,7 @@ class PipelineDriver:
             diagnostics=(),
             warnings=all_warnings,
             checked_graph=checked_graph,
-            configs=configs,
             compiled_graph=compiled_graph,
-        )
-
-    def collect_startup_config_graph(
-        self,
-        prepared: PreparedGraph,
-        *,
-        names: set[str],
-        compiled_graph: "MatchCompiledModuleGraph | None" = None,
-        checked_graph: "CheckedModuleGraph | None" = None,
-        param_values: Mapping[str, object] | None = None,
-        config_cli: "Mapping[str, Value] | None" = None,
-        config_base: "Mapping[str, Value] | None" = None,
-    ) -> StartupConfigResult:
-        """Evaluate entry-module source config declarations needed at startup.
-
-        ``runner``, ``log``, and ``log-file`` must be known before the normal
-        runtime creates its agent factory and trace sink. This prepass reuses
-        the resolved graph, then typechecks, match-compiles, lowers, and
-        evaluates entry initializers only until the requested config bindings
-        are available. A supplied match-compiled artifact skips the repeated
-        static passes.
-        """
-        warnings: list[Diagnostic] = list(prepared.warnings)
-
-        if prepared.resolved_graph is None:
-            return StartupConfigResult(
-                ok=False,
-                diagnostics=list(prepared.diagnostics),
-                error=None,
-                warnings=warnings,
-                checked_graph=None,
-            )
-
-        host_env = self.host_environment()
-        capabilities = host_env.capabilities
-        if compiled_graph is not None:
-            cache_diagnostic = _cached_graph_artifact_provenance_diagnostic(
-                prepared.resolved_graph, compiled_graph, capabilities
-            )
-            if cache_diagnostic is not None:
-                return StartupConfigResult(
-                    ok=False,
-                    diagnostics=[cache_diagnostic],
-                    error=None,
-                    warnings=warnings,
-                    values={},
-                    checked_graph=None,
-                    compiled_graph=None,
-                )
-            if compiled_graph.capabilities != capabilities:
-                compiled_graph = None
-        if checked_graph is not None and compiled_graph is None:
-            cache_diagnostic = _cached_checked_graph_artifact_provenance_diagnostic(
-                prepared.resolved_graph, checked_graph, capabilities
-            )
-            if cache_diagnostic is not None:
-                return StartupConfigResult(
-                    ok=False,
-                    diagnostics=[cache_diagnostic],
-                    error=None,
-                    warnings=warnings,
-                    values={},
-                    checked_graph=None,
-                    compiled_graph=None,
-                )
-            if checked_graph.capabilities != capabilities:
-                checked_graph = None
-
-        from agm.agl.modules.ids import ENTRY_ID
-        from agm.agl.syntax.nodes import ConfigDecl
-
-        entry_mod = prepared.resolved_graph.modules.get(ENTRY_ID)
-        if entry_mod is None:
-            return StartupConfigResult(
-                ok=False,
-                diagnostics=[Diagnostic(message="Entry module not found in graph", line=1)],
-                error=None,
-                warnings=warnings,
-                checked_graph=None,
-            )
-        if not any(
-            isinstance(item, ConfigDecl) and item.name in names
-            for item in entry_mod.resolved.program.body.items
-        ):
-            return StartupConfigResult(
-                ok=True,
-                diagnostics=[],
-                error=None,
-                warnings=warnings,
-                values={},
-                checked_graph=(
-                    compiled_graph.checked_graph
-                    if compiled_graph is not None
-                    else checked_graph
-                ),
-                compiled_graph=compiled_graph,
-            )
-
-        tc_diagnostics: tuple[Diagnostic, ...]
-        if compiled_graph is not None:
-            tc_diagnostics = ()
-            checked_graph = compiled_graph.checked_graph
-        elif checked_graph is None:
-            checked_graph, tc_diagnostics = _run_typecheck_graph(
-                prepared.resolved_graph, capabilities
-            )
-        else:
-            tc_diagnostics = ()
-        if checked_graph is None:
-            return StartupConfigResult(
-                ok=False,
-                diagnostics=list(tc_diagnostics),
-                error=None,
-                warnings=warnings,
-                checked_graph=None,
-            )
-
-        _append_checker_warnings(warnings, checked_graph)
-
-        if compiled_graph is None:
-            compiled_graph, match_diagnostics = _run_matchcompile_graph(checked_graph)
-            if compiled_graph is None:
-                return StartupConfigResult(
-                    ok=False,
-                    diagnostics=list(match_diagnostics),
-                    error=None,
-                    warnings=warnings,
-                    checked_graph=checked_graph,
-                )
-            compiled_graph = _with_cached_capabilities(compiled_graph, capabilities)
-
-        contract_payloads, contract_errors = _materialize_graph_custom_contract_payloads(
-            checked_graph,
-            host_env.codecs,
-        )
-        if contract_errors:
-            return StartupConfigResult(
-                ok=False,
-                diagnostics=contract_errors,
-                error=None,
-                warnings=warnings,
-                checked_graph=checked_graph,
-                compiled_graph=compiled_graph,
-            )
-
-        # Extern companions: import and resolve every declared extern up front,
-        # exactly as the normal run path does, so a startup config initializer
-        # that calls an extern finds its loaded companion instead of tripping
-        # ExternRegistry.resolve's unguarded assert. This is still after all
-        # static checks, including custom contract materialization, so companion
-        # top-level code cannot run before a static diagnostic is surfaced.
-        startup_failure = self._wire_externs_or_fail(
-            checked_graph=checked_graph,
-            capabilities=capabilities,
-            host_env=host_env,
-            prepared=prepared,
-            on_failure=lambda extern_diagnostics: StartupConfigResult(
-                ok=False,
-                diagnostics=extern_diagnostics,
-                error=None,
-                warnings=warnings,
-                checked_graph=checked_graph,
-                compiled_graph=compiled_graph,
-            ),
-        )
-        if startup_failure is not None:
-            return startup_failure
-
-        from agm.agl.lower import lower_graph
-        from agm.agl.semantics.exceptions import AglRaise
-
-        executable = lower_graph(
-            compiled_graph,
-            validate=True,
-            _validate_compiled=False,
-            contract_payloads=contract_payloads,
-        )
-        host_contracts, ir_contract_errors = _materialize_ir_contracts(
-            executable,
-            host_env.codecs,
-        )
-        if ir_contract_errors:
-            return StartupConfigResult(
-                ok=False,
-                diagnostics=ir_contract_errors,
-                error=None,
-                warnings=warnings,
-                checked_graph=checked_graph,
-                compiled_graph=compiled_graph,
-            )
-        ir_param_values, param_errors = _prepare_ir_params(
-            executable, {} if param_values is None else param_values
-        )
-        if param_errors:
-            return StartupConfigResult(
-                ok=False,
-                diagnostics=param_errors,
-                error=None,
-                warnings=warnings,
-                checked_graph=checked_graph,
-                compiled_graph=compiled_graph,
-            )
-
-        from agm.agl.runtime.trace import TraceStore
-
-        trace = TraceStore(path=None, buffer=True)
-        trace.run_start()
-        interp = IrInterpreter(
-            executable,
-            registry=host_env.registry,
-            loop_limit=self._default_loop_limit,
-            strict_json=self._default_strict_json,
-            shell_exec_timeout=self._shell_exec_timeout,
-            max_call_depth=self._default_call_depth_limit,
-            param_values=ir_param_values,
-            host_contracts=host_contracts,
-            config_cli=config_cli,
-            config_base=config_base,
-            extern_registry=host_env.extern_registry,
-            trace=trace,
-        )
-        try:
-            values = interp.collect_entry_config_values(names)
-        except AglRaise as exc:
-            return StartupConfigResult(
-                ok=False,
-                diagnostics=[],
-                error=exception_value_to_run_error(exc.exc, span=exc.span),
-                warnings=warnings,
-                checked_graph=checked_graph,
-                compiled_graph=compiled_graph,
-            )
-        return StartupConfigResult(
-            ok=True,
-            diagnostics=[],
-            error=None,
-            warnings=warnings,
-            values=values,
-            checked_graph=checked_graph,
-            compiled_graph=compiled_graph,
-            interpreter=interp,
-            trace=trace,
-        )
-
-    def resume_startup_config(
-        self, startup: StartupConfigResult, *, log_file: "Path | None"
-    ) -> RunResult:
-        """Continue a successful startup-config prepass without replaying it."""
-        assert startup.interpreter is not None
-        from agm.agl.runtime.trace import TraceStore
-        from agm.agl.semantics.exceptions import AglRaise
-
-        trace = startup.trace if startup.trace is not None else TraceStore(path=log_file)
-        if log_file is not None:
-            from agm.core.fs import mkdir
-
-            mkdir(log_file.parent, parents=True, exist_ok=True)
-        trace.activate(log_file)
-        if startup.trace is None:
-            trace.run_start()
-        try:
-            bindings = startup.interpreter.resume(
-                registry=self.host_environment().registry, trace=trace
-            )
-        except AglRaise as exc:
-            error = exception_value_to_run_error(exc.exc, span=exc.span)
-            trace.exception(
-                type_name=error.type_name,
-                message=str(error.fields.get("message", "")),
-                trace_id=str(error.fields.get("trace_id", "")),
-                span=exc.span,
-            )
-            trace.run_end(ok=False)
-            return RunResult(
-                ok=False,
-                diagnostics=[],
-                error=error,
-                warnings=startup.warnings,
-                trace_path=log_file,
-            )
-
-        trace.run_end(ok=True)
-        return RunResult(
-            ok=True,
-            diagnostics=[],
-            error=None,
-            warnings=startup.warnings,
-            bindings=bindings,
-            trace_path=log_file,
         )
 
     def _wire_externs_or_fail(
@@ -1486,8 +1175,8 @@ class PipelineDriver:
         log_file: "Path | None" = None,
         compiled_graph: "MatchCompiledModuleGraph | None" = None,
         checked_graph: "CheckedModuleGraph | None" = None,
-        config_cli: "Mapping[str, Value] | None" = None,
-        config_base: "Mapping[str, Value] | None" = None,
+        host_settings_policy: "HostSettingsPolicy | None" = None,
+        builtin_host_settings: "Mapping[str, Value] | None" = None,
     ) -> RunResult:
         """Execute an already loaded + scoped module graph (no re-loading).
 
@@ -1588,7 +1277,6 @@ class PipelineDriver:
                     error=None,
                     warnings=warnings,
                 )
-            compiled_graph = _with_cached_capabilities(compiled_graph, capabilities)
 
         contract_payloads, contract_errors = _materialize_graph_custom_contract_payloads(
             checked_graph,
@@ -1639,8 +1327,8 @@ class PipelineDriver:
             check_only=check_only,
             log_file=log_file,
             warnings=warnings,
-            config_cli=config_cli,
-            config_base=config_base,
+            host_settings_policy=host_settings_policy,
+            builtin_host_settings=builtin_host_settings,
         )
 
     @property
@@ -1662,20 +1350,6 @@ class PipelineDriver:
     def default_call_depth_limit(self) -> int:
         """Maximum call depth for recursive functions."""
         return self._default_call_depth_limit
-
-    def share_extern_registry(self, extern_registry: "ExternRegistry") -> None:
-        """Use *extern_registry* for subsequent extern companion wiring.
-
-        Hosts call this when two driver instances are phases of one program
-        invocation, such as ``agm exec`` startup-config evaluation followed by
-        the real run. Agent and codec registrations are preserved; any cached
-        host environment is refreshed with the shared registry.
-        """
-        self._extern_registry = extern_registry
-        if self._host_env_cache is not None:
-            from dataclasses import replace
-
-            self._host_env_cache = replace(self._host_env_cache, extern_registry=extern_registry)
 
     def update_defaults(
         self,
@@ -1828,27 +1502,6 @@ def _cached_checked_graph_artifact_provenance_diagnostic(
     )
 
 
-@overload
-def _with_cached_capabilities(
-    compiled: "MatchCompiledProgram", capabilities: "HostCapabilities"
-) -> "MatchCompiledProgram": ...
-
-
-@overload
-def _with_cached_capabilities(
-    compiled: "MatchCompiledModuleGraph", capabilities: "HostCapabilities"
-) -> "MatchCompiledModuleGraph": ...
-
-
-def _with_cached_capabilities(
-    compiled: "MatchCompiledProgram | MatchCompiledModuleGraph",
-    capabilities: "HostCapabilities",
-) -> "MatchCompiledProgram | MatchCompiledModuleGraph":
-    """Return a compiled artifact whose checked input already has provenance."""
-    _ = capabilities
-    return compiled
-
-
 def _run_typecheck_graph(
     resolved_graph: "ResolvedModuleGraph",
     capabilities: "HostCapabilities",
@@ -1883,62 +1536,6 @@ def _run_matchcompile_graph(
         return result.compiled, ()
     except Exception as exc:
         return None, (Diagnostic(message=f"Match compilation error: {exc}", line=1),)
-
-
-def static_config_values(program: "Program") -> dict[str, bool | int | str]:
-    """Collect compile-time-constant ``config`` values from the entry AST.
-
-    Walks *program*'s top-level items for ``ConfigDecl`` nodes whose value is a
-    literal scalar (``BoolLit``/``IntLit``/``StringLit``) and returns a mapping of
-    kebab engine-key → Python scalar.  Bare ``config KEY`` declarations and
-    non-literal value expressions are skipped (they have no static constant).
-    Used by ``agm exec`` to fold source ``config`` constants into engine-setting
-    resolution (CLI > source constant > config-file > default).
-    """
-    from agm.agl.syntax.nodes import BoolLit, ConfigDecl, IntLit, StringLit
-
-    result: dict[str, bool | int | str] = {}
-    for item in program.body.items:
-        if isinstance(item, ConfigDecl) and item.value is not None:
-            value = item.value
-            if isinstance(value, BoolLit):
-                result[item.name] = value.value
-            elif isinstance(value, IntLit):
-                result[item.name] = value.value
-            elif isinstance(value, StringLit):
-                result[item.name] = value.value
-    return result
-
-
-def _collect_config_infos(
-    program: "Program", type_env: "TypeEnvironment"
-) -> tuple[ConfigDeclInfo, ...]:
-    """Build the ``ConfigDeclInfo`` inventory for the entry program's config keys.
-
-    Reads each root-level ``ConfigDecl`` and its checker-recorded engine-key type.
-    Shared by :meth:`PipelineDriver.discover_params` and
-    :meth:`PipelineDriver.discover_params_graph`.
-    """
-    from agm.agl.syntax.nodes import ConfigDecl
-
-    infos: list[ConfigDeclInfo] = []
-    for item in program.body.items:
-        if isinstance(item, ConfigDecl):
-            cfg_type = type_env.get_binding_type(item.node_id)
-            assert cfg_type is not None, (
-                f"Config {item.name!r} has no recorded binding type; checker invariant violated."
-            )
-            infos.append(
-                ConfigDeclInfo(
-                    name=item.name,
-                    type=cfg_type,
-                    has_value=item.value is not None,
-                    line=item.span.start_line,
-                    col=item.span.start_col,
-                )
-            )
-    infos.sort(key=lambda info: (info.line, info.col))
-    return tuple(infos)
 
 
 def _materialize_custom_contract_payloads(

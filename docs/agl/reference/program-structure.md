@@ -14,7 +14,6 @@ expression-oriented sequence.
 program    ::= block EOF
 block      ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
 item       ::= import_decl                        (* header position only *)
-             | config_decl                        (* root only *)
              | "private"? record_def              (* root only *)
              | "private"? enum_def                (* root only *)
              | "private"? type_alias              (* root only *)
@@ -70,66 +69,45 @@ y              # the program's value is y
 Side-effecting forms (`print`, `:=`, loops, else-less `if`) have type `unit`,
 return `void`, and are commonly followed by another expression.
 
-## Config declarations
+## Engine settings
 
-A **config declaration** names a fixed engine-setting key and binds it as an
-immutable, runtime-resolved **readable value** — like `param`, but for the
-program's own engine options:
-
-```ebnf
-config_decl ::= "config" NAME ("=" expr)?
-```
-
-Config declarations may appear **anywhere at the program root** — before or
-after other items. Nesting inside a block is a static error. Each key may
-appear at most once; duplicate keys are an error. Entry-module only.
-
-The value expression, when present, must have the key's declared type. A bare
-`config KEY` (no value) resolves from the host's configured default.
-
-| Key | Type | Meaning |
-|-----|------|---------|
-| `log` | `bool` | Enable/disable trace logging. |
-| `log-file` | `Option[text]` | Path to the trace log file. |
-| `strict-json` | `bool` | Parse agent JSON output strictly. |
-| `max-iters` | `int` | Maximum iterations for `do` loops. |
-| `runner` | `text` | Default agent runner command. |
-| `timeout` | `Option[text]` | Shell execution timeout. |
-
-For an `Option[T]` key (`log-file`, `timeout`) a bare `T` value is accepted and
-projected into `Some(value)`; an `Option[T]` value may also be given directly.
-
-A config key is a normal readable binding: it can be used in any expression.
-The binding is immutable — assigning to it is a static error.
+The standard-library module `std.config` exposes the program's engine
+settings — the knobs that control the default agent runner, trace logging,
+JSON strictness, the loop safety valve, and the shell-exec timeout. Each is a
+**mutable binding**; import the module and assign it through a qualified target
+to change a setting:
 
 ```agl
-config max-iters = 10
-config timeout = "30s"        # projected into Some("30s")
-config runner = "claude -p"
-let budget = max-iters        # config keys are readable
+import std.config
+
+std.config::max-iters := 10
+std.config::timeout := Some("30s")
+std.config::runner := "claude -p"
+let budget = std.config::max-iters      # settings are readable
 print budget
 ```
 
-**Precedence.** The bound value is resolved per key as:
-`CLI flag > source value (if given) > [<program>].KEY > [exec].KEY > engine default`.
+The settings and their types are:
 
-A bare `config KEY` (no `=` value) contributes no source value and falls through
-to the program-section / exec-section / engine-default layers.
+| Setting | Type | Meaning |
+|---------|------|---------|
+| `log` | `bool` | Enable/disable trace logging. |
+| `log-file` | `Option[text]` | Path to the trace log file. |
+| `strict-json` | `bool` | Parse agent JSON output strictly. |
+| `max-iters` | `int` | Safety-valve cap for unbounded loops. |
+| `runner` | `text` | Default agent runner command. |
+| `timeout` | `Option[text]` | Shell-exec timeout. |
 
-**Effect-at-binding.** The three eval-consumed keys (`strict-json`, `max-iters`,
-`timeout`) take effect at the point the declaration executes in declaration order;
-expressions that follow see the updated setting. The remaining keys (`runner`,
-`log`, `log-file`) are start-resolved before the program runs; place them near the
-top of the program so the agent factory and trace infrastructure see them. If such
-an expression calls an agent, it uses a bootstrap factory configured from the CLI,
-config-file/default runner floor, and normal per-agent overrides; a computed `runner`
-value applies to the factory for the main program, not to its own computation.
+A write takes effect **positionally**, exactly like any `var` mutation: it
+governs the statements that follow it, in program order. Because the settings
+live in another module, a write must use a qualified assignment target
+([Modules](modules.md)); a bare `max-iters := …` is not a valid way to set one.
+The `Option[text]` settings (`log-file`, `timeout`) are set with `Some("…")` or
+`None`.
 
-**Error surface.** A source `config timeout = "…"` value is a runtime-evaluated
-expression; a bad value raises a runtime error (exit 2). A bad `--timeout` or
-`[exec].timeout` value is caught before execution (exit 1). The source `config
-timeout` controls the **shell-exec** timeout only; the agent idle timeout is always
-start-resolved from the CLI or `[exec]`.
+See [Host environment](host-environment.md) for the full settings table with
+their defaults and for how a source write combines with the host's CLI and
+config-file layers.
 
 ## Binders: `let` and `var`
 

@@ -41,14 +41,14 @@ def resolve_log_decision(
     cli_no_log: bool,
     cli_log: bool,
     cli_log_file: str | None,
-    source_log: bool | None,
-    source_log_file: str | None,
     config_log: bool,
     config_log_file: str | None,
+    source_log: bool | None = None,
+    source_log_file: str | None = None,
 ) -> LogDecision:
     """Resolve the final logging decision from three priority layers.
 
-    Precedence (highest first): CLI > source config declaration > config file.
+    Precedence (highest first): CLI > source > config file.
 
     CLI layer:
       - ``--no-log``        → enabled=False, path=None  (explicit disable)
@@ -56,7 +56,7 @@ def resolve_log_decision(
       - ``--log``           → enabled=True,  path=None
       - (none)              → enabled=None   (unset; fall through)
 
-    Source layer (``config log``/``config log-file`` declarations in the program):
+    Source layer (an optional program-provided logging decision):
       - ``source_log_file`` → path=source_log_file; enabled=True when present
       - ``source_log``      → enabled per value (True/False/None)
 
@@ -80,7 +80,7 @@ def resolve_log_decision(
         cli_enabled = None
     cli_path = cli_log_file  # None when --log or --no-log; explicit str otherwise
 
-    # --- Source config declaration layer ---
+    # --- Source layer ---
     source_path = source_log_file
     if source_log_file is not None:
         source_enabled: bool | None = True if source_log is None else source_log
@@ -111,25 +111,18 @@ def prepare_trace_log_from_layers(
     cli_log_file: str | None,
     config_log: bool,
     config_log_file: str | None,
-    source_log: bool | None = None,
-    source_log_file: str | None = None,
 ) -> Path | None:
-    """Resolve the CLI/source/config logging decision and prepare the trace file.
+    """Resolve the CLI/config logging decision and prepare the trace file.
 
     Combines :func:`resolve_log_decision` with :func:`prepare_trace_log` so the
     two commands that support the full ``--log``/``--no-log``/``--log-file`` +
     config precedence chain (``agm exec`` and ``agm repl``) share one call site.
-    ``agm exec`` forwards the source ``config log``/``config log-file`` binding
-    values via ``source_log``/``source_log_file``; ``agm repl`` leaves them at
-    their ``None`` defaults.  Callers handle the ``--dry-run`` short-circuit
-    before calling.
+    Callers handle the ``--dry-run`` short-circuit before calling.
     """
     decision = resolve_log_decision(
         cli_no_log=cli_no_log,
         cli_log=cli_log,
         cli_log_file=cli_log_file,
-        source_log=source_log,
-        source_log_file=source_log_file,
         config_log=config_log,
         config_log_file=config_log_file,
     )

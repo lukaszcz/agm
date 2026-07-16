@@ -112,72 +112,73 @@ target — see [Generics](generics.md#the-finite-schema-boundary).
 
 ## Host-configurable settings
 
-### Engine keys
+### Engine settings
 
-A program may declare any of the following fixed engine keys with `config`
-([Bindings and scope](bindings-and-scope.md)):
+The standard-library module `std.config` exposes the following fixed engine
+settings as mutable bindings ([Bindings and scope](bindings-and-scope.md)):
 
-| Key | AgL type | Portable default |
+| Setting | AgL type | Portable default |
 | --- | -------- | ---------------- |
 | `log` | `bool` | `false` |
 | `strict-json` | `bool` | `false` (lenient recovery) |
 | `max-iters` | `int` | `5` |
 | `runner` | `text` | host floor runner |
-| `log-file` | `Option[text]` | `none` |
-| `timeout` | `Option[text]` | `none` |
+| `log-file` | `Option[text]` | `None` |
+| `timeout` | `Option[text]` | `None` |
 
-For an `Option[T]` key (`log-file`, `timeout`) a bare inner `T` value is
-accepted and projected into `some(value)` automatically.
+Import `std.config` and read or write a setting through a qualified target
+(`std.config::max-iters`); the `Option[text]` settings (`log-file`, `timeout`)
+take a `Some("…")` or `None` value.
 
-### Precedence chains
+### Precedence
 
-The two declaration forms have distinct precedence rules:
+A setting's effective value is resolved as:
 
 ```
-config X:   CLI --X  >  source (config X = e)  >  [<program>].X  >  [exec].X  >  engine default
-param  Y:   CLI --Y  >  [<program>].Y           >  source default (param Y = e) >  required error
+setting X:  source (std.config::X := e)  >  CLI --X  >  [<program>].X  >  [exec].X  >  engine default
+param   Y:  CLI --Y                       >  [<program>].Y  >  source default (param Y = e) >  required error
 ```
 
-A bare `config KEY` (no value) contributes no source value and falls through
-to the program-section / exec-section / engine-default layers.
+The CLI flag and the config-file layers supply the setting's **initial** value;
+a source write to `std.config::X` overrides them from its program point onward. A
+program that never writes a setting keeps the value chosen by the CLI/config
+layers.
 
 ### Config-file schema
 
 `[exec]` holds global engine defaults with kebab field names (`strict-json`,
 `max-iters`, `log-file`). A `[<program>]` top-level section — keyed by the
-`program NAME` declaration or the `.agl` file stem — overrides both engine-key
-values and param values for that program. A file stem that matches a reserved
+`program NAME` declaration or the `.agl` file stem — overrides both engine
+settings and param values for that program. A file stem that matches a reserved
 host section name (e.g. `exec`, `loop`) is an error unless an explicit `program
 NAME` declaration is present. Inline `-c` programs with no `program` declaration
 have no config section.
 
-### Effect-at-binding and start-resolved keys
+### Positional effect
 
-The six engine keys are divided into two groups:
-
-- **Effect-at-binding** (`strict-json`, `max-iters`, `timeout`): take effect
-  from the point the `config` declaration executes. Expressions after the
-  declaration see the updated setting; expressions before do not.
-- **Start-resolved** (`runner`, `log`, `log-file`): resolved before the program
-  runs. Declare them at the top so the agent factory and trace infrastructure
-  see the chosen values before any expression evaluates.
+Every setting takes effect **positionally**: a write to `std.config::X` governs
+the statements that follow it, in program order, and does not affect statements
+before it. Writing `runner`, `log`, or `log-file` repoints the default agent and
+the trace destination used by subsequent calls; writing `strict-json`,
+`max-iters`, or `timeout` changes how subsequent agent calls, loops, and `exec`
+calls behave.
 
 ### Error surface for `timeout`
 
 - A bad `--timeout` or `[exec].timeout` value is caught before execution
   (exit 1 pre-execution error).
-- A bad source `config timeout = "…"` value is a runtime-evaluated expression;
+- A bad `std.config::timeout := "…"` value is a runtime-evaluated expression;
   a bad value raises a runtime error (exit 2).
-- Source `config timeout` governs only the **shell-exec** timeout. The agent
-  idle timeout is always start-resolved from the CLI or `[exec]` and cannot be
-  changed mid-program.
+- The `timeout` setting governs only the **shell-exec** timeout. The agent
+  idle timeout is resolved from the CLI or `[exec]` and cannot be changed
+  mid-program.
 
 ### `--no-log-file` semantics
 
-`--no-log-file` sets the in-program `config log-file` binding to `none`. It
-does **not** suppress a trace configured elsewhere — a `[exec] log-file` path
-or an auto path from `--log` still applies to the trace infrastructure. Use
-`--no-log` to disable tracing entirely.
+`--no-log-file` clears the initial `log-file` value. It does **not** suppress a
+trace configured elsewhere — a `[exec] log-file` path or an auto path from
+`--log` still applies to the trace infrastructure. Use `--no-log` to disable
+tracing entirely.
 
 ### Other host-configurable defaults
 

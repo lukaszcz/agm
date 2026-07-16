@@ -18,7 +18,7 @@ Supported AST nodes
     LetDecl, VarDecl, AssignStmt (simple name target only)
     Declarations that have no runtime action:
       RecordDef, EnumDef, TypeAlias, FuncDef, AgentDecl, ParamDecl,
-      ProgramDecl, ConfigDecl, ImportDecl, ExportDecl
+      ProgramDecl, ImportDecl, ExportDecl
 
 Any AST node outside this set raises ``NotImplementedError`` with a clear
 message.  A missing checker side-table entry is a compiler bug and raises
@@ -54,6 +54,8 @@ from agm.agl.ir.nodes import (
     IrBind,
     IrBlock,
     IrBreak,
+    IrBuiltinLoad,
+    IrBuiltinStore,
     IrCapture,
     IrCase,
     IrCaseArm,
@@ -61,7 +63,6 @@ from agm.agl.ir.nodes import (
     IrCatchHandler,
     IrCoerce,
     IrCompare,
-    IrConfigBind,
     IrConstBool,
     IrConstDecimal,
     IrConstInt,
@@ -150,10 +151,11 @@ from agm.agl.matchcompile import (
     FieldOccurrenceProvenance,
     LiteralKind,
     MatchCompiledProgram,
+    Occurrence,
     OccurrenceId,
     validate_match_compiled_program,
 )
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
 from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import (
@@ -183,12 +185,12 @@ from agm.agl.syntax.nodes import (
     Block,
     BoolLit,
     Break,
+    BuiltinVarDecl,
     Call,
     Case,
     CaseBranch,
     Cast,
     CatchClause,
-    ConfigDecl,
     ConstructorPattern,
     Continue,
     DecimalLit,
@@ -570,7 +572,7 @@ class _Lowerer:
                 | ParamDecl()
                 | ProgramDecl()
                 | AgentDecl()
-                | ConfigDecl()
+                | BuiltinVarDecl()
                 | ImportDecl()
                 | ExportDecl()
                 | InfixDecl()
@@ -1062,6 +1064,10 @@ class _Lowerer:
 
                 ref = self._checked.resolved.resolution.get(nid)
                 assert ref is not None, f"compiler bug: no resolution for VarRef node_id={nid!r}"
+                if ref.kind is BinderKind.builtin_var_binding:
+                    # A ``builtin var`` read pulls the engine setting from its
+                    # interpreter register, keyed by the engine-key name.
+                    return IrBuiltinLoad(location=self._loc(span), key=ref.name)
                 if ref.kind is BinderKind.constructor_binding:
                     node_typ = self._node_type(nid)
                     assert isinstance(node_typ, FunctionType)
@@ -2540,6 +2546,16 @@ class _Lowerer:
             compiled.normalized.root.id: root_symbol
         }
         occurrences = {occurrence.id: occurrence for occurrence in compiled.occurrences}
+        # Group each field occurrence under its (parent occurrence, constructor)
+        # once, in occurrence order, so a switch branch can look up its field
+        # children directly instead of rescanning every occurrence per branch.
+        field_children_by_group: dict[tuple[OccurrenceId, Constructor], list[Occurrence]] = {}
+        for occurrence in compiled.occurrences:
+            provenance = occurrence.provenance
+            if isinstance(provenance, FieldOccurrenceProvenance):
+                field_children_by_group.setdefault(
+                    (provenance.parent, provenance.constructor), []
+                ).append(occurrence)
         actions = {action.action_id: action for action in compiled.actions}
         branch_by_action = {
             action.action_id: branches[action.source_index] for action in compiled.actions
@@ -2648,14 +2664,10 @@ class _Lowerer:
                 child = decision_branch.decision
                 demanded_children = tuple(
                     occurrence
-                    for occurrence in compiled.occurrences
-                    if occurrence.id in child.free_occurrences
-                    and isinstance(
-                        occurrence.provenance, FieldOccurrenceProvenance
+                    for occurrence in field_children_by_group.get(
+                        (switch.occurrence.id, decision_branch.constructor), ()
                     )
-                    and occurrence.provenance.parent == switch.occurrence.id
-                    and occurrence.provenance.constructor
-                    == decision_branch.constructor
+                    if occurrence.id in child.free_occurrences
                 )
                 field_bindings = tuple(
                     (
@@ -2920,12 +2932,6 @@ class _Lowerer:
                 self._lower_param_decl(param_decl)
                 return None
 
-            case ConfigDecl() as config_decl:
-                # Config declarations are entry-only readable bindings; unlike
-                # ParamDecl they emit an initializer (IrConfigBind) evaluated in
-                # declaration order, NOT hoisted like params.
-                return self._lower_config_decl(config_decl)
-
             case AgentDecl() as agent_decl:
                 sym = self._sym_for_decl(agent_decl.node_id)
                 loc = self._loc(agent_decl.span)
@@ -2944,7 +2950,10 @@ class _Lowerer:
                 | ImportDecl()
                 | ExportDecl()
                 | InfixDecl()
+                | BuiltinVarDecl()
             ):
+                # ``builtin var`` is declaration-only: it introduces no
+                # initializer (reads/writes go through IrBuiltinLoad/Store).
                 return None
 
             # ----------------------------------------------------------
@@ -2984,86 +2993,29 @@ class _Lowerer:
         )
         self._params.append(ir_param)
 
-    def _lower_config_decl(self, node: "ConfigDecl") -> IrConfigBind:
-        """Lower an entry-module ``ConfigDecl`` to an ``IrConfigBind`` initializer.
-
-        Allocates a PUBLIC ``SymbolId`` for the config key and lowers the source
-        value expression (projecting a bare inner-type value into ``some(value)``
-        for ``Option[T]`` engine keys).  Unlike ``_lower_param_decl`` this returns
-        an initializer node (params are hoisted; config bindings are evaluated in
-        declaration order).  Decoding of external CLI/config-file values is handled
-        host-side via ``convert_config_value`` — the IR node carries no decoder.
-        """
-        sym = self._alloc_sym(
-            node.node_id,
-            name=node.name,
-            mutable=False,
-            public=True,
-            owner=self._module_id,
-        )
-        declared_type = self._binding_type(node.node_id)
-        value_ir: IrExpr | None
-        if node.value is not None:
-            value_ir = self._lower_config_value(node.value, declared_type)
-        else:
-            value_ir = None
-        return IrConfigBind(
-            location=self._loc(node.span),
-            symbol=sym,
-            public_name=node.name,
-            value=value_ir,
-        )
-
-    def _lower_config_value(self, expr: Expr, declared_type: Type) -> IrExpr:
-        """Lower a config value, projecting a bare ``T`` into ``some(T)`` for Option keys.
-
-        When the engine-key type is ``Option[T]`` and the source value's type is
-        not itself an enum (i.e. it is the inner ``T``), wrap the lowered inner
-        value in an ``Option::Some`` construction.  Otherwise lower with ordinary
-        coercion to the declared type.
-        """
-        if isinstance(declared_type, EnumType) and declared_type.type_args:
-            expr_type = self._node_type(expr.node_id)
-            if not isinstance(expr_type, EnumType):
-                inner = declared_type.type_args[0]
-                inner_ir = self.lower_coerced(expr, inner)
-                self._ensure_option_nominal()
-                return IrMakeEnum(
-                    location=self._loc(expr.span),
-                    nominal=NominalId(STD_CORE_ID, "Option"),
-                    display_name="Option",
-                    variant="Some",
-                    fields=(("value", inner_ir),),
-                )
-        return self.lower_coerced(expr, declared_type)
-
-    def _ensure_option_nominal(self) -> None:
-        """Register the ``std.core::Option`` enum nominal if not already present."""
-        nominal = NominalId(STD_CORE_ID, "Option")
-        if nominal not in self._link.nominals:
-            self._link.nominals[nominal] = NominalDescriptor(
-                nominal=nominal,
-                display_name="Option",
-                kind=NominalKind.ENUM,
-                fields=(),
-                variants=(
-                    VariantDescriptor(name="None", fields=()),
-                    VariantDescriptor(name="Some", fields=("value",)),
-                ),
-            )
-
     def _lower_assign(
         self,
         target: AssignTarget,
         rhs: Expr,
         span: SourceSpan,
         assign_node_id: int,
-    ) -> IrAssign:
-        """Lower an assignment statement (simple name or indexed path)."""
+    ) -> "IrAssign | IrBuiltinStore":
+        """Lower an assignment statement (simple name, indexed path, or builtin var)."""
         ref = self._checked.resolved.resolution.get(assign_node_id)
         assert ref is not None, (
             f"compiler bug: no resolution for AssignStmt node_id={assign_node_id!r}"
         )
+
+        if ref.kind is BinderKind.builtin_var_binding:
+            # A ``builtin var`` assignment stores into the engine setting's
+            # interpreter register (keyed by engine-key name); it has no symbol.
+            slot_type = self._binding_type(ref.decl_node_id)
+            return IrBuiltinStore(
+                location=self._loc(span),
+                key=ref.name,
+                value=self.lower_coerced(rhs, slot_type),
+            )
+
         sym = self._sym_for_decl(ref.decl_node_id)
 
         if isinstance(target, NameTarget):

@@ -291,8 +291,8 @@ modules may only contain declarations:
 - `import` — import declarations (header only, before all other items)
 
 Statements, binders (`let`/`var`), expressions, agent declarations, `param`
-declarations, `program` declarations, and config declarations are all **static
-errors** in a library module.
+declarations, and `program` declarations are all **static errors** in a library
+module.
 
 ## Cross-module mutual recursion
 

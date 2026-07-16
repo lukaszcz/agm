@@ -169,39 +169,34 @@ default and the host does not supply a value. Supported param types are `text`,
 Runtime-only types such as `unit`, `agent`, and function types cannot be used as
 program param types.
 
-## `config` — engine-key bindings
+## `builtin var` — engine-setting bindings
 
 ```ebnf
-config_decl ::= "config" NAME ("=" expr)?
+builtin_var_def ::= "builtin" "var" NAME ":" type_expr
 ```
 
-`config` declarations are root-only and **entry-module only**. Each binds one of
-the fixed engine keys (`log`, `log-file`, `strict-json`, `max-iters`, `runner`,
-`timeout`) as an **immutable readable value** in the root scope — the type is
-fixed by the key registry, not declared in source.
+A `builtin var` declares a body-less, runtime-backed, **mutable** binding with a
+mandatory type and no initializer. Like `builtin def`, it is a standard-library
+facility; ordinary programs do not write `builtin var` themselves. The standard
+library uses it in `std.config` to expose the program's engine settings:
 
 ```agl
-config strict-json = true
-config max-iters = 10
-config timeout = "30s"           # projected into some("30s")
-let cap = max-iters              # config keys are readable bindings
+import std.config
+
+std.config::max-iters := 10           # write a setting (qualified target)
+std.config::runner := "claude -p"
+let cap = std.config::max-iters       # read a setting
 ```
 
-A bare `config KEY` (no `= expr`) contributes no source value; the binding takes
-its value from the external resolution chain (`[<program>]` → `[exec]` → engine
-default). A `config KEY = expr` source value overrides the config-file layers but
-is itself overridden by a matching CLI flag.
+An engine setting is an ordinary mutable binding in another module, so **reading**
+it uses a qualifier and **writing** it requires a qualified assignment target —
+cross-module mutation is never done with a bare name. A write takes effect from its
+program point onward, exactly like any `var` mutation. The `Option[text]` settings
+are set with `Some("…")` or `None`.
 
-**Immutability.** Assigning to a config binding (`:=`) is a static error. The
-diagnostic names the binder kind — `config` — the same way it does for `let` and
-`param`.
-
-**Requiredness asymmetry.** Unlike `param X` (required when no default or external
-value), `config X` always resolves: a missing CLI flag and no source value cause the
-binding to fall back to the engine default, never to a required-value error.
-
-See [Program structure](program-structure.md) for the key table, types, and the
-full precedence chain.
+See [Host environment](host-environment.md) for the settings table, their types
+and defaults, and how a source write combines with the host's CLI and config-file
+layers.
 
 ## `agent` — declared agents
 

@@ -191,26 +191,9 @@ def test_graph_artifact_is_rechecked_when_host_capabilities_change() -> None:
     assert discovery.compiled_graph is not compiled
 
 
-def test_startup_graph_cache_derives_capability_provenance_from_checked_graph() -> None:
+def test_graph_run_rechecks_compiled_artifact_when_host_capabilities_change() -> None:
     runtime = PipelineDriver()
-    prepared = _prepare_graph("config log = true\nlog")
-    assert prepared.resolved_graph is not None
-    compiled = compile_graph_matches(
-        check_graph(prepared.resolved_graph, runtime.host_environment().capabilities)
-    ).compiled
-    assert isinstance(compiled, MatchCompiledModuleGraph)
-
-    result = runtime.collect_startup_config_graph(
-        prepared, names={"log"}, compiled_graph=compiled
-    )
-
-    assert result.ok
-    assert result.compiled_graph is compiled
-
-
-def test_startup_and_run_recheck_graph_artifacts_when_host_capabilities_change() -> None:
-    runtime = PipelineDriver()
-    prepared = _prepare_graph("config log = true\nlog")
+    prepared = _prepare_graph("let value = 1\nvalue")
     assert prepared.resolved_graph is not None
     compiled = compile_graph_matches(
         check_graph(prepared.resolved_graph, runtime.host_environment().capabilities)
@@ -218,12 +201,8 @@ def test_startup_and_run_recheck_graph_artifacts_when_host_capabilities_change()
     assert isinstance(compiled, MatchCompiledModuleGraph)
     _change_capabilities(runtime)
 
-    startup = runtime.collect_startup_config_graph(
-        prepared, names={"log"}, compiled_graph=compiled
-    )
     run = runtime.run_prepared_graph(prepared, check_only=True, compiled_graph=compiled)
 
-    assert startup.ok
     assert run.ok
 
 
@@ -274,29 +253,6 @@ def test_graph_run_rejects_cached_artifact_from_different_prepared_graph(
     assert capsys.readouterr().out == ""
 
 
-def test_startup_config_rejects_cached_artifact_from_different_prepared_graph(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    _prepared_a, discovery_a = _compiled_graph(
-        'config log = true\nprint "stale startup"'
-    )
-    prepared_b = _prepare_graph('config log = false\nprint "fresh startup"')
-
-    result = PipelineDriver().collect_startup_config_graph(
-        prepared_b,
-        names={"log"},
-        compiled_graph=discovery_a.compiled_graph,
-    )
-
-    assert not result.ok
-    assert result.error is None
-    assert result.values == {}
-    assert result.checked_graph is None
-    assert result.compiled_graph is None
-    _assert_cache_mismatch(iter(result.diagnostics))
-    assert capsys.readouterr().out == ""
-
-
 def test_prechecked_artifacts_compile_without_rechecking_single_and_graph_paths() -> None:
     runtime = PipelineDriver()
     single_prepared = runtime.prepare("let value = 1\nvalue")
@@ -307,43 +263,10 @@ def test_prechecked_artifacts_compile_without_rechecking_single_and_graph_paths(
     )
     assert single_run.ok, single_run.diagnostics
 
-    graph_prepared = _prepare_graph("config log = true\nlog")
+    graph_prepared = _prepare_graph("let g = 1\ng")
     graph_discovery = runtime.discover_params_graph(graph_prepared)
     assert graph_discovery.checked_graph is not None
-    startup = runtime.collect_startup_config_graph(
-        graph_prepared, names={"log"}, checked_graph=graph_discovery.checked_graph
-    )
-    assert startup.ok, startup.diagnostics
     graph_run = runtime.run_prepared_graph(
         graph_prepared, checked_graph=graph_discovery.checked_graph, check_only=True
     )
     assert graph_run.ok, graph_run.diagnostics
-
-
-def test_startup_config_preserves_checked_graph_when_no_value_is_requested() -> None:
-    runtime = PipelineDriver()
-    prepared = _prepare_graph("let value = 1\nvalue")
-    discovery = runtime.discover_params_graph(prepared)
-    assert discovery.checked_graph is not None
-
-    result = runtime.collect_startup_config_graph(
-        prepared, names={"log"}, checked_graph=discovery.checked_graph
-    )
-
-    assert result.ok
-    assert result.checked_graph is discovery.checked_graph
-
-
-def test_startup_config_validates_cached_artifact_even_when_no_value_is_requested() -> None:
-    _prepared_a, discovery_a = _compiled_graph("let a = 1\na")
-    prepared_b = _prepare_graph("let b = 2\nb")
-
-    result = PipelineDriver().collect_startup_config_graph(
-        prepared_b,
-        names={"log"},
-        compiled_graph=discovery_a.compiled_graph,
-    )
-
-    assert not result.ok
-    assert result.values == {}
-    _assert_cache_mismatch(iter(result.diagnostics))

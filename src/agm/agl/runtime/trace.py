@@ -78,9 +78,15 @@ class TraceStore:
         return new_trace_id()
 
     def activate(self, path: Path | None) -> None:
-        """Set the final path and flush events buffered before it was known."""
+        """Set the final path and flush events buffered before it was known.
+
+        When *path* is ``None`` the store settles into no-log mode: buffering is
+        turned off so subsequent events short-circuit instead of accumulating in
+        memory for the rest of the run.
+        """
         self._path = path
         if path is None:
+            self._buffer = False
             self._buffered_records.clear()
             return
         for record in self._buffered_records:

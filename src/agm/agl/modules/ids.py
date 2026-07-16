@@ -118,3 +118,7 @@ PRELUDE_ID: ModuleId = ModuleId(segments=(_PRELUDE_SEGMENT,))
 
 #: Logical module id for the shipped core standard library.
 STD_CORE_ID: ModuleId = ModuleId(segments=("std", "core"))
+
+#: Logical module id for the shipped engine-settings standard library
+#: (``std.config``), which declares the engine keys as ``builtin var`` bindings.
+STD_CONFIG_ID: ModuleId = ModuleId(segments=("std", "config"))

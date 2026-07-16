@@ -2307,6 +2307,32 @@ class TestExecModulePathOption:
         assert getattr(calls[0], "module_paths") == []
 
 
+class TestExecEngineFlagExclusivity:
+    """Parser-contract tests for exec's mutually exclusive engine flags."""
+
+    def test_exec_rejects_log_file_with_no_log_file(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("let x = 1\n")
+        result = invoke(
+            runner, ["exec", str(agl_file), "--log-file", "out.log", "--no-log-file"]
+        )
+        assert result.exit_code != 0
+        assert "mutually exclusive" in result.output
+
+    def test_exec_rejects_timeout_with_no_timeout(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("let x = 1\n")
+        result = invoke(
+            runner, ["exec", str(agl_file), "--timeout", "30s", "--no-timeout"]
+        )
+        assert result.exit_code != 0
+        assert "mutually exclusive" in result.output
+
+
 class TestMaxCallDepthOption:
     """Parser-contract tests for the --max-call-depth option on exec/repl."""
 

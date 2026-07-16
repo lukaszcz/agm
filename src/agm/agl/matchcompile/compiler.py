@@ -1117,8 +1117,15 @@ def validate_decision_dag(root: Decision) -> None:
     _validate_decision_dataflow(root, frozenset(), None)
 
 
-def compile_case(normalized: NormalizedCase) -> CompiledCase:
-    """Compile one normalized source case and derive all structured issues from its DAG."""
+def compile_case(normalized: NormalizedCase, *, validate: bool = True) -> CompiledCase:
+    """Compile one normalized source case and derive all structured issues from its DAG.
+
+    ``validate`` runs the full per-case invariant check on the result.  It
+    defaults to ``True`` for standalone callers; the whole-program stage passes
+    ``validate=False`` because the artifact boundary (``MatchCompiled*``
+    ``__post_init__``) re-runs a strict superset of this validation, so a second
+    per-case replay here would be redundant work on the exec hot path.
+    """
     compiler = _CaseCompiler(normalized)
     root, allocator = compiler.compile(
         matrix_from_normalized(normalized), OccurrenceAllocator.for_case(normalized)
@@ -1127,7 +1134,8 @@ def compile_case(normalized: NormalizedCase) -> CompiledCase:
     occurrences = allocator.occurrences
     reachable, issues = _issues(normalized, root, occurrences)
     compiled = CompiledCase(normalized, root, occurrences, reachable, issues)
-    validate_compiled_case(compiled)
+    if validate:
+        validate_compiled_case(compiled)
     return compiled
 
 

@@ -1,8 +1,9 @@
-"""Engine-key registry for AgL config declarations.
+"""Engine-key registry for AgL engine settings.
 
-Maps fixed config engine-key names (kebab) to their resolved AgL types.
-This module is the single source of truth for the fixed set of AgL engine
-config keys and for program names reserved by AGM.
+Maps fixed engine-key names (kebab) to their resolved AgL types.  This module
+is the single source of truth for the fixed set of AgL engine-setting keys
+(declared as ``builtin var`` bindings in ``std.config``) and for program names
+reserved by AGM.
 """
 
 from __future__ import annotations

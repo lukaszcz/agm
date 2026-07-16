@@ -1,0 +1,6 @@
+builtin var runner: text
+builtin var log: bool
+builtin var log-file: Option[text]
+builtin var strict-json: bool
+builtin var max-iters: int
+builtin var timeout: Option[text]

@@ -82,6 +82,7 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
         "MatchIssue",
         "MatchWitness",
         "NonExhaustiveIssue",
+        "Occurrence",
         "OccurrenceId",
         "OpenComplementWitness",
         "RedundantArmIssue",
@@ -755,7 +756,7 @@ def test_pipeline_nonraising_helpers_defend_against_wrong_artifact_kind(
     assert "single-program artifact" in diagnostics[0].message
 
 
-def test_discovery_and_startup_config_surface_match_errors() -> None:
+def test_single_and_graph_discovery_surface_match_errors() -> None:
     runtime = PipelineDriver()
     discovery = runtime.discover_params(
         runtime.prepare("param n: int = 1\ncase true of | true => n")
@@ -764,14 +765,14 @@ def test_discovery_and_startup_config_surface_match_errors() -> None:
     assert any("Non-exhaustive" in item.message for item in discovery.diagnostics)
 
     prepared_graph = PipelineDriver.prepare_program(
-        "config log = true\ncase true of | true => ()",
+        "case true of | true => ()",
         entry_path=None,
         roots=RootSet(roots=frozenset()),
         default_stdlib=False,
     )
-    startup = runtime.collect_startup_config_graph(prepared_graph, names={"log"})
-    assert not startup.ok
-    assert any("Non-exhaustive" in item.message for item in startup.diagnostics)
+    graph_discovery = runtime.discover_params_graph(prepared_graph)
+    assert graph_discovery.compiled_graph is None
+    assert any("Non-exhaustive" in item.message for item in graph_discovery.diagnostics)
 
 
 @pytest.mark.parametrize("check_only", [False, True])
@@ -840,7 +841,7 @@ def test_graph_discovery_and_cached_run_compile_matches_once(
     assert compile_count == 1
 
 
-def test_startup_discovery_and_execution_reuse_one_graph_match_compilation(
+def test_discovery_and_execution_reuse_one_graph_match_compilation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     compile_count = 0
@@ -855,19 +856,10 @@ def test_startup_discovery_and_execution_reuse_one_graph_match_compilation(
         counted_compile,
     )
     runtime = PipelineDriver()
-    prepared = _prepared_graph(
-        "config log = case true of | true => false | false => true\n"
-        "case true of | true => 1 | false => 0"
-    )
+    prepared = _prepared_graph("case true of | true => 1 | false => 0")
 
-    startup = runtime.collect_startup_config_graph(prepared, names={"log"})
-    assert startup.ok, startup.diagnostics
-    assert startup.compiled_graph is not None
-    discovery = runtime.discover_params_graph(
-        prepared,
-        compiled_graph=startup.compiled_graph,
-    )
-    assert discovery.compiled_graph is startup.compiled_graph
+    discovery = runtime.discover_params_graph(prepared)
+    assert discovery.compiled_graph is not None
     result = runtime.run_prepared_graph(
         prepared,
         compiled_graph=discovery.compiled_graph,

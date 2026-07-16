@@ -117,6 +117,14 @@ class AgentRegistry:
         self._named = named
         self._default = default_agent
 
+    def set_default_agent(self, fn: AgentFn | None) -> None:
+        """Replace the default (``ask``) agent callable.
+
+        Only the default agent is swappable; named agents stay fixed for the
+        lifetime of the registry.
+        """
+        self._default = fn
+
     @property
     def has_default_agent(self) -> bool:
         """True when a default agent backs the built-in ``ask`` keyword."""

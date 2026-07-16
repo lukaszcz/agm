@@ -19,7 +19,7 @@ _FAILING_SOURCE = (
 )
 
 _CACHED_SOURCE = (
-    "config log = true\n"
+    "# cached header\n"
     "agent idle\n"
     'let response: text = ask("Q", on_parse_error = Abort())\n'
     "case true of\n"
@@ -86,21 +86,6 @@ def test_graph_discovery_preserves_checker_warning_before_match_failure() -> Non
     _assert_warning_then_match_error(result)
 
 
-def test_startup_config_preserves_checker_warning_before_match_failure() -> None:
-    source = "config log = true\n" + _FAILING_SOURCE
-    result = PipelineDriver(default_agent=lambda _request: "").collect_startup_config_graph(
-        _prepare_graph(source),
-        names={"log"},
-    )
-
-    assert not result.ok
-    assert [(item.line, item.severity) for item in result.warnings] == [
-        (2, "warning"),
-        (3, "warning"),
-    ]
-    assert [(item.line, item.severity) for item in result.diagnostics] == [(4, "error")]
-
-
 @pytest.mark.parametrize("check_only", [False, True])
 def test_repl_preserves_checker_warning_before_match_failure(check_only: bool) -> None:
     result = ReplSession(default_agent=lambda _request: "").eval_entry(
@@ -147,16 +132,10 @@ def test_graph_cached_consumers_do_not_duplicate_checker_warnings() -> None:
         compiled_graph=discovery.compiled_graph,
         check_only=True,
     )
-    startup = runtime.collect_startup_config_graph(
-        prepared,
-        names={"log"},
-        compiled_graph=discovery.compiled_graph,
-    )
 
     assert rediscovery.diagnostics == ()
     assert run.ok
-    assert startup.ok
-    for result in (rediscovery, run, startup):
+    for result in (rediscovery, run):
         assert [(item.line, item.severity) for item in result.warnings] == [
             (2, "warning"),
             (3, "warning"),

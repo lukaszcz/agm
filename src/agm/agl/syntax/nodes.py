@@ -852,11 +852,16 @@ class VarDecl:
 
 @dataclass(frozen=True, slots=True)
 class NameTarget:
-    """Assignment target for ``name := expr``."""
+    """Assignment target for ``name := expr``.
+
+    ``module_qualifier`` is set for a qualified assignment target such as
+    ``std.config::max-iters := expr``; it is ``None`` for a plain local target.
+    """
 
     name: str
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    module_qualifier: Qualifier | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1005,26 +1010,23 @@ class AgentDecl:
     node_id: int = dc_field(compare=False)
 
 
-# ---------------------------------------------------------------------------
-# Config declaration
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True, slots=True)
-class ConfigDecl:
-    """``config NAME [= expr]`` declaration (engine-setting key).
+class BuiltinVarDecl:
+    """``builtin var NAME : Type`` declaration — a body-less, runtime-backed,
+    MUTABLE binding.
 
-    May appear anywhere at the program root (not inside a nested block).
-    Enforced by the scope pass; grammatically it is a top-level item.
+    Mirrors ``builtin def`` / ``builtin record`` (a host-provided declaration with
+    a signature but no body).  A ``builtin var`` names an engine setting whose
+    value lives in an interpreter register: programs read it as an ordinary value
+    and assign it with ``:=``.  The declaration itself introduces no initializer
+    and lowers to nothing.
 
-    ``name``   — the declared engine key in kebab-case (e.g. ``"log"``, ``"max-iters"``).
-    ``value``  — the optional value expression; ``None`` when omitted.  When
-                 present it is a runtime-evaluated readable binding; absent
-                 declarations resolve from the host's configured default.
+    ``name``      — the declared engine key (kebab-case, e.g. ``"max-iters"``).
+    ``type_ann``  — the mandatory declared type (no value expression).
     """
 
     name: str
-    value: Expr | None
+    type_ann: TypeExpr
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
 
@@ -1053,7 +1055,7 @@ Declaration = (
     | ParamDecl
     | ProgramDecl
     | AgentDecl
-    | ConfigDecl
+    | BuiltinVarDecl
     | InfixDecl
     | ImportDecl
     | ExportDecl

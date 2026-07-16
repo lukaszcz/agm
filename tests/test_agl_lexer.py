@@ -2224,9 +2224,11 @@ class TestCaseNeutralNames:
         assert "fn" in types
         assert "NAME" not in types
 
-    def test_config_is_keyword(self) -> None:
-        result = tok("config")
-        assert result == [("config", "config")]
+    def test_config_is_ordinary_name(self) -> None:
+        # 'config' is an ordinary identifier everywhere, including at item-start
+        # and as the 'config' segment of a module path (e.g. std.config).
+        assert tok("config") == [("NAME", "config")]
+        assert ("NAME", "config") in tok("let config = 1")
 
     def test_agent_is_keyword_not_name(self) -> None:
         result = tok("agent")

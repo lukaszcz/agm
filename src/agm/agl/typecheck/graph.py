@@ -78,6 +78,7 @@ from agm.agl.semantics.types import (
     Type,
 )
 from agm.agl.syntax.nodes import (
+    BuiltinVarDecl,
     EnumDef,
     ExceptionDef,
     FuncDef,
@@ -719,6 +720,31 @@ def _build_graph_func_sig_table(
     return result
 
 
+def _build_graph_builtin_var_table(
+    resolved_graph: ResolvedModuleGraph,
+) -> dict[int, Type]:
+    """Compute binding types for every ``builtin var`` across all modules.
+
+    A ``builtin var`` names a fixed engine key whose type is canonical (from the
+    engine-key registry), so no type-expression resolution or per-module env is
+    needed.  The table is keyed by the declaration node id (globally unique), so
+    seeding it into every module's env makes each engine setting readable and
+    assignable from any module that imports its owner (e.g. ``std.config``).
+    Unknown-key declarations are omitted; the owning module's own check rejects
+    them with a clear error.
+    """
+    from agm.agl.semantics.engine_keys import get_engine_key_type
+
+    result: dict[int, Type] = {}
+    for _mid, loaded in resolved_graph.modules.items():
+        for item in loaded.resolved.program.body.items:
+            if isinstance(item, BuiltinVarDecl):
+                key_type = get_engine_key_type(item.name)
+                if key_type is not None:
+                    result[item.node_id] = key_type
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Per-module checking helper
 # ---------------------------------------------------------------------------
@@ -751,6 +777,7 @@ def _check_module(
     graph_type_table: dict[tuple[ModuleId, str], Type],
     import_env_map: Mapping[ModuleId, object],
     graph_func_sig_table: dict[int, tuple[str, FunctionSignature, FunctionType, bool]],
+    graph_builtin_var_table: dict[int, Type],
     graph_generic_table: dict[tuple[ModuleId, str], GenericTypeDef],
     graph_alias_table: dict[tuple[ModuleId, str], GenericAliasDef],
     graph_ctor_sig_table: dict[tuple[ModuleId, str, str | None], ConstructorSignature],
@@ -830,6 +857,13 @@ def _check_module(
         env.register_function_signature(name, sig)
         if is_extern:
             env.register_extern_node_id(node_id)
+
+    # Seed builtin-var binding types (engine settings) from the whole-graph
+    # pre-pass so a ``std.config::key`` read/assign in any module resolves its
+    # type.  Keyed by globally-unique decl node id, so seeding the whole table
+    # into every module's env is safe and collision-free.
+    for var_node_id, var_type in graph_builtin_var_table.items():
+        env.set_binding_type(var_node_id, var_type)
 
     # Build the checked output through the same close/finalize boundary as a
     # single module. The graph pre-pass already checked inhabitation over the
@@ -927,6 +961,10 @@ def check_graph(
         entry_seed_env=entry_seed_env,
     )
 
+    # Phase 2b: canonical binding types for every ``builtin var`` (engine
+    # settings), keyed by decl node id, seeded into every module's env below.
+    graph_builtin_var_table = _build_graph_builtin_var_table(resolved_graph)
+
     # Collect import envs for per-module checking.
     import_env_map: dict[ModuleId, object] = {
         mid: rmod.import_env for mid, rmod in resolved_graph.modules.items()
@@ -956,6 +994,7 @@ def check_graph(
             graph_type_table,
             import_env_map,
             graph_func_sig_table,
+            graph_builtin_var_table,
             graph_generic_table,
             graph_alias_table,
             graph_ctor_sig_table,

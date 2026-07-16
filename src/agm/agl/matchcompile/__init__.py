@@ -29,6 +29,7 @@ from .model import (
     EnumConstructor,
     FieldOccurrenceProvenance,
     LiteralKind,
+    Occurrence,
     OccurrenceId,
 )
 from .stage import (
@@ -65,6 +66,7 @@ __all__ = [
     "MatchIssue",
     "MatchWitness",
     "NonExhaustiveIssue",
+    "Occurrence",
     "OccurrenceId",
     "OpenComplementWitness",
     "RedundantArmIssue",

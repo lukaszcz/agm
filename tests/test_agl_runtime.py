@@ -762,19 +762,6 @@ class TestPipelineDriverProperties:
 class TestResetExternRegistry:
     """``PipelineDriver.reset_extern_registry`` — the ``ReplSession.reset()`` seam."""
 
-    def test_share_registry_replaces_cached_registry_only(self) -> None:
-        from agm.agl.runtime.externs import ExternRegistry
-
-        rt = PipelineDriver()
-        env_before = rt.host_environment()
-        shared = ExternRegistry()
-        rt.share_extern_registry(shared)
-        env_after = rt.host_environment()
-        assert env_after.extern_registry is shared
-        assert env_after.registry is env_before.registry
-        assert env_after.capabilities is env_before.capabilities
-        assert env_after.codecs is env_before.codecs
-
     def test_noop_before_the_host_environment_is_ever_assembled(self) -> None:
         # Nothing cached yet: resetting must not crash, and a later
         # ``host_environment()`` call still works normally afterward.
@@ -3215,22 +3202,6 @@ class TestPrepareProgram:
         assert prepared.resolved_graph is not None
         assert any(d.name == "reviewer" for d in prepared.declared_agents)
 
-    def test_prepare_program_configs_from_entry(self, tmp_path: pathlib.Path) -> None:
-        """Config declarations are discovered from the entry module."""
-        from agm.agl.modules.roots import RootSet
-
-        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        rt = PipelineDriver()
-        prepared = rt.prepare_program(
-            "config max-iters = 7\nlet x = 1\nx",
-            entry_path=None,
-            roots=roots,
-        )
-        assert prepared.resolved_graph is not None
-        discovery = rt.discover_params_graph(prepared)
-        names = {c.name for c in discovery.configs}
-        assert "max-iters" in names
-
     def test_prepare_program_failure_returns_empty_declared_agents(
         self, tmp_path: pathlib.Path
     ) -> None:
@@ -3244,6 +3215,17 @@ class TestPrepareProgram:
         # scope error → resolved_graph is None
         assert prepared.resolved_graph is None
         assert prepared.declared_agents == ()
+
+    def test_prepare_program_captures_syntax_error(self) -> None:
+        """A parse failure is captured as a diagnostic, not raised."""
+        from agm.agl.modules.roots import RootSet
+
+        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
+        prepared = PipelineDriver.prepare_program(
+            "let x = = =", entry_path=None, roots=roots
+        )
+        assert prepared.resolved_graph is None
+        assert prepared.diagnostics
 
 
 class TestRunPreparedGraph:

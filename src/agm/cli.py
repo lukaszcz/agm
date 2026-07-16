@@ -1071,15 +1071,15 @@ def exec_cmd(
     no_log: bool = typer.Option(
         False,
         "--no-log",
-        help="Disable trace logging (overrides a source config declaration or [exec] log = true).",
+        help="Disable trace logging (overrides [exec] log = true in config.toml).",
     ),
     log: bool = typer.Option(
         False,
         "--log",
         help=(
             "Enable trace logging to an auto-named timestamped file under .agent-files/. "
-            "Trace logging is off by default; --log, --log-file, a source 'config log = true' "
-            "declaration, or [exec] log = true in config.toml opt in."
+            "Trace logging is off by default; --log, --log-file, or [exec] log = true in "
+            "config.toml opt in."
         ),
     ),
     module_paths: list[str] = typer.Option(
@@ -1104,7 +1104,7 @@ def exec_cmd(
         "--timeout",
         help=(
             "Override the shell-exec timeout (e.g. '30s', '5m', '120').  "
-            "Also sets the in-program 'config timeout' binding to some(VALUE).  "
+            "Seeds the in-program 'std.config::timeout' setting to some(VALUE).  "
             "Mutually exclusive with --no-timeout."
         ),
     ),
@@ -1113,7 +1113,7 @@ def exec_cmd(
         "--no-timeout",
         help=(
             "Remove any configured timeout (no shell-exec timeout).  "
-            "Also sets the in-program 'config timeout' binding to none.  "
+            "Seeds the in-program 'std.config::timeout' setting to none.  "
             "Mutually exclusive with --timeout."
         ),
     ),
@@ -1249,7 +1249,7 @@ def repl_cmd(
         help=(
             "Enable trace logging to an auto-named timestamped file under .agent-files/. "
             "Trace logging is off by default; --log, --log-file, or [exec] log = true in "
-            "config.toml opt in. Source config declarations take effect in the REPL too."
+            "config.toml opt in. A std.config::log write takes effect in the REPL too."
         ),
     ),
     _help: bool = _help_option(),

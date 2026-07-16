@@ -506,30 +506,32 @@ _HELP_TEXTS: dict[str, str] = {
         Boolean params use the `--name/--no-name` flag form. Structured types
         take a JSON string. Run `agm exec FILE --help` to show discovered params.
 
-        Trace logging is OFF by default.  Enable it with --log, --log-file,
-        a source-level "config log = true" declaration, or [exec] log = true
-        in config.toml.  Source config declarations override config-file values;
-        CLI flags override source declarations (CLI > source > config).
+        Trace logging is OFF by default.  Enable it with --log, --log-file, or
+        [exec] log = true in config.toml.  A source ``std.config::KEY := VALUE``
+        write takes effect from its program point and overrides the CLI flag,
+        which overrides the config-file layer.
 
         Options:
           -c, --command COMMAND  Execute the program given as COMMAND instead of FILE.
           --strict-json         Require bare JSON output from agents (no recovery).
           --no-strict-json      Use lenient JSON recovery (default).
-          --max-iters N         Cap unbounded loops; off by default (CLI > source > config).
+          --max-iters N         Cap unbounded loops; off by default (CLI > config).
           --max-call-depth N    Override the maximum recursion call depth
                                 (CLI > config).
           --runner COMMAND      Override the default agent runner command.
-          --timeout DURATION    Override the shell-exec timeout and bind config timeout
-                                to some(DURATION). Mutually exclusive with --no-timeout.
-          --no-timeout          Remove any configured shell-exec timeout and bind
-                                config timeout to none. Mutually exclusive with --timeout.
+          --timeout DURATION    Override the shell-exec timeout and seed
+                                std.config::timeout to some(DURATION). Mutually
+                                exclusive with --no-timeout.
+          --no-timeout          Remove any configured shell-exec timeout and seed
+                                std.config::timeout to none. Mutually exclusive
+                                with --timeout.
           --dry-run             Run the full static pipeline and validate parameters,
                                 but do not execute the workflow.
           --log                 Enable trace logging (auto timestamped path).
           --log-file PATH       Write trace log to PATH.
-          --no-log-file         Clear the source-level log-file binding only; use
-                                --no-log to disable tracing entirely.
-          --no-log              Disable trace logging (overrides source/config).
+          --no-log-file         Clear the CLI log-file seed only; use --no-log to
+                                disable tracing entirely.
+          --no-log              Disable trace logging (overrides config).
           --log, --log-file, and --no-log are mutually exclusive.
           --log-file and --no-log-file are mutually exclusive.
           --no-stdlib           Do not automatically open std.core in the entry module.
@@ -562,10 +564,10 @@ _HELP_TEXTS: dict[str, str] = {
         automatically opens std.core so standard-library names are available
         unqualified.
 
-        Trace logging is OFF by default.  Source config declarations
-        (config KEY = VALUE) entered at the REPL prompt take effect from their
-        declaration point and persist for the session; :reset clears them.
-        Set session-wide defaults via CLI flags or [exec] config.
+        Trace logging is OFF by default.  A ``std.config::KEY := VALUE`` write
+        entered at the REPL prompt takes effect from that point and persists for
+        the session; :reset clears it.  Set session-wide defaults via CLI flags
+        or [exec] config.
 
         Params (`param NAME: T`) resolve eagerly when entered: first from
         [<program>] config when a `program NAME` declaration is active,

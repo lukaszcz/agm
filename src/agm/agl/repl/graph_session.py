@@ -54,8 +54,10 @@ class GraphSessionCtx(Protocol):
     _ambient_type_names: frozenset[str]
     _trace_path: Path | None
     _default_strict_json: bool
+    _default_loop_limit: int | None
     _default_call_depth_limit: int
     _shell_exec_timeout: float | None
+    _persisted_host_settings: dict[str, Value]
 
     def _ensure_roots(self) -> RootSet: ...
 
@@ -70,10 +72,6 @@ class GraphSessionCtx(Protocol):
     def _pre_eval_param_check(
         self, program: Program, checked: CheckedProgram, warnings: list[Diagnostic]
     ) -> tuple[EntryResult | None, dict[str, Value], str | None, dict[str, object]]: ...
-
-    def _build_config_base(
-        self, effective_config: dict[str, object]
-    ) -> dict[str, Value]: ...
 
     def _update_engine_settings(
         self,
@@ -376,20 +374,23 @@ class GraphSession:
         host_contracts, _ = _materialize_ir_contracts(lowered.program, host_env.codecs)
         trace = TraceStore(path=self._ctx._trace_path)
         trace.run_start()
-        config_base = self._ctx._build_config_base(entry_active_config)
         interp = IrInterpreter(
             lowered.program,
             registry=host_env.registry,
             strict_json=self._ctx._default_strict_json,
+            loop_limit=self._ctx._default_loop_limit,
             max_call_depth=self._ctx._default_call_depth_limit,
             shell_exec_timeout=self._ctx._shell_exec_timeout,
             trace=trace,
             param_values=ir_params,
             host_contracts=host_contracts,
             base_frame=self._ctx._ir_base_frame,
-            config_cli={},
-            config_base=config_base,
             extern_registry=host_env.extern_registry,
+            # The REPL persists host-consumed register values across entries but,
+            # lacking a runner-command→factory map and per-entry trace repointing,
+            # never rebuilds agents or repoints traces on a host-consumed write.
+            host_reconfigurer=None,
+            builtin_host_settings=self._ctx._persisted_host_settings,
         )
         try:
             interp.run()
@@ -462,6 +463,11 @@ class GraphSession:
             loop_limit=interp.loop_limit,
             shell_exec_timeout=interp.shell_exec_timeout,
         )
+        # Persist the host-consumed register values (runner/log/log-file) so a
+        # ``std.config::KEY := VALUE`` write carries into later entries.  Read
+        # back only on full success, mirroring ``_update_engine_settings`` — a
+        # write in a partially-failed entry is not promoted.
+        self._ctx._persisted_host_settings = interp.builtin_host_settings
         self._ctx._promote_ir_state(
             text=text,
             program=orig_program,

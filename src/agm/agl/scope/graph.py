@@ -49,6 +49,7 @@ from agm.agl.scope.symbols import (
 )
 from agm.agl.syntax.nodes import (
     AgentDecl,
+    BuiltinVarDecl,
     EnumDef,
     ExceptionDef,
     ExportDecl,
@@ -199,6 +200,10 @@ def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[str, QNa
         if isinstance(item, (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias)):
             if not item.is_private:
                 result[item.name] = (self_id, item.name)
+        elif isinstance(item, BuiltinVarDecl):
+            # ``builtin var`` engine settings are public, exported like any other
+            # top-level declaration so they are reachable via ``module::name``.
+            result[item.name] = (self_id, item.name)
     return result
 
 
@@ -441,6 +446,12 @@ def resolve_graph(
                         else BinderKind.let_binding
                     )
                     decl_info[key] = (item.node_id, item.span, kind)
+            elif isinstance(item, BuiltinVarDecl):
+                # A ``builtin var`` is a public, MUTABLE cross-module binding
+                # (engine setting).  Record its kind so cross-module references
+                # and qualified ``:=`` assignments resolve correctly.
+                key = (mid, item.name)
+                decl_info[key] = (item.node_id, item.span, BinderKind.builtin_var_binding)
 
     # ------------------------------------------------------------------
     # Step 6: Resolve each module's bodies.

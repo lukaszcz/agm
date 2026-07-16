@@ -61,7 +61,7 @@ reachable modules. Success yields a distinct `MatchCompiledProgram` or
 `MatchCompiledModuleGraph` that wraps the exact checked artifact and carries a total case-to-DAG
 mapping; any issue yields sorted static diagnostics and no artifact. Artifact validation checks
 source ownership, mapping totality, and decision semantics before lowering trusts the result.
-Parameter discovery, startup config, dry-run, execution, and REPL paths reuse static artifacts
+Parameter discovery, dry-run, execution, and REPL paths reuse static artifacts
 only when their resolved-program identities and host capabilities match the consuming pipeline;
 otherwise they recheck (or reject an artifact from different source) before lowering.
 

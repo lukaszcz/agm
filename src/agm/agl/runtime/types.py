@@ -19,7 +19,6 @@ if TYPE_CHECKING:
 __all__ = [
     "AgentDeclInfo",
     "CallSiteInfo",
-    "ConfigDeclInfo",
     "HostEnvironment",
     "ParamDeclInfo",
 ]
@@ -104,23 +103,5 @@ class ParamDeclInfo:
     name: str
     type: "AglType"
     has_default: bool
-    line: int
-    col: int
-
-
-@dataclass(frozen=True, slots=True)
-class ConfigDeclInfo:
-    """Static summary of one ``config`` declaration in a program.
-
-    ``name``      — the kebab-case engine key (e.g. ``"max-iters"``).
-    ``type``      — the resolved AgL type of the engine key.
-    ``has_value`` — ``True`` when the declaration carries a source value
-                    (``config KEY = expr``); ``False`` for bare ``config KEY``.
-    ``line``/``col`` — 1-based source location of the declaration.
-    """
-
-    name: str
-    type: "AglType"
-    has_value: bool
     line: int
     col: int

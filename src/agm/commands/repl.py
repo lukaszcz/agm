@@ -107,20 +107,17 @@ def run(args: ReplArgs) -> None:
     stdlib_root = resolve_stdlib_root(home=ctx.home)
     lib_root = resolve_lib_root(mod_roots_cfg, home=ctx.home)
 
-    # Build the [exec] engine base for the four start-resolved engine keys
-    # (runner, log, log-file, timeout) that the session uses as the config_base
-    # floor for bare ``config KEY`` bindings.  strict-json and max-iters are
-    # tracked by the session's own persisted settings and override these values
-    # in _build_config_base; they are included here so the dict is complete for
-    # any consumer that reads all six keys.
+    # Build the [exec] engine base for all six engine keys.  The session seeds
+    # its host-consumed registers (runner, log, log-file) from these values; the
+    # remaining keys complete the dict for any consumer that reads all six.
     #
     # The raw timeout string is read from the TOML table via raw_option_str so
-    # the binding holds the original written value (e.g. "30s") rather than a
+    # the value holds the original written string (e.g. "30s") rather than a
     # parsed float (e.g. "30.0").
     exec_raw_table = toml_dict(merged_config.get("exec"))
     raw_timeout_str = raw_option_str(exec_raw_table, {}, "timeout")
     # Omit max-iters when unset (None = valve OFF) so build_engine_config_base
-    # falls back to its _ENGINE_DEFAULTS entry (the bare-config floor).
+    # falls back to its engine default.
     repl_base_raw: dict[str, object] = {
         "strict-json": strict_json,
         "runner": runner_cmd,

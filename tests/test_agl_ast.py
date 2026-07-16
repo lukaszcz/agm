@@ -51,7 +51,6 @@ from agm.agl.syntax import (
     CaseBranch,
     Cast,
     CatchClause,
-    ConfigDecl,
     ConstructorPattern,
     Continue,
     DecimalLit,
@@ -1127,13 +1126,6 @@ class TestDeclarations:
         args = typing.get_args(Declaration)
         assert FuncDef in args
 
-    def test_config_decl(self) -> None:
-        val = BoolLit(value=True, span=self._s(), node_id=2)
-        node = ConfigDecl(name="log", value=val, span=self._s(), node_id=1)
-        assert node.name == "log"
-        assert isinstance(node.value, BoolLit)
-        assert node.value.value is True
-
     def test_exception_def_fields(self) -> None:
         """ExceptionDef stores name, fields, base, and privacy/builtin flags."""
         t = TextT(span=self._s(), node_id=3)
@@ -1363,12 +1355,6 @@ class TestVisitorWalk:
         )
         param_decl = ParamDecl(name="spec", annotation=text_t, default=None, span=s, node_id=215)
         agent_decl = AgentDecl(name="reviewer", runner=None, span=s, node_id=216)
-        config_decl = ConfigDecl(
-            name="log",
-            value=BoolLit(value=True, span=s, node_id=2170),
-            span=s,
-            node_id=217,
-        )
 
         # FuncDef — exercises UnitT, AgentT, FuncT via type annotations + Param
         _std = ParamKind.STANDARD
@@ -1530,7 +1516,7 @@ class TestVisitorWalk:
         top_block = Block(
             items=(
                 record_def, enum_def, exception_def, type_alias, param_decl, input_no_ann,
-                agent_decl, config_decl, func_def,
+                agent_decl, func_def,
                 let_decl, let_with_type, let_applied, var_decl, var_with_type,
                 assign_stmt, indexed_assign_stmt,
                 # expressions directly in block
@@ -1577,7 +1563,7 @@ class TestVisitorWalk:
 
         decl_kinds = {
             RecordDef, EnumDef, ExceptionDef, TypeAlias, ParamDecl, Param, VariantDef,
-            AgentDecl, FuncDef, ConfigDecl,
+            AgentDecl, FuncDef,
         }
         for kind in decl_kinds:
             assert kind in kinds, f"Expected {kind.__name__} to be visited"
@@ -2020,25 +2006,6 @@ class TestVisitorWalk:
         # AgentDecl is a leaf — only itself is visited.
         assert visited == [node]
 
-    def test_walk_config_decl_with_value(self) -> None:
-        from agm.agl.syntax.visitor import walk
-
-        s = span()
-        val = BoolLit(value=True, span=s, node_id=2)
-        node = ConfigDecl(name="log", value=val, span=s, node_id=1)
-        visited: list[object] = []
-        walk(node, visited.append)
-        assert visited == [node, val]
-
-    def test_walk_config_decl_no_value(self) -> None:
-        from agm.agl.syntax.visitor import walk
-
-        s = span()
-        node = ConfigDecl(name="log", value=None, span=s, node_id=1)
-        visited: list[object] = []
-        walk(node, visited.append)
-        assert visited == [node]
-
     def test_walk_param_decl_without_annotation(self) -> None:
         from agm.agl.syntax.visitor import walk
 
@@ -2347,7 +2314,7 @@ class TestUnionAliases:
     def test_declaration_union_members(self) -> None:
         import typing
         args = typing.get_args(Declaration)
-        for cls in (FuncDef, RecordDef, EnumDef, TypeAlias, ParamDecl, AgentDecl, ConfigDecl):
+        for cls in (FuncDef, RecordDef, EnumDef, TypeAlias, ParamDecl, AgentDecl):
             assert cls in args, f"{cls.__name__} missing from Declaration union"
 
     def test_item_contains_declaration_binder_expr(self) -> None:

@@ -15,6 +15,16 @@ enum Box
 enum Wrapper
   | Wrap(color: Color)
 
+# 'Halt' is a variant of both Signal and Trend.  A bare pattern is resolved
+# against the scrutinee's enum, so the shared spelling needs no qualification.
+enum Signal
+  | Halt
+  | Go
+
+enum Trend
+  | Halt
+  | Fall
+
 def name(c: Color) -> text =
   case c of
     | Red => "red"
@@ -37,6 +47,16 @@ def describe(b: Box) -> text =
     | Empty => "empty"
     | Full(item) => "full:${item}"
 
+def signal_name(s: Signal) -> text =
+  case s of
+    | Halt => "stop"
+    | Go => "go"
+
+def trend_name(t: Trend) -> text =
+  case t of
+    | Halt => "flat"
+    | Fall => "down"
+
 # Nested: a bare variant pattern (Red) and a bare binder (other) on a subfield.
 def inner_name(w: Wrapper) -> text =
   case w of
@@ -49,3 +69,5 @@ print(code(c))
 print(describe(Empty))
 print(describe(Full(item = n)))
 print(inner_name(Wrap(color = c)))
+print(signal_name(Signal::Halt))
+print(trend_name(Trend::Halt))

@@ -542,10 +542,41 @@ class EnumOwnerForm:
             raise ValueError("a qualified-import enum owner form requires an import handle")
 
     def match(self, concrete: Type) -> TypeTemplateMatch | None:
-        """Match this checked owner form against one concrete semantic type."""
+        """Match this checked owner form against one concrete semantic type.
+
+        Enum-owner aliases may carry phantom parameters, which cannot be
+        inferred from a scrutinee but do not affect the enum they denote.
+        """
         if self.type_template is None:
             return None
-        return self.type_template.match(concrete)
+        return _match_enum_owner_template(self.type_template, concrete)
+
+
+def _match_enum_owner_template(
+    template: TypeTemplate, concrete: Type
+) -> TypeTemplateMatch | None:
+    """Match enum owner templates while permitting uninferred phantom parameters."""
+    bindings = match_type_template(template.template, concrete, ())
+    if bindings is not None:
+        return bindings
+
+    # ``match_type_template`` needs declared variables to compare variable
+    # occurrences. Give phantom variables a concrete sentinel, then omit them
+    # from the resulting match; only variables present in the template matter.
+    parameters = tuple(
+        parameter
+        for parameter in template.type_params
+        if _type_contains_var(template.template, parameter)
+    )
+    if not parameters:
+        return TypeTemplateMatch(()) if template.template == concrete else None
+    return match_type_template(template.template, concrete, parameters)
+
+
+def _type_contains_var(typ: Type, name: str) -> bool:
+    if isinstance(typ, TypeVarType):
+        return typ.name == name
+    return any(_type_contains_var(child, name) for child in type_children(typ))
 def type_children(t: Type) -> tuple[Type, ...]:
     """Return *t*'s direct structural children, if any.
 

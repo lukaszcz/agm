@@ -535,7 +535,15 @@ class TestType:
     def test_type_unknown_name_clean_error(self) -> None:
         outcome = meta_mod.dispatch_meta(":type nope", _session_ctx())
         assert outcome.text is not None
+        assert outcome.text.startswith("1:1")
+        assert "error:" in outcome.text
         assert outcome.quit is False  # never crashed the loop
+
+    def test_type_match_error_preserves_source_location(self) -> None:
+        outcome = meta_mod.dispatch_meta(":type case true of | true => 1", _session_ctx())
+        assert outcome.text is not None
+        assert outcome.text.startswith("1:1")
+        assert "Non-exhaustive" in outcome.text
 
     def test_type_bad_syntax_clean_error(self) -> None:
         outcome = meta_mod.dispatch_meta(":type 1 +", _session_ctx())

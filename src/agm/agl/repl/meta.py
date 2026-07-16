@@ -112,14 +112,14 @@ def _handle_type(arg: str, ctx: MetaContext) -> MetaOutcome:
     pipeline failure (syntax / scope / type / non-expression) is caught and
     returned as a clean error string so it never escapes ``dispatch_meta``.
     """
-    from agm.agl.diagnostics import AglError
+    from agm.agl.diagnostics import AglError, format_diagnostic
 
     if not arg:
         return MetaOutcome(text="usage: :type EXPR")
     try:
         type_str = ctx.session.type_of(arg)
     except AglError as exc:
-        return MetaOutcome(text=str(exc))
+        return MetaOutcome(text=format_diagnostic(exc.to_diagnostic(), source_name=None))
     return MetaOutcome(text=type_str)
 
 

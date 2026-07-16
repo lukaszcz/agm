@@ -1130,7 +1130,7 @@ class ReplSession:
         match_result = compile_program_matches(checked)
         if match_result.compiled is None:
             diagnostic = diagnostics_from_match_issues(match_result.issues)[0]
-            raise AglError(diagnostic.message)
+            raise AglError(diagnostic.message, span=match_result.issues[0].span)
         typ = checked.node_types.get(expr_item.node_id)
         assert typ is not None
         from agm.agl.repl.type_display import format_type_for_repl

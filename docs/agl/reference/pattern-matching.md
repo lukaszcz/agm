@@ -234,6 +234,10 @@ covered with a complete set of nested patterns.
 
 The domains of `int`, `decimal`, `text`, `json`, lists, dictionaries, records,
 exceptions, `unit`, agents, functions, and an unresolved type parameter are open.
+
+`bottom` has an empty domain: a diverging expression (`raise`, `return`, `break`,
+or `continue`) produces no value to match. Consequently, every arm written for
+a `case` over `bottom` is redundant.
 A finite set of literals cannot exhaust such a domain; the remaining values
 require an irrefutable wildcard or variable-binder pattern. The same requirement
 applies when an open domain occurs inside a constructor payload.

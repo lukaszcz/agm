@@ -959,6 +959,47 @@ class ConstructorChecker:
                 sig = self._ctx._env.get_ctor_sig_from_module(
                     ctor_ref.owner_module_id, ctor_ref.owner_name, ctor_ref.variant
                 )
+            else:
+                source = self._ctx._env.source_type_template_qname(
+                    ctor_ref.owner_module_id, ctor_ref.owner_name
+                )
+                if source is not None and isinstance(source.template, RecordType):
+                    target = source.template
+                    gdef = self._ctx._env.get_generic_type_from_module(
+                        target.module_id, target.name
+                    )
+                    if gdef is None:
+                        gdef = self._ctx._env.get_generic_type(target.name)
+                    if gdef is not None:
+                        target_sig = self._ctx._env.get_ctor_sig_from_module(
+                            target.module_id, target.name, None
+                        )
+                        if target_sig is None:
+                            target_sig = self._ctx._env.get_constructor_signature(target.name, None)
+                        assert target_sig is not None
+                        target_match = TypeTemplate(gdef.template, gdef.type_params).match(
+                            source.template
+                        )
+                        assert target_match is not None
+                        target_subst = dict(target_match.bindings)
+                        sig = ConstructorSignature(
+                            owner_name=ctor_ref.owner_name,
+                            variant=None,
+                            field_names=target_sig.field_names,
+                            field_templates=tuple(
+                                substitute(field, target_subst)
+                                for field in target_sig.field_templates
+                            ),
+                            result_template=source.template,
+                            type_params=source.type_params,
+                        )
+                        ctor_ref = ConstructorRef(
+                            owner_name=ctor_ref.owner_name,
+                            variant=None,
+                            owner_decl_node_id=ctor_ref.owner_decl_node_id,
+                            type_params=source.type_params,
+                            owner_module_id=ctor_ref.owner_module_id,
+                        )
             return self._check_generic_constructor_call(
                 node_type_args=node.type_args,
                 ctor_ref=ctor_ref,

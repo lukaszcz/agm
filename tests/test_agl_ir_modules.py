@@ -7,10 +7,10 @@ from pathlib import Path
 import pytest
 
 from agm.agl.ir.ids import NominalId
-from agm.agl.modules.ids import ModuleId
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.semantics.values import BoolValue, EnumValue, IntValue, RecordValue, TextValue
 from agm.agl.typecheck import AglTypeError
-from tests.agl.ir_harness import evaluate_ir_graph, evaluate_ir_graph_raises
+from tests.agl.ir_harness import evaluate_ir, evaluate_ir_graph, evaluate_ir_graph_raises
 
 
 def test_imported_function_and_local_let(tmp_path: Path) -> None:
@@ -28,6 +28,20 @@ let x = 10
     r = evaluate_ir_graph(entry_source, {"lib": lib_source}, tmp_path)
     assert r["result"] == IntValue(7)
     assert r["x"] == IntValue(10)
+
+
+def test_local_alias_constructor_lowers() -> None:
+    result = evaluate_ir(
+        """
+record Box[T]
+  value: T
+type Alias[T] = Box[T]
+let box = Alias(value = 1)
+box
+"""
+    )
+
+    assert result["box"] == RecordValue(NominalId(ENTRY_ID, "Box"), "Box", {"value": IntValue(1)})
 
 
 def test_imported_alias_constructor_value_lowers(tmp_path: Path) -> None:

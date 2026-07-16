@@ -124,6 +124,7 @@ from agm.agl.syntax.nodes import (
     assign_target_root_name,
 )
 from agm.agl.syntax.spans import SourceSpan
+from agm.agl.syntax.types import AppliedT, NameT
 
 # ---------------------------------------------------------------------------
 # Built-in names and reserved-name enforcement
@@ -560,6 +561,15 @@ class _Resolver:
                     variant=None,
                     owner_decl_node_id=item.node_id,
                     type_params=(),
+                    owner_module_id=self._module_id,
+                )
+                self._add_constructor_candidate(item.name, cref)
+            elif isinstance(item, TypeAlias) and isinstance(item.type_expr, (NameT, AppliedT)):
+                cref = ConstructorRef(
+                    owner_name=item.name,
+                    variant=None,
+                    owner_decl_node_id=item.node_id,
+                    type_params=item.type_params,
                     owner_module_id=self._module_id,
                 )
                 self._add_constructor_candidate(item.name, cref)

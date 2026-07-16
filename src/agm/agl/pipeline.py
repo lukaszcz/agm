@@ -775,6 +775,7 @@ class PipelineDriver:
             source_text=source,
             source_label="<entry>",
             validate=True,
+            _validate_compiled=False,
             contract_payloads=contract_payloads,
         )
 
@@ -1326,6 +1327,7 @@ class PipelineDriver:
         executable = lower_graph(
             compiled_graph,
             validate=True,
+            _validate_compiled=False,
             contract_payloads=contract_payloads,
         )
         host_contracts, ir_contract_errors = _materialize_ir_contracts(
@@ -1552,6 +1554,7 @@ class PipelineDriver:
         executable = lower_graph(
             compiled_graph,
             validate=True,
+            _validate_compiled=False,
             contract_payloads=contract_payloads,
         )
 
@@ -1769,6 +1772,9 @@ def _with_cached_capabilities(
 ) -> "MatchCompiledProgram | MatchCompiledModuleGraph":
     """Stamp cached artifacts with the host contract used for type checking."""
     from dataclasses import replace
+
+    if compiled.capabilities == capabilities:
+        return compiled
 
     from agm.agl.matchcompile import MatchCompiledProgram
 

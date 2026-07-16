@@ -44,6 +44,7 @@ def lower_graph(
     compiled_graph: MatchCompiledModuleGraph,
     *,
     validate: bool = False,
+    _validate_compiled: bool = True,
     _link: _LinkState | None = None,
     _already_linked: frozenset[ModuleId] = frozenset(),
     _entry_source_text: str | None = None,
@@ -56,7 +57,8 @@ def lower_graph(
     :param validate: when ``True``, run ``validate_ir(deep=True)`` before returning.
     :returns: the linked ``ExecutableProgram`` ready for evaluation.
     """
-    validate_match_compiled_graph(compiled_graph)
+    if _validate_compiled:
+        validate_match_compiled_graph(compiled_graph)
     checked_graph = compiled_graph.checked_graph
     link = _link if _link is not None else _LinkState()
 

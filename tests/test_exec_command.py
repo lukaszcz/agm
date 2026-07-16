@@ -2550,10 +2550,13 @@ class TestExecStartupConfigPrepass:
             *,
             names: set[str],
             compiled_graph: object = None,
+            checked_graph: object = None,
             param_values: object = None,
             config_cli: object = None,
             config_base: object = None,
         ) -> StartupConfigResult:
+            assert compiled_graph is not None
+            assert checked_graph is compiled_graph.checked_graph
             return StartupConfigResult(
                 ok=False,
                 diagnostics=[error],
@@ -2588,6 +2591,7 @@ class TestExecStartupConfigPrepass:
             *,
             names: set[str],
             compiled_graph: object = None,
+            checked_graph: object = None,
             param_values: object = None,
             config_cli: object = None,
             config_base: object = None,

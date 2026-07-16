@@ -434,6 +434,8 @@ def run(args: ExecArgs) -> None:
         startup_result = startup_runtime.collect_startup_config_graph(
             prepared,
             names={"runner", "log", "log-file"},
+            compiled_graph=discovery.compiled_graph,
+            checked_graph=discovery.checked_graph,
             param_values=external_params,
             config_cli=config_cli,
             config_base=config_base,

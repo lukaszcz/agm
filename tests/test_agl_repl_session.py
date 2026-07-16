@@ -156,6 +156,11 @@ class TestStdlib:
         assert some_result.ok, some_result.diagnostics
         assert none_result.ok, none_result.diagnostics
 
+    def test_type_of_uses_opened_core_stdlib(self) -> None:
+        s = ReplSession(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
+
+        assert "Option[int]" in s.type_of("Some(value = 1)")
+
     def test_core_stdlib_qualified_generic_type_resolves_in_type_definition(self) -> None:
         s = ReplSession(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
 

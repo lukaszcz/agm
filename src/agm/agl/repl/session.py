@@ -1098,10 +1098,12 @@ class ReplSession:
         underlying ``AglSyntaxError``/``AglScopeError``/``AglTypeError`` on
         failure, or ``AglError`` for match errors or a non-expression entry.
         """
+        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.modules.loader import build_repl_graph
         from agm.agl.parser import parse_program_seeded
-        from agm.agl.scope import resolve
+        from agm.agl.scope.graph import resolve_graph
         from agm.agl.syntax.nodes import Binder, Declaration
-        from agm.agl.typecheck import check
+        from agm.agl.typecheck.graph import check_graph
 
         host_env = self._runtime.host_environment()
         # Throwaway ids: type_of never promotes and never advances the session
@@ -1117,17 +1119,29 @@ class ReplSession:
                 "not a binding, declaration, or statement."
             )
         expr_item = items[0]
-        resolved = resolve(
-            program,
-            parent_scope=self._session_scope,
-            ambient_agents=self._ambient_agents(host_env),
-            ambient_constructor_candidates=self._ambient_constructor_candidates,
-            ambient_type_names=self._ambient_type_names,
+        graph_program = self._graph_session._inject_accumulated_imports(program)
+        graph, _next_node_id, _new_modules = build_repl_graph(
+            graph_program,
+            self._next_node_id,
+            path=None,
+            cached=self._loaded_lib_modules,
+            roots=self._ensure_roots(),
         )
-        checked = check(resolved, host_env.capabilities, seed_env=self._type_env)
-        from agm.agl.matchcompile import compile_program_matches, diagnostics_from_match_issues
+        resolved_graph = resolve_graph(
+            graph,
+            ambient_agents=self._ambient_agents(host_env),
+            entry_ambient_constructor_candidates=self._ambient_constructor_candidates,
+            entry_ambient_type_names=self._ambient_type_names,
+            entry_parent_scope=self._session_scope,
+            entry_repl_session_scope=self._session_scope,
+        )
+        checked_graph = check_graph(
+            resolved_graph, host_env.capabilities, entry_seed_env=self._type_env
+        )
+        checked = checked_graph.modules[ENTRY_ID]
+        from agm.agl.matchcompile import compile_graph_matches, diagnostics_from_match_issues
 
-        match_result = compile_program_matches(checked)
+        match_result = compile_graph_matches(checked_graph)
         if match_result.compiled is None:
             diagnostic = diagnostics_from_match_issues(match_result.issues)[0]
             raise AglError(diagnostic.message, span=match_result.issues[0].span)

@@ -46,7 +46,7 @@ Run the CLI locally with `uv run agm ...` when iterating on a command.
 - **IMPORTANT**: For every bug found, add a regression test that fails because of the bug, then fix the bug and ensure the test passes.
 - Avoid brittle tests. Test user workflows, not implementation details.
 - Test only main app Python code under `src/agm/`, NOT build/install scripts, `justfile` commands or config file content. Do NOT test exact help, warning or error messages.
-- Do NOT add ungated defensive assertions (defense-in-depth) to the code. Write appropriate tests instead. Defense-in-depth assertions are allowed ONLY gated behind a test-only flag.
+- Do NOT add heavy ungated defensive assertions (defense-in-depth) to the code. Write appropriate tests instead. Defense-in-depth assertions are allowed ONLY if they are trivial preconditions or gated behind a test-only flag.
 - Make sure tests are not flaky.
 - Maintain 100% test coverage of `src/`.
 - Maintain 100% command coverage in e2e tests.

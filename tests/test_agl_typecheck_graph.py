@@ -1052,6 +1052,22 @@ def test_is_test_type_name_import_handle_ambiguity_errors(tmp_path: Path) -> Non
         _check_graph(tmp_path, modules)
 
 
+def test_pattern_type_name_import_handle_ambiguity_errors(tmp_path: Path) -> None:
+    modules = {
+        "entry": (
+            "import a using Color\n"
+            "import b qualified as Color\n"
+            "def check(value: Color) -> int =\n"
+            "  case value of | Color::Red => 1 | _ => 0\n"
+            "0"
+        ),
+        "a": "enum Color | Red",
+        "b": "enum Other | Red",
+    }
+    with pytest.raises(AglTypeError, match="both a type name and an import handle"):
+        _check_graph(tmp_path, modules)
+
+
 # ---------------------------------------------------------------------------
 # Coverage: type name not in S via qualified lookup
 # ---------------------------------------------------------------------------

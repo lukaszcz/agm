@@ -498,10 +498,8 @@ def _check_column(matrix: PatternMatrix, column: int) -> None:
         )
 
 
-def head_constructors(matrix: PatternMatrix, column: int) -> tuple[Constructor, ...]:
-    """Return distinct observed heads in stable first-observation order."""
-    validate_matrix(matrix)
-    _check_column(matrix, column)
+def _head_constructors(matrix: PatternMatrix, column: int) -> tuple[Constructor, ...]:
+    """Return heads from an already validated matrix and column."""
     heads: list[Constructor] = []
     seen: set[_ConstructorKey] = set()
     for row in matrix.rows:
@@ -513,6 +511,13 @@ def head_constructors(matrix: PatternMatrix, column: int) -> tuple[Constructor, 
             heads.append(cell.constructor)
             seen.add(key)
     return tuple(heads)
+
+
+def head_constructors(matrix: PatternMatrix, column: int) -> tuple[Constructor, ...]:
+    """Return distinct observed heads in stable first-observation order."""
+    validate_matrix(matrix)
+    _check_column(matrix, column)
+    return _head_constructors(matrix, column)
 
 
 def _migrate_binder(
@@ -544,7 +549,7 @@ def specialize(
     validate_matrix(matrix)
     _check_column(matrix, column)
     _validate_allocator(matrix, allocator)
-    observed_keys = {_constructor_key(head) for head in head_constructors(matrix, column)}
+    observed_keys = {_constructor_key(head) for head in _head_constructors(matrix, column)}
     if _constructor_key(constructor) not in observed_keys:
         raise MatchCompileInvariantError(
             "cannot specialize a constructor head not observed in the selected column"
@@ -657,7 +662,7 @@ def _qba_score(matrix: PatternMatrix, column: int) -> QbaScore:
         if not isinstance(row.cells[column], ConstructorCell):
             break
         leading += 1
-    heads = head_constructors(matrix, column)
+    heads = _head_constructors(matrix, column)
     return QbaScore(
         leading_constructor_prefix=leading,
         distinct_branch_heads=len(heads),

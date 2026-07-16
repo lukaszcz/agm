@@ -9,6 +9,7 @@ from typing import cast
 
 import pytest
 
+import agm.agl.matchcompile.matrix as matrix_module
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.ids import NominalId
 from agm.agl.matchcompile.matrix import (
@@ -350,6 +351,21 @@ def test_qba_breaks_complete_ties_by_occurrence_creation_order_then_id() -> None
         (replace(tied.path_decompositions[0], children=lower_id_occurrences),),
     )
     assert select_qba_column(lower_id_first).index == 0
+
+
+def test_qba_selection_validates_its_matrix_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    _, _, matrix, _, _ = _pair_case()
+    calls = 0
+    original = matrix_module.validate_matrix
+
+    def count_validation(candidate: PatternMatrix) -> None:
+        nonlocal calls
+        calls += 1
+        original(candidate)
+
+    monkeypatch.setattr(matrix_module, "validate_matrix", count_validation)
+    select_qba_column(matrix)
+    assert calls == 1
 
 
 def test_head_constructors_preserve_first_observation_order_and_semantic_uniqueness() -> None:

@@ -93,6 +93,7 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
         "diagnostic_from_match_issue",
         "diagnostics_from_match_issues",
         "render_witness",
+        "run_optional_validation",
         "validate_match_compiled_graph",
         "validate_match_compiled_program",
     }

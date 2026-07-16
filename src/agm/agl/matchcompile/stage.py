@@ -23,6 +23,7 @@ from .diagnostics import (
     render_witness,
 )
 from .normalize import MatchCompileInvariantError, normalize_case
+from .optional_validation import run_optional_validation
 
 
 def _immutable_cases(cases: Mapping[int, CompiledCase]) -> Mapping[int, CompiledCase]:
@@ -51,7 +52,7 @@ class MatchCompiledProgram:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "cases", _immutable_cases(self.cases))
-        validate_match_compiled_program(self)
+        run_optional_validation(lambda: validate_match_compiled_program(self))
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,7 +69,7 @@ class MatchCompiledModuleGraph:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "cases_by_module", _immutable_module_cases(self.cases_by_module))
-        validate_match_compiled_graph(self)
+        run_optional_validation(lambda: validate_match_compiled_graph(self))
 
 
 MatchCompiledArtifact: TypeAlias = MatchCompiledProgram | MatchCompiledModuleGraph
@@ -195,13 +196,7 @@ def _compile_owner_cases(
             raise MatchCompileInvariantError(
                 f"duplicate source case node id {source_case.node_id} in one program"
             )
-        # Clean cases are validated once at the artifact boundary
-        # (``MatchCompiled*.__post_init__``); skip the redundant per-case replay
-        # here.  Issue-bearing cases never reach that boundary (the stage returns
-        # issues without an artifact), so keep their per-case invariant check.
-        compiled = compile_case(normalize_case(source_case, owner), validate=False)
-        if compiled.issues:
-            validate_compiled_case(compiled)
+        compiled = compile_case(normalize_case(source_case, owner))
         cases[source_case.node_id] = compiled
         issues.extend(compiled.issues)
     return cases, issues

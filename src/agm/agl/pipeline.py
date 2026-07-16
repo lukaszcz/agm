@@ -655,8 +655,6 @@ class PipelineDriver:
                 prepared_modules={ENTRY_ID: resolved},
                 compiled_entry=ENTRY_ID,
                 compiled_modules={ENTRY_ID: compiled.checked.resolved},
-                cached_capabilities=compiled.capabilities,
-                capabilities=capabilities,
                 span=program.span,
             )
             if cache_diagnostic is not None:
@@ -674,8 +672,6 @@ class PipelineDriver:
                 prepared_modules={ENTRY_ID: resolved},
                 checked_entry=ENTRY_ID,
                 checked_modules={ENTRY_ID: checked.resolved},
-                cached_capabilities=checked.capabilities,
-                capabilities=capabilities,
                 span=program.span,
             )
             if cache_diagnostic is not None:
@@ -753,7 +749,6 @@ class PipelineDriver:
             source_text=source,
             source_label="<entry>",
             validate=True,
-            _validate_compiled=False,
             contract_payloads=contract_payloads,
         )
 
@@ -1038,7 +1033,7 @@ class PipelineDriver:
         capabilities = self.host_environment().capabilities
         if compiled_graph is not None:
             cache_diagnostic = _cached_graph_artifact_provenance_diagnostic(
-                prepared.resolved_graph, compiled_graph, capabilities
+                prepared.resolved_graph, compiled_graph
             )
             if cache_diagnostic is not None:
                 return ParamDiscovery(
@@ -1211,7 +1206,7 @@ class PipelineDriver:
         capabilities = host_env.capabilities
         if compiled_graph is not None:
             cache_diagnostic = _cached_graph_artifact_provenance_diagnostic(
-                resolved_graph, compiled_graph, capabilities
+                resolved_graph, compiled_graph
             )
             if cache_diagnostic is not None:
                 return RunResult(
@@ -1224,7 +1219,7 @@ class PipelineDriver:
                 compiled_graph = None
         if checked_graph is not None and compiled_graph is None:
             cache_diagnostic = _cached_checked_graph_artifact_provenance_diagnostic(
-                resolved_graph, checked_graph, capabilities
+                resolved_graph, checked_graph
             )
             if cache_diagnostic is not None:
                 return RunResult(
@@ -1316,7 +1311,6 @@ class PipelineDriver:
         executable = lower_graph(
             compiled_graph,
             validate=True,
-            _validate_compiled=False,
             contract_payloads=contract_payloads,
         )
 
@@ -1410,8 +1404,6 @@ def _cached_artifact_provenance_diagnostic(
     prepared_modules: "Mapping[ModuleId, ResolvedProgram]",
     compiled_entry: "ModuleId",
     compiled_modules: "Mapping[ModuleId, ResolvedProgram]",
-    cached_capabilities: object | None,
-    capabilities: "HostCapabilities",
     span: "SourceSpan | None",
 ) -> Diagnostic | None:
     """Reject a cached artifact unless it wraps the exact prepared resolutions.
@@ -1438,7 +1430,6 @@ def _cached_artifact_provenance_diagnostic(
 def _cached_graph_artifact_provenance_diagnostic(
     resolved_graph: "ResolvedModuleGraph",
     compiled_graph: "MatchCompiledModuleGraph",
-    capabilities: "HostCapabilities",
 ) -> Diagnostic | None:
     """Adapt graph artifacts to the shared cached-provenance validator."""
     entry_module = resolved_graph.modules.get(resolved_graph.entry_id)
@@ -1452,8 +1443,6 @@ def _cached_graph_artifact_provenance_diagnostic(
             module_id: module.resolved
             for module_id, module in compiled_graph.checked_graph.modules.items()
         },
-        cached_capabilities=compiled_graph.capabilities,
-        capabilities=capabilities,
         span=entry_module.resolved.program.span if entry_module is not None else None,
     )
 
@@ -1464,8 +1453,6 @@ def _cached_checked_artifact_provenance_diagnostic(
     prepared_modules: "Mapping[ModuleId, ResolvedProgram]",
     checked_entry: "ModuleId",
     checked_modules: "Mapping[ModuleId, ResolvedProgram]",
-    cached_capabilities: object | None,
-    capabilities: "HostCapabilities",
     span: "SourceSpan | None",
 ) -> Diagnostic | None:
     """Reject a checked artifact from a different prepared source."""
@@ -1474,8 +1461,6 @@ def _cached_checked_artifact_provenance_diagnostic(
         prepared_modules=prepared_modules,
         compiled_entry=checked_entry,
         compiled_modules=checked_modules,
-        cached_capabilities=cached_capabilities,
-        capabilities=capabilities,
         span=span,
     )
 
@@ -1483,7 +1468,6 @@ def _cached_checked_artifact_provenance_diagnostic(
 def _cached_checked_graph_artifact_provenance_diagnostic(
     resolved_graph: "ResolvedModuleGraph",
     checked_graph: "CheckedModuleGraph",
-    capabilities: "HostCapabilities",
 ) -> Diagnostic | None:
     """Adapt checked graph artifacts to the shared provenance validator."""
     entry_module = resolved_graph.modules.get(resolved_graph.entry_id)
@@ -1496,8 +1480,6 @@ def _cached_checked_graph_artifact_provenance_diagnostic(
         checked_modules={
             module_id: module.resolved for module_id, module in checked_graph.modules.items()
         },
-        cached_capabilities=checked_graph.capabilities,
-        capabilities=capabilities,
         span=entry_module.resolved.program.span if entry_module is not None else None,
     )
 

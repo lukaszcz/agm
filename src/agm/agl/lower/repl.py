@@ -13,6 +13,7 @@ from agm.agl.lower.lowerer import _LinkState, _Lowerer
 from agm.agl.matchcompile import (
     MatchCompiledModuleGraph,
     MatchCompiledProgram,
+    run_optional_validation,
     validate_match_compiled_program,
 )
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
@@ -90,7 +91,7 @@ def lower_repl_entry(
     contract_payloads: Mapping[int, ContractPayload] | None = None,
 ) -> LoweredReplEntry:
     """Link one match-compiled REPL entry into ``image`` without resetting any IDs."""
-    validate_match_compiled_program(compiled_entry)
+    run_optional_validation(lambda: validate_match_compiled_program(compiled_entry))
     checked_entry = compiled_entry.checked
     link = image._state
     source_id = SourceId(link.next_source)

@@ -108,6 +108,38 @@ class ConstructorChecker:
     def __init__(self, ctx: ConstructorCheckCtx) -> None:
         self._ctx = ctx
 
+    @staticmethod
+    def _alias_constructor_signature(
+        *,
+        target_gdef: GenericTypeDef,
+        source: TypeTemplate,
+        base_sig: ConstructorSignature,
+        owner_name: str,
+        variant: str | None,
+    ) -> ConstructorSignature:
+        """Re-express a constructor signature seen through a transparent alias.
+
+        A local/imported type alias is a transparent spelling of an underlying
+        generic nominal. Match the alias template against that nominal's
+        template so the underlying field templates are rewritten into the
+        alias's type parameters, and expose the alias template as the result.
+        """
+        target_match = TypeTemplate(target_gdef.template, target_gdef.type_params).match(
+            source.template
+        )
+        assert target_match is not None
+        target_subst = dict(target_match.bindings)
+        return ConstructorSignature(
+            owner_name=owner_name,
+            variant=variant,
+            field_names=base_sig.field_names,
+            field_templates=tuple(
+                substitute(field, target_subst) for field in base_sig.field_templates
+            ),
+            result_template=source.template,
+            type_params=source.type_params,
+        )
+
     # --- Generic constructor as value ---
 
     def check_generic_constructor_as_value(
@@ -150,20 +182,12 @@ class ConstructorChecker:
         if source_template is not None and resolved_owner_name is not None:
             target_gdef = self._ctx._env.get_generic_type(owner_name)
             assert target_gdef is not None, f"No generic type definition for {owner_name}"
-            target_match = TypeTemplate(target_gdef.template, target_gdef.type_params).match(
-                source_template.template
-            )
-            assert target_match is not None
-            target_subst = dict(target_match.bindings)
-            sig = ConstructorSignature(
+            sig = self._alias_constructor_signature(
+                target_gdef=target_gdef,
+                source=source_template,
+                base_sig=sig,
                 owner_name=ctor_ref.owner_name,
                 variant=variant,
-                field_names=sig.field_names,
-                field_templates=tuple(
-                    substitute(field, target_subst) for field in sig.field_templates
-                ),
-                result_template=source_template.template,
-                type_params=source_template.type_params,
             )
             type_params = source_template.type_params
 
@@ -588,22 +612,14 @@ class ConstructorChecker:
         assert target_sig is not None, (
             f"Generic enum '{target.name}' has no constructor signature for '{variant}'"
         )
-        target_match = TypeTemplate(target_gdef.template, target_gdef.type_params).match(
-            source.template
-        )
-        assert target_match is not None
-        target_subst = dict(target_match.bindings)
         return (
             target_gdef,
-            ConstructorSignature(
+            self._alias_constructor_signature(
+                target_gdef=target_gdef,
+                source=source,
+                base_sig=target_sig,
                 owner_name=owner_name,
                 variant=variant,
-                field_names=target_sig.field_names,
-                field_templates=tuple(
-                    substitute(field, target_subst) for field in target_sig.field_templates
-                ),
-                result_template=source.template,
-                type_params=source.type_params,
             ),
             source.type_params,
         )
@@ -801,20 +817,12 @@ class ConstructorChecker:
         assert signature is not None
         source = self._ctx._env.source_type_template_qname(callee_ref.module_id, callee_ref.name)
         assert source is not None
-        target_match = TypeTemplate(target_gdef.template, target_gdef.type_params).match(
-            source.template
-        )
-        assert target_match is not None
-        target_subst = dict(target_match.bindings)
-        effective_signature = ConstructorSignature(
+        effective_signature = self._alias_constructor_signature(
+            target_gdef=target_gdef,
+            source=source,
+            base_sig=signature,
             owner_name=callee_ref.name,
             variant=None,
-            field_names=signature.field_names,
-            field_templates=tuple(
-                substitute(field, target_subst) for field in signature.field_templates
-            ),
-            result_template=source.template,
-            type_params=source.type_params,
         )
         return owner, target_gdef, effective_signature, source.type_params
 
@@ -1002,21 +1010,12 @@ class ConstructorChecker:
                         if target_sig is None:
                             target_sig = self._ctx._env.get_constructor_signature(target.name, None)
                         assert target_sig is not None
-                        target_match = TypeTemplate(gdef.template, gdef.type_params).match(
-                            source.template
-                        )
-                        assert target_match is not None
-                        target_subst = dict(target_match.bindings)
-                        sig = ConstructorSignature(
+                        sig = self._alias_constructor_signature(
+                            target_gdef=gdef,
+                            source=source,
+                            base_sig=target_sig,
                             owner_name=ctor_ref.owner_name,
                             variant=None,
-                            field_names=target_sig.field_names,
-                            field_templates=tuple(
-                                substitute(field, target_subst)
-                                for field in target_sig.field_templates
-                            ),
-                            result_template=source.template,
-                            type_params=source.type_params,
                         )
                         ctor_ref = ConstructorRef(
                             owner_name=ctor_ref.owner_name,

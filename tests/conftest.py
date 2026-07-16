@@ -10,7 +10,15 @@ from pathlib import Path
 
 import pytest
 
+from agm.agl.matchcompile.optional_validation import set_match_validation_enabled
 from agm.core import dry_run
+
+# Enable the match compiler's optional invariant self-checks for the whole test
+# suite.  They are disabled in normal execution (zero production cost); turning
+# them on here makes every case compiled anywhere in the suite double as an
+# invariant oracle.  Individual tests may disable them to exercise the
+# production path (see the ``match_validation_disabled`` fixture).
+set_match_validation_enabled(True)
 
 # Set to ``True`` once :func:`pytest_configure` has successfully detached the
 # current (test-running) process from its controlling terminal.  Consulted by

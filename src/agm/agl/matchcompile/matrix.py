@@ -37,6 +37,7 @@ from .normalize import (
     MatchCompileInvariantError,
     constructor_inhabits_type,
 )
+from .optional_validation import run_optional_validation
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,7 +159,7 @@ class PatternMatrix:
 
     def __post_init__(self) -> None:
         _canonicalize_matrix(self)
-        _validate_matrix(self)
+        run_optional_validation(lambda: _validate_matrix(self))
 
 
 def _occurrence_sort_key(occurrence: Occurrence) -> tuple[int, int]:
@@ -498,6 +499,20 @@ def _check_column(matrix: PatternMatrix, column: int) -> None:
         )
 
 
+def _validate_operation(
+    matrix: PatternMatrix,
+    *,
+    column: int | None = None,
+    allocator: OccurrenceAllocator | None = None,
+) -> None:
+    """Re-check the operation-boundary invariants of one matrix operation."""
+    validate_matrix(matrix)
+    if column is not None:
+        _check_column(matrix, column)
+    if allocator is not None:
+        _validate_allocator(matrix, allocator)
+
+
 def _head_constructors(matrix: PatternMatrix, column: int) -> tuple[Constructor, ...]:
     """Return heads from an already validated matrix and column."""
     heads: list[Constructor] = []
@@ -515,8 +530,7 @@ def _head_constructors(matrix: PatternMatrix, column: int) -> tuple[Constructor,
 
 def head_constructors(matrix: PatternMatrix, column: int) -> tuple[Constructor, ...]:
     """Return distinct observed heads in stable first-observation order."""
-    validate_matrix(matrix)
-    _check_column(matrix, column)
+    run_optional_validation(lambda: _validate_operation(matrix, column=column))
     return _head_constructors(matrix, column)
 
 
@@ -546,9 +560,9 @@ def specialize(
     allocator: OccurrenceAllocator,
 ) -> Specialization:
     """Specialize one selected occurrence for an observed constructor head."""
-    validate_matrix(matrix)
-    _check_column(matrix, column)
-    _validate_allocator(matrix, allocator)
+    run_optional_validation(
+        lambda: _validate_operation(matrix, column=column, allocator=allocator)
+    )
     observed_keys = {_constructor_key(head) for head in _head_constructors(matrix, column)}
     if _constructor_key(constructor) not in observed_keys:
         raise MatchCompileInvariantError(
@@ -614,8 +628,7 @@ def specialize(
 
 def default_matrix(matrix: PatternMatrix, column: int) -> PatternMatrix:
     """Retain wildcard/binder rows after removing one selected occurrence."""
-    validate_matrix(matrix)
-    _check_column(matrix, column)
+    run_optional_validation(lambda: _validate_operation(matrix, column=column))
     selected = matrix.occurrences[column]
     rows = tuple(
         MatrixRow(
@@ -672,7 +685,7 @@ def _qba_score(matrix: PatternMatrix, column: int) -> QbaScore:
 
 def select_qba_column(matrix: PatternMatrix) -> QbaSelection:
     """Select a refutable column by q, then b, a, then occurrence order/ID."""
-    validate_matrix(matrix)
+    run_optional_validation(lambda: _validate_operation(matrix))
     candidates: list[tuple[int, QbaScore]] = [
         (index, _qba_score(matrix, index))
         for index in range(len(matrix.occurrences))

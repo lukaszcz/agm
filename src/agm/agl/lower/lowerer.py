@@ -153,6 +153,7 @@ from agm.agl.matchcompile import (
     MatchCompiledProgram,
     Occurrence,
     OccurrenceId,
+    run_optional_validation,
     validate_match_compiled_program,
 )
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
@@ -3258,7 +3259,6 @@ def lower_program(
     source_text: str,
     source_label: str,
     validate: bool = False,
-    _validate_compiled: bool = True,
     contract_payloads: Mapping[int, ContractPayload] | None = None,
 ) -> ExecutableProgram:
     """Lower a single-module match-compiled artifact to an ``ExecutableProgram``.
@@ -3271,8 +3271,7 @@ def lower_program(
     :raises NotImplementedError: for unsupported AST nodes.
     :raises AssertionError: for missing checker side-table entries (compiler bugs).
     """
-    if _validate_compiled:
-        validate_match_compiled_program(compiled)
+    run_optional_validation(lambda: validate_match_compiled_program(compiled))
     checked = compiled.checked
     link = _LinkState()
     source_id = SourceId(link.next_source)

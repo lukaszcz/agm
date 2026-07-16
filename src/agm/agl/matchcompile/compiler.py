@@ -61,6 +61,7 @@ from .normalize import (
     constructor_inhabits_type,
     signature_for_type,
 )
+from .optional_validation import run_optional_validation
 
 
 @dataclass(frozen=True, slots=True)
@@ -1117,25 +1118,23 @@ def validate_decision_dag(root: Decision) -> None:
     _validate_decision_dataflow(root, frozenset(), None)
 
 
-def compile_case(normalized: NormalizedCase, *, validate: bool = True) -> CompiledCase:
+def compile_case(normalized: NormalizedCase) -> CompiledCase:
     """Compile one normalized source case and derive all structured issues from its DAG.
 
-    ``validate`` runs the full per-case invariant check on the result.  It
-    defaults to ``True`` for standalone callers; the whole-program stage passes
-    ``validate=False`` because the artifact boundary (``MatchCompiled*``
-    ``__post_init__``) re-runs a strict superset of this validation, so a second
-    per-case replay here would be redundant work on the exec hot path.
+    The decision DAG and its structured issues are the compiler's product. The
+    invariant self-checks (``validate_decision_dag``, ``validate_compiled_case``)
+    only re-verify that product and run when optional match-compilation
+    validation is enabled (see :mod:`.optional_validation`).
     """
     compiler = _CaseCompiler(normalized)
     root, allocator = compiler.compile(
         matrix_from_normalized(normalized), OccurrenceAllocator.for_case(normalized)
     )
-    validate_decision_dag(root)
+    run_optional_validation(lambda: validate_decision_dag(root))
     occurrences = allocator.occurrences
     reachable, issues = _issues(normalized, root, occurrences)
     compiled = CompiledCase(normalized, root, occurrences, reachable, issues)
-    if validate:
-        validate_compiled_case(compiled)
+    run_optional_validation(lambda: validate_compiled_case(compiled))
     return compiled
 
 

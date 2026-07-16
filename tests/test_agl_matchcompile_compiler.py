@@ -1385,6 +1385,8 @@ def test_witness_renderer_covers_atomic_and_empty_complement_forms() -> None:
     assert render_witness(BoolWitness(False)) == "false"
     assert render_witness(LiteralWitness(LiteralKind.TEXT, "x")) == '"x"'
     assert render_witness(LiteralWitness(LiteralKind.TEXT, "\x1b")) == '"\\u001b"'
+    assert render_witness(LiteralWitness(LiteralKind.TEXT, "${name}")) == '"\\${name}"'
+    assert render_witness(LiteralWitness(LiteralKind.TEXT, "\\${name}")) == '"\\\\\\${name}"'
     assert (
         render_witness(LiteralWitness(LiteralKind.NUMERIC, decimal.Decimal("1E-7"))) == "0.0000001"
     )

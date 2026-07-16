@@ -101,7 +101,7 @@ MatchIssue: TypeAlias = NonExhaustiveIssue | RedundantArmIssue
 def _render_literal(kind: LiteralKind, value: decimal.Decimal | str | None) -> str:
     if kind is LiteralKind.TEXT:
         assert isinstance(value, str)
-        return json.dumps(value, ensure_ascii=False)
+        return json.dumps(value, ensure_ascii=False).replace("${", "\\${")
     if kind is LiteralKind.NULL:
         return "null"
     assert isinstance(value, decimal.Decimal)

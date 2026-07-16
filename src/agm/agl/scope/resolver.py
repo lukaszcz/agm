@@ -35,7 +35,7 @@ normal binding.  A bare ``VarRef("print")`` (not in call position) raises
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
@@ -766,20 +766,18 @@ class _Resolver:
         return self._scope
 
     @staticmethod
-    def _snapshot_scope(scope: ScopeNode) -> ScopeNode:
-        """Copy a lexical scope chain at one source position.
+    def _snapshot_case_scope(scope: ScopeNode, names: Iterable[str]) -> ScopeNode:
+        """Capture only the names match diagnostics can inspect at a case site.
 
-        Scope nodes continue accumulating sequential block bindings during
-        resolution.  Case provenance must instead retain precisely the names
-        visible when the case was entered, so later declarations cannot
-        retroactively change diagnostic spellings.
+        Case normalization only queries constructor-candidate names to decide
+        whether a bare enum variant remains visible.  Recording those lookups
+        directly avoids copying every preceding binding for every case while
+        preserving the exact shadowing state at this source position.
         """
-        parent = (
-            None
-            if scope.parent is None
-            else _Resolver._snapshot_scope(scope.parent)
+        return ScopeNode(
+            scope.node_id,
+            bindings={name: ref for name in names if (ref := scope.lookup(name)) is not None},
         )
-        return ScopeNode(scope.node_id, parent, dict(scope.bindings))
 
     @contextmanager
     def _child_scope(self, node_id: int) -> Iterator[ScopeNode]:
@@ -1596,7 +1594,9 @@ class _Resolver:
             self._resolve_expr_or_block(branch.body)
 
     def _resolve_case(self, node: Case) -> None:
-        self._case_scopes[node.node_id] = self._snapshot_scope(self._current_scope())
+        self._case_scopes[node.node_id] = self._snapshot_case_scope(
+            self._current_scope(), self._constructor_candidates
+        )
         self._resolve_expr(node.subject)
         for branch in node.branches:
             with self._child_scope(branch.node_id) as branch_scope:

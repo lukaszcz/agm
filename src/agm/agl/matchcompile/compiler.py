@@ -235,13 +235,26 @@ class _CaseCompiler:
     def __init__(self, normalized: NormalizedCase) -> None:
         self._normalized = normalized
         self._memo: dict[_CompileStateKey, Decision] = {}
-        self._interned: dict[Decision, Decision] = {}
+        self._interned: dict[object, Decision] = {}
 
     def intern(self, decision: Decision) -> Decision:
-        existing = self._interned.get(decision)
+        """Hash-cons a bottom-up decision without recursively hashing its DAG."""
+        if isinstance(decision, DecisionFail):
+            key: object = ("fail",)
+        elif isinstance(decision, DecisionLeaf):
+            key = ("leaf", decision.action_id, decision.binder_assignments)
+        else:
+            key = (
+                "switch",
+                decision.occurrence,
+                tuple((branch.constructor, id(branch.decision)) for branch in decision.keyed_children),
+                None if decision.default is None else id(decision.default),
+                decision.free_occurrences,
+            )
+        existing = self._interned.get(key)
         if existing is not None:
             return existing
-        self._interned[decision] = decision
+        self._interned[key] = decision
         return decision
 
     def compile(

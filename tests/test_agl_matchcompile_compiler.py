@@ -1391,6 +1391,21 @@ def test_leaf_free_interface_deduplicates_an_occurrence() -> None:
     )
 
 
+def test_decision_interning_does_not_recursively_hash_shared_children() -> None:
+    _, _, compiled = _compile("let value = false\ncase value of | false => 0 | true => 1")
+    root = cast(DecisionSwitch, compiled.root)
+    compiler = compiler_module._CaseCompiler(compiled.normalized)
+    decision: Decision = DecisionFail()
+    for _ in range(2_000):
+        decision = DecisionSwitch(
+            root.occurrence,
+            (DecisionBranch(BoolConstructor(False), decision),),
+            None,
+        )
+
+    assert compiler.intern(decision) is decision
+
+
 def test_private_compiler_guards_reject_malformed_internal_states() -> None:
     _, _, compiled = _compile("let value = false\ncase value of | false => 0 | true => 1")
     normalized = compiled.normalized

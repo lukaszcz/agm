@@ -51,7 +51,6 @@ from agm.agent.config import default_agent_runner
 from agm.agent.runner import split_command
 from agm.agl import PipelineDriver
 from agm.agl.diagnostics import format_diagnostic
-from agm.agl.matchcompile import MatchCompiledModuleGraph
 from agm.agl.modules.roots import assemble_roots
 from agm.agl.runtime.agents import runner_backed_agent_factory
 from agm.agl.runtime.externs import ExternRegistry
@@ -362,11 +361,68 @@ def run(args: ExecArgs) -> None:
         idle_timeout=resolved_timeout,
     )
 
+    # Parameter discovery and validation are static.  They must complete before
+    # evaluating startup config because that config may call an agent to compute
+    # its runner, log, or log-file value.
+    discovery_runtime = PipelineDriver(
+        default_loop_limit=resolved_loop_limit,
+        default_strict_json=resolved_strict_json,
+        default_agent=bootstrap_factory,
+        shell_exec_timeout=resolved_timeout,
+        default_call_depth_limit=resolved_call_depth_limit,
+    )
+    for declaration in decls:
+        discovery_runtime.register_agent(declaration.name, bootstrap_factory)
+    discovery = discovery_runtime.discover_params_graph(prepared)
+    for diag in discovery.warnings:
+        print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
+
+    external_params: dict[str, object] = {}
+    checked = discovery.checked
+    if checked is not None:
+        collision_errors = check_param_collisions(
+            discovery.params, source_name=diagnostic_source_name
+        )
+        if collision_errors:
+            for err in collision_errors:
+                print(f"Error: {err}", file=sys.stderr)
+            raise SystemExit(1)
+        try:
+            cli_params = parse_param_tokens(discovery.params, args.param_tokens)
+        except ValueError as exc:
+            exit_with_usage_error(["exec"], f"error: {exc}")
+
+        config_param_values = {
+            k: v for k, v in program_table.items() if k not in ENGINE_KEY_NAMES
+        }
+        declared_names = {p.name for p in discovery.params}
+        resolved_params, config_warnings = resolve_param_values(
+            declared_names,
+            config_param_values,
+            cli_params,
+            program_name=program_key,
+        )
+        external_params.update(resolved_params)
+        for msg in config_warnings:
+            print(msg, file=sys.stderr)
+
+        param_preflight = discovery_runtime.run_prepared_graph(
+            prepared,
+            param_values=external_params,
+            check_only=True,
+            compiled_graph=discovery.compiled_graph,
+            config_cli=config_cli,
+            config_base=config_base,
+        )
+        if not param_preflight.ok:
+            for diag in param_preflight.diagnostics:
+                print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
+            raise SystemExit(1)
+
     shared_extern_registry = ExternRegistry()
     # The startup pass must advertise the same declared-agent capabilities as
     # the execution pass so its compiled artifact remains reusable.
     startup_values: dict[str, Value] = {}
-    startup_compiled_graph: MatchCompiledModuleGraph | None = None
     if prepared.resolved_graph is not None and not dry_run.enabled():
         startup_runtime = PipelineDriver(
             default_loop_limit=resolved_loop_limit,
@@ -395,7 +451,6 @@ def run(args: ExecArgs) -> None:
             print(startup_result.error.to_message(include_trace_id=True), file=sys.stderr)
             raise SystemExit(2)
         startup_values = startup_result.values if startup_result.ok else {}
-        startup_compiled_graph = startup_result.compiled_graph
 
     # Resolve + validate the trace log file up front.  --dry-run is
     # side-effect-free: no trace is written regardless of --log-file.
@@ -480,45 +535,6 @@ def run(args: ExecArgs) -> None:
     # declares stay inert (NOT registered).
     for d in decls:
         runtime.register_agent(d.name, factory)
-
-    discovery = runtime.discover_params_graph(
-        prepared, compiled_graph=startup_compiled_graph
-    )
-    for diag in discovery.warnings:
-        print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
-
-    external_params: dict[str, object] = {}
-    checked = discovery.checked
-    if checked is not None:
-        collision_errors = check_param_collisions(
-            discovery.params, source_name=diagnostic_source_name
-        )
-        if collision_errors:
-            for err in collision_errors:
-                print(f"Error: {err}", file=sys.stderr)
-            raise SystemExit(1)
-        try:
-            cli_params = parse_param_tokens(discovery.params, args.param_tokens)
-        except ValueError as exc:
-            exit_with_usage_error(["exec"], f"error: {exc}")
-
-        # Strip engine keys before param resolution: they were already applied to
-        # ExecConfig; leaving them in would trigger spurious "unknown param" warnings.
-        # program_key and program_table are shared with the engine-config path above,
-        # ensuring both always read the same [<program>] section.
-        config_param_values = {
-            k: v for k, v in program_table.items() if k not in ENGINE_KEY_NAMES
-        }
-        declared_names = {p.name for p in discovery.params}
-        resolved_params, config_warnings = resolve_param_values(
-            declared_names,
-            config_param_values,
-            cli_params,
-            program_name=program_key,
-        )
-        external_params.update(resolved_params)
-        for msg in config_warnings:
-            print(msg, file=sys.stderr)
 
     # Reuse the ``PreparedGraph`` from above — no second parse/scope of the source.
     # Pass the already-computed checked_graph from discovery so the graph is

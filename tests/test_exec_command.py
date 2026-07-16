@@ -2232,6 +2232,29 @@ class TestExecAgentPrecedence:
         env.setdefault("HOME", str(Path.home()))
         return env
 
+    def test_missing_param_prevents_startup_config_agent_call(self, tmp_path: Path) -> None:
+        """Required params are checked before startup config can invoke an agent."""
+        env = self._base_env()
+        marker = tmp_path / "runner-called"
+        runner = tmp_path / "bin" / "bootstrap-runner"
+        runner.parent.mkdir()
+        runner.write_text(f"#!/bin/bash\ntouch {marker}\necho ignored\n")
+        runner.chmod(runner.stat().st_mode | stat.S_IEXEC)
+        env["PATH"] = str(runner.parent) + ":" + env["PATH"]
+
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            'config runner = ask("choose a runner")\nparam required\nprint required\n'
+        )
+        config_dir = tmp_path / ".agm"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text('[exec]\nrunner = "bootstrap-runner"\n')
+
+        result = self._run_agm_exec([str(agl_file), "--no-log"], env=env, cwd=tmp_path)
+
+        assert result.returncode == 1
+        assert not marker.exists()
+
     def test_startup_config_agent_uses_bootstrap_runner(self, tmp_path: Path) -> None:
         """An agent call in source config is real, not a placeholder response."""
         env = self._base_env()

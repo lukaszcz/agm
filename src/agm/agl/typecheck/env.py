@@ -1552,6 +1552,17 @@ class TypeEnvironment:
             type_template=template,
         )
 
+    def has_visible_unqualified_type_name(self, name: str) -> bool:
+        """Return whether *name* occupies the visible unqualified type namespace."""
+        if name in self._own_source_type_names():
+            return True
+        if self._import_env is None:
+            return False
+        return any(
+            self._is_graph_type_candidate(qname)
+            for qname in self._import_env.unqualified.get(name, frozenset())
+        )
+
     def resolve_unqualified_enum_owner_form(
         self, owner_name: str
     ) -> EnumOwnerForm | None:

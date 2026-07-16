@@ -2771,11 +2771,8 @@ class _Checker:
         if len(module_qualifier.segments) == 1:
             qualifier = module_qualifier.segments[0]
             form = self._env.resolve_unqualified_enum_owner_form(qualifier)
-            local_form = self._env.resolve_enum_owner_form(
-                EnumOwnerFormKind.SELF, qualifier
-            )
             handle_match = self._env.has_qualified_import_handle(module_qualifier.segments)
-            if local_form is not None and handle_match:
+            if self._env.has_visible_unqualified_type_name(qualifier) and handle_match:
                 raise AglTypeError(
                     f"Qualifier '{qualifier}' is both a type name and an import handle; "
                     "rename the import alias to disambiguate.",
@@ -2803,6 +2800,17 @@ class _Checker:
         form = self._env.resolve_enum_owner_form(
             kind, enum_name, module_qualifier.segments
         )
+        if form is None and module_qualifier.segments and enum_name == enum_type.name:
+            form = next(
+                (
+                    candidate
+                    for candidate in self._env.enum_owner_forms()
+                    if candidate.kind is EnumOwnerFormKind.QUALIFIED_IMPORT
+                    and candidate.module_qualifier == module_qualifier.segments
+                    and candidate.match(enum_type) is not None
+                ),
+                None,
+            )
         if form is not None:
             owner = (
                 f"::{enum_name}"

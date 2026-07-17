@@ -25,9 +25,9 @@ def default_agent_files_dir() -> Path:
 
 @dataclass(frozen=True)
 class LogDecision:
-    """Resolved logging decision from the CLI/source/config precedence chain.
+    """A run's initial logging decision, resolved from the CLI and config layers.
 
-    ``enabled`` is the final on/off state.  ``explicit_path`` is the resolved
+    ``enabled`` is the starting on/off state.  ``explicit_path`` is the resolved
     log-file path when the user (or config) provided one explicitly; ``None``
     means use the auto-generated timestamped path inside ``.agent-files/``.
     """
@@ -43,12 +43,17 @@ def resolve_log_decision(
     cli_log_file: str | None,
     config_log: bool,
     config_log_file: str | None,
-    source_log: bool | None = None,
-    source_log_file: str | None = None,
 ) -> LogDecision:
-    """Resolve the final logging decision from three priority layers.
+    """Resolve the logging decision a run STARTS with, from the two host layers.
 
-    Precedence (highest first): CLI > source > config file.
+    Precedence (highest first): CLI > config file.
+
+    A program's own ``std.config::log``/``log-file`` write is deliberately not a
+    layer here.  It is not resolved at startup at all: it takes effect at
+    runtime, from its program point onward, through the host settings
+    reconfigurer, and it overrides whichever value this function chose.  So for
+    the setting as a whole the source wins — see
+    ``docs/agl/reference/host-environment.md`` for the full precedence chain.
 
     CLI layer:
       - ``--no-log``        → enabled=False, path=None  (explicit disable)
@@ -56,18 +61,14 @@ def resolve_log_decision(
       - ``--log``           → enabled=True,  path=None
       - (none)              → enabled=None   (unset; fall through)
 
-    Source layer (an optional program-provided logging decision):
-      - ``source_log_file`` → path=source_log_file; enabled=True when present
-      - ``source_log``      → enabled per value (True/False/None)
-
     Config layer:
       - ``config_log=True`` or ``config_log_file`` → enabled=True
       - ``config_log=False`` (default) and no file → fall through as None
       Note: config cannot express an explicit False distinctly from default;
       use CLI ``--no-log`` to force off when config has defaults.
 
-    Enabled resolution: first non-None of [cli, source, config], default False.
-    Path resolution:    first non-None of [cli.path, source.path, config.path].
+    Enabled resolution: first non-None of [cli, config], default False.
+    Path resolution:    first non-None of [cli.path, config.path].
     """
     # --- CLI layer ---
     if cli_no_log:
@@ -80,25 +81,15 @@ def resolve_log_decision(
         cli_enabled = None
     cli_path = cli_log_file  # None when --log or --no-log; explicit str otherwise
 
-    # --- Source layer ---
-    source_path = source_log_file
-    if source_log_file is not None:
-        source_enabled: bool | None = True if source_log is None else source_log
-    else:
-        source_enabled = source_log  # True, False, or None
-
     # --- Config layer ---
     config_path = config_log_file
     config_enabled: bool | None = True if (config_log or config_log_file) else None
 
     # --- Resolve enabled ---
-    enabled_layers = [cli_enabled, source_enabled, config_enabled]
-    resolved_enabled = next((v for v in enabled_layers if v is not None), False)
+    resolved_enabled = next((v for v in [cli_enabled, config_enabled] if v is not None), False)
 
     # --- Resolve path ---
-    resolved_path = next(
-        (p for p in [cli_path, source_path, config_path] if p is not None), None
-    )
+    resolved_path = next((p for p in [cli_path, config_path] if p is not None), None)
 
     return LogDecision(enabled=resolved_enabled, explicit_path=resolved_path)
 

@@ -1,7 +1,7 @@
-"""Tests for resolve_log_decision and the refactored log helpers (Part A).
+"""Tests for resolve_log_decision and the log helpers.
 
 Coverage:
-- resolve_log_decision: full precedence table (CLI > source config > config), default off,
+- resolve_log_decision: initial-value precedence (CLI > config file), default off,
   path resolution, explicit disable beats lower-layer enable.
 - resolve_log_file / prepare_trace_log with enabled/log_file shape.
 - --log flag parsing + mutual-exclusivity rejection in typer (cli.py) parser.
@@ -59,8 +59,6 @@ class TestResolveLogDecisionDefaults:
             cli_no_log=False,
             cli_log=False,
             cli_log_file=None,
-            source_log=None,
-            source_log_file=None,
             config_log=False,
             config_log_file=None,
         )
@@ -71,8 +69,6 @@ class TestResolveLogDecisionDefaults:
             cli_no_log=False,
             cli_log=False,
             cli_log_file=None,
-            source_log=None,
-            source_log_file=None,
             config_log=False,
             config_log_file=None,
         )
@@ -88,8 +84,6 @@ class TestResolveLogDecisionCliLayer:
             cli_no_log=False,
             cli_log=True,
             cli_log_file=None,
-            source_log=None,
-            source_log_file=None,
             config_log=False,
             config_log_file=None,
         )
@@ -101,8 +95,6 @@ class TestResolveLogDecisionCliLayer:
             cli_no_log=True,
             cli_log=False,
             cli_log_file=None,
-            source_log=None,
-            source_log_file=None,
             config_log=False,
             config_log_file=None,
         )
@@ -114,8 +106,6 @@ class TestResolveLogDecisionCliLayer:
             cli_no_log=False,
             cli_log=False,
             cli_log_file="/tmp/trace.jsonl",
-            source_log=None,
-            source_log_file=None,
             config_log=False,
             config_log_file=None,
         )
@@ -128,8 +118,6 @@ class TestResolveLogDecisionCliLayer:
             cli_no_log=True,
             cli_log=False,
             cli_log_file=None,
-            source_log=None,
-            source_log_file=None,
             config_log=True,
             config_log_file=None,
         )
@@ -141,38 +129,10 @@ class TestResolveLogDecisionCliLayer:
             cli_no_log=True,
             cli_log=False,
             cli_log_file=None,
-            source_log=None,
-            source_log_file=None,
             config_log=False,
             config_log_file="/tmp/config.jsonl",
         )
         assert d.enabled is False
-
-    def test_cli_no_log_overrides_source_log_true(self) -> None:
-        """CLI --no-log beats source config log=true."""
-        d = resolve_log_decision(
-            cli_no_log=True,
-            cli_log=False,
-            cli_log_file=None,
-            source_log=True,
-            source_log_file=None,
-            config_log=False,
-            config_log_file=None,
-        )
-        assert d.enabled is False
-
-    def test_cli_log_file_path_beats_source_path(self) -> None:
-        """CLI --log-file path takes precedence over source_log_file."""
-        d = resolve_log_decision(
-            cli_no_log=False,
-            cli_log=False,
-            cli_log_file="/cli/path.jsonl",
-            source_log=None,
-            source_log_file="/source/path.jsonl",
-            config_log=False,
-            config_log_file="/config/path.jsonl",
-        )
-        assert d.explicit_path == "/cli/path.jsonl"
 
     def test_cli_log_file_path_beats_config_path(self) -> None:
         """CLI --log-file path takes precedence over config log_file."""
@@ -180,79 +140,10 @@ class TestResolveLogDecisionCliLayer:
             cli_no_log=False,
             cli_log=False,
             cli_log_file="/cli/path.jsonl",
-            source_log=None,
-            source_log_file=None,
             config_log=False,
             config_log_file="/config/path.jsonl",
         )
         assert d.explicit_path == "/cli/path.jsonl"
-
-
-class TestResolveLogDecisionSourceLayer:
-    """Source config declaration layer: between CLI and config."""
-
-    def test_source_log_true_enables(self) -> None:
-        d = resolve_log_decision(
-            cli_no_log=False,
-            cli_log=False,
-            cli_log_file=None,
-            source_log=True,
-            source_log_file=None,
-            config_log=False,
-            config_log_file=None,
-        )
-        assert d.enabled is True
-        assert d.explicit_path is None
-
-    def test_source_log_false_disables(self) -> None:
-        d = resolve_log_decision(
-            cli_no_log=False,
-            cli_log=False,
-            cli_log_file=None,
-            source_log=False,
-            source_log_file=None,
-            config_log=True,
-            config_log_file=None,
-        )
-        assert d.enabled is False
-
-    def test_source_log_file_enables_with_path(self) -> None:
-        d = resolve_log_decision(
-            cli_no_log=False,
-            cli_log=False,
-            cli_log_file=None,
-            source_log=None,
-            source_log_file="/source/trace.jsonl",
-            config_log=False,
-            config_log_file=None,
-        )
-        assert d.enabled is True
-        assert d.explicit_path == "/source/trace.jsonl"
-
-    def test_source_log_file_path_beats_config_path(self) -> None:
-        d = resolve_log_decision(
-            cli_no_log=False,
-            cli_log=False,
-            cli_log_file=None,
-            source_log=None,
-            source_log_file="/source/trace.jsonl",
-            config_log=False,
-            config_log_file="/config/trace.jsonl",
-        )
-        assert d.explicit_path == "/source/trace.jsonl"
-
-    def test_source_disabled_beats_config_enabled(self) -> None:
-        """source_log=False disables even when config_log=True."""
-        d = resolve_log_decision(
-            cli_no_log=False,
-            cli_log=False,
-            cli_log_file=None,
-            source_log=False,
-            source_log_file=None,
-            config_log=True,
-            config_log_file=None,
-        )
-        assert d.enabled is False
 
 
 class TestResolveLogDecisionConfigLayer:
@@ -263,8 +154,6 @@ class TestResolveLogDecisionConfigLayer:
             cli_no_log=False,
             cli_log=False,
             cli_log_file=None,
-            source_log=None,
-            source_log_file=None,
             config_log=True,
             config_log_file=None,
         )
@@ -276,8 +165,6 @@ class TestResolveLogDecisionConfigLayer:
             cli_no_log=False,
             cli_log=False,
             cli_log_file=None,
-            source_log=None,
-            source_log_file=None,
             config_log=False,
             config_log_file="/config/trace.jsonl",
         )
@@ -290,8 +177,6 @@ class TestResolveLogDecisionConfigLayer:
             cli_no_log=False,
             cli_log=False,
             cli_log_file=None,
-            source_log=None,
-            source_log_file=None,
             config_log=False,
             config_log_file=None,
         )
@@ -299,56 +184,7 @@ class TestResolveLogDecisionConfigLayer:
 
 
 class TestResolveLogDecisionPrecedence:
-    """Verify full CLI > source config > config-file precedence chain."""
-
-    def test_cli_wins_over_pragma_and_config(self) -> None:
-        d = resolve_log_decision(
-            cli_no_log=False,
-            cli_log=True,
-            cli_log_file=None,
-            source_log=False,
-            source_log_file=None,
-            config_log=True,
-            config_log_file=None,
-        )
-        # CLI says ENABLE; source says disable — CLI wins.
-        assert d.enabled is True
-
-    def test_source_wins_over_config(self) -> None:
-        d = resolve_log_decision(
-            cli_no_log=False,
-            cli_log=False,
-            cli_log_file=None,
-            source_log=True,
-            source_log_file=None,
-            config_log=False,
-            config_log_file=None,
-        )
-        assert d.enabled is True
-
-    def test_path_precedence_cli_over_source_over_config(self) -> None:
-        d = resolve_log_decision(
-            cli_no_log=False,
-            cli_log=False,
-            cli_log_file="/cli.jsonl",
-            source_log=None,
-            source_log_file="/source.jsonl",
-            config_log=False,
-            config_log_file="/config.jsonl",
-        )
-        assert d.explicit_path == "/cli.jsonl"
-
-    def test_path_precedence_source_over_config(self) -> None:
-        d = resolve_log_decision(
-            cli_no_log=False,
-            cli_log=False,
-            cli_log_file=None,
-            source_log=None,
-            source_log_file="/source.jsonl",
-            config_log=False,
-            config_log_file="/config.jsonl",
-        )
-        assert d.explicit_path == "/source.jsonl"
+    """Verify the CLI > config-file chain where the two layers disagree."""
 
     def test_path_none_when_only_config_and_enabled_by_cli(self) -> None:
         """CLI --log (no path) + config log_file → path comes from config."""
@@ -356,8 +192,6 @@ class TestResolveLogDecisionPrecedence:
             cli_no_log=False,
             cli_log=True,
             cli_log_file=None,
-            source_log=None,
-            source_log_file=None,
             config_log=False,
             config_log_file="/config/trace.jsonl",
         )

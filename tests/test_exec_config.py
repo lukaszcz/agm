@@ -17,7 +17,7 @@ from agm.config.general import (
 
 
 class TestExecConfig:
-    def test_default_values(self) -> None:
+    def test_explicit_values(self) -> None:
         cfg = ExecConfig(
             runner=None,
             strict_json=False,
@@ -62,7 +62,6 @@ class TestLoadExecConfig:
         assert cfg.agents == {}
         assert cfg.log is False
         assert cfg.log_file is None
-
 
     def test_load_exec_config_from_toml(self, tmp_path: Path) -> None:
         home = tmp_path / "home"

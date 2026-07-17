@@ -84,5 +84,3 @@ def test_graph_run_rechecks_checked_artifact_when_capabilities_change() -> None:
     assert not result.ok
     assert result.error is None
     assert result.diagnostics
-
-

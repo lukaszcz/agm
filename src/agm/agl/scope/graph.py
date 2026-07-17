@@ -201,8 +201,8 @@ def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[str, QNa
             if not item.is_private:
                 result[item.name] = (self_id, item.name)
         elif isinstance(item, BuiltinVarDecl):
-            # ``builtin var`` engine settings are public, exported like any other
-            # top-level declaration so they are reachable via ``module::name``.
+            # The resolver admits these only in ``std.config``; its engine
+            # settings are public so callers can use ``std.config::name``.
             result[item.name] = (self_id, item.name)
     return result
 
@@ -447,9 +447,8 @@ def resolve_graph(
                     )
                     decl_info[key] = (item.node_id, item.span, kind)
             elif isinstance(item, BuiltinVarDecl):
-                # A ``builtin var`` is a public, MUTABLE cross-module binding
-                # (engine setting).  Record its kind so cross-module references
-                # and qualified ``:=`` assignments resolve correctly.
+                # The resolver admits this declaration only in ``std.config``.
+                # Record its mutable kind so qualified reads and writes resolve.
                 key = (mid, item.name)
                 decl_info[key] = (item.node_id, item.span, BinderKind.builtin_var_binding)
 

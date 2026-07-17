@@ -13,6 +13,7 @@ Covers:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Protocol
 
@@ -190,6 +191,7 @@ def _args(
     confirm_agents: bool = False,
     quiet: bool = False,
     no_log: bool = False,
+    log: bool = False,
     log_file: str | None = None,
     max_iters: int | None = None,
 ) -> ReplArgs:
@@ -200,6 +202,7 @@ def _args(
         confirm_agents=confirm_agents,
         quiet=quiet,
         no_log=no_log,
+        log=log,
         log_file=log_file,
         max_iters=max_iters,
     )
@@ -257,6 +260,53 @@ class TestReplRun:
         repl_command.run(_args(max_iters=10))
         session: ReplSession = fake_console[0]["session"]
         assert session._default_loop_limit == 10
+
+    @pytest.mark.parametrize("limit", [0, -1])
+    def test_max_iters_requires_positive_value(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+        limit: int,
+    ) -> None:
+        _isolated_home(monkeypatch, tmp_path)
+
+        with pytest.raises(SystemExit) as exc_info:
+            repl_command.run(_args(max_iters=limit))
+
+        assert exc_info.value.code == 1
+        assert fake_console == []
+
+    @pytest.mark.parametrize(
+        ("args", "expected_log", "expected_file"),
+        [
+            (_args(log=True), True, None),
+            (_args(no_log=True), False, None),
+            (_args(log_file="custom.jsonl"), True, "custom.jsonl"),
+        ],
+    )
+    def test_cli_logging_flags_seed_builtin_settings(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+        args: ReplArgs,
+        expected_log: bool,
+        expected_file: str | None,
+    ) -> None:
+        from agm.agl.semantics.values import BoolValue, EnumValue, TextValue
+
+        _isolated_home(monkeypatch, tmp_path)
+        monkeypatch.setattr(repl_command, "_resolve_trace_path", lambda *args, **kwargs: None)
+        repl_command.run(args)
+        session: ReplSession = fake_console[0]["session"]
+        assert session._persisted_host_settings["log"] == BoolValue(expected_log)
+        log_file = session._persisted_host_settings["log-file"]
+        assert isinstance(log_file, EnumValue)
+        if expected_file is None:
+            assert log_file.variant == "None"
+        else:
+            assert log_file.fields["value"] == TextValue(expected_file)
 
     def test_dry_run_runs_console_in_check_only_mode(
         self,
@@ -357,6 +407,32 @@ class TestReplRun:
         (agm_dir / "config.toml").write_text("[exec]\ntimeout = 30\nrunner = \"echo agent\"\n")
         repl_command.run(_args())
         assert len(fake_console) == 1
+
+    def test_tiny_numeric_timeout_round_trips_through_builtin_setting(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        from agm.agl.semantics.values import EnumValue, TextValue
+
+        home = _isolated_home(monkeypatch, tmp_path)
+        agm_dir = home / ".agm"
+        agm_dir.mkdir(parents=True, exist_ok=True)
+        (agm_dir / "config.toml").write_text(
+            '[exec]\ntimeout = 0.0000001\nrunner = "echo agent"\n'
+        )
+
+        repl_command.run(_args())
+        session = fake_console[0]["session"]
+        assert isinstance(session, ReplSession)
+        result = session.eval_entry(
+            "import std.config\nstd.config::timeout := std.config::timeout\nstd.config::timeout"
+        )
+
+        assert result.ok
+        assert isinstance(result.value, EnumValue)
+        assert result.value.fields["value"] == TextValue("0.0000001s")
 
     def test_string_timeout_in_config_accepted(
         self,
@@ -494,6 +570,61 @@ class TestReplTrace:
         assert log_file.exists()
         session = fake_console[0]["session"]
         assert isinstance(session, ReplSession)
+
+    def test_source_writes_use_command_host_reconfiguration_policy(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        _isolated_home(monkeypatch, tmp_path)
+        repl_command.run(_args())
+        session = fake_console[0]["session"]
+        assert isinstance(session, ReplSession)
+
+        assert session.eval_entry("import std.config").ok
+        assert session.eval_entry('std.config::runner := "echo replacement"').ok
+        live_trace = tmp_path / "live.jsonl"
+        assert session.eval_entry(
+            f'std.config::log-file := Some("{live_trace}")'
+        ).ok
+        assert session.eval_entry('print "traced"').ok
+        assert session.eval_entry("std.config::log := false").ok
+        assert session.eval_entry('print "disabled"').ok
+        assert session.eval_entry("std.config::log-file := None").ok
+
+        records = [
+            json.loads(line)
+            for line in live_trace.read_text(encoding="utf-8").splitlines()
+        ]
+        rendered = [record.get("rendered") for record in records]
+        assert "traced" in rendered
+        assert "disabled" not in rendered
+
+    def test_malformed_source_runner_is_catchable_and_rolls_back(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        from agm.agl.semantics.values import BoolValue
+
+        _isolated_home(monkeypatch, tmp_path)
+        repl_command.run(_args())
+        session = fake_console[0]["session"]
+        assert isinstance(session, ReplSession)
+
+        result = session.eval_entry(
+            "import std.config\n"
+            "let previous = std.config::runner\n"
+            "try\n"
+            "  std.config::runner := \"'\"\n"
+            "catch Exception as error => ()\n"
+            "std.config::runner == previous"
+        )
+
+        assert result.ok
+        assert result.value == BoolValue(True)
 
     def test_no_log_writes_no_trace(
         self,

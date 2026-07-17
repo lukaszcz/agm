@@ -27,6 +27,8 @@ Two tiers (validate_ir runs ONLY when explicitly called):
        there; extern boundary contracts are checked for internal consistency
        (registered nominals, type-variable positions matching their declared
        type parameters).
+    8. Every ``IrBuiltinLoad``/``IrBuiltinStore`` key belongs to the canonical
+       engine-key catalog.
 
 The expression dispatcher uses a closed structural ``match`` with a final
 ``assert_never(node)`` arm so that adding an ``IrExpr`` variant in a
@@ -140,6 +142,7 @@ from agm.agl.ir.program import (
     SourceFile,
 )
 from agm.agl.modules.ids import ModuleId
+from agm.config.engine_keys import ENGINE_KEY_NAMES
 
 __all__ = ["InvalidIrError", "validate_ir"]
 
@@ -249,6 +252,12 @@ def _validate_location(loc: Location, ctx: _Context) -> None:
     _check_location_cheap(loc)
     if ctx.deep:
         _check_location_deep(loc, ctx)
+
+
+def _validate_builtin_key(key: str, ctx: _Context) -> None:
+    """Reject an engine-register key outside the canonical closed catalog."""
+    if ctx.deep and key not in ENGINE_KEY_NAMES:
+        raise InvalidIrError(f"IR builtin-var node has unknown engine key {key!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -1113,11 +1122,13 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
                         f"IrExec has max_attempts={node.max_attempts!r} (must be >= 1)"
                     )
 
-        case IrBuiltinLoad():
+        case IrBuiltinLoad(key=key):
             _validate_location(node.location, ctx)
+            _validate_builtin_key(key, ctx)
 
-        case IrBuiltinStore(value=store_value):
+        case IrBuiltinStore(key=key, value=store_value):
             _validate_location(node.location, ctx)
+            _validate_builtin_key(key, ctx)
             _validate_expr(store_value, ctx)
 
         case _ as unreachable:  # pragma: no cover

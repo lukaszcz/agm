@@ -40,7 +40,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 from agm.agl.diagnostics import Diagnostic
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CONFIG_ID, ModuleId
 from agm.agl.scope.symbols import (
     BUILTIN_CALL_NAMES,
     AglScopeError,
@@ -702,18 +702,22 @@ class _Resolver:
         return tuple(warnings)
 
     def _resolve_builtin_var(self, node: BuiltinVarDecl) -> None:
-        """Resolve a ``builtin var`` declaration into a mutable register binding.
+        """Resolve a standard-library engine setting into a mutable register binding.
 
-        A ``builtin var`` names an engine setting backed by an interpreter
-        register.  It is MUTABLE (assignable with ``:=``) and readable.  Like
-        ``builtin def`` it is a host-provided declaration allowed only at the
-        module root; the typecheck pass validates that the name is a known
-        engine key (the name whitelist that gates every builtin declaration).
+        ``builtin var`` is reserved to the canonical ``std.config`` module.
+        The typecheck pass then validates that the name is a known engine key
+        with its canonical type.
         """
         if not self._at_root:
             raise AglScopeError(
                 f"'builtin var' declarations are only allowed at the module root, "
                 f"not inside a nested block (found 'builtin var {node.name}' here).",
+                span=node.span,
+            )
+        if self._module_id != STD_CONFIG_ID:
+            raise AglScopeError(
+                "'builtin var' declarations are only allowed in the standard-library "
+                "module 'std.config'.",
                 span=node.span,
             )
         ref = BindingRef(
@@ -902,9 +906,8 @@ class _Resolver:
             if isinstance(item, FuncDef):
                 self._resolve_funcdef(item)
             elif isinstance(item, BuiltinVarDecl):
-                # ``builtin var`` is a host-provided declaration (like ``builtin
-                # def``): allowed at the root of BOTH the entry and library
-                # modules.  Placement (root-only) is enforced in the handler.
+                # Placement in the canonical standard-library module is
+                # enforced by the declaration handler.
                 self._resolve_builtin_var(item)
             elif isinstance(item, AgentDecl):
                 if is_non_entry_root:

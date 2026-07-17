@@ -4535,6 +4535,15 @@ class TestMisc:
         r = accept_type('enum E\n  | A\n  | B\nlet e = E::A()\ne is A')
         assert r.resolved.program is not None
 
+    def test_is_test_uses_scrutinee_type_for_shared_variant_name(self) -> None:
+        r = accept_type(
+            "enum Left\n  | Same\n"
+            "enum Right\n  | Same\n"
+            "let value = Left::Same()\n"
+            "value is Same"
+        )
+        assert r.resolved.program is not None
+
     def test_constructor_pattern_without_qualifier(self) -> None:
         # Exercises a constructor pattern without a qualifier.
         r = accept_type(

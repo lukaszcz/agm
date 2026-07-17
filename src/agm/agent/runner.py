@@ -58,16 +58,23 @@ class PromptRunResult:
     spawn_error: str | None
 
 
-def split_command(command: str, *, kind: str) -> list[str]:
+def parse_command(command: str, *, kind: str) -> list[str]:
+    """Split a command, raising ``ValueError`` without host-process side effects."""
     try:
         split = shlex.split(command)
     except ValueError as exc:
-        print(f"Error: invalid {kind} command: {exc}", file=sys.stderr)
+        raise ValueError(f"invalid {kind} command: {exc}") from exc
+    if not split:
+        raise ValueError(f"{kind} command is empty")
+    return split
+
+
+def split_command(command: str, *, kind: str) -> list[str]:
+    try:
+        return parse_command(command, kind=kind)
+    except ValueError as exc:
+        print(f"Error: {exc}.", file=sys.stderr)
         raise SystemExit(1) from exc
-    if split:
-        return split
-    print(f"Error: {kind} command is empty.", file=sys.stderr)
-    raise SystemExit(1)
 
 
 def validate_command(command: list[str], *, kind: str) -> None:

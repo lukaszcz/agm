@@ -5,8 +5,8 @@ Covers:
   --max-iters, --runner, --log-file, --no-log flags into ExecArgs
 - Missing file exits with code 1 and prints to stderr
 - Unreadable file exits with code 1 and prints error to stderr
-- Valid .agl file: runtime.run is called, diagnostics printed to stderr, exits 1
-  (pre-execution failure per exit-code contract, since runtime is not yet implemented)
+- Valid programs execute through the graph pipeline; static failures and uncaught
+  AgL exceptions use their documented exit codes.
 """
 
 from __future__ import annotations
@@ -448,6 +448,27 @@ class TestExecCommandBehavior:
         captured = capsys.readouterr()
         assert captured.err
 
+    def test_static_discovery_failure_does_not_truncate_trace(self, tmp_path: Path) -> None:
+        agl_file = tmp_path / "test.agl"
+        agl_file.write_text("let x = undefined_name\n")
+        log_path = tmp_path / "trace.jsonl"
+        log_path.write_text("existing trace\n", encoding="utf-8")
+
+        args = ExecArgs(
+            file=str(agl_file),
+            param_tokens=[],
+            strict_json=None,
+            max_iters=None,
+            runner=None,
+            no_log=False,
+            log_file=str(log_path),
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(args)
+
+        assert exc_info.value.code == 1
+        assert log_path.read_text(encoding="utf-8") == "existing trace\n"
+
 
 def _exec_args(
     agl_file: Path, *, param_tokens: list[str] | None = None, log_file: str | None = None
@@ -584,7 +605,7 @@ class TestExecExitCodeMapping:
         from agm.agl.pipeline import PipelineDriver, RunError, RunResult
 
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\n")
+        agl_file.write_text("let x = 1\nx\n")
 
         def fake_run(
             self: PipelineDriver,
@@ -594,6 +615,8 @@ class TestExecExitCodeMapping:
             check_only: bool = False,
             **_kwargs: object,
         ) -> RunResult:
+            if check_only:
+                return RunResult(ok=True, diagnostics=[], error=None)
             return RunResult(
                 ok=False,
                 diagnostics=[],
@@ -630,7 +653,7 @@ class TestExecCommandWarnings:
         from agm.agl.pipeline import PipelineDriver, RunResult
 
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\n")
+        agl_file.write_text("let x = 1\nx\n")
 
         warning = Diagnostic(
             message="declared agent 'reviewer' is unused",
@@ -712,7 +735,7 @@ class TestExecCommandWarnings:
         from agm.agl.pipeline import PipelineDriver, RunResult
 
         agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\n")
+        agl_file.write_text("let x = 1\nx\n")
 
         warning = Diagnostic(
             message="unused binding",
@@ -738,6 +761,8 @@ class TestExecCommandWarnings:
             check_only: bool = False,
             **_kwargs: object,
         ) -> RunResult:
+            if check_only:
+                return RunResult(ok=True, diagnostics=[], error=None)
             return RunResult(
                 ok=False, diagnostics=[error], error=None, warnings=[warning]
             )
@@ -1837,7 +1862,7 @@ class TestUncaughtExceptionOutputFormat:
         from agm.commands import exec as exec_command
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("let x = 1\n")
+        agl_file.write_text("let x = 1\nx\n")
         args = self._exec_args_nolog(agl_file)
         # Synthesize a RunResult whose error has line set but col=None.
         fake_result = RunResult(
@@ -1859,9 +1884,12 @@ class TestUncaughtExceptionOutputFormat:
             fake_prepared.declared_agents = ()
             mock_rt.prepare_program.return_value = fake_prepared
             mock_rt.return_value.discover_params_graph.return_value = MagicMock(
-                diagnostics=(), warnings=(), params=(), checked=None, program_name=None
+                diagnostics=(), warnings=(), params=(), checked=MagicMock(), program_name=None
             )
-            mock_rt.return_value.run_prepared_graph.return_value = fake_result
+            mock_rt.return_value.run_prepared_graph.side_effect = [
+                RunResult(ok=True, diagnostics=[], error=None),
+                fake_result,
+            ]
             with pytest.raises(SystemExit) as exc_info:
                 exec_command.run(args)
         assert exc_info.value.code == 2
@@ -2551,13 +2579,69 @@ class TestExecTimeoutAndLogFileFlags:
         assert result is None
         assert captured["shell_exec_timeout"] is None
 
-    def test_cli_no_log_file_runs_clean(self, tmp_path: Path) -> None:
-        """``--no-log-file`` resolves the log-file seed to ``none`` without error."""
+    def test_cli_timeout_preserves_raw_builtin_value(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("let x = 1\nx\n")
+        agl_file.write_text("import std.config\nprint std.config::timeout\n")
 
-        result = exec_command.run(_exec_args_no_log(agl_file, no_log_file=True))
-        assert result is None
+        exec_command.run(_exec_args_no_log(agl_file, timeout="0.0001s"))
+
+        assert capsys.readouterr().out == 'Option::Some(value = "0.0001s")\n'
+
+    def test_program_config_timeout_preserves_raw_builtin_value(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            '[exec]\ntimeout = "1s"\n\n[prog]\ntimeout = 0.0001\n'
+        )
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("import std.config\nprint std.config::timeout\n")
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        exec_command.run(_exec_args_no_log(agl_file))
+
+        assert capsys.readouterr().out == 'Option::Some(value = "0.0001s")\n'
+
+    def test_cli_no_log_file_clears_visible_seed_not_configured_trace(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from agm.config.context import ConfigContext
+
+        trace_path = tmp_path / "configured.jsonl"
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text(
+            f'[exec]\nlog = true\nlog-file = "{trace_path}"\n'
+        )
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("import std.config\nprint std.config::log-file\n")
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        exec_command.run(
+            _exec_args_no_log(agl_file, no_log=False, no_log_file=True)
+        )
+
+        assert capsys.readouterr().out == "Option::None\n"
+        assert trace_path.exists()
 
 
 class TestExecSourceConfigPrecedence:
@@ -2613,14 +2697,23 @@ class TestExecSourceConfigPrecedence:
         assert result is None  # exit 0
         assert capsys.readouterr().out == "done\n"
 
-    def test_source_max_iters_zero_is_rejected(self, tmp_path: Path) -> None:
-        """``std.config::max-iters := 0`` is rejected instead of becoming a live loop limit."""
+    def test_source_max_iters_zero_disables_host_limit(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """``std.config::max-iters := 0`` turns an active host valve off."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("import std.config\nstd.config::max-iters := 0\nprint 1\n")
+        agl_file.write_text(
+            "import std.config\n"
+            "std.config::max-iters := 0\n"
+            "var i = 0\n"
+            "do\n"
+            "  i := i + 1\n"
+            "until i >= 3\n"
+            "print i\n"
+        )
 
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file))
-        assert exc_info.value.code == 2
+        exec_command.run(_exec_args_no_log(agl_file, max_iters=1))
+        assert capsys.readouterr().out == "3\n"
 
     def test_source_max_iters_negative_expression_is_rejected(self, tmp_path: Path) -> None:
         """A computed negative ``max-iters`` value is rejected at the assignment point."""
@@ -2752,13 +2845,18 @@ class TestExecSourceConfigPrecedence:
             exec_command.run(_exec_args_no_log(agl_file, max_iters=3))
         assert exc_info.value.code == 2
 
-    def test_max_iters_five_enables_valve(self, tmp_path: Path) -> None:
-        """``--max-iters 5`` enables the valve (regression: was a silent no-op).
+    @pytest.mark.parametrize("limit", [0, -1])
+    def test_cli_max_iters_requires_positive_value(self, tmp_path: Path, limit: int) -> None:
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("print 1\n")
 
-        The old magic-``5`` sentinel treated ``5`` as "off", so ``--max-iters 5``
-        was a no-op while ``config max-iters = 5`` enabled the valve.  Both must
-        now enable it consistently.
-        """
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file, max_iters=limit))
+
+        assert exc_info.value.code == 1
+
+    def test_max_iters_five_enables_valve(self, tmp_path: Path) -> None:
+        """An explicit positive CLI limit consistently enables the valve."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
             "var i = 0\n"
@@ -3015,6 +3113,23 @@ class TestExecSourceConfigPrecedence:
 
         exec_command.run(_exec_args_no_log(agl_file))
         assert captured_runner[-1:] == ["my-runner"]
+
+    def test_malformed_source_runner_is_catchable_and_rolls_back(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "import std.config\n"
+            "let previous = std.config::runner\n"
+            "try\n"
+            "  std.config::runner := \"'\"\n"
+            "catch Exception as error => ()\n"
+            "print(std.config::runner == previous)\n"
+        )
+
+        exec_command.run(_exec_args_no_log(agl_file))
+
+        assert capsys.readouterr().out == "true\n"
 
 
 def _exec_args_inline_no_log(

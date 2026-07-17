@@ -246,8 +246,8 @@ never cut short by the host. The host's `max-iters` setting
 **safety valve** that applies **only to unbounded loops** — those with no `[n]` bound
 and no `for` clause (a bare `while … do … done` or `do … until E`). It
 caps such loops at `max-iters` body executions, raising
-`MaxIterationsExceeded`. The valve is **off by default** (unbounded loops run
-until they self-terminate); setting `max-iters` turns it on.
+`MaxIterationsExceeded`. The valve is off by default, represented by a readable
+`max-iters` value of `0`; a source write of zero also disables an active host limit.
 
 The `until` keyword (and `done`) may start its own line aligned with `do`,
 courtesy of the branch-marker continuation rule

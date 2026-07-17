@@ -46,8 +46,12 @@ def raw_option_str(
         val = table.get(key)
         if isinstance(val, str) and val.strip():
             return val
-        if isinstance(val, (int, float)) and not isinstance(val, bool) and val > 0:
+        if isinstance(val, int) and not isinstance(val, bool) and val > 0:
             return str(val)
+        if isinstance(val, float) and val > 0:
+            from agm.core.parse import format_timeout
+
+            return format_timeout(val)
     return None
 
 
@@ -55,7 +59,7 @@ def raw_option_str(
 _ENGINE_DEFAULTS: dict[str, object] = {
     "log": False,
     "strict-json": False,
-    "max-iters": 5,
+    "max-iters": 0,
     "runner": "claude",  # callers providing a resolved runner override this
     "log-file": None,
     "timeout": None,
@@ -67,7 +71,8 @@ def build_engine_config_base(raw_values: "Mapping[str, object]") -> "dict[str, V
 
     Decodes each of the six engine keys via :func:`convert_config_value`.
     Keys absent from *raw_values* fall back to the engine defaults
-    (``false``/``false``/``5``/``"claude"``/``none``/``none``).
+    (``false``/``false``/``0``/``"claude"``/``none``/``none``), where zero
+    represents the disabled ``max-iters`` safety valve.
 
     Each caller is responsible for constructing *raw_values* with its own
     layering (CLI/program/exec config).  This helper performs only the

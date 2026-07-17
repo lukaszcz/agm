@@ -153,6 +153,7 @@ from agm.agl.semantics.values import (
     TextValue,
     Value,
 )
+from agm.core.parse import format_timeout as _format_timeout
 from agm.core.parse import parse_timeout as _parse_timeout
 
 if TYPE_CHECKING:
@@ -255,11 +256,7 @@ class _ReturnSignal(Exception):
 # (loop cap, strict-json mode, shell timeout): exactly the settings backed by a
 # live interpreter field.
 _RUNTIME_LIVE_ENGINE_KEYS = frozenset({"strict-json", "max-iters", "timeout"})
-
-# Engine default for ``max-iters`` (the loop safety valve), reported when a
-# ``builtin var max-iters`` read finds the valve off (``_loop_limit is None``).
-_DEFAULT_MAX_ITERS = 5
-
+_HOST_CONSUMED_ENGINE_KEYS = frozenset({"runner", "log", "log-file"})
 
 # ---------------------------------------------------------------------------
 # Coercion helper — module-level for test access
@@ -390,13 +387,26 @@ class IrInterpreter:
             named={}, default_agent=None
         )
         self._strict_json: bool = strict_json
-        # Global max-iters safety valve.  ``None`` means the valve is OFF (no
-        # host cap); an ``int`` means the valve is ON, capping unguarded loops at
-        # that many iterations.  The valve applies ONLY to unguarded loops
+        # Global max-iters safety valve. ``None`` means the valve is off; a
+        # positive limit caps unguarded loops. The valve applies ONLY to unguarded loops
         # (``IrLoop.guarded is False``) — ``for`` and ``do[n]`` loops carry
         # their own bound and are never cut short by this safety net.
-        self._loop_limit: int | None = loop_limit
+        self._loop_limit = loop_limit
         self._shell_exec_timeout: float | None = shell_exec_timeout
+        seeded_timeout = (
+            builtin_host_settings.get("timeout")
+            if builtin_host_settings is not None
+            else None
+        )
+        if seeded_timeout is not None:
+            assert isinstance(seeded_timeout, EnumValue)
+            self._timeout_setting = seeded_timeout
+        elif shell_exec_timeout is None:
+            self._timeout_setting = none_value()
+        else:
+            self._timeout_setting = some_value(
+                TextValue(_format_timeout(shell_exec_timeout))
+            )
         # Registers for the HOST-CONSUMED ``builtin var`` engine settings
         # (``runner``, ``log``, ``log-file``).  Unlike the three runtime-live
         # keys (which reuse ``_strict_json`` / ``_loop_limit`` /
@@ -411,7 +421,15 @@ class IrInterpreter:
             "runner": TextValue("claude"),
             "log": BoolValue(False),
             "log-file": none_value(),
-            **(dict(builtin_host_settings) if builtin_host_settings is not None else {}),
+            **(
+                {
+                    key: value
+                    for key, value in builtin_host_settings.items()
+                    if key in _HOST_CONSUMED_ENGINE_KEYS
+                }
+                if builtin_host_settings is not None
+                else {}
+            ),
         }
         self._host_contracts: Mapping[ContractId, OutputContract] = (
             host_contracts if host_contracts is not None else {}
@@ -457,8 +475,13 @@ class IrInterpreter:
 
     @property
     def loop_limit(self) -> int | None:
-        """Current global max-iters valve (``None`` = OFF; may be updated by a write)."""
+        """Current global max-iters valve (``None`` means off)."""
         return self._loop_limit
+
+    @property
+    def timeout_setting(self) -> EnumValue:
+        """Current raw ``Option[text]`` timeout value."""
+        return self._timeout_setting
 
     @property
     def shell_exec_timeout(self) -> float | None:
@@ -1449,6 +1472,7 @@ class IrInterpreter:
                 except AglRaise as exc:
                     exc.span = node.location
                     raise
+                self._trace.mutation(name=key, value=stored, span=node.location)
                 return VOID_VALUE
 
             case _ as unreachable:  # pragma: no cover
@@ -1467,14 +1491,9 @@ class IrInterpreter:
         if key == "strict-json":
             return BoolValue(self._strict_json)
         if key == "max-iters":
-            # ``None`` means the loop safety valve is off; report the engine
-            # default so the ``int``-typed setting always reads a concrete value.
-            limit = self._loop_limit if self._loop_limit is not None else _DEFAULT_MAX_ITERS
-            return IntValue(limit)
+            return IntValue(0 if self._loop_limit is None else self._loop_limit)
         if key == "timeout":
-            if self._shell_exec_timeout is None:
-                return none_value()
-            return some_value(TextValue(f"{self._shell_exec_timeout}s"))
+            return self._timeout_setting
         return self._builtin_host_settings[key]
 
     def _store_builtin_setting(self, key: str, value: Value) -> None:
@@ -1487,10 +1506,24 @@ class IrInterpreter:
         """
         if key in _RUNTIME_LIVE_ENGINE_KEYS:
             self._apply_config_effect(key, value)
-        else:
-            self._builtin_host_settings[key] = value
-            if self._host_reconfigurer is not None:
-                self._reconfigure_host_service(key)
+            if key == "timeout":
+                assert isinstance(value, EnumValue)
+                self._timeout_setting = value
+            return
+
+        previous = dict(self._builtin_host_settings)
+        self._builtin_host_settings[key] = value
+        if key == "log-file":
+            assert isinstance(value, EnumValue)
+            if value.variant == "Some":
+                self._builtin_host_settings["log"] = BoolValue(True)
+        if self._host_reconfigurer is None:
+            return
+        try:
+            self._reconfigure_host_service(key)
+        except Exception:
+            self._builtin_host_settings = previous
+            raise
 
     def _reconfigure_host_service(self, key: str) -> None:
         """Reflect a host-consumed register write into the live host service.
@@ -1540,15 +1573,15 @@ class IrInterpreter:
             self._strict_json = config_value.value
         elif public_name == "max-iters":
             assert isinstance(config_value, IntValue)
-            if config_value.value <= 0:
+            if config_value.value < 0:
                 raise AglRaise(
                     _make_exc_value(
                         "ValueError",
-                        "invalid max-iters: expected a positive integer",
+                        "invalid max-iters: expected a non-negative integer",
                         trace_id=self._trace.new_event_id(),
                     )
                 )
-            self._loop_limit = config_value.value
+            self._loop_limit = config_value.value or None
         else:
             assert public_name == "timeout"
             assert isinstance(config_value, EnumValue)

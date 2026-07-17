@@ -30,6 +30,8 @@ from agm.agl.ir import (
     IrAssign,
     IrBind,
     IrBlock,
+    IrBuiltinLoad,
+    IrBuiltinStore,
     IrCapture,
     IrCase,
     IrCaseArm,
@@ -587,6 +589,48 @@ class TestCheapTierNonEmpty:
         node = IrBlock(location=LOC, items=(IrConstUnit(location=LOC),))
         prog = _make_program(initializers=(node,))
         validate_ir(prog, deep=False)  # no exception
+
+
+# ===========================================================================
+# Deep tier — builtin-var keys
+# ===========================================================================
+
+
+def test_deep_rejects_unknown_builtin_load_key() -> None:
+    program = _make_program(initializers=(IrBuiltinLoad(location=LOC, key="bogus"),))
+
+    with pytest.raises(InvalidIrError, match="builtin.*key"):
+        validate_ir(program)
+
+
+def test_deep_rejects_unknown_builtin_store_key() -> None:
+    program = _make_program(
+        initializers=(IrBuiltinStore(location=LOC, key="bogus", value=_int(1)),)
+    )
+
+    with pytest.raises(InvalidIrError, match="builtin.*key"):
+        validate_ir(program)
+
+
+def test_cheap_validation_does_not_require_known_builtin_key() -> None:
+    program = _make_program(initializers=(IrBuiltinLoad(location=LOC, key="bogus"),))
+
+    validate_ir(program, deep=False)
+
+
+def test_deep_accepts_known_builtin_keys() -> None:
+    program = _make_program(
+        initializers=(
+            IrBuiltinLoad(location=LOC, key="max-iters"),
+            IrBuiltinStore(
+                location=LOC,
+                key="runner",
+                value=IrConstText(location=LOC, value="codex"),
+            ),
+        )
+    )
+
+    validate_ir(program)
 
 
 # ===========================================================================

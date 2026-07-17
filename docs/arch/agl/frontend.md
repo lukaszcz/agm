@@ -8,7 +8,7 @@ The lexer is hand-written because AgL is indentation-sensitive: it produces INDE
 
 ## AST
 
-The AST is plain frozen dataclasses with no parser types — the firewall the rest of the implementation depends on. Because AgL is expression-oriented, there is no statement/expression split: a single unified node family covers blocks, bindings, assignment, control flow (`if`/`case`/loops/`try`), and a single call node for every kind of invocation (user functions, built-ins, and function values, with the bare-argument call sugar desugaring to the same node). Call arguments may carry placeholder leaves (`?` / `?n`) only as whole positional arguments or named-argument values; the AST builder validates the per-call placeholder numbering shape before these nodes cross the firewall. Value-position type application (`value::[T]`) is represented explicitly and erases after type checking; it instantiates a generic function value, a generic constructor value (payload variant → function value, nullary variant → the constructed nominal value), or a typed call's type arguments (kept on the call node). Type-qualified constructor references (`Type::Ctor`, `module::Type::Ctor`, and `Type[T]::Ctor`) are represented as qualified `VarRef` nodes rather than field access; dotted chains are always runtime field access. Casts (`as` / `as?`), indexing, lambdas and named function definitions, the unit literal, and divergence (`raise`, `return`, `break`, `continue`) are all expression nodes. Type-level nodes describe the surface type syntax, including generic type applications.
+The AST is plain frozen dataclasses with no parser types — the firewall the rest of the implementation depends on. Because AgL is expression-oriented, there is no statement/expression split: a single unified node family covers blocks, bindings, assignment, control flow (`if`/`case`/loops/`try`), and a single call node for every kind of invocation (user functions, built-ins, and function values, with the bare-argument call sugar desugaring to the same node). Call arguments may carry placeholder leaves (`?` / `?n`) only as whole positional arguments or named-argument values; the AST builder validates the per-call placeholder numbering shape before these nodes cross the firewall. Value-position type application (`value::[T]`) is represented explicitly and erases after type checking; it instantiates a generic function value, a generic constructor value (payload variant → function value, nullary variant → the constructed nominal value), or a typed call's type arguments (kept on the call node). Type-qualified constructor references (`Type::Ctor`, `module::Type::Ctor`, and `Type[T]::Ctor`) are represented as qualified `VarRef` nodes rather than field access; dotted chains are always runtime field access. The AST builder rejects those constructor forms in assignment-target position while retaining module-qualified names for cross-module `builtin var` writes. Casts (`as` / `as?`), indexing, lambdas and named function definitions, the unit literal, and divergence (`raise`, `return`, `break`, `continue`) are all expression nodes. Type-level nodes describe the surface type syntax, including generic type applications.
 
 Each node carries a stable id assigned at build time. Later passes never mutate nodes; they record their conclusions in side tables keyed by that id (carried in the resolved and checked program objects). This is the universal annotation convention — it is why nodes can be frozen and shared, and why `id()`-based identity is never used.
 
@@ -22,7 +22,7 @@ Resolution is namespace- and scope-directed, never capitalization-directed — a
 - Constructors live in the value namespace; an ambiguous unqualified constructor name is a static error, disambiguated with static namespace qualification (`Type::Ctor`).
 - A bare name in a `case` pattern is treated as a constructor pattern when it names an in-scope constructor and otherwise as a variable binder — decided by resolution, not capitalization.
 
-Agents must be declared in source; the scope pass binds each declared agent as a first-class value of agent type. It also enforces lexical control-flow boundaries: `break`/`continue` must stay within a loop in the same function, and `return` must appear inside the body of a `def` or `fn` (not in parameter defaults or at the program root). Graph-mode resolution extends this pass across modules; see [modules.md](modules.md).
+Agents must be declared in source; the scope pass binds each declared agent as a first-class value of agent type. Register-backed `builtin var` declarations are admitted only in the canonical `std.config` module, while entry programs and other libraries can only import and use those bindings. The pass also enforces lexical control-flow boundaries: `break`/`continue` must stay within a loop in the same function, and `return` must appear inside the body of a `def` or `fn` (not in parameter defaults or at the program root). Graph-mode resolution extends this pass across modules; see [modules.md](modules.md).
 
 ## Type System
 
@@ -49,9 +49,11 @@ Output contracts (the schema and format metadata that agent/`exec` calls need) a
 `matchcompile/` consumes checked pattern metadata without depending on lowering, the execution IR,
 the evaluator, or runtime services. It normalizes source patterns into typed pattern matrices,
 preserves source priority while choosing tests with the deterministic `qba` heuristic, and compiles
-each source `case` into a locally shared immutable decision DAG. Compilation and artifact validation
-summarize live matrix state and path facts at DAG joins, preserving sharing rather than expanding
-historical paths. Enum and boolean domains use their complete checked signatures; scalar and
+each source `case` into a locally shared immutable decision DAG. Immutable matrices retain
+per-column constructor partitions for selection and specialization, while memo keys reuse a cached
+structural hash of each live state. Compilation and artifact validation summarize live matrix state
+and path facts at DAG joins, preserving sharing rather than expanding historical paths. Enum and
+boolean domains use their complete checked signatures; scalar and
 unresolved type-variable domains remain open. The same DAG
 provides reachable-arm information and deterministic structured witnesses, so exhaustiveness and
 redundancy diagnostics cannot disagree with the executable decision structure.

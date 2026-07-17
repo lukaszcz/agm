@@ -224,17 +224,20 @@ previously declared user operator.
 ```ebnf
 let_decl ::= "let" name (":" type_expr)? "=" expr
 var_decl ::= "var" name (":" type_expr)? "=" expr
-builtin_var_def ::= "builtin" "var" name ":" type_expr  (* body-less; standard library only *)
+builtin_var_def ::= "builtin" "var" name ":" type_expr  (* body-less; std.config only *)
 assign_expr ::= assign_target ":=" expr
 assign_target ::= name ("[" expr "]")*
+                | module_path "::" name
 ```
 
-A `builtin var` is a body-less, runtime-backed mutable binding with a mandatory
+A `builtin var` is a body-less, host-backed mutable binding with a mandatory
 type and no initializer; the `builtin` modifier may sit on the same line or the
-line directly above (like `builtin def`). It is a standard-library facility used
-by `std.config` to expose engine settings; ordinary programs do not write it.
+line directly above (like `builtin def`). It may be declared only at the root of
+`std.config`; entry modules and other library modules cannot declare one.
 
-Assignment has type `unit` and returns `void`. In an indexed assignment target,
+Assignment has type `unit` and returns `void`. A qualified assignment target is
+valid only when it resolves to a `builtin var`; type-qualified constructor forms
+are not assignment targets. In an indexed assignment target,
 each opening `[` must be adjacent to the target name or preceding index:
 `xs[0]` is indexed assignment, while `xs [0]` is not.
 
@@ -305,10 +308,12 @@ pattern_field  ::= pattern              (* positional sub-pattern *)
 ```
 
 A qualified variant pattern (`Option::some(value)` or
-`module::Option::some(value)`) names the owning enum and variant with `::`; it
-is required when an unqualified variant name is ambiguous across enums
-([Generics](generics.md), [Pattern matching](pattern-matching.md)). Type
-arguments are carried by the scrutinee type rather than written in a pattern.
+`module::Option::some(value)`) names the owning enum and variant with `::`.
+Unqualified constructor ownership is selected by the scrutinee's static enum
+type, even when multiple enums share the variant name; a qualifier is optional
+and must agree with that type when present ([Generics](generics.md),
+[Pattern matching](pattern-matching.md)). Type arguments are carried by the
+scrutinee type rather than written in a pattern.
 
 In a constructor pattern, **positional sub-patterns** (`pattern` without a
 `name "="` prefix) fill positional-capable (pos-only/standard) constructor fields

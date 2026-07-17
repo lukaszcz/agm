@@ -59,5 +59,10 @@ class HostSettingsReconfigurer:
         self._registry.set_default_agent(self._policy.build_runner(command))
 
     def reconfigure_trace(self, *, enabled: bool, log_file: str | None) -> None:
-        """Repoint the trace store at the path implied by the current settings."""
-        self._trace.activate(self._policy.resolve_trace_path(enabled, log_file))
+        """Repoint the best-effort trace store at the path implied by the settings."""
+        try:
+            path = self._policy.resolve_trace_path(enabled, log_file)
+        except OSError as exc:
+            self._trace.disable(exc)
+            return
+        self._trace.activate(path)

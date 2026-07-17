@@ -6,8 +6,9 @@ by the lowering/linking phase and consumed by the evaluator.
 The IR carries no checker ``Type``, ``TypeEnvironment``, ``FunctionSignature``,
 ``CastSpec``, type expression, or ``node_types``/``binding_types`` table.
 
-Imports: only stdlib and ``agm.agl.modules.ids``.  No eval, runtime, values,
-syntax, scope, or typecheck imports are permitted in this package.
+Imports: only stdlib, ``agm.agl.modules.ids``, and the pure shared engine-key
+catalog. No eval, runtime, values, syntax, scope, or typecheck imports are
+permitted in this package.
 
 ``__all__`` is sorted and complete (all public names re-exported here).
 """

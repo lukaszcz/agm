@@ -377,6 +377,24 @@ class TestBinders:
         with pytest.raises(AglSyntaxError, match="assignment target"):
             parse("make()[0] := 10")
 
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "std.config::NoSuchType::max-iters := 3",
+            "std.config::NoSuchType::max-iters[0] := 3",
+        ),
+    )
+    def test_type_qualified_assignment_target_rejected(self, source: str) -> None:
+        with pytest.raises(AglSyntaxError, match="assignment target"):
+            parse(source)
+
+    def test_module_qualified_assignment_target_preserved(self) -> None:
+        assignment = first(parse("std.config::max-iters := 3"))
+        assert isinstance(assignment, AssignStmt)
+        assert isinstance(assignment.target, NameTarget)
+        assert assignment.target.module_qualifier is not None
+        assert assignment.target.module_qualifier.segments == ("std", "config")
+
     def test_let_continuation(self) -> None:
         """let-continuation: let x = 1; x parses as two block items."""
         prog = parse("let x = 1\nx")

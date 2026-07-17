@@ -20,6 +20,7 @@ item       ::= import_decl                        (* header position only *)
              | param_decl                         (* root only *)
              | program_decl                       (* root only *)
              | agent_decl                         (* root only *)
+             | builtin_var_def                     (* root only; std.config only *)
              | "private"? func_def                (* root only *)
              | binder | expr
 binder     ::= let_decl | var_decl
@@ -47,6 +48,9 @@ The following are **root-only**: a static error if nested inside a block.
   Entry-module only.
 - **`agent` declarations** — the names of the agents the program may call.
   Entry-module only (see [Modules](modules.md)).
+- **`builtin var` declarations** — body-less engine-backed mutable bindings.
+  They are reserved to the canonical standard-library `std.config` module;
+  entry programs and ordinary libraries cannot declare them.
 - **`def` declarations** — user-defined functions. Like type declarations,
   all `def`s at the program root are collected before any expression is
   evaluated, enabling mutual recursion (see [Functions](functions.md)). A `def`
@@ -103,7 +107,8 @@ governs the statements that follow it, in program order. Because the settings
 live in another module, a write must use a qualified assignment target
 ([Modules](modules.md)); a bare `max-iters := …` is not a valid way to set one.
 The `Option[text]` settings (`log-file`, `timeout`) are set with `Some("…")` or
-`None`.
+`None`. A `timeout` read preserves the exact assigned text; its parsed duration
+controls shell execution without normalizing the stored value.
 
 See [Host environment](host-environment.md) for the full settings table with
 their defaults and for how a source write combines with the host's CLI and

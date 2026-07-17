@@ -519,8 +519,8 @@ _HELP_TEXTS: dict[str, str] = {
           --max-call-depth N    Override the maximum recursion call depth
                                 (CLI > config).
           --runner COMMAND      Override the default agent runner command.
-          --timeout DURATION    Override the shell-exec timeout and seed
-                                std.config::timeout to some(DURATION). Mutually
+          --timeout DURATION    Override initial shell-exec and agent idle timeouts;
+                                seed std.config::timeout to some(DURATION). Mutually
                                 exclusive with --no-timeout.
           --no-timeout          Remove any configured shell-exec timeout and seed
                                 std.config::timeout to none. Mutually exclusive
@@ -577,7 +577,8 @@ _HELP_TEXTS: dict[str, str] = {
         Options:
           --strict-json         Require bare JSON output from agents (no recovery).
           --no-strict-json      Use lenient JSON recovery (default).
-          --max-iters N         Cap unbounded loops; off by default (CLI > source > config).
+          --max-iters N         Positive cap for unbounded loops; off by default
+                                (source writes > CLI > config).
           --max-call-depth N    Override the maximum recursion call depth
                                 (CLI > config; source pragmas are not applied in the REPL).
           --runner COMMAND      Override the default agent runner command.

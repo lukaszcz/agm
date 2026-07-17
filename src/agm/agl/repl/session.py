@@ -35,10 +35,11 @@ if TYPE_CHECKING:
     from agm.agl.modules.roots import RootSet
     from agm.agl.runtime.agents import AgentFn
     from agm.agl.runtime.codec import OutputCodec
+    from agm.agl.runtime.host_settings import HostSettingsPolicy
     from agm.agl.runtime.types import HostEnvironment
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
-    from agm.agl.semantics.values import Frame, Value
+    from agm.agl.semantics.values import EnumValue, Frame, Value
     from agm.agl.syntax.nodes import ImportDecl, InfixAssoc, Program
     from agm.agl.syntax.spans import SourceSpan
     from agm.agl.syntax.types import TypeExpr
@@ -109,6 +110,7 @@ class ReplSession:
         trace_path: "Path | None" = None,
         params_config_loader: "Callable[[str], dict[str, object]] | None" = None,
         engine_base: "Mapping[str, Value] | None" = None,
+        host_settings_policy: "HostSettingsPolicy | None" = None,
         cwd: "Path | None" = None,
         stdlib_root: "Path | None" = None,
         lib_root: "Path | None" = None,
@@ -140,12 +142,15 @@ class ReplSession:
         # back after a successful entry so a ``std.config::KEY := VALUE`` write
         # persists.
         self._persisted_host_settings: dict[str, Value] = self._build_host_settings_base()
+        self._persisted_timeout_setting = self._build_timeout_setting_base()
+        self._host_settings_policy = host_settings_policy
         # Trace destination: when set, each evaluated entry opens a fresh
         # ``TraceStore`` (its own ``run_id``) appending JSONL records to this one
         # file.  ``check_only`` entries write nothing (mirroring ``agm exec``).
         # The COMMAND validates/creates the path up front; the session assumes it
         # is writable but the no-op store tolerates failure (it disables itself).
         self._trace_path = trace_path
+        self._initial_trace_path = trace_path
         self._params_config_loader = params_config_loader
 
         # Internal runtime owns the registrations + host-environment assembly.
@@ -624,6 +629,22 @@ class ReplSession:
             key: self._engine_base.get(key, defaults[key])
             for key in _HOST_CONSUMED_ENGINE_KEYS
         }
+
+    def _build_timeout_setting_base(self) -> "EnumValue":
+        """Seed the readable timeout register from host input or engine data."""
+        from agm.agl.runtime.params import build_engine_config_base
+        from agm.agl.semantics.values import EnumValue
+        from agm.core.parse import format_timeout
+
+        raw = (
+            {}
+            if self._initial_shell_exec_timeout is None
+            else {"timeout": format_timeout(self._initial_shell_exec_timeout)}
+        )
+        defaults = build_engine_config_base(raw)
+        timeout = self._engine_base.get("timeout", defaults["timeout"])
+        assert isinstance(timeout, EnumValue)
+        return timeout
 
     def _update_engine_settings(
         self,
@@ -1216,6 +1237,15 @@ class ReplSession:
         # Re-seed the host-consumed registers so a prior ``std.config::runner``
         # (etc.) write does not bleed past :reset.
         self._persisted_host_settings = self._build_host_settings_base()
+        self._persisted_timeout_setting = self._build_timeout_setting_base()
+        self._trace_path = self._initial_trace_path
+        if self._host_settings_policy is not None:
+            from agm.agl.semantics.values import TextValue
+
+            runner = self._persisted_host_settings["runner"]
+            assert isinstance(runner, TextValue)
+            registry = self._runtime.host_environment().registry
+            registry.set_default_agent(self._host_settings_policy.build_runner(runner.value))
         # Restore live engine settings to the session's initial defaults so that
         # promoted ``std.config`` effects from prior entries do not bleed past :reset.
         self._update_engine_settings(

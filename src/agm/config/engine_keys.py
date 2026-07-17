@@ -1,9 +1,9 @@
 """Canonical schema of AGM's AgL engine config keys.
 
 Pure data leaf (no ``agm`` imports) shared by the config layer — which reads
-these keys from the ``[exec]`` / ``[<program>]`` TOML tables — and the AgL
-semantics layer, which maps each key to a concrete AgL type.  Keeping the key
-catalog here lets both layers depend on one definition without coupling.
+these keys from the ``[exec]`` / ``[<program>]`` TOML tables — AgL semantics,
+which maps each key to a concrete type, and deep IR validation. Keeping the
+catalog here lets all consumers depend on one definition without coupling.
 """
 
 from __future__ import annotations
@@ -33,3 +33,6 @@ ENGINE_KEY_KINDS: tuple[tuple[str, EngineKeyKind], ...] = (
     ("log-file", EngineKeyKind.OPTION_TEXT),
     ("timeout", EngineKeyKind.OPTION_TEXT),
 )
+
+# Closed set shared by configuration, AgL semantics, and deep IR validation.
+ENGINE_KEY_NAMES: frozenset[str] = frozenset(name for name, _kind in ENGINE_KEY_KINDS)

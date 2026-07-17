@@ -728,6 +728,18 @@ class TestReservedNames:
 
 
 # ---------------------------------------------------------------------------
+# Builtin-var declaration placement
+# ---------------------------------------------------------------------------
+
+
+class TestBuiltinVarPlacement:
+    def test_entry_module_declaration_rejected(self) -> None:
+        err = reject_scope("builtin var max-iters: int\n()")
+        _, message = diag(err)
+        assert "std.config" in message
+
+
+# ---------------------------------------------------------------------------
 # Built-in call classification (builtin_calls side table)
 # ---------------------------------------------------------------------------
 

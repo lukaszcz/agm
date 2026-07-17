@@ -98,8 +98,8 @@ class BinderKind(enum.Enum):
     ``agent_binding``
         An ``agent`` declaration (immutable value binding of type ``agent``).
     ``builtin_var_binding``
-        A ``builtin var`` declaration (MUTABLE, runtime-register-backed engine
-        setting; readable and assignable with ``:=``).
+        A ``builtin var`` declaration (mutable, engine-backed setting; readable
+        and assignable with ``:=``).
     ``constructor_binding``
         A record constructor or enum variant binding (immutable value binding).
     ``loop_var_binding``

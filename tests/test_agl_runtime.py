@@ -95,6 +95,19 @@ class TestPipelineDriverConstructor:
         assert result.diagnostics == []
         assert capsys.readouterr().out == "true\n"
 
+    def test_is_test_uses_scrutinee_owner_for_shared_variant_name(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        result = PipelineDriver().run(
+            "enum Left\n  | Same\n"
+            "enum Right\n  | Same\n"
+            "let value = Left::Same()\n"
+            "print(value is Same)\n"
+        )
+
+        assert result.ok is True
+        assert capsys.readouterr().out == "true\n"
+
     def test_user_defined_right_infix_operator_run_end_to_end(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:

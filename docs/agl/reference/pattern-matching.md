@@ -111,10 +111,11 @@ the discarded payload is acknowledged: write `Fail()` or destructure the
 fields. Empty parentheses ignore every payload field, including named-only fields. The call and qualified forms apply to every variant;
 the bare form is a convenience for the common nullary case.
 
-When two enums share an unqualified variant spelling, a bare reference in
-expression position is a static ambiguity error ([Bindings and scope](bindings-and-scope.md)),
-but in a pattern the scrutinee's static type selects the intended enum, so a
-bare pattern needs no qualification.
+Constructor ownership in patterns is directed by the scrutinee's static enum
+type. When two enums share an unqualified variant spelling, the scrutinee type
+selects the intended enum, so the pattern needs no qualification. This differs
+from a bare reference in expression position, where the same situation is a
+static ambiguity error ([Bindings and scope](bindings-and-scope.md)).
 
 #### Module-qualified constructor patterns
 
@@ -132,11 +133,11 @@ case value of
 
 The prefix may name an owning type (`Color::Red`), a module and owning type
 (`mylib::Color::Red`), or the current module (`::Color::Red`). A module may
-also qualify an exposed constructor directly (`mylib::Red`). This is useful
-when two open-imported modules export enum types with the same variant name,
-since qualification always disambiguates. Dotted names occur only inside a
-module path such as `company.colors::Color::Red`; constructor qualification
-itself uses `::`, never `.`.
+also qualify an exposed constructor directly (`mylib::Red`). Qualification
+states the owner explicitly but is not required to resolve same-spelled variants;
+when present, it must identify the scrutinee's enum. Dotted names occur only
+inside a module path such as `company.colors::Color::Red`; constructor
+qualification itself uses `::`, never `.`.
 
 **Payload sub-patterns** follow the same positional-greedy binding as calls:
 
@@ -211,9 +212,9 @@ def describe_option(o: Option[int]) -> text =
     | Option::some(value) => "found ${value}"   # value: int, so it can be interpolated
 ```
 
-The qualifier (`Option::`) names the owning enum; it is otherwise optional and
-serves to disambiguate when two enums share a variant name (see
-[Expressions](expressions.md)).
+The qualifier (`Option::`) explicitly names the owning enum. It is optional
+because the scrutinee's static enum type determines constructor ownership; when
+present, it must agree with that type.
 
 ## Matching semantics
 

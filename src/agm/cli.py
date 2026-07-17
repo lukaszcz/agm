@@ -1050,7 +1050,7 @@ def exec_cmd(
     max_iters: int | None = typer.Option(
         None,
         "--max-iters",
-        help="Cap for unbounded loops (while/do...until with no [n] or for); off by default.",
+        help="Positive cap for unbounded loops without an inline bound; off by default.",
     ),
     max_call_depth: int | None = typer.Option(
         None,
@@ -1210,7 +1210,7 @@ def repl_cmd(
     max_iters: int | None = typer.Option(
         None,
         "--max-iters",
-        help="Cap for unbounded loops (while/do...until with no [n] or for); off by default.",
+        help="Positive cap for unbounded loops without an inline bound; off by default.",
     ),
     max_call_depth: int | None = typer.Option(
         None,

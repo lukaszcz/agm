@@ -77,13 +77,25 @@ class TraceStore:
         """
         return new_trace_id()
 
+    def disable(self, reason: OSError) -> None:
+        """Disable best-effort logging after a filesystem failure, warning once."""
+        if not self._disabled:
+            print(f"warning: trace logging disabled: {reason}", file=sys.stderr)
+        self._disabled = True
+        self._path = None
+        self._buffer = False
+        self._buffered_records.clear()
+
     def activate(self, path: Path | None) -> None:
         """Set the final path and flush events buffered before it was known.
 
         When *path* is ``None`` the store settles into no-log mode: buffering is
         turned off so subsequent events short-circuit instead of accumulating in
-        memory for the rest of the run.
+        memory for the rest of the run. A store disabled by an I/O failure stays
+        disabled for the rest of that run.
         """
+        if self._disabled:
+            return
         self._path = path
         if path is None:
             self._buffer = False
@@ -93,8 +105,7 @@ class TraceStore:
             try:
                 append_jsonl(path, record)
             except OSError as exc:
-                self._disabled = True
-                print(f"warning: trace logging disabled: {exc}", file=sys.stderr)
+                self.disable(exc)
                 break
         self._buffered_records.clear()
 
@@ -116,8 +127,6 @@ class TraceStore:
         a single ``warning: trace logging disabled: <reason>`` line is emitted to
         stderr, and the store is disabled for the rest of the run.
         """
-        if self._disabled:
-            return
         record: dict[str, object] = {
             "run_id": self._run_id,
             "kind": kind,
@@ -130,8 +139,7 @@ class TraceStore:
         try:
             append_jsonl(self._path, record)
         except OSError as exc:
-            self._disabled = True
-            print(f"warning: trace logging disabled: {exc}", file=sys.stderr)
+            self.disable(exc)
 
     def run_start(self) -> None:
         """Record the start of a run (boundary marker)."""

@@ -96,6 +96,25 @@ class TestTraceFileCreated:
         assert result.ok
         assert result.trace_path == log_path
 
+    def test_trace_directory_creation_failure_is_best_effort(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        def fail_mkdir(*args: object, **kwargs: object) -> None:
+            raise OSError("read-only filesystem")
+
+        monkeypatch.setattr("agm.core.fs.mkdir", fail_mkdir)
+        result = PipelineDriver().run(
+            'print "still runs"',
+            log_file=tmp_path / "missing" / "trace.jsonl",
+        )
+
+        assert result.ok
+        assert result.trace_path is None
+        assert capsys.readouterr().err.count("trace logging disabled") == 1
+
 
 # ---------------------------------------------------------------------------
 # 2. Record kinds: print, mutation (assignment), exec command, agent call
@@ -150,6 +169,20 @@ class TestMutationRecord:
         assert mut_recs
         rec = mut_recs[0]
         assert rec.get("name") == "x"
+
+    def test_builtin_setting_store_produces_mutation_record(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        agl_file = tmp_path / "settings.agl"
+        agl_file.write_text(
+            "import std.config\nstd.config::strict-json := true\n",
+            encoding="utf-8",
+        )
+        exec_command.run(_exec_args(agl_file, log_file=str(log_path)))
+
+        records = _load_jsonl(log_path)
+        mutation = next(r for r in records if r.get("kind") == "mutation")
+        assert mutation["name"] == "strict-json"
+        assert mutation["value"] == "true"
 
 
 class TestExecCommandRecord:
@@ -805,7 +838,9 @@ class TestTraceStoreProperties:
 
         trace.activate(tmp_path / "trace.jsonl")
         trace.run_end(ok=True)
+        trace.activate(tmp_path / "recovered.jsonl")
 
+        assert trace.path is None
         assert capsys.readouterr().err.count("trace logging disabled") == 1
 
     def test_activate_none_stops_buffering(self) -> None:

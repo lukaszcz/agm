@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, STD_CONFIG_ID, ModuleId
 from agm.agl.parser import parse_program
 from agm.agl.scope import resolve
 from agm.agl.scope.graph import ResolvedModule, ResolvedModuleGraph, resolve_graph
@@ -700,6 +700,55 @@ class TestPrivateBoundary:
 # ---------------------------------------------------------------------------
 # Test: declaration-only enforcement
 # ---------------------------------------------------------------------------
+
+
+class TestBuiltinVarPlacement:
+    def test_entry_declaration_rejected(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {"entry": "builtin var max-iters: int\n()"},
+        )
+
+        with pytest.raises(AglScopeError, match="std.config"):
+            resolve_graph(graph)
+
+    def test_arbitrary_library_declaration_rejected(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import mylib\n()",
+                "mylib": "builtin var max-iters: int",
+            },
+        )
+
+        with pytest.raises(AglScopeError, match="std.config"):
+            resolve_graph(graph)
+
+    def test_std_config_declarations_and_qualified_assignment_resolve(
+        self, tmp_path: Path
+    ) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "import std.config\n"
+                    "std.config::max-iters := 3\n"
+                    "std.config::max-iters"
+                )
+            },
+        )
+
+        resolved = resolve_graph(graph)
+        std_config = resolved.modules[STD_CONFIG_ID]
+        binding = std_config.resolved.root_scope.lookup("max-iters")
+        assert binding is not None
+        assert binding.kind is BinderKind.builtin_var_binding
+        assignment_ref = next(
+            ref
+            for ref in resolved.modules[ENTRY_ID].resolved.resolution.values()
+            if ref.name == "max-iters" and ref.kind is BinderKind.builtin_var_binding
+        )
+        assert assignment_ref.module_id == STD_CONFIG_ID
 
 
 class TestDeclarationOnly:

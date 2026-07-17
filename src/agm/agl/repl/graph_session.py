@@ -18,6 +18,7 @@ from agm.agl.repl.entry import EntryKind, EntryResult
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from agm.agl.eval.ir_interpreter import IrInterpreter
     from agm.agl.ir.contracts import ContractPayload
     from agm.agl.ir.ids import Location, NominalId
     from agm.agl.ir.program import NominalDescriptor
@@ -26,10 +27,12 @@ if TYPE_CHECKING:
     from agm.agl.modules.ids import ModuleId
     from agm.agl.modules.loader import LoadedModule
     from agm.agl.modules.roots import RootSet
+    from agm.agl.runtime.host_settings import HostSettingsPolicy
+    from agm.agl.runtime.trace import TraceStore
     from agm.agl.runtime.types import HostEnvironment
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
-    from agm.agl.semantics.values import Frame, Value
+    from agm.agl.semantics.values import EnumValue, Frame, Value
     from agm.agl.syntax.nodes import ImportDecl, Program
     from agm.agl.syntax.spans import SourceSpan
     from agm.agl.typecheck.env import CheckedProgram, TypeEnvironment
@@ -58,6 +61,8 @@ class GraphSessionCtx(Protocol):
     _default_call_depth_limit: int
     _shell_exec_timeout: float | None
     _persisted_host_settings: dict[str, Value]
+    _persisted_timeout_setting: EnumValue
+    _host_settings_policy: HostSettingsPolicy | None
 
     def _ensure_roots(self) -> RootSet: ...
 
@@ -374,6 +379,16 @@ class GraphSession:
         host_contracts, _ = _materialize_ir_contracts(lowered.program, host_env.codecs)
         trace = TraceStore(path=self._ctx._trace_path)
         trace.run_start()
+        if self._ctx._host_settings_policy is not None:
+            from agm.agl.runtime.host_settings import HostSettingsReconfigurer
+
+            reconfigurer: HostSettingsReconfigurer | None = HostSettingsReconfigurer(
+                registry=host_env.registry,
+                trace=trace,
+                policy=self._ctx._host_settings_policy,
+            )
+        else:
+            reconfigurer = None
         interp = IrInterpreter(
             lowered.program,
             registry=host_env.registry,
@@ -386,11 +401,11 @@ class GraphSession:
             host_contracts=host_contracts,
             base_frame=self._ctx._ir_base_frame,
             extern_registry=host_env.extern_registry,
-            # The REPL persists host-consumed register values across entries but,
-            # lacking a runner-command→factory map and per-entry trace repointing,
-            # never rebuilds agents or repoints traces on a host-consumed write.
-            host_reconfigurer=None,
-            builtin_host_settings=self._ctx._persisted_host_settings,
+            host_reconfigurer=reconfigurer,
+            builtin_host_settings={
+                **self._ctx._persisted_host_settings,
+                "timeout": self._ctx._persisted_timeout_setting,
+            },
         )
         try:
             interp.run()
@@ -403,6 +418,7 @@ class GraphSession:
                 span=exc.span,
             )
             trace.run_end(ok=False)
+            self._persist_interpreter_settings(interp, trace)
             installed = self._ctx._promote_ir_state(
                 text=text,
                 program=orig_program,
@@ -430,6 +446,7 @@ class GraphSession:
         except (AgentCancelled, KeyboardInterrupt) as exc:
             cancel_span = exc.span if isinstance(exc, AgentCancelled) else None
             trace.run_end(ok=False)
+            self._persist_interpreter_settings(interp, trace)
             installed = self._ctx._promote_ir_state(
                 text=text,
                 program=orig_program,
@@ -457,17 +474,9 @@ class GraphSession:
                 installed=installed,
             )
         trace.run_end(ok=True)
-        # Promote engine settings BEFORE static state, mirroring session.py.
-        self._ctx._update_engine_settings(
-            strict_json=interp.strict_json,
-            loop_limit=interp.loop_limit,
-            shell_exec_timeout=interp.shell_exec_timeout,
-        )
-        # Persist the host-consumed register values (runner/log/log-file) so a
-        # ``std.config::KEY := VALUE`` write carries into later entries.  Read
-        # back only on full success, mirroring ``_update_engine_settings`` — a
-        # write in a partially-failed entry is not promoted.
-        self._ctx._persisted_host_settings = interp.builtin_host_settings
+        # Setting writes are ordinary non-transactional mutations: persist all
+        # effects that completed, on success or before a later runtime failure.
+        self._persist_interpreter_settings(interp, trace)
         self._ctx._promote_ir_state(
             text=text,
             program=orig_program,
@@ -520,6 +529,19 @@ class GraphSession:
             quote_strings=self._ctx._quote_strings_for_entry(orig_program),
             type_table=checked.type_env.type_table,
         )
+
+    def _persist_interpreter_settings(
+        self, interp: "IrInterpreter", trace: "TraceStore"
+    ) -> None:
+        """Persist completed setting writes and the live trace destination."""
+        self._ctx._update_engine_settings(
+            strict_json=interp.strict_json,
+            loop_limit=interp.loop_limit,
+            shell_exec_timeout=interp.shell_exec_timeout,
+        )
+        self._ctx._persisted_host_settings = interp.builtin_host_settings
+        self._ctx._persisted_timeout_setting = interp.timeout_setting
+        self._ctx._trace_path = trace.path
 
     def _restore_unpromoted_entry_nominals(
         self,

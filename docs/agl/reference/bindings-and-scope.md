@@ -46,6 +46,7 @@ var artifact: text = ask("Implement ${spec}", agent = impl)
 ```ebnf
 assign_stmt ::= assign_target ":=" expr
 assign_target ::= NAME ("[" expr "]")*
+                | module_path "::" NAME
 ```
 
 `:=` updates the nearest visible **mutable** binding, has type `unit`, and
@@ -75,7 +76,8 @@ to the target name or preceding index, as in `xs[0]`. A spaced form such as
 Indexed assignment is copy-on-write: the binding is updated with a new list or
 dictionary value containing the changed element. The root must be a `var`
 binding. Assigning through `let`, `param`, function arguments, function return
-temporaries, or fields is a static error. List assignment uses the same
+temporaries, fields, or a type-qualified constructor reference is a static
+error. List assignment uses the same
 negative-index and `IndexError` rules as list access. Dictionary assignment
 updates existing keys only; assigning to a missing key raises `KeyError`.
 
@@ -175,10 +177,11 @@ program param types.
 builtin_var_def ::= "builtin" "var" NAME ":" type_expr
 ```
 
-A `builtin var` declares a body-less, runtime-backed, **mutable** binding with a
-mandatory type and no initializer. Like `builtin def`, it is a standard-library
-facility; ordinary programs do not write `builtin var` themselves. The standard
-library uses it in `std.config` to expose the program's engine settings:
+A `builtin var` declares a body-less, host-backed, **mutable** binding with a
+mandatory type and no initializer. It may appear only at the root of the
+canonical standard-library module `std.config`; declarations in entry programs
+or other library modules are static errors. `std.config` uses it to expose the
+program's engine settings:
 
 ```agl
 import std.config
@@ -278,9 +281,11 @@ expected-type annotation).
 ### Overload sets, shadowing, and ambiguity
 
 Two enums may declare the **same** unqualified variant name; that name then
-resolves to an *overload set*. An unqualified reference is a **static
-ambiguity error** — regardless of payload, surrounding context, or explicit
-type arguments. **Qualify** the reference with the owning enum to disambiguate:
+resolves to an *overload set*. An unqualified reference in ordinary expression
+position is a **static ambiguity error** — regardless of payload, surrounding
+context, or explicit type arguments. **Qualify** the reference with the owning
+enum to disambiguate. Constructor patterns and `is` tests are different: their
+scrutinee's static enum type selects the owner.
 
 ```agl
 enum Holder[T]

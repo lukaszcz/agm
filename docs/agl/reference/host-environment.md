@@ -121,14 +121,14 @@ settings as mutable bindings ([Bindings and scope](bindings-and-scope.md)):
 | --- | -------- | ---------------- |
 | `log` | `bool` | `false` |
 | `strict-json` | `bool` | `false` (lenient recovery) |
-| `max-iters` | `int` | `5` |
+| `max-iters` | `int` | `0` (off) |
 | `runner` | `text` | host floor runner |
 | `log-file` | `Option[text]` | `None` |
 | `timeout` | `Option[text]` | `None` |
 
 Import `std.config` and read or write a setting through a qualified target
-(`std.config::max-iters`); the `Option[text]` settings (`log-file`, `timeout`)
-take a `Some("…")` or `None` value.
+(`std.config::max-iters`); writing zero disables that safety valve. The
+`Option[text]` settings (`log-file`, `timeout`) take a `Some("…")` or `None` value.
 
 ### Precedence
 
@@ -158,27 +158,33 @@ have no config section.
 
 Every setting takes effect **positionally**: a write to `std.config::X` governs
 the statements that follow it, in program order, and does not affect statements
-before it. Writing `runner`, `log`, or `log-file` repoints the default agent and
-the trace destination used by subsequent calls; writing `strict-json`,
-`max-iters`, or `timeout` changes how subsequent agent calls, loops, and `exec`
-calls behave.
+before it. A completed write remains effective if a later expression fails.
+Writing `runner`, `log`, or `log-file` repoints the default agent and the trace
+destination used by subsequent calls. Assigning `Some(path)` to `log-file`
+enables logging; a later `log := false` disables it while retaining the path.
+Writing `strict-json`, `max-iters`, or `timeout` changes subsequent agent-output
+parsing, unbounded loops, or `exec` calls, respectively.
+A host that rejects a `runner` reconfiguration leaves the setting's prior value
+in place. Trace output is best-effort: a filesystem failure disables tracing for
+the rest of the run without rolling back the assigned `log` or `log-file` value.
 
 ### Error surface for `timeout`
 
-- A bad `--timeout` or `[exec].timeout` value is caught before execution
-  (exit 1 pre-execution error).
-- A bad `std.config::timeout := "…"` value is a runtime-evaluated expression;
+- A bad `--timeout`, `[<program>].timeout`, or `[exec].timeout` value is caught
+  before execution (exit 1 pre-execution error).
+- A bad duration in `std.config::timeout := Some("…")` is evaluated at runtime;
   a bad value raises a runtime error (exit 2).
-- The `timeout` setting governs only the **shell-exec** timeout. The agent
-  idle timeout is resolved from the CLI or `[exec]` and cannot be changed
-  mid-program.
+- A CLI, `[<program>]`, or `[exec]` timeout initially seeds both shell execution
+  and agent idle timeout. A source write to the `timeout` setting changes only
+  the **shell-exec** timeout; agent idle timeout cannot be changed mid-program.
+- Reading `timeout` returns the exact `Option[text]` value assigned or supplied
+  initially; duration parsing does not normalize its text.
 
 ### `--no-log-file` semantics
 
 `--no-log-file` clears the initial `log-file` value. It does **not** suppress a
 trace configured elsewhere — a `[exec] log-file` path or an auto path from
-`--log` still applies to the trace infrastructure. Use `--no-log` to disable
-tracing entirely.
+`--log` still applies. Use `--no-log` to disable tracing entirely.
 
 ### Other host-configurable defaults
 
@@ -194,15 +200,17 @@ host default.
 
 ## Tracing
 
-A conforming host traces execution so runs can be audited and debugged. The
-trace records:
+While tracing is active, a conforming host records execution so runs can be
+audited and debugged. Positional source writes may enable or disable tracing,
+so records outside the active interval (including run start or end) can be
+absent. The trace can contain:
 
 - run start and end (with success/failure);
 - every agent call attempt (agent, attempt number, rendered prompt) and
   every parse result (raw output, normalized output, error summary);
 - every `exec` invocation (command, exit code, duration, stdout, stderr,
   timeout flag);
-- every `:=` mutation and every `print`;
+- every `:=` mutation, including engine-setting writes, and every `print`;
 - every raised exception.
 
 Every exception value carries a `trace_id` field linking it to the

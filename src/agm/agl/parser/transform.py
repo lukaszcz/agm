@@ -818,6 +818,14 @@ class AstBuilder(Transformer):
     def assign_stmt(self, meta: Meta, args: _Args) -> syntax.AssignStmt:
         # Grammar: postfix ASSIGN expr
         lhs, value = (cast(syntax.Expr, a) for a in args if _is_expr_node(a))
+        root = lhs
+        while isinstance(root, syntax.IndexAccess):
+            root = root.obj
+        if not isinstance(root, syntax.VarRef) or root.type_qualifier is not None:
+            raise AglSyntaxError(
+                "assignment target must be a variable or indexed variable.",
+                span=lhs.span,
+            )
         if isinstance(lhs, syntax.VarRef):
             target: syntax.AssignTarget = syntax.NameTarget(
                 name=lhs.name,
@@ -825,20 +833,13 @@ class AstBuilder(Transformer):
                 node_id=self._next_id(),
                 module_qualifier=lhs.module_qualifier,
             )
-        elif (
-            isinstance(lhs, syntax.IndexAccess)
-            and syntax.assign_target_root_name(lhs) is not None
-        ):
+        else:
+            assert isinstance(lhs, syntax.IndexAccess)
             target = syntax.IndexTarget(
                 obj=lhs.obj,
                 index=lhs.index,
                 span=lhs.span,
                 node_id=self._next_id(),
-            )
-        else:
-            raise AglSyntaxError(
-                "assignment target must be a variable or indexed variable.",
-                span=lhs.span,
             )
         span = self._span_from_meta(meta)
         return syntax.AssignStmt(

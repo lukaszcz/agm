@@ -1,7 +1,7 @@
-"""AgL semantics — foundation leaf package holding meaning-domain models.
+"""AgL semantics — shared foundation package holding meaning-domain models.
 
-This package is the lowest leaf in the AgL package tree that the rest of the
-pipeline can depend on without import cycles.  It contains:
+Frontend and runtime layers share these models; the package itself depends only
+on narrow IR identity/location types and its own semantic data. It contains:
 
 - ``agm.agl.semantics.values`` — the single value home: every runtime value
   type (leaf primitive tags, container/nominal types, IR closures, and the

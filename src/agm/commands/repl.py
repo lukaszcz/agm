@@ -24,11 +24,12 @@ import sys
 from pathlib import Path
 
 from agm.agent.config import default_agent_runner
-from agm.agent.runner import split_command
+from agm.agent.runner import parse_command, split_command
 from agm.agl.repl import ReplSession
 from agm.agl.repl.agentmode import AgentMode
 from agm.agl.repl.agents import ConfirmingAgent
-from agm.agl.runtime.agents import runner_backed_agent_factory
+from agm.agl.runtime.agents import AgentFn, runner_backed_agent_factory
+from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.agl.runtime.params import build_engine_config_base, raw_option_str
 from agm.agl.semantics.values import Value
 from agm.cli_support.args import ReplArgs
@@ -43,7 +44,8 @@ from agm.config.general import (
 )
 from agm.config.module_roots import load_module_roots, resolve_lib_root, resolve_stdlib_root
 from agm.core import dry_run
-from agm.core.log import prepare_trace_log_from_layers
+from agm.core.fs import mkdir
+from agm.core.log import prepare_trace_log_from_layers, resolve_log_file
 from agm.core.toml import toml_dict
 
 
@@ -59,6 +61,9 @@ def run(args: ReplArgs) -> None:
     repl_config = load_repl_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
 
     strict_json = args.strict_json if args.strict_json is not None else config.strict_json
+    if args.max_iters is not None and args.max_iters <= 0:
+        print("Error: --max-iters must be a positive integer", file=sys.stderr)
+        raise SystemExit(1)
     loop_limit = args.max_iters if args.max_iters is not None else config.default_loop_limit
     # Resolve max call depth: CLI > [exec] config (config pragmas are not applied
     # in the REPL).  ``None`` lets the session apply the canonical default.
@@ -92,8 +97,34 @@ def run(args: ReplArgs) -> None:
     # code paths never pay for the terminal dependency.
     from agm.agl.repl.console import make_console_confirm, run_console
 
+    confirm_agent_call = make_console_confirm()
     confirming_agent = ConfirmingAgent(
-        runner_agent, agent_mode, confirm=make_console_confirm()
+        runner_agent, agent_mode, confirm=confirm_agent_call
+    )
+
+    def _build_runner(command: str) -> AgentFn:
+        parse_command(command, kind="runner")
+        rebuilt = runner_backed_agent_factory(
+            default_runner_cmd=command,
+            per_agent_cmds=config.agents,
+            idle_timeout=config.timeout,
+        )
+        return ConfirmingAgent(rebuilt, agent_mode, confirm=confirm_agent_call)
+
+    def _resolve_live_trace_path(enabled: bool, log_file: str | None) -> Path | None:
+        path = resolve_log_file(
+            command_name="repl",
+            enabled=enabled,
+            log_file=log_file,
+            unique=True,
+        )
+        if path is not None:
+            mkdir(path.parent, parents=True, exist_ok=True)
+        return path
+
+    host_settings_policy = HostSettingsPolicy(
+        build_runner=_build_runner,
+        resolve_trace_path=_resolve_live_trace_path,
     )
 
     def _params_config_loader(program_name: str) -> dict[str, object]:
@@ -116,14 +147,21 @@ def run(args: ReplArgs) -> None:
     # parsed float (e.g. "30.0").
     exec_raw_table = toml_dict(merged_config.get("exec"))
     raw_timeout_str = raw_option_str(exec_raw_table, {}, "timeout")
-    # Omit max-iters when unset (None = valve OFF) so build_engine_config_base
-    # falls back to its engine default.
+    # An absent host limit leaves the valve off; the builtin register exposes
+    # that state as zero.
+    if args.no_log:
+        seed_log = False
+    elif args.log or args.log_file is not None:
+        seed_log = True
+    else:
+        seed_log = config.log or config.log_file is not None
+    seed_log_file = args.log_file if args.log_file is not None else config.log_file
     repl_base_raw: dict[str, object] = {
         "strict-json": strict_json,
         "runner": runner_cmd,
-        "log": config.log,
+        "log": seed_log,
         "timeout": raw_timeout_str,
-        "log-file": config.log_file,
+        "log-file": seed_log_file,
     }
     if loop_limit is not None:
         repl_base_raw["max-iters"] = loop_limit
@@ -138,6 +176,7 @@ def run(args: ReplArgs) -> None:
         trace_path=trace_path,
         params_config_loader=_params_config_loader,
         engine_base=engine_base,
+        host_settings_policy=host_settings_policy,
         cwd=ctx.cwd,
         stdlib_root=stdlib_root,
         lib_root=lib_root,

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import decimal
+from collections.abc import Mapping
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
+from heapq import merge
+from types import MappingProxyType
 from typing import TypeAlias
 
 from agm.agl.modules.ids import ENTRY_ID
@@ -132,6 +135,14 @@ def _cell_binder_ids(cell: PatternCell) -> tuple[int, ...]:
 
 
 @dataclass(frozen=True, slots=True)
+class _ColumnProfile:
+    heads: tuple[Constructor, ...]
+    constructor_rows: Mapping[_ConstructorKey, tuple[int, ...]]
+    wildcard_rows: tuple[int, ...]
+    leading_constructor_prefix: int
+
+
+@dataclass(frozen=True, slots=True)
 class PatternMatrix:
     """One immutable compilation state with active and path-available occurrences."""
 
@@ -146,10 +157,38 @@ class PatternMatrix:
         compare=False,
         hash=False,
     )
+    _column_profiles: tuple[_ColumnProfile, ...] | None = dataclass_field(
+        init=False,
+        default=None,
+        repr=False,
+        compare=False,
+        hash=False,
+    )
+    _compile_state_hash: int = dataclass_field(
+        init=False,
+        repr=False,
+        compare=False,
+        hash=False,
+    )
 
     def __post_init__(self) -> None:
         _canonicalize_matrix(self)
+        object.__setattr__(self, "_compile_state_hash", hash((self.occurrences, self.rows)))
         run_optional_validation(lambda: _validate_matrix(self))
+
+    @property
+    def column_profiles(self) -> tuple[_ColumnProfile, ...]:
+        """Return cached selected-column data, building it only when needed."""
+        profiles = self._column_profiles
+        if profiles is None:
+            profiles = _build_column_profiles(self)
+            object.__setattr__(self, "_column_profiles", profiles)
+        return profiles
+
+    @property
+    def compile_state_hash(self) -> int:
+        """Return the cached hash of the live state used by compiler memoization."""
+        return self._compile_state_hash
 
 
 def _occurrence_sort_key(occurrence: Occurrence) -> tuple[int, int]:
@@ -204,6 +243,50 @@ def _canonicalize_matrix(matrix: PatternMatrix) -> None:
     object.__setattr__(matrix, "available_occurrences", available_occurrences)
     object.__setattr__(matrix, "rows", rows)
     object.__setattr__(matrix, "path_decompositions", path_decompositions)
+
+
+def _build_column_profiles(matrix: PatternMatrix) -> tuple[_ColumnProfile, ...]:
+    """Classify every cell once for head lookup, qba scoring, and specialization."""
+    width = len(matrix.occurrences)
+    heads: list[list[Constructor]] = [[] for _ in range(width)]
+    constructor_rows: list[dict[_ConstructorKey, list[int]]] = [
+        {} for _ in range(width)
+    ]
+    wildcard_rows: list[list[int]] = [[] for _ in range(width)]
+    leading_prefixes = [0] * width
+    prefix_open = [True] * width
+
+    for row_index, row in enumerate(matrix.rows):
+        for column in range(min(width, len(row.cells))):
+            cell = row.cells[column]
+            if isinstance(cell, ConstructorCell):
+                key = _constructor_key(cell.constructor)
+                matching_rows = constructor_rows[column].get(key)
+                if matching_rows is None:
+                    heads[column].append(cell.constructor)
+                    matching_rows = []
+                    constructor_rows[column][key] = matching_rows
+                matching_rows.append(row_index)
+                if prefix_open[column]:
+                    leading_prefixes[column] += 1
+            else:
+                wildcard_rows[column].append(row_index)
+                prefix_open[column] = False
+
+    return tuple(
+        _ColumnProfile(
+            heads=tuple(heads[column]),
+            constructor_rows=MappingProxyType(
+                {
+                    key: tuple(row_indices)
+                    for key, row_indices in constructor_rows[column].items()
+                }
+            ),
+            wildcard_rows=tuple(wildcard_rows[column]),
+            leading_constructor_prefix=leading_prefixes[column],
+        )
+        for column in range(width)
+    )
 
 
 def matrix_from_normalized(case: NormalizedCase) -> PatternMatrix:
@@ -319,17 +402,7 @@ def _allocate_children(
 
 def _head_constructors(matrix: PatternMatrix, column: int) -> tuple[Constructor, ...]:
     """Return heads from an already validated matrix and column."""
-    heads: list[Constructor] = []
-    seen: set[_ConstructorKey] = set()
-    for row in matrix.rows:
-        cell = row.cells[column]
-        if not isinstance(cell, ConstructorCell):
-            continue
-        key = _constructor_key(cell.constructor)
-        if key not in seen:
-            heads.append(cell.constructor)
-            seen.add(key)
-    return tuple(heads)
+    return matrix.column_profiles[column].heads
 
 
 def head_constructors(matrix: PatternMatrix, column: int) -> tuple[Constructor, ...]:
@@ -365,30 +438,24 @@ def specialize(
 ) -> Specialization:
     """Specialize one selected occurrence for an observed constructor head."""
     run_optional_validation(lambda: _validate_operation(matrix, column=column, allocator=allocator))
-    observed_keys = {_constructor_key(head) for head in _head_constructors(matrix, column)}
-    if _constructor_key(constructor) not in observed_keys:
+    profile = matrix.column_profiles[column]
+    constructor_rows = profile.constructor_rows.get(_constructor_key(constructor))
+    if constructor_rows is None:
         raise MatchCompileInvariantError(
             "cannot specialize a constructor head not observed in the selected column"
         )
     selected = matrix.occurrences[column]
     canonical = _canonical_constructor(constructor, selected.type, matrix.type_table)
-    first_cell = next(
-        cast_cell
-        for row in matrix.rows
-        if isinstance((cast_cell := row.cells[column]), ConstructorCell)
-        and _constructor_key(cast_cell.constructor) == _constructor_key(constructor)
-    )
+    first_cell = matrix.rows[constructor_rows[0]].cells[column]
+    assert isinstance(first_cell, ConstructorCell)
     sources = tuple(argument.provenance for argument in first_cell.arguments)
     children, next_allocator = _allocate_children(allocator, selected, canonical, sources)
 
     rows: list[MatrixRow] = []
-    for row in matrix.rows:
+    for row_index in merge(constructor_rows, profile.wildcard_rows):
+        row = matrix.rows[row_index]
         cell = row.cells[column]
-        prefix = row.cells[:column]
-        suffix = row.cells[column + 1 :]
         if isinstance(cell, ConstructorCell):
-            if _constructor_key(cell.constructor) != _constructor_key(constructor):
-                continue
             replacement = cell.arguments
             assignments = row.binder_assignments
         else:
@@ -399,7 +466,7 @@ def specialize(
             assignments = _migrate_binder(row, cell, selected)
         rows.append(
             MatrixRow(
-                cells=(*prefix, *replacement, *suffix),
+                cells=(*row.cells[:column], *replacement, *row.cells[column + 1 :]),
                 action_id=row.action_id,
                 source_index=row.source_index,
                 source_pattern_id=row.source_pattern_id,
@@ -472,16 +539,11 @@ class QbaSelection:
 
 
 def _qba_score(matrix: PatternMatrix, column: int) -> QbaScore:
-    leading = 0
-    for row in matrix.rows:
-        if not isinstance(row.cells[column], ConstructorCell):
-            break
-        leading += 1
-    heads = _head_constructors(matrix, column)
+    profile = matrix.column_profiles[column]
     return QbaScore(
-        leading_constructor_prefix=leading,
-        distinct_branch_heads=len(heads),
-        introduced_arity=sum(head.arity for head in heads),
+        leading_constructor_prefix=profile.leading_constructor_prefix,
+        distinct_branch_heads=len(profile.heads),
+        introduced_arity=sum(head.arity for head in profile.heads),
     )
 
 
@@ -490,8 +552,8 @@ def select_qba_column(matrix: PatternMatrix) -> QbaSelection:
     run_optional_validation(lambda: _validate_operation(matrix))
     candidates: list[tuple[int, QbaScore]] = [
         (index, _qba_score(matrix, index))
-        for index in range(len(matrix.occurrences))
-        if any(isinstance(row.cells[index], ConstructorCell) for row in matrix.rows)
+        for index, profile in enumerate(matrix.column_profiles)
+        if profile.heads
     ]
     if not candidates:
         raise MatchCompileInvariantError("qba selection requires at least one refutable column")

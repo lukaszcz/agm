@@ -19,6 +19,7 @@ from pathlib import Path
 
 from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.runtime.agents import AgentFn
+from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.semantics.values import BoolValue, EnumValue, IntValue, TextValue, Value
 
@@ -40,11 +41,13 @@ def _session(
     *,
     default_agent: AgentFn | None = None,
     engine_base: dict[str, Value] | None = None,
+    host_settings_policy: HostSettingsPolicy | None = None,
 ) -> ReplSession:
     return ReplSession(
         stdlib_root=_STDLIB_ROOT,
         default_agent=default_agent,
         engine_base=engine_base,
+        host_settings_policy=host_settings_policy,
     )
 
 
@@ -91,6 +94,7 @@ class TestCrossEntryPersistence:
         value = _read(s, "timeout")
         assert isinstance(value, EnumValue)
         assert value.variant == "Some"
+        assert value.fields["value"] == TextValue("45s")
         # The written timeout is retained as the live shell-exec timeout.
         assert s._shell_exec_timeout == 45.0
 
@@ -172,10 +176,25 @@ class TestDefaultsAndSeeding:
         assert isinstance(log_file, EnumValue)
         assert log_file.variant == "None"
         assert _read(s, "strict-json") == BoolValue(False)
-        assert _read(s, "max-iters") == IntValue(5)
+        assert _read(s, "max-iters") == IntValue(0)
         timeout = _read(s, "timeout")
         assert isinstance(timeout, EnumValue)
         assert timeout.variant == "None"
+
+    def test_host_timeout_seed_round_trips_without_disabling_live_timeout(self) -> None:
+        s = ReplSession(stdlib_root=_STDLIB_ROOT, shell_exec_timeout=0.0000001)
+        _ok(s, "import std.config")
+
+        value = _read(s, "timeout")
+        assert isinstance(value, EnumValue)
+        assert value.fields["value"] == TextValue("0.0000001s")
+        _ok(s, "std.config::timeout := std.config::timeout")
+        assert s._shell_exec_timeout == 0.0000001
+
+        s.reset()
+        value = _ok(s, "import std.config\nstd.config::timeout").value
+        assert isinstance(value, EnumValue)
+        assert value.fields["value"] == TextValue("0.0000001s")
 
     def test_host_consumed_seed_reflects_engine_base(self) -> None:
         from agm.agl.runtime.params import build_engine_config_base
@@ -203,12 +222,61 @@ class TestDefaultsAndSeeding:
 
 
 class TestPartialFailureDiscipline:
-    """A host-consumed write in a failed entry must not persist."""
+    """Setting writes completed before a runtime failure remain persistent."""
 
-    def test_write_before_failure_does_not_persist(self) -> None:
+    def test_write_before_failure_persists(self) -> None:
         s = _session()
         _ok(s, "import std.config")
-        # The runner write fires first, then a runtime error aborts the entry.
         result = s.eval_entry('std.config::runner := "codex"\nlet z: decimal = 1 / 0')
         assert not result.ok
-        assert _read(s, "runner") == TextValue("claude")
+        assert _read(s, "runner") == TextValue("codex")
+
+    def test_runtime_live_write_before_failure_persists(self) -> None:
+        s = _session()
+        _ok(s, "import std.config")
+        result = s.eval_entry("std.config::max-iters := 2\nlet z: decimal = 1 / 0")
+        assert not result.ok
+        assert _read(s, "max-iters") == IntValue(2)
+
+
+class TestLiveHostReconfiguration:
+    def test_runner_write_rebuilds_default_agent_for_later_entry(self) -> None:
+        def old_agent(request: AgentRequest) -> AgentResponse:
+            return AgentResponse(content="old")
+
+        def build_runner(command: str) -> AgentFn:
+            def rebuilt(request: AgentRequest) -> AgentResponse:
+                return AgentResponse(content=command)
+
+            return rebuilt
+
+        policy = HostSettingsPolicy(
+            build_runner=build_runner,
+            resolve_trace_path=lambda enabled, log_file: None,
+        )
+        s = _session(default_agent=old_agent, host_settings_policy=policy)
+        _ok(s, "import std.config")
+        _ok(s, 'std.config::runner := "new-runner"')
+
+        result = _ok(s, 'ask("which")')
+        assert result.value == TextValue("new-runner")
+
+        s.reset()
+        result = _ok(s, 'ask("which")')
+        assert result.value == TextValue("claude")
+
+    def test_log_file_write_repoints_later_repl_entries(self, tmp_path: Path) -> None:
+        trace_path = tmp_path / "trace.jsonl"
+        policy = HostSettingsPolicy(
+            build_runner=lambda command: lambda request: AgentResponse(content=command),
+            resolve_trace_path=lambda enabled, log_file: (
+                Path(log_file) if enabled or log_file is not None else None
+            ),
+        )
+        s = _session(host_settings_policy=policy)
+        _ok(s, "import std.config")
+        _ok(s, f'std.config::log-file := Some("{trace_path}")')
+        _ok(s, 'print "later"')
+
+        assert trace_path.exists()
+        assert '"rendered": "later"' in trace_path.read_text(encoding="utf-8")

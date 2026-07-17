@@ -16,9 +16,9 @@ runner = "agm run pi -p '@%{PROMPT_FILE}'"
 # [exec]
 # runner = "claude -p"          # default agent runner (falls back to [loop] runner)
 # strict-json = false           # require bare JSON from agents (default: lenient recovery)
-# max-iters = 5                 # do[] iteration bound when not specified inline
+# max-iters = 5                 # safety-valve cap for otherwise unbounded loops
 # max-call-depth = 256          # recursion call-depth limit (default: 256)
-# timeout = "30m"               # idle timeout for agent and exec() calls
+# timeout = "30m"               # initial shell-exec and agent idle timeout
 # log = false                   # trace logging; off by default — set true to enable
 # log-file = "trace.jsonl"      # explicit trace path (omit for auto timestamped path)
 #
@@ -49,9 +49,3 @@ runner = "agm run pi -p '@%{PROMPT_FILE}'"
 # ratio    = "0.75"             # decimal param — MUST be a quoted string;
 #                               #   a bare TOML float (0.75) is rejected because
 #                               #   AgL forbids binary floating-point values.
-
-# Migration note (breaking, pre-1.0, no compatibility shim):
-#   [params.<program>]  →  [<program>]    (top-level section, not under [params])
-#   [exec] strict_json  →  strict-json    (snake → kebab field names)
-#   [exec] default_loop_limit → max-iters
-#   [exec] log_file     →  log-file

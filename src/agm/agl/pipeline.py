@@ -294,9 +294,8 @@ class PipelineDriver:
     default_loop_limit : int or None
         The host's global ``max-iters`` safety valve for unguarded loops
         (``while``/``do…until`` with no ``[n]`` bound and no ``for`` clause).
-        ``None`` (the default) means the valve is OFF — unbounded loops run
-        until they self-terminate.  An ``int`` caps unguarded loops at that
-        many iterations, raising ``MaxIterationsExceeded``.  Self-bounded
+        ``None`` (the default) leaves the valve off; an integer caps unguarded
+        loops at that many iterations, raising ``MaxIterationsExceeded``. Self-bounded
         loops (``for``, ``do[n]``) are never affected by this valve.  Resolved
         by the caller as ``--max-iters`` > ``[exec] max-iters``.
     default_agent : callable or None
@@ -827,7 +826,10 @@ class PipelineDriver:
         if log_file is not None:
             from agm.core.fs import mkdir
 
-            mkdir(log_file.parent, parents=True, exist_ok=True)
+            try:
+                mkdir(log_file.parent, parents=True, exist_ok=True)
+            except OSError as exc:
+                trace.disable(exc)
         trace.run_start()
 
         if host_settings_policy is not None:
@@ -877,7 +879,7 @@ class PipelineDriver:
                 error=error,
                 warnings=list(warnings),
                 bindings={},
-                trace_path=log_file,
+                trace_path=trace.path,
             )
 
         trace.run_end(ok=True)
@@ -888,7 +890,7 @@ class PipelineDriver:
             error=None,
             warnings=list(warnings),
             bindings=root_bindings,
-            trace_path=log_file,
+            trace_path=trace.path,
         )
 
     @staticmethod
@@ -1332,7 +1334,7 @@ class PipelineDriver:
 
     @property
     def default_loop_limit(self) -> int | None:
-        """Default max-iters valve (``None`` = OFF) for unguarded loops."""
+        """Default max-iters valve (``None`` means off) for unguarded loops."""
         return self._default_loop_limit
 
     @property

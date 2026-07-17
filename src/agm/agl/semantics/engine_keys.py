@@ -11,6 +11,7 @@ from __future__ import annotations
 from agm.agl.semantics.types import OPTION_TEXT_TYPE, BoolType, IntType, TextType, Type
 from agm.command_catalog import COMMAND_NAMES
 from agm.config.engine_keys import ENGINE_KEY_KINDS, EngineKeyKind
+from agm.config.engine_keys import ENGINE_KEY_NAMES as ENGINE_KEY_NAMES
 from agm.config.sections import RESERVED_CONFIG_SECTIONS
 
 # Concrete AgL type for each engine-key value kind.  The kebab key names and
@@ -27,9 +28,6 @@ _TYPE_BY_KIND: dict[EngineKeyKind, Type] = {
 _ENGINE_KEY_TYPES: dict[str, Type] = {
     name: _TYPE_BY_KIND[kind] for name, kind in ENGINE_KEY_KINDS
 }
-
-# Frozenset of all valid engine key names (kebab).
-ENGINE_KEY_NAMES: frozenset[str] = frozenset(_ENGINE_KEY_TYPES)
 
 
 def get_engine_key_type(name: str) -> Type | None:

@@ -389,9 +389,9 @@ concrete shapes).
 ## Unqualified variant ambiguity
 
 If two enums declare the same unqualified variant name, an unqualified
-reference to that name is a **static ambiguity error** — regardless of
-payload, surrounding context, or explicit type arguments. Disambiguate by
-**qualifying** the reference (and patterns) with the owning enum:
+reference to that name in expression position is a **static ambiguity error** —
+regardless of payload, surrounding context, or explicit type arguments.
+Disambiguate by **qualifying** the reference with the owning enum:
 
 ```agl
 enum Option[T]
@@ -408,11 +408,14 @@ let line = describe_option(d)
 print line
 ```
 
-Qualification works in expression, pattern, and `is`-test positions
+Qualification is accepted in expression, pattern, and `is`-test positions
 (`Option::some(value = 1)`, `case … | Option::none => …`,
-`probe is Option::some`). A nearer ordinary binding (a `let`, `var`, or
-function parameter) **shadows** a constructor or overload set, exactly like
-any other shadowing (see [Bindings and scope](bindings-and-scope.md)).
+`probe is Option::some`). In a pattern or `is` test, the scrutinee's static enum
+type selects the owner even when variants share a name, so qualification is
+optional; when present, it must agree with that type. A nearer ordinary binding
+(a `let`, `var`, or function parameter) **shadows** a constructor or overload
+set, exactly like any other shadowing (see
+[Bindings and scope](bindings-and-scope.md)).
 
 ## No generic agent targets
 

@@ -68,7 +68,7 @@ AgL supports file-based modules. A single-file program runs through the single-m
 | REPL | `src/agm/agl/repl/` |
 | Pipeline orchestrator | `src/agm/agl/pipeline.py` |
 
-Package layering is enforced by a dependency-contract test (`tests/test_agl_dependencies.py`): `semantics` is the foundation leaf, the IR depends only on its own data and module ids, the evaluator never imports the frontend, the runtime is eval-free, and the pipeline sits on top.
+Package layering is enforced by a dependency-contract test (`tests/test_agl_dependencies.py`): `semantics` is the semantic foundation layer, the IR depends only on its own data, module ids, and the pure shared engine-key catalog, the evaluator never imports the frontend, the runtime is eval-free, and the pipeline sits on top.
 
 ## What To Read Next
 

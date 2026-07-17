@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import decimal
 import re
+
+
+def format_timeout(seconds: float) -> str:
+    """Render parsed seconds in syntax accepted by :func:`parse_timeout`."""
+    return f"{format(decimal.Decimal(str(seconds)), 'f')}s"
 
 
 def parse_timeout(value: str) -> float:

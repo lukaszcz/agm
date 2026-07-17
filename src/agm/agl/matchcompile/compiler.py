@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TypeAlias
 
 from agm.agl.semantics.type_table import TypeTable
@@ -597,12 +597,23 @@ class _ReplaySwitchRule:
 
 
 _ReplayRule: TypeAlias = _ReplayFailRule | _ReplayLeafRule | _ReplaySwitchRule
-_CompileStateKey: TypeAlias = tuple[tuple[Occurrence, ...], tuple[MatrixRow, ...]]
+
+
+@dataclass(frozen=True, slots=True)
+class _CompileStateKey:
+    """A structural matrix key whose recursive hash is computed once per matrix."""
+
+    occurrences: tuple[Occurrence, ...]
+    rows: tuple[MatrixRow, ...]
+    cached_hash: int = field(compare=False)
+
+    def __hash__(self) -> int:
+        return self.cached_hash
 
 
 def _compile_state_key(matrix: PatternMatrix) -> _CompileStateKey:
     """Return the live matrix state that determines all later compilation work."""
-    return matrix.occurrences, matrix.rows
+    return _CompileStateKey(matrix.occurrences, matrix.rows, matrix.compile_state_hash)
 
 
 @dataclass(frozen=True, slots=True)

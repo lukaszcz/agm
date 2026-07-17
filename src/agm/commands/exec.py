@@ -48,13 +48,13 @@ from pathlib import Path
 from typing import TypeVar
 
 from agm.agent.config import default_agent_runner
-from agm.agent.runner import split_command
+from agm.agent.runner import parse_command, split_command
 from agm.agl import PipelineDriver
 from agm.agl.diagnostics import format_diagnostic
 from agm.agl.modules.roots import assemble_roots
 from agm.agl.runtime.agents import AgentFn, runner_backed_agent_factory
 from agm.agl.runtime.host_settings import HostSettingsPolicy
-from agm.agl.runtime.params import convert_config_value
+from agm.agl.runtime.params import convert_config_value, raw_option_str
 from agm.agl.semantics.engine_keys import (
     ENGINE_KEY_NAMES,
     RESERVED_PROGRAM_NAMES,
@@ -78,7 +78,8 @@ from agm.config.module_roots import load_module_roots, resolve_lib_root, resolve
 from agm.core import dry_run
 from agm.core.fs import mkdir, read_text_arg
 from agm.core.log import prepare_trace_log_from_layers, resolve_log_file
-from agm.core.parse import parse_timeout
+from agm.core.parse import format_timeout, parse_timeout
+from agm.core.toml import toml_dict
 from agm.parser import exit_with_usage_error
 
 _T = TypeVar("_T")
@@ -223,11 +224,13 @@ def run(args: ExecArgs) -> None:
         config.max_call_depth,
     )
 
-    # Resolve loop limit (max-iters valve): CLI > config. ``None`` (nothing set
-    # at any layer) means the valve is OFF — unguarded loops run until they
-    # self-terminate. A source ``std.config::max-iters := VALUE`` write is
-    # applied at runtime from its program point, overriding this initial value.
-    resolved_loop_limit: int | None = _first(args.max_iters, config.default_loop_limit)
+    # Resolve loop limit (max-iters valve): CLI > config. ``None`` leaves the
+    # valve off. A source ``std.config::max-iters := VALUE`` write is applied
+    # at runtime from its program point, overriding this initial value.
+    if args.max_iters is not None and args.max_iters <= 0:
+        print("Error: --max-iters must be a positive integer", file=sys.stderr)
+        raise SystemExit(1)
+    resolved_loop_limit = _first(args.max_iters, config.default_loop_limit)
 
     # Resolve timeout: CLI > [exec] config. A source ``std.config::timeout :=
     # VALUE`` write is applied at runtime from its program point.
@@ -296,49 +299,53 @@ def run(args: ExecArgs) -> None:
     # set: reconciliation always passes; config-only agents the source never
     # declares stay inert (NOT registered).
     for declaration in decls:
-        runtime.register_agent(declaration.name, factory)
+        if declaration.name in per_agent_cmds:
+            runtime.register_agent(declaration.name, factory)
 
     discovery = runtime.discover_params_graph(prepared)
     for diag in discovery.warnings:
         print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
+    checked = discovery.checked
+    if checked is None:
+        for diag in discovery.diagnostics:
+            print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
+        raise SystemExit(1)
 
     external_params: dict[str, object] = {}
-    checked = discovery.checked
-    if checked is not None:
-        collision_errors = check_param_collisions(
-            discovery.params, source_name=diagnostic_source_name
-        )
-        if collision_errors:
-            for err in collision_errors:
-                print(f"Error: {err}", file=sys.stderr)
-            raise SystemExit(1)
-        try:
-            cli_params = parse_param_tokens(discovery.params, args.param_tokens)
-        except ValueError as exc:
-            exit_with_usage_error(["exec"], f"error: {exc}")
+    collision_errors = check_param_collisions(
+        discovery.params, source_name=diagnostic_source_name
+    )
+    if collision_errors:
+        for err in collision_errors:
+            print(f"Error: {err}", file=sys.stderr)
+        raise SystemExit(1)
+    try:
+        cli_params = parse_param_tokens(discovery.params, args.param_tokens)
+    except ValueError as exc:
+        exit_with_usage_error(["exec"], f"error: {exc}")
 
-        config_param_values = {k: v for k, v in program_table.items() if k not in ENGINE_KEY_NAMES}
-        declared_names = {p.name for p in discovery.params}
-        resolved_params, config_warnings = resolve_param_values(
-            declared_names,
-            config_param_values,
-            cli_params,
-            program_name=program_key,
-        )
-        external_params.update(resolved_params)
-        for msg in config_warnings:
-            print(msg, file=sys.stderr)
+    config_param_values = {k: v for k, v in program_table.items() if k not in ENGINE_KEY_NAMES}
+    declared_names = {p.name for p in discovery.params}
+    resolved_params, config_warnings = resolve_param_values(
+        declared_names,
+        config_param_values,
+        cli_params,
+        program_name=program_key,
+    )
+    external_params.update(resolved_params)
+    for msg in config_warnings:
+        print(msg, file=sys.stderr)
 
-        param_preflight = runtime.run_prepared_graph(
-            prepared,
-            param_values=external_params,
-            check_only=True,
-            compiled_graph=discovery.compiled_graph,
-        )
-        if not param_preflight.ok:
-            for diag in param_preflight.diagnostics:
-                print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
-            raise SystemExit(1)
+    param_preflight = runtime.run_prepared_graph(
+        prepared,
+        param_values=external_params,
+        check_only=True,
+        compiled_graph=discovery.compiled_graph,
+    )
+    if not param_preflight.ok:
+        for diag in param_preflight.diagnostics:
+            print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
+        raise SystemExit(1)
 
     # Resolve + validate the trace log file up front.  --dry-run is
     # side-effect-free: no trace is written regardless of --log-file.  A source
@@ -363,7 +370,7 @@ def run(args: ExecArgs) -> None:
     # trace store.  The mid-run trace repoint must NOT truncate an existing file,
     # so it resolves the path directly rather than through ``prepare_trace_log``.
     def _build_runner(command: str) -> AgentFn:
-        split_command(command, kind="runner")
+        parse_command(command, kind="runner")
         return runner_backed_agent_factory(
             default_runner_cmd=command,
             per_agent_cmds=per_agent_cmds,
@@ -373,7 +380,7 @@ def run(args: ExecArgs) -> None:
     def _resolve_trace_path(enabled: bool, log_file_value: str | None) -> Path | None:
         path = resolve_log_file(
             command_name="exec",
-            enabled=(enabled or log_file_value is not None),
+            enabled=enabled,
             log_file=log_file_value,
             unique=True,
         )
@@ -390,19 +397,31 @@ def run(args: ExecArgs) -> None:
     # A later source ``:=`` overrides the seed from its program point onward.
     if args.no_log:
         seed_log = False
-    elif args.log:
+    elif args.log or args.log_file is not None:
         seed_log = True
     else:
-        seed_log = config.log
+        seed_log = config.log or config.log_file is not None
     seed_log_file = _project_option_text(
         args.log_file, no_flag=args.no_log_file, key_name="log-file", key_type=_log_file_type
     )
     if seed_log_file is None:
         seed_log_file = convert_config_value("log-file", config.log_file, _log_file_type)
+    _timeout_type = get_engine_key_type("timeout")
+    assert _timeout_type is not None
+    exec_raw_table = toml_dict(merged_config.get("exec"))
+    if args.timeout is not None:
+        timeout_seed_raw: object = args.timeout
+    elif args.no_timeout:
+        timeout_seed_raw = None
+    else:
+        timeout_seed_raw = raw_option_str(program_table, exec_raw_table, "timeout")
+        if timeout_seed_raw is None and resolved_timeout is not None:
+            timeout_seed_raw = format_timeout(resolved_timeout)
     builtin_host_settings: dict[str, Value] = {
         "runner": TextValue(runner_cmd),
         "log": BoolValue(seed_log),
         "log-file": seed_log_file,
+        "timeout": convert_config_value("timeout", timeout_seed_raw, _timeout_type),
     }
 
     # Reuse the ``PreparedGraph`` from above — no second parse/scope of the source.

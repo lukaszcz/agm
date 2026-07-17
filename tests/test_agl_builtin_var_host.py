@@ -20,7 +20,7 @@ from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PipelineDriver, RunResult
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.host_settings import HostSettingsPolicy
-from agm.agl.semantics.values import Value
+from agm.agl.semantics.values import TextValue, Value
 from agm.cli_support.args import ExecArgs
 from agm.commands import exec as exec_command
 
@@ -101,10 +101,33 @@ class TestRunnerReconfiguration:
 
         assert received == [["claude", "-p"]]
 
+    def test_runner_write_updates_bare_agents_but_not_dedicated_agents(
+        self, tmp_path: Path
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "import std.config\n"
+            'agent fixed = "fixed-runner"\n'
+            "agent inherited\n"
+            'std.config::runner := "new-runner"\n'
+            'ask("one", agent = fixed)\n'
+            'ask("two", agent = inherited)\n'
+        )
+
+        received: list[list[str]] = []
+        with (
+            _patch_runner(received),
+            patch("agm.agent.runner.run_prepared_prompt_result", return_value=_ok_run_result()),
+            patch("agm.agent.runner.cleanup_temp_files"),
+        ):
+            exec_command.run(_exec_args(agl_file))
+
+        assert received == [["fixed-runner"], ["new-runner"]]
+
 
 class TestTraceReconfiguration:
-    def test_log_file_write_routes_trace_to_that_file(self, tmp_path: Path) -> None:
-        """A mid-run ``log-file :=`` sends subsequent trace events to that file."""
+    def test_log_file_write_routes_trace_until_log_is_disabled(self, tmp_path: Path) -> None:
+        """A path enables tracing, while a later ``log := false`` disables it."""
         trace_path = tmp_path / "trace.jsonl"
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
@@ -112,6 +135,8 @@ class TestTraceReconfiguration:
             'print "before"\n'
             f'std.config::log-file := Some("{trace_path}")\n'
             'print "after"\n'
+            "std.config::log := false\n"
+            'print "disabled"\n'
         )
 
         exec_command.run(_exec_args(agl_file))
@@ -124,6 +149,7 @@ class TestTraceReconfiguration:
         rendered = [json.loads(ln).get("rendered") for ln in lines]
         assert "after" in rendered
         assert "before" not in rendered
+        assert "disabled" not in rendered
 
     def test_log_false_disables_further_trace_writes(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -250,3 +276,57 @@ class TestReconfigureHooks:
         assert not result.ok
         assert result.error is not None
         assert result.error.type_name == "ValueError"
+
+    def test_failed_runner_reconfigure_rolls_back_register(self) -> None:
+        def failing_build(command: str) -> AgentFn:
+            raise ValueError(f"cannot build {command}")
+
+        policy = HostSettingsPolicy(
+            build_runner=failing_build, resolve_trace_path=lambda enabled, log_file: None
+        )
+        source = (
+            "import std.config\n"
+            "try\n"
+            '  std.config::runner := "boom"\n'
+            "catch Exception as error => ()\n"
+            "let retained = std.config::runner\n"
+            "retained\n"
+        )
+        result = _run_graph_with_policy(source, policy=policy)
+
+        assert result.ok
+        assert result.bindings["retained"] == TextValue("claude")
+
+    def test_source_trace_directory_failure_is_best_effort(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        recorder = _RecordingPolicy()
+        recovered_path = tmp_path / "recovered.jsonl"
+        calls = 0
+
+        def fail_then_recover(enabled: bool, log_file: str | None) -> Path | None:
+            nonlocal calls
+            calls += 1
+            if calls != 2:
+                raise OSError("read-only filesystem")
+            return recovered_path
+
+        policy = HostSettingsPolicy(
+            build_runner=recorder.build_runner,
+            resolve_trace_path=fail_then_recover,
+        )
+        result = _run_graph_with_policy(
+            "import std.config\n"
+            'std.config::log-file := Some("nested/one.jsonl")\n'
+            'std.config::log-file := Some("nested/two.jsonl")\n'
+            'std.config::log-file := Some("nested/three.jsonl")\n'
+            "print 1\n",
+            policy=policy,
+        )
+
+        assert result.ok
+        assert result.trace_path is None
+        assert not recovered_path.exists()
+        assert capsys.readouterr().err.count("trace logging disabled") == 1

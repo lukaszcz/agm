@@ -92,8 +92,7 @@ ignored). If these values have no common type, add a return type annotation.
 
 A `return` inside a lambda returns from that lambda, not from an enclosing
 `def`. A `return` is valid only inside a function body; it is a static error at
-the program top level, in parameter/config defaults, or in function parameter
-defaults.
+the program top level or in parameter defaults.
 
 Like `raise`, `return` is a top-level expression form. Inline branch and loop
 body positions accept only `or_expr`, so write a suite body or parenthesize the
@@ -645,9 +644,10 @@ programs through `print`, interpolation, `as text`, or JSON conversion.
 ## Recursion and the call-depth limit
 
 Top-level `def`s may call themselves and each other without restriction
-at the language level. The runtime enforces a **call-depth limit** (default
-256, configurable via the `max_call_depth` config pragma). Exceeding it raises
-`RecursionError` ([Exceptions](exceptions.md)):
+at the language level. The host enforces a **call-depth limit**, with a portable
+default of 256, and may select a different limit before execution. The limit is
+not an AgL engine-setting binding and cannot be changed by the program. Exceeding
+it raises `RecursionError` ([Exceptions](exceptions.md)):
 
 ```agl
 def fact(n: int) -> int =

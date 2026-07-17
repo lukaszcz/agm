@@ -74,13 +74,15 @@ like any other static error.
   exactly one JSON value from chatty output (stripping fences/prose, repairing
   trivially malformed JSON), then validates it strictly against the schema. The
   recovered (normalized) value is traced alongside the raw output.
-- `--max-iters N`: Override the host's `max-iters` safety valve, which caps
+- `--max-iters N`: Override the host's `max-iters` safety valve with a positive
+  integer, which caps
   **unbounded** loops (a bare `while … do … done` or `do … until E` with no
   `[n]` bound and no `for` clause) at `N` body executions, raising
   `MaxIterationsExceeded`. Self-bounded loops (`for`, `do[n]`) are never cut
-  short by this valve. The valve is **off by default**; setting this option (or
-  `max-iters` in config / a source `std.config::max-iters := N` write) turns it
-  on. See [Control flow](../agl/reference/control-flow.md).
+  short by this valve. The valve is off by default; its readable setting is `0`.
+  This option, config, or a positive source write enables it, while a source
+  `std.config::max-iters := 0` write disables it. See
+  [Control flow](../agl/reference/control-flow.md).
 - `--max-call-depth N`: Override the maximum recursion call depth (CLI >
   `[exec] max-call-depth` config; the canonical default is 256). Exceeding it
   raises `RecursionError`.
@@ -152,8 +154,8 @@ source `std.config` writes can override:
 [exec]
 runner = "claude -p"        # default agent runner
 strict-json = false         # lenient JSON recovery is the default
-max-iters = 5               # host safety valve for unbounded loops (off when unset)
-timeout = "30m"             # shell-exec idle timeout
+max-iters = 5               # opt into a safety-valve cap for unbounded loops
+timeout = "30m"             # initial shell-exec and agent idle timeout
 log = false                 # trace logging off by default; set true to enable
 # log-file = "trace.jsonl" # explicit trace path (omit for auto timestamped path)
 
@@ -209,15 +211,20 @@ example, `--no-log` sets the initial state to off, but a later
 Every setting takes effect **positionally**, like an ordinary `var` mutation:
 statements after the write see the new value, statements before it do not. Writing
 `runner`, `log`, or `log-file` reconfigures the live default agent and trace
-destination for subsequent calls; writing `strict-json`, `max-iters`, or `timeout`
-changes how subsequent agent calls, loops, and `exec` calls behave.
+destination for subsequent calls. Assigning `Some(path)` to `log-file` enables
+logging; a later `log := false` disables it without clearing the path. Writing
+`strict-json`, `max-iters`, or `timeout` changes subsequent agent-output parsing,
+unbounded loops, or `exec` calls, respectively.
 
-Note: the `timeout` setting governs only the **shell-exec** timeout. The agent idle
-timeout is resolved from CLI / `[exec]` and cannot be changed mid-program.
+A CLI, `[<program>]`, or `[exec]` timeout initially seeds both shell execution and
+agent idle timeout. A source write to the `timeout` setting changes only the
+**shell-exec** timeout; agent idle timeout cannot be changed mid-program.
 
-A bad `std.config::timeout := "…"` value is a runtime AgL error (exit 2), because a
-source write is a runtime-evaluated expression. A bad `--timeout` or `[exec].timeout`
-value is a pre-execution error (exit 1).
+A bad duration in `std.config::timeout := Some("…")` is a runtime AgL error (exit 2),
+because a source write is a runtime-evaluated expression. A valid assigned timeout
+round-trips with its original text while the parsed duration drives shell execution.
+A bad `--timeout`, `[<program>].timeout`, or `[exec].timeout` value is a
+pre-execution error (exit 1).
 
 `--no-log-file` clears only the initial `log-file` value; a log-file path set via
 `[exec] log-file` or auto-assigned by `--log` still applies. Use `--no-log` to
@@ -362,8 +369,9 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
   constructor, a binding) keep evaluating normally.
 - **Engine settings** are set at the REPL prompt by importing `std.config` and writing a
   qualified target (`std.config::max-iters := 3`). The write takes effect positionally,
-  so subsequent entries in the session see the new value; writing `runner`, `log`, or
-  `log-file` reconfigures the live default agent and trace destination. `:reset` clears
+  so subsequent entries in the session see the new value, including when a later
+  expression in the writing entry fails; writing `runner`, `log`, or `log-file`
+  reconfigures the live default agent and trace destination. `:reset` clears
   the session, restoring the settings to the CLI/`[exec]` defaults set before the loop
   starts.
 

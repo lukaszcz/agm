@@ -5,8 +5,15 @@ just produced: the match compiler's matrix operation-boundary consistency,
 occurrence-ledger integrity, decision-DAG shape, semantic replay and artifact
 provenance, plus the structural validation of the lowered execution IR. None of
 these checks change a result — they only assert that a correct compiler stayed
-correct — so they are disabled during normal execution and cost production
-nothing.
+correct — so they are disabled during normal execution.
+
+Every call site guards its check with ``if self_validation_enabled():``, so that
+a disabled check costs one global read: neither the check nor any state recorded
+solely for it is built on the production path.
+
+An artifact validates itself once, where it is constructed; its consumers trust
+it rather than re-checking it, so each invariant is verified exactly once per
+artifact.
 
 The test harness enables them (see ``tests/conftest.py``) so that every case
 compiled and every program lowered anywhere in the suite doubles as an invariant
@@ -14,8 +21,6 @@ oracle.
 """
 
 from __future__ import annotations
-
-from collections.abc import Callable
 
 _ENABLED = False
 
@@ -32,9 +37,3 @@ def set_self_validation_enabled(enabled: bool) -> None:
     """
     global _ENABLED
     _ENABLED = enabled
-
-
-def run_optional_validation(check: Callable[[], None]) -> None:
-    """Invoke ``check`` only when the optional self-checks are enabled."""
-    if _ENABLED:
-        check()

@@ -21,7 +21,6 @@ and param config loading are wired from the same config stack as ``agm exec``.
 from __future__ import annotations
 
 import sys
-from functools import partial
 
 from agm.agent.config import default_agent_runner
 from agm.agent.runner import parse_command, split_command
@@ -46,8 +45,8 @@ from agm.config.general import (
 from agm.config.module_roots import load_module_roots, resolve_lib_root, resolve_stdlib_root
 from agm.core import dry_run
 from agm.core.log import (
+    LiveTracePathResolver,
     prepare_trace_log_from_decision,
-    resolve_live_trace_path,
     resolve_log_decision,
 )
 from agm.core.toml import toml_dict
@@ -132,7 +131,7 @@ def run(args: ReplArgs) -> None:
 
     host_settings_policy = HostSettingsPolicy(
         build_runner=_build_runner,
-        resolve_trace_path=partial(resolve_live_trace_path, command_name="repl"),
+        resolve_trace_path=LiveTracePathResolver(command_name="repl", auto_path=trace_path),
     )
 
     def _params_config_loader(program_name: str) -> dict[str, object]:

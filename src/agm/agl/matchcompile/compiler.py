@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TypeAlias
 
-from agm.agl.self_validation import run_optional_validation
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import EnumOwnerForm, EnumOwnerFormKind
 
@@ -520,9 +519,10 @@ def compile_case(normalized: NormalizedCase) -> CompiledCase:
 
     The decision DAG and its structured issues are the compiler's product.
     ``validate_compiled_case`` is the single self-check entry point over that
-    product: it re-verifies the DAG as well as the ledger and the issues, and
-    runs only when optional match-compilation validation is enabled (see
-    :mod:`agm.agl.self_validation`).
+    product: it re-verifies the DAG as well as the ledger and the issues. The
+    whole-program stage runs it once per compiled case — at whichever boundary
+    that case reaches — when optional match-compilation validation is enabled
+    (see :mod:`agm.agl.self_validation`).
     """
     compiler = _CaseCompiler()
     root, allocator = compiler.compile(
@@ -530,9 +530,7 @@ def compile_case(normalized: NormalizedCase) -> CompiledCase:
     )
     occurrences = allocator.occurrences
     reachable, issues = _issues(normalized, root, occurrences)
-    compiled = CompiledCase(normalized, root, occurrences, reachable, issues)
-    run_optional_validation(lambda: validate_compiled_case(compiled))
-    return compiled
+    return CompiledCase(normalized, root, occurrences, reachable, issues)
 
 
 # ---------------------------------------------------------------------------

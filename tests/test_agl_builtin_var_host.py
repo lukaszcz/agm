@@ -10,7 +10,9 @@ a recording policy for the reconfiguration hooks.
 
 from __future__ import annotations
 
+import json
 import shlex
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -42,6 +44,34 @@ def _exec_args(
         log=log,
         log_file=log_file,
     )
+
+
+class _StepClock:
+    """A ``datetime`` stand-in whose ``now()`` advances one second per call.
+
+    Every freshly minted auto trace path therefore gets a distinct timestamp,
+    so a run that mints twice is visible as two files rather than depending on
+    wall-clock granularity.
+    """
+
+    def __init__(self) -> None:
+        self._calls = 0
+
+    def now(self) -> datetime:
+        self._calls += 1
+        return datetime(2026, 1, 1, 12, 0, 0) + timedelta(seconds=self._calls)
+
+
+def _trace_kinds_and_prints(path: Path) -> tuple[list[str], list[str]]:
+    """Return the record kinds and the rendered ``print`` outputs of a trace file."""
+    records = [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    kinds = [rec["kind"] for rec in records]
+    rendered = [rec["rendered"] for rec in records if rec["kind"] == "print"]
+    return kinds, rendered
 
 
 def _patch_runner(received_cmds: list[list[str]]) -> object:
@@ -211,6 +241,78 @@ class TestTraceReconfiguration:
             if ln.strip() and json.loads(ln).get("kind") == "print"
         ]
         assert "hello" in rendered
+
+    def test_log_write_keeps_one_auto_trace_file_for_the_whole_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``--log`` plus a mid-run ``log := true`` keeps the run in ONE file."""
+        monkeypatch.setattr("agm.core.log.default_agent_files_dir", lambda: tmp_path)
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "import std.config\n"
+            'print "before"\n'
+            "std.config::log := true\n"
+            'print "after"\n'
+        )
+
+        with patch("agm.core.log.datetime", _StepClock()):
+            exec_command.run(_exec_args(agl_file, no_log=False, log=True))
+
+        logs = list(tmp_path.glob("exec-*.log"))
+        assert len(logs) == 1, f"the run split its trace across {logs}"
+        kinds, rendered = _trace_kinds_and_prints(logs[0])
+        assert "run_start" in kinds
+        assert "run_end" in kinds
+        assert rendered == ["before", "after"]
+
+    def test_toggling_log_off_and_on_reuses_the_same_auto_trace_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A program that turns logging on, off, then on again writes ONE file."""
+        monkeypatch.setattr("agm.core.log.default_agent_files_dir", lambda: tmp_path)
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "import std.config\n"
+            "std.config::log := true\n"
+            'print "first"\n'
+            "std.config::log := false\n"
+            'print "second"\n'
+            "std.config::log := true\n"
+            'print "third"\n'
+        )
+
+        with patch("agm.core.log.datetime", _StepClock()):
+            exec_command.run(_exec_args(agl_file))
+
+        logs = list(tmp_path.glob("exec-*.log"))
+        assert len(logs) == 1, f"re-enabling logging minted a second file: {logs}"
+        _, rendered = _trace_kinds_and_prints(logs[0])
+        assert rendered == ["first", "third"]
+
+    def test_explicit_log_file_still_wins_over_the_auto_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``--log-file`` keeps the whole run in the named file, minting nothing."""
+        auto_dir = tmp_path / "agent-files"
+        auto_dir.mkdir()
+        monkeypatch.setattr("agm.core.log.default_agent_files_dir", lambda: auto_dir)
+        trace_path = tmp_path / "explicit.jsonl"
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            "import std.config\n"
+            'print "before"\n'
+            "std.config::log := true\n"
+            'print "after"\n'
+        )
+
+        with patch("agm.core.log.datetime", _StepClock()):
+            exec_command.run(_exec_args(agl_file, no_log=False, log_file=str(trace_path)))
+
+        assert list(auto_dir.glob("exec-*.log")) == []
+        kinds, rendered = _trace_kinds_and_prints(trace_path)
+        assert "run_start" in kinds
+        assert "run_end" in kinds
+        assert rendered == ["before", "after"]
 
 
 class _RecordingPolicy:

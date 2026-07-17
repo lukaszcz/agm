@@ -18,7 +18,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, TypeVar
 
-from agm.agl.diagnostics import AglError, Diagnostic, diagnostic_from_span
+from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.eval.ir_interpreter import IrInterpreter
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.params import _materialize_ir_contracts, _prepare_ir_params
@@ -32,6 +32,7 @@ from agm.agl.runtime.types import (
     HostEnvironment,
     ParamDeclInfo,
 )
+from agm.agl.self_validation import self_validation_enabled
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -52,7 +53,6 @@ if TYPE_CHECKING:
     from agm.agl.semantics.values import ExceptionValue, Value
     from agm.agl.syntax.nodes import AgentDecl as AgentDeclNode
     from agm.agl.syntax.nodes import Program
-    from agm.agl.syntax.spans import SourceSpan
     from agm.agl.typecheck.env import CheckedProgram as CheckedProgramType
     from agm.agl.typecheck.env import OutputContractSpec
     from agm.agl.typecheck.graph import CheckedModuleGraph
@@ -61,6 +61,17 @@ _ResultT = TypeVar("_ResultT")
 
 # Reserved agent names: cannot be registered by callers.
 _RESERVED_AGENT_NAMES: frozenset[str] = frozenset({"ask", "exec", "ask-request"})
+
+
+class ArtifactProvenanceError(Exception):
+    """A cached compiler artifact does not belong to the prepared source it is
+    handed back with.
+
+    Raised by AgL's optional self-validation only.  The artifact seam is
+    internal — a caller passes back an artifact this pipeline produced for a
+    specific prepared source — so a mismatch is a host-wiring bug with no
+    user-facing remedy, not a diagnostic about the program.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +86,23 @@ class ParamDiscovery:
     checked_graph: "CheckedModuleGraph | None" = None
     compiled: "MatchCompiledProgram | None" = None
     compiled_graph: "MatchCompiledModuleGraph | None" = None
+
+
+@dataclass(frozen=True, slots=True)
+class ParamPreflight:
+    """Result of ``PipelineDriver.preflight_params_graph``.
+
+    ``result``
+        The check-only run result: ``ok`` iff every param validated.
+    ``executable``
+        The lowered program the params were checked against, or ``None`` when a
+        pass before lowering failed.  Hand it back to
+        ``PipelineDriver.run_prepared_graph`` as ``executable`` to execute it
+        without lowering the graph a second time.
+    """
+
+    result: "RunResult"
+    executable: "ExecutableProgram | None"
 
 
 @dataclass(frozen=True, slots=True)
@@ -633,8 +661,6 @@ class PipelineDriver:
                 warnings=warnings,
             )
         resolved = prepared.resolved
-        program = prepared.program
-        assert program is not None  # resolved set ⇒ parse succeeded
         source = prepared.source
 
         # ----------------------------------------------------------------
@@ -649,36 +675,22 @@ class PipelineDriver:
         from agm.agl.modules.ids import ENTRY_ID
 
         if compiled is not None:
-            cache_diagnostic = _cached_artifact_provenance_diagnostic(
-                prepared_entry=ENTRY_ID,
-                prepared_modules={ENTRY_ID: resolved},
-                compiled_entry=ENTRY_ID,
-                compiled_modules={ENTRY_ID: compiled.checked.resolved},
-                span=program.span,
-            )
-            if cache_diagnostic is not None:
-                return RunResult(
-                    ok=False,
-                    diagnostics=[cache_diagnostic],
-                    error=None,
-                    warnings=warnings,
+            if self_validation_enabled():
+                _check_artifact_provenance(
+                    prepared_entry=ENTRY_ID,
+                    prepared_modules={ENTRY_ID: resolved},
+                    compiled_entry=ENTRY_ID,
+                    compiled_modules={ENTRY_ID: compiled.checked.resolved},
                 )
             if compiled.capabilities != capabilities:
                 compiled = None
         if checked is not None and compiled is None:
-            cache_diagnostic = _cached_artifact_provenance_diagnostic(
-                prepared_entry=ENTRY_ID,
-                prepared_modules={ENTRY_ID: resolved},
-                compiled_entry=ENTRY_ID,
-                compiled_modules={ENTRY_ID: checked.resolved},
-                span=program.span,
-            )
-            if cache_diagnostic is not None:
-                return RunResult(
-                    ok=False,
-                    diagnostics=[cache_diagnostic],
-                    error=None,
-                    warnings=warnings,
+            if self_validation_enabled():
+                _check_artifact_provenance(
+                    prepared_entry=ENTRY_ID,
+                    prepared_modules={ENTRY_ID: resolved},
+                    compiled_entry=ENTRY_ID,
+                    compiled_modules={ENTRY_ID: checked.resolved},
                 )
             if checked.capabilities != capabilities:
                 checked = None
@@ -1033,17 +1045,9 @@ class PipelineDriver:
 
         capabilities = self.host_environment().capabilities
         if compiled_graph is not None:
-            cache_diagnostic = _cached_graph_artifact_provenance_diagnostic(
-                prepared.resolved_graph, compiled_graph.checked_graph
-            )
-            if cache_diagnostic is not None:
-                return ParamDiscovery(
-                    params=(),
-                    program_name=prepared.program_name,
-                    checked=None,
-                    diagnostics=(cache_diagnostic,),
-                    warnings=prepared.warnings,
-                    checked_graph=None,
+            if self_validation_enabled():
+                _check_graph_artifact_provenance(
+                    prepared.resolved_graph, compiled_graph.checked_graph
                 )
             if compiled_graph.capabilities != capabilities:
                 compiled_graph = None
@@ -1146,11 +1150,9 @@ class PipelineDriver:
     ) -> "_ResultT | None":
         """Import and resolve every extern companion, or build a failure result.
 
-        Shared by the startup-config and run paths, which wire externs
-        identically and differ only in the result dataclass returned on
-        failure.  Returns ``None`` when wiring succeeds, otherwise
-        ``on_failure(diagnostics)`` with the collected import/resolution
-        diagnostics.
+        Returns ``None`` when wiring succeeds, otherwise ``on_failure`` applied
+        to the collected import/resolution diagnostics, so the caller decides
+        which result dataclass carries them.
         """
         extern_diagnostics = _wire_extern_registry(
             checked_graph=checked_graph,
@@ -1171,6 +1173,7 @@ class PipelineDriver:
         log_file: "Path | None" = None,
         compiled_graph: "MatchCompiledModuleGraph | None" = None,
         checked_graph: "CheckedModuleGraph | None" = None,
+        executable: "ExecutableProgram | None" = None,
         host_settings_policy: "HostSettingsPolicy | None" = None,
         builtin_host_settings: "Mapping[str, Value] | None" = None,
     ) -> RunResult:
@@ -1186,8 +1189,70 @@ class PipelineDriver:
         ``compiled_graph``
             When the caller has already typechecked and match-compiled the graph
             (for example via :meth:`discover_params_graph`), pass the result
-            here to skip those static passes. ``None`` runs them here. Both
-            paths still lower before the check-only stop or evaluation.
+            here to skip those static passes. ``None`` runs them here.
+
+        ``executable``
+            When the caller has already lowered this exact graph (via
+            :meth:`preflight_params_graph`), pass the lowered program here to
+            run it as-is: contract materialization and lowering are skipped, so
+            a program is lowered only once however many times a host resumes it.
+            ``None`` lowers here, before the check-only stop or evaluation.
+        """
+        result, _executable = self._run_graph(
+            prepared,
+            param_values=param_values,
+            check_only=check_only,
+            log_file=log_file,
+            compiled_graph=compiled_graph,
+            checked_graph=checked_graph,
+            executable=executable,
+            host_settings_policy=host_settings_policy,
+            builtin_host_settings=builtin_host_settings,
+        )
+        return result
+
+    def preflight_params_graph(
+        self,
+        prepared: PreparedGraph,
+        *,
+        param_values: Mapping[str, object] | None = None,
+        compiled_graph: "MatchCompiledModuleGraph | None" = None,
+    ) -> ParamPreflight:
+        """Validate external params against the graph without executing it.
+
+        Params are validated against the LOWERED program, so a host that must
+        reject bad params before it commits to any run side effect has to lower
+        first. This runs the static pipeline exactly as :meth:`run_prepared_graph`
+        does under ``check_only`` and hands the lowered program back, so the host
+        can then execute it (``run_prepared_graph(..., executable=...)``) without
+        paying for a second lowering.
+        """
+        result, executable = self._run_graph(
+            prepared,
+            param_values=param_values,
+            check_only=True,
+            compiled_graph=compiled_graph,
+        )
+        return ParamPreflight(result=result, executable=executable)
+
+    def _run_graph(
+        self,
+        prepared: PreparedGraph,
+        *,
+        param_values: Mapping[str, object] | None = None,
+        check_only: bool = False,
+        log_file: "Path | None" = None,
+        compiled_graph: "MatchCompiledModuleGraph | None" = None,
+        checked_graph: "CheckedModuleGraph | None" = None,
+        executable: "ExecutableProgram | None" = None,
+        host_settings_policy: "HostSettingsPolicy | None" = None,
+        builtin_host_settings: "Mapping[str, Value] | None" = None,
+    ) -> "tuple[RunResult, ExecutableProgram | None]":
+        """Back the graph run and its param preflight with one pipeline body.
+
+        Returns the run result together with the lowered program it ran (the one
+        supplied as *executable*, or the one lowered here), or ``None`` when a
+        pass before lowering failed.
         """
         if param_values is None:
             param_values = {}
@@ -1195,40 +1260,27 @@ class PipelineDriver:
         warnings: list[Diagnostic] = list(prepared.warnings)
 
         if prepared.resolved_graph is None:
-            return RunResult(
-                ok=False,
-                diagnostics=list(prepared.diagnostics),
-                error=None,
-                warnings=warnings,
+            return (
+                RunResult(
+                    ok=False,
+                    diagnostics=list(prepared.diagnostics),
+                    error=None,
+                    warnings=warnings,
+                ),
+                None,
             )
         resolved_graph = prepared.resolved_graph
 
         host_env = self.host_environment()
         capabilities = host_env.capabilities
         if compiled_graph is not None:
-            cache_diagnostic = _cached_graph_artifact_provenance_diagnostic(
-                resolved_graph, compiled_graph.checked_graph
-            )
-            if cache_diagnostic is not None:
-                return RunResult(
-                    ok=False,
-                    diagnostics=[cache_diagnostic],
-                    error=None,
-                    warnings=warnings,
-                )
+            if self_validation_enabled():
+                _check_graph_artifact_provenance(resolved_graph, compiled_graph.checked_graph)
             if compiled_graph.capabilities != capabilities:
                 compiled_graph = None
         if checked_graph is not None and compiled_graph is None:
-            cache_diagnostic = _cached_graph_artifact_provenance_diagnostic(
-                resolved_graph, checked_graph
-            )
-            if cache_diagnostic is not None:
-                return RunResult(
-                    ok=False,
-                    diagnostics=[cache_diagnostic],
-                    error=None,
-                    warnings=warnings,
-                )
+            if self_validation_enabled():
+                _check_graph_artifact_provenance(resolved_graph, checked_graph)
             if checked_graph.capabilities != capabilities:
                 checked_graph = None
 
@@ -1237,11 +1289,14 @@ class PipelineDriver:
         # Agent reconciliation against entry module's declared agents.
         reconciliation_errors = _reconcile_agents(registry, resolved_graph.entry_agents)
         if reconciliation_errors:
-            return RunResult(
-                ok=False,
-                diagnostics=reconciliation_errors,
-                error=None,
-                warnings=list(warnings),
+            return (
+                RunResult(
+                    ok=False,
+                    diagnostics=reconciliation_errors,
+                    error=None,
+                    warnings=list(warnings),
+                ),
+                None,
             )
 
         # Reuse a supplied match-compiled graph rather than repeating its
@@ -1255,11 +1310,14 @@ class PipelineDriver:
         else:
             tc_diagnostics = ()
         if checked_graph is None:
-            return RunResult(
-                ok=False,
-                diagnostics=list(tc_diagnostics),
-                error=None,
-                warnings=warnings,
+            return (
+                RunResult(
+                    ok=False,
+                    diagnostics=list(tc_diagnostics),
+                    error=None,
+                    warnings=warnings,
+                ),
+                None,
             )
 
         _append_checker_warnings(warnings, checked_graph)
@@ -1267,24 +1325,35 @@ class PipelineDriver:
         if compiled_graph is None:
             compiled_graph, match_diagnostics = _run_matchcompile_graph(checked_graph)
             if compiled_graph is None:
-                return RunResult(
-                    ok=False,
-                    diagnostics=list(match_diagnostics),
-                    error=None,
-                    warnings=warnings,
+                return (
+                    RunResult(
+                        ok=False,
+                        diagnostics=list(match_diagnostics),
+                        error=None,
+                        warnings=warnings,
+                    ),
+                    None,
                 )
 
-        contract_payloads, contract_errors = _materialize_graph_custom_contract_payloads(
-            checked_graph,
-            host_env.codecs,
-        )
-        if contract_errors:
-            return RunResult(
-                ok=False,
-                diagnostics=contract_errors,
-                error=None,
-                warnings=list(warnings),
+        # An already lowered program carries its materialized contracts, so both
+        # steps are skipped for it: the graph is lowered exactly once per host
+        # invocation, however many times the host resumes the pipeline.
+        contract_payloads: "Mapping[int, ContractPayload]" = {}
+        if executable is None:
+            contract_payloads, contract_errors = _materialize_graph_custom_contract_payloads(
+                checked_graph,
+                host_env.codecs,
             )
+            if contract_errors:
+                return (
+                    RunResult(
+                        ok=False,
+                        diagnostics=contract_errors,
+                        error=None,
+                        warnings=list(warnings),
+                    ),
+                    None,
+                )
 
         if not check_only:
             # Extern (Python FFI) companions: import and resolve every declared
@@ -1305,24 +1374,28 @@ class PipelineDriver:
                 ),
             )
             if run_failure is not None:
-                return run_failure
+                return run_failure, None
 
-        from agm.agl.lower import lower_graph
+        if executable is None:
+            from agm.agl.lower import lower_graph
 
-        executable = lower_graph(
-            compiled_graph,
-            contract_payloads=contract_payloads,
-        )
+            executable = lower_graph(
+                compiled_graph,
+                contract_payloads=contract_payloads,
+            )
 
-        return self._execute_ir(
+        return (
+            self._execute_ir(
+                executable,
+                host_env=host_env,
+                param_values=param_values,
+                check_only=check_only,
+                log_file=log_file,
+                warnings=warnings,
+                host_settings_policy=host_settings_policy,
+                builtin_host_settings=builtin_host_settings,
+            ),
             executable,
-            host_env=host_env,
-            param_values=param_values,
-            check_only=check_only,
-            log_file=log_file,
-            warnings=warnings,
-            host_settings_policy=host_settings_policy,
-            builtin_host_settings=builtin_host_settings,
         )
 
     @property
@@ -1354,10 +1427,11 @@ class PipelineDriver:
     ) -> None:
         """Update the live engine defaults in place without losing registrations.
 
-        Called by ``ReplSession`` after a successful entry that contains a
-        ``config`` binding, to persist the effect-at-binding for subsequent
-        entries.  Agent/codec registrations and the call-depth limit are
-        preserved — only the three eval-consumed settings are updated.
+        Called by ``ReplSession`` after a successful entry, to carry that entry's
+        engine settings — which a ``std.config`` write may have changed mid-entry
+        — into the entries that follow.  Agent/codec registrations and the
+        call-depth limit are preserved: only the three eval-consumed settings are
+        updated.
         """
         self._default_strict_json = strict_json
         self._default_loop_limit = loop_limit
@@ -1398,18 +1472,20 @@ def _append_checker_warnings(
     warnings.extend(checked.warnings)
 
 
-def _cached_artifact_provenance_diagnostic(
+def _check_artifact_provenance(
     *,
     prepared_entry: "ModuleId",
     prepared_modules: "Mapping[ModuleId, ResolvedProgram]",
     compiled_entry: "ModuleId",
     compiled_modules: "Mapping[ModuleId, ResolvedProgram]",
-    span: "SourceSpan | None",
-) -> Diagnostic | None:
-    """Reject a cached artifact unless it wraps the exact prepared resolutions.
+) -> None:
+    """Assert a cached artifact wraps the exact prepared resolutions.
 
     Object identity is the provenance contract: structurally equal programs
-    prepared in separate passes are not interchangeable compiler inputs.
+    prepared in separate passes are not interchangeable compiler inputs.  Call
+    sites guard this check with :func:`self_validation_enabled` — building its
+    module mappings costs more than the production path should ever pay for an
+    invariant it cannot violate.
     """
     same_provenance = (
         prepared_entry == compiled_entry
@@ -1419,25 +1495,22 @@ def _cached_artifact_provenance_diagnostic(
             for module_id, prepared_resolved in prepared_modules.items()
         )
     )
-    if same_provenance:
-        return None
-    message = "Cached match-compilation artifact does not belong to the prepared source."
-    if span is None:
-        return Diagnostic(message=message, line=1)
-    return diagnostic_from_span(message, span)
+    if not same_provenance:
+        raise ArtifactProvenanceError(
+            "Cached match-compilation artifact does not belong to the prepared source."
+        )
 
 
-def _cached_graph_artifact_provenance_diagnostic(
+def _check_graph_artifact_provenance(
     resolved_graph: "ResolvedModuleGraph",
     checked_graph: "CheckedModuleGraph",
-) -> Diagnostic | None:
-    """Adapt graph artifacts to the shared cached-provenance validator.
+) -> None:
+    """Adapt graph artifacts to the shared provenance self-check.
 
-    Match-compiled graphs are validated through their `checked_graph`, which
+    Match-compiled graphs are checked through their `checked_graph`, which
     carries the resolutions the compiler consumed.
     """
-    entry_module = resolved_graph.modules.get(resolved_graph.entry_id)
-    return _cached_artifact_provenance_diagnostic(
+    _check_artifact_provenance(
         prepared_entry=resolved_graph.entry_id,
         prepared_modules={
             module_id: module.resolved for module_id, module in resolved_graph.modules.items()
@@ -1446,7 +1519,6 @@ def _cached_graph_artifact_provenance_diagnostic(
         compiled_modules={
             module_id: module.resolved for module_id, module in checked_graph.modules.items()
         },
-        span=entry_module.resolved.program.span if entry_module is not None else None,
     )
 
 

@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import TypeAlias
 
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
-from agm.agl.self_validation import run_optional_validation
+from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import EnumOwnerForm, EnumType, Type
 from agm.agl.syntax.nodes import Program
@@ -233,7 +233,8 @@ class ConstructorCell:
     provenance: SourcePatternProvenance
 
     def __post_init__(self) -> None:
-        run_optional_validation(lambda: _validate_constructor_cell(self))
+        if self_validation_enabled():
+            _validate_constructor_cell(self)
 
 
 PatternCell: TypeAlias = WildcardCell | ConstructorCell
@@ -301,7 +302,8 @@ class NormalizedCase:
     )
 
     def __post_init__(self) -> None:
-        run_optional_validation(lambda: _validate_normalized_case(self))
+        if self_validation_enabled():
+            _validate_normalized_case(self)
 
 
 @dataclass(frozen=True, slots=True)

@@ -10,13 +10,9 @@ from agm.agl.ir.ids import NominalId, SourceId, SymbolId
 from agm.agl.ir.program import ExecutableProgram, NominalDescriptor, SourceFile
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.lowerer import _LinkState, _Lowerer
-from agm.agl.matchcompile import (
-    MatchCompiledModuleGraph,
-    MatchCompiledProgram,
-    validate_match_compiled_program,
-)
+from agm.agl.matchcompile import MatchCompiledModuleGraph, MatchCompiledProgram
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
-from agm.agl.self_validation import run_optional_validation
+from agm.agl.self_validation import self_validation_enabled
 from agm.agl.syntax.nodes import Binder, Declaration
 from agm.util.text import normalize_newlines
 
@@ -90,7 +86,8 @@ def lower_repl_entry(
     contract_payloads: Mapping[int, ContractPayload] | None = None,
 ) -> LoweredReplEntry:
     """Link one match-compiled REPL entry into ``image`` without resetting any IDs."""
-    run_optional_validation(lambda: validate_match_compiled_program(compiled_entry))
+    # ``compiled_entry`` validated itself when it was constructed; lowering adds
+    # the IR self-check over its own output below.
     checked_entry = compiled_entry.checked
     link = image._state
     source_id = SourceId(link.next_source)
@@ -116,7 +113,8 @@ def lower_repl_entry(
         if not isinstance(last, (Binder, Declaration))
         else None
     )
-    run_optional_validation(lambda: validate_ir(program))
+    if self_validation_enabled():
+        validate_ir(program)
     return LoweredReplEntry(program=program, trailing_expression=trailing_expression)
 
 

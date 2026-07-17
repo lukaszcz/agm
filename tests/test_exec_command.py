@@ -844,6 +844,86 @@ class TestExecParsesSourceOnce:
         assert resolve_graph_calls == 1
 
 
+class TestExecLowersGraphOnce:
+    """``agm exec`` lowers the module graph exactly ONCE per invocation.
+
+    Regression guard: params are validated against the LOWERED program, so exec
+    checks them before the trace file is prepared and only then executes.  Both
+    steps must share a single lowering — a program must never pay for IR
+    construction (and, under self-validation, IR validation) twice per run.
+    """
+
+    def _count_lowerings(self, monkeypatch: pytest.MonkeyPatch) -> list[object]:
+        """Record one entry per ``lower_graph`` call while still lowering for real."""
+        import agm.agl.lower as lower_mod
+        from agm.agl.ir.program import ExecutableProgram
+
+        real_lower_graph = lower_mod.lower_graph
+        lowerings: list[object] = []
+
+        def counting_lower_graph(*args: Any, **kwargs: Any) -> ExecutableProgram:
+            executable = real_lower_graph(*args, **kwargs)
+            lowerings.append(executable)
+            return executable
+
+        monkeypatch.setattr(lower_mod, "lower_graph", counting_lower_graph)
+        return lowerings
+
+    def test_exec_lowers_graph_once_and_still_runs_the_program(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        lowerings = self._count_lowerings(monkeypatch)
+        (tmp_path / "helper.agl").write_text("def greet(who: text) -> text = \"hi ${who}\"\n")
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(
+            'import helper\nparam who: text = "world"\nprint helper::greet(who)\n'
+        )
+
+        assert exec_command.run(_exec_args(agl_file, param_tokens=["--who", "agl"])) is None
+
+        assert capsys.readouterr().out == "hi agl\n"
+        assert len(lowerings) == 1
+
+    def test_exec_dry_run_lowers_graph_once_and_reports_call_sites(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from agm.core import dry_run
+
+        lowerings = self._count_lowerings(monkeypatch)
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('agent impl\nparam task: text = "do it"\nask(task, agent = impl)\n')
+        monkeypatch.setattr(dry_run, "_ENABLED", True)
+
+        assert exec_command.run(_exec_args(agl_file)) is None
+
+        captured = capsys.readouterr()
+        # --dry-run keeps its contract: the static call-site inventory is
+        # reported and the program never executes.
+        assert "call-sites:" in captured.out
+        assert len(lowerings) == 1
+
+    def test_param_error_exits_1_before_the_trace_file_is_prepared(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A param failure preempts the run: no trace file, no program output."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text('param n: int\nprint "n=${n}"\n')
+        log_path = tmp_path / "trace.jsonl"
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args(agl_file, log_file=str(log_path)))
+
+        assert exc_info.value.code == 1
+        assert capsys.readouterr().err
+        assert not log_path.exists()
+
+
 class TestExecCLIPaths:
     """Cover the CLI paths for missing FILE and --no-log/--log-file conflict."""
 
@@ -1886,10 +1966,10 @@ class TestUncaughtExceptionOutputFormat:
             mock_rt.return_value.discover_params_graph.return_value = MagicMock(
                 diagnostics=(), warnings=(), params=(), checked=MagicMock(), program_name=None
             )
-            mock_rt.return_value.run_prepared_graph.side_effect = [
-                RunResult(ok=True, diagnostics=[], error=None),
-                fake_result,
-            ]
+            mock_rt.return_value.preflight_params_graph.return_value = MagicMock(
+                result=RunResult(ok=True, diagnostics=[], error=None), executable=MagicMock()
+            )
+            mock_rt.return_value.run_prepared_graph.return_value = fake_result
             with pytest.raises(SystemExit) as exc_info:
                 exec_command.run(args)
         assert exc_info.value.code == 2
@@ -2512,6 +2592,7 @@ class TestExecTimeoutAndLogFileFlags:
     def _capture_timeout(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
         from collections.abc import Mapping
 
+        from agm.agl.ir.program import ExecutableProgram
         from agm.agl.matchcompile import MatchCompiledModuleGraph
         from agm.agl.pipeline import PipelineDriver as RealRuntime
         from agm.agl.pipeline import PreparedGraph, RunResult
@@ -2529,6 +2610,7 @@ class TestExecTimeoutAndLogFileFlags:
                 check_only: bool = False,
                 log_file: Path | None = None,
                 compiled_graph: MatchCompiledModuleGraph | None = None,
+                executable: ExecutableProgram | None = None,
                 host_settings_policy: HostSettingsPolicy | None = None,
                 builtin_host_settings: Mapping[str, Value] | None = None,
             ) -> RunResult:
@@ -2539,6 +2621,7 @@ class TestExecTimeoutAndLogFileFlags:
                     check_only=check_only,
                     log_file=log_file,
                     compiled_graph=compiled_graph,
+                    executable=executable,
                     host_settings_policy=host_settings_policy,
                     builtin_host_settings=builtin_host_settings,
                 )
@@ -3618,6 +3701,7 @@ class TestF1StemVsProgramNameBug:
         """
         from collections.abc import Mapping
 
+        from agm.agl.ir.program import ExecutableProgram
         from agm.agl.matchcompile import MatchCompiledModuleGraph
         from agm.agl.pipeline import PipelineDriver as RealRuntime
         from agm.agl.pipeline import PreparedGraph, RunResult
@@ -3652,6 +3736,7 @@ class TestF1StemVsProgramNameBug:
                 check_only: bool = False,
                 log_file: Path | None = None,
                 compiled_graph: MatchCompiledModuleGraph | None = None,
+                executable: ExecutableProgram | None = None,
                 host_settings_policy: HostSettingsPolicy | None = None,
                 builtin_host_settings: Mapping[str, Value] | None = None,
             ) -> RunResult:
@@ -3662,6 +3747,7 @@ class TestF1StemVsProgramNameBug:
                     check_only=check_only,
                     log_file=log_file,
                     compiled_graph=compiled_graph,
+                    executable=executable,
                     host_settings_policy=host_settings_policy,
                     builtin_host_settings=builtin_host_settings,
                 )

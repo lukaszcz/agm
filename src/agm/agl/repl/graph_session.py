@@ -540,7 +540,13 @@ class GraphSession:
         )
         self._ctx._persisted_host_settings = interp.builtin_host_settings
         self._ctx._persisted_timeout_setting = interp.timeout_setting
-        self._ctx._trace_path = trace.path
+        # A store disabled by a failed write nulls its own path for the rest of
+        # the entry; that is a transient I/O condition, not a destination the
+        # session should adopt.  Keeping the session path lets the next entry
+        # retry at the original destination.  A store that settled into no-log
+        # mode deliberately (``std.config::log := false``) does persist ``None``.
+        if not trace.disabled:
+            self._ctx._trace_path = trace.path
 
     def _restore_unpromoted_entry_nominals(
         self,

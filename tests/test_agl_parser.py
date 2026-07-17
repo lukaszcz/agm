@@ -395,6 +395,19 @@ class TestBinders:
         assert assignment.target.module_qualifier is not None
         assert assignment.target.module_qualifier.segments == ("std", "config")
 
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "mm::xs[0] := 42",
+            "std.config::max-iters[0] := 3",
+        ),
+    )
+    def test_module_qualified_indexed_assignment_target_rejected(self, source: str) -> None:
+        """A qualified assignment target cannot also be indexed (grammar forbids the
+        combination — a qualified target must resolve to a scalar builtin var)."""
+        with pytest.raises(AglSyntaxError, match="assignment target"):
+            parse(source)
+
     def test_let_continuation(self) -> None:
         """let-continuation: let x = 1; x parses as two block items."""
         prog = parse("let x = 1\nx")

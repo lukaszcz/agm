@@ -43,12 +43,14 @@ def _session(
     default_agent: AgentFn | None = None,
     engine_base: dict[str, Value] | None = None,
     host_settings_policy: HostSettingsPolicy | None = None,
+    trace_path: Path | None = None,
 ) -> ReplSession:
     return ReplSession(
         stdlib_root=_STDLIB_ROOT,
         default_agent=default_agent,
         engine_base=engine_base,
         host_settings_policy=host_settings_policy,
+        trace_path=trace_path,
     )
 
 
@@ -281,3 +283,25 @@ class TestLiveHostReconfiguration:
 
         assert trace_path.exists()
         assert '"rendered": "later"' in trace_path.read_text(encoding="utf-8")
+
+    def test_log_false_settles_into_no_log_for_later_entries(self, tmp_path: Path) -> None:
+        """A deliberate ``log := false`` keeps later entries untraced."""
+        trace_path = tmp_path / "trace.jsonl"
+        policy = HostSettingsPolicy(
+            build_runner=lambda command: lambda request: AgentResponse(content=command),
+            resolve_trace_path=lambda enabled, log_file: (
+                Path(log_file) if log_file is not None else trace_path
+            )
+            if enabled
+            else None,
+        )
+        s = _session(host_settings_policy=policy, trace_path=trace_path)
+        _ok(s, "import std.config")
+        _ok(s, 'print "traced"')
+        _ok(s, "std.config::log := false")
+
+        result = _ok(s, 'print "untraced"')
+        assert result.trace_path is None
+        text = trace_path.read_text(encoding="utf-8")
+        assert '"rendered": "traced"' in text
+        assert "untraced" not in text

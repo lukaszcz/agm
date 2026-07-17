@@ -11,6 +11,8 @@ Coverage:
 
 from __future__ import annotations
 
+from datetime import datetime as _datetime
+from datetime import timedelta as _timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -22,7 +24,12 @@ import agm.cli as cli
 import agm.commands.exec as exec_command
 import agm.commands.repl as repl_command
 from agm.cli_support.args import ExecArgs
-from agm.core.log import LogDecision, resolve_log_decision, resolve_log_file
+from agm.core.log import (
+    LiveTracePathResolver,
+    LogDecision,
+    resolve_log_decision,
+    resolve_log_file,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -418,6 +425,72 @@ class TestResolveLogFileNewShape:
                 command_name="exec", enabled=True, log_file=None, unique=True
             )
         assert path_a != path_b
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: LiveTracePathResolver — one auto trace path per run
+# ---------------------------------------------------------------------------
+
+
+class _StepClock:
+    """A ``datetime`` stand-in whose ``now()`` advances one second per call."""
+
+    def __init__(self) -> None:
+        self._calls = 0
+
+    def now(self) -> _datetime:
+        self._calls += 1
+        return _datetime(2026, 1, 1, 12, 0, 0) + _timedelta(seconds=self._calls)
+
+
+class TestLiveTracePathResolver:
+    def test_disabled_returns_none(self, tmp_path: Path) -> None:
+        resolver = LiveTracePathResolver(command_name="exec", auto_path=tmp_path / "seed.log")
+        assert resolver(False, None) is None
+
+    def test_seeded_auto_path_is_reused_for_auto_repoints(self, tmp_path: Path) -> None:
+        seeded = tmp_path / "run" / "seed.log"
+        resolver = LiveTracePathResolver(command_name="exec", auto_path=seeded)
+        with patch("agm.core.log.datetime", _StepClock()):
+            assert resolver(True, None) == seeded
+            assert resolver(True, None) == seeded
+        assert seeded.parent.is_dir()
+
+    def test_auto_path_is_minted_once_and_reused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("agm.core.log.default_agent_files_dir", lambda: tmp_path / "af")
+        resolver = LiveTracePathResolver(command_name="exec", auto_path=None)
+        with patch("agm.core.log.datetime", _StepClock()):
+            first = resolver(True, None)
+            # A repoint through the off state must not mint a second file.
+            assert resolver(False, None) is None
+            second = resolver(True, None)
+        assert first is not None
+        assert first == second
+
+    def test_explicit_path_wins_over_the_auto_path(self, tmp_path: Path) -> None:
+        seeded = tmp_path / "seed.log"
+        explicit = tmp_path / "nested" / "explicit.jsonl"
+        resolver = LiveTracePathResolver(command_name="exec", auto_path=seeded)
+        assert resolver(True, str(explicit)) == explicit
+        assert explicit.parent.is_dir()
+        # The auto path survives an explicit detour.
+        assert resolver(True, None) == seeded
+
+    def test_relative_explicit_path_is_absolutised(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        resolver = LiveTracePathResolver(command_name="exec", auto_path=None)
+        assert resolver(True, "out.jsonl") == tmp_path / "out.jsonl"
+
+    def test_repoint_does_not_truncate_the_destination(self, tmp_path: Path) -> None:
+        existing = tmp_path / "existing.jsonl"
+        existing.write_text("kept\n", encoding="utf-8")
+        resolver = LiveTracePathResolver(command_name="exec", auto_path=None)
+        assert resolver(True, str(existing)) == existing
+        assert existing.read_text(encoding="utf-8") == "kept\n"
 
 
 # ---------------------------------------------------------------------------

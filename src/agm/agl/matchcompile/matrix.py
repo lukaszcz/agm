@@ -11,7 +11,7 @@ from types import MappingProxyType
 from typing import TypeAlias
 
 from agm.agl.modules.ids import ENTRY_ID
-from agm.agl.self_validation import run_optional_validation
+from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import (
     EnumType,
@@ -151,7 +151,8 @@ class PatternMatrix:
     available_occurrences: tuple[Occurrence, ...]
     type_table: TypeTable = dataclass_field(repr=False, compare=False, hash=False)
     # Recorded for the optional self-checks only; the compiler derives nothing
-    # from it, and it is canonicalized only when those checks run.
+    # from it, so it stays empty — never built, never canonicalized — unless
+    # those checks are enabled.
     path_decompositions: tuple[PathDecomposition, ...] = ()
     case_context: MatchCaseContext = dataclass_field(
         default_factory=lambda: MatchCaseContext(ENTRY_ID),
@@ -176,7 +177,8 @@ class PatternMatrix:
     def __post_init__(self) -> None:
         _canonicalize_matrix(self)
         object.__setattr__(self, "_compile_state_hash", hash((self.occurrences, self.rows)))
-        run_optional_validation(lambda: _validate_matrix(self))
+        if self_validation_enabled():
+            _validate_matrix(self)
 
     @property
     def column_profiles(self) -> tuple[_ColumnProfile, ...]:
@@ -233,9 +235,10 @@ def _canonicalize_matrix(matrix: PatternMatrix) -> None:
     )
     object.__setattr__(matrix, "available_occurrences", available_occurrences)
     object.__setattr__(matrix, "rows", rows)
-    # ``path_decompositions`` is consumed only by the optional self-checks, so
-    # its canonical order is only established when those checks run.
-    run_optional_validation(lambda: _canonicalize_path_decompositions(matrix))
+    # ``path_decompositions`` is recorded and consumed only by the optional
+    # self-checks, so its canonical order is only established when they run.
+    if self_validation_enabled():
+        _canonicalize_path_decompositions(matrix)
 
 
 def _build_column_profiles(matrix: PatternMatrix) -> tuple[_ColumnProfile, ...]:
@@ -429,7 +432,8 @@ def _allocate_children(
 
 def head_constructors(matrix: PatternMatrix, column: int) -> tuple[Constructor, ...]:
     """Return distinct observed heads in stable first-observation order."""
-    run_optional_validation(lambda: _validate_operation(matrix, column=column))
+    if self_validation_enabled():
+        _validate_operation(matrix, column=column)
     return matrix.column_profiles[column].heads
 
 
@@ -459,7 +463,8 @@ def specialize(
     allocator: OccurrenceAllocator,
 ) -> Specialization:
     """Specialize one selected occurrence for an observed constructor head."""
-    run_optional_validation(lambda: _validate_operation(matrix, column=column, allocator=allocator))
+    if self_validation_enabled():
+        _validate_operation(matrix, column=column, allocator=allocator)
     profile = matrix.column_profiles[column]
     constructor_rows = profile.constructor_rows.get(_constructor_key(constructor))
     if constructor_rows is None:
@@ -501,15 +506,19 @@ def specialize(
         *children,
         *matrix.occurrences[column + 1 :],
     )
+    # Extending the decomposition ledger is pure self-check bookkeeping.
+    path_decompositions: tuple[PathDecomposition, ...] = ()
+    if self_validation_enabled():
+        path_decompositions = (
+            *matrix.path_decompositions,
+            PathDecomposition(selected, canonical, children),
+        )
     return Specialization(
         PatternMatrix(
             occurrences=occurrences,
             rows=tuple(rows),
             available_occurrences=(*matrix.available_occurrences, *children),
-            path_decompositions=(
-                *matrix.path_decompositions,
-                PathDecomposition(selected, canonical, children),
-            ),
+            path_decompositions=path_decompositions,
             type_table=matrix.type_table,
             case_context=matrix.case_context,
         ),
@@ -519,7 +528,8 @@ def specialize(
 
 def default_matrix(matrix: PatternMatrix, column: int) -> PatternMatrix:
     """Retain wildcard/binder rows after removing one selected occurrence."""
-    run_optional_validation(lambda: _validate_operation(matrix, column=column))
+    if self_validation_enabled():
+        _validate_operation(matrix, column=column)
     selected = matrix.occurrences[column]
     rows = tuple(
         MatrixRow(
@@ -571,7 +581,8 @@ def _qba_score(matrix: PatternMatrix, column: int) -> QbaScore:
 
 def select_qba_column(matrix: PatternMatrix) -> QbaSelection:
     """Select a refutable column by q, then b, a, then occurrence order/ID."""
-    run_optional_validation(lambda: _validate_operation(matrix))
+    if self_validation_enabled():
+        _validate_operation(matrix)
     candidates: list[tuple[int, QbaScore]] = [
         (index, _qba_score(matrix, index))
         for index, profile in enumerate(matrix.column_profiles)

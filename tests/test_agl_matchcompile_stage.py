@@ -13,7 +13,6 @@ import pytest
 import agm.agl.matchcompile as matchcompile
 import agm.agl.matchcompile.compiler as compiler_module
 import agm.agl.matchcompile.stage as stage_module
-from agm.agl.lower import lower_graph, lower_program
 from agm.agl.matchcompile import (
     MatchCompilationResult,
     MatchCompiledModuleGraph,
@@ -31,6 +30,7 @@ from agm.agl.matchcompile.compiler import (
     compile_case,
     validate_compiled_case,
 )
+from agm.agl.matchcompile.diagnostics import issue_sort_key
 from agm.agl.matchcompile.matrix import OccurrenceAllocator, PatternMatrix, Specialization
 from agm.agl.matchcompile.model import (
     Constructor,
@@ -39,6 +39,7 @@ from agm.agl.matchcompile.model import (
     DecisionLeaf,
     DecisionSwitch,
     LiteralConstructor,
+    NormalizedCase,
 )
 from agm.agl.matchcompile.normalize import MatchCompileInvariantError, normalize_case
 from agm.agl.modules.ids import ENTRY_ID
@@ -299,12 +300,73 @@ def test_source_issues_are_all_sorted_adapted_and_prevent_artifact() -> None:
     assert any("false" in diagnostic.message for diagnostic in diagnostics)
     assert any("Redundant" in diagnostic.message for diagnostic in diagnostics)
 
-    with pytest.raises(ValueError, match="sorted"):
-        MatchCompilationResult(compiled=None, issues=tuple(reversed(result.issues)))
-    with pytest.raises(ValueError, match="exactly one"):
-        MatchCompilationResult(compiled=None, issues=())
     with pytest.raises(AssertionError, match="unsupported"):
         diagnostic_from_match_issue(cast(MatchIssue, object()))
+
+
+def test_program_match_compilation_orders_issues_by_source_location() -> None:
+    checked = _checked(
+        "case true of\n"
+        "  | true => 1\n"
+        "  | true => 2\n"
+        "case false of\n"
+        "  | false => 3\n"
+    )
+
+    result = compile_program_matches(checked)
+
+    assert len(result.issues) > 1
+    assert list(result.issues) == sorted(result.issues, key=issue_sort_key)
+
+
+def test_match_compilation_yields_an_artifact_or_issues_but_never_both(tmp_path: Path) -> None:
+    accepted = compile_program_matches(_checked("case true of | true => 1 | false => 2"))
+    assert accepted.compiled is not None
+    assert accepted.issues == ()
+
+    rejected = compile_program_matches(_checked("case true of | true => 1"))
+    assert rejected.compiled is None
+    assert rejected.issues != ()
+
+    accepted_graph = compile_graph_matches(
+        check_graph(
+            resolve_graph(
+                make_graph_from_files(tmp_path / "ok", {"entry": "case true of | _ => 1"})
+            ),
+            base_caps(),
+        )
+    )
+    assert accepted_graph.compiled is not None
+    assert accepted_graph.issues == ()
+
+    rejected_graph = compile_graph_matches(
+        check_graph(
+            resolve_graph(
+                make_graph_from_files(tmp_path / "bad", {"entry": "case true of | true => 1"})
+            ),
+            base_caps(),
+        )
+    )
+    assert rejected_graph.compiled is None
+    assert rejected_graph.issues != ()
+
+
+def test_rejected_match_compilation_still_validates_the_cases_it_discards(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rejected cases never reach an artifact, so the stage result is their only oracle."""
+    real_compile_case = stage_module.compile_case
+
+    def corrupting_compile_case(normalized: object) -> CompiledCase:
+        compiled = real_compile_case(cast(NormalizedCase, normalized))
+        if not compiled.issues:
+            return compiled
+        return replace(compiled, reachable_action_ids=())
+
+    monkeypatch.setattr(stage_module, "compile_case", corrupting_compile_case)
+
+    with pytest.raises(MatchCompileInvariantError, match="reachable action ids"):
+        compile_program_matches(_checked("case true of | true => 1"))
 
 
 def test_graph_issues_are_aggregated_and_sorted_across_module_sources(tmp_path: Path) -> None:
@@ -346,6 +408,7 @@ def test_graph_issues_are_aggregated_and_sorted_across_module_sources(tmp_path: 
     assert [
         (issue.span.start_line, issue.span.start_col) for issue in result.issues
     ] == [(2, 3), (4, 7), (2, 3), (4, 7)]
+    assert list(result.issues) == sorted(result.issues, key=issue_sort_key)
 
     diagnostics = diagnostics_from_match_issues(result.issues)
     assert all(diagnostic.severity == "error" for diagnostic in diagnostics)
@@ -421,6 +484,7 @@ def test_program_artifact_rejects_compiled_case_semantic_corruption() -> None:
             reachable_action_ids=(999,),
         ),
         replace(first, reachable_action_ids=tuple(reversed(first.reachable_action_ids))),
+        replace(first, reachable_action_ids=()),
         replace(
             first,
             root=replace(
@@ -447,12 +511,6 @@ def test_program_artifact_rejects_compiled_case_semantic_corruption() -> None:
     stripped = replace(invalid_compiled, issues=())
     with pytest.raises(MatchCompileInvariantError):
         MatchCompiledProgram(invalid_checked, {invalid_case.node_id: stripped})
-
-    corrupted_cases = dict(compiled.cases)
-    corrupted_cases[first_id] = replace(first, reachable_action_ids=())
-    object.__setattr__(compiled, "cases", corrupted_cases)
-    with pytest.raises(MatchCompileInvariantError):
-        lower_program(compiled, source_text="", source_label="<corrupt>")
 
 
 def test_program_artifact_replays_source_semantics_against_every_decision_edge() -> None:
@@ -651,6 +709,7 @@ def test_graph_artifact_rejects_compiled_case_semantic_corruption(tmp_path: Path
             reachable_action_ids=(999,),
         ),
         replace(first, reachable_action_ids=tuple(reversed(first.reachable_action_ids))),
+        replace(first, reachable_action_ids=()),
         replace(
             first,
             root=replace(
@@ -688,15 +747,6 @@ def test_graph_artifact_rejects_compiled_case_semantic_corruption(tmp_path: Path
             invalid_checked_graph,
             {ENTRY_ID: {invalid_case.node_id: stripped}},
         )
-
-    corrupted_modules = {
-        module_id: dict(module_cases)
-        for module_id, module_cases in compiled.cases_by_module.items()
-    }
-    corrupted_modules[ENTRY_ID][first_id] = replace(first, reachable_action_ids=())
-    object.__setattr__(compiled, "cases_by_module", corrupted_modules)
-    with pytest.raises(MatchCompileInvariantError):
-        lower_graph(compiled)
 
 
 def test_graph_artifact_replays_source_semantics_against_every_decision_edge(

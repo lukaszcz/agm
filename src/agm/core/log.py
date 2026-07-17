@@ -121,23 +121,43 @@ def prepare_trace_log_from_decision(
     )
 
 
-def resolve_live_trace_path(
-    enabled: bool, log_file: str | None, *, command_name: str
-) -> Path | None:
-    """Resolve a trace path for a mid-run repoint, creating its parent directory.
+class LiveTracePathResolver:
+    """Resolve trace paths for mid-run repoints, with ONE auto path per run.
+
+    A run resolves its automatic (timestamped) trace path at most once: the
+    command seeds *auto_path* with whatever it already prepared, and any later
+    repoint that names no explicit path reuses it.  Without this a program that
+    merely re-enables logging mid-run would mint a fresh timestamp and split one
+    run's trace across two files.  Toggling logging off and back on likewise
+    returns to the same file rather than starting a new one.
 
     Unlike :func:`prepare_trace_log` this deliberately does NOT truncate the
     resolved file: a program that repoints logging part-way through a run must
-    not destroy whatever the destination already holds.  The positional
-    ``(enabled, log_file)`` signature matches the host settings policy's
-    ``resolve_trace_path`` hook; bind *command_name* with ``functools.partial``.
+    not destroy whatever the destination already holds; only the parent
+    directory is created.
+
+    Instances are callable with the positional ``(enabled, log_file)`` signature
+    of the host settings policy's ``resolve_trace_path`` hook.  Shared by
+    ``agm exec`` and ``agm repl``.
     """
-    path = resolve_log_file(
-        command_name=command_name, enabled=enabled, log_file=log_file, unique=True
-    )
-    if path is not None:
+
+    def __init__(self, *, command_name: str, auto_path: Path | None) -> None:
+        self._command_name = command_name
+        self._auto_path = auto_path
+
+    def __call__(self, enabled: bool, log_file: str | None) -> Path | None:
+        if not enabled:
+            return None
+        if log_file is None and self._auto_path is not None:
+            path = self._auto_path
+        else:
+            path = _log_file_path(
+                command_name=self._command_name, log_file=log_file, unique=True
+            )
+            if log_file is None:
+                self._auto_path = path
         mkdir(path.parent, parents=True, exist_ok=True)
-    return path
+        return path
 
 
 def resolve_log_file(
@@ -156,13 +176,18 @@ def resolve_log_file(
 
     When *unique* is ``True``, a pid-based component is appended to the
     default (timestamp-based) filename so that two concurrent invocations in
-    the same second produce different paths instead of colliding (F6, §11.1).
+    the same second produce different paths instead of colliding.
     *unique* has no effect when *log_file* is provided explicitly.
     loop/review behavior is unchanged unless they opt in (``unique=False``,
     the default).
     """
     if not enabled:
         return None
+    return _log_file_path(command_name=command_name, log_file=log_file, unique=unique)
+
+
+def _log_file_path(*, command_name: str, log_file: str | None, unique: bool) -> Path:
+    """Resolve the trace path for enabled logging — the always-a-path core."""
     if log_file is not None:
         resolved = Path(log_file)
         if not resolved.is_absolute():

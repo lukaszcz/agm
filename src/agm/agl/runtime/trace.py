@@ -99,6 +99,18 @@ class TraceStore:
         return self._path
 
     @property
+    def disabled(self) -> bool:
+        """Whether an I/O failure disabled this store (as opposed to no-log mode).
+
+        A store settled into no-log mode by settings reports ``False`` here with
+        a ``None`` path; a store knocked out by a failed write reports ``True``.
+        Callers that outlive one store (the REPL, which builds one per entry)
+        use this to tell a deliberate no-log destination apart from a transient
+        failure they should retry.
+        """
+        return self._disabled
+
+    @property
     def run_id(self) -> str:
         """Per-run identifier shared by all records in this trace."""
         return self._run_id

@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TypeAlias
 
 from agm.agl.diagnostics import Diagnostic, diagnostic_from_span
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
-from agm.agl.self_validation import run_optional_validation
+from agm.agl.self_validation import self_validation_enabled
 from agm.agl.syntax.nodes import Case, Program
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck.env import CheckedProgram
@@ -52,7 +52,8 @@ class MatchCompiledProgram:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "cases", _immutable_cases(self.cases))
-        run_optional_validation(lambda: validate_match_compiled_program(self))
+        if self_validation_enabled():
+            validate_match_compiled_program(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,7 +70,8 @@ class MatchCompiledModuleGraph:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "cases_by_module", _immutable_module_cases(self.cases_by_module))
-        run_optional_validation(lambda: validate_match_compiled_graph(self))
+        if self_validation_enabled():
+            validate_match_compiled_graph(self)
 
 
 MatchCompiledArtifact: TypeAlias = MatchCompiledProgram | MatchCompiledModuleGraph
@@ -77,16 +79,14 @@ MatchCompiledArtifact: TypeAlias = MatchCompiledProgram | MatchCompiledModuleGra
 
 @dataclass(frozen=True, slots=True)
 class MatchCompilationResult:
-    """Non-raising whole-program stage result."""
+    """Non-raising whole-program stage result.
+
+    Carries exactly one of a compiled artifact or a source-ordered tuple of
+    issues; the stage entry points below establish both.
+    """
 
     compiled: MatchCompiledArtifact | None
     issues: tuple[MatchIssue, ...]
-
-    def __post_init__(self) -> None:
-        if self.issues != tuple(sorted(self.issues, key=issue_sort_key)):
-            raise ValueError("match-compilation issues must be sorted by source location")
-        if (self.compiled is None) == (not self.issues):
-            raise ValueError("match compilation must return exactly one of an artifact or issues")
 
 
 def _source_cases(program: Program) -> dict[int, Case]:
@@ -121,12 +121,29 @@ def _compile_owner_cases(
     return cases, issues
 
 
+def _rejected(
+    cases_by_owner: Iterable[Mapping[int, CompiledCase]],
+    issues: tuple[MatchIssue, ...],
+) -> MatchCompilationResult:
+    """Build the issue-carrying stage result, discarding the cases compiled so far.
+
+    Rejected cases never reach an artifact, so this is the one boundary at which
+    they can be validated; the checks run only when optional match-compilation
+    validation is enabled (see :mod:`agm.agl.self_validation`).
+    """
+    if self_validation_enabled():
+        for owner_cases in cases_by_owner:
+            for compiled in owner_cases.values():
+                validate_compiled_case(compiled)
+    return MatchCompilationResult(compiled=None, issues=issues)
+
+
 def compile_program_matches(checked: CheckedProgram) -> MatchCompilationResult:
     """Compile every case in a checked single program without raising for source issues."""
     cases, issues = _compile_owner_cases(checked)
     sorted_issues = tuple(sorted(issues, key=issue_sort_key))
     if sorted_issues:
-        return MatchCompilationResult(compiled=None, issues=sorted_issues)
+        return _rejected((cases,), sorted_issues)
     return MatchCompilationResult(
         compiled=MatchCompiledProgram(checked=checked, cases=cases), issues=()
     )
@@ -142,7 +159,7 @@ def compile_graph_matches(checked_graph: CheckedModuleGraph) -> MatchCompilation
         issues.extend(module_issues)
     sorted_issues = tuple(sorted(issues, key=issue_sort_key))
     if sorted_issues:
-        return MatchCompilationResult(compiled=None, issues=sorted_issues)
+        return _rejected(cases_by_module.values(), sorted_issues)
     return MatchCompilationResult(
         compiled=MatchCompiledModuleGraph(
             checked_graph=checked_graph, cases_by_module=cases_by_module

@@ -153,11 +153,10 @@ from agm.agl.matchcompile import (
     MatchCompiledProgram,
     Occurrence,
     OccurrenceId,
-    validate_match_compiled_program,
 )
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
 from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind
-from agm.agl.self_validation import run_optional_validation
+from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
@@ -3255,7 +3254,8 @@ def lower_program(
     :raises NotImplementedError: for unsupported AST nodes.
     :raises AssertionError: for missing checker side-table entries (compiler bugs).
     """
-    run_optional_validation(lambda: validate_match_compiled_program(compiled))
+    # ``compiled`` validated itself when it was constructed; lowering adds the IR
+    # self-check over its own output below.
     checked = compiled.checked
     link = _LinkState()
     source_id = SourceId(link.next_source)
@@ -3272,5 +3272,6 @@ def lower_program(
         contract_payloads=contract_payloads,
     )
     program = lowerer.lower()
-    run_optional_validation(lambda: validate_ir(program))
+    if self_validation_enabled():
+        validate_ir(program)
     return program

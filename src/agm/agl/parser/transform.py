@@ -826,6 +826,12 @@ class AstBuilder(Transformer):
                 "assignment target must be a variable or indexed variable.",
                 span=lhs.span,
             )
+        if root.module_qualifier is not None and isinstance(lhs, syntax.IndexAccess):
+            raise AglSyntaxError(
+                "assignment target cannot combine a module qualifier with indexing; "
+                "a qualified assignment target must be a bare name.",
+                span=lhs.span,
+            )
         if isinstance(lhs, syntax.VarRef):
             target: syntax.AssignTarget = syntax.NameTarget(
                 name=lhs.name,

@@ -10,7 +10,9 @@ exactly-once agent dispatch, the ``:set`` param flow, ``reset``, ``load_file``,
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Mapping
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -1449,6 +1451,34 @@ class TestTraceLogging:
         records = [json.loads(line) for line in trace.read_text().splitlines() if line]
         run_end = [rec for rec in records if rec["kind"] == "run_end"]
         assert run_end and run_end[-1]["ok"] is False
+
+    def test_write_failure_disables_logging_for_that_entry_only(self, tmp_path: Path) -> None:
+        """A transient write failure must not kill logging for the whole session."""
+        import json
+
+        from agm.core import log as core_log
+
+        trace = tmp_path / "repl.log"
+        s = ReplSession(default_agent=CountingAgent("a", "b"), trace_path=trace)
+        real_append = core_log.append_jsonl
+        calls = {"n": 0}
+
+        def flaky(path: Path | None, record: Mapping[str, object]) -> None:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise OSError("transient failure")
+            real_append(path, record)
+
+        with patch("agm.agl.runtime.trace.append_jsonl", side_effect=flaky):
+            first = s.eval_entry('print "one"')
+            second = s.eval_entry('print "two"')
+
+        assert first.ok
+        assert second.ok
+        assert second.trace_path == trace
+        records = [json.loads(line) for line in trace.read_text().splitlines() if line]
+        rendered = [rec["rendered"] for rec in records if rec["kind"] == "print"]
+        assert rendered == ["two"]
 
 
 # ---------------------------------------------------------------------------

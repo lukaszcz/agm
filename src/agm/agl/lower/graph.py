@@ -28,12 +28,9 @@ from agm.agl.lower.lowerer import (
     _LinkState,
     _Lowerer,
 )
-from agm.agl.matchcompile import (
-    MatchCompiledModuleGraph,
-    validate_match_compiled_graph,
-)
+from agm.agl.matchcompile import MatchCompiledModuleGraph
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId
-from agm.agl.self_validation import run_optional_validation
+from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.types import EnumType, ExceptionType, RecordType
 from agm.agl.syntax.nodes import AgentDecl, FuncDef
 from agm.util.text import normalize_newlines
@@ -55,7 +52,8 @@ def lower_graph(
     :param compiled_graph: the statically match-compiled module graph to lower.
     :returns: the linked ``ExecutableProgram`` ready for evaluation.
     """
-    run_optional_validation(lambda: validate_match_compiled_graph(compiled_graph))
+    # ``compiled_graph`` validated itself when it was constructed; lowering adds
+    # the IR self-check over its own output below.
     checked_graph = compiled_graph.checked_graph
     link = _link if _link is not None else _LinkState()
 
@@ -251,5 +249,6 @@ def lower_graph(
         contracts=dict(link.contracts),
         dry_run_inventory=dry_run_inventory,
     )
-    run_optional_validation(lambda: validate_ir(program, deep=True))
+    if self_validation_enabled():
+        validate_ir(program, deep=True)
     return program

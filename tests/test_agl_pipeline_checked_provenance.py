@@ -1,4 +1,10 @@
-"""Checked artifacts must be bound to their prepared source and host capabilities."""
+"""Checked artifacts must be bound to their prepared source and host capabilities.
+
+Source provenance is an internal invariant, re-verified only under AgL's
+self-validation (enabled suite-wide) and raising when violated.  Capability
+provenance is different: it is real cache invalidation on the production path,
+and re-running the checker is its fallback.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from agm.agl.modules.roots import RootSet
-from agm.agl.pipeline import PipelineDriver, PreparedGraph
+from agm.agl.pipeline import ArtifactProvenanceError, PipelineDriver, PreparedGraph
 from agm.agl.typecheck import check
 from agm.agl.typecheck.graph import check_graph
 
@@ -31,11 +37,9 @@ def test_single_run_rejects_checked_artifact_from_different_prepared_program(
     assert discovery_a.checked is not None
     prepared_b = runtime.prepare('print "fresh"')
 
-    result = runtime.run_prepared(prepared_b, checked=discovery_a.checked)
+    with pytest.raises(ArtifactProvenanceError):
+        runtime.run_prepared(prepared_b, checked=discovery_a.checked)
 
-    assert not result.ok
-    assert result.error is None
-    assert result.diagnostics
     assert capsys.readouterr().out == ""
 
 
@@ -48,11 +52,9 @@ def test_graph_run_rejects_checked_artifact_from_different_prepared_graph(
     assert discovery_a.checked_graph is not None
     prepared_b = _prepare_graph('print "fresh"')
 
-    result = runtime.run_prepared_graph(prepared_b, checked_graph=discovery_a.checked_graph)
+    with pytest.raises(ArtifactProvenanceError):
+        runtime.run_prepared_graph(prepared_b, checked_graph=discovery_a.checked_graph)
 
-    assert not result.ok
-    assert result.error is None
-    assert result.diagnostics
     assert capsys.readouterr().out == ""
 
 

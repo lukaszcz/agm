@@ -154,6 +154,18 @@ def test_specialization_and_default_are_exact_and_migrate_binders() -> None:
     assert defaulted.path_decompositions == matrix.path_decompositions
 
 
+def test_path_decompositions_are_recorded_only_when_the_self_checks_run(
+    self_validation_disabled: None,
+) -> None:
+    """The compiler derives nothing from them, so the production path never builds them."""
+    _, _, matrix, pair, allocator = _pair_case()
+
+    specialized = specialize(matrix, 0, pair, allocator).matrix
+
+    assert specialized.path_decompositions == ()
+    assert default_matrix(matrix, 0).path_decompositions == ()
+
+
 def test_specialization_reuses_stable_children_and_allocates_sibling_ids_sequentially() -> None:
     checked = _check(
         "enum Choice\n"

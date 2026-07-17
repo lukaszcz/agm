@@ -44,7 +44,6 @@ Flag notes:
 from __future__ import annotations
 
 import sys
-from functools import partial
 from pathlib import Path
 from typing import TypeVar
 
@@ -79,8 +78,8 @@ from agm.config.module_roots import load_module_roots, resolve_lib_root, resolve
 from agm.core import dry_run
 from agm.core.fs import read_text_arg
 from agm.core.log import (
+    LiveTracePathResolver,
     prepare_trace_log_from_decision,
-    resolve_live_trace_path,
     resolve_log_decision,
 )
 from agm.core.parse import format_timeout, parse_timeout
@@ -351,14 +350,18 @@ def run(args: ExecArgs) -> None:
     for msg in config_warnings:
         print(msg, file=sys.stderr)
 
-    param_preflight = runtime.run_prepared_graph(
+    # Params are validated against the lowered program, so this preflight lowers
+    # the graph.  It must report a param failure (exit 1) BEFORE the trace file
+    # is prepared and the runner is built — hence a check-only pass here rather
+    # than letting the run below surface it.  The lowered program it produces is
+    # handed to that run, so the graph is lowered exactly once per invocation.
+    param_preflight = runtime.preflight_params_graph(
         prepared,
         param_values=external_params,
-        check_only=True,
         compiled_graph=discovery.compiled_graph,
     )
-    if not param_preflight.ok:
-        for diag in param_preflight.diagnostics:
+    if not param_preflight.result.ok:
+        for diag in param_preflight.result.diagnostics:
             print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
         raise SystemExit(1)
 
@@ -385,8 +388,10 @@ def run(args: ExecArgs) -> None:
     # (``runner``, ``log``, ``log-file``) into the live services during the run.
     # A source ``std.config::runner := ...`` rebuilds the default agent from the
     # new command (source-authoritative); ``log``/``log-file`` writes repoint the
-    # trace store.  The mid-run trace repoint must NOT truncate an existing file,
-    # so it goes through ``resolve_live_trace_path`` rather than ``prepare_trace_log``.
+    # trace store.  The mid-run trace repoint must NOT truncate an existing file
+    # and must reuse the trace path already prepared for this run rather than
+    # minting a second timestamped one, so it goes through
+    # ``LiveTracePathResolver`` rather than ``prepare_trace_log``.
     def _build_runner(command: str) -> AgentFn:
         parse_command(command, kind="runner")
         return runner_backed_agent_factory(
@@ -397,7 +402,7 @@ def run(args: ExecArgs) -> None:
 
     policy = HostSettingsPolicy(
         build_runner=_build_runner,
-        resolve_trace_path=partial(resolve_live_trace_path, command_name="exec"),
+        resolve_trace_path=LiveTracePathResolver(command_name="exec", auto_path=log_file),
     )
 
     # Seed the host-consumed registers from the resolved host layers so a program
@@ -430,14 +435,16 @@ def run(args: ExecArgs) -> None:
     }
 
     # Reuse the ``PreparedGraph`` from above — no second parse/scope of the source.
-    # Pass the already-computed compiled_graph from discovery so the graph is
-    # type-checked and match-compiled exactly once.
+    # Pass the already-computed compiled_graph from discovery and the program the
+    # preflight already lowered, so the graph is type-checked, match-compiled and
+    # lowered exactly once.
     result = runtime.run_prepared_graph(
         prepared,
         param_values=external_params,
         check_only=dry_run.enabled(),
         log_file=log_file,
         compiled_graph=discovery.compiled_graph,
+        executable=param_preflight.executable,
         host_settings_policy=policy,
         builtin_host_settings=builtin_host_settings,
     )

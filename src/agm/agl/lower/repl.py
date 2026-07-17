@@ -13,10 +13,10 @@ from agm.agl.lower.lowerer import _LinkState, _Lowerer
 from agm.agl.matchcompile import (
     MatchCompiledModuleGraph,
     MatchCompiledProgram,
-    run_optional_validation,
     validate_match_compiled_program,
 )
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.self_validation import run_optional_validation
 from agm.agl.syntax.nodes import Binder, Declaration
 from agm.util.text import normalize_newlines
 
@@ -87,7 +87,6 @@ def lower_repl_entry(
     image: LinkImage,
     source_text: str,
     source_label: str,
-    validate: bool = False,
     contract_payloads: Mapping[int, ContractPayload] | None = None,
 ) -> LoweredReplEntry:
     """Link one match-compiled REPL entry into ``image`` without resetting any IDs."""
@@ -117,8 +116,7 @@ def lower_repl_entry(
         if not isinstance(last, (Binder, Declaration))
         else None
     )
-    if validate:
-        validate_ir(program)
+    run_optional_validation(lambda: validate_ir(program))
     return LoweredReplEntry(program=program, trailing_expression=trailing_expression)
 
 
@@ -127,7 +125,6 @@ def lower_repl_graph(
     *,
     image: LinkImage,
     source_text: str,
-    validate: bool = False,
     contract_payloads: Mapping[int, ContractPayload] | None = None,
 ) -> LoweredReplEntry:
     """Incrementally link a match-compiled module graph into a REPL image."""
@@ -140,7 +137,6 @@ def lower_repl_graph(
     # ``LinkImage.mark_linked`` once the entry has evaluated successfully.
     program = lower_graph(
         compiled_graph,
-        validate=validate,
         _link=image._state,
         _already_linked=frozenset(image._linked_modules),
         _entry_source_text=source_text,

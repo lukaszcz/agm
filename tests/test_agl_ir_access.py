@@ -453,7 +453,6 @@ def _lower(source: str) -> "ExecutableProgram":
         _compiled_checked(checked),
         source_text=source,
         source_label="<test>",
-        validate=True,
     )
 
 

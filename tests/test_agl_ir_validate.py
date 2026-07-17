@@ -281,6 +281,25 @@ def test_case_rejects_closure_capture_outside_payload_dominance() -> None:
         validate_ir(program)
 
 
+def test_private_synthetic_temporary_may_be_loaded_outside_any_case() -> None:
+    """Only symbols an arm actually binds are payloads.
+
+    Lowering temporaries look exactly like payload bindings in the symbol table
+    (private, immutable, synthetic), so a load of one outside a case must stay
+    valid.
+    """
+    program = _make_program(
+        initializers=(IrLoad(location=LOC, symbol=SYM1),),
+        symbols={
+            SYM1: SymbolDescriptor(
+                SYM1, mutable=False, public_name=None, owner=MOD_A, synthetic=True
+            )
+        },
+    )
+
+    validate_ir(program)
+
+
 def test_case_arm_cannot_bind_a_private_source_symbol() -> None:
     enum_nominal = NominalId(module_id=MOD_A, declared_name="Box")
     program = _make_program(
@@ -481,7 +500,6 @@ class TestValidProgram:
             _compiled_checked(checked),
             source_text=source,
             source_label="<test>",
-            validate=False,
         )
 
         validate_ir(program, deep=True)

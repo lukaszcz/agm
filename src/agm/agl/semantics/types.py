@@ -563,20 +563,13 @@ def _match_enum_owner_template(
     # ``match_type_template`` needs declared variables to compare variable
     # occurrences. Give phantom variables a concrete sentinel, then omit them
     # from the resulting match; only variables present in the template matter.
-    parameters = tuple(
-        parameter
-        for parameter in template.type_params
-        if _type_contains_var(template.template, parameter)
-    )
+    occurring = free_type_vars(template.template)
+    parameters = tuple(parameter for parameter in template.type_params if parameter in occurring)
     if not parameters:
         return TypeTemplateMatch(()) if template.template == concrete else None
     return match_type_template(template.template, concrete, parameters)
 
 
-def _type_contains_var(typ: Type, name: str) -> bool:
-    if isinstance(typ, TypeVarType):
-        return typ.name == name
-    return any(_type_contains_var(child, name) for child in type_children(typ))
 def type_children(t: Type) -> tuple[Type, ...]:
     """Return *t*'s direct structural children, if any.
 

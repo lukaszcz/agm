@@ -523,6 +523,11 @@ class TypeEnvironment:
         self._import_env: ImportEnv | None = import_env
         self._module_id: ModuleId = module_id
         self._sealed = False
+        # Memo for the own-type-name enumeration, which rebuilds a whole-namespace
+        # answer and is asked for repeatedly (once per owner-form resolution).  It
+        # is populated only once ``seal`` has frozen the declaration namespace, so
+        # a still-mutating environment never serves a stale answer.
+        self._sealed_own_source_type_names: frozenset[str] | None = None
         # Built-in exception types are always available.
         for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
             self._types[exc_name] = exc_type
@@ -1482,6 +1487,9 @@ class TypeEnvironment:
         return None if resolved is None else TypeTemplate(resolved)
 
     def _own_source_type_names(self) -> frozenset[str]:
+        cached = self._sealed_own_source_type_names
+        if cached is not None:
+            return cached
         names = set(self._types) | set(self._alias_targets) | set(self._generic_types)
         names.update(
             name for module_id, name in self._graph_alias_table if module_id == self._module_id
@@ -1496,7 +1504,10 @@ class TypeEnvironment:
             names.update(
                 name for module_id, name in self._graph_type_table if module_id == self._module_id
             )
-        return frozenset(names)
+        own_names = frozenset(names)
+        if self._sealed:
+            self._sealed_own_source_type_names = own_names
+        return own_names
 
     def resolve_enum_owner_form(
         self,

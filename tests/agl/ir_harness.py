@@ -97,7 +97,7 @@ def _run_ir(
 ) -> tuple[dict[str, Value], str]:
     compiled = _compiled_program(source, caps=caps)
     executable = lower_program(
-        compiled, source_text=source, source_label="<ir-test>", validate=True
+        compiled, source_text=source, source_label="<ir-test>"
     )
     params = _build_ir_param_values(executable, param_values) if param_values else None
     output = io.StringIO()
@@ -177,7 +177,6 @@ def _prepare_extern_program(
         _compiled_checked(checked),
         source_text=source,
         source_label="<extern-ir-test>",
-        validate=True,
     )
     registry = ExternRegistry()
     loaded: set[ModuleId] = set()
@@ -257,7 +256,7 @@ def evaluate_ir_graph(
     entry_source: str, modules: dict[str, str], tmp_path: Path
 ) -> dict[str, Value]:
     checked = _checked_graph(entry_source, modules, tmp_path)
-    executable = lower_graph(_compiled_checked_graph(checked), validate=True)
+    executable = lower_graph(_compiled_checked_graph(checked))
     result = IrInterpreter(executable).run()
     return result
 
@@ -266,7 +265,7 @@ def evaluate_ir_graph_raises(
     entry_source: str, modules: dict[str, str], tmp_path: Path
 ) -> ExceptionValue:
     checked = _checked_graph(entry_source, modules, tmp_path)
-    executable = lower_graph(_compiled_checked_graph(checked), validate=True)
+    executable = lower_graph(_compiled_checked_graph(checked))
     try:
         IrInterpreter(executable).run()
     except AglRaise as exc:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TypeAlias
 
+from agm.agl.self_validation import run_optional_validation
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import EnumOwnerForm, EnumOwnerFormKind
 
@@ -21,10 +22,14 @@ from .diagnostics import (
     WildcardWitness,
     WitnessField,
     issue_sort_key,
+    qualified_owner_name,
 )
 from .matrix import (
     OccurrenceAllocator,
+    OccurrenceIndex,
     PatternMatrix,
+    _binder_assignment_sort_key,
+    _occurrence_sort_key,
     default_matrix,
     head_constructors,
     matrix_from_normalized,
@@ -61,7 +66,6 @@ from .normalize import (
     constructor_inhabits_type,
     signature_for_type,
 )
-from .optional_validation import run_optional_validation
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,21 +103,13 @@ _Constraint: TypeAlias = _ConstructorConstraint | _OpenConstraint
 _Constraints: TypeAlias = tuple[tuple[OccurrenceId, _Constraint], ...]
 
 
-@dataclass(frozen=True, slots=True)
-class _FailureAnalysis:
-    """A deterministic failure suffix and the identities computed to derive it."""
-
-    constraints: _Constraints | None
-    analyzed_decision_ids: tuple[int, ...]
-
-
 def _constructor_index(constructor: Constructor, signature: ClosedSignature) -> int:
-    try:
-        return signature.constructors.index(constructor)
-    except ValueError as exc:
+    index = signature.index_of(constructor)
+    if index is None:
         raise MatchCompileInvariantError(
             "observed constructor is absent from its occurrence's closed signature"
-        ) from exc
+        )
+    return index
 
 
 def _ordered_heads(matrix: PatternMatrix, column: int) -> tuple[Constructor, ...]:
@@ -129,9 +125,10 @@ def _ordered_heads(matrix: PatternMatrix, column: int) -> tuple[Constructor, ...
 
 
 def _signature_is_complete(observed: tuple[Constructor, ...], signature: ClosedSignature) -> bool:
-    return len(observed) == len(signature.constructors) and all(
-        constructor in observed for constructor in signature.constructors
-    )
+    if len(observed) != len(signature.constructors):
+        return False
+    observed_set = frozenset(observed)
+    return all(constructor in observed_set for constructor in signature.constructors)
 
 
 def _finalize_binders(matrix: PatternMatrix, row: MatrixRow) -> tuple[BinderAssignment, ...]:
@@ -154,47 +151,31 @@ def _finalize_binders(matrix: PatternMatrix, row: MatrixRow) -> tuple[BinderAssi
         binder_ids.add(assignment.binder.node_id)
 
     def assignment_key(item: BinderAssignment) -> tuple[int, int, int]:
-        return (
-            available[item.occurrence].creation_order,
-            item.occurrence.value,
-            item.binder.node_id,
-        )
+        return _binder_assignment_sort_key(item, available)
 
     return tuple(sorted(assignments, key=assignment_key))
-
-
-def _child_ids(
-    occurrences: tuple[Occurrence, ...], parent: OccurrenceId, constructor: Constructor
-) -> frozenset[OccurrenceId]:
-    return frozenset(
-        occurrence.id
-        for occurrence in occurrences
-        if isinstance(occurrence.provenance, FieldOccurrenceProvenance)
-        and occurrence.provenance.parent == parent
-        and occurrence.provenance.constructor == constructor
-    )
 
 
 def _switch_free_occurrences(
     occurrence: Occurrence,
     branches: tuple[DecisionBranch, ...],
     default: Decision | None,
-    occurrences: tuple[Occurrence, ...],
+    index: OccurrenceIndex,
 ) -> tuple[OccurrenceId, ...]:
     required = {occurrence.id}
     for branch in branches:
         required.update(
             set(branch.decision.free_occurrences)
-            - _child_ids(occurrences, occurrence.id, branch.constructor)
+            - index.child_ids(occurrence.id, branch.constructor)
         )
     if default is not None:
         required.update(default.free_occurrences)
-    by_id = {item.id: item for item in occurrences}
+    by_id = index.by_id
     if any(identifier not in by_id for identifier in required):
         raise MatchCompileInvariantError("decision free interface names an unknown occurrence")
 
     def occurrence_key(identifier: OccurrenceId) -> tuple[int, int]:
-        return by_id[identifier].creation_order, identifier.value
+        return _occurrence_sort_key(by_id[identifier])
 
     return tuple(sorted(required, key=occurrence_key))
 
@@ -202,8 +183,7 @@ def _switch_free_occurrences(
 class _CaseCompiler:
     """Mutable tables scoped to exactly one source case compilation."""
 
-    def __init__(self, normalized: NormalizedCase) -> None:
-        self._normalized = normalized
+    def __init__(self) -> None:
         self._memo: dict[_CompileStateKey, Decision] = {}
         self._interned: dict[object, Decision] = {}
 
@@ -270,7 +250,7 @@ class _CaseCompiler:
             selection.occurrence,
             branch_tuple,
             default,
-            current_allocator.occurrences,
+            current_allocator.index,
         )
         decision = self.intern(
             DecisionSwitch(
@@ -305,10 +285,14 @@ def _default_constraint(decision: DecisionSwitch, type_table: TypeTable) -> _Con
     return _OpenConstraint(tuple(excluded))
 
 
-def _analyze_first_failure(root: Decision, type_table: TypeTable) -> _FailureAnalysis:
+def _first_failure_constraints(root: Decision, type_table: TypeTable) -> _Constraints | None:
+    """Return the deterministic first failure path's constraints, or ``None``.
+
+    Every decision identity is analyzed at most once, so a hash-consed DAG whose
+    paths are exponential in its node count still costs one visit per node.
+    """
     memo: dict[int, _Constraints | None] = {}
     active: set[int] = set()
-    analyzed: list[int] = []
 
     def visit(decision: Decision) -> _Constraints | None:
         identifier = id(decision)
@@ -316,7 +300,6 @@ def _analyze_first_failure(root: Decision, type_table: TypeTable) -> _FailureAna
             raise MatchCompileInvariantError("decision graph contains a cycle")
         if identifier in memo:
             return memo[identifier]
-        analyzed.append(identifier)
         if isinstance(decision, DecisionFail):
             memo[identifier] = ()
             return ()
@@ -363,12 +346,7 @@ def _analyze_first_failure(root: Decision, type_table: TypeTable) -> _FailureAna
         finally:
             active.remove(identifier)
 
-    constraints = visit(root)
-    return _FailureAnalysis(constraints, tuple(analyzed))
-
-
-def _first_failure_constraints(root: Decision, type_table: TypeTable) -> _Constraints | None:
-    return _analyze_first_failure(root, type_table).constraints
+    return visit(root)
 
 
 def _witness_for_occurrence(
@@ -446,15 +424,8 @@ def _source_spelling(
     def candidate_key(
         candidate: EnumOwnerForm,
     ) -> tuple[int, str, bool]:
-        spelling = candidate
-        assert spelling.owner_name is not None
-        qualifier = spelling.module_qualifier
-        if qualifier is None:
-            text = spelling.owner_name
-        elif qualifier:
-            text = f"{'.'.join(qualifier)}::{spelling.owner_name}"
-        else:
-            text = f"::{spelling.owner_name}"
+        assert candidate.owner_name is not None
+        text = qualified_owner_name(candidate.owner_name, candidate.module_qualifier)
         return (
             len(text),
             text,
@@ -547,16 +518,16 @@ def _issues(
 def compile_case(normalized: NormalizedCase) -> CompiledCase:
     """Compile one normalized source case and derive all structured issues from its DAG.
 
-    The decision DAG and its structured issues are the compiler's product. The
-    invariant self-checks (``validate_decision_dag``, ``validate_compiled_case``)
-    only re-verify that product and run when optional match-compilation
-    validation is enabled (see :mod:`.optional_validation`).
+    The decision DAG and its structured issues are the compiler's product.
+    ``validate_compiled_case`` is the single self-check entry point over that
+    product: it re-verifies the DAG as well as the ledger and the issues, and
+    runs only when optional match-compilation validation is enabled (see
+    :mod:`agm.agl.self_validation`).
     """
-    compiler = _CaseCompiler(normalized)
+    compiler = _CaseCompiler()
     root, allocator = compiler.compile(
         matrix_from_normalized(normalized), OccurrenceAllocator.for_case(normalized)
     )
-    run_optional_validation(lambda: validate_decision_dag(root))
     occurrences = allocator.occurrences
     reachable, issues = _issues(normalized, root, occurrences)
     compiled = CompiledCase(normalized, root, occurrences, reachable, issues)
@@ -569,7 +540,7 @@ def compile_case(normalized: NormalizedCase) -> CompiledCase:
 #
 # Invariant self-checks that re-verify this module's own output.  They never
 # change the compiler's result and run only when optional match-compilation
-# validation is enabled (see ``optional_validation.py``); the test harness
+# validation is enabled (see ``agm.agl.self_validation``); the test harness
 # turns them on so every compile in the suite is validated.
 # ---------------------------------------------------------------------------
 
@@ -818,6 +789,7 @@ def _validate_compiled_decisions(
     binder_paths = _source_binder_paths(normalized)
     referenced_groups: set[tuple[OccurrenceId, Constructor]] = set()
     free_memo: dict[int, tuple[OccurrenceId, ...]] = {}
+    occurrence_index = OccurrenceIndex.for_occurrences(compiled.occurrences)
 
     def resolve_binder_path(path: _BinderPath) -> Occurrence:
         occurrence = normalized.root
@@ -866,11 +838,7 @@ def _validate_compiled_decisions(
                 )
 
             def assignment_order(item: BinderAssignment) -> tuple[int, int, int]:
-                return (
-                    occurrences_by_id[item.occurrence].creation_order,
-                    item.occurrence.value,
-                    item.binder.node_id,
-                )
+                return _binder_assignment_sort_key(item, occurrences_by_id)
 
             expected_assignments = tuple(sorted(actual_binders.values(), key=assignment_order))
             if decision.binder_assignments != expected_assignments:
@@ -928,7 +896,7 @@ def _validate_compiled_decisions(
                 decision.occurrence,
                 decision.keyed_children,
                 decision.default,
-                compiled.occurrences,
+                occurrence_index,
             )
             if decision.free_occurrences != expected_free:
                 raise MatchCompileInvariantError(
@@ -937,13 +905,17 @@ def _validate_compiled_decisions(
         free_memo[identifier] = expected_free
         return expected_free
 
-    validate_decision_dag(compiled.root)
+    _validate_decision_shape(compiled.root)
     validate_free_interface(compiled.root)
     if set(occurrence_groups) != referenced_groups:
         raise MatchCompileInvariantError(
             "compiled occurrence ledger does not exactly match decision decompositions"
         )
 
+    # The ledger-aware dataflow subsumes the occurrence-free variant run by
+    # ``validate_decision_dag``: it re-checks the one-test-per-occurrence-per-path
+    # invariant over the same nodes, and additionally checks free interfaces
+    # against the occurrences a path really makes available.
     _validate_decision_dataflow(
         compiled.root,
         frozenset((normalized.root.id,)),
@@ -1123,8 +1095,8 @@ def validate_compiled_case(
         )
 
 
-def validate_decision_dag(root: Decision) -> None:
-    """Assert acyclicity, unique switch keys, and one test per occurrence per path."""
+def _validate_decision_shape(root: Decision) -> None:
+    """Assert acyclicity and well-formed switch keys and free interfaces."""
     visiting: set[int] = set()
     visited: set[int] = set()
 
@@ -1155,6 +1127,11 @@ def validate_decision_dag(root: Decision) -> None:
         visited.add(identifier)
 
     acyclic(root)
+
+
+def validate_decision_dag(root: Decision) -> None:
+    """Assert acyclicity, unique switch keys, and one test per occurrence per path."""
+    _validate_decision_shape(root)
     _validate_decision_dataflow(root, frozenset(), None)
 
 

@@ -297,7 +297,9 @@ class TestReplRun:
         from agm.agl.semantics.values import BoolValue, EnumValue, TextValue
 
         _isolated_home(monkeypatch, tmp_path)
-        monkeypatch.setattr(repl_command, "_resolve_trace_path", lambda *args, **kwargs: None)
+        monkeypatch.setattr(
+            repl_command, "prepare_trace_log_from_decision", lambda *args, **kwargs: None
+        )
         repl_command.run(args)
         session: ReplSession = fake_console[0]["session"]
         assert session._persisted_host_settings["log"] == BoolValue(expected_log)

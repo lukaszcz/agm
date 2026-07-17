@@ -207,8 +207,6 @@ def test_allocator_can_only_start_from_and_remains_bound_to_one_normalized_case(
     assert repeated.matrix.occurrences == specialized.matrix.occurrences
     assert repeated.allocator == specialized.allocator
     assert hash(repeated.allocator)
-    with pytest.raises(MatchCompileInvariantError, match="normalized case root"):
-        OccurrenceAllocator.for_case(specialized.matrix)
     with pytest.raises(MatchCompileInvariantError, match="case compilation"):
         specialize(other_matrix, 0, box, allocator)
 

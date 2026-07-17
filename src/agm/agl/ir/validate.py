@@ -39,7 +39,6 @@ future change without a validator arm produces a mypy exhaustiveness error.
 
 from __future__ import annotations
 
-import decimal
 from collections.abc import Callable, Mapping
 from typing import TypeVar, assert_never
 
@@ -131,6 +130,7 @@ from agm.agl.ir.nodes import (
     IrUnary,
     IrVariantIs,
     UseDefault,
+    is_canonical_literal_scalar,
 )
 from agm.agl.ir.operations import ArithKind, ArithOp, CmpOp, CompareKind, UnaryOp
 from agm.agl.ir.program import (
@@ -177,11 +177,11 @@ class _Context:
         "check_payload_dominance",
         "deep",
         "dominating_payload_symbols",
+        "dominators",
         "payload_symbols",
         "program",
         "payload_requirements",
         "requirement_collectors",
-        "validated_exprs",
     )
 
     def __init__(
@@ -189,20 +189,23 @@ class _Context:
         program: ExecutableProgram,
         *,
         deep: bool,
-        payload_symbols: set[SymbolId],
         check_payload_dominance: bool = False,
     ) -> None:
         self.program = program
         self.deep = deep
         self.check_payload_dominance = check_payload_dominance
-        self.payload_symbols = payload_symbols
+        # Every symbol bound by an IrCase arm, inventoried as the traversal
+        # meets each arm; complete once the traversal finishes.
+        self.payload_symbols: set[SymbolId] = set()
         self.dominating_payload_symbols: frozenset[SymbolId] = frozenset()
         self.active_exprs: set[int] = set()
-        self.validated_exprs: set[int] = set()
         # A cached expression's free payload requirements are independent of
         # its incoming case-arm bindings.  This preserves DAG sharing while
         # still checking that every incoming path supplies those bindings.
         self.payload_requirements: dict[int, frozenset[SymbolId]] = {}
+        # Per visited expression, the intersection of the payload symbols bound
+        # on every path that reaches it — the symbols it may rely on.
+        self.dominators: dict[int, frozenset[SymbolId]] = {}
         self.requirement_collectors: list[set[SymbolId]] = []
 
 
@@ -569,19 +572,16 @@ def _validate_catch_handler(handler: IrCatchHandler, ctx: _Context) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _literal_key_is_valid(key: IrLiteralCaseKey) -> bool:
-    value = key.scalar_value
-    return (
-        key.kind is IrLiteralKind.NUMERIC
-        and isinstance(value, decimal.Decimal)
-        and value.is_finite()
-        or key.kind is IrLiteralKind.BOOL
-        and isinstance(value, bool)
-        or key.kind is IrLiteralKind.TEXT
-        and isinstance(value, str)
-        or key.kind is IrLiteralKind.NULL
-        and value is None
-    )
+def _is_payload_candidate(symbol: SymbolId, ctx: _Context) -> bool:
+    """Report whether *symbol* has the shape an ``IrCase`` arm binding must have.
+
+    A cheap over-approximation of the payload inventory, usable before the
+    traversal has met every arm: other lowering temporaries share this shape, so
+    :func:`_check_payload_dominance` re-tests the recorded requirements against
+    the exact set of bound payload symbols.
+    """
+    descriptor = ctx.program.symbols[symbol]
+    return descriptor.synthetic and not descriptor.mutable and descriptor.public_name is None
 
 
 def _case_family(arm: IrCaseArm) -> tuple[str, object]:
@@ -616,7 +616,7 @@ def _validate_case_arm(arm: IrCaseArm, ctx: _Context) -> None:
             else:
                 valid_fields = None
         case IrLiteralCaseKey() as key:
-            if not _literal_key_is_valid(key):
+            if not is_canonical_literal_scalar(key.kind, key.scalar_value):
                 raise InvalidIrError(f"IrLiteralCaseKey has invalid scalar {key.scalar_value!r}")
             if arm.field_bindings:
                 raise InvalidIrError("literal IrCaseArm must not bind payload fields")
@@ -714,7 +714,13 @@ def _validate_case(node: IrCase, ctx: _Context) -> None:
 def _validate_expr(
     node: IrExpr, ctx: _Context, *, merge_requirements: bool = True
 ) -> frozenset[SymbolId]:
-    """Validate a DAG node once and check its free payload requirements."""
+    """Validate a DAG node once and record its free payload requirements.
+
+    Dominance itself is not decided here: whether a required symbol is a case
+    payload is only known once every arm has been seen, so each visit narrows
+    the node's dominator set and :func:`_check_payload_dominance` renders the
+    verdict after the traversal.
+    """
     identifier = id(node)
     if identifier in ctx.active_exprs:
         raise InvalidIrError("IR expression graph contains a cycle")
@@ -729,16 +735,15 @@ def _validate_expr(
         finally:
             ctx.requirement_collectors.pop()
             ctx.active_exprs.remove(identifier)
-        ctx.validated_exprs.add(identifier)
         ctx.payload_requirements[identifier] = requirements
 
     if ctx.check_payload_dominance:
-        missing = requirements - ctx.dominating_payload_symbols
-        if missing:
-            symbol = next(iter(missing))
-            raise InvalidIrError(
-                f"IrLoad references payload symbol_id={symbol.value!r} outside a binding IrCaseArm"
-            )
+        dominators = ctx.dominators.get(identifier)
+        ctx.dominators[identifier] = (
+            ctx.dominating_payload_symbols
+            if dominators is None
+            else dominators & ctx.dominating_payload_symbols
+        )
     if merge_requirements and ctx.requirement_collectors:
         ctx.requirement_collectors[-1].update(requirements)
     return requirements
@@ -788,7 +793,7 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
                         f"IrLoad references symbol_id={node.symbol.value!r}"
                         " which is not in program.symbols"
                     )
-                if ctx.check_payload_dominance and node.symbol in ctx.payload_symbols:
+                if ctx.check_payload_dominance and _is_payload_candidate(node.symbol, ctx):
                     ctx.requirement_collectors[-1].add(node.symbol)
 
         case IrBind():
@@ -1024,7 +1029,7 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
                             f"IrMakeClosure capture references symbol_id={cap.symbol!r}"
                             " which is not in program.symbols"
                         )
-                    if ctx.check_payload_dominance and cap.symbol in ctx.payload_symbols:
+                    if ctx.check_payload_dominance and _is_payload_candidate(cap.symbol, ctx):
                         ctx.requirement_collectors[-1].add(cap.symbol)
 
         case IrDirectCall(function_id=fn_id, arguments=arguments):
@@ -1140,13 +1145,9 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _validate_program_tables(
-    program: ExecutableProgram,
-    payload_symbols: set[SymbolId],
-    *,
-    check_payload_dominance: bool = False,
-) -> None:
+def _validate_program_tables(ctx: _Context) -> None:
     """Run deep cross-reference checks on the top-level program tables."""
+    program = ctx.program
 
     # 1. entry_module
     if program.entry_module not in program.modules:
@@ -1194,12 +1195,6 @@ def _validate_program_tables(
             )
 
     # 4. functions table consistency
-    fn_ctx = _Context(
-        program,
-        deep=True,
-        payload_symbols=payload_symbols,
-        check_payload_dominance=check_payload_dominance,
-    )
     for fn_key, fn_desc in program.functions.items():
         if fn_desc.function_id != fn_key:
             raise InvalidIrError(
@@ -1223,10 +1218,10 @@ def _validate_program_tables(
                     " is not in program.symbols"
                 )
             if param.default is not None:
-                _validate_expr(param.default, fn_ctx)
+                _validate_expr(param.default, ctx)
         match fn_desc.impl:
             case IrFunctionBody(body=body):
-                _validate_expr(body, fn_ctx)
+                _validate_expr(body, ctx)
             case ExternFunctionBody(contract=contract):
                 if len(fn_desc.params) != len(contract.params):
                     raise InvalidIrError(
@@ -1234,18 +1229,18 @@ def _validate_program_tables(
                         f" IR params but its contract has {len(contract.params)}"
                         " boundary params"
                     )
-                _validate_extern_contract(fn_key, contract, fn_ctx)
+                _validate_extern_contract(fn_key, contract, ctx)
             case other:  # pragma: no cover
                 assert_never(other)
 
     # 5. params table — each IrParam must reference a registered symbol, and
     #    the default expression (if present) must be structurally valid.
     for ir_param in program.params:
-        _validate_ir_param(ir_param, fn_ctx)
+        _validate_ir_param(ir_param, ctx)
 
     # 6. contracts table — each ContractRequest must be consistent.
     for cid, contract_req in program.contracts.items():
-        _validate_contract_request(cid, contract_req, fn_ctx)
+        _validate_contract_request(cid, contract_req, ctx)
 
     # (Sources table has no key/id consistency invariant beyond being keyed by
     # SourceId; key consistency is structural to dict construction.)
@@ -1299,6 +1294,30 @@ def _validate_contract_request(
 
 
 # ---------------------------------------------------------------------------
+# Payload dominance verdict (deep tier)
+# ---------------------------------------------------------------------------
+
+
+def _check_payload_dominance(ctx: _Context) -> None:
+    """Check that every visited expression is dominated by the payloads it needs.
+
+    Run once the traversal has met every arm, so ``ctx.payload_symbols`` is
+    complete and the recorded requirements can be reduced to actual payload
+    symbols. A node's dominators are the intersection over all incoming paths,
+    so requiring a payload it does not dominate means at least one path to the
+    node fails to bind that payload — independent of traversal order, which
+    preserves DAG sharing.
+    """
+    for identifier, requirements in ctx.payload_requirements.items():
+        missing = (requirements & ctx.payload_symbols) - ctx.dominators[identifier]
+        if missing:
+            symbol = next(iter(missing))
+            raise InvalidIrError(
+                f"IrLoad references payload symbol_id={symbol.value!r} outside a binding IrCaseArm"
+            )
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -1312,32 +1331,17 @@ def validate_ir(program: ExecutableProgram, *, deep: bool = True) -> None:
     :raises InvalidIrError: on the first violation found, with a message
         identifying the offending node or table entry.
     """
-    payload_symbols: set[SymbolId] = set()
-    ctx = _Context(program, deep=deep, payload_symbols=payload_symbols)
+    ctx = _Context(program, deep=deep, check_payload_dominance=deep)
 
     if deep:
-        _validate_program_tables(program, payload_symbols)
+        _validate_program_tables(ctx)
 
     for _module_id, em in program.modules.items():
         for node in em.initializers:
             _validate_expr(node, ctx)
 
     if deep:
-        # The first traversal inventories every field-binding symbol. Re-run
-        # with that complete inventory so shared DAG nodes are checked on every
-        # payload-binding path, independent of traversal order.
-        _validate_program_tables(
-            program, payload_symbols, check_payload_dominance=True
-        )
-        dominance_ctx = _Context(
-            program,
-            deep=True,
-            payload_symbols=payload_symbols,
-            check_payload_dominance=True,
-        )
-        for _module_id, em in program.modules.items():
-            for node in em.initializers:
-                _validate_expr(node, dominance_ctx)
+        _check_payload_dominance(ctx)
 
     # Cheap-tier param validation (location checks only — deep is in _validate_program_tables).
     if not deep:

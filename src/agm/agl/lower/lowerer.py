@@ -153,11 +153,11 @@ from agm.agl.matchcompile import (
     MatchCompiledProgram,
     Occurrence,
     OccurrenceId,
-    run_optional_validation,
     validate_match_compiled_program,
 )
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
 from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind
+from agm.agl.self_validation import run_optional_validation
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
@@ -2574,7 +2574,7 @@ class _Lowerer:
                 occurrence_symbols[identifier] = symbol
             return symbol
 
-        binder_provenance: dict[int, tuple[str, int]] = {}
+        binder_names: dict[int, str] = {}
         visited_decisions: set[int] = set()
 
         def collect_binders(decision: Decision) -> None:
@@ -2585,9 +2585,7 @@ class _Lowerer:
             if isinstance(decision, DecisionLeaf):
                 for assignment in decision.binder_assignments:
                     binder = assignment.binder
-                    binder_provenance.setdefault(
-                        binder.node_id, (binder.name, binder.node_id)
-                    )
+                    binder_names.setdefault(binder.node_id, binder.name)
                 return
             switch = cast(DecisionSwitch, decision)
             for decision_branch in switch.keyed_children:
@@ -2600,7 +2598,7 @@ class _Lowerer:
             node_id: self._alloc_sym(
                 node_id, name=name, mutable=False, public=False
             )
-            for name, node_id in binder_provenance.values()
+            for node_id, name in binder_names.items()
         }
         for action_id, action in actions.items():
             source_branch = branch_by_action[action_id]
@@ -2631,12 +2629,7 @@ class _Lowerer:
             assert constructor.value is None
             return IrLiteralCaseKey(IrLiteralKind.NULL, None)
 
-        def lower_decision(decision: Decision, available: frozenset[OccurrenceId]) -> IrExpr:
-            missing = set(decision.free_occurrences) - available
-            assert not missing, (
-                "compiler bug: decision reads undominated occurrences "
-                f"{sorted(identifier.value for identifier in missing)}"
-            )
+        def lower_decision(decision: Decision) -> IrExpr:
             cached = decision_memo.get(id(decision))
             if cached is not None:
                 return cached
@@ -2680,20 +2673,15 @@ class _Lowerer:
                         occurrence.provenance, FieldOccurrenceProvenance
                     )
                 )
-                child_available = available | frozenset(
-                    occurrence.id for occurrence in demanded_children
-                )
                 arms.append(
                     IrCaseArm(
                         case_key(decision_branch.constructor),
                         field_bindings,
-                        lower_decision(child, child_available),
+                        lower_decision(child),
                     )
                 )
             default = (
-                lower_decision(switch.default, available)
-                if switch.default is not None
-                else None
+                lower_decision(switch.default) if switch.default is not None else None
             )
             lowered_switch = IrCase(
                 location,
@@ -2704,9 +2692,7 @@ class _Lowerer:
             decision_memo[id(decision)] = lowered_switch
             return lowered_switch
 
-        decision = lower_decision(
-            compiled.root, frozenset({compiled.normalized.root.id})
-        )
+        decision = lower_decision(compiled.root)
         return IrSequence(
             location,
             (
@@ -3258,7 +3244,6 @@ def lower_program(
     *,
     source_text: str,
     source_label: str,
-    validate: bool = False,
     contract_payloads: Mapping[int, ContractPayload] | None = None,
 ) -> ExecutableProgram:
     """Lower a single-module match-compiled artifact to an ``ExecutableProgram``.
@@ -3266,7 +3251,6 @@ def lower_program(
     :param compiled: the statically match-compiled program to lower.
     :param source_text: the normalised source text (used in the sources table).
     :param source_label: human-readable label for the source (display_name).
-    :param validate: when ``True``, run ``validate_ir`` before returning.
     :returns: the linked ``ExecutableProgram`` ready for evaluation.
     :raises NotImplementedError: for unsupported AST nodes.
     :raises AssertionError: for missing checker side-table entries (compiler bugs).
@@ -3288,6 +3272,5 @@ def lower_program(
         contract_payloads=contract_payloads,
     )
     program = lowerer.lower()
-    if validate:
-        validate_ir(program)
+    run_optional_validation(lambda: validate_ir(program))
     return program

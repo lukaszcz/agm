@@ -30,10 +30,10 @@ from agm.agl.lower.lowerer import (
 )
 from agm.agl.matchcompile import (
     MatchCompiledModuleGraph,
-    run_optional_validation,
     validate_match_compiled_graph,
 )
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId
+from agm.agl.self_validation import run_optional_validation
 from agm.agl.semantics.types import EnumType, ExceptionType, RecordType
 from agm.agl.syntax.nodes import AgentDecl, FuncDef
 from agm.util.text import normalize_newlines
@@ -44,7 +44,6 @@ __all__ = ["lower_graph"]
 def lower_graph(
     compiled_graph: MatchCompiledModuleGraph,
     *,
-    validate: bool = False,
     _link: _LinkState | None = None,
     _already_linked: frozenset[ModuleId] = frozenset(),
     _entry_source_text: str | None = None,
@@ -54,7 +53,6 @@ def lower_graph(
     :class:`~agm.agl.ir.program.ExecutableProgram`.
 
     :param compiled_graph: the statically match-compiled module graph to lower.
-    :param validate: when ``True``, run ``validate_ir(deep=True)`` before returning.
     :returns: the linked ``ExecutableProgram`` ready for evaluation.
     """
     run_optional_validation(lambda: validate_match_compiled_graph(compiled_graph))
@@ -253,6 +251,5 @@ def lower_graph(
         contracts=dict(link.contracts),
         dry_run_inventory=dry_run_inventory,
     )
-    if validate:
-        validate_ir(program, deep=True)
+    run_optional_validation(lambda: validate_ir(program, deep=True))
     return program

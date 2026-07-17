@@ -253,7 +253,6 @@ def _run_with_json_codec(
         _compiled_checked(checked),
         source_text="<direct-ast>",
         source_label="<test>",
-        validate=True,
     )
     contracts, errors = _materialize_ir_contracts(executable, codecs)
     assert errors == []

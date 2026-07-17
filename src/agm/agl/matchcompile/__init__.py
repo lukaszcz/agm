@@ -32,7 +32,6 @@ from .model import (
     Occurrence,
     OccurrenceId,
 )
-from .optional_validation import run_optional_validation
 from .stage import (
     MatchCompilationResult,
     MatchCompiledArtifact,
@@ -78,7 +77,6 @@ __all__ = [
     "diagnostic_from_match_issue",
     "diagnostics_from_match_issues",
     "render_witness",
-    "run_optional_validation",
     "validate_match_compiled_graph",
     "validate_match_compiled_program",
 ]

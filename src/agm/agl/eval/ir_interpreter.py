@@ -9,6 +9,7 @@ Allowed imports:
 - ``agm.agl.semantics.exceptions`` (AglRaise, make_builtin_exception)
 - ``agm.agl.eval._decimal`` (shared pinned decimal context)
 - ``agm.agl.runtime.serialize`` (value_to_json_obj for ToJson coercion)
+- ``agm.config.engine_keys`` (the canonical engine-key catalog data leaf)
 
 NOT allowed: ``agm.agl.syntax``, ``agm.agl.scope``, ``agm.agl.typecheck``.
 """
@@ -127,6 +128,7 @@ from agm.agl.runtime.codec import ParseResult, _parse_contract_output
 from agm.agl.runtime.convert import StrictJsonParseError, parse_json_strict
 from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.runtime.option import none_value, some_value
+from agm.agl.runtime.params import build_engine_config_base
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.serialize import value_to_json_obj
 from agm.agl.runtime.trace import TraceStore, noop_trace
@@ -153,6 +155,7 @@ from agm.agl.semantics.values import (
     TextValue,
     Value,
 )
+from agm.config.engine_keys import HOST_CONSUMED_ENGINE_KEYS, RUNTIME_LIVE_ENGINE_KEYS
 from agm.core.parse import format_timeout as _format_timeout
 from agm.core.parse import parse_timeout as _parse_timeout
 
@@ -206,8 +209,41 @@ def _call_custom_codec_parse(
     return parse(raw, **accepted_kwargs)
 
 
+# Engine-key defaults, built on first use.  The evaluator owns no default of its
+# own for the host-consumed engine settings — the host runtime does — so it seeds
+# its registers from the host and falls back to these.  They are fixed data, so
+# they are built once and shared.
+_ENGINE_DEFAULT_SETTINGS: dict[str, Value] = {}
+
+
+def _engine_default_settings() -> Mapping[str, Value]:
+    """Return the host runtime's engine-key defaults."""
+    if not _ENGINE_DEFAULT_SETTINGS:
+        _ENGINE_DEFAULT_SETTINGS.update(build_engine_config_base({}))
+    return _ENGINE_DEFAULT_SETTINGS
+
+
+# Memo for :func:`_literal_key_value`, keyed by the frozen, hashable case key.
+_LITERAL_KEY_VALUES: dict[IrLiteralCaseKey, Value] = {}
+
+
 def _literal_key_value(key: IrLiteralCaseKey) -> Value:
-    """Materialize the runtime value represented by one typeless scalar key."""
+    """Materialize the runtime value represented by one typeless scalar key.
+
+    Memoized on *key*: a literal case arm always materializes the same immutable
+    ``Value``, so the hot case-dispatch path reuses one instance instead of
+    reallocating per arm per evaluation.
+    """
+    cached = _LITERAL_KEY_VALUES.get(key)
+    if cached is not None:
+        return cached
+    value = _make_literal_key_value(key)
+    _LITERAL_KEY_VALUES[key] = value
+    return value
+
+
+def _make_literal_key_value(key: IrLiteralCaseKey) -> Value:
+    """Build the runtime value for one typeless scalar key (uncached)."""
     if key.kind is IrLiteralKind.NUMERIC:
         assert isinstance(key.scalar_value, decimal.Decimal)
         return DecimalValue(key.scalar_value)
@@ -251,12 +287,6 @@ class _ReturnSignal(Exception):
         super().__init__()
         self.value = value
 
-
-# The engine keys whose ``builtin var`` store applies a live interpreter effect
-# (loop cap, strict-json mode, shell timeout): exactly the settings backed by a
-# live interpreter field.
-_RUNTIME_LIVE_ENGINE_KEYS = frozenset({"strict-json", "max-iters", "timeout"})
-_HOST_CONSUMED_ENGINE_KEYS = frozenset({"runner", "log", "log-file"})
 
 # ---------------------------------------------------------------------------
 # Coercion helper — module-level for test access
@@ -412,24 +442,16 @@ class IrInterpreter:
         # keys (which reuse ``_strict_json`` / ``_loop_limit`` /
         # ``_shell_exec_timeout``), these have no direct interpreter field; their
         # values live here as AgL ``Value``s.  The registers start from the
-        # engine defaults and are overlaid with the host-supplied seed (resolved
-        # from the default → config-file → CLI layers) for the keys it provides.
+        # engine defaults — owned by the host runtime, not by the evaluator —
+        # and are overlaid with the host-supplied seed (resolved from the
+        # default → config-file → CLI layers) for the keys it provides.
         # A ``host_reconfigurer`` (when present) reflects a write into the live
         # host services — the agent registry's default agent and the trace store.
         self._host_reconfigurer = host_reconfigurer
+        seed = builtin_host_settings if builtin_host_settings is not None else {}
+        defaults = _engine_default_settings()
         self._builtin_host_settings: dict[str, Value] = {
-            "runner": TextValue("claude"),
-            "log": BoolValue(False),
-            "log-file": none_value(),
-            **(
-                {
-                    key: value
-                    for key, value in builtin_host_settings.items()
-                    if key in _HOST_CONSUMED_ENGINE_KEYS
-                }
-                if builtin_host_settings is not None
-                else {}
-            ),
+            key: seed.get(key, defaults[key]) for key in HOST_CONSUMED_ENGINE_KEYS
         }
         self._host_contracts: Mapping[ContractId, OutputContract] = (
             host_contracts if host_contracts is not None else {}
@@ -1504,7 +1526,7 @@ class IrInterpreter:
         the write onward; the host-consumed keys update their register and, when
         a host reconfigurer is present, reconfigure the live host service.
         """
-        if key in _RUNTIME_LIVE_ENGINE_KEYS:
+        if key in RUNTIME_LIVE_ENGINE_KEYS:
             self._apply_config_effect(key, value)
             if key == "timeout":
                 assert isinstance(value, EnumValue)

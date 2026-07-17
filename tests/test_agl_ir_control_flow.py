@@ -518,7 +518,7 @@ catch CastError =>
 
 
 def _lower(source: str) -> object:
-    """Parse → check → lower; return ExecutableProgram with validate=True."""
+    """Parse → check → lower; return ExecutableProgram."""
     from agm.agl.capabilities import HostCapabilities
     from agm.agl.lower import lower_program
     from agm.agl.parser import parse_program
@@ -543,7 +543,6 @@ def _lower(source: str) -> object:
         _compiled_checked(checked),
         source_text=source,
         source_label="<test>",
-        validate=True,
     )
 
 

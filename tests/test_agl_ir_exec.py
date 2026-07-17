@@ -261,7 +261,6 @@ def test_t10_golden_lowering() -> None:
         _compiled_checked(checked),
         source_text=source,
         source_label="<test>",
-        validate=True,
     )
 
     # Check that the entry module initializers contain an IrExec node

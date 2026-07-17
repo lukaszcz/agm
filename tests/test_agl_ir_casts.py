@@ -53,7 +53,7 @@ def _lower(source: str):
     prog = parse_program(source)
     checked = check(resolve(prog), base_caps())
     return lower_program(
-        _compiled_checked(checked), source_text=source, source_label="<test>", validate=True
+        _compiled_checked(checked), source_text=source, source_label="<test>"
     )
 
 

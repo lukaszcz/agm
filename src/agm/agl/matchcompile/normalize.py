@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 import decimal
-from typing import assert_never
+import weakref
+from typing import Never, NoReturn, assert_never
 
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.scope.symbols import BinderKind, ScopeNode
-from agm.agl.semantics.type_table import TypeTable
+from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import (
     AgentType,
     BoolType,
     BottomType,
     DecimalType,
     DictType,
+    EnumOwnerForm,
     EnumType,
     ExceptionType,
     FunctionType,
@@ -75,6 +77,21 @@ class MatchCompileInvariantError(RuntimeError):
     """A checked-program invariant required by match compilation was violated."""
 
 
+def _unsupported(description: str, node: Never) -> NoReturn:
+    """Reject a value outside the closed union this dispatch is total over.
+
+    ``assert_never`` keeps the dispatch statically exhaustive; the raise turns a
+    checked-output value that escaped the union into a compiler invariant error
+    rather than a bare ``AssertionError``.
+    """
+    try:
+        assert_never(node)
+    except AssertionError as exc:
+        raise MatchCompileInvariantError(
+            f"unsupported {description} {type(node).__name__}"
+        ) from exc
+
+
 def _bare_enum_constructors(
     scope: ScopeNode,
     checked: CheckedPatternOwner,
@@ -126,12 +143,7 @@ def constructor_inhabits_type(constructor: Constructor, subject_type: Type) -> b
         case BoolConstructor() | EnumConstructor() | LiteralConstructor():
             pass
         case _ as unsupported_constructor:
-            try:
-                assert_never(unsupported_constructor)
-            except AssertionError as exc:
-                raise MatchCompileInvariantError(
-                    f"unsupported constructor {type(unsupported_constructor).__name__}"
-                ) from exc
+            _unsupported("constructor", unsupported_constructor)
 
     match subject_type:
         case BoolType():
@@ -183,12 +195,7 @@ def constructor_inhabits_type(constructor: Constructor, subject_type: Type) -> b
         ):
             return False
         case _ as unsupported_type:
-            try:
-                assert_never(unsupported_type)
-            except AssertionError as exc:
-                raise MatchCompileInvariantError(
-                    f"unsupported semantic type {type(unsupported_type).__name__}"
-                ) from exc
+            _unsupported("semantic type", unsupported_type)
 
 
 def pattern_cell_inhabits_type(cell: PatternCell, subject_type: Type) -> bool:
@@ -209,6 +216,47 @@ def pattern_cell_inhabits_type(cell: PatternCell, subject_type: Type) -> bool:
     return True
 
 
+_ENUM_SIGNATURES: weakref.WeakKeyDictionary[
+    TypeTable, dict[tuple[EnumType, TypeDef], ClosedSignature]
+] = weakref.WeakKeyDictionary()
+
+
+def _build_enum_signature(enum_type: EnumType, table: TypeTable) -> ClosedSignature:
+    try:
+        variant_names = tuple(table.enum_variants(enum_type))
+    except (KeyError, AssertionError) as exc:
+        raise MatchCompileInvariantError(
+            f"cannot resolve enum signature for checked type {enum_type!r}"
+        ) from exc
+    return ClosedSignature(
+        tuple(_enum_constructor(enum_type, name, table) for name in variant_names)
+    )
+
+
+def _enum_signature(enum_type: EnumType, table: TypeTable) -> ClosedSignature:
+    """Return the closed signature of *enum_type*, built once per declaration.
+
+    Every switch node asks for its occurrence's signature more than once, so the
+    result is memoized.  The key carries the registered ``TypeDef`` alongside the
+    handle: a redeclared type is a different def and therefore never resolves
+    through a stale signature, and the whole memo is dropped together with its
+    ``TypeTable``.
+    """
+    typedef = table.get(enum_type.module_id, enum_type.name)
+    if typedef is None:
+        return _build_enum_signature(enum_type, table)
+    cache = _ENUM_SIGNATURES.get(table)
+    if cache is None:
+        cache = {}
+        _ENUM_SIGNATURES[table] = cache
+    key = (enum_type, typedef)
+    signature = cache.get(key)
+    if signature is None:
+        signature = _build_enum_signature(enum_type, table)
+        cache[key] = signature
+    return signature
+
+
 def signature_for_type(subject_type: Type, table: TypeTable) -> Signature:
     """Return the complete constructor signature for every current semantic type.
 
@@ -220,15 +268,7 @@ def signature_for_type(subject_type: Type, table: TypeTable) -> Signature:
         case BoolType():
             return ClosedSignature((BoolConstructor(False), BoolConstructor(True)))
         case EnumType() as enum_type:
-            try:
-                variant_names = tuple(table.enum_variants(enum_type))
-            except (KeyError, AssertionError) as exc:
-                raise MatchCompileInvariantError(
-                    f"cannot resolve enum signature for checked type {enum_type!r}"
-                ) from exc
-            return ClosedSignature(
-                tuple(_enum_constructor(enum_type, name, table) for name in variant_names)
-            )
+            return _enum_signature(enum_type, table)
         case InferenceVarType():
             raise MatchCompileInvariantError(
                 "flexible inference type escaped checked output"
@@ -251,12 +291,7 @@ def signature_for_type(subject_type: Type, table: TypeTable) -> Signature:
         ):
             return OpenSignature()
         case _ as unreachable:
-            try:
-                assert_never(unreachable)
-            except AssertionError as exc:
-                raise MatchCompileInvariantError(
-                    f"unsupported semantic type {type(unreachable).__name__}"
-                ) from exc
+            _unsupported("semantic type", unreachable)
 
 
 def _canonical_literal(pattern: LiteralPattern, subject_type: Type) -> Constructor:
@@ -277,11 +312,12 @@ def _canonical_literal(pattern: LiteralPattern, subject_type: Type) -> Construct
     )
 
 
-def _normalize_pattern(
+def normalize_pattern(
     pattern: Pattern,
     subject_type: Type,
     checked: CheckedPatternOwner,
 ) -> PatternCell:
+    """Normalize one checked pattern against its checked occurrence type."""
     provenance = SourcePatternProvenance(pattern.node_id, pattern.span)
     match pattern:
         case WildcardPattern():
@@ -365,28 +401,24 @@ def _normalize_pattern(
                         )
                     )
                 else:
-                    arguments.append(_normalize_pattern(child, field.type, checked))
+                    arguments.append(normalize_pattern(child, field.type, checked))
             return ConstructorCell(constructor, tuple(arguments), provenance)
         case _ as unreachable:
-            try:
-                assert_never(unreachable)
-            except AssertionError as exc:
-                raise MatchCompileInvariantError(
-                    f"unsupported source pattern {type(unreachable).__name__}"
-                ) from exc
+            _unsupported("source pattern", unreachable)
 
 
-def normalize_pattern(
-    pattern: Pattern,
-    subject_type: Type,
+def normalize_case(
+    case: Case,
     checked: CheckedPatternOwner,
-) -> PatternCell:
-    """Normalize one checked pattern against its checked occurrence type."""
-    return _normalize_pattern(pattern, subject_type, checked)
+    *,
+    enum_owner_forms: tuple[EnumOwnerForm, ...] | None = None,
+) -> NormalizedCase:
+    """Normalize one checked source case into a source-priority one-column matrix.
 
-
-def normalize_case(case: Case, checked: CheckedPatternOwner) -> NormalizedCase:
-    """Normalize one checked source case into a source-priority one-column matrix."""
+    *enum_owner_forms* lets a caller normalizing every case of one checked owner
+    enumerate that owner's writable enum spellings once instead of once per
+    case; it defaults to resolving them from *checked*.
+    """
     try:
         subject_type = checked.node_types[case.subject.node_id]
     except KeyError as exc:
@@ -405,7 +437,7 @@ def normalize_case(case: Case, checked: CheckedPatternOwner) -> NormalizedCase:
     )
     rows: list[MatrixRow] = []
     for index, branch in enumerate(case.branches):
-        cell = _normalize_pattern(branch.pattern, subject_type, checked)
+        cell = normalize_pattern(branch.pattern, subject_type, checked)
         if pattern_cell_inhabits_type(cell, subject_type):
             rows.append(
                 MatrixRow(
@@ -432,9 +464,12 @@ def normalize_case(case: Case, checked: CheckedPatternOwner) -> NormalizedCase:
             f"missing resolver scope provenance for case node {case.node_id}"
         ) from exc
     module_id = checked.module_id if isinstance(checked, CheckedModule) else ENTRY_ID
+    owner_forms = (
+        checked.type_env.enum_owner_forms() if enum_owner_forms is None else enum_owner_forms
+    )
     case_context = MatchCaseContext(
         module_id=module_id,
-        enum_owner_forms=checked.type_env.enum_owner_forms(),
+        enum_owner_forms=owner_forms,
         bare_enum_constructors=_bare_enum_constructors(case_scope, checked),
         owner_program=checked.resolved.program,
     )

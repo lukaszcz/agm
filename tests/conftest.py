@@ -10,15 +10,16 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.matchcompile.optional_validation import set_match_validation_enabled
+from agm.agl.self_validation import self_validation_enabled, set_self_validation_enabled
 from agm.core import dry_run
 
-# Enable the match compiler's optional invariant self-checks for the whole test
-# suite.  They are disabled in normal execution (zero production cost); turning
-# them on here makes every case compiled anywhere in the suite double as an
-# invariant oracle.  Individual tests may disable them to exercise the
-# production path (see the ``match_validation_disabled`` fixture).
-set_match_validation_enabled(True)
+# Enable AgL's optional invariant self-checks — match-compilation self-checks and
+# IR structural validation — for the whole test suite.  They are disabled in
+# normal execution (zero production cost); turning them on here makes every case
+# compiled and every program lowered anywhere in the suite double as an invariant
+# oracle.  Individual tests may disable them to exercise the production path (see
+# the ``self_validation_disabled`` fixture).
+set_self_validation_enabled(True)
 
 # Set to ``True`` once :func:`pytest_configure` has successfully detached the
 # current (test-running) process from its controlling terminal.  Consulted by
@@ -66,6 +67,21 @@ def pytest_configure(config: pytest.Config) -> None:
     xdist_active = getattr(config.option, "dist", "no") != "no"
     if is_xdist_worker or not xdist_active:
         _detach_from_controlling_terminal()
+
+
+@pytest.fixture()
+def self_validation_disabled() -> Generator[None, None, None]:
+    """Run the body with AgL's optional self-checks off, as in normal execution.
+
+    The suite enables them globally; tests that pin the production path — where a
+    compile or lowering is trusted without being re-verified — take this fixture.
+    """
+    previous = self_validation_enabled()
+    set_self_validation_enabled(False)
+    try:
+        yield
+    finally:
+        set_self_validation_enabled(previous)
 
 
 @pytest.fixture()

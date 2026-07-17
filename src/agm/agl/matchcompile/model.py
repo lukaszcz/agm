@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import TypeAlias
 
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.self_validation import run_optional_validation
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import EnumOwnerForm, EnumType, Type
 from agm.agl.syntax.nodes import Program
@@ -109,6 +110,27 @@ class ClosedSignature:
     """A finite, declaration-ordered set of all constructors for a type."""
 
     constructors: tuple[Constructor, ...]
+    _indices: dict[Constructor, int] | None = field(
+        init=False,
+        default=None,
+        repr=False,
+        compare=False,
+        hash=False,
+    )
+
+    def index_of(self, constructor: Constructor) -> int | None:
+        """Return the declaration index of *constructor*, or ``None`` when absent.
+
+        The index is built once per signature so declaration-order lookups and
+        completeness tests never rescan the constructor tuple.
+        """
+        indices = self._indices
+        if indices is None:
+            indices = {}
+            for index, candidate in enumerate(self.constructors):
+                indices.setdefault(candidate, index)
+            object.__setattr__(self, "_indices", indices)
+        return indices.get(constructor)
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,11 +233,7 @@ class ConstructorCell:
     provenance: SourcePatternProvenance
 
     def __post_init__(self) -> None:
-        if len(self.arguments) != self.constructor.arity:
-            raise ValueError(
-                "constructor cell argument count does not match constructor arity: "
-                f"{len(self.arguments)} != {self.constructor.arity}"
-            )
+        run_optional_validation(lambda: _validate_constructor_cell(self))
 
 
 PatternCell: TypeAlias = WildcardCell | ConstructorCell
@@ -283,28 +301,7 @@ class NormalizedCase:
     )
 
     def __post_init__(self) -> None:
-        if self.occurrences != (self.root,):
-            raise ValueError("a freshly normalized case must contain only its root occurrence")
-        if any(len(row.cells) != len(self.occurrences) for row in self.rows):
-            raise ValueError("normalized matrix row width does not match occurrence width")
-        if tuple(action.source_index for action in self.actions) != tuple(
-            range(len(self.actions))
-        ):
-            raise ValueError("source actions must retain contiguous source priority")
-        row_indices = tuple(row.source_index for row in self.rows)
-        if row_indices != tuple(sorted(set(row_indices))) or any(
-            not 0 <= source_index < len(self.actions) for source_index in row_indices
-        ):
-            raise ValueError(
-                "normalized matrix rows must retain an ordered unique subsequence "
-                "of source actions"
-            )
-        if any(
-            row.action_id != self.actions[row.source_index].action_id for row in self.rows
-        ):
-            raise ValueError(
-                "normalized rows and source actions must agree for each retained row"
-            )
+        run_optional_validation(lambda: _validate_normalized_case(self))
 
 
 @dataclass(frozen=True, slots=True)
@@ -353,6 +350,43 @@ class DecisionSwitch:
 
 
 Decision: TypeAlias = DecisionFail | DecisionLeaf | DecisionSwitch
+
+
+# ---------------------------------------------------------------------------
+# Optional self-validation
+#
+# Invariant self-checks that re-verify this module's own construction.  They
+# never change the compiler's result and run only when optional
+# match-compilation validation is enabled (see ``agm.agl.self_validation``); the
+# test harness turns them on so every value built anywhere in the suite is
+# validated.
+# ---------------------------------------------------------------------------
+
+
+def _validate_constructor_cell(cell: ConstructorCell) -> None:
+    if len(cell.arguments) != cell.constructor.arity:
+        raise ValueError(
+            "constructor cell argument count does not match constructor arity: "
+            f"{len(cell.arguments)} != {cell.constructor.arity}"
+        )
+
+
+def _validate_normalized_case(case: NormalizedCase) -> None:
+    if case.occurrences != (case.root,):
+        raise ValueError("a freshly normalized case must contain only its root occurrence")
+    if any(len(row.cells) != len(case.occurrences) for row in case.rows):
+        raise ValueError("normalized matrix row width does not match occurrence width")
+    if tuple(action.source_index for action in case.actions) != tuple(range(len(case.actions))):
+        raise ValueError("source actions must retain contiguous source priority")
+    row_indices = tuple(row.source_index for row in case.rows)
+    if row_indices != tuple(sorted(set(row_indices))) or any(
+        not 0 <= source_index < len(case.actions) for source_index in row_indices
+    ):
+        raise ValueError(
+            "normalized matrix rows must retain an ordered unique subsequence of source actions"
+        )
+    if any(row.action_id != case.actions[row.source_index].action_id for row in case.rows):
+        raise ValueError("normalized rows and source actions must agree for each retained row")
 
 
 __all__ = [

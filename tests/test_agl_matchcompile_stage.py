@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import decimal
-from collections.abc import MutableMapping
+from collections.abc import Callable, MutableMapping
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
@@ -93,7 +93,6 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
         "diagnostic_from_match_issue",
         "diagnostics_from_match_issues",
         "render_witness",
-        "run_optional_validation",
         "validate_match_compiled_graph",
         "validate_match_compiled_program",
     }
@@ -579,10 +578,15 @@ def test_duplicate_source_case_ids_are_rejected_by_compilation_and_validation(
 ) -> None:
     checked = _checked("case true of | true => 1 | false => 2")
     source_case = _first_case(checked)
-    monkeypatch.setattr(stage_module, "_source_cases", lambda _program: (source_case, source_case))
+
+    def walk_one_case_twice(_program: object, visit: Callable[[object], None]) -> None:
+        visit(source_case)
+        visit(source_case)
+
+    monkeypatch.setattr(stage_module, "walk", walk_one_case_twice)
 
     with pytest.raises(MatchCompileInvariantError, match="duplicate"):
-        stage_module._expected_case_map(checked.resolved.program)
+        stage_module._source_cases(checked.resolved.program)
     with pytest.raises(MatchCompileInvariantError, match="duplicate"):
         compile_program_matches(checked)
 

@@ -49,7 +49,6 @@ def _lower(source: str) -> ExecutableProgram:
         result.compiled,
         source_text=source,
         source_label="<test>",
-        validate=True,
     )
 
 

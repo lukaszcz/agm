@@ -101,11 +101,7 @@ def _roots(*paths: Path) -> RootSet:
     return RootSet(roots=frozenset(paths))
 
 
-def _lower_source(
-    source: str,
-    *,
-    validate: bool = True,
-) -> ExecutableProgram:
+def _lower_source(source: str) -> ExecutableProgram:
     """Parse + resolve (file-backed, so `extern def` is allowed) + check + lower."""
     resolved = resolve(parse_program(source), origin_path=_PATH)
     checked = check(resolved, _CAPS)
@@ -113,7 +109,6 @@ def _lower_source(
         _compiled_checked(checked),
         source_text=source,
         source_label="<extern-lowering-test>",
-        validate=validate,
     )
 
 
@@ -213,7 +208,7 @@ class TestGraphLowering:
             },
         )
         checked = check_graph(resolve_graph(graph), _CAPS)
-        executable = lower_graph(_compiled_checked_graph(checked), validate=True)
+        executable = lower_graph(_compiled_checked_graph(checked))
 
         lib_mid = ModuleId.from_dotted("lib.mod")
         desc = _only_extern(executable)

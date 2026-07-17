@@ -32,7 +32,11 @@ from agm.agl.matchcompile.compiler import (
     compile_case,
     validate_decision_dag,
 )
-from agm.agl.matchcompile.matrix import OccurrenceAllocator, matrix_from_normalized
+from agm.agl.matchcompile.matrix import (
+    OccurrenceAllocator,
+    OccurrenceIndex,
+    matrix_from_normalized,
+)
 from agm.agl.matchcompile.model import (
     BinderAssignment,
     BoolConstructor,
@@ -50,6 +54,7 @@ from agm.agl.matchcompile.model import (
     MatchCaseContext,
     Occurrence,
     OccurrenceId,
+    Signature,
     WildcardCell,
 )
 from agm.agl.matchcompile.normalize import (
@@ -655,16 +660,31 @@ def test_wide_enum_match_does_not_rebuild_its_signature_per_matrix_cell(
 
 
 @pytest.mark.parametrize("exhaustive", [False, True])
-def test_failure_analysis_memoizes_paper_diagonal_dag_by_identity(exhaustive: bool) -> None:
+def test_failure_analysis_memoizes_paper_diagonal_dag_by_identity(
+    exhaustive: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _, _, compiled = _compile(_diagonal_source(10, exhaustive=exhaustive))
-
-    analysis = compiler_module._analyze_first_failure(compiled.root, compiled.normalized.type_table)
     unique = _unique_decision_ids(compiled.root)
+    signature_calls = 0
+    original = compiler_module.signature_for_type
 
-    assert frozenset(analysis.analyzed_decision_ids) == unique
-    assert len(analysis.analyzed_decision_ids) == len(unique)
+    def counted_signature_for_type(subject_type: Type, table: TypeTable) -> Signature:
+        nonlocal signature_calls
+        signature_calls += 1
+        return original(subject_type, table)
+
+    monkeypatch.setattr(compiler_module, "signature_for_type", counted_signature_for_type)
+
+    constraints = compiler_module._first_failure_constraints(
+        compiled.root, compiled.normalized.type_table
+    )
+
+    # Each analyzed switch resolves its signature once, plus once more for a
+    # default edge, so bounded signature work over a DAG with an order of
+    # magnitude more paths than nodes means every node was analyzed once.
+    assert signature_calls <= 2 * len(unique)
     assert len(_path_test_counts(compiled.root)) > len(unique) * 10
-    assert (analysis.constraints is None) is exhaustive
+    assert (constraints is None) is exhaustive
 
 
 def test_decisions_do_not_share_between_source_cases() -> None:
@@ -1426,7 +1446,7 @@ def test_leaf_free_interface_deduplicates_an_occurrence() -> None:
 def test_decision_interning_does_not_recursively_hash_shared_children() -> None:
     _, _, compiled = _compile("let value = false\ncase value of | false => 0 | true => 1")
     root = cast(DecisionSwitch, compiled.root)
-    compiler = compiler_module._CaseCompiler(compiled.normalized)
+    compiler = compiler_module._CaseCompiler()
     decision: Decision = DecisionFail()
     for _ in range(2_000):
         decision = DecisionSwitch(
@@ -1443,7 +1463,7 @@ def test_private_compiler_guards_reject_malformed_internal_states() -> None:
     normalized = compiled.normalized
     matrix = matrix_from_normalized(normalized)
     allocator = OccurrenceAllocator.for_case(normalized)
-    case_compiler = compiler_module._CaseCompiler(normalized)
+    case_compiler = compiler_module._CaseCompiler()
     first_root, evolved = case_compiler.compile(matrix, allocator)
     second_root, same_allocator = case_compiler.compile(matrix, evolved)
     assert second_root is first_root
@@ -1492,7 +1512,7 @@ def test_private_compiler_guards_reject_malformed_internal_states() -> None:
             normalized.root,
             (DecisionBranch(BoolConstructor(False), unknown_leaf),),
             None,
-            normalized.occurrences,
+            OccurrenceIndex.for_occurrences(normalized.occurrences),
         )
 
     _, _, enum_compiled = _compile(

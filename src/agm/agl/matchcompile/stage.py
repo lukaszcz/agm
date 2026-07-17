@@ -9,6 +9,7 @@ from typing import TypeAlias
 
 from agm.agl.diagnostics import Diagnostic, diagnostic_from_span
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.self_validation import run_optional_validation
 from agm.agl.syntax.nodes import Case, Program
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck.env import CheckedProgram
@@ -23,7 +24,6 @@ from .diagnostics import (
     render_witness,
 )
 from .normalize import MatchCompileInvariantError, normalize_case
-from .optional_validation import run_optional_validation
 
 
 def _immutable_cases(cases: Mapping[int, CompiledCase]) -> Mapping[int, CompiledCase]:
@@ -89,15 +89,21 @@ class MatchCompilationResult:
             raise ValueError("match compilation must return exactly one of an artifact or issues")
 
 
-def _source_cases(program: Program) -> tuple[Case, ...]:
-    cases: list[Case] = []
+def _source_cases(program: Program) -> dict[int, Case]:
+    """Collect every source case of *program*, keyed by its unique node id."""
+    cases: dict[int, Case] = {}
 
     def collect(node: object) -> None:
-        if isinstance(node, Case):
-            cases.append(node)
+        if not isinstance(node, Case):
+            return
+        if node.node_id in cases:
+            raise MatchCompileInvariantError(
+                f"duplicate source case node id {node.node_id} in one program"
+            )
+        cases[node.node_id] = node
 
     walk(program, collect)
-    return tuple(cases)
+    return cases
 
 
 def _compile_owner_cases(
@@ -105,13 +111,12 @@ def _compile_owner_cases(
 ) -> tuple[dict[int, CompiledCase], list[MatchIssue]]:
     cases: dict[int, CompiledCase] = {}
     issues: list[MatchIssue] = []
-    for source_case in _source_cases(owner.resolved.program):
-        if source_case.node_id in cases:
-            raise MatchCompileInvariantError(
-                f"duplicate source case node id {source_case.node_id} in one program"
-            )
-        compiled = compile_case(normalize_case(source_case, owner))
-        cases[source_case.node_id] = compiled
+    # Every case of one checked owner shares that owner's writable enum
+    # spellings, and enumerating them rescans the whole type namespace.
+    owner_forms = owner.type_env.enum_owner_forms()
+    for case_node_id, source_case in _source_cases(owner.resolved.program).items():
+        compiled = compile_case(normalize_case(source_case, owner, enum_owner_forms=owner_forms))
+        cases[case_node_id] = compiled
         issues.extend(compiled.issues)
     return cases, issues
 
@@ -167,20 +172,9 @@ def diagnostics_from_match_issues(issues: tuple[MatchIssue, ...]) -> tuple[Diagn
 #
 # Invariant self-checks that re-verify this module's own output.  They never
 # change the compiler's result and run only when optional match-compilation
-# validation is enabled (see ``optional_validation.py``); the test harness
+# validation is enabled (see ``agm.agl.self_validation``); the test harness
 # turns them on so every compile in the suite is validated.
 # ---------------------------------------------------------------------------
-
-
-def _expected_case_map(program: Program) -> dict[int, Case]:
-    expected: dict[int, Case] = {}
-    for case in _source_cases(program):
-        if case.node_id in expected:
-            raise MatchCompileInvariantError(
-                f"duplicate source case node id {case.node_id} in one program"
-            )
-        expected[case.node_id] = case
-    return expected
 
 
 def _validate_cases(
@@ -190,7 +184,7 @@ def _validate_cases(
     cases: Mapping[int, CompiledCase],
 ) -> None:
     program = owner.resolved.program
-    expected = _expected_case_map(program)
+    expected = _source_cases(program)
     actual_ids = set(cases)
     expected_ids = set(expected)
     missing = expected_ids - actual_ids

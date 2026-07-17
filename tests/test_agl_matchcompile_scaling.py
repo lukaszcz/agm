@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Generator
-
 import pytest
 
 import agm.agl.matchcompile.compiler as compiler_module
@@ -17,10 +15,6 @@ from agm.agl.matchcompile.matrix import (
     specialize,
 )
 from agm.agl.matchcompile.normalize import normalize_case
-from agm.agl.matchcompile.optional_validation import (
-    match_validation_enabled,
-    set_match_validation_enabled,
-)
 from agm.agl.parser import parse_program
 from agm.agl.scope import resolve
 from agm.agl.semantics.types import BoolType, EnumType
@@ -39,17 +33,6 @@ _CAPS = HostCapabilities(
 )
 
 
-@pytest.fixture()
-def match_validation_disabled() -> Generator[None, None, None]:
-    """Exercise production complexity without optional invariant replay work."""
-    previous = match_validation_enabled()
-    set_match_validation_enabled(False)
-    try:
-        yield
-    finally:
-        set_match_validation_enabled(previous)
-
-
 def _normalized(source: str) -> tuple[CheckedProgram, Case]:
     checked = check(resolve(parse_program(source)), _CAPS)
     cases: list[Case] = []
@@ -65,7 +48,7 @@ def _normalized(source: str) -> tuple[CheckedProgram, Case]:
 
 def test_specializing_many_heads_only_classifies_source_rows_once(
     monkeypatch: pytest.MonkeyPatch,
-    match_validation_disabled: None,
+    self_validation_disabled: None,
 ) -> None:
     head_count = 80
     variants = "\n".join(f"  | v{index}" for index in range(head_count))
@@ -102,7 +85,7 @@ def test_specializing_many_heads_only_classifies_source_rows_once(
 
 def test_terminal_wide_constructor_state_skips_column_profiles(
     monkeypatch: pytest.MonkeyPatch,
-    match_validation_disabled: None,
+    self_validation_disabled: None,
 ) -> None:
     field_count = 120
     fields = ", ".join(f"f{index}: bool" for index in range(field_count))
@@ -133,7 +116,7 @@ def test_terminal_wide_constructor_state_skips_column_profiles(
 
 def test_compile_state_keys_cache_structural_hash_work(
     monkeypatch: pytest.MonkeyPatch,
-    match_validation_disabled: None,
+    self_validation_disabled: None,
 ) -> None:
     checked, case = _normalized("case true of | true => 1 | false => 2")
     normalized = normalize_case(case, checked)

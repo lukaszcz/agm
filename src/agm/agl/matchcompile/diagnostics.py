@@ -41,6 +41,19 @@ class WitnessField:
     witness: MatchWitness
 
 
+def qualified_owner_name(owner_name: str, module_qualifier: tuple[str, ...] | None) -> str:
+    """Render one enum owner's source spelling from its module qualifier.
+
+    ``None`` spells an unqualified owner, an empty qualifier spells the
+    self-module form ``::Owner``, and a non-empty one spells its dotted handle.
+    """
+    if module_qualifier is None:
+        return owner_name
+    if module_qualifier:
+        return f"{'.'.join(module_qualifier)}::{owner_name}"
+    return f"::{owner_name}"
+
+
 @dataclass(frozen=True, slots=True)
 class EnumWitnessQualification:
     """Source-level enum owner spelling used to render one witness.
@@ -52,6 +65,11 @@ class EnumWitnessQualification:
 
     owner_name: str
     module_qualifier: tuple[str, ...] | None
+
+    @property
+    def owner_spelling(self) -> str:
+        """The selected owner's source spelling, including any module qualifier."""
+        return qualified_owner_name(self.owner_name, self.module_qualifier)
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,16 +137,7 @@ def render_witness(witness: MatchWitness) -> str:
     if isinstance(witness, EnumWitness):
         constructor_name = witness.variant
         if witness.qualification is not None:
-            owner_name = witness.qualification.owner_name
-            assert owner_name is not None
-            qualifier = witness.qualification.module_qualifier
-            if qualifier is None:
-                module_prefix = ""
-            elif qualifier:
-                module_prefix = f"{'.'.join(qualifier)}::"
-            else:
-                module_prefix = "::"
-            constructor_name = f"{module_prefix}{owner_name}::{witness.variant}"
+            constructor_name = f"{witness.qualification.owner_spelling}::{witness.variant}"
         if not witness.fields:
             return constructor_name
         fields = ", ".join(
@@ -173,5 +182,6 @@ __all__ = [
     "WildcardWitness",
     "WitnessField",
     "issue_sort_key",
+    "qualified_owner_name",
     "render_witness",
 ]

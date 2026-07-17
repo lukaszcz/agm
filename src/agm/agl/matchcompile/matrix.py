@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import TypeAlias
 
 from agm.agl.modules.ids import ENTRY_ID
+from agm.agl.self_validation import run_optional_validation
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import (
     EnumType,
@@ -40,7 +41,6 @@ from .normalize import (
     MatchCompileInvariantError,
     constructor_inhabits_type,
 )
-from .optional_validation import run_optional_validation
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,6 +150,8 @@ class PatternMatrix:
     rows: tuple[MatrixRow, ...]
     available_occurrences: tuple[Occurrence, ...]
     type_table: TypeTable = dataclass_field(repr=False, compare=False, hash=False)
+    # Recorded for the optional self-checks only; the compiler derives nothing
+    # from it, and it is canonicalized only when those checks run.
     path_decompositions: tuple[PathDecomposition, ...] = ()
     case_context: MatchCaseContext = dataclass_field(
         default_factory=lambda: MatchCaseContext(ENTRY_ID),
@@ -195,16 +197,6 @@ def _occurrence_sort_key(occurrence: Occurrence) -> tuple[int, int]:
     return occurrence.creation_order, occurrence.id.value
 
 
-def _decomposition_sort_key(
-    decomposition: PathDecomposition,
-) -> tuple[int, int, _ConstructorSortKey]:
-    return (
-        decomposition.parent.creation_order,
-        decomposition.parent.id.value,
-        _constructor_sort_key(decomposition.constructor),
-    )
-
-
 def _binder_assignment_sort_key(
     assignment: BinderAssignment,
     available_by_id: dict[OccurrenceId, Occurrence],
@@ -239,10 +231,11 @@ def _canonicalize_matrix(matrix: PatternMatrix) -> None:
         )
         for row in matrix.rows
     )
-    path_decompositions = tuple(sorted(matrix.path_decompositions, key=_decomposition_sort_key))
     object.__setattr__(matrix, "available_occurrences", available_occurrences)
     object.__setattr__(matrix, "rows", rows)
-    object.__setattr__(matrix, "path_decompositions", path_decompositions)
+    # ``path_decompositions`` is consumed only by the optional self-checks, so
+    # its canonical order is only established when those checks run.
+    run_optional_validation(lambda: _canonicalize_path_decompositions(matrix))
 
 
 def _build_column_profiles(matrix: PatternMatrix) -> tuple[_ColumnProfile, ...]:
@@ -300,19 +293,67 @@ def matrix_from_normalized(case: NormalizedCase) -> PatternMatrix:
     )
 
 
+_OccurrenceGroup: TypeAlias = tuple[OccurrenceId, _ConstructorKey]
+
+
 @dataclass(frozen=True, slots=True)
-class _OccurrenceAllocation:
-    parent: OccurrenceId
-    constructor_key: _ConstructorKey
-    children: tuple[Occurrence, ...]
+class OccurrenceIndex:
+    """A case-local occurrence ledger with its identity and child lookups.
+
+    Both maps are maintained as occurrences are allocated so that neither a
+    switch's free-occurrence interface nor a branch's field children require a
+    scan of the whole ledger.  They are derived from ``occurrences``, which
+    alone therefore carries this index's identity.
+    """
+
+    occurrences: tuple[Occurrence, ...]
+    by_id: Mapping[OccurrenceId, Occurrence] = dataclass_field(
+        repr=False, compare=False, hash=False
+    )
+    children_by_group: Mapping[_OccurrenceGroup, tuple[Occurrence, ...]] = dataclass_field(
+        repr=False, compare=False, hash=False
+    )
+
+    @classmethod
+    def for_occurrences(cls, occurrences: tuple[Occurrence, ...]) -> OccurrenceIndex:
+        """Index an existing creation-ordered occurrence ledger."""
+        groups: dict[_OccurrenceGroup, list[Occurrence]] = {}
+        for occurrence in occurrences:
+            provenance = occurrence.provenance
+            if isinstance(provenance, FieldOccurrenceProvenance):
+                key = (provenance.parent, _constructor_key(provenance.constructor))
+                groups.setdefault(key, []).append(occurrence)
+        return cls(
+            occurrences,
+            MappingProxyType({occurrence.id: occurrence for occurrence in occurrences}),
+            MappingProxyType({key: tuple(group) for key, group in groups.items()}),
+        )
+
+    def extended(
+        self, group: _OccurrenceGroup, children: tuple[Occurrence, ...]
+    ) -> OccurrenceIndex:
+        """Return this index with one freshly allocated child group appended.
+
+        Children are allocated with contiguous increasing ids and creation
+        orders, so appending them keeps the ledger in creation order.
+        """
+        return OccurrenceIndex(
+            (*self.occurrences, *children),
+            MappingProxyType({**self.by_id, **{child.id: child for child in children}}),
+            MappingProxyType({**self.children_by_group, group: children}),
+        )
+
+    def child_ids(self, parent: OccurrenceId, constructor: Constructor) -> frozenset[OccurrenceId]:
+        """Return the ids of *parent*'s field children under *constructor*."""
+        group = (parent, _constructor_key(constructor))
+        return frozenset(child.id for child in self.children_by_group.get(group, ()))
 
 
 @dataclass(frozen=True, slots=True)
 class OccurrenceAllocator:
     """Persistent case-local allocator for stable structural child occurrences."""
 
-    initial_occurrences: tuple[Occurrence, ...]
-    allocations: tuple[_OccurrenceAllocation, ...]
+    index: OccurrenceIndex
     next_id: int
     next_creation_order: int
     type_table: TypeTable = dataclass_field(repr=False, compare=False, hash=False)
@@ -321,8 +362,6 @@ class OccurrenceAllocator:
     @classmethod
     def for_case(cls, case: NormalizedCase) -> OccurrenceAllocator:
         """Create the sole root allocator for one normalized source case."""
-        if not isinstance(case, NormalizedCase):
-            raise MatchCompileInvariantError("occurrence allocator requires a normalized case root")
         next_id = (
             max(
                 (occurrence.id.value for occurrence in case.occurrences),
@@ -338,8 +377,7 @@ class OccurrenceAllocator:
             + 1
         )
         return cls(
-            case.occurrences,
-            (),
+            OccurrenceIndex.for_occurrences(case.occurrences),
             next_id,
             next_order,
             case.type_table,
@@ -349,15 +387,7 @@ class OccurrenceAllocator:
     @property
     def occurrences(self) -> tuple[Occurrence, ...]:
         """Return every case-local occurrence allocated so far in creation order."""
-        known = _known_occurrences(self)
-        return tuple(sorted(known.values(), key=_occurrence_sort_key))
-
-
-def _known_occurrences(allocator: OccurrenceAllocator) -> dict[OccurrenceId, Occurrence]:
-    known = {occurrence.id: occurrence for occurrence in allocator.initial_occurrences}
-    for allocation in allocator.allocations:
-        known.update((occurrence.id, occurrence) for occurrence in allocation.children)
-    return known
+        return self.index.occurrences
 
 
 def _allocate_children(
@@ -366,33 +396,30 @@ def _allocate_children(
     constructor: Constructor,
     sources: tuple[PatternProvenance, ...],
 ) -> tuple[tuple[Occurrence, ...], OccurrenceAllocator]:
-    key = _constructor_key(constructor)
-    for allocation in allocator.allocations:
-        if allocation.parent == parent.id and allocation.constructor_key == key:
-            return allocation.children, allocator
+    if not isinstance(constructor, EnumConstructor) or not constructor.fields:
+        return (), allocator
+    group = (parent.id, _constructor_key(constructor))
+    existing = allocator.index.children_by_group.get(group)
+    if existing is not None:
+        return existing, allocator
 
-    if not isinstance(constructor, EnumConstructor):
-        children: tuple[Occurrence, ...] = ()
-    else:
-        children = tuple(
-            Occurrence(
-                id=OccurrenceId(allocator.next_id + index),
-                creation_order=allocator.next_creation_order + index,
-                type=field.type,
-                provenance=FieldOccurrenceProvenance(
-                    parent=parent.id,
-                    constructor=constructor,
-                    field_name=field.name,
-                    field_index=index,
-                    source=sources[index],
-                ),
-            )
-            for index, field in enumerate(constructor.fields)
+    children = tuple(
+        Occurrence(
+            id=OccurrenceId(allocator.next_id + index),
+            creation_order=allocator.next_creation_order + index,
+            type=field.type,
+            provenance=FieldOccurrenceProvenance(
+                parent=parent.id,
+                constructor=constructor,
+                field_name=field.name,
+                field_index=index,
+                source=sources[index],
+            ),
         )
-    allocation = _OccurrenceAllocation(parent.id, key, children)
+        for index, field in enumerate(constructor.fields)
+    )
     return children, OccurrenceAllocator(
-        initial_occurrences=allocator.initial_occurrences,
-        allocations=(*allocator.allocations, allocation),
+        index=allocator.index.extended(group, children),
         next_id=allocator.next_id + constructor.arity,
         next_creation_order=allocator.next_creation_order + constructor.arity,
         type_table=allocator.type_table,
@@ -400,15 +427,10 @@ def _allocate_children(
     )
 
 
-def _head_constructors(matrix: PatternMatrix, column: int) -> tuple[Constructor, ...]:
-    """Return heads from an already validated matrix and column."""
-    return matrix.column_profiles[column].heads
-
-
 def head_constructors(matrix: PatternMatrix, column: int) -> tuple[Constructor, ...]:
     """Return distinct observed heads in stable first-observation order."""
     run_optional_validation(lambda: _validate_operation(matrix, column=column))
-    return _head_constructors(matrix, column)
+    return matrix.column_profiles[column].heads
 
 
 def _migrate_binder(
@@ -582,9 +604,27 @@ def select_qba_column(matrix: PatternMatrix) -> QbaSelection:
 #
 # Invariant self-checks that re-verify this module's own output.  They never
 # change the compiler's result and run only when optional match-compilation
-# validation is enabled (see ``optional_validation.py``); the test harness
+# validation is enabled (see ``agm.agl.self_validation``); the test harness
 # turns them on so every compile in the suite is validated.
 # ---------------------------------------------------------------------------
+
+
+def _decomposition_sort_key(
+    decomposition: PathDecomposition,
+) -> tuple[int, int, _ConstructorSortKey]:
+    return (
+        decomposition.parent.creation_order,
+        decomposition.parent.id.value,
+        _constructor_sort_key(decomposition.constructor),
+    )
+
+
+def _canonicalize_path_decompositions(matrix: PatternMatrix) -> None:
+    """Order the path decompositions the self-checks compare against."""
+    decompositions: tuple[PathDecomposition, ...] = tuple(
+        sorted(matrix.path_decompositions, key=_decomposition_sort_key)
+    )
+    object.__setattr__(matrix, "path_decompositions", decompositions)
 
 
 def _validate_cell(cell: PatternCell, subject_type: Type, type_table: TypeTable) -> None:
@@ -738,7 +778,7 @@ def _validate_allocator(matrix: PatternMatrix, allocator: OccurrenceAllocator) -
         raise MatchCompileInvariantError(
             "occurrence allocator belongs to a different compiler context"
         )
-    known = _known_occurrences(allocator)
+    known = allocator.index.by_id
     if any(known.get(occurrence.id) != occurrence for occurrence in matrix.available_occurrences):
         raise MatchCompileInvariantError(
             "occurrence allocator does not belong to this matrix compilation"
@@ -774,6 +814,7 @@ def _validate_operation(
 
 __all__ = [
     "OccurrenceAllocator",
+    "OccurrenceIndex",
     "PatternMatrix",
     "QbaScore",
     "QbaSelection",

@@ -138,7 +138,6 @@ def test_lower_repl_entry_accumulates_tables_and_resolves_prior_symbols() -> Non
         image=image,
         source_text="let x = 41\n()",
         source_label="<repl:1>",
-        validate=True,
     )
     first_symbols = set(first.program.symbols)
     first_sources = set(first.program.sources)
@@ -163,14 +162,13 @@ def test_lower_repl_entry_accumulates_tables_and_resolves_prior_symbols() -> Non
     assert second.program.modules[second.program.entry_module].initializers
 
 
-def _lower(source: str, *, validate: bool = True) -> ExecutableProgram:
+def _lower(source: str) -> ExecutableProgram:
     """Parse → check → lower the source; return ExecutableProgram."""
     checked = _check(source)
     return lower_program(
         _compiled_checked(checked),
         source_text=source,
         source_label="<test>",
-        validate=validate,
     )
 
 
@@ -969,7 +967,7 @@ class TestSourcesTable:
         assert len(prog.sources) == 1
 
     def test_source_display_name(self) -> None:
-        prog = _lower("()", validate=False)
+        prog = _lower("()")
         (src_id,) = prog.sources
         assert prog.sources[src_id].display_name == "<test>"
 
@@ -1229,13 +1227,8 @@ class TestValidateIrIntegration:
             "_v := 3\n"
             "()"
         )
-        prog = _lower(source, validate=True)
+        prog = _lower(source)
         validate_ir(prog)
-
-    def test_validate_false_skips_validation(self) -> None:
-        # Should not raise even without explicit validate call
-        prog = _lower("()", validate=False)
-        assert prog is not None
 
 
 # ---------------------------------------------------------------------------
@@ -1859,7 +1852,7 @@ class TestLowerGraph:
         rg = resolve_graph(mg)
         cg = check_graph(rg, _caps())
 
-        prog = lower_graph(_compiled_checked_graph(cg), validate=True)
+        prog = lower_graph(_compiled_checked_graph(cg))
 
         # Both modules must appear
         assert len(prog.modules) == 2
@@ -1903,8 +1896,8 @@ class TestLowerGraph:
         result_syms = [desc for desc in prog.symbols.values() if desc.public_name == "result"]
         assert len(result_syms) == 1
 
-        # validate_ir must pass (already called with validate=True above,
-        # but call again explicitly to be explicit)
+        # The suite-enabled self-checks already validated this program during
+        # lowering; call validate_ir explicitly so the test pins it regardless.
         validate_ir(prog, deep=True)
 
     def test_lower_graph_type_alias_no_spurious_nominal(self, tmp_path: Path) -> None:
@@ -1959,7 +1952,7 @@ class TestLowerGraph:
         rg = resolve_graph(mg)
         cg = check_graph(rg, _caps())
 
-        prog = lower_graph(_compiled_checked_graph(cg), validate=True)
+        prog = lower_graph(_compiled_checked_graph(cg))
 
         nominal_names = {desc.display_name for desc in prog.nominals.values()}
         nominal_ids = set(prog.nominals.keys())
@@ -1983,40 +1976,6 @@ class TestLowerGraph:
         assert NominalId(lib_mid, "ColorAlias") not in nominal_ids, (
             "NominalId(lib_mid, 'ColorAlias') must NOT appear in program.nominals"
         )
-
-    def test_lower_graph_without_validate(self, tmp_path: Path) -> None:
-        """lower_graph with validate=False skips validate_ir (covers the non-validate branch)."""
-        import os
-
-        from agm.agl.lower.graph import lower_graph
-        from agm.agl.modules.ids import ModuleId
-        from agm.agl.modules.loader import load_graph
-        from agm.agl.modules.roots import RootSet
-        from agm.agl.scope.graph import resolve_graph
-        from agm.agl.typecheck.graph import check_graph
-
-        lib_source = "def greet(n: int) -> int =\n    n + 1\n"
-        entry_source = "import lib\nlet r = lib::greet(5)\n()\n"
-
-        root = tmp_path / "root"
-        root.mkdir()
-        lib_mid = ModuleId.from_dotted("lib")
-        lib_path = root / lib_mid.relpath().replace("/", os.sep)
-        lib_path.parent.mkdir(parents=True, exist_ok=True)
-        lib_path.write_text(lib_source)
-
-        mg = load_graph(
-            entry_source,
-            entry_path=None,
-            roots=RootSet(roots=frozenset({root, _REPO_STDLIB_ROOT})),
-        )
-        rg = resolve_graph(mg)
-        cg = check_graph(rg, _caps())
-
-        # validate=False (the default) skips validate_ir — covers the branch at graph.py:144
-        prog = lower_graph(_compiled_checked_graph(cg))
-        assert len(prog.modules) == 2
-
 
 # ---------------------------------------------------------------------------
 # Golden lowering: print, parse_json, param declarations

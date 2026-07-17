@@ -21,7 +21,7 @@ and param config loading are wired from the same config stack as ``agm exec``.
 from __future__ import annotations
 
 import sys
-from pathlib import Path
+from functools import partial
 
 from agm.agent.config import default_agent_runner
 from agm.agent.runner import parse_command, split_command
@@ -33,6 +33,7 @@ from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.agl.runtime.params import build_engine_config_base, raw_option_str
 from agm.agl.semantics.values import Value
 from agm.cli_support.args import ReplArgs
+from agm.commands.exec import check_max_iters
 from agm.config.context import current_config_context
 from agm.config.general import (
     agm_home_dir,
@@ -44,8 +45,11 @@ from agm.config.general import (
 )
 from agm.config.module_roots import load_module_roots, resolve_lib_root, resolve_stdlib_root
 from agm.core import dry_run
-from agm.core.fs import mkdir
-from agm.core.log import prepare_trace_log_from_layers, resolve_log_file
+from agm.core.log import (
+    prepare_trace_log_from_decision,
+    resolve_live_trace_path,
+    resolve_log_decision,
+)
 from agm.core.toml import toml_dict
 
 
@@ -61,9 +65,7 @@ def run(args: ReplArgs) -> None:
     repl_config = load_repl_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
 
     strict_json = args.strict_json if args.strict_json is not None else config.strict_json
-    if args.max_iters is not None and args.max_iters <= 0:
-        print("Error: --max-iters must be a positive integer", file=sys.stderr)
-        raise SystemExit(1)
+    check_max_iters(args.max_iters)
     loop_limit = args.max_iters if args.max_iters is not None else config.default_loop_limit
     # Resolve max call depth: CLI > [exec] config (config pragmas are not applied
     # in the REPL).  ``None`` lets the session apply the canonical default.
@@ -78,9 +80,26 @@ def run(args: ReplArgs) -> None:
     # surface here as a clean error before the loop starts).
     split_command(runner_cmd, kind="runner")
 
-    # Resolve and validate the trace log file.  ``--dry-run`` is side-effect-free
-    # (no eval, no trace), mirroring ``agm exec``.
-    trace_path = _resolve_trace_path(args, config_log=config.log, config_log_file=config.log_file)
+    # Resolve the CLI > config logging decision ONCE: it both drives the trace
+    # file prepared here and seeds the readable ``log``/``log-file`` registers
+    # below, exactly as ``agm exec`` does.
+    log_decision = resolve_log_decision(
+        cli_no_log=args.no_log,
+        cli_log=args.log,
+        cli_log_file=args.log_file,
+        config_log=config.log,
+        config_log_file=config.log_file,
+    )
+
+    # Resolve and validate the trace log file up front so an unwritable
+    # ``--log-file`` exits 1 BEFORE the loop starts rather than crashing
+    # mid-session.  ``--dry-run`` is side-effect-free (no eval, no trace),
+    # mirroring ``agm exec``.
+    trace_path = (
+        None
+        if dry_run.enabled()
+        else prepare_trace_log_from_decision(log_decision, command_name="repl")
+    )
 
     runner_agent = runner_backed_agent_factory(
         default_runner_cmd=runner_cmd,
@@ -111,20 +130,9 @@ def run(args: ReplArgs) -> None:
         )
         return ConfirmingAgent(rebuilt, agent_mode, confirm=confirm_agent_call)
 
-    def _resolve_live_trace_path(enabled: bool, log_file: str | None) -> Path | None:
-        path = resolve_log_file(
-            command_name="repl",
-            enabled=enabled,
-            log_file=log_file,
-            unique=True,
-        )
-        if path is not None:
-            mkdir(path.parent, parents=True, exist_ok=True)
-        return path
-
     host_settings_policy = HostSettingsPolicy(
         build_runner=_build_runner,
-        resolve_trace_path=_resolve_live_trace_path,
+        resolve_trace_path=partial(resolve_live_trace_path, command_name="repl"),
     )
 
     def _params_config_loader(program_name: str) -> dict[str, object]:
@@ -149,19 +157,12 @@ def run(args: ReplArgs) -> None:
     raw_timeout_str = raw_option_str(exec_raw_table, {}, "timeout")
     # An absent host limit leaves the valve off; the builtin register exposes
     # that state as zero.
-    if args.no_log:
-        seed_log = False
-    elif args.log or args.log_file is not None:
-        seed_log = True
-    else:
-        seed_log = config.log or config.log_file is not None
-    seed_log_file = args.log_file if args.log_file is not None else config.log_file
     repl_base_raw: dict[str, object] = {
         "strict-json": strict_json,
         "runner": runner_cmd,
-        "log": seed_log,
+        "log": log_decision.enabled,
         "timeout": raw_timeout_str,
-        "log-file": seed_log_file,
+        "log-file": log_decision.explicit_path,
     }
     if loop_limit is not None:
         repl_base_raw["max-iters"] = loop_limit
@@ -197,26 +198,4 @@ def run(args: ReplArgs) -> None:
         history_path=history_path,
         theme=repl_config.theme,
         on_theme_save=lambda t: save_repl_theme(t, home=ctx.home),
-    )
-
-
-def _resolve_trace_path(
-    args: ReplArgs, config_log: bool, config_log_file: str | None
-) -> Path | None:
-    """Resolve + validate the JSONL trace path, or ``None`` (dry-run / disabled).
-
-    Mirrors ``agm exec`` via the shared :func:`prepare_trace_log_from_layers`:
-    ``--dry-run`` writes no trace; otherwise the path is resolved and validated
-    up front so an unwritable ``--log-file`` exits 1 BEFORE the loop starts
-    rather than crashing mid-session.
-    """
-    if dry_run.enabled():
-        return None
-    return prepare_trace_log_from_layers(
-        command_name="repl",
-        cli_no_log=args.no_log,
-        cli_log=args.log,
-        cli_log_file=args.log_file,
-        config_log=config_log,
-        config_log_file=config_log_file,
     )

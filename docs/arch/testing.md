@@ -18,6 +18,12 @@ Some tests guard architectural properties rather than feature behavior:
 - **End-to-end acceptance.** Whole-program suites for single-file and multi-file AgL programs are part of the standing gate and must stay green.
 - **Coverage.** The project maintains 100% test coverage of `src/` and 100% command coverage in end-to-end tests.
 
+## AgL Self-Validation
+
+AgL carries invariant self-checks that re-verify artifacts the compiler itself just produced: the match compiler's own output (matrix, occurrence ledger, decision DAG, semantic replay, provenance) and the structural validation of the lowered IR (`validate_ir`). These re-check already-checked source, so they are defense-in-depth rather than production behavior and are disabled by default.
+
+One toggle (`agm.agl.self_validation`) gates all of them. `tests/conftest.py` turns it on for the whole suite, so every case compiled and every program lowered anywhere in the tests doubles as an invariant oracle while production pays nothing. Tests that pin the production path take the `self_validation_disabled` fixture; `tests/test_agl_self_validation.py` holds the gating contract.
+
 ## Agents in Tests
 
 Real agents (claude, codex, and other runners) are never invoked in tests; agent and shell boundaries are always mocked. This keeps the suite deterministic and offline. The command e2e harness installs AGM into a temporary venv through `uv` in offline mode, so missing cached package artifacts fail as local setup problems instead of reaching the network. Tests are also written to survive concurrent and cross-worktree runs — no hardcoded temp paths, and interrupt tests restore default signal handling.
@@ -26,6 +32,7 @@ Real agents (claude, codex, and other runners) are never invoked in tests; agent
 
 - `tests/` — all tests; AgL pass suites are `tests/test_agl_*.py`, command suites are named per command.
 - `tests/test_agl_dependencies.py` — the package-layering contract.
+- `tests/test_agl_self_validation.py` — the self-validation gating contract; `src/agm/agl/self_validation.py` — the toggle.
 - `tests/test_agl_e2e.py` and `tests/agl/programs/` — single-file end-to-end acceptance; `tests/test_agl_multifile.py` with `tests/agl/multi_file/` — multi-file acceptance.
 - `tests/conftest.py`, `tests/_agl_helpers.py`, `tests/_proc_helpers.py` — shared fixtures and helpers.
 - `justfile` — the `test`, `lint`, `typecheck`, and `check` gates that run the suite.

@@ -44,6 +44,7 @@ Flag notes:
 from __future__ import annotations
 
 import sys
+from functools import partial
 from pathlib import Path
 from typing import TypeVar
 
@@ -76,8 +77,12 @@ from agm.config.general import (
 )
 from agm.config.module_roots import load_module_roots, resolve_lib_root, resolve_stdlib_root
 from agm.core import dry_run
-from agm.core.fs import mkdir, read_text_arg
-from agm.core.log import prepare_trace_log_from_layers, resolve_log_file
+from agm.core.fs import read_text_arg
+from agm.core.log import (
+    prepare_trace_log_from_decision,
+    resolve_live_trace_path,
+    resolve_log_decision,
+)
 from agm.core.parse import format_timeout, parse_timeout
 from agm.core.toml import toml_dict
 from agm.parser import exit_with_usage_error
@@ -88,6 +93,18 @@ _T = TypeVar("_T")
 def _first(*values: _T | None) -> _T | None:
     """Return the first non-None value, or None if all are None."""
     return next((v for v in values if v is not None), None)
+
+
+def check_max_iters(max_iters: int | None) -> None:
+    """Reject a non-positive ``--max-iters`` before anything runs.
+
+    The ``max-iters`` safety valve counts iterations, so zero and negatives are
+    meaningless; ``None`` means the flag was not given.  Shared by ``agm exec``
+    and ``agm repl``, which take the flag with identical semantics.
+    """
+    if max_iters is not None and max_iters <= 0:
+        print("Error: --max-iters must be a positive integer", file=sys.stderr)
+        raise SystemExit(1)
 
 
 def _project_option_text(
@@ -227,9 +244,7 @@ def run(args: ExecArgs) -> None:
     # Resolve loop limit (max-iters valve): CLI > config. ``None`` leaves the
     # valve off. A source ``std.config::max-iters := VALUE`` write is applied
     # at runtime from its program point, overriding this initial value.
-    if args.max_iters is not None and args.max_iters <= 0:
-        print("Error: --max-iters must be a positive integer", file=sys.stderr)
-        raise SystemExit(1)
+    check_max_iters(args.max_iters)
     resolved_loop_limit = _first(args.max_iters, config.default_loop_limit)
 
     # Resolve timeout: CLI > [exec] config. A source ``std.config::timeout :=
@@ -347,6 +362,16 @@ def run(args: ExecArgs) -> None:
             print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
         raise SystemExit(1)
 
+    # Resolve the CLI > config logging decision ONCE: it both drives the trace
+    # file prepared here and seeds the readable ``log`` register below.
+    log_decision = resolve_log_decision(
+        cli_no_log=args.no_log,
+        cli_log=args.log,
+        cli_log_file=args.log_file,
+        config_log=config.log,
+        config_log_file=config.log_file,
+    )
+
     # Resolve + validate the trace log file up front.  --dry-run is
     # side-effect-free: no trace is written regardless of --log-file.  A source
     # ``std.config::log``/``log-file`` write takes effect at runtime via the host
@@ -354,21 +379,14 @@ def run(args: ExecArgs) -> None:
     if dry_run.enabled():
         log_file = None
     else:
-        log_file = prepare_trace_log_from_layers(
-            command_name="exec",
-            cli_no_log=args.no_log,
-            cli_log=args.log,
-            cli_log_file=args.log_file,
-            config_log=config.log,
-            config_log_file=config.log_file,
-        )
+        log_file = prepare_trace_log_from_decision(log_decision, command_name="exec")
 
     # Host policy for reflecting host-consumed ``builtin var`` writes
     # (``runner``, ``log``, ``log-file``) into the live services during the run.
     # A source ``std.config::runner := ...`` rebuilds the default agent from the
     # new command (source-authoritative); ``log``/``log-file`` writes repoint the
     # trace store.  The mid-run trace repoint must NOT truncate an existing file,
-    # so it resolves the path directly rather than through ``prepare_trace_log``.
+    # so it goes through ``resolve_live_trace_path`` rather than ``prepare_trace_log``.
     def _build_runner(command: str) -> AgentFn:
         parse_command(command, kind="runner")
         return runner_backed_agent_factory(
@@ -377,30 +395,17 @@ def run(args: ExecArgs) -> None:
             idle_timeout=resolved_timeout,
         )
 
-    def _resolve_trace_path(enabled: bool, log_file_value: str | None) -> Path | None:
-        path = resolve_log_file(
-            command_name="exec",
-            enabled=enabled,
-            log_file=log_file_value,
-            unique=True,
-        )
-        if path is not None:
-            mkdir(path.parent, parents=True, exist_ok=True)
-        return path
-
     policy = HostSettingsPolicy(
-        build_runner=_build_runner, resolve_trace_path=_resolve_trace_path
+        build_runner=_build_runner,
+        resolve_trace_path=partial(resolve_live_trace_path, command_name="exec"),
     )
 
     # Seed the host-consumed registers from the resolved host layers so a program
     # reading these settings before any write observes the effective start value.
     # A later source ``:=`` overrides the seed from its program point onward.
-    if args.no_log:
-        seed_log = False
-    elif args.log or args.log_file is not None:
-        seed_log = True
-    else:
-        seed_log = config.log or config.log_file is not None
+    # ``log`` reuses the decision that drove the trace file, so the register and
+    # the trace can never disagree.  ``log-file`` keeps its own projection: only
+    # the register honours ``--no-log-file``.
     seed_log_file = _project_option_text(
         args.log_file, no_flag=args.no_log_file, key_name="log-file", key_type=_log_file_type
     )
@@ -419,7 +424,7 @@ def run(args: ExecArgs) -> None:
             timeout_seed_raw = format_timeout(resolved_timeout)
     builtin_host_settings: dict[str, Value] = {
         "runner": TextValue(runner_cmd),
-        "log": BoolValue(seed_log),
+        "log": BoolValue(log_decision.enabled),
         "log-file": seed_log_file,
         "timeout": convert_config_value("timeout", timeout_seed_raw, _timeout_type),
     }

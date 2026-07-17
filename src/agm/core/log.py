@@ -103,34 +103,41 @@ def resolve_log_decision(
     return LogDecision(enabled=resolved_enabled, explicit_path=resolved_path)
 
 
-def prepare_trace_log_from_layers(
-    *,
-    command_name: str,
-    cli_no_log: bool,
-    cli_log: bool,
-    cli_log_file: str | None,
-    config_log: bool,
-    config_log_file: str | None,
+def prepare_trace_log_from_decision(
+    decision: LogDecision, *, command_name: str
 ) -> Path | None:
-    """Resolve the CLI/config logging decision and prepare the trace file.
+    """Prepare the trace file for an already-resolved :class:`LogDecision`.
 
-    Combines :func:`resolve_log_decision` with :func:`prepare_trace_log` so the
-    two commands that support the full ``--log``/``--no-log``/``--log-file`` +
-    config precedence chain (``agm exec`` and ``agm repl``) share one call site.
-    Callers handle the ``--dry-run`` short-circuit before calling.
+    The two commands that support the full ``--log``/``--no-log``/``--log-file``
+    + config precedence chain (``agm exec`` and ``agm repl``) resolve the
+    decision once — they also seed their engine-setting registers from it — and
+    then hand it here.  Callers handle the ``--dry-run`` short-circuit before
+    calling.
     """
-    decision = resolve_log_decision(
-        cli_no_log=cli_no_log,
-        cli_log=cli_log,
-        cli_log_file=cli_log_file,
-        config_log=config_log,
-        config_log_file=config_log_file,
-    )
     return prepare_trace_log(
         command_name=command_name,
         enabled=decision.enabled,
         log_file=decision.explicit_path,
     )
+
+
+def resolve_live_trace_path(
+    enabled: bool, log_file: str | None, *, command_name: str
+) -> Path | None:
+    """Resolve a trace path for a mid-run repoint, creating its parent directory.
+
+    Unlike :func:`prepare_trace_log` this deliberately does NOT truncate the
+    resolved file: a program that repoints logging part-way through a run must
+    not destroy whatever the destination already holds.  The positional
+    ``(enabled, log_file)`` signature matches the host settings policy's
+    ``resolve_trace_path`` hook; bind *command_name* with ``functools.partial``.
+    """
+    path = resolve_log_file(
+        command_name=command_name, enabled=enabled, log_file=log_file, unique=True
+    )
+    if path is not None:
+        mkdir(path.parent, parents=True, exist_ok=True)
+    return path
 
 
 def resolve_log_file(

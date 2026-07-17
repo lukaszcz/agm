@@ -144,7 +144,7 @@ def test_call_depth_guard_ir_only() -> None:
     caps = base_caps()
     checked = check(resolved, caps)
     executable = lower_program(
-        _compiled_checked(checked), source_text=source, source_label="<test>", validate=True
+        _compiled_checked(checked), source_text=source, source_label="<test>"
     )
     interp = IrInterpreter(executable, max_call_depth=10)
     with pytest.raises(AglRaise) as exc_info:

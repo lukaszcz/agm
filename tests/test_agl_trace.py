@@ -821,49 +821,47 @@ class TestAppendJsonl:
 
 
 class TestTraceStoreProperties:
-    def test_activate_disables_trace_when_buffer_flush_fails(
+    def test_activate_repoints_and_stops_writes(self, tmp_path: Path) -> None:
+        """``activate`` routes later events to the new path; ``None`` stops writes."""
+        from agm.agl.runtime.trace import TraceStore
+
+        first = tmp_path / "first.jsonl"
+        second = tmp_path / "second.jsonl"
+        trace = TraceStore(path=first)
+        trace.run_start()
+
+        trace.activate(second)
+        trace.print_stmt(rendered="routed", span=None)
+
+        trace.activate(None)
+        trace.print_stmt(rendered="dropped", span=None)
+        trace.run_end(ok=True)
+
+        assert trace.path is None
+        assert "routed" in second.read_text(encoding="utf-8")
+        assert "dropped" not in second.read_text(encoding="utf-8")
+
+    def test_activate_cannot_revive_a_disabled_store(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
+        """Once an I/O failure disables logging, ``activate`` stays a no-op."""
         from agm.agl.runtime.trace import TraceStore
 
-        def fail_append(_path: Path, _record: dict[str, object]) -> None:
+        def fail_append(_path: Path | None, _record: dict[str, object]) -> None:
             raise OSError("disk unavailable")
 
-        trace = TraceStore(path=None, buffer=True)
-        trace.run_start()
         monkeypatch.setattr("agm.agl.runtime.trace.append_jsonl", fail_append)
+        trace = TraceStore(path=tmp_path / "trace.jsonl")
+        trace.run_start()
 
-        trace.activate(tmp_path / "trace.jsonl")
-        trace.run_end(ok=True)
         trace.activate(tmp_path / "recovered.jsonl")
+        trace.run_end(ok=True)
 
         assert trace.path is None
         assert capsys.readouterr().err.count("trace logging disabled") == 1
-
-    def test_activate_none_stops_buffering(self) -> None:
-        """A buffered store activated with path=None must settle into no-log mode.
-
-        Regression: ``activate(None)`` used to clear the buffer but leave
-        buffering enabled, so every later event kept accumulating in memory
-        (never flushed, path is None) for the whole run.
-        """
-        from agm.agl.runtime.trace import TraceStore
-        from agm.agl.semantics.values import IntValue
-
-        trace = TraceStore(path=None, buffer=True)
-        trace.run_start()
-        trace.activate(None)
-        # Emit a variety of events after deactivation.
-        for _ in range(100):
-            trace.print_stmt(rendered="x", span=None)
-            trace.mutation(name="v", value=IntValue(1), span=None)
-        trace.run_end(ok=True)
-
-        # No events may be retained: the store is a genuine no-op now.
-        assert trace._buffered_records == []
 
     def test_trace_store_path_property(self, tmp_path: Path) -> None:
         from agm.agl.runtime.trace import TraceStore

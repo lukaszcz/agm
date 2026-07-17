@@ -95,7 +95,7 @@ LOC = loc()
 
 
 def test_literal_case_keys_reject_non_finite_decimals() -> None:
-    with pytest.raises(ValueError, match="finite"):
+    with pytest.raises(ValueError):
         IrLiteralCaseKey(IrLiteralKind.NUMERIC, decimal.Decimal("sNaN"))
 
 

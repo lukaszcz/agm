@@ -115,6 +115,7 @@ __all__ = [
     "IrUnary",
     "IrVariantIs",
     "UseDefault",
+    "is_canonical_literal_scalar",
 ]
 
 
@@ -686,6 +687,26 @@ class IrLiteralKind(enum.Enum):
 IrLiteralScalar: TypeAlias = int | decimal.Decimal | bool | str | None
 
 
+def is_canonical_literal_scalar(kind: IrLiteralKind, value: IrLiteralScalar) -> bool:
+    """Report whether *value* is the canonical stored scalar for *kind*.
+
+    Canonical means post-normalization: a ``NUMERIC`` key stores a finite
+    :class:`decimal.Decimal` (never an ``int`` or a ``bool``), so this is the
+    single source of truth for the shape an :class:`IrLiteralCaseKey` holds.
+    """
+    return (
+        kind is IrLiteralKind.NUMERIC
+        and isinstance(value, decimal.Decimal)
+        and value.is_finite()
+        or kind is IrLiteralKind.BOOL
+        and isinstance(value, bool)
+        or kind is IrLiteralKind.TEXT
+        and isinstance(value, str)
+        or kind is IrLiteralKind.NULL
+        and value is None
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class IrEnumCaseKey:
     """One enum discriminant identified by nominal owner and variant."""
@@ -708,23 +729,14 @@ class IrLiteralCaseKey:
 
     def __post_init__(self) -> None:
         value = self.scalar_value
-        if self.kind is IrLiteralKind.NUMERIC:
-            if isinstance(value, bool) or not isinstance(value, (int, decimal.Decimal)):
-                raise ValueError("numeric case keys require an int or Decimal scalar")
-            decimal_value = decimal.Decimal(value)
-            if not decimal_value.is_finite():
-                raise ValueError("numeric case keys require a finite Decimal scalar")
-            object.__setattr__(self, "scalar_value", decimal_value)
-            return
-        valid = (
-            self.kind is IrLiteralKind.BOOL
-            and isinstance(value, bool)
-            or self.kind is IrLiteralKind.TEXT
-            and isinstance(value, str)
-            or self.kind is IrLiteralKind.NULL
-            and value is None
-        )
-        if not valid:
+        if (
+            self.kind is IrLiteralKind.NUMERIC
+            and not isinstance(value, bool)
+            and isinstance(value, int)
+        ):
+            value = decimal.Decimal(value)
+            object.__setattr__(self, "scalar_value", value)
+        if not is_canonical_literal_scalar(self.kind, value):
             raise ValueError(
                 f"invalid scalar {value!r} for literal case kind {self.kind.name!r}"
             )

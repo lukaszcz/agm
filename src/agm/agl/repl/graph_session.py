@@ -368,7 +368,6 @@ class GraphSession:
             compiled_graph,
             image=self._ctx._link_image,
             source_text=text,
-            validate=True,
             contract_payloads=contract_payloads,
         )
         ir_params = {

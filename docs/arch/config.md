@@ -29,7 +29,7 @@ For AgL execution, four sources combine with a defined precedence:
 
 - **Engine settings** (`runner`, `log`, `strict-json`, `max-iters`, `log-file`, `timeout`) — the `std.config` `builtin var` bindings:
   `source write (std.config::X := e) > CLI flag > [<program>].X > [exec].X > engine default`
-  Their names and value kinds come from the pure shared catalog in `config/engine_keys.py`, also consumed by AgL semantics and deep IR validation.
+  Their names, value kinds, and consuming side come from the pure shared catalog in `config/engine_keys.py`, also consumed by AgL semantics, deep IR validation, and the AgL evaluator/REPL.
 - **Param values** (`param NAME`):
   `CLI flag > [<program>].Y > source default (param Y = e) > required error`
 
@@ -45,7 +45,7 @@ Sandbox settings for `agm run` follow their own discovery and merge chain across
 - `src/agm/config/general.py` loads and merges the layered config and exposes the per-feature config readers.
 - `src/agm/config/command_config.py` resolves per-command override sections.
 - `src/agm/config/sections.py` is the pure data-leaf source of truth for reserved structural config-section names (shared with the AgL reserved-program-name guard).
-- `src/agm/config/engine_keys.py` is the pure data-leaf catalog of engine-key names and value kinds (shared with the AgL engine-key type registry that maps each kind to an AgL type).
+- `src/agm/config/engine_keys.py` is the pure data-leaf catalog of engine keys: each key's name, value kind, and consuming side (runtime-live — backed by a live interpreter field — versus host-consumed — reflected back into a live host service). Shared with the AgL engine-key type registry that maps each kind to an AgL type, and with the evaluator/REPL, which route a write by its consuming side.
 - `src/agm/config/module_roots.py` resolves AgL module search roots from the `[modules]` config.
 - `src/agm/config/sandbox/` discovers and merges SRT sandbox settings.
 - `config/` (repository root) holds the default config templates installed into `~/.agm/`.

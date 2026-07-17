@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, cast
 from agm.agl.diagnostics import AglError, Diagnostic, diagnostic_from_span
 from agm.agl.repl.entry import EntryKind, EntryResult
 from agm.agl.repl.graph_session import GraphSession
+from agm.config.engine_keys import HOST_CONSUMED_ENGINE_KEYS
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -48,13 +49,6 @@ if TYPE_CHECKING:
 
 # Layout-only token types that carry no statement to evaluate.
 _TRIVIAL_TOKENS: frozenset[str] = frozenset({"_NEWLINE", "_INDENT", "_DEDENT"})
-
-# The three host-consumed engine settings backed by the interpreter's builtin
-# host-settings register.  Unlike the runtime-live keys (strict-json / max-iters
-# / timeout, which persist through ``_update_engine_settings``), these carry no
-# live interpreter field, so the session persists their register values across
-# entries in ``_persisted_host_settings``.
-_HOST_CONSUMED_ENGINE_KEYS: frozenset[str] = frozenset({"runner", "log", "log-file"})
 
 
 def has_runnable_statements(text: str) -> bool:
@@ -619,15 +613,18 @@ class ReplSession:
     def _build_host_settings_base(self) -> "dict[str, Value]":
         """Seed the host-consumed register values for a fresh session.
 
-        Starts from the engine defaults for ``runner``/``log``/``log-file`` and
-        overlays the session's ``_engine_base`` values where present.
+        Starts from the engine defaults and overlays the session's
+        ``_engine_base`` values where present.  Unlike the runtime-live keys
+        (which persist through ``_update_engine_settings``), the host-consumed
+        keys carry no live interpreter field, so the session persists their
+        register values across entries in ``_persisted_host_settings``.
         """
         from agm.agl.runtime.params import build_engine_config_base
 
         defaults = build_engine_config_base({})
         return {
             key: self._engine_base.get(key, defaults[key])
-            for key in _HOST_CONSUMED_ENGINE_KEYS
+            for key in HOST_CONSUMED_ENGINE_KEYS
         }
 
     def _build_timeout_setting_base(self) -> "EnumValue":

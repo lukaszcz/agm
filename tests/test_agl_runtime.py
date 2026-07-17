@@ -1840,6 +1840,37 @@ class TestMaterializeContractMissingCodec:
 
 
 # ---------------------------------------------------------------------------
+# The engine runner default tracks the shared agent floor
+# ---------------------------------------------------------------------------
+
+
+class TestEngineRunnerDefault:
+    """AgL's engine default must stay the runner AGM would actually invoke."""
+
+    def test_engine_runner_default_is_the_shared_agent_floor(self) -> None:
+        """A host that seeds no runner must still get the real floor.
+
+        The engine default backstops ``std.config::runner`` when a host supplies
+        no resolved runner.  It has to agree with ``default_agent_runner``: a
+        divergent value here is invisible while every host seeds the key, and
+        wrong the moment one does not.
+        """
+        from agm.agent.defaults import DEFAULT_AGENT_RUNNER
+        from agm.agl.runtime.params import build_engine_config_base
+        from agm.agl.semantics.values import TextValue
+
+        assert build_engine_config_base({})["runner"] == TextValue(DEFAULT_AGENT_RUNNER)
+
+    def test_agent_floor_is_non_interactive(self) -> None:
+        """The floor must not block on a terminal that is not there."""
+        from agm.agent.config import default_agent_runner
+        from agm.agent.defaults import DEFAULT_AGENT_RUNNER
+
+        assert default_agent_runner(merged={}) == DEFAULT_AGENT_RUNNER
+        assert "-p" in DEFAULT_AGENT_RUNNER.split()
+
+
+# ---------------------------------------------------------------------------
 # Coverage: pipeline.py — generic exception handlers and error paths
 # ---------------------------------------------------------------------------
 

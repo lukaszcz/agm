@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from agm.agent.defaults import DEFAULT_AGENT_RUNNER
 from agm.agl.diagnostics import Diagnostic
 
 if TYPE_CHECKING:
@@ -55,12 +56,15 @@ def raw_option_str(
     return None
 
 
-# Engine defaults for build_engine_config_base when a key is absent from raw_values.
+# Engine defaults for build_engine_config_base when a key is absent from
+# raw_values.  This is the SINGLE owner of the engine-key defaults: both the
+# REPL session and the IR evaluator seed their registers from
+# build_engine_config_base rather than carrying a table of their own.
 _ENGINE_DEFAULTS: dict[str, object] = {
     "log": False,
     "strict-json": False,
     "max-iters": 0,
-    "runner": "claude",  # callers providing a resolved runner override this
+    "runner": DEFAULT_AGENT_RUNNER,
     "log-file": None,
     "timeout": None,
 }
@@ -71,8 +75,9 @@ def build_engine_config_base(raw_values: "Mapping[str, object]") -> "dict[str, V
 
     Decodes each of the six engine keys via :func:`convert_config_value`.
     Keys absent from *raw_values* fall back to the engine defaults
-    (``false``/``false``/``0``/``"claude"``/``none``/``none``), where zero
-    represents the disabled ``max-iters`` safety valve.
+    (``false``/``false``/``0``/:data:`~agm.agent.defaults.DEFAULT_AGENT_RUNNER`/
+    ``none``/``none``), where zero represents the disabled ``max-iters`` safety
+    valve.
 
     Each caller is responsible for constructing *raw_values* with its own
     layering (CLI/program/exec config).  This helper performs only the

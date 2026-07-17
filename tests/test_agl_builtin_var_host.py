@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from agm.agent.defaults import DEFAULT_AGENT_RUNNER
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PipelineDriver, RunResult
 from agm.agl.runtime.agents import AgentFn
@@ -295,7 +296,7 @@ class TestReconfigureHooks:
         result = _run_graph_with_policy(source, policy=policy)
 
         assert result.ok
-        assert result.bindings["retained"] == TextValue("claude")
+        assert result.bindings["retained"] == TextValue(DEFAULT_AGENT_RUNNER)
 
     def test_source_trace_directory_failure_is_best_effort(
         self,

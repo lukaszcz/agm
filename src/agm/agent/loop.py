@@ -6,6 +6,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from agm.agent.defaults import DEFAULT_AGENT_RUNNER
 from agm.agent.output import step_header_text as step_header_text
 from agm.agent.prompt import dry_run_prompt_text as dry_run_prompt_text
 from agm.agent.prompt import preprocess_prompt_file
@@ -59,7 +60,7 @@ def selected_task_text(task_file: Path) -> str:
 def runner_command(args: LoopCommandArgs) -> list[str]:
     configured = configured_loop_settings(args.command_name)
     runner = args.runner if args.runner is not None else configured.runner
-    selected = runner if runner is not None else "claude -p"
+    selected = runner if runner is not None else DEFAULT_AGENT_RUNNER
     return [*split_command(selected, kind="runner"), *args.runner_args]
 
 

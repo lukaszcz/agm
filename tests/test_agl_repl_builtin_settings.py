@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from agm.agent.defaults import DEFAULT_AGENT_RUNNER
 from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.host_settings import HostSettingsPolicy
@@ -170,7 +171,7 @@ class TestDefaultsAndSeeding:
     def test_untouched_session_reads_engine_defaults(self) -> None:
         s = _session()
         _ok(s, "import std.config")
-        assert _read(s, "runner") == TextValue("claude")
+        assert _read(s, "runner") == TextValue(DEFAULT_AGENT_RUNNER)
         assert _read(s, "log") == BoolValue(False)
         log_file = _read(s, "log-file")
         assert isinstance(log_file, EnumValue)
@@ -213,7 +214,7 @@ class TestDefaultsAndSeeding:
         assert _read(s, "runner") == TextValue("codex")
         s.reset()
         _ok(s, "import std.config")
-        assert _read(s, "runner") == TextValue("claude")
+        assert _read(s, "runner") == TextValue(DEFAULT_AGENT_RUNNER)
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +264,7 @@ class TestLiveHostReconfiguration:
 
         s.reset()
         result = _ok(s, 'ask("which")')
-        assert result.value == TextValue("claude")
+        assert result.value == TextValue(DEFAULT_AGENT_RUNNER)
 
     def test_log_file_write_repoints_later_repl_entries(self, tmp_path: Path) -> None:
         trace_path = tmp_path / "trace.jsonl"

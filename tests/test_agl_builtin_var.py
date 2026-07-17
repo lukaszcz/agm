@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from agm.agent.defaults import DEFAULT_AGENT_RUNNER
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PipelineDriver, RunResult
 from agm.agl.semantics.values import BoolValue, EnumValue, IntValue, TextValue
@@ -87,12 +88,12 @@ class TestBuiltinVarRegisters:
         assert result.ok
         assert result.bindings["b"] == BoolValue(True)
 
-    def test_runner_default_reads_claude(self) -> None:
+    def test_runner_default_reads_the_shared_agent_floor(self) -> None:
         result = _run_graph(
             "import std.config\nlet r = std.config::runner\nprint r"
         )
         assert result.ok
-        assert result.bindings["r"] == TextValue("claude")
+        assert result.bindings["r"] == TextValue(DEFAULT_AGENT_RUNNER)
 
     def test_runner_write_then_read(self) -> None:
         result = _run_graph(
@@ -201,7 +202,7 @@ class TestStdConfigQualified:
             "import std.config\nlet r = std.config::runner\nprint r"
         )
         assert result.ok
-        assert result.bindings["r"] == TextValue("claude")
+        assert result.bindings["r"] == TextValue(DEFAULT_AGENT_RUNNER)
 
     def test_max_iters_zero_disables_valve(self) -> None:
         result = _run_graph(

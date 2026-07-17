@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from agm.agent.defaults import DEFAULT_AGENT_RUNNER
 from agm.config.context import current_config_context
 from agm.config.general import load_loop_config, loop_config_from_merged
 from agm.core.toml import TomlDict
@@ -23,4 +24,4 @@ def default_agent_runner(*, merged: TomlDict | None = None) -> str:
             proj_dir=context.proj_dir,
             cwd=context.cwd,
         )
-    return loop_config.runner if loop_config.runner is not None else "claude -p"
+    return loop_config.runner if loop_config.runner is not None else DEFAULT_AGENT_RUNNER

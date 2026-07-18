@@ -1241,6 +1241,11 @@ def repl_cmd(
             "config.toml opt in. A std/config::log write takes effect in the REPL too."
         ),
     ),
+    no_stdlib: bool = typer.Option(
+        False,
+        "--no-stdlib",
+        help="Do not automatically open std/core in the REPL session.",
+    ),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
@@ -1262,6 +1267,7 @@ def repl_cmd(
             no_log=no_log,
             log_file=log_file,
             log=log,
+            no_stdlib=no_stdlib,
         )
     )
 

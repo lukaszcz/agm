@@ -175,6 +175,7 @@ def run(args: ReplArgs) -> None:
         stdlib_root=stdlib_root,
         lib_root=lib_root,
         configured_roots=mod_roots_cfg.extra,
+        default_stdlib=not args.no_stdlib,
     )
 
     history_path = agm_home_dir(home=ctx.home) / "repl_history"

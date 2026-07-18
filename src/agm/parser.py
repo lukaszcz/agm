@@ -552,7 +552,7 @@ _HELP_TEXTS: dict[str, str] = {
     """),
     "repl": textwrap.dedent("""\
         agm repl [--strict-json|--no-strict-json] [--max-iters N] [--max-call-depth N]
-                 [--runner COMMAND] [--confirm-agents] [--dry-run]
+                 [--runner COMMAND] [--confirm-agents] [--dry-run] [--no-stdlib]
                  [--quiet] [--log|--log-file PATH|--no-log]
 
         Start an interactive read-eval-print loop for AgL.  Each entry is
@@ -562,7 +562,7 @@ _HELP_TEXTS: dict[str, str] = {
         session reuses the [exec] configuration (runner, per-agent commands,
         call-depth limit, JSON strictness, timeout).  Like agm exec, it
         automatically opens std/core so standard-library names are available
-        unqualified.
+        unqualified; use --no-stdlib to require an explicit import instead.
 
         Trace logging is OFF by default.  A ``std/config::KEY := VALUE`` write
         entered at the REPL prompt takes effect from that point and persists for
@@ -585,6 +585,8 @@ _HELP_TEXTS: dict[str, str] = {
           --confirm-agents     Confirm each agent call before dispatching it
                                 (default: fire agent calls without confirming).
           --quiet               Suppress automatic echoing of entry results.
+          --no-stdlib           Do not automatically open std/core; explicit imports
+                                remain available and :reset keeps this choice.
           --log                 Enable trace logging (auto timestamped path).
           --log-file PATH       Write a JSONL trace log to PATH.
           --no-log              Disable trace logging.

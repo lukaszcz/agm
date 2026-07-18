@@ -427,6 +427,7 @@ def build_repl_graph(
     path: Path | None,
     cached: dict[ModuleId, LoadedModule],
     roots: RootSet,
+    default_stdlib: bool = True,
 ) -> tuple[ModuleGraph, int, dict[ModuleId, LoadedModule]]:
     """Build a module graph from an already-parsed entry program.
 
@@ -449,6 +450,9 @@ def build_repl_graph(
         These are reused without re-parsing.
     roots:
         The assembled :class:`~agm.agl.modules.roots.RootSet` to search.
+    default_stdlib:
+        Whether to inject the standard-library prelude into the entry and
+        newly loaded library modules.
 
     Returns
     -------
@@ -462,8 +466,9 @@ def build_repl_graph(
     entry_source_id = SourceId(label=label)
 
     seed_modules = dict(cached)
-    program = _with_default_stdlib_import(program, import_node_id=next_start_id)
-    next_start_id += 1
+    if default_stdlib:
+        program = _with_default_stdlib_import(program, import_node_id=next_start_id)
+        next_start_id += 1
 
     entry_loaded = LoadedModule(
         module_id=ENTRY_ID,
@@ -482,5 +487,5 @@ def build_repl_graph(
         canonical_entry_path=canonical_entry_path,
         seed_modules=seed_modules,
         start_id=next_start_id,
-        default_stdlib=True,
+        default_stdlib=default_stdlib,
     )

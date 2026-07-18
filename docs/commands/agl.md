@@ -3,7 +3,7 @@
 | Command | Description |
 |---------|-------------|
 | `agm exec [--strict-json\|--no-strict-json] [--max-iters N] [--max-call-depth N] [--runner COMMAND] [--timeout DURATION\|--no-timeout] [--dry-run] [--log\|--log-file PATH\|--no-log] [--no-log-file] [--no-stdlib] [-I DIR]... (FILE \| -c COMMAND) [--PARAM VALUE]...` | Execute an AgL workflow program |
-| `agm repl [--strict-json\|--no-strict-json] [--max-iters N] [--max-call-depth N] [--runner COMMAND] [--confirm-agents] [--quiet] [--dry-run] [--log\|--log-file PATH\|--no-log]` | Start an interactive AgL REPL |
+| `agm repl [--strict-json\|--no-strict-json] [--max-iters N] [--max-call-depth N] [--runner COMMAND] [--confirm-agents] [--quiet] [--dry-run] [--no-stdlib] [--log\|--log-file PATH\|--no-log]` | Start an interactive AgL REPL |
 
 AGM runs AgL (Agent Language) workflow programs two ways: `agm exec` runs a whole
 program from a fresh environment, and `agm repl` evaluates entries interactively in a
@@ -254,7 +254,7 @@ disable tracing entirely.
 ```text
 agm repl [--strict-json|--no-strict-json]
          [--max-iters N] [--max-call-depth N] [--runner COMMAND] [--confirm-agents]
-         [--quiet] [--dry-run] [--log|--log-file PATH|--no-log]
+         [--quiet] [--dry-run] [--no-stdlib] [--log|--log-file PATH|--no-log]
 ```
 
 Start an interactive read-eval-print loop for AgL. Unlike `agm exec`, which runs a
@@ -268,8 +268,10 @@ max-iters valve, call-depth limit, JSON strictness, timeout), so an interactive
 session evaluates entries with the same agent backing a batch `agm exec` run
 would use.
 
-Like `agm exec`, the REPL automatically opens `std.core`, so standard-library names
+Like `agm exec`, the REPL automatically opens `std/core`, so standard-library names
 such as `Option`, `Some`, and `None` are available unqualified from a fresh prompt.
+Pass `--no-stdlib` to disable that prelude for the whole session; explicit imports
+still work, including after `:reset`.
 Entering a bare type name displays the type; an unapplied generic type name such as
 `Option` displays its generic definition instead of being evaluated as a value.
 
@@ -346,6 +348,8 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
 - `--confirm-agents`: Start in confirm mode, asking before each agent call (the default
   is auto; see [Agent-call confirmation](#agent-call-confirmation)).
 - `--quiet`: Suppress the automatic echoing of entry results.
+- `--no-stdlib`: Do not automatically open `std/core`. Explicit standard-library
+  imports remain available; `:reset` retains this launch-time choice.
 - `--log` / `--log-file PATH` / `--no-log`: Control trace logging (off by default), as
   for `agm exec`. With `--log-file` each evaluated entry appends its JSONL trace records
   (one trace *run* per entry) to `PATH`. The three are mutually exclusive, and

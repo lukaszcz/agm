@@ -110,6 +110,7 @@ class ReplSession:
         lib_root: "Path | None" = None,
         configured_roots: "Iterable[tuple[str, Path]]" = (),
         extra_cli_roots: "Iterable[str]" = (),
+        default_stdlib: bool = True,
     ) -> None:
         from pathlib import Path
 
@@ -121,6 +122,7 @@ class ReplSession:
 
         self._default_strict_json = default_strict_json
         self._default_loop_limit = default_loop_limit
+        self._default_stdlib = default_stdlib
         self._shell_exec_timeout = shell_exec_timeout
         # Capture initial engine defaults for :reset to restore.
         self._initial_loop_limit = default_loop_limit
@@ -207,9 +209,9 @@ class ReplSession:
         self._roots: RootSet | None = None
         # Cached lib modules from prior REPL program entries.
         self._loaded_lib_modules: dict[ModuleId, LoadedModule] = {}
-        # Accumulated import declarations from prior promoted program entries.
-        # These are prepended to each new entry's program in program context so that
-        # open imports (e.g. ``import util``) persist across entries.
+        # Imports generally persist across successfully promoted program entries.
+        # Declarations for a module named in a later entry replace its retained
+        # declarations; the rest are prepended in program context for reuse.
         self._accumulated_imports: list["ImportDecl"] = []
         # Resolved user infix fixity declared in prior promoted entries
         # (operator name → ``(priority, associativity)``). Passed to the parser
@@ -454,13 +456,17 @@ class ReplSession:
                 start_id=self._next_node_id,
                 ambient_infix=self._accumulated_infix,
             )
-            program = self._entry_pipeline._inject_accumulated_imports(program)
+            roots = self._ensure_roots()
+            program, next_start_id, _entry_imports = self._entry_pipeline._prepare_entry_program(
+                program, next_start_id, roots
+            )
             graph, _new_next_id, _new_modules = build_repl_graph(
                 program,
                 next_start_id,
                 path=None,
                 cached=self._loaded_lib_modules,
-                roots=self._ensure_roots(),
+                roots=roots,
+                default_stdlib=self._default_stdlib,
             )
             resolved_program = resolve_program(
                 graph,
@@ -1083,13 +1089,17 @@ class ReplSession:
                 "':type' expects a single expression, not a binding, declaration, or statement."
             )
         expr_item = items[0]
-        entry_program = self._entry_pipeline._inject_accumulated_imports(program)
+        roots = self._ensure_roots()
+        entry_program, next_node_id, _entry_imports = self._entry_pipeline._prepare_entry_program(
+            program, next_node_id, roots
+        )
         graph, _next_node_id, _new_modules = build_repl_graph(
             entry_program,
             next_node_id,
             path=None,
             cached=self._loaded_lib_modules,
-            roots=self._ensure_roots(),
+            roots=roots,
+            default_stdlib=self._default_stdlib,
         )
         resolved = resolve_program(
             graph,

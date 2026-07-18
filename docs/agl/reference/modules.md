@@ -153,9 +153,11 @@ resolved, so functions and nominal types may refer across cycles.
 
 ## Interactive sessions
 
-REPL imports persist after a successful entry. A later import of the same
-module or wildcard prefix replaces the earlier declaration, so a new selection,
-open mode, or alias takes effect for following entries. A failed entry does not
-change the accumulated imports. `:reset` clears them along with session
-bindings. REPL entries otherwise retain entry-module behavior: declarations,
-bindings, expressions, and imports may be interleaved.
+REPL imports persist after a successful entry. Wildcard imports expand to their
+matched modules before they are retained. A later entry replaces every earlier
+import declaration for each module it names, so a new selection, open mode, or
+alias takes effect for that module while declarations for another matched module
+remain. Multiple declarations for one module in the new entry merge as usual.
+A failed entry does not change the accumulated imports. `:reset` clears them
+along with session bindings. REPL entries otherwise retain entry-module behavior:
+declarations, bindings, expressions, and imports may be interleaved.

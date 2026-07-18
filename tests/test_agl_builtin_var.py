@@ -345,6 +345,59 @@ class TestEffectAtBinding:
 
 
 # ---------------------------------------------------------------------------
+# Bare (unqualified) assignment through an open import
+# ---------------------------------------------------------------------------
+
+
+class TestBareCrossModuleAssign:
+    def test_bare_write_reflected_by_bare_read(self) -> None:
+        """An open import makes a setting assignable and readable without a qualifier."""
+        result = _run_graph(
+            "import std.config\n"
+            "max-iters := 3\n"
+            "let n = max-iters\n"
+            "print n"
+        )
+        assert result.ok, f"expected success but got: {result.error!r}"
+        assert result.bindings["n"] == IntValue(3)
+
+    def test_bare_write_reflected_by_qualified_read(self) -> None:
+        """Bare and qualified targets denote the same binding."""
+        result = _run_graph(
+            "import std.config\n"
+            "max-iters := 4\n"
+            "let n = std.config::max-iters\n"
+            "print n"
+        )
+        assert result.ok, f"expected success but got: {result.error!r}"
+        assert result.bindings["n"] == IntValue(4)
+
+    def test_bare_write_takes_effect_on_loop_limit(self) -> None:
+        """A bare write changes engine behavior, not just the readable value."""
+        result = _run_graph(
+            "import std.config\nvar i: int = 0\nmax-iters := 3\ndo\n  i := i + 1\nuntil i >= 2\n",
+            default_loop_limit=1,
+        )
+        assert result.ok, f"expected success but got: {result.error!r}"
+
+    def test_bare_write_to_non_open_import_rejected(self, tmp_path: Path) -> None:
+        """A qualified-only import does not expose the name for bare assignment."""
+        result = _run_graph("import std.config qualified as cfg\nmax-iters := 3\nprint 1")
+        assert not result.ok
+        assert result.diagnostics
+
+    def test_bare_write_to_immutable_import_rejected(self, tmp_path: Path) -> None:
+        """An open-imported ``def`` is still not a valid assignment target."""
+        (tmp_path / "mylib.agl").write_text("def foo() -> int = 1\n", encoding="utf-8")
+        result = _run_graph(
+            "import mylib\nfoo := 3\nprint 1",
+            extra_roots=frozenset({tmp_path}),
+        )
+        assert not result.ok
+        assert result.diagnostics
+
+
+# ---------------------------------------------------------------------------
 # Qualified assignment: rejections
 # ---------------------------------------------------------------------------
 

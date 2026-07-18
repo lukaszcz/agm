@@ -235,9 +235,10 @@ type and no initializer; the `builtin` modifier may sit on the same line or the
 line directly above (like `builtin def`). It may be declared only at the root of
 `std.config`; entry modules and other library modules cannot declare one.
 
-Assignment has type `unit` and returns `void`. A qualified assignment target is
-valid only when it resolves to a `builtin var`; type-qualified constructor forms
-are not assignment targets. In an indexed assignment target,
+Assignment has type `unit` and returns `void`. A cross-module assignment target
+— written with a qualifier, or bare when an open import puts the name in scope —
+is valid only when it resolves to a `builtin var`; type-qualified constructor
+forms are not assignment targets. In an indexed assignment target,
 each opening `[` must be adjacent to the target name or preceding index:
 `xs[0]` is indexed assignment, while `xs [0]` is not.
 

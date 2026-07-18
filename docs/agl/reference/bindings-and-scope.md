@@ -187,13 +187,14 @@ program's engine settings:
 import std.config
 
 std.config::max-iters := 10           # write a setting (qualified target)
-std.config::runner := "claude -p"
+runner := "claude -p"                 # the open import also allows a bare target
 let cap = std.config::max-iters       # read a setting
 ```
 
-An engine setting is an ordinary mutable binding in another module, so **reading**
-it uses a qualifier and **writing** it requires a qualified assignment target —
-cross-module mutation is never done with a bare name. A write takes effect from its
+An engine setting is an ordinary mutable binding in another module, so an
+assignment target names it exactly as a read does: a qualifier always works, and
+a bare name works whenever the import is open, so the name is in scope
+unqualified. A write takes effect from its
 program point onward, exactly like any `var` mutation. The `Option[text]` settings
 are set with `Some("…")` or `None`.
 

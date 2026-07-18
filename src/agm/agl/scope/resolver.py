@@ -1072,11 +1072,16 @@ class _Resolver:
             )
         ref = self._current_scope().lookup(name)
         if ref is None:
-            raise AglScopeError(
-                f"'{name}' is not declared; assignment requires an existing "
-                f"mutable binding.",
-                span=node.span,
-            )
+            # In graph mode with import_env, try open imports as fallback, so a
+            # bare target reaches an imported mutable binding just like a read.
+            if self._import_env is not None:
+                ref = self._lookup_import_env_unqualified(name, node.span)
+            if ref is None:
+                raise AglScopeError(
+                    f"'{name}' is not declared; assignment requires an existing "
+                    f"mutable binding.",
+                    span=node.span,
+                )
         if not ref.mutable:
             raise AglScopeError(
                 f"Cannot assign to '{name}': "
@@ -1286,7 +1291,7 @@ class _Resolver:
         if ref is None:
             # In graph mode with import_env, try open imports as fallback.
             if self._import_env is not None:
-                ref = self._lookup_import_env_unqualified(node)
+                ref = self._lookup_import_env_unqualified(node.name, node.span)
             if ref is None:
                 if node.name in _RESERVED_NAMES:
                     raise AglScopeError(
@@ -1408,15 +1413,17 @@ class _Resolver:
             )
         return (src_name, owning_module)
 
-    def _lookup_import_env_unqualified(self, node: VarRef) -> BindingRef | None:
+    def _lookup_import_env_unqualified(self, name: str, span: SourceSpan) -> BindingRef | None:
         """Look up a bare name in the open-import environment (graph mode).
 
         Returns a ``BindingRef`` if exactly one ``QName`` matches, or raises
         ``AglScopeError`` on ambiguity (clash-on-use).  Returns ``None`` if the
-        name is not found in any open import.
+        name is not found in any open import.  Shared by bare value references
+        and bare assignment targets, so an open import exposes a binding the
+        same way for reads and writes.
         """
         assert self._import_env is not None
-        qnames = self._import_env.unqualified.get(node.name)
+        qnames = self._import_env.unqualified.get(name)
         if qnames is None:
             return None
         if len(qnames) > 1:
@@ -1426,13 +1433,13 @@ class _Resolver:
             )
             hint = ", ".join(qualifiers)
             raise AglScopeError(
-                f"'{node.name}' is ambiguous: imported from multiple modules. "
+                f"'{name}' is ambiguous: imported from multiple modules. "
                 f"Use a qualified reference to disambiguate: {hint}",
-                span=node.span,
+                span=span,
             )
         # Exactly one QName.
         qname = next(iter(qnames))
-        return self._make_cross_module_ref(qname[0], node.name, qname[1], node.span)
+        return self._make_cross_module_ref(qname[0], name, qname[1], span)
 
     def _resolve_varref_qualified(self, node: VarRef) -> None:
         """Resolve a qualified VarRef (``::name`` or ``MODQUAL::name``) in graph mode."""

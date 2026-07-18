@@ -1,0 +1,3 @@
+def scaled(n: int) -> int = n * 2
+
+def wants_strict(n: int) -> bool = n > 4

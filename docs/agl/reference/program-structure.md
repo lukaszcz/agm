@@ -103,9 +103,10 @@ The settings and their types are:
 | `timeout` | `Option[text]` | Shell-exec timeout. |
 
 A write takes effect **positionally**, exactly like any `var` mutation: it
-governs the statements that follow it, in program order. Because the settings
-live in another module, a write must use a qualified assignment target
-([Modules](modules.md)); a bare `max-iters := …` is not a valid way to set one.
+governs the statements that follow it, in program order. An assignment target
+names an imported setting the same way a read does ([Modules](modules.md)): a
+qualified target always works, and a bare `max-iters := …` works when the
+import is open, so the name is in scope unqualified.
 The `Option[text]` settings (`log-file`, `timeout`) are set with `Some("…")` or
 `None`. A `timeout` read preserves the exact assigned text; its parsed duration
 controls shell execution without normalizing the stored value.

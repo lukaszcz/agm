@@ -1,0 +1,28 @@
+# Modules: an open import exposes a mutable engine setting for bare assignment.
+# Exercises a bare write cross-checked through a qualified read, a bare write
+# whose value comes from an open-imported function, a differently-typed setting
+# on the same import, and the write actually raising the cap that bounds an
+# unbounded `do` loop. A param drives the numbers.
+import std.config
+import tuning
+
+param budget: int
+
+# Bare write through the open import; the qualified read sees the same binding.
+max-iters := budget
+print std.config::max-iters
+
+# The written value may come from an open-imported function, read back bare.
+max-iters := scaled(budget)
+print max-iters
+
+# `strict-json` is a differently-typed setting reached through the same import.
+strict-json := wants_strict(budget)
+print strict-json
+
+# The bare write raised the cap that bounds this otherwise unbounded loop.
+var i: int = 0
+do
+  i := i + 1
+until i >= 4
+print i

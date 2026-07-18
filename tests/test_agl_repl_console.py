@@ -476,7 +476,7 @@ class TestLexer:
 
     def test_later_pipe_is_not_a_variant(self) -> None:
         # A `|` in a `case` after an enum on the same entry must not be read as a
-        # variant introducer: `y` is a binding pattern, not a constructor.
+        # variant introducer: a bare pattern name has no lexical styling category.
         text = "enum A | A\ncase A(x: 1) of | y => y"
         lexer = AglPromptLexer()
         getter = lexer.lex_document(Document(text))

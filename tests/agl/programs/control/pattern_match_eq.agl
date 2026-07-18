@@ -30,8 +30,8 @@ let described = case wrapped of
 
 print described
 
-# Construction (with shorthand) inside branch bodies; nested constructor + a
-# record-typed field bound by shorthand then read via field access.
+# Construction inside branch bodies; a nested constructor and a record-typed
+# field bound by its matched-field name then read via field access.
 let bumped: Wrapped = case wrapped of
   | Empty => Empty
   | Holds(shape) =>

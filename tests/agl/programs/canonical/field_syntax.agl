@@ -1,6 +1,6 @@
-# Canonical end-to-end mirror of the syntax change: record + enum + '='
-# construction (with shorthand) + pattern match (with shorthand) + dict literal
-# (':' unchanged) + '==' equality. Field declarations keep ':'.
+# Canonical end-to-end coverage: record + enum '=' construction, positional
+# pattern binding, dict literals (':' unchanged), and '==' equality. Field
+# declarations keep ':'.
 record R
   x: int
   y: int

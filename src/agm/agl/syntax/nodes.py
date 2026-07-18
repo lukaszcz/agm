@@ -338,8 +338,8 @@ class Param:
     """A function/lambda parameter or a record/enum-variant/exception field.
 
     ``kind`` records which zone this parameter belongs to (positional-only,
-    standard, or named-only).  In this version kinds are assigned by the
-    transformer but not yet enforced by the binder — they are inert data.
+    standard, or named-only). The transformer assigns a concrete kind to every
+    parameter, and shared argument binding enforces it for calls and patterns.
     ``default`` is ``None`` for field params (records/variants/exceptions);
     only ``def``/``builtin def``/lambda params may carry a default expression.
     """
@@ -815,9 +815,9 @@ class PatternField:
 class ConstructorPattern:
     """A constructor (record/variant) destructuring pattern.
 
-    ``positional`` holds positional sub-patterns (in source order); they bind
-    to positional-capable (POSITIONAL_ONLY or STANDARD) fields left to right, or
-    overflow to named-only shorthand when all positional-capable slots are full.
+    ``positional`` holds positional sub-patterns (in source order). They fill
+    positional-capable (POSITIONAL_ONLY or STANDARD) fields left to right, or
+    use named-only shorthand when no positional-capable slots remain.
     ``named`` holds named sub-patterns ``name = pattern`` (PatternField), each
     bound to the field with that name.  Positional must precede named (enforced
     by the transformer); the checker routes both through ``bind_arguments``.

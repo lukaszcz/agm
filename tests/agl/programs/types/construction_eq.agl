@@ -1,6 +1,6 @@
-# Record/enum construction with '=' named args, bare-name shorthand (R(x) means
-# R(x = x)), reordered fields, and nested construction. Field declarations keep
-# ':'. Constructed values are verified by field access and pattern destructuring
+# Record/enum construction with '=' named args, positional arguments, reordered
+# named fields, and nested construction. Field declarations keep ':'. Constructed
+# values are verified by field access and pattern destructuring
 # (scalar prints only, no whole-value rendering).
 record R
   x: int
@@ -22,13 +22,13 @@ let r2 = R(y = 20, x = 10)
 print r2.x
 print r2.y
 
-# Shorthand: bare 'x' means 'x = x'.
+# A standard field accepts a positional bare-name argument.
 let x = 7
 let r3 = R(x, y = x + 1)
 print r3.x
 print r3.y
 
-# Enum construction with '=' and nested construction using shorthand.
+# Enum construction with '=' and nested construction.
 let e1 = A(x = base)
 let e2 = B(x, r = R(x = x + 1, y = x + 2))
 

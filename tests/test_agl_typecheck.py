@@ -8557,30 +8557,27 @@ class TestGenericNominalModuleId:
 
 
 # ---------------------------------------------------------------------------
-# Field-assignment syntax change: constructor shorthand binding, positional
-# literal rejection, and '==' / '!=' equality typing. These specify the TARGET
-# behavior and are expected to fail until grammar + constructor checker update.
+# Constructor argument zones and '==' / '!=' equality typing.
 # ---------------------------------------------------------------------------
 
 
 class TestFieldAssignmentSyntaxChecks:
-    def test_constructor_shorthand_binds_field(self) -> None:
-        """R(x) binds field 'x' to the in-scope local 'x' (shorthand for x = x)."""
+    def test_positional_constructor_arg_binds_standard_field(self) -> None:
+        """A positional argument fills the first standard constructor field."""
         r = accept_type("record R\n  x: int\n  y: int\nlet x = 5\nlet r = R(x, y = 1)\nr")
         assert r.resolved.program is not None
 
-    def test_enum_shorthand_binds_field(self) -> None:
+    def test_positional_enum_arg_binds_standard_field(self) -> None:
         r = accept_type("enum E\n  | A(x: int)\nlet x = 7\nlet e = A(x)\ne")
         assert r.resolved.program is not None
 
-    def test_shorthand_and_explicit_same_field_is_duplicate(self) -> None:
-        """A field supplied both via shorthand and explicitly is a duplicate."""
+    def test_positional_and_explicit_same_field_is_duplicate(self) -> None:
+        """A field supplied positionally and explicitly is a duplicate."""
         err = reject_any("record R\n  x: int\nlet x = 1\nR(x, x = 2)")
         assert "duplicate" in str(err).lower()
 
-    def test_reversed_order_shorthand_after_named_arg(self) -> None:
-        """Positional args (including bare-name shorthands) must precede named args.
-        B(r = ..., x) is rejected because positional 'x' follows named arg 'r = ...'."""
+    def test_positional_arg_after_named_arg_rejected(self) -> None:
+        """A positional argument cannot follow a named argument."""
         from agm.agl.parser.errors import AglSyntaxError
 
         with pytest.raises(AglSyntaxError):

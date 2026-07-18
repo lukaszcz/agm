@@ -687,7 +687,7 @@ dict_entry: template COLON expr     -> dict_entry_str
 //   name with value "_" → wildcard (handled in AstBuilder.pat_var_or_wild)
 //   qual_prefix type_qual? name + optional fields → qualified constructor pattern
 //   name LPAR ... RPAR → unqualified constructor pattern with payload
-//   name (other) → var binder or bare constructor
+//   name (other) → a bare top-level constructor or field-directed nested pattern
 //   literal → literal pattern
 pattern: pattern_atom ("as" name)* -> pat_as
 pattern_atom: qual_prefix type_qual? name (LPAR pattern_fields? RPAR)? -> pat_qual_constructor

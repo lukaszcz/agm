@@ -3017,7 +3017,7 @@ class TestCaseNeutralNamesParser:
 class TestCaseNeutralPatterns:
     """Case-neutral pattern matching: both upper- and lower-case names work the same."""
 
-    def test_bare_lowercase_name_is_var_pattern(self) -> None:
+    def test_bare_lowercase_name_parses_as_var_pattern_node(self) -> None:
         prog = parse("case x of | y => y")
         case = first(prog)
         assert isinstance(case, Case)
@@ -3025,8 +3025,8 @@ class TestCaseNeutralPatterns:
         assert isinstance(pat, VarPattern)
         assert pat.name == "y"
 
-    def test_bare_uppercase_name_is_var_pattern(self) -> None:
-        # With case-neutral names, bare uppercase is also a VarPattern
+    def test_bare_uppercase_name_parses_as_var_pattern_node(self) -> None:
+        # Case does not affect the parser's VarPattern representation.
         prog = parse("case x of | Y => Y")
         case = first(prog)
         assert isinstance(case, Case)
@@ -3772,15 +3772,13 @@ class TestPrivateDecls:
 
 
 # ---------------------------------------------------------------------------
-# Field-assignment syntax change: '=' named args, '==' equality, shorthand.
-# These specify the TARGET grammar and are expected to fail until the grammar
-# is updated (named args switch ':' -> '=', equality switches '=' -> '==').
+# Named-argument, equality, and constructor-call parsing.
 # ---------------------------------------------------------------------------
 
 
 class TestFieldAssignmentSyntax:
     def test_paren_call_named_arg_eq(self) -> None:
-        """Named args use '=' (was ':')."""
+        """Named arguments use ``=``."""
         call = first(parse("ask(x, agent = reviewer)"))
         assert isinstance(call, Call)
         assert len(call.args) == 1
@@ -3804,9 +3802,12 @@ class TestFieldAssignmentSyntax:
         assert len(call.named_args) == 1
         assert call.named_args[0].name == "value"
 
-    def test_constructor_call_shorthand_is_positional_varref(self) -> None:
-        """A bare-name constructor arg parses as a positional VarRef; the
-        constructor type checker reinterprets it as 'name = name' shorthand."""
+    def test_constructor_call_positional_varref_is_preserved(self) -> None:
+        """A bare-name constructor arg parses as a positional VarRef.
+
+        Constructor checking may reinterpret it as ``name = name`` shorthand
+        only when it lands in named-only territory.
+        """
         call = first(parse("R(x, y = 1)"))
         assert isinstance(call, Call)
         assert len(call.args) == 1
@@ -3815,9 +3816,11 @@ class TestFieldAssignmentSyntax:
         assert len(call.named_args) == 1
         assert call.named_args[0].name == "y"
 
-    def test_constructor_call_shorthand_after_named_arg(self) -> None:
-        """Positional args (incl. bare-name shorthands) must precede named args.
-        B(r = 1, x) is rejected at parse time."""
+    def test_constructor_call_positional_arg_after_named_arg(self) -> None:
+        """Positional args must precede named args.
+
+        ``B(r = 1, x)`` is rejected at parse time.
+        """
         from agm.agl.parser.errors import AglSyntaxError
 
         with pytest.raises(AglSyntaxError):

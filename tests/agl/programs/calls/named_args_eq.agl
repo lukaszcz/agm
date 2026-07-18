@@ -1,8 +1,8 @@
-# Function calls with named args using '=' (was ':'). Positional still works,
-# named args may be reordered, and positional + named may be mixed. There is NO
-# bare-name shorthand for def calls — only constructors get that. A param-driven
-# branch makes each scenario take a genuinely different path (and exercise a
-# different named-arg call form).
+# Function calls with named args using '='. Positional arguments still work,
+# named args may be reordered, and positional + named may be mixed. This program
+# has no named-only parameters, so every bare argument is positional. A
+# param-driven branch makes each scenario take a genuinely different path (and
+# exercise a different named-arg call form).
 param msg: text
 param level: int
 

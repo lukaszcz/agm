@@ -6,7 +6,7 @@ Read @docs/arch/agl/index.md to understand AgL implementation architecture.
 
 **IMPORTANT**: Update docs/arch/agl/**/*.md whenever AgL implementation architecture changes – always keep these files up-to-date with the codebase.
 
-The primary purpose of architecture docs in docs/arch/agl/**/*.md is to provide agents with a quick but comprehensive overview of the system's architecture and the codebase. Treat the docs as an onboarding guide. When updating, do not add brittle implementation details, but do include info on where to find relevant codebase references. Be succinct, not verbose. Provide architectural overview, not mechanism details. Match the existing writing style.
+The primary purpose of architecture docs in docs/arch/agl/**/*.md is to provide agents with a quick but comprehensive overview of the system's architecture and the codebase. Treat the docs as an onboarding guide. When updating, do not add brittle implementation details, but do include info on where to find relevant codebase references. Be succinct, not verbose. Provide architectural overview, not mechanism details. Match the existing writing style and succinctness level.
 
 ## AgL language reference
 

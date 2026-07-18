@@ -16,7 +16,7 @@ Read @docs/arch/index.md to understand AGM implementation architecture.
 
 **IMPORTANT**: Update docs/arch/**/*.md whenever AGM implementation architecture changes – always keep these files up-to-date with the codebase.
 
-The primary purpose of architecture docs in docs/arch/**/*.md is to provide agents with a quick but comprehensive overview of the system's architecture and the codebase. Treat the docs as an onboarding guide. When updating, do not add brittle implementation details, but do include info on where to find relevant codebase references. Be succinct, not verbose. Provide architectural overview, not mechanism details. Match the existing writing style.
+The primary purpose of architecture docs in docs/arch/**/*.md is to provide agents with a quick but comprehensive overview of the system's architecture and the codebase. Treat the docs as an onboarding guide. When updating, do not add brittle implementation details, but do include info on where to find relevant codebase references. Be succinct, not verbose. Provide architectural overview, not mechanism details. Match the existing writing style and succinctness level.
 
 ## Build, Test, and Development Commands
 

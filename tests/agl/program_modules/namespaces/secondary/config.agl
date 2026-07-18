@@ -1,0 +1,1 @@
+def secondary() -> int = 2

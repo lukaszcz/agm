@@ -12,18 +12,21 @@ Resolution is namespace- and scope-directed, never capitalization-directed — a
 
 ## Import Environments
 
-`scope/imports.py` is the pure import-policy seam. `ImportEnv` supports the program
-resolver, while the separate contribution environment represents selected module members,
-bare injection, aliases, and suffix/anchored qualification without coupling to the
-resolver.
+`scope/imports.py` is the pure import-policy seam. Its contribution environment
+merges every declaration for a module into selected members, bare injection, aliases,
+and plain-path routes. Plain imports are qualified-only; `using` and `open import`
+inject bare names. One shared suffix/anchored resolver serves value reads and writes,
+constructors, and type qualification, retaining ambiguity and route identity until the use
+site; its diagnostics distinguish private declarations from names outside a contribution.
 
 ## Static Guarantees
 
-Agents must be declared in source; the pass binds each declared agent as a first-class value of agent type. Register-backed `builtin var` declarations are admitted only in the canonical `std.config` module. The pass enforces lexical control-flow boundaries — `break`/`continue` must stay within a loop in the same function, `return` must appear inside a function body — and the extern (Python FFI) placement rule that externs are only allowed in file-backed modules.
+Agents must be declared in source; the pass binds each declared agent as a first-class value of agent type. Register-backed `builtin var` declarations are admitted only in the canonical `std/config` module. The pass enforces lexical control-flow boundaries — `break`/`continue` must stay within a loop in the same function, `return` must appear inside a function body — and the extern (Python FFI) placement rule that externs are only allowed in file-backed modules.
 
 Program resolution extends this pass across modules; see [modules.md](agl/modules.md).
 
 ## Code Entry Points
 
 - `src/agm/agl/scope/` — `resolve_module`, `resolve_program`, their resolution side tables, and the pure import-policy models in `imports.py`.
-- Tests: `tests/test_agl_scope.py`, `tests/test_agl_scope_program.py`, `tests/test_agl_scope_imports.py`, and the contribution-environment tests.
+- Tests: `tests/test_agl_scope.py`, `tests/test_agl_scope_program.py`,
+  `tests/test_agl_scope_contributions.py`, and `tests/test_agl_namespace_wiring.py`.

@@ -82,12 +82,12 @@ JSON strictness, the loop safety valve, and the shell-exec timeout. Each is a
 to change a setting:
 
 ```agl
-import std.config
+import std/config
 
-std.config::max-iters := 10
-std.config::timeout := Some("30s")
-std.config::runner := "claude -p"
-let budget = std.config::max-iters      # settings are readable
+std/config::max-iters := 10
+std/config::timeout := Some("30s")
+std/config::runner := "claude -p"
+let budget = std/config::max-iters      # settings are readable
 print budget
 ```
 

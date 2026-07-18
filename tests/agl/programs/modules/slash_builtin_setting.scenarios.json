@@ -1,0 +1,8 @@
+{
+  "scenarios": [
+    {
+      "name": "qualified_builtin_assignment_uses_suffix_resolution",
+      "expect": {"stdout": "3\n"}
+    }
+  ]
+}

@@ -392,6 +392,7 @@ def _witness_for_occurrence(
         qualification = EnumWitnessQualification(
             owner_name=spelling.owner_name,
             module_qualifier=spelling.module_qualifier,
+            qualifier_anchored=spelling.qualifier_anchored,
         )
     return EnumWitness(
         constructor.enum_type,
@@ -415,7 +416,9 @@ def _source_spelling(
         return EnumConstructorSpelling(None, None, bare=True)
 
     matches = tuple(
-        form for form in case_context.enum_owner_forms if form.match(enum_type) is not None
+        form
+        for form in case_context.enum_owner_forms
+        if form.match(enum_type) is not None and constructor.variant not in form.blocked_variants
     )
     if not matches:
         return EnumConstructorSpelling(None, None)
@@ -424,7 +427,11 @@ def _source_spelling(
         candidate: EnumOwnerForm,
     ) -> tuple[int, str, bool]:
         assert candidate.owner_name is not None
-        text = qualified_owner_name(candidate.owner_name, candidate.module_qualifier)
+        text = qualified_owner_name(
+            candidate.owner_name,
+            candidate.module_qualifier,
+            anchored=candidate.qualifier_anchored,
+        )
         return (
             len(text),
             text,

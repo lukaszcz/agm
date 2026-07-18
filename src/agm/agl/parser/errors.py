@@ -195,6 +195,7 @@ def _import_migration_error(
     header = _MODULE_HEADER_RE.search(source_text[:token_pos])
     if header is None:
         return None
+    module_kind = str(header.group("kind"))
     path_before_token = str(header.group("path"))
     if token_type == "DOT" and _MODULE_PATH_BEFORE_DOT_RE.fullmatch(path_before_token):
         return AglSyntaxError("Module paths use `/` between segments.", span=span)
@@ -203,7 +204,7 @@ def _import_migration_error(
     if (
         token_type == "NAME"
         and token_value == "qualified"
-        and header.group("kind").endswith("import")
+        and module_kind.endswith("import")
     ):
         return AglSyntaxError(
             "`qualified` was removed; imports are qualified by default.", span=span

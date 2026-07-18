@@ -1,0 +1,9 @@
+{
+  "scenarios": [
+    {
+      "name": "suffix_anchor_and_using",
+      "module_roots": ["program_modules"],
+      "expect": {"stdout": "2\n1\n1\n"}
+    }
+  ]
+}

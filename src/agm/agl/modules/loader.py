@@ -170,7 +170,7 @@ def _synthetic_stdlib_import(node_id: int) -> ImportDecl:
     return ImportDecl(
         module_path=STD_CORE_ID.segments,
         wildcard=False,
-        qualified=False,
+        is_open=True,
         alias=None,
         mode=ImportMode.ALL,
         items=(),

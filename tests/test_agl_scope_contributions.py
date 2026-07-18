@@ -6,7 +6,7 @@ import pytest
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.imports import (
-    ImportEnvV2,
+    ImportEnv,
     ModuleContribution,
     QualResolutionAmbiguous,
     QualResolutionFound,
@@ -14,7 +14,7 @@ from agm.agl.scope.imports import (
     QualResolutionUnknownQualifier,
     SingleTarget,
     WildcardTarget,
-    build_import_env_v2,
+    build_import_env,
     resolve_qualified,
 )
 from agm.agl.scope.symbols import AglScopeError
@@ -41,13 +41,14 @@ def _decl(
     *,
     alias: str | None = None,
     wildcard: bool = False,
+    is_open: bool = False,
     mode: ImportMode = ImportMode.ALL,
     items: tuple[ImportItem, ...] = (),
 ) -> ImportDecl:
     return ImportDecl(
         module_path=tuple(path.split("/")),
         wildcard=wildcard,
-        qualified=False,
+        is_open=is_open,
         alias=alias,
         mode=mode,
         items=items,
@@ -73,10 +74,8 @@ def _build(
     decls: list[ImportDecl],
     targets: dict[int, SingleTarget | WildcardTarget],
     exports: dict[ModuleId, dict[str, tuple[ModuleId, str]]],
-    *,
-    open_decls: frozenset[int] = frozenset(),
-) -> ImportEnvV2:
-    return build_import_env_v2(tuple(decls), targets, exports, open_decl_ids=open_decls)
+) -> ImportEnv:
+    return build_import_env(tuple(decls), targets, exports)
 
 
 class TestContributionSets:
@@ -105,20 +104,19 @@ class TestContributionSets:
         assert set(env.unqualified) == ({"one", "three"} if mode is ImportMode.USING else set())
 
     def test_open_injects_the_full_selected_set_bare(self) -> None:
-        decl = _decl("lib/api", mode=ImportMode.HIDING, items=(_item("secret"),))
+        decl = _decl("lib/api", is_open=True, mode=ImportMode.HIDING, items=(_item("secret"),))
         module = _module("lib/api")
         env = _build(
             [decl],
             {decl.node_id: SingleTarget(module)},
             {module: _exports("lib/api", "public", "secret")},
-            open_decls=frozenset({decl.node_id}),
         )
 
         assert set(env.unqualified) == {"public"}
         assert env.unqualified["public"] == frozenset({(module, "public")})
 
     def test_open_using_is_rejected_as_redundant(self) -> None:
-        decl = _decl("lib/api", mode=ImportMode.USING, items=(_item("one"),))
+        decl = _decl("lib/api", is_open=True, mode=ImportMode.USING, items=(_item("one"),))
         module = _module("lib/api")
 
         with pytest.raises(AglScopeError):
@@ -126,7 +124,6 @@ class TestContributionSets:
                 [decl],
                 {decl.node_id: SingleTarget(module)},
                 {module: _exports("lib/api", "one")},
-                open_decls=frozenset({decl.node_id}),
             )
 
 
@@ -144,7 +141,7 @@ class TestContributionImmutability:
         )
         contributions = {module: contribution}
         unqualified = {"public": frozenset({original})}
-        env = ImportEnvV2(contributions=contributions, unqualified=unqualified)
+        env = ImportEnv(contributions=contributions, unqualified=unqualified)
 
         members["later"] = (module, "later")
         contributions[_module("other/api")] = contribution
@@ -252,14 +249,13 @@ class TestWildcardDistribution:
         assert env.unqualified["shared"] == frozenset({(left, "shared"), (right, "shared")})
 
     def test_wildcard_open_distributes_bare_names(self) -> None:
-        decl = _decl("pkg", wildcard=True)
+        decl = _decl("pkg", wildcard=True, is_open=True)
         left = _module("pkg/left")
         right = _module("pkg/right")
         env = _build(
             [decl],
             {decl.node_id: WildcardTarget(frozenset({left, right}))},
             {left: _exports("pkg/left", "left"), right: _exports("pkg/right", "right")},
-            open_decls=frozenset({decl.node_id}),
         )
 
         assert env.unqualified == {
@@ -270,7 +266,7 @@ class TestWildcardDistribution:
 
 class TestDeterministicConstruction:
     def test_public_mappings_have_stable_module_and_name_order(self) -> None:
-        decl = _decl("pkg", wildcard=True)
+        decl = _decl("pkg", wildcard=True, is_open=True)
         left = _module("pkg/left")
         right = _module("pkg/right")
         env = _build(
@@ -280,7 +276,6 @@ class TestDeterministicConstruction:
                 left: _exports("pkg/left", "zeta", "alpha"),
                 right: _exports("pkg/right", "zeta", "alpha"),
             },
-            open_decls=frozenset({decl.node_id}),
         )
 
         assert list(env.contributions) == [left, right]

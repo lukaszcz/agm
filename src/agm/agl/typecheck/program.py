@@ -492,6 +492,7 @@ def _build_program_type_table(
             program_ctor_sig_table=program_ctor_sig_table,
             program_ctor_field_kinds_table=program_ctor_field_kinds_table,
             import_env=import_env,
+            private_info=resolved.private_info,
             module_id=mid,
             type_table=shared_type_table,
         )
@@ -614,6 +615,7 @@ def _build_program_func_sig_table(
             program_generic_table=program_generic_table,
             program_alias_table=program_alias_table,
             import_env=import_env,
+            private_info=resolved.private_info,
             module_id=mid,
         )
         if mid.is_entry and entry_seed_env is not None:
@@ -720,6 +722,7 @@ def _check_module(
     capabilities: HostCapabilities,
     program_type_table: dict[tuple[ModuleId, str], Type],
     import_env_map: Mapping[ModuleId, object],
+    private_info: Mapping[tuple[ModuleId, str], bool],
     program_func_sig_table: dict[int, tuple[str, FunctionSignature, FunctionType, bool]],
     program_builtin_var_table: dict[int, Type],
     program_generic_table: dict[tuple[ModuleId, str], GenericTypeDef],
@@ -760,6 +763,7 @@ def _check_module(
         program_ctor_sig_table=program_ctor_sig_table,
         program_ctor_field_kinds_table=program_ctor_field_kinds_table,
         import_env=import_env,
+        private_info=private_info,
         module_id=mid,
         type_table=type_table,
     )
@@ -927,6 +931,7 @@ def check_program(
             capabilities,
             program_type_table,
             import_env_map,
+            resolved.private_info,
             program_func_sig_table,
             program_builtin_var_table,
             program_generic_table,

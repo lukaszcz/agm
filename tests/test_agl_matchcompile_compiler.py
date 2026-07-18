@@ -801,6 +801,52 @@ def test_imported_enum_witness_uses_full_module_qualification_only_when_ambiguou
     )
 
 
+def test_local_enum_witness_keeps_a_short_owner_when_an_import_only_contributes_its_owner(
+    tmp_path: Path,
+) -> None:
+    compiled = _compile_graph_case(
+        tmp_path,
+        {
+            "support/Status": "enum Status | External",
+            "entry": (
+                "import support/Status\n"
+                "enum Status | Ready | Missing\n"
+                "def inspect(Missing: int, value: Status) -> int =\n"
+                "  case value of | Status::Ready => 0\n"
+                "inspect(0, Status::Ready)\n"
+            ),
+        },
+    )
+
+    witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
+
+    assert witness.qualification == EnumWitnessQualification("Status", None)
+    assert render_witness(witness) == "Status::Missing"
+
+
+def test_local_enum_witness_avoids_a_short_owner_when_the_variant_is_a_module_member(
+    tmp_path: Path,
+) -> None:
+    compiled = _compile_graph_case(
+        tmp_path,
+        {
+            "support/Status": "enum Status | External\ndef Missing() -> int = 1",
+            "entry": (
+                "import support/Status\n"
+                "enum Status | Ready | Missing\n"
+                "def inspect(Missing: int, value: Status) -> int =\n"
+                "  case value of | Status::Ready => 0\n"
+                "inspect(0, Status::Ready)\n"
+            ),
+        },
+    )
+
+    witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
+
+    assert witness.qualification == EnumWitnessQualification("Status", ())
+    assert render_witness(witness) == "::Status::Missing"
+
+
 def test_qualified_only_imported_enum_witness_uses_source_alias(tmp_path: Path) -> None:
     compiled = _compile_graph_case(
         tmp_path,

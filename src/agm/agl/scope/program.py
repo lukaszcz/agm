@@ -10,8 +10,8 @@ Design
 - **Export maps**: non-private top-level ``def``/``record``/``enum``/``type``
   names per module plus explicit ``export`` declarations, computed before any
   body is resolved.
-- **ImportEnv per module**: built from each module's import declarations against
-  the already-loaded graph (no re-reading files).
+- **Contribution import environment per module**: built from each module's
+  import declarations against the already-loaded graph (no re-reading files).
 - **Whole-program pre-pass tables**: ``all_public_funcs`` and ``all_public_types``
   collected BEFORE resolving any body, enabling cross-module mutual recursion.
 - **Declaration-only enforcement**: non-entry modules may only contain
@@ -125,6 +125,7 @@ class ResolvedProgram:
     all_public_types: dict[tuple[ModuleId, str], RecordDef | EnumDef | ExceptionDef | TypeAlias]
     entry_agents: dict[str, AgentDecl]
     warnings: tuple[Diagnostic, ...]
+    private_info: Mapping[tuple[ModuleId, str], bool]
 
 
 # ---------------------------------------------------------------------------
@@ -400,7 +401,7 @@ def resolve_program(
         module_targets: dict[int, ImportTarget] = {
             decl.node_id: all_targets[decl.node_id] for decl in decls
         }
-        import_envs[mid] = build_import_env(mid, decls, module_targets, export_maps)
+        import_envs[mid] = build_import_env(decls, module_targets, export_maps)
 
     # ------------------------------------------------------------------
     # Step 5: Whole-program pre-pass — collect public funcs/types and
@@ -504,4 +505,5 @@ def resolve_program(
         all_public_types=all_public_types,
         entry_agents=entry_agents,
         warnings=tuple(all_warnings),
+        private_info=private_info,
     )

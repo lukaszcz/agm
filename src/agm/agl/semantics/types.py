@@ -495,14 +495,16 @@ class EnumOwnerFormKind(_enum.Enum):
 class EnumOwnerForm:
     """One immutable checked enum-owner source form.
 
-    Source identity and template metadata are excluded from display equality;
-    they retain the checked resolution needed to validate a concrete enum
-    without reinterpreting import syntax downstream.
+    Source identity, template metadata, and blocked short variants are excluded
+    from display equality; they retain the checked resolution needed to validate
+    a concrete enum without reinterpreting import syntax downstream.
     """
 
     owner_name: str | None
     module_qualifier: tuple[str, ...] | None
     bare: bool = False
+    qualifier_anchored: bool = False
+    blocked_variants: frozenset[str] = field(default_factory=frozenset, compare=False, repr=False)
     kind: EnumOwnerFormKind | None = field(default=None, compare=False)
     source_module_id: ModuleId | None = field(default=None, compare=False, repr=False)
     source_name: str | None = field(default=None, compare=False, repr=False)
@@ -532,6 +534,8 @@ class EnumOwnerForm:
                 raise ValueError("a self-qualified enum owner form requires an empty qualifier")
         elif not self.module_qualifier:
             raise ValueError("a qualified-import enum owner form requires an import handle")
+        if self.qualifier_anchored and not self.module_qualifier:
+            raise ValueError("only a non-empty module qualifier can be anchored")
 
     def match(self, concrete: Type) -> TypeTemplateMatch | None:
         """Match this checked owner form against one concrete semantic type.

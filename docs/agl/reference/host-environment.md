@@ -126,8 +126,8 @@ settings as mutable bindings ([Bindings and scope](bindings-and-scope.md)):
 | `log-file` | `Option[text]` | `None` |
 | `timeout` | `Option[text]` | `None` |
 
-Import `std.config` and read or write a setting through a qualified target
-(`std.config::max-iters`); writing zero disables that safety valve. The
+Import `std/config` and read or write a setting through a qualified target
+(`std/config::max-iters`); writing zero disables that safety valve. The
 `Option[text]` settings (`log-file`, `timeout`) take a `Some("…")` or `None` value.
 
 ### Precedence

@@ -35,11 +35,11 @@ if
       let value = make_some(base)
       case value of
         | Option::none => print("none")
-        | Option::some(n) => print(n)
+        | Option::some(_ as n) => print(n)
       let make_failed = Status::failed(reason = ?)
       let status = make_failed("bad")
       case status of
-        | ok(n) => print(n)
+        | ok(_ as n) => print(n)
         | failed(reason) => print(reason)
   | else =>
       let make_boom = Boom(message = ?, code = base)

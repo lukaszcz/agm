@@ -904,8 +904,8 @@ class TestProgramDeclScopeSideTables:
         assert isinstance(r, ModuleResolution)
         assert BuiltinKind.EXEC in r.builtin_calls.values()
 
-    def test_bare_variant_patterns_populated(self) -> None:
-        """A bare name in a case pattern that names a constructor is in bare_variant_patterns."""
+    def test_bare_pattern_constructor_candidates_populated(self) -> None:
+        """A bare constructor pattern records its candidates for field-directed checking."""
         source = (
             "enum Status\n  | Ok\n  | Fail\nlet s = Ok()\ncase s of\n  | Ok => 1\n  | Fail => 0\n"
         )
@@ -913,8 +913,8 @@ class TestProgramDeclScopeSideTables:
         from agm.agl.scope.symbols import ModuleResolution
 
         assert isinstance(r, ModuleResolution)
-        # At least one VarPattern node_id was recognised as a bare-variant constructor.
-        assert len(r.bare_variant_patterns) >= 1
+        # Each bare constructor pattern retains its scope-independent candidates.
+        assert len(r.pattern_constructor_candidates) >= 1
 
 
 # ---------------------------------------------------------------------------

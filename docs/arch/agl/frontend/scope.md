@@ -8,7 +8,7 @@ Resolution is namespace- and scope-directed, never capitalization-directed — a
 
 - Built-in calls (`print`, `exec`, `ask`, and friends) are recognized by resolving the callee to a known built-in declaration, not by keyword.
 - Constructors live in the value namespace; an ambiguous unqualified constructor name is a static error, disambiguated with `Type::Ctor` qualification.
-- A bare name in a `case` pattern is a constructor pattern when it names an in-scope constructor and a variable binder otherwise; an `as`-pattern name is always a variable binder. Both rules are decided by resolution, not capitalization.
+- Scope records constructor candidates for bare pattern names independently of ordinary value bindings. Top-level names are constructor-only; nested names are provisional branch bindings until field-directed type checking publishes their final binder or constructor classification. An `as`-pattern name is always a variable binder.
 
 ## Static Guarantees
 

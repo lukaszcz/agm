@@ -23,17 +23,17 @@ case shape of
 
 let wrapped: Wrapped = Inner(shape = shape)
 case wrapped of
-  | Inner(shape = Line(len = n)) => print "nested line ${n}"
-  | Inner(shape = inner) => print "nested other"
+  | Inner(shape = Line(len as n)) => print "nested line ${n}"
+  | Inner(shape = _ as inner) => print "nested other"
   | Nothing() => print "nothing"
 
 case code of
   | 0 => print "zero"
   | 1 => print "one"
-  | other => print "other ${other}"
+  | _ as other => print "other ${other}"
 
 case shape of
-  | Box(label = tag) => print "tagged ${tag}"
+  | Box(label = _ as tag) => print "tagged ${tag}"
   | _ => print "untagged"
 
 case who of

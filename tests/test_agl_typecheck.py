@@ -2526,7 +2526,7 @@ class TestCase:
         assert r.resolved.program is not None
 
     def test_case_var_pattern(self) -> None:
-        r = accept_type("let x = 1\ncase x of | n => n")
+        r = accept_type("let x = 1\ncase x of | _ as n => n")
         assert r.resolved.program is not None
 
     def test_case_literal_pattern(self) -> None:
@@ -2562,7 +2562,7 @@ class TestCase:
         r = accept_type(
             "enum Result\n  | Ok(value: int)\n  | Err(msg: text)\n"
             "let res = Ok(value = 42)\n"
-            "case res of | Result::Ok(value = v) => v | Result::Err(msg = m) => 0"
+            "case res of | Result::Ok(value = _ as v) => v | Result::Err(msg = _ as m) => 0"
         )
         assert r.resolved.program is not None
 
@@ -3274,7 +3274,7 @@ class TestConstructorRefDispatch:
         )
         assert "does not belong" in str(err)
 
-    def test_bare_variant_pattern_rejects_missing_or_stale_resolver_metadata(self) -> None:
+    def test_bare_pattern_rejects_missing_or_stale_constructor_candidates(self) -> None:
         resolved = resolve_module(
             parse_program(
                 "enum Choice\n  | none\nlet value: Choice = none\ncase value of | none => 0"
@@ -3284,9 +3284,9 @@ class TestConstructorRefDispatch:
         assert isinstance(case, Case)
         pattern = case.branches[0].pattern
 
-        missing_ref = replace(resolved, bare_variant_refs={}, bare_variant_candidates={})
-        with pytest.raises(AssertionError, match="missing resolved constructor ref"):
-            check_module(missing_ref, default_capabilities())
+        missing_candidates = replace(resolved, pattern_constructor_candidates={})
+        with pytest.raises(AglTypeError, match="does not belong"):
+            check_module(missing_candidates, default_capabilities())
 
         stale_pattern = replace(pattern, name="missing")
         stale_case = replace(
@@ -3300,14 +3300,24 @@ class TestConstructorRefDispatch:
                 items=(*resolved.program.body.items[:-1], stale_case),
             ),
         )
-        ref = resolved.bare_variant_refs[pattern.node_id]
-        stale_resolved = replace(
-            resolved,
-            program=stale_program,
-            bare_variant_refs={pattern.node_id: replace(ref, variant="missing")},
-        )
+        stale_resolved = replace(resolved, program=stale_program)
         with pytest.raises(AglTypeError, match="does not belong"):
             check_module(stale_resolved, default_capabilities())
+
+        from agm.agl.scope.symbols import ConstructorRef
+
+        stale_candidate = ConstructorRef(
+            owner_name="Choice",
+            variant="missing",
+            owner_decl_node_id=-1,
+            type_params=(),
+        )
+        malformed_candidates = replace(
+            stale_resolved,
+            pattern_constructor_candidates={pattern.node_id: (stale_candidate,)},
+        )
+        with pytest.raises(AglTypeError, match="does not belong"):
+            check_module(malformed_candidates, default_capabilities())
 
     def test_missing_field_still_errors(self) -> None:
         err = reject_type("record Box\n  value: int\nBox()")
@@ -4226,7 +4236,7 @@ class TestMisc:
             "record Point\n  x: int\n"
             "enum E\n  | A(value: int)\n  | B\n"
             "let e = A(1)\n"
-            "case e of | A(value = item) as enum_value => enum_value | B => B()\n"
+            "case e of | A(value = _ as item) as enum_value => enum_value | B => B()\n"
             "let point = Point(2)\n"
             "case point of | _ as record_value => record_value.x\n"
             "case 0 of | 0 as scalar_value => scalar_value | _ => 0"
@@ -4314,7 +4324,7 @@ class TestMisc:
         r = accept_type(
             "enum Result\n  | Ok(value: int)\n  | Err(msg: text)\n"
             "let res = Ok(value = 42)\n"
-            "case res of | Result::Ok(value = v) => v | Result::Err(msg = m) => 0"
+            "case res of | Result::Ok(value = _ as v) => v | Result::Err(msg = _ as m) => 0"
         )
         assert r.resolved.program is not None
 
@@ -4405,7 +4415,7 @@ class TestMisc:
     def test_constructor_pattern_with_qualifier(self) -> None:
         # Exercises the qualifier check in constructor pattern matching.
         r = accept_type(
-            "enum E\n  | A(x: int)\nlet e = A(x = 1)\ncase e of | E::A(x = n) => n | _ => 0"
+            "enum E\n  | A(x: int)\nlet e = A(x = 1)\ncase e of | E::A(x = _ as n) => n | _ => 0"
         )
         assert r.resolved.program is not None
 
@@ -4520,13 +4530,13 @@ class TestMisc:
     def test_constructor_pattern_without_qualifier(self) -> None:
         # Exercises a constructor pattern without a qualifier.
         r = accept_type(
-            "enum E\n  | A(x: int)\nlet e = A(x = 1)\ncase e of | A(x = n) => n | _ => 0"
+            "enum E\n  | A(x: int)\nlet e = A(x = 1)\ncase e of | A(x = _ as n) => n | _ => 0"
         )
         assert r.resolved.program is not None
 
     def test_constructor_pattern_with_self_qualified_owner(self) -> None:
         r = accept_type(
-            "enum E\n  | A(x: int)\nlet e = A(x = 1)\ncase e of | ::E::A(x = n) => n | _ => 0"
+            "enum E\n  | A(x: int)\nlet e = A(x = 1)\ncase e of | ::E::A(x = _ as n) => n | _ => 0"
         )
         assert r.resolved.program is not None
 
@@ -7043,7 +7053,7 @@ class TestGenericPatterns:
             "  | none\n"
             "  | some(value: T)\n"
             "let x: Option[int] = some(value = 1)\n"
-            "case x of | some(value = v) => v | none() => 0"
+            "case x of | some(value = _ as v) => v | none() => 0"
         )
         assert r.resolved.program is not None
 
@@ -7053,7 +7063,7 @@ class TestGenericPatterns:
             "  | none\n"
             "  | some(value: T)\n"
             "let x: Option[int] = some(value = 1)\n"
-            "case x of | some(value = v) => v + 1 | none() => 0"
+            "case x of | some(value = _ as v) => v + 1 | none() => 0"
         )
         assert r.resolved.program is not None
 
@@ -7801,7 +7811,7 @@ class TestGenericAbstractInstanceAccess:
             "  | some(value: T)\n"
             "def get_or[U](opt: Option[U], default: U) -> U =\n"
             "  case opt of\n"
-            "    | some(value = v) => v\n"
+            "    | some(value = _ as v) => v\n"
             "    | none() => default\n"
             "let n: int = get_or(opt = some(value = 1), default = 0)\nn"
         )
@@ -7815,7 +7825,7 @@ class TestGenericAbstractInstanceAccess:
             "  | some(value: T)\n"
             "def get_or[U](opt: Option[U], default: U) -> U =\n"
             "  case opt of\n"
-            "    | some(value = v) => v\n"
+            "    | some(value = _ as v) => v\n"
             "    | none() => default\n"
             "let s: text = get_or(opt = some(value = 1), default = 0)\ns"
         )

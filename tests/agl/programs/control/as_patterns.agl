@@ -20,7 +20,7 @@ case shape of
 let tagged = Number(0)
 case tagged of
   | Number(value = 0 as zero) => print "zero ${zero}"
-  | Number(value = other) => print "other ${other}"
+  | Number(value = _ as other) => print "other ${other}"
 
 let point = Point(6, 7)
 case point of
@@ -29,4 +29,4 @@ case point of
 let scalar = if rectangle => 0 | else => 5
 case scalar of
   | 0 as zero => print "scalar zero ${zero}"
-  | other => print "scalar other ${other}"
+  | _ as other => print "scalar other ${other}"

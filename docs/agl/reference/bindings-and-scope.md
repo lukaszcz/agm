@@ -301,7 +301,10 @@ let h: Holder[int] = Holder::tagged(by = 7)   # qualified — unambiguous
 
 A **nearer ordinary binding shadows** a constructor (or an overload set): an
 inner `let`, `var`, or function parameter named `tagged` hides the outer
-constructor for the rest of its scope, exactly like any other shadowing.
+constructor for the rest of its scope, exactly like any other shadowing. An
+ordinary declaration may also use a constructor's spelling in its own scope;
+it owns expression position, while a case-pattern constructor lookup remains
+independent.
 
 ```agl
 def shadow(tagged: int) -> int = tagged * 10   # parameter hides the constructor

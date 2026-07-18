@@ -1,0 +1,11 @@
+{
+  "scenarios": [
+    {
+      "name": "nested_field_binder_and_constructor",
+      "expect": {
+        "stdout": "7:ready\n",
+        "calls": {}
+      }
+    }
+  ]
+}

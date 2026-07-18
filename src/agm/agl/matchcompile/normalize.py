@@ -7,7 +7,6 @@ import weakref
 from typing import Never, NoReturn, assert_never
 
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
-from agm.agl.scope.symbols import BinderKind, ScopeNode
 from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import (
     AgentType,
@@ -92,22 +91,19 @@ def _unsupported(description: str, node: Never) -> NoReturn:
         ) from exc
 
 
-def _bare_enum_constructors(
-    scope: ScopeNode,
-    checked: CheckedPatternOwner,
-) -> frozenset[tuple[ModuleId, str, str]]:
-    """Collect declaration-level bare variants valid in the exact case scope."""
-    result: set[tuple[ModuleId, str, str]] = set()
-    for name, candidates in checked.resolved.constructor_candidates.items():
-        binding = scope.lookup(name)
-        if binding is None or binding.kind is not BinderKind.constructor_binding:
-            continue
-        if len(candidates) != 1:
-            continue
-        candidate = candidates[0]
-        if candidate.variant is not None:
-            result.add((candidate.owner_module_id, candidate.owner_name, candidate.variant))
-    return frozenset(result)
+def _bare_enum_constructors(checked: CheckedPatternOwner) -> frozenset[tuple[ModuleId, str, str]]:
+    """Collect enum constructors whose unqualified call forms are visible.
+
+    The witness renderer may use an explicit call form for field-bearing
+    variants, so its visibility set is broader than the nullary-only bare-name
+    pattern rule. Ordinary value bindings do not hide these pattern forms.
+    """
+    return frozenset(
+        (candidate.owner_module_id, candidate.owner_name, candidate.variant)
+        for candidates in checked.resolved.constructor_candidates.values()
+        for candidate in candidates
+        if candidate.variant is not None
+    )
 
 
 def _enum_constructor(enum_type: EnumType, variant: str, table: TypeTable) -> EnumConstructor:
@@ -331,19 +327,19 @@ def normalize_pattern(
                 BinderProvenance(node_id=node_id, name=name, span=pattern.span),
             )
         case VarPattern(node_id=node_id, name=name):
-            if node_id not in checked.resolved.bare_variant_patterns:
+            if node_id in checked.argument_bindings.pattern_binders:
                 return WildcardCell(
                     binder=BinderProvenance(node_id=node_id, name=name, span=pattern.span),
                     provenance=provenance,
                 )
-            if not isinstance(subject_type, EnumType):
-                raise MatchCompileInvariantError(
-                    "resolver-classified bare variant has a non-enum checked type"
-                )
-            constructor_ref = checked.resolved.bare_variant_refs.get(node_id)
+            constructor_ref = checked.argument_bindings.pattern_constructors.get(node_id)
             if constructor_ref is None or constructor_ref.variant != name:
                 raise MatchCompileInvariantError(
-                    "missing or inconsistent resolved constructor ref for bare variant"
+                    "missing final constructor classification for bare pattern"
+                )
+            if not isinstance(subject_type, EnumType):
+                raise MatchCompileInvariantError(
+                    "final bare constructor has a non-enum checked type"
                 )
             constructor = _enum_constructor(
                 EnumType(
@@ -354,14 +350,8 @@ def normalize_pattern(
                 name,
                 checked.type_env.type_table,
             )
-            if constructor.enum_type != subject_type:
-                raise MatchCompileInvariantError(
-                    "resolved bare variant owner does not match its checked scrutinee type"
-                )
-            if constructor.arity != 0:
-                raise MatchCompileInvariantError(
-                    f"resolver-classified bare variant {name!r} is not nullary"
-                )
+            if constructor.enum_type != subject_type or constructor.arity != 0:
+                raise MatchCompileInvariantError("invalid final bare constructor classification")
             return ConstructorCell(constructor, (), provenance)
         case LiteralPattern():
             return ConstructorCell(
@@ -463,12 +453,6 @@ def normalize_case(
         )
         for index, branch in enumerate(case.branches)
     )
-    try:
-        case_scope = checked.resolved.case_scopes[case.node_id]
-    except KeyError as exc:
-        raise MatchCompileInvariantError(
-            f"missing resolver scope provenance for case node {case.node_id}"
-        ) from exc
     module_id = checked.module_id if isinstance(checked, CheckedModule) else ENTRY_ID
     owner_forms = (
         checked.type_env.enum_owner_forms() if enum_owner_forms is None else enum_owner_forms
@@ -476,7 +460,7 @@ def normalize_case(
     case_context = MatchCaseContext(
         module_id=module_id,
         enum_owner_forms=owner_forms,
-        bare_enum_constructors=_bare_enum_constructors(case_scope, checked),
+        bare_enum_constructors=_bare_enum_constructors(checked),
         owner_program=checked.resolved.program,
     )
     return NormalizedCase(

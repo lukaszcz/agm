@@ -276,20 +276,15 @@ class ModuleResolution:
         ``None`` for locally-declared/open-imported types and the owning
         ``ModuleId`` for cross-module references.  The checker validates
         enum-ness and variant.
-    ``bare_variant_patterns``
-        ``node_id`` of every ``VarPattern`` whose bare name denotes an in-scope
-        constructor binding and is therefore a (nullary) constructor pattern
-        rather than a variable binder.  Resolution records this classification,
-        the checker validates that the name is a nullary variant of the scrutinee
-        enum, and match compilation consumes the classification when normalizing
-        the source pattern into a decision artifact.
-    ``bare_variant_candidates``
-        Maps each bare-variant ``VarPattern.node_id`` to every constructor its
-        spelling could denote.  When a spelling is shared across enums the
-        resolver cannot pick one — the scrutinee's enum type does that at check
-        time — so it records all candidates here and the checker selects the
-        matching one, recording it in ``bare_variant_refs``.  A single-candidate
-        (unambiguous) pattern is also resolved eagerly into ``bare_variant_refs``.
+    ``pattern_constructor_candidates``
+        Maps every bare ``VarPattern.node_id`` that names one or more visible
+        constructors to its candidate constructors. Constructor candidates are
+        independent of ordinary value bindings; the checker selects the final
+        interpretation from the matched occurrence's type and field name.
+    ``provisional_pattern_binders``
+        Node ids of nested bare names provisionally introduced into a branch
+        scope so its body can resolve before field-directed checking classifies
+        them. The checker publishes the authoritative final binder set.
     ``case_scopes``
         Maps every source ``Case.node_id`` to the exact lexical scope active
         when the resolver entered that case.  Downstream diagnostics use this
@@ -311,9 +306,10 @@ class ModuleResolution:
     qualified_constructor_refs: dict[int, tuple[str, str, ModuleId | None]] = field(
         default_factory=dict
     )
-    bare_variant_patterns: frozenset[int] = frozenset()
-    bare_variant_refs: dict[int, ConstructorRef] = field(default_factory=dict)
-    bare_variant_candidates: dict[int, tuple[ConstructorRef, ...]] = field(default_factory=dict)
+    pattern_constructor_candidates: dict[int, tuple[ConstructorRef, ...]] = field(
+        default_factory=dict
+    )
+    provisional_pattern_binders: frozenset[int] = frozenset()
     case_scopes: dict[int, ScopeNode] = field(default_factory=dict)
 
 

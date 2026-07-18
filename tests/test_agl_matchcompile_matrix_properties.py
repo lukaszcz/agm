@@ -109,7 +109,7 @@ def test_paper_specializations_preserve_complete_rows_and_priority() -> None:
         "let value = subject(left = nil(), right = nil())\n"
         "case value of\n"
         "  | subject(left = nil(), right = _) => 1\n"
-        "  | subject(left = left_value, right = nil()) => 2\n"
+        "  | subject(left = left, right = nil()) => 2\n"
         "  | subject(left = cons(), right = cons()) => 3\n"
     )
     subject = cast(EnumConstructor, head_constructors(root, 0)[0])
@@ -174,8 +174,8 @@ def test_paper_default_retains_and_migrates_all_wildcard_rows() -> None:
         "let value = subject(left = nil(), right = nil())\n"
         "case value of\n"
         "  | subject(left = nil(), right = _) => 1\n"
-        "  | subject(left = second_left, right = nil()) => 2\n"
-        "  | subject(left = third_left, right = _) => 3\n"
+        "  | subject(left = left, right = nil()) => 2\n"
+        "  | subject(left = left, right = _) => 3\n"
     )
     subject = cast(EnumConstructor, head_constructors(root, 0)[0])
     matrix = specialize(root, 0, subject, allocator).matrix
@@ -251,7 +251,7 @@ def _assert_decomposition_partition(
 
 def test_boolean_and_enum_decompositions_partition_complete_finite_domains() -> None:
     bool_checked, bool_case, bool_matrix, bool_allocator = _matrix(
-        "let value = false\ncase value of | false => 1 | remaining => 2"
+        "let value = false\ncase value of | false => 1 | _ as remaining => 2"
     )
     _assert_decomposition_partition(
         bool_checked,
@@ -267,7 +267,7 @@ def test_boolean_and_enum_decompositions_partition_complete_finite_domains() -> 
         "  | green\n"
         "  | blue\n"
         "let value = red()\n"
-        "case value of | red() => 1 | blue() => 2 | remaining => 3"
+        "case value of | red() => 1 | blue() => 2 | _ as remaining => 3"
     )
     enum_type = cast(EnumConstructor, head_constructors(enum_matrix, 0)[0]).enum_type
     nominal = NominalId(enum_type.module_id, enum_type.name)

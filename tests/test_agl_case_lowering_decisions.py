@@ -176,7 +176,7 @@ def test_executable_ir_contains_no_source_pattern_or_occurrence_objects() -> Non
     program = _lower(
         "enum Box | box(value: int)\n"
         "let boxed = box(value = 2)\n"
-        "let result = case boxed of | box(value = 1) => 1 | box(value = n) => n\n"
+        "let result = case boxed of | box(value = 1) => 1 | box(value = _ as n) => n\n"
         "()"
     )
     forbidden_names = tuple(

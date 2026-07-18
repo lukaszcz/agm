@@ -1,6 +1,5 @@
-# Bare nullary-variant patterns: a bare name that names an in-scope constructor
-# is a constructor pattern (a nullary variant), not a variable binder.  A bare
-# name that is NOT a constructor stays an ordinary catch-all binder.
+# Bare top-level names are nullary constructor patterns. Catch-all binders use
+# an explicit as-pattern; nested names follow their matched field.
 param n: int = 0
 
 enum Color
@@ -40,7 +39,7 @@ def pick(k: int) -> Color =
 def code(c: Color) -> int =
   case c of
     | Red => 1
-    | rest => 0
+    | _ as rest => 0
 
 def describe(b: Box) -> text =
   case b of
@@ -57,11 +56,11 @@ def trend_name(t: Trend) -> text =
     | Halt => "flat"
     | Fall => "down"
 
-# Nested: a bare variant pattern (Red) and a bare binder (other) on a subfield.
+# Nested: a bare variant pattern (Red) and a field-name binder (color).
 def inner_name(w: Wrapper) -> text =
   case w of
     | Wrap(color = Red) => "wrapped-red"
-    | Wrap(color = other) => "wrapped-${name(other)}"
+    | Wrap(color) => "wrapped-${name(color)}"
 
 let c: Color = pick(n)
 print(name(c))

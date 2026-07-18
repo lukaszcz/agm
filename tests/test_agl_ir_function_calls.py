@@ -474,8 +474,8 @@ def test_capture_through_nested_positions_and_pattern_locals() -> None:
         "let multiplier = 3\n"
         "def describe(s: Shape) -> int =\n"
         "  case s of\n"
-        "    | Circle(radius = r) => r * multiplier\n"
-        "    | Square(side = sd) => sd * multiplier\n"
+        "    | Circle(radius = _ as r) => r * multiplier\n"
+        "    | Square(side = _ as sd) => sd * multiplier\n"
         "let c = describe(Shape::Circle(radius = 4))\n"
         "let sq = describe(Shape::Square(side = 5))\n()"
     )
@@ -524,11 +524,11 @@ def test_case_wildcard_and_literal_patterns_in_function_body() -> None:
 
 
 def test_bare_variant_pattern_in_function_body() -> None:
-    """_pattern_binding_ids covers VarPattern-as-bare-constructor branch.
+    """_pattern_binding_ids excludes a bare constructor pattern.
 
-    A bare name in a case pattern (e.g. ``| On => ...``) is a VarPattern whose
-    node_id appears in ``bare_variant_patterns``.  The bare-constructor branch is not taken
-    so the node_id is NOT added to local_ids (correct: it is not a binder).
+    A bare name in a case pattern (for example, ``| On => ...``) is finalized
+    by the checker as a constructor rather than a binder, so it is not added to
+    ``local_ids``.
     """
     source = (
         "enum Flag | On | Off\n"

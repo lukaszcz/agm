@@ -25,8 +25,8 @@ let wrapped: Wrapped = ask("Pick a wrapped shape.", agent = picker)
 let described = case wrapped of
   | Empty => "empty"
   | Holds(shape = Dot) => "dot"
-  | Holds(shape = Line(len = n)) => "line ${n}"
-  | Holds(shape = Box(at = p, len = n)) => "box at ${p.x},${p.y} size ${n}"
+  | Holds(shape = Line(len = _ as n)) => "line ${n}"
+  | Holds(shape = Box(at = _ as p, len = _ as n)) => "box at ${p.x},${p.y} size ${n}"
 
 print described
 
@@ -45,5 +45,5 @@ let bumped: Wrapped = case wrapped of
 case bumped of
   | Empty => print "still empty"
   | Holds(shape = Dot) => print "still dot"
-  | Holds(shape = Line(len = m)) => print "bumped line ${m}"
-  | Holds(shape = Box(at = q, len = m)) => print "bumped box ${q.x} ${m}"
+  | Holds(shape = Line(len = _ as m)) => print "bumped line ${m}"
+  | Holds(shape = Box(at = _ as q, len = _ as m)) => print "bumped box ${q.x} ${m}"

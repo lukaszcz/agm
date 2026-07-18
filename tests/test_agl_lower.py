@@ -2383,7 +2383,7 @@ class TestOneLevelCaseLowering:
             "let s = Status::Active\n"
             "let r = case s of\n"
             "  | Active => 1\n"
-            "  | x => 0\n"
+            "  | _ as x => 0\n"
             "()\n"
         )
         prog = _lower(source)
@@ -2407,7 +2407,7 @@ class TestOneLevelCaseLowering:
             "let s = Status::Inactive\n"
             "let r = case s of\n"
             "  | Active => 1\n"
-            "  | x => 2\n"
+            "  | _ as x => 2\n"
             "()\n"
         )
         prog = _lower(source)

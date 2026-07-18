@@ -180,7 +180,7 @@ def test_flexible_inference_types_cannot_enter_match_normalization() -> None:
 
 
 def test_normalize_case_preserves_priority_actions_and_binder_provenance() -> None:
-    checked = _check("let value = 1\ncase value of | 0 => 10 | captured => captured")
+    checked = _check("let value = 1\ncase value of | 0 => 10 | _ as captured => captured")
     case = _only_case(checked.resolved.program)
 
     normalized = normalize_case(case, checked)
@@ -202,9 +202,9 @@ def test_normalize_case_preserves_priority_actions_and_binder_provenance() -> No
     assert isinstance(normalized.rows[0].cells[0], ConstructorCell)
     binder_cell = normalized.rows[1].cells[0]
     assert isinstance(binder_cell, WildcardCell)
-    assert binder_cell.binder is not None
-    assert binder_cell.binder.node_id == case.branches[1].pattern.node_id
-    assert binder_cell.binder.name == "captured"
+    assert len(binder_cell.as_binders) == 1
+    assert binder_cell.as_binders[0].node_id == case.branches[1].pattern.node_id
+    assert binder_cell.as_binders[0].name == "captured"
     assert isinstance(binder_cell.provenance, SourcePatternProvenance)
     assert normalized.rows[1].binder_assignments == ()
 
@@ -212,7 +212,7 @@ def test_normalize_case_preserves_priority_actions_and_binder_provenance() -> No
 def test_as_patterns_preserve_all_current_occurrence_binders() -> None:
     checked = _check(
         "enum E\n  | A(value: int)\n  | B\nlet value = A(1)\n"
-        "case value of | A(value = inner) as whole as same => inner | B => 0"
+        "case value of | A(value = _ as inner) as whole as same => inner | B => 0"
     )
     normalized = normalize_case(_only_case(checked.resolved.program), checked)
 
@@ -221,8 +221,7 @@ def test_as_patterns_preserve_all_current_occurrence_binders() -> None:
     assert [binder.name for binder in cell.binders] == ["whole", "same"]
     child = cell.arguments[0]
     assert isinstance(child, WildcardCell)
-    assert child.binder is not None
-    assert child.binder.name == "inner"
+    assert [binder.name for binder in child.as_binders] == ["inner"]
 
 
 def test_numeric_literals_share_runtime_equality_canonical_form() -> None:
@@ -365,7 +364,7 @@ def test_constructor_normalization_expands_omitted_generic_fields_in_declaration
         "enum Item[T]\n"
         "  | Made(first: T, second: text, third: int)\n"
         'let value: Item[int] = Made(first = 1, second = "x", third = 3)\n'
-        "case value of | Made(first = captured, third = 3) => captured | _ => 0"
+        "case value of | Made(first = _ as captured, third = 3) => captured | _ => 0"
     )
     case = _only_case(checked.resolved.program)
 
@@ -382,8 +381,7 @@ def test_constructor_normalization_expands_omitted_generic_fields_in_declaration
     assert len(outer.arguments) == 3
     first, second, third = outer.arguments
     assert isinstance(first, WildcardCell)
-    assert first.binder is not None
-    assert first.binder.name == "captured"
+    assert [binder.name for binder in first.as_binders] == ["captured"]
     assert isinstance(second, WildcardCell)
     assert second.binder is None
     assert second.provenance == OmittedFieldProvenance(
@@ -423,7 +421,7 @@ def test_imported_generic_enum_normalizes_from_checked_metadata(tmp_path: Path) 
                 "import lib\n"
                 'let value: Choice[int] = present(value = 1, note = "x")\n'
                 "case value of\n"
-                "  | present(value = captured) => captured\n"
+                "  | present(value = _ as captured) => captured\n"
                 "  | absent => 0\n"
             ),
         },
@@ -518,12 +516,12 @@ def test_model_rejects_invalid_occurrences_cells_and_normalized_matrices() -> No
 
 
 def test_decision_model_carries_occurrence_and_binder_identities() -> None:
-    checked = _check("let value = 1\ncase value of | captured => captured")
+    checked = _check("let value = 1\ncase value of | _ as captured => captured")
     normalized = normalize_case(_only_case(checked.resolved.program), checked)
     cell = normalized.rows[0].cells[0]
     assert isinstance(cell, WildcardCell)
-    assert cell.binder is not None
-    assignment = BinderAssignment(normalized.root.id, cell.binder)
+    assert len(cell.as_binders) == 1
+    assignment = BinderAssignment(normalized.root.id, cell.as_binders[0])
     leaf = DecisionLeaf(normalized.rows[0].action_id, (assignment,))
     fail = DecisionFail()
     constructor = LiteralConstructor(LiteralKind.NUMERIC, decimal.Decimal(1))
@@ -619,14 +617,16 @@ def test_malformed_checked_literal_and_bare_variant_metadata_raise_invariants() 
 
     bare_none = enum_case.branches[0].pattern
     bare_some = replace(bare_none, name="some")
-    assert bare_none.node_id in enum_checked.resolved.bare_variant_refs
-    some_ref = replace(enum_checked.resolved.bare_variant_refs[bare_none.node_id], variant="some")
-    malformed_resolved = replace(
-        enum_checked.resolved,
-        bare_variant_refs={bare_none.node_id: some_ref},
+    assert bare_none.node_id in enum_checked.argument_bindings.pattern_constructors
+    some_ref = replace(
+        enum_checked.argument_bindings.pattern_constructors[bare_none.node_id], variant="some"
     )
-    malformed_checked = replace(enum_checked, resolved=malformed_resolved)
-    with pytest.raises(MatchCompileInvariantError, match="not nullary"):
+    malformed_bindings = replace(
+        enum_checked.argument_bindings,
+        pattern_constructors={bare_none.node_id: some_ref},
+    )
+    malformed_checked = replace(enum_checked, argument_bindings=malformed_bindings)
+    with pytest.raises(MatchCompileInvariantError, match="invalid final"):
         normalize_case(_replace_case_pattern(enum_case, bare_some), malformed_checked)
 
 
@@ -637,27 +637,27 @@ def test_bare_variant_normalization_rejects_missing_and_wrong_owner_metadata() -
     case = _only_case(checked.resolved.program)
     pattern = case.branches[0].pattern
 
-    missing_ref = replace(checked.resolved, bare_variant_refs={})
-    with pytest.raises(MatchCompileInvariantError, match="missing or inconsistent"):
-        normalize_case(case, replace(checked, resolved=missing_ref))
+    missing_ref = replace(checked.argument_bindings, pattern_constructors={})
+    with pytest.raises(MatchCompileInvariantError, match="missing final constructor"):
+        normalize_case(case, replace(checked, argument_bindings=missing_ref))
 
-    ref = checked.resolved.bare_variant_refs[pattern.node_id]
+    ref = checked.argument_bindings.pattern_constructors[pattern.node_id]
     checked.type_env.type_table.register(
         TypeDef(kind="enum", name="Other", module_id=ENTRY_ID, variants=(("none", ()),))
     )
     wrong_owner = replace(ref, owner_name="Other")
-    wrong_owner_resolved = replace(
-        checked.resolved, bare_variant_refs={pattern.node_id: wrong_owner}
+    wrong_owner_bindings = replace(
+        checked.argument_bindings, pattern_constructors={pattern.node_id: wrong_owner}
     )
-    with pytest.raises(MatchCompileInvariantError, match="owner does not match"):
-        normalize_case(case, replace(checked, resolved=wrong_owner_resolved))
+    with pytest.raises(MatchCompileInvariantError, match="invalid final"):
+        normalize_case(case, replace(checked, argument_bindings=wrong_owner_bindings))
 
 
 def test_malformed_checked_constructor_metadata_raise_invariants() -> None:
     checked = _check(
         "enum Choice\n  | some(value: int)\n"
         "let value: Choice = some(value = 1)\n"
-        "case value of | some(value = captured) => captured | _ => 0"
+        "case value of | some(value = _ as captured) => captured | _ => 0"
     )
     case = _only_case(checked.resolved.program)
     pattern = case.branches[0].pattern
@@ -721,7 +721,7 @@ def test_source_reference_matcher_preserves_priority_and_partial_constructor_fie
         'let value: Choice = present(value = 1.0, note = "x")\n'
         "case value of\n"
         "  | present(value = 1) => 10\n"
-        "  | present(note = captured) => 20\n"
+        "  | present(note = _ as captured) => 20\n"
         "  | absent => 30\n"
         "  | _ => 40\n"
     )

@@ -88,9 +88,9 @@ def _pair_case() -> tuple[CheckedModule, Case, PatternMatrix, EnumConstructor, O
         "  | empty\n"
         "let subject: Pair = pair(left = false, right = true)\n"
         "case subject of\n"
-        "  | pair(left = false, right = captured) => 1\n"
+        "  | pair(left = false, right = _ as captured) => 1\n"
         "  | pair(left = true, right = false) => 2\n"
-        "  | whole => 3\n"
+        "  | _ as whole => 3\n"
     )
     case = _only_case(checked)
     normalized = normalize_case(case, checked)
@@ -126,10 +126,9 @@ def test_specialization_and_default_are_exact_and_migrate_binders() -> None:
     assert isinstance(first_left, ConstructorCell)
     assert first_left.constructor == BoolConstructor(False)
     assert isinstance(first_right, WildcardCell)
-    assert first_right.binder is not None and first_right.binder.name == "captured"
+    assert [binder.name for binder in first_right.as_binders] == ["captured"]
     assert all(isinstance(cell, WildcardCell) for cell in specialized.rows[2].cells)
-    whole = cast(WildcardCell, matrix.rows[2].cells[0]).binder
-    assert whole is not None
+    whole = cast(WildcardCell, matrix.rows[2].cells[0]).as_binders[0]
     assert specialized.rows[2].binder_assignments == (
         BinderAssignment(matrix.occurrences[0].id, whole),
     )
@@ -436,8 +435,7 @@ def test_matrix_operations_reject_malformed_boundaries_loudly() -> None:
             matrix.type_table,
         )
     with pytest.raises(MatchCompileInvariantError, match="binder assignment"):
-        binder = cast(WildcardCell, matrix.rows[2].cells[0]).binder
-        assert binder is not None
+        binder = cast(WildcardCell, matrix.rows[2].cells[0]).as_binders[0]
         bad_row = replace(
             row,
             binder_assignments=(BinderAssignment(OccurrenceId(99), binder),),
@@ -716,8 +714,7 @@ def test_allocator_rejects_incompatible_origin_and_rows_reject_duplicate_binders
     with pytest.raises(MatchCompileInvariantError, match="creation order"):
         specialize(matrix, 0, pair, replace(allocator, next_creation_order=0))
 
-    binder = cast(WildcardCell, matrix.rows[2].cells[0]).binder
-    assert binder is not None
+    binder = cast(WildcardCell, matrix.rows[2].cells[0]).as_binders[0]
     duplicate = replace(
         matrix.rows[2],
         cells=(WildcardCell(binder, matrix.rows[2].cells[0].provenance),),
@@ -942,8 +939,8 @@ def _independent_box_columns() -> tuple[
         "let subject = pair(left = boxed(value = true), right = boxed(value = false))\n"
         "case subject of\n"
         "  | pair(left = boxed(value = true), right = boxed(value = false)) => 1\n"
-        "  | pair(left = boxed(value = left), right = boxed(value = right)) => 2\n"
-        "  | pair(left = left_box, right = right_box) => 3\n"
+        "  | pair(left = boxed(value = _), right = boxed(value = _)) => 2\n"
+        "  | pair(left = left, right = right) => 3\n"
     )
     normalized = normalize_case(_only_case(checked), checked)
     root = matrix_from_normalized(normalized)

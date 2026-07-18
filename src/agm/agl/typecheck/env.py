@@ -19,7 +19,7 @@ from typing import Literal
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.scope.imports import ImportEnv, QName
-from agm.agl.scope.symbols import BindingRef, ModuleResolution
+from agm.agl.scope.symbols import BindingRef, ConstructorRef, ModuleResolution
 from agm.agl.semantics.persistent import PersistentDict
 from agm.agl.semantics.type_table import (
     BUILTIN_PRELUDE_TYPE_DEFS,
@@ -262,12 +262,18 @@ class ArgumentBindings:
     ``constructor_patterns``
         Constructor-pattern ``Pattern.node_id`` → ordered ``(field_name,
         sub_pattern)`` pairs (partial patterns omit unmentioned fields).
+    ``pattern_binders`` / ``pattern_constructors``
+        The final field-directed classification of bare patterns. These are the
+        authoritative source for match normalization and lowering; scope's
+        provisional bindings are not semantic pattern classifications.
     """
 
     function_calls: dict[int, tuple[Expr | None, ...]]
     function_param_types: dict[int, tuple[Type, ...]]
     constructor_calls: dict[int, dict[str, Expr]]
     constructor_patterns: dict[int, tuple[tuple[str, Pattern], ...]]
+    pattern_binders: frozenset[int] = frozenset()
+    pattern_constructors: dict[int, ConstructorRef] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

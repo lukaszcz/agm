@@ -58,6 +58,7 @@ from agm.agl.syntax.nodes import (
     VariantDef,
     VarPattern,
     VarRef,
+    WildcardPattern,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import IntT
@@ -452,7 +453,7 @@ class TestAssignErrors:
         assert "declared with 'let'" not in msg
 
     def test_assign_to_pattern_binding_names_pattern(self) -> None:
-        err = reject_scope("let v = 1\ncase v of\n  | n =>\n    n := 2\n")
+        err = reject_scope("let v = 1\ncase v of\n  | _ as n =>\n    n := 2\n")
         line, msg = diag(err)
         assert line == 4
         assert "pattern binding" in msg
@@ -658,7 +659,7 @@ class TestReservedNames:
         _, msg = diag(err)
         assert "exec" in msg
 
-    def test_reserve_ask_pattern_var(self) -> None:
+    def test_top_level_bare_ask_is_not_a_binder(self) -> None:
         let_x = _make_let("x", _make_intlit(1))
         pv = VarPattern(name="ask", span=_sp(2), node_id=_nid())
         branch = CaseBranch(
@@ -678,7 +679,7 @@ class TestReservedNames:
         err = reject_program(let_x, case_node)
         msg = err.to_diagnostic().message
         assert "ask" in msg
-        assert "reserved" in msg.lower() or "contextual" in msg.lower()
+        assert "visible constructor" in msg.lower()
 
     def test_bare_ask_varref_rejected(self) -> None:
         """A bare VarRef to 'ask' (not in call position) is rejected."""
@@ -1165,11 +1166,11 @@ class TestIfScoping:
 
 class TestCaseScoping:
     def test_case_var_pattern_visible_in_body(self) -> None:
-        r = parse_and_resolve("let x = 1\ncase x of\n  | n => n\n")
+        r = parse_and_resolve("let x = 1\ncase x of\n  | _ as n => n\n")
         assert _ref(r, "n").kind == BinderKind.pattern_binding
 
     def test_case_pattern_not_visible_outside(self) -> None:
-        err = reject_scope("let x = 1\ncase x of\n  | n => n\nn\n")
+        err = reject_scope("let x = 1\ncase x of\n  | _ as n => n\nn\n")
         line, msg = diag(err)
         assert line == 4
         assert "n" in msg
@@ -1629,7 +1630,12 @@ class TestDirectASTConstruction:
 
     def test_case_var_pattern_binds(self) -> None:
         let_x = _make_let("x", _make_intlit(1))
-        pattern_var = VarPattern(name="matched", span=_sp(), node_id=_nid())
+        pattern_var = AsPattern(
+            pattern=WildcardPattern(span=_sp(), node_id=_nid()),
+            name="matched",
+            span=_sp(),
+            node_id=_nid(),
+        )
         matched_ref = _make_varref("matched")
         branch = CaseBranch(
             pattern=pattern_var,
@@ -1688,7 +1694,7 @@ class TestDirectASTConstruction:
     def test_as_pattern_duplicate_with_inner_field_binder_rejected(self) -> None:
         err = reject_scope(
             "enum E\n  | A(value: int)\nlet value = A(1)\n"
-            "case value of | A(value = captured) as captured => captured | _ => 0"
+            "case value of | A(value = value as captured) as captured => captured | _ => 0"
         )
         assert "captured" in err.to_diagnostic().message
 
@@ -1720,7 +1726,12 @@ class TestDirectASTConstruction:
     def test_pattern_var_shadows_outer_accepted(self) -> None:
         let_outer = _make_let("v", _make_intlit(99))
         let_x = _make_let("x", _make_intlit(1))
-        pv = VarPattern(name="v", span=_sp(), node_id=_nid())
+        pv = AsPattern(
+            pattern=WildcardPattern(span=_sp(), node_id=_nid()),
+            name="v",
+            span=_sp(),
+            node_id=_nid(),
+        )
         v_in_branch = _make_varref("v")
         branch = CaseBranch(pattern=pv, body=v_in_branch, span=_sp(), node_id=_nid())
         from agm.agl.syntax.nodes import Case
@@ -2363,24 +2374,27 @@ class TestConstructorBindings:
 
     # --- Collision rules (non-constructor vs constructor) ---
 
-    def test_def_same_name_as_constructor_raises(self) -> None:
-        """A def with the same name as an enum variant raises a duplicate error."""
-        err = reject_scope("enum Option\n  | some\ndef some(x: int) -> int = x\nsome(1)\n")
-        msg = err.to_diagnostic().message
-        assert "some" in msg
-        assert "already declared" in msg.lower() or "duplicate" in msg.lower()
+    def test_ordinary_bindings_can_share_constructor_spellings(self) -> None:
+        """Value lookup remains ordinary while pattern lookup retains constructors."""
+        resolved = parse_and_resolve(
+            "enum Option\n  | some\ndef some(x: int) -> int = x\nlet value = some(1)\n"
+            "case Option::some of | some => value"
+        )
+        assert _ref(resolved, "some", occurrence=0).kind == BinderKind.function_binding
+        case = resolved.program.body.items[-1]
+        assert case.branches[0].pattern.node_id in resolved.pattern_constructor_candidates
 
-    def test_agent_same_name_as_constructor_raises(self) -> None:
-        """An agent with the same name as a variant raises a duplicate error."""
-        err = reject_scope("enum Option\n  | myagent\nagent myagent\n()\n")
-        msg = err.to_diagnostic().message
-        assert "myagent" in msg
+    def test_agent_can_share_constructor_spelling(self) -> None:
+        resolved = parse_and_resolve(
+            "enum Option\n  | myagent\nagent myagent\nlet current = myagent\n"
+        )
+        assert _ref(resolved, "myagent").kind == BinderKind.agent_binding
 
-    def test_constructor_same_name_as_def_raises(self) -> None:
-        """An enum variant named after an existing def raises a duplicate error."""
-        err = reject_scope("def some(x: int) -> int = x\nenum Option\n  | some\nsome(1)\n")
-        msg = err.to_diagnostic().message
-        assert "some" in msg
+    def test_constructor_can_share_existing_def_spelling(self) -> None:
+        resolved = parse_and_resolve(
+            "def some(x: int) -> int = x\nenum Option\n  | some\nsome(1)\n"
+        )
+        assert _ref(resolved, "some").kind == BinderKind.function_binding
 
     def test_let_shadows_constructor_in_if_branch_no_error(self) -> None:
         """In a branch, a 'let' name can shadow a constructor from the outer scope.
@@ -2398,11 +2412,13 @@ class TestConstructorBindings:
         # The else-branch "some" resolves to the constructor_binding (not shadowed)
         assert r.resolution[outer.node_id].kind == BinderKind.constructor_binding
 
-    def test_let_at_root_conflicts_with_constructor(self) -> None:
-        """At root, 'let some' conflicts with the constructor 'some'."""
-        err = reject_scope("enum Option\n  | some\nlet some = 1\nsome\n")
-        msg = err.to_diagnostic().message
-        assert "some" in msg
+    def test_root_value_binding_does_not_hide_constructor_patterns(self) -> None:
+        resolved = parse_and_resolve(
+            "enum Option\n  | some\nlet some = 1\nlet value: Option = Option::some\n"
+            "case value of | some => 0"
+        )
+        case = resolved.program.body.items[-1]
+        assert case.branches[0].pattern.node_id in resolved.pattern_constructor_candidates
 
     # --- Enum name is NOT a value (only variants are) ---
 

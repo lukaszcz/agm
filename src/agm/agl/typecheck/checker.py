@@ -43,7 +43,7 @@ import keyword
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from typing import Literal, TypeGuard, assert_never
+from typing import Literal, TypeGuard, assert_never, cast
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
@@ -436,6 +436,9 @@ class _Checker:
         self._function_call_param_types: dict[int, tuple[Type, ...]] = {}
         self._constructor_call_bindings: dict[int, dict[str, Expr]] = {}
         self._constructor_pattern_bindings: dict[int, tuple[tuple[str, Pattern], ...]] = {}
+        # ``None`` means a final binder; a ConstructorRef means a final bare
+        # constructor pattern. Scope only supplied provisional nested binders.
+        self._pattern_classifications: dict[int, ConstructorRef | None] = {}
         self._partial_calls: dict[int, PartialCallSpec] = {}
         # Extern provenance for first-class function values.  A value can name
         # one or more externs (e.g. through a branch); when such a function
@@ -1572,6 +1575,7 @@ class _Checker:
             ("function_call_bindings", self._function_call_bindings),
             ("constructor_call_bindings", self._constructor_call_bindings),
             ("constructor_pattern_bindings", self._constructor_pattern_bindings),
+            ("pattern_classifications", self._pattern_classifications),
             ("partial_calls", self._partial_calls),
             ("contract_specs", self._contract_specs),
             ("cast_specs", self._cast_specs),
@@ -1612,6 +1616,15 @@ class _Checker:
             "constructor_pattern_bindings", self._constructor_pattern_bindings, node_id
         )
         self._constructor_pattern_bindings[node_id] = binding
+
+    def _record_pattern_classification(
+        self, node_id: int, constructor: ConstructorRef | None
+    ) -> None:
+        """Publish one final bare/as-pattern classification for this check region."""
+        self._record_side_table_addition(
+            "pattern_classifications", self._pattern_classifications, node_id
+        )
+        self._pattern_classifications[node_id] = constructor
 
     def _record_constructor_call_binding(self, node_id: int, binding: dict[str, Expr]) -> None:
         """Store a region-owned constructor-call argument binding."""
@@ -2241,6 +2254,7 @@ class _Checker:
         branch_types: list[Type] = []
         for branch in node.branches:
             self._bind_pattern_types(branch.pattern, subj_type, branch)
+            self._reconcile_provisional_pattern_references(node, branch.pattern)
             bt = self._check_expr(branch.body, expected=expected)
             branch_types.append(bt)
         result = self._unify_branch_types(branch_types, node.span, "Case expression")
@@ -3030,11 +3044,19 @@ class _Checker:
     # Pattern binding helpers
     # ------------------------------------------------------------------
 
-    def _bind_pattern_types(self, pattern: object, subj_type: Type, owner: object) -> None:
-        """Record binding types for variables introduced by *pattern*."""
+    def _bind_pattern_types(
+        self,
+        pattern: object,
+        subj_type: Type,
+        owner: object,
+        *,
+        field_name: str | None = None,
+        field_names: frozenset[str] = frozenset(),
+    ) -> None:
+        """Type and finally classify one pattern at its matched occurrence."""
         if isinstance(pattern, WildcardPattern):
-            pass
-        elif isinstance(pattern, LiteralPattern):
+            return
+        if isinstance(pattern, LiteralPattern):
             lit_type = self._check_expr(pattern.literal, expected=None)
             if not comparable_types(lit_type, subj_type, self._env.type_table):
                 raise AglTypeError(
@@ -3042,136 +3064,238 @@ class _Checker:
                     f"scrutinee of type '{subj_type!r}'.",
                     span=pattern.span,
                 )
-        elif isinstance(pattern, AsPattern):
-            self._bind_pattern_types(pattern.pattern, subj_type, owner)
+            return
+        if isinstance(pattern, AsPattern):
+            self._bind_pattern_types(
+                pattern.pattern,
+                subj_type,
+                owner,
+                field_name=field_name,
+                field_names=field_names,
+            )
             self._env.set_binding_type(pattern.node_id, subj_type)
-        elif isinstance(pattern, VarPattern):
-            if (
-                pattern.node_id in self._resolved.bare_variant_patterns
-            ):  # A bare name denoting an in-scope constructor: a nullary
-                # variant pattern, not a binder.  Validate it statically.
-                self._check_bare_variant_pattern(pattern, subj_type)
+            self._record_pattern_classification(pattern.node_id, None)
+            return
+        if isinstance(pattern, VarPattern):
+            if field_name is None:
+                self._check_top_level_bare_constructor(pattern, subj_type)
             else:
-                self._env.set_binding_type(pattern.node_id, subj_type)
-        else:
-            assert isinstance(pattern, ConstructorPattern), (
-                f"Unexpected pattern kind: {type(pattern).__name__}"
-            )
-            if not isinstance(subj_type, EnumType):
-                raise AglTypeError(
-                    f"Cannot match constructor pattern '{pattern.name}' against "
-                    f"non-enum type '{subj_type!r}'.",
-                    span=pattern.span,
-                )
-            self._check_variant_qualification(
-                qualifier=pattern.qualifier,
-                module_qualifier=pattern.module_qualifier,
-                enum_type=subj_type,
-                span=pattern.span,
-            )
-            variant_name = pattern.name
-            enum_variants = self._env.type_table.enum_variants(subj_type)
-            if variant_name not in enum_variants:
-                raise AglTypeError(
-                    f"Variant '{variant_name}' does not belong to enum '{subj_type.name}'.",
-                    span=pattern.span,
-                )
-            vfields = enum_variants[variant_name]
+                self._check_field_bare_pattern(pattern, subj_type, field_name, field_names)
+            return
 
-            # Retrieve the registered field kinds for this variant constructor.
-            field_kinds = self._env.get_constructor_field_kinds(
-                subj_type.name, variant_name, module_id=subj_type.module_id
-            )
-            assert field_kinds is not None, (
-                f"field kinds not registered for {subj_type.name}.{variant_name}"
-            )
-
-            # Route through the shared binder (handles zones, duplicates, unknowns).
-            binding = bind_pattern_args(
-                field_kinds,
-                pattern.positional,
-                pattern.named,
-                call_span=pattern.span,
-                context_desc=f"pattern for variant '{variant_name}'",
-            )
-
-            # Record the side-table entry and recursively check bound sub-patterns.
-            bound_pairs: list[tuple[str, Pattern]] = []
-            for (fname, _), bound_pat in zip(field_kinds, binding):
-                if bound_pat is not None:
-                    bound_pairs.append((fname, bound_pat))
-                    field_type = vfields[fname]
-                    self._bind_pattern_types(bound_pat, field_type, pattern)
-            self._record_constructor_pattern_binding(pattern.node_id, tuple(bound_pairs))
-
-    def _check_bare_variant_pattern(self, pattern: VarPattern, subj_type: Type) -> None:
-        """Validate a bare-name nullary variant pattern (``| Red =>``).
-
-        The name has already been classified as an in-scope constructor by the
-        resolver; here it must additionally be a *nullary* variant of the
-        scrutinee's enum.  A field-bearing variant requires the explicit call
-        form so the discarded payload is acknowledged.
-        """
+        assert isinstance(pattern, ConstructorPattern), (
+            f"Unexpected pattern kind: {type(pattern).__name__}"
+        )
         if not isinstance(subj_type, EnumType):
             raise AglTypeError(
                 f"Cannot match constructor pattern '{pattern.name}' against "
                 f"non-enum type '{subj_type!r}'.",
                 span=pattern.span,
             )
-        constructor_ref = self._resolved.bare_variant_refs.get(pattern.node_id)
-        if constructor_ref is None:
-            # A spelling shared across enums: the resolver deferred the choice.
-            # The scrutinee's enum type selects the intended constructor; record
-            # it so match compilation reads a concrete ref downstream.
-            constructor_ref = self._select_bare_variant_ref(pattern, subj_type)
-            self._resolved.bare_variant_refs[pattern.node_id] = constructor_ref
-        if (
-            constructor_ref.owner_module_id != subj_type.module_id
-            or constructor_ref.owner_name != subj_type.name
-            or constructor_ref.variant != pattern.name
-        ):
-            raise AglTypeError(
-                f"Variant '{pattern.name}' does not belong to enum '{subj_type.name}'.",
-                span=pattern.span,
-            )
+        self._check_variant_qualification(
+            qualifier=pattern.qualifier,
+            module_qualifier=pattern.module_qualifier,
+            enum_type=subj_type,
+            span=pattern.span,
+        )
+        variant_name = pattern.name
         enum_variants = self._env.type_table.enum_variants(subj_type)
-        if pattern.name not in enum_variants:
+        if variant_name not in enum_variants:
             raise AglTypeError(
-                f"Variant '{pattern.name}' does not belong to enum '{subj_type.name}'.",
+                f"Variant '{variant_name}' does not belong to enum '{subj_type.name}'.",
                 span=pattern.span,
             )
-        if enum_variants[pattern.name]:
-            raise AglTypeError(
-                f"'{pattern.name}' is a variant of enum '{subj_type.name}' that has "
-                f"fields, so a bare name cannot match it. Write '{pattern.name}(...)' "
-                f"(or '{pattern.name}(_)') to match and ignore the payload, or "
-                f"destructure the fields explicitly.",
-                span=pattern.span,
-            )
+        vfields = enum_variants[variant_name]
+        field_kinds = self._env.get_constructor_field_kinds(
+            subj_type.name, variant_name, module_id=subj_type.module_id
+        )
+        assert field_kinds is not None, (
+            f"field kinds not registered for {subj_type.name}.{variant_name}"
+        )
+        binding = bind_pattern_args(
+            field_kinds,
+            pattern.positional,
+            pattern.named,
+            call_span=pattern.span,
+            context_desc=f"pattern for variant '{variant_name}'",
+        )
+        bound_pairs: list[tuple[str, Pattern]] = []
+        constructor_field_names = frozenset(vfields)
+        for (name, _), bound_pattern in zip(field_kinds, binding):
+            if bound_pattern is not None:
+                bound_pairs.append((name, bound_pattern))
+                self._bind_pattern_types(
+                    bound_pattern,
+                    vfields[name],
+                    pattern,
+                    field_name=name,
+                    field_names=constructor_field_names,
+                )
+        self._record_constructor_pattern_binding(pattern.node_id, tuple(bound_pairs))
 
-    def _select_bare_variant_ref(self, pattern: VarPattern, subj_type: EnumType) -> ConstructorRef:
-        """Pick the constructor a bare pattern denotes among same-spelled candidates.
-
-        The resolver leaves the choice open when a spelling is owned by more
-        than one enum; the scrutinee's enum type resolves it here.  A pattern
-        classified as a bare variant always has candidates, so their absence is
-        an internal invariant violation, whereas a spelling that belongs to no
-        candidate of the scrutinee's enum is an ordinary type error.
-        """
-        candidates = self._resolved.bare_variant_candidates.get(pattern.node_id, ())
-        if not candidates:
-            raise AssertionError("missing resolved constructor ref for bare variant pattern")
-        for candidate in candidates:
+    def _candidate_for_field_type(
+        self, pattern: VarPattern, field_type: Type
+    ) -> ConstructorRef | None:
+        """Return the candidate spelling that belongs to this enum field, if any."""
+        if not isinstance(field_type, EnumType):
+            return None
+        for candidate in self._resolved.pattern_constructor_candidates.get(pattern.node_id, ()):
             if (
-                candidate.owner_module_id == subj_type.module_id
-                and candidate.owner_name == subj_type.name
+                candidate.owner_module_id == field_type.module_id
+                and candidate.owner_name == field_type.name
                 and candidate.variant == pattern.name
             ):
                 return candidate
+        return None
+
+    def _check_top_level_bare_constructor(self, pattern: VarPattern, subj_type: Type) -> None:
+        """Finalize a top-level bare pattern as a nullary enum constructor."""
+        if not isinstance(subj_type, EnumType):
+            raise AglTypeError(
+                f"Cannot match constructor pattern '{pattern.name}' against "
+                f"non-enum type '{subj_type!r}'.",
+                span=pattern.span,
+            )
+        candidate = self._candidate_for_field_type(pattern, subj_type)
+        if candidate is None:
+            raise AglTypeError(
+                f"Variant '{pattern.name}' does not belong to enum '{subj_type.name}'.",
+                span=pattern.span,
+            )
+        self._require_nullary_bare_constructor(pattern, subj_type)
+        self._record_pattern_classification(pattern.node_id, candidate)
+
+    def _check_field_bare_pattern(
+        self,
+        pattern: VarPattern,
+        field_type: Type,
+        field_name: str,
+        field_names: frozenset[str],
+    ) -> None:
+        """Finalize one bare subpattern after shared field binding selected its slot."""
+        candidate = self._candidate_for_field_type(pattern, field_type)
+        if pattern.name == field_name:
+            if candidate is not None:
+                raise AglTypeError(
+                    f"'{pattern.name}' is both field '{field_name}' and a constructor of its type. "
+                    f"Write '{pattern.name}()' for the constructor or '_ as {pattern.name}' "
+                    "for the field binder.",
+                    span=pattern.span,
+                )
+            self._env.set_binding_type(pattern.node_id, field_type)
+            self._record_pattern_classification(pattern.node_id, None)
+            return
+        if candidate is not None:
+            self._require_nullary_bare_constructor(pattern, field_type)
+            self._record_pattern_classification(pattern.node_id, candidate)
+            return
+        if pattern.name in field_names:
+            raise AglTypeError(
+                f"'{pattern.name}' names a different field, not matched field '{field_name}'. "
+                f"Use '{field_name} as {pattern.name}' to rename the binding.",
+                span=pattern.span,
+            )
         raise AglTypeError(
-            f"Variant '{pattern.name}' does not belong to enum '{subj_type.name}'.",
+            f"'{pattern.name}' is neither field '{field_name}' nor a constructor of its type.",
             span=pattern.span,
         )
+
+    def _require_nullary_bare_constructor(self, pattern: VarPattern, enum_type: Type) -> None:
+        """Require a bare constructor spelling to be a nullary matched enum variant."""
+        assert isinstance(enum_type, EnumType)
+        fields = self._env.type_table.enum_variants(enum_type).get(pattern.name)
+        if fields is None:
+            raise AglTypeError(
+                f"Variant '{pattern.name}' does not belong to enum '{enum_type.name}'.",
+                span=pattern.span,
+            )
+        if fields:
+            raise AglTypeError(
+                f"'{pattern.name}' has fields; write '{pattern.name}(...)' to match it.",
+                span=pattern.span,
+            )
+
+    def _reconcile_provisional_pattern_references(self, case: Case, pattern: Pattern) -> None:
+        """Reconcile branch references with final field-directed classifications.
+
+        Scope gives nested bare names a temporary branch binding because their
+        field type is not known yet. Several candidate spellings can share that
+        temporary slot. Once checking decides which names truly bind, every
+        branch reference is redirected to the unique final binder or to the
+        enclosing scope when none binds.
+        """
+        case_scope = self._resolved.case_scopes[case.node_id]
+        names: dict[str, list[VarPattern | AsPattern]] = {}
+        for candidate in self._pattern_binding_candidates(pattern):
+            names.setdefault(candidate.name, []).append(candidate)
+
+        for name, candidates in names.items():
+            provisional = [
+                candidate
+                for candidate in candidates
+                if candidate.node_id in self._resolved.provisional_pattern_binders
+            ]
+            if not provisional:
+                continue
+            binders = [
+                candidate
+                for candidate in candidates
+                if self._pattern_classifications.get(candidate.node_id) is None
+            ]
+            if len(binders) > 1:
+                raise AglTypeError(
+                    f"Name '{name}' is bound more than once in this pattern.",
+                    span=binders[1].span,
+                )
+            provisional_ids = {candidate.node_id for candidate in provisional}
+            reference_node_ids = [
+                ref_node_id
+                for ref_node_id, ref in self._resolved.resolution.items()
+                if ref.decl_node_id in provisional_ids
+            ]
+            if not reference_node_ids:
+                continue
+            if binders:
+                binder = binders[0]
+                target_ref = replace(
+                    self._resolved.resolution[reference_node_ids[0]],
+                    decl_span=binder.span,
+                    decl_node_id=binder.node_id,
+                )
+            else:
+                target_ref = cast(BindingRef, case_scope.lookup(name))
+                candidates_for_name = self._resolved.constructor_candidates.get(name, ())
+                if (
+                    target_ref.kind is BinderKind.constructor_binding
+                    and len(candidates_for_name) != 1
+                ):
+                    raise AglTypeError(
+                        f"'{name}' is ambiguous outside the pattern; qualify the reference.",
+                        span=provisional[0].span,
+                    )
+            for ref_node_id in reference_node_ids:
+                self._resolved.resolution[ref_node_id] = target_ref
+                if target_ref.kind is BinderKind.constructor_binding:
+                    constructor = self._pattern_classifications[provisional[0].node_id]
+                    assert constructor is not None
+                    self._resolved.constructor_refs[ref_node_id] = constructor
+                else:
+                    self._resolved.constructor_refs.pop(ref_node_id, None)
+
+    @staticmethod
+    def _pattern_binding_candidates(pattern: Pattern) -> tuple[VarPattern | AsPattern, ...]:
+        """Return bare and explicit binding names in a pattern."""
+        if isinstance(pattern, VarPattern):
+            return (pattern,)
+        if isinstance(pattern, AsPattern):
+            return (*_Checker._pattern_binding_candidates(pattern.pattern), pattern)
+        if isinstance(pattern, ConstructorPattern):
+            return tuple(
+                candidate
+                for child in (*pattern.positional, *(field.pattern for field in pattern.named))
+                for candidate in _Checker._pattern_binding_candidates(child)
+            )
+        return ()
 
     # ------------------------------------------------------------------
     # Branch unification
@@ -3269,6 +3393,16 @@ class _Checker:
                 function_param_types=self._function_call_param_types,
                 constructor_calls=self._constructor_call_bindings,
                 constructor_patterns=self._constructor_pattern_bindings,
+                pattern_binders=frozenset(
+                    node_id
+                    for node_id, constructor in self._pattern_classifications.items()
+                    if constructor is None
+                ),
+                pattern_constructors={
+                    node_id: constructor
+                    for node_id, constructor in self._pattern_classifications.items()
+                    if constructor is not None
+                },
             ),
             partial_calls=self._partial_calls,
         )

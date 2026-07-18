@@ -297,7 +297,7 @@ def _nested_pair_value(
 
 
 def test_irrefutable_leaf_finalizes_binder_and_has_no_issues() -> None:
-    _, case, compiled = _compile("let value = 1\ncase value of | captured => captured")
+    _, case, compiled = _compile("let value = 1\ncase value of | _ as captured => captured")
 
     assert isinstance(compiled.root, DecisionLeaf)
     assert compiled.root.action_id == case.branches[0].node_id
@@ -384,7 +384,7 @@ def test_every_arm_on_a_bottom_scrutinee_is_redundant() -> None:
     _, case, compiled = _compile(
         "exception E extends Exception\n"
         "  code: int\n"
-        'case (raise E(message = "x", code = 1)) of | _ => 1 | value => 2'
+        'case (raise E(message = "x", code = 1)) of | _ => 1 | _ as value => 2'
     )
 
     assert not any(isinstance(issue, NonExhaustiveIssue) for issue in compiled.issues)
@@ -429,7 +429,7 @@ def test_binder_in_specialized_default_row_targets_the_dominated_child_occurrenc
         "enum Box\n"
         "  | box(flag: bool)\n"
         "let value = box(flag = false)\n"
-        "case value of | box(flag = false) => false | box(flag = captured) => captured"
+        "case value of | box(flag = false) => false | box(flag = _ as captured) => captured"
     )
     root = cast(DecisionSwitch, compiled.root)
     nested = cast(DecisionSwitch, root.keyed_children[0].decision)
@@ -737,7 +737,7 @@ def test_enum_witness_uses_wildcards_for_unconstrained_fields() -> None:
         ("Left::empty", "Left::item(value = _)"),
     ],
 )
-def test_ambiguous_local_enum_witnesses_use_type_qualification(
+def test_same_spelled_local_variants_use_scrutinee_directed_witnesses(
     covered_pattern: str, rendered: str
 ) -> None:
     _, _, compiled = _compile(
@@ -749,11 +749,11 @@ def test_ambiguous_local_enum_witnesses_use_type_qualification(
     issue = cast(NonExhaustiveIssue, compiled.issues[0])
     witness = cast(EnumWitness, issue.witness)
 
-    assert witness.qualification == EnumWitnessQualification("Left", None)
-    assert render_witness(witness) == rendered
+    assert witness.qualification is None
+    assert render_witness(witness) == rendered.removeprefix("Left::")
 
 
-def test_nested_ambiguous_enum_witnesses_are_qualified_recursively() -> None:
+def test_nested_same_spelled_variants_use_scrutinee_directed_witnesses() -> None:
     _, _, compiled = _compile(
         "enum LeftInner\n  | missing\n  | present\n"
         "enum RightInner\n  | missing\n  | present\n"
@@ -767,13 +767,13 @@ def test_nested_ambiguous_enum_witnesses_are_qualified_recursively() -> None:
     outer = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
     inner = cast(EnumWitness, outer.fields[0].witness)
 
-    assert outer.qualification == EnumWitnessQualification("LeftOuter", None)
-    assert inner.qualification == EnumWitnessQualification("LeftInner", None)
-    assert render_witness(outer) == "LeftOuter::wrap(value = LeftInner::missing)"
+    assert outer.qualification is None
+    assert inner.qualification is None
+    assert render_witness(outer) == "wrap(value = missing)"
 
 
 @pytest.mark.parametrize("ambiguous", [False, True])
-def test_imported_enum_witness_uses_full_module_qualification_only_when_ambiguous(
+def test_open_imported_enum_witnesses_are_scrutinee_directed(
     tmp_path: Path, ambiguous: bool
 ) -> None:
     other_import = "import other\n" if ambiguous else ""
@@ -794,11 +794,8 @@ def test_imported_enum_witness_uses_full_module_qualification_only_when_ambiguou
     )
     witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
 
-    expected_qualification = EnumWitnessQualification("Remote", None) if ambiguous else None
-    assert witness.qualification == expected_qualification
-    assert render_witness(witness) == (
-        "Remote::item(value = _)" if ambiguous else "item(value = _)"
-    )
+    assert witness.qualification is None
+    assert render_witness(witness) == "item(value = _)"
 
 
 def test_qualified_only_imported_enum_witness_uses_source_alias(tmp_path: Path) -> None:
@@ -840,7 +837,7 @@ def test_aliased_qualified_imports_choose_target_source_handle(tmp_path: Path) -
     assert render_witness(witness) == "left::Shared::item(value = _)"
 
 
-def test_lexical_binding_shadowing_variant_forces_type_qualified_witness() -> None:
+def test_lexical_binding_does_not_hide_constructor_witnesses() -> None:
     _, _, compiled = _compile(
         "enum Choice\n  | empty\n  | item(value: int)\n"
         "def inspect(item: int, value: Choice) -> int =\n"
@@ -850,8 +847,8 @@ def test_lexical_binding_shadowing_variant_forces_type_qualified_witness() -> No
     )
     witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
 
-    assert witness.qualification == EnumWitnessQualification("Choice", None)
-    assert render_witness(witness) == "Choice::item(value = _)"
+    assert witness.qualification is None
+    assert render_witness(witness) == "item(value = _)"
 
 
 def test_later_lexical_binding_does_not_retroactively_shadow_case_variant() -> None:
@@ -869,7 +866,7 @@ def test_later_lexical_binding_does_not_retroactively_shadow_case_variant() -> N
     assert render_witness(witness) == "item(value = _)"
 
 
-def test_renamed_open_import_uses_exposed_type_name_when_bare_variant_is_shadowed(
+def test_renamed_open_import_keeps_constructor_witnesses_unqualified(
     tmp_path: Path,
 ) -> None:
     compiled = _compile_graph_case(
@@ -887,8 +884,8 @@ def test_renamed_open_import_uses_exposed_type_name_when_bare_variant_is_shadowe
     )
     witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
 
-    assert witness.qualification == EnumWitnessQualification("R", None)
-    assert render_witness(witness) == "R::item(value = _)"
+    assert witness.qualification is None
+    assert render_witness(witness) == "item(value = _)"
 
 
 def test_hidden_imported_type_allows_irrefutable_case_without_invented_spelling(
@@ -1020,16 +1017,16 @@ def test_rendered_local_generic_alias_owner_round_trips_through_checker() -> Non
     )
     witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
 
-    assert render_witness(witness) == "Alias::item(value = _)"
+    assert render_witness(witness) == "item(value = _)"
     _compile(
         declaration
         + "def inspect(value: Remote[int]) -> int =\n"
-        + "  case value of | Alias::item(value = _) => 0\n"
+        + "  case value of | item(value = _) => 0\n"
         + "inspect(Remote::empty)\n"
     )
 
 
-def test_witness_prefers_shortest_valid_enum_owner_spelling() -> None:
+def test_witness_prefers_unqualified_constructor_spelling() -> None:
     declaration = "enum R[T]\n  | empty\n  | item(value: T)\ntype LongAlias[T] = R[T]\n"
     _, _, compiled = _compile(
         declaration
@@ -1039,7 +1036,7 @@ def test_witness_prefers_shortest_valid_enum_owner_spelling() -> None:
     )
     witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
 
-    assert render_witness(witness) == "R::item(value = _)"
+    assert render_witness(witness) == "item(value = _)"
 
 
 def test_imported_generic_alias_with_fixed_argument_matches_enum_owner(
@@ -1132,7 +1129,7 @@ def test_local_owner_form_blocks_shadowed_open_import_spelling(tmp_path: Path) -
     unavailable = compile_case(replace(compiled.normalized, rows=()))
     issue = cast(NonExhaustiveIssue, unavailable.issues[0])
 
-    assert render_witness(issue.witness) == "library.remote::Clash::empty"
+    assert render_witness(issue.witness) == "empty"
     assert not any(
         form.owner_name == "Clash" and form.kind is EnumOwnerFormKind.OPEN_IMPORT
         for form in compiled.normalized.case_context.enum_owner_forms
@@ -1225,7 +1222,7 @@ def test_polymorphic_nested_instantiation_selects_generic_alias_template(
     assert render_witness(witness) == "Root::next(value = N::value(item = _))"
 
 
-def test_local_type_uses_self_qualification_when_import_handle_conflicts(
+def test_local_type_keeps_constructor_witnesses_unqualified_when_import_handle_conflicts(
     tmp_path: Path,
 ) -> None:
     compiled = _compile_graph_case(
@@ -1244,8 +1241,8 @@ def test_local_type_uses_self_qualification_when_import_handle_conflicts(
     )
     witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
 
-    assert witness.qualification == EnumWitnessQualification("Choice", ())
-    assert render_witness(witness) == "::Choice::item(value = _)"
+    assert witness.qualification is None
+    assert render_witness(witness) == "item(value = _)"
 
 
 def test_rendered_self_qualified_generic_owner_round_trips_under_handle_conflict(
@@ -1265,7 +1262,7 @@ def test_rendered_self_qualified_generic_owner_round_trips_under_handle_conflict
     compiled = _compile_graph_case(tmp_path, modules)
     witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
 
-    assert render_witness(witness) == "::Remote::item(value = _)"
+    assert render_witness(witness) == "item(value = _)"
     _compile_graph_case(
         tmp_path,
         {
@@ -1429,7 +1426,7 @@ def test_witness_renderer_covers_atomic_and_empty_complement_forms() -> None:
 
 
 def test_leaf_free_interface_deduplicates_an_occurrence() -> None:
-    _, _, compiled = _compile("let value = 1\ncase value of | captured => captured")
+    _, _, compiled = _compile("let value = 1\ncase value of | _ as captured => captured")
     leaf = cast(DecisionLeaf, compiled.root)
     first = leaf.binder_assignments[0]
     duplicate_occurrence = replace(
@@ -1479,24 +1476,24 @@ def test_private_compiler_guards_reject_malformed_internal_states() -> None:
         compiler_module._finalize_binders(matrix, refutable_row)
 
     binder_checked, _, binder_compiled = _compile(
-        "let value = 1\ncase value of | captured => captured"
+        "let value = 1\ncase value of | _ as captured => captured"
     )
     del binder_checked
     binder_matrix = matrix_from_normalized(binder_compiled.normalized)
     binder_row = binder_matrix.rows[0]
     binder_cell = cast(WildcardCell, binder_row.cells[0])
-    assert binder_cell.binder is not None
+    binder = binder_cell.as_binders[0]
     unavailable = replace(
         binder_row,
-        cells=(replace(binder_cell, binder=None),),
-        binder_assignments=(BinderAssignment(OccurrenceId(999), binder_cell.binder),),
+        cells=(replace(binder_cell, as_binders=()),),
+        binder_assignments=(BinderAssignment(OccurrenceId(999), binder),),
     )
     with pytest.raises(MatchCompileInvariantError, match="unavailable"):
         compiler_module._finalize_binders(binder_matrix, unavailable)
     duplicate = replace(
         binder_row,
         binder_assignments=(
-            BinderAssignment(binder_compiled.normalized.root.id, binder_cell.binder),
+            BinderAssignment(binder_compiled.normalized.root.id, binder),
         ),
     )
     with pytest.raises(MatchCompileInvariantError, match="more than once"):
@@ -1504,7 +1501,7 @@ def test_private_compiler_guards_reject_malformed_internal_states() -> None:
 
     unknown_leaf = DecisionLeaf(
         1,
-        (BinderAssignment(OccurrenceId(999), binder_cell.binder),),
+        (BinderAssignment(OccurrenceId(999), binder),),
     )
     with pytest.raises(MatchCompileInvariantError, match="unknown occurrence"):
         compiler_module._switch_free_occurrences(
@@ -1628,7 +1625,7 @@ def test_strong_compiled_case_validator_rejects_internal_corruption() -> None:
             normalized.type_table,
         )
 
-    _, _, binder_compiled = _compile("let value = 1\ncase value of | captured => captured")
+    _, _, binder_compiled = _compile("let value = 1\ncase value of | _ as captured => captured")
     binder_leaf = cast(DecisionLeaf, binder_compiled.root)
     binder_assignment = binder_leaf.binder_assignments[0]
     binder_ledger, binder_groups = compiler_module._validate_occurrence_ledger(
@@ -1671,7 +1668,7 @@ def test_strong_compiled_case_validator_rejects_internal_corruption() -> None:
         "  | box(value: int)\n"
         "  | empty\n"
         "let value = box(value = 1)\n"
-        "case value of | box(value = captured) => captured"
+        "case value of | box(value = _ as captured) => captured"
     )
     nested_root = cast(DecisionSwitch, nested_binder_compiled.root)
     nested_leaf = cast(DecisionLeaf, nested_root.keyed_children[0].decision)
@@ -1859,7 +1856,7 @@ def test_source_spelling_model_rejects_inconsistent_structures() -> None:
     assert EnumOwnerForm("Choice", ()).kind is EnumOwnerFormKind.SELF
 
 
-def test_normalization_requires_case_scope_provenance() -> None:
+def test_normalization_uses_checked_pattern_metadata_without_scope_provenance() -> None:
     checked, case, _ = _compile(
         "enum Choice\n  | empty\nlet value: Choice = Choice::empty\ncase value of | _ => 0\n"
     )
@@ -1867,8 +1864,7 @@ def test_normalization_requires_case_scope_provenance() -> None:
         checked,
         resolved=replace(checked.resolved, case_scopes={}),
     )
-    with pytest.raises(MatchCompileInvariantError, match="scope provenance"):
-        normalize_case(case, without_scope)
+    normalize_case(case, without_scope)
 
 
 def test_private_diagnostic_guards_reject_malformed_switches() -> None:

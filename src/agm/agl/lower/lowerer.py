@@ -521,12 +521,11 @@ class _Lowerer:
     def _pattern_binding_ids(self, pattern: Pattern, out: set[int]) -> None:
         """Collect node_ids of the variable binders a pattern introduces."""
         match pattern:
-            case VarPattern():
-                if pattern.node_id not in self._checked.resolved.bare_variant_patterns:
+            case VarPattern() | AsPattern():
+                if pattern.node_id in self._checked.argument_bindings.pattern_binders:
                     out.add(pattern.node_id)
-            case AsPattern():
-                out.add(pattern.node_id)
-                self._pattern_binding_ids(pattern.pattern, out)
+                if isinstance(pattern, AsPattern):
+                    self._pattern_binding_ids(pattern.pattern, out)
             case ConstructorPattern():
                 for p in pattern.positional:
                     self._pattern_binding_ids(p, out)

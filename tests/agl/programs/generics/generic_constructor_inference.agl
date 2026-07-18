@@ -18,8 +18,8 @@ let missing = fallback(none, value)
 print direct.value
 print partial.value
 case present of
-  | some(value = item) => print(item)
+  | some(value = _ as item) => print(item)
   | none => print(-1)
 case missing of
-  | some(value = item) => print(item)
+  | some(value = _ as item) => print(item)
   | none => print("none")

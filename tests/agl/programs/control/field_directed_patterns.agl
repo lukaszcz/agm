@@ -1,0 +1,12 @@
+# Bare names in nested patterns follow their matched field names.
+enum Flag
+  | on
+  | off
+
+enum Packet
+  | packet(count: int, flag: Flag, label: text)
+
+let value = packet(7, on(), "ready")
+case value of
+  | packet(count, flag = on, label = label as shown) => print "${count}:${shown}"
+  | packet(_, _, _) => print "other"

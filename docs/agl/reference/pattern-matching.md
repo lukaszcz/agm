@@ -12,7 +12,7 @@ each additional branch is introduced by `|`.
 pattern        ::= pattern_atom ("as" name)*
 pattern_atom   ::= "_"                                    (* wildcard *)
                  | literal                                (* literal pattern *)
-                 | name                                   (* binder or bare constructor *)
+                 | name                                   (* field-directed name or bare constructor *)
                  | name "(" pattern_fields? ")"          (* unqualified constructor *)
                  | qual_prefix type_qual? name
                      ("(" pattern_fields? ")")?           (* qualified constructor *)
@@ -54,27 +54,22 @@ case shape of
   | _ as other => print "other shape: ${other}"
 ```
 
-### Variable binder
+### Variable binders
 
-A bare name in a pattern is a **variable binder** — it matches anything and
-binds the scrutinee to that name as an immutable, branch-local value — *unless*
-the name denotes an in-scope constructor, in which case it is a **constructor
-pattern** for that variant (see [Constructor patterns](#constructor-patterns)
-below). What a bare name denotes is fixed by whether it resolves to a
-constructor, never by its spelling: capitalization carries no meaning
-([Lexical structure](lexical-structure.md)). So `other`, `result`, and
-`leftover` are binders precisely when no constructor of that name is in scope:
+A variable binder is explicit: use an `as`-pattern. `_ as name` is the
+catch-all binder; a constructor or literal may also be followed by `as name`.
+The binder is immutable and branch-local.
 
 ```agl
 case result of
   | Blocked(reason) => raise Abort(message = reason)
-  | other => print other            # 'other' names no constructor → binder
+  | _ as other => print other
 ```
 
-A nearer ordinary binding — a `let`, `var`, parameter, or enclosing pattern
-variable — **shadows** a constructor, exactly as in expression position
-([Bindings and scope](bindings-and-scope.md)). Under such a shadow a bare name
-the constructor would otherwise claim is again a plain binder.
+A bare top-level name is never a variable binder. It must denote a visible
+nullary enum constructor. Ordinary value bindings do not alter constructor
+lookup in pattern position; capitalization carries no meaning
+([Lexical structure](lexical-structure.md)).
 
 ### Literal patterns
 
@@ -102,8 +97,8 @@ Restrictions:
 A constructor pattern matches one enum variant and optionally destructures its
 payload. A pattern is a constructor pattern when it is one of:
 
-- a **bare name that denotes an in-scope constructor** — matches that variant
-  (nullary variants only; see below),
+- a **bare top-level name that denotes a visible constructor** — matches that
+  variant (nullary variants only; see below),
 - a **call form** `name(…)`, where the parentheses may be empty, or
 - a **qualified** `Enum::variant` or `module::Enum::variant` form.
 
@@ -116,7 +111,7 @@ def summarize(review: Review) -> text =
   case review of
     | Review::Pass => "passed"              # qualified nullary constructor
     | Fail(reason = "stuck") => "blocked"  # nested scalar literal
-    | Fail(reason = other) => other          # named binder
+    | Fail(reason = reason) => reason        # named field binder
 ```
 
 The first branch could equivalently use bare `Pass` or explicit `Pass()`.
@@ -162,8 +157,15 @@ qualification itself uses `::`, never `.`.
 - **Named sub-patterns** (`field = pattern`) bind a specific field by name; they
   may follow positional sub-patterns.
 - **Bare-name shorthand** (`x` in a position where positional slots are exhausted)
-  means `x = x` — it binds field `x` to pattern variable `x`. Only valid when the
-  bare name lands on a named-only field.
+  means `x = x`. It is valid only when `x` names a named-only field.
+
+After a sub-pattern has been assigned to a field, a bare name is interpreted
+by that field: the name of the matched field binds that field, while a nullary
+constructor of the field's enum type matches that constructor. Any other bare
+name is a static error. A spelling that is both the matched field name and a
+constructor of its type is ambiguous; use `name()` (or qualification) for the
+constructor and `_ as name` for the binder. A bare name for another field does
+not move to that field; use a named sub-pattern to select it.
 
 ```agl
 enum Result
@@ -172,16 +174,17 @@ enum Result
 
 # Each arm below is an alternative spelling for a separate case:
 case r of
-  | Ok(v) => ...  # positional: binds field 'value' to v
+  | Ok(value) => ...  # positional: binds the field named 'value'
   | Err(reason, fatal) => ...  # positional: binds fields in declaration order
 
-# The equivalent fully named spellings are Ok(value = v) and
-# Err(reason = r, fatal = f), respectively.
+# The equivalent fully named spellings are Ok(value = value) and
+# Err(reason = reason, fatal = fatal), respectively. Rename a binder with
+# an as-pattern, for example Ok(value = _ as v).
 ```
 
 Named sub-patterns nest arbitrarily — the sub-pattern may be a wildcard, literal,
-binder, or another constructor pattern. Here the final binder is required because
-`int` is an open domain:
+field-directed bare name, explicit binder, or another constructor pattern. Here the
+final binder is required because `int` is an open domain:
 
 ```agl
 enum Response
@@ -192,7 +195,7 @@ def describe(response: Response) -> text =
   case response of
     | Complete => "complete"
     | Failed(code = 503) => "unavailable"  # nested scalar literal
-    | Failed(code = code) => "error ${code}"  # named binder covers other ints
+    | Failed(code = code) => "error ${code}"  # matched-field binder covers other ints
 ```
 
 Static rules:

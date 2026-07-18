@@ -1993,8 +1993,7 @@ def test_bare_pattern_constructor_shared_spelling_defers_to_scrutinee(tmp_path: 
     entry = result.modules[ENTRY_ID]
     case = entry.resolved.program.body.items[-1]
     pattern = case.branches[0].pattern
-    assert pattern.node_id in entry.resolved.bare_variant_patterns
     candidate_owners = {
-        ref.owner_name for ref in entry.resolved.bare_variant_candidates[pattern.node_id]
+        ref.owner_name for ref in entry.resolved.pattern_constructor_candidates[pattern.node_id]
     }
     assert candidate_owners == {"Local", "Foreign"}

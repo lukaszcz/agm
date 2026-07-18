@@ -98,7 +98,7 @@ def test_case_binder_pattern() -> None:
     src = """\
 let x: int = 42
 let r = case x of
-  | n => n
+  | _ as n => n
 r"""
     ir = evaluate_ir(src)
     assert ir["r"] == IntValue(42)
@@ -144,7 +144,7 @@ def test_case_binder_does_not_leak() -> None:
     src = """\
 let x: int = 5
 let r = case x of
-  | bound_var => bound_var
+  | _ as bound_var => bound_var
 r"""
     ir = evaluate_ir(src)
     # 'bound_var' must not appear as a top-level name
@@ -163,8 +163,8 @@ r"""
 
 
 def test_case_nullary_variant_match() -> None:
-    """VarPattern as bare-variant: bare name that resolves to a constructor."""
-    # Using bare names (VarPattern classified as bare_variant_patterns by scope resolver)
+    """A bare name finalized as a constructor matches its nullary variant."""
+    # Bare names are classified by the checker after scope records candidates.
     src = """\
 enum Flag | On | Off
 let f = Flag::On()
@@ -213,8 +213,8 @@ def test_case_constructor_field_destructure() -> None:
 enum Shape | Circle(radius: int) | Square(side: int)
 let s = Shape::Circle(radius = 5)
 let r = case s of
-  | Circle(radius = n) => n
-  | Square(side = m) => m
+  | Circle(radius = _ as n) => n
+  | Square(side = _ as m) => m
 r"""
     ir = evaluate_ir(src)
     assert ir["r"] == IntValue(5)
@@ -226,8 +226,8 @@ def test_case_constructor_field_no_match_fallback() -> None:
 enum Shape | Circle(radius: int) | Square(side: int)
 let s = Shape::Square(side = 10)
 let r = case s of
-  | Circle(radius = n) => n
-  | Square(side = m) => m
+  | Circle(radius = _ as n) => n
+  | Square(side = _ as m) => m
 r"""
     ir = evaluate_ir(src)
     assert ir["r"] == IntValue(10)
@@ -240,7 +240,7 @@ enum Shape | Circle(radius: int) | Square(side: int)
 let s = Shape::Circle(radius = 3)
 let r = case s of
   | Circle(radius = 3) => "three"
-  | Circle(radius = n) => "other"
+  | Circle(radius = _ as n) => "other"
   | _ => "not circle"
 r"""
     ir = evaluate_ir(src)
@@ -253,8 +253,8 @@ def test_case_constructor_nested_binder() -> None:
 enum Shape | Circle(radius: int) | Square(side: int)
 let s = Shape::Circle(radius = 7)
 let r = case s of
-  | Square(side = x) => x
-  | Circle(radius = n) => n
+  | Square(side = _ as x) => x
+  | Circle(radius = _ as n) => n
 r"""
     ir = evaluate_ir(src)
     assert ir["r"] == IntValue(7)
@@ -280,7 +280,7 @@ enum Color | Red | Blue
 enum Shape | Colored(size: int)
 let s = Shape::Colored(size = 10)
 let r = case s of
-  | Colored(size = n) => n
+  | Colored(size = _ as n) => n
 r"""
     ir = evaluate_ir(src)
     assert ir["r"] == IntValue(10)
@@ -292,7 +292,7 @@ def test_case_constructor_multi_field() -> None:
 enum Point | Pt(x: int, y: int)
 let p = Point::Pt(x = 3, y = 4)
 let r = case p of
-  | Pt(x = a, y = b) => a
+  | Pt(x = _ as a, y = _ as b) => a
 r"""
     ir = evaluate_ir(src)
     assert ir["r"] == IntValue(3)
@@ -357,13 +357,13 @@ r"""
 def test_case_constructor_nested_literal_no_match_fallback() -> None:
     """Constructor arm matched but nested literal sub-plan fails; falls to next arm."""
     # s = Circle(radius = 7); arm 0: Circle(radius = 3) — variant matches, literal fails
-    # arm 1: Circle(radius = n) — catches
+    # arm 1 uses an explicit catch-all binder.
     src = """\
 enum Shape | Circle(radius: int) | Square(side: int)
 let s = Shape::Circle(radius = 7)
 let r = case s of
   | Circle(radius = 3) => "three"
-  | Circle(radius = n) => "other"
+  | Circle(radius = _ as n) => "other"
   | _ => "not circle"
 r"""
     ir = evaluate_ir(src)

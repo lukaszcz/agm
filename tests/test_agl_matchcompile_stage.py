@@ -254,10 +254,10 @@ _SEMANTIC_REPLAY_SOURCE = (
     "  | pair(left: bool, right: bool)\n"
     "let pair_value = pair(left = false, right = true)\n"
     "case true of | true => 1 | false => 2\n"
-    "case 1 of | 1 => 3 | captured => captured\n"
+    "case 1 of | 1 => 3 | _ as captured => captured\n"
     "case pair_value of\n"
-    "  | pair(left = true, right = when_true) => when_true\n"
-    "  | pair(left = false, right = when_false) => when_false\n"
+    "  | pair(left = true, right = _ as when_true) => when_true\n"
+    "  | pair(left = false, right = _ as when_false) => when_false\n"
 )
 
 

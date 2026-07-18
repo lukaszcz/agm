@@ -105,7 +105,6 @@ from agm.agl.syntax.nodes import (
     NullLit,
     ParamDecl,
     Pattern,
-    PatternField,
     Placeholder,
     Program,
     ProgramDecl,
@@ -237,11 +236,11 @@ class _Resolver:
         self._constructor_refs: dict[int, ConstructorRef] = {}
         # Qualified constructor refs: VarRef.node_id -> (owner_name, member, owner_module_id).
         self._qualified_constructor_refs: dict[int, tuple[str, str, ModuleId | None]] = {}
-        # VarPattern.node_id of bare names that denote a constructor (nullary
-        # variant patterns), not variable binders.
-        self._bare_variant_patterns: set[int] = set()
-        self._bare_variant_refs: dict[int, ConstructorRef] = {}
-        self._bare_variant_candidates: dict[int, tuple[ConstructorRef, ...]] = {}
+        # Bare pattern names are classified provisionally here and finally by
+        # the checker after constructor fields have been mapped. Candidates do
+        # not depend on ordinary lexical value bindings.
+        self._pattern_constructor_candidates: dict[int, tuple[ConstructorRef, ...]] = {}
+        self._provisional_pattern_binders: set[int] = set()
         # Case.node_id -> exact lexical scope active at the case site.
         self._case_scopes: dict[int, ScopeNode] = {}
         # Loop-context flag: True when resolving inside a loop body (while_cond,
@@ -339,9 +338,8 @@ class _Resolver:
             },
             constructor_refs=dict(self._constructor_refs),
             qualified_constructor_refs=dict(self._qualified_constructor_refs),
-            bare_variant_patterns=frozenset(self._bare_variant_patterns),
-            bare_variant_refs=dict(self._bare_variant_refs),
-            bare_variant_candidates=dict(self._bare_variant_candidates),
+            pattern_constructor_candidates=dict(self._pattern_constructor_candidates),
+            provisional_pattern_binders=frozenset(self._provisional_pattern_binders),
             case_scopes=dict(self._case_scopes),
         )
 
@@ -589,12 +587,9 @@ class _Resolver:
                 # than raise so a `def Retry()`/`agent Retry` is legal.
                 if all(c.owner_module_id in (PRELUDE_ID, STD_CORE_ID) for c in crefs):
                     continue
-                # A user-declared constructor colliding with a non-constructor
-                # binding (def/agent) of the same name is a genuine duplicate.
-                raise AglScopeError(
-                    f"Name '{name}' is already declared in this scope.",
-                    span=None,
-                )
+                # Constructors remain candidates for pattern resolution, but
+                # ordinary value bindings own the value namespace spelling.
+                continue
             # Use the first candidate's decl as the representative binding.
             rep = crefs[0]
             ref = BindingRef(
@@ -833,10 +828,7 @@ class _Resolver:
         """
         scope = self._current_scope()
         existing = scope.bindings.get(name)
-        if existing is not None and not (
-            existing.kind is BinderKind.constructor_binding
-            and existing.module_id in (PRELUDE_ID, STD_CORE_ID)
-        ):
+        if existing is not None and existing.kind is not BinderKind.constructor_binding:
             raise AglScopeError(
                 f"Name '{name}' is already declared in this scope.",
                 span=ref.decl_span,
@@ -1754,81 +1746,93 @@ class _Resolver:
     # Pattern variable binding
     # ------------------------------------------------------------------
 
-    def _bind_pattern_vars(self, pattern: Pattern, scope: ScopeNode) -> None:
-        """Recursively bind variables introduced by *pattern* into *scope*.
+    def _bind_pattern_vars(
+        self, pattern: Pattern, scope: ScopeNode, *, nested: bool = False
+    ) -> None:
+        """Provisionally bind nested bare names and validate top-level names.
 
-        Raises ``AglScopeError`` on duplicate names within the same pattern.
+        A top-level bare name is constructor-only. Nested bare names cannot be
+        classified until shared argument binding maps them to a field, so they
+        are provisionally bound for branch-body resolution and finalized by the
+        type checker.
         """
         if isinstance(pattern, VarPattern):
-            candidates = self._pattern_constructor_candidates(pattern, scope)
+            candidates = tuple(self._constructor_candidates.get(pattern.name, ()))
             if candidates:
-                # A bare name that denotes an in-scope constructor is a nullary
-                # constructor pattern, not a variable binder. Record every
-                # candidate its spelling could denote; when a single enum owns
-                # the spelling we resolve it eagerly, otherwise the checker
-                # disambiguates against the scrutinee's enum type.
-                self._bare_variant_patterns.add(pattern.node_id)
-                self._bare_variant_candidates[pattern.node_id] = candidates
-                if len(candidates) == 1:
-                    self._bare_variant_refs[pattern.node_id] = candidates[0]
+                self._pattern_constructor_candidates[pattern.node_id] = candidates
+            if not nested:
+                if not candidates:
+                    raise AglScopeError(
+                        f"Bare case pattern '{pattern.name}' is not a visible constructor. "
+                        "Use '_' or '_ as name' for a catch-all binder.",
+                        span=pattern.span,
+                    )
                 return
-            self._check_not_reserved(pattern.name, pattern.span)
-            ref = BindingRef(
-                name=pattern.name,
-                mutable=False,
-                decl_span=pattern.span,
-                decl_node_id=pattern.node_id,
-                kind=BinderKind.pattern_binding,
-                module_id=self._module_id,
+            self._bind_pattern_name(
+                pattern.name,
+                pattern.span,
+                pattern.node_id,
+                scope,
+                allow_existing_provisional=bool(candidates),
             )
-            if pattern.name in scope.bindings:
-                raise AglScopeError(
-                    f"Name '{pattern.name}' is bound more than once in this pattern.",
-                    span=pattern.span,
-                )
-            scope.define(pattern.name, ref)
+            self._provisional_pattern_binders.add(pattern.node_id)
         elif isinstance(pattern, AsPattern):
-            self._bind_pattern_vars(pattern.pattern, scope)
-            self._check_not_reserved(pattern.name, pattern.span)
-            ref = BindingRef(
-                name=pattern.name,
-                mutable=False,
-                decl_span=pattern.span,
-                decl_node_id=pattern.node_id,
-                kind=BinderKind.pattern_binding,
-                module_id=self._module_id,
-            )
-            if pattern.name in scope.bindings:
-                raise AglScopeError(
-                    f"Name '{pattern.name}' is bound more than once in this pattern.",
-                    span=pattern.span,
-                )
-            scope.define(pattern.name, ref)
+            self._bind_pattern_vars(pattern.pattern, scope, nested=nested)
+            if not self._bind_pattern_name(
+                pattern.name,
+                pattern.span,
+                pattern.node_id,
+                scope,
+                allow_existing_provisional=True,
+            ):
+                self._provisional_pattern_binders.add(pattern.node_id)
         elif isinstance(pattern, ConstructorPattern):
-            for p in pattern.positional:
-                self._bind_pattern_vars(p, scope)
-            for pf in pattern.named:
-                self._bind_pattern_field_vars(pf, scope)
+            for child in pattern.positional:
+                self._bind_pattern_vars(child, scope, nested=True)
+            for field in pattern.named:
+                self._bind_pattern_vars(field.pattern, scope, nested=True)
         # WildcardPattern, LiteralPattern — no bindings introduced.
 
-    def _bind_pattern_field_vars(self, pf: PatternField, scope: ScopeNode) -> None:
-        self._bind_pattern_vars(pf.pattern, scope)
+    def _bind_pattern_name(
+        self,
+        name: str,
+        span: SourceSpan,
+        node_id: int,
+        scope: ScopeNode,
+        *,
+        allow_existing_provisional: bool = False,
+    ) -> bool:
+        """Introduce one branch-local pattern binding.
 
-    def _pattern_constructor_candidates(
-        self, pattern: VarPattern, scope: ScopeNode
-    ) -> tuple[ConstructorRef, ...]:
-        """Constructor candidates a bare pattern name could denote.
-
-        Returns the empty tuple when the name is an ordinary variable binder —
-        either it names no in-scope constructor, or a nearer non-constructor
-        binding shadows the constructor.  Otherwise it returns every candidate
-        the spelling could denote; a shared spelling yields more than one, and
-        the scrutinee's enum type selects among them at check time.
+        Returns whether this name became the scope's provisional binding. A
+        nested spelling with constructor candidates may ultimately be a
+        constructor rather than a binder, so a later such spelling may share
+        its provisional slot. The checker validates final duplicate binders and
+        rewrites branch references to the unique final binder if necessary.
         """
-        ref = scope.lookup(pattern.name)
-        if ref is not None and ref.kind is not BinderKind.constructor_binding:
-            return ()
-        return tuple(self._constructor_candidates.get(pattern.name, ()))
+        self._check_not_reserved(name, span)
+        existing = scope.bindings.get(name)
+        if existing is not None:
+            if (
+                allow_existing_provisional
+                and existing.decl_node_id in self._provisional_pattern_binders
+            ):
+                return False
+            raise AglScopeError(
+                f"Name '{name}' is bound more than once in this pattern.", span=span
+            )
+        scope.define(
+            name,
+            BindingRef(
+                name=name,
+                mutable=False,
+                decl_span=span,
+                decl_node_id=node_id,
+                kind=BinderKind.pattern_binding,
+                module_id=self._module_id,
+            ),
+        )
+        return True
 
 
 # ---------------------------------------------------------------------------

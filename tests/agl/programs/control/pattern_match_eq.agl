@@ -1,6 +1,6 @@
 # Pattern matching with '=': field shorthand (Holds(shape)), full-form field
 # patterns (name = pattern), and nested ENUM-in-enum constructor patterns
-# (Holds(shape = Line(len = n))). Constructor patterns target only enum-typed
+# (Holds(shape = Line(len = _ as n))). Constructor patterns target only enum-typed
 # values; the record-typed field 'at' is bound (shorthand/full form) and read
 # via field access in the branch body, never destructured by a ctor pattern.
 record Pt
@@ -21,7 +21,8 @@ agent picker
 let wrapped: Wrapped = ask("Pick a wrapped shape.", agent = picker)
 
 # Nested constructor patterns with '=' on the enum-typed field 'shape'; the
-# record-typed field 'at' is bound full-form ('at = p') and read via 'p.x'/'p.y'.
+# record-typed field 'at' is matched full-form ('at = _ as p'), where 'as' captures
+# the alias, and read via 'p.x'/'p.y'.
 let described = case wrapped of
   | Empty => "empty"
   | Holds(shape = Dot) => "dot"

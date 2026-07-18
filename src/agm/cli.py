@@ -1099,7 +1099,7 @@ def exec_cmd(
         "--timeout",
         help=(
             "Override the shell-exec timeout (e.g. '30s', '5m', '120').  "
-            "Seeds the in-program 'std.config::timeout' setting to some(VALUE).  "
+            "Seeds the in-program 'std/config::timeout' setting to some(VALUE).  "
             "Mutually exclusive with --no-timeout."
         ),
     ),
@@ -1108,7 +1108,7 @@ def exec_cmd(
         "--no-timeout",
         help=(
             "Remove any configured timeout (no shell-exec timeout).  "
-            "Seeds the in-program 'std.config::timeout' setting to none.  "
+            "Seeds the in-program 'std/config::timeout' setting to none.  "
             "Mutually exclusive with --timeout."
         ),
     ),
@@ -1238,7 +1238,7 @@ def repl_cmd(
         help=(
             "Enable trace logging to an auto-named timestamped file under .agent-files/. "
             "Trace logging is off by default; --log, --log-file, or [exec] log = true in "
-            "config.toml opt in. A std.config::log write takes effect in the REPL too."
+            "config.toml opt in. A std/config::log write takes effect in the REPL too."
         ),
     ),
     _help: bool = _help_option(),

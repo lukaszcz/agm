@@ -2,8 +2,7 @@
 # BranchA variant carries a NodeB (defined in tree_b), and tree_b's NodeB
 # carries a list[NodeA] back. Cross-module cycles are legal the same way
 # same-module mutual recursion is.
-import tree_b
-
+open import tree_b
 enum NodeA
   | LeafA
   | BranchA(value: int, child: NodeB)

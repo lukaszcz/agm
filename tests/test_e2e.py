@@ -8188,7 +8188,7 @@ class TestReplCommand:
             ["repl"],
             env=env,
             cwd=str(work),
-            input="import math\ndouble(21)\n:quit\n",
+            input="open import math\ndouble(21)\n:quit\n",
         )
         assert result.returncode == 0
         assert any(line.split()[-1:] == ["42"] for line in result.stdout.splitlines())

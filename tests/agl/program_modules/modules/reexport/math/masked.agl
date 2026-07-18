@@ -1,2 +1,2 @@
 # Re-exports add and _internal stays private; mul is hidden.
-export math.ops hiding mul
+export math/ops hiding mul

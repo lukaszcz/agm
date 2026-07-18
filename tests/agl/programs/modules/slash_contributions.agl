@@ -1,7 +1,6 @@
 import namespaces/primary/config
 import namespaces/secondary/config
 import namespaces/primary/config using primary
-
 print(config::secondary())
 print(/namespaces/primary/config::primary())
 print(primary())

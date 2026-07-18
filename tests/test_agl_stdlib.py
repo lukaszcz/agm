@@ -64,7 +64,7 @@ def test_no_stdlib_disables_default_open_import() -> None:
 
 def test_no_stdlib_still_allows_explicit_std_core_import() -> None:
     _check(
-        "import std.core\nlet x: Option[int] = Some(value = 1)\nx\n",
+        "open import std/core\nlet x: Option[int] = Some(value = 1)\nx\n",
         default_stdlib=False,
     )
 

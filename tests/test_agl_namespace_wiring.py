@@ -8,6 +8,8 @@ import pytest
 
 from agm.agl.matchcompile.diagnostics import qualified_owner_name
 from agm.agl.modules.ids import ModuleId
+from agm.agl.modules.loader import load_graph
+from agm.agl.modules.roots import RootSet
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import AglScopeError
 from agm.agl.semantics.types import EnumOwnerFormKind
@@ -15,7 +17,18 @@ from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
 from agm.agl.syntax.types import Qualifier
 from agm.agl.typecheck import AglTypeError
 from agm.agl.typecheck.program import check_program
-from tests.agl.ir_harness import base_caps, make_graph_from_files
+from tests.agl.ir_harness import base_caps, make_graph_from_files, write_module_file
+
+
+def _make_graph_without_prelude(tmp_path: Path, modules: dict[str, str]) -> object:
+    root = tmp_path / "root"
+    root.mkdir()
+    for module_path, source in modules.items():
+        if module_path != "entry":
+            write_module_file(root, module_path, source)
+    return load_graph(
+        modules["entry"], entry_path=None, roots=RootSet(frozenset({root})), default_stdlib=False
+    )
 
 
 def test_scope_resolves_suffix_anchor_and_using_contributions(tmp_path: Path) -> None:
@@ -107,17 +120,25 @@ def test_type_qualifier_beats_route_without_the_requested_member(tmp_path: Path)
     assert check_program(resolve_program(graph), base_caps()).entry_id == graph.entry_id
 
 
-def test_type_and_module_constructor_member_collision_is_ambiguous(tmp_path: Path) -> None:
+def test_is_test_type_and_module_constructor_member_collision_is_ambiguous(
+    tmp_path: Path,
+) -> None:
     graph = make_graph_from_files(
         tmp_path,
         {
-            "entry": "import support/config\nenum config | On\nconfig::On",
+            "entry": (
+                "import support/config\n"
+                "enum config | On\n"
+                "let flag = ::config::On\n"
+                "flag is config::On"
+            ),
             "support/config": "def On() -> int = 1",
         },
     )
 
-    with pytest.raises(AglScopeError) as exc_info:
-        resolve_program(graph)
+    resolved = resolve_program(graph)
+    with pytest.raises(AglTypeError) as exc_info:
+        check_program(resolved, base_caps())
 
     diagnostic = str(exc_info.value)
     assert "both a type name and a module route" in diagnostic
@@ -132,10 +153,7 @@ def test_is_test_does_not_treat_an_imported_enum_owner_as_its_variant_route(
         tmp_path,
         {
             "entry": (
-                "import support/config\n"
-                "enum config | On\n"
-                "let flag = config::On\n"
-                "flag is config::On"
+                "import support/config\nenum config | On\nlet flag = config::On\nflag is config::On"
             ),
             "support/config": "enum config | On",
         },
@@ -247,10 +265,34 @@ def test_anchored_enum_owner_form_preserves_its_route(tmp_path: Path) -> None:
 
     assert form is not None
     assert form.qualifier_anchored is True
-    rendered = qualified_owner_name(
-        "Flag", form.module_qualifier, anchored=form.qualifier_anchored
-    )
+    rendered = qualified_owner_name("Flag", form.module_qualifier, anchored=form.qualifier_anchored)
     assert rendered == "/remote/config::Flag"
+
+
+def test_qualified_enum_owner_form_rejects_a_non_type_member(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import remote/config\n0",
+            "remote/config": "def Flag() -> int = 1",
+        },
+    )
+    checked = check_program(resolve_program(graph), base_caps())
+    qualifier = Qualifier(
+        segments=("remote", "config"),
+        anchored=False,
+        span=SourceSpan(1, 1, 1, 1, 0, 0, UNKNOWN_SOURCE),
+        node_id=0,
+    )
+
+    assert (
+        checked.modules[graph.entry_id].type_env.resolve_enum_owner_form(
+            EnumOwnerFormKind.QUALIFIED_IMPORT,
+            "Flag",
+            qualifier,
+        )
+        is None
+    )
 
 
 def test_pattern_and_is_filter_type_module_routes_by_the_referenced_variant(tmp_path: Path) -> None:
@@ -274,6 +316,32 @@ def test_pattern_and_is_filter_type_module_routes_by_the_referenced_variant(tmp_
     assert check_program(resolve_program(graph), base_caps()).entry_id == graph.entry_id
 
 
+def test_enum_owner_forms_exclude_ambiguous_suffix_routes(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import one/config\n"
+                "import two/config\n"
+                "let flag = one/config::Flag::On\n"
+                "case flag of | one/config::Flag::On => 1 | _ => 2"
+            ),
+            "one/config": "enum Flag | On | Off",
+            "two/config": "enum Flag | On | Off",
+        },
+    )
+
+    checked = check_program(resolve_program(graph), base_caps())
+    forms = checked.modules[graph.entry_id].type_env.enum_owner_forms()
+
+    assert not any(form.module_qualifier == ("config",) for form in forms)
+    assert {
+        form.module_qualifier
+        for form in forms
+        if form.owner_name == "Flag" and form.module_qualifier is not None
+    } >= {("one", "config"), ("two", "config")}
+
+
 def test_anchored_constructor_route_never_falls_back_to_a_local_type(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,
@@ -285,3 +353,67 @@ def test_anchored_constructor_route_never_falls_back_to_a_local_type(tmp_path: P
 
     with pytest.raises(AglScopeError, match="No module imported"):
         resolve_program(graph)
+
+
+def test_spec_suffixes_anchor_and_two_line_bare_full_idiom(tmp_path: Path) -> None:
+    """Suffixes filter by member, anchors select exactly, and imports union."""
+    graph = _make_graph_without_prelude(
+        tmp_path,
+        {
+            "entry": (
+                "import std/config\n"
+                "import std/list/config\n"
+                "import extra/config hiding retries\n"
+                "import utils/api\n"
+                "import utils/api using bare\n"
+                "let a = config::retries()\n"
+                "let b = list/config::opt()\n"
+                "let c = /std/config::opt()\n"
+                "let d = bare()\n"
+                "let e = api::full()\n"
+                "e"
+            ),
+            "std/config": "def retries() -> int = 1\ndef opt() -> int = 2",
+            "std/list/config": "def opt() -> int = 3",
+            "extra/config": "def retries() -> int = 4\ndef opt() -> int = 5",
+            "utils/api": "def bare() -> int = 6\ndef full() -> int = 7",
+        },
+    )
+
+    resolved = resolve_program(graph)
+    entry = resolved.modules[graph.entry_id]
+    assert entry.import_env.unqualified["bare"] == frozenset(
+        {(ModuleId.from_path("utils/api"), "bare")}
+    )
+
+
+def test_hiding_repairs_a_suffix_ambiguity_and_new_import_makes_it_loud(tmp_path: Path) -> None:
+    modules = {
+        "one/config": "def opt() -> int = 1",
+        "two/config": "def opt() -> int = 2",
+    }
+    repaired = make_graph_from_files(
+        tmp_path,
+        {"entry": "import one/config\nimport two/config hiding opt\nconfig::opt()", **modules},
+    )
+    assert resolve_program(repaired).entry_id == repaired.entry_id
+
+    ambiguous = make_graph_from_files(
+        tmp_path,
+        {"entry": "import one/config\nimport two/config\nconfig::opt()", **modules},
+    )
+    with pytest.raises(AglScopeError, match="ambiguous"):
+        resolve_program(ambiguous)
+
+
+def test_wildcard_alias_is_a_member_filtered_facade(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import facade/* as api\nlet first = api::first()\napi::second()",
+            "facade/one": "def first() -> int = 1",
+            "facade/two": "def second() -> int = 2",
+        },
+    )
+
+    assert resolve_program(graph).entry_id == graph.entry_id

@@ -1,5 +1,4 @@
 import namespaces/flags/config
-
 let flag: /namespaces/flags/config::Flag = /namespaces/flags/config::Flag::On
 let result = case flag of
   | /namespaces/flags/config::Flag::On => "on"

@@ -888,7 +888,7 @@ class TestTypeEnvironment:
         unqualified: dict[str, frozenset[tuple[ModuleId, str]]] = {
             "Color": frozenset({(mod_a, "Color"), (mod_b, "Color")}),
         }
-        import_env = ImportEnv(unqualified=unqualified, qualified={})
+        import_env = ImportEnv(contributions={}, unqualified=unqualified)
         env = TypeEnvironment(program_type_table=graph_table, import_env=import_env)
         # Both entries are in graph_table → type_candidates has 2 elements → False branch.
         result = env.resolve_named_type("Color")
@@ -2202,7 +2202,7 @@ class TestPartialConstructorAndValueCalls:
 
         modules = {
             "entry": (
-                "import mylib\n"
+                "open import mylib\n"
                 "let make: (int) -> mylib::Point = mylib::Point(x = ?)\n"
                 "let make_open: (int) -> Point = Point(x = ?)\n"
                 "let make_box: (text) -> mylib::Box[text] = mylib::Box(value = ?)\n"
@@ -5688,7 +5688,7 @@ class TestResolveTypeExprTypeVars:
                     "Point": frozenset({(lib_a, "Point")}),
                     "Box": frozenset({(lib_a, "Box"), (lib_b, "Box")}),
                 },
-                qualified={},
+                contributions={},
             ),
             program_generic_table={(lib_a, "Box"): gdef, (lib_b, "Box"): gdef},
         )
@@ -7946,7 +7946,6 @@ class TestCast:
 
 class TestCastClassificationTable:
     """Direct unit tests for cast_classification() covering the new nominal→json pairs."""
-
     def test_record_to_json_is_total_json(self) -> None:
         from agm.agl.semantics.types import CastKind, cast_classification
 
@@ -8203,7 +8202,7 @@ class TestImportDeclTypecheck:
 
     def test_import_decl_does_not_raise(self) -> None:
         """A bare import declaration type-checks as unit."""
-        r = accept_type("import foo.bar\n1")
+        r = accept_type("open import foo/bar\n1")
         assert r  # no exception
 
     def test_import_with_alias_does_not_raise(self) -> None:
@@ -8211,7 +8210,7 @@ class TestImportDeclTypecheck:
         assert r
 
     def test_import_wildcard_does_not_raise(self) -> None:
-        r = accept_type("import foo.*\n1")
+        r = accept_type("import foo/*\n1")
         assert r
 
     def test_import_using_does_not_raise(self) -> None:

@@ -1,4 +1,3 @@
 import std/config
-
 std/config::max-iters := 3
 print(config::max-iters)

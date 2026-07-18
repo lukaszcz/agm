@@ -507,7 +507,7 @@ _HELP_TEXTS: dict[str, str] = {
         take a JSON string. Run `agm exec FILE --help` to show discovered params.
 
         Trace logging is OFF by default.  Enable it with --log, --log-file, or
-        [exec] log = true in config.toml.  A source ``std.config::KEY := VALUE``
+        [exec] log = true in config.toml.  A source ``std/config::KEY := VALUE``
         write takes effect from its program point and overrides the CLI flag,
         which overrides the config-file layer.
 
@@ -520,10 +520,10 @@ _HELP_TEXTS: dict[str, str] = {
                                 (CLI > config).
           --runner COMMAND      Override the default agent runner command.
           --timeout DURATION    Override initial shell-exec and agent idle timeouts;
-                                seed std.config::timeout to some(DURATION). Mutually
+                                seed std/config::timeout to some(DURATION). Mutually
                                 exclusive with --no-timeout.
           --no-timeout          Remove any configured shell-exec timeout and seed
-                                std.config::timeout to none. Mutually exclusive
+                                std/config::timeout to none. Mutually exclusive
                                 with --timeout.
           --dry-run             Run the full static pipeline and validate parameters,
                                 but do not execute the workflow.
@@ -534,7 +534,7 @@ _HELP_TEXTS: dict[str, str] = {
           --no-log              Disable trace logging (overrides config).
           --log, --log-file, and --no-log are mutually exclusive.
           --log-file and --no-log-file are mutually exclusive.
-          --no-stdlib           Do not automatically open std.core in the entry module.
+          --no-stdlib           Do not automatically open std/core in the entry module.
           -I DIR, --module-path DIR
                                 Add DIR as an additional module search root
                                 (repeatable). Resolved relative to the invocation
@@ -561,10 +561,10 @@ _HELP_TEXTS: dict[str, str] = {
         earlier results stay available and agent calls fire exactly once.  The
         session reuses the [exec] configuration (runner, per-agent commands,
         call-depth limit, JSON strictness, timeout).  Like agm exec, it
-        automatically opens std.core so standard-library names are available
+        automatically opens std/core so standard-library names are available
         unqualified.
 
-        Trace logging is OFF by default.  A ``std.config::KEY := VALUE`` write
+        Trace logging is OFF by default.  A ``std/config::KEY := VALUE`` write
         entered at the REPL prompt takes effect from that point and persists for
         the session; :reset clears it.  Set session-wide defaults via CLI flags
         or [exec] config.

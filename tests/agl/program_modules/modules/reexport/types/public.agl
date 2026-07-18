@@ -1,2 +1,2 @@
 # Re-exports the Point type and make_point; does NOT re-export _raw (private).
-export types.geo
+export types/geo

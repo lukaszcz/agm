@@ -675,7 +675,7 @@ def _build_program_builtin_var_table(
     engine-key registry), so no type-expression resolution or per-module env is
     needed.  The table is keyed by the declaration node id (globally unique), so
     seeding it into every module's env makes each engine setting readable and
-    assignable from any module that imports its owner (e.g. ``std.config``).
+    assignable from any module that imports its owner (e.g. ``std/config``).
     Unknown-key declarations are omitted; the owning module's own check rejects
     them with a clear error.
     """
@@ -807,7 +807,7 @@ def _check_module(
             env.register_extern_node_id(node_id)
 
     # Seed builtin-var binding types (engine settings) from the whole-program
-    # pre-pass so a ``std.config::key`` read/assign in any module resolves its
+    # pre-pass so a ``std/config::key`` read/assign in any module resolves its
     # type.  Keyed by globally-unique decl node id, so seeding the whole table
     # into every module's env is safe and collision-free.
     for var_node_id, var_type in program_builtin_var_table.items():

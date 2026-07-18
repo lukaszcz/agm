@@ -773,32 +773,29 @@ def test_nested_ambiguous_enum_witnesses_are_qualified_recursively() -> None:
 
 
 @pytest.mark.parametrize("ambiguous", [False, True])
-def test_imported_enum_witness_uses_full_module_qualification_only_when_ambiguous(
+def test_imported_enum_witness_uses_suffix_qualification_with_other_imports(
     tmp_path: Path, ambiguous: bool
 ) -> None:
     other_import = "import other\n" if ambiguous else ""
-    pattern = "library.remote::Remote::empty" if ambiguous else "empty"
+    pattern = "remote::Remote::empty"
     compiled = _compile_graph_case(
         tmp_path,
         {
             "library/remote": "enum Remote[T]\n  | empty\n  | item(value: T)",
             "other": "enum Other\n  | empty\n  | item(value: int)",
             "entry": (
-                "import library.remote\n"
+                "import library/remote\n"
                 f"{other_import}"
-                "let value: library.remote::Remote[int] = "
-                "library.remote::Remote::empty\n"
+                "let value: library/remote::Remote[int] = "
+                "library/remote::Remote::empty\n"
                 f"case value of | {pattern} => 0\n"
             ),
         },
     )
     witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
 
-    expected_qualification = EnumWitnessQualification("Remote", None) if ambiguous else None
-    assert witness.qualification == expected_qualification
-    assert render_witness(witness) == (
-        "Remote::item(value = _)" if ambiguous else "item(value = _)"
-    )
+    assert witness.qualification == EnumWitnessQualification("Remote", ("remote",))
+    assert render_witness(witness) == "remote::Remote::item(value = _)"
 
 
 def test_local_enum_witness_keeps_a_short_owner_when_an_import_only_contributes_its_owner(
@@ -853,7 +850,7 @@ def test_qualified_only_imported_enum_witness_uses_source_alias(tmp_path: Path) 
         {
             "library/remote": "enum Remote\n  | empty\n  | item(value: int)",
             "entry": (
-                "import library.remote qualified as r\n"
+                "import library/remote as r\n"
                 "let value: r::Remote = r::Remote::empty\n"
                 "case value of | r::Remote::empty => 0\n"
             ),
@@ -872,8 +869,8 @@ def test_aliased_qualified_imports_choose_target_source_handle(tmp_path: Path) -
             "library/left": "enum Shared\n  | empty\n  | item(value: int)",
             "library/right": "enum Shared\n  | empty\n  | item(value: int)",
             "entry": (
-                "import library.left qualified as left\n"
-                "import library.right qualified as right\n"
+                "import library/left as left\n"
+                "import library/right as right\n"
                 "enum Shared\n  | empty\n  | item(value: int)\n"
                 "let value: left::Shared = left::Shared::empty\n"
                 "case value of | left::Shared::empty => 0\n"
@@ -923,7 +920,7 @@ def test_renamed_open_import_uses_exposed_type_name_when_bare_variant_is_shadowe
         {
             "library/remote": "enum Remote\n  | empty\n  | item(value: int)",
             "entry": (
-                "import library.remote using Remote as R\n"
+                "import library/remote using Remote as R\n"
                 "def inspect(item: int, value: R) -> int =\n"
                 "  case value of | R::empty => 0\n"
                 "let result = inspect(1, R::empty)\n"
@@ -947,7 +944,7 @@ def test_hidden_imported_type_allows_irrefutable_case_without_invented_spelling(
                 "enum Remote\n  | empty\n  | item(value: int)\ndef make() -> Remote = empty\n"
             ),
             "entry": (
-                "import library.remote using make\nlet value = make()\ncase value of | _ => 0\n"
+                "import library/remote using make\nlet value = make()\ncase value of | _ => 0\n"
             ),
         },
     )
@@ -964,22 +961,22 @@ def test_hidden_imported_type_allows_irrefutable_case_without_invented_spelling(
     ("import_line", "owner", "module_qualifier", "rendered"),
     [
         (
-            "import library.remote using Alias",
+            "import library/remote using Alias",
             "Alias",
             None,
             "Alias::item(value = _)",
         ),
         (
-            "import library.remote using Alias as A",
+            "import library/remote using Alias as A",
             "A",
             None,
             "A::item(value = _)",
         ),
         (
-            "import library.remote qualified as r using Alias",
+            "import library/remote as r using Alias",
             "Alias",
-            ("r",),
-            "r::Alias::item(value = _)",
+            None,
+            "Alias::item(value = _)",
         ),
     ],
 )
@@ -1023,7 +1020,7 @@ def test_imported_transformed_generic_alias_matches_concrete_enum_owner(
                 "def make() -> Remote[Pair[int, text]] = Remote::empty\n"
             ),
             "entry": (
-                "import library.remote using Flipped, make\n"
+                "import library/remote using Flipped, make\n"
                 "let value = make()\n"
                 "case value of | Flipped::empty => 0\n"
             ),
@@ -1101,7 +1098,7 @@ def test_imported_generic_alias_with_fixed_argument_matches_enum_owner(
                 "def make() -> Remote[Pair[text, int]] = Remote::empty\n"
             ),
             "entry": (
-                "import library.remote using Fixed, make\n"
+                "import library/remote using Fixed, make\n"
                 "let value = make()\n"
                 "case value of | Fixed::empty => 0\n"
             ),
@@ -1123,7 +1120,7 @@ def test_qualified_generic_identity_alias_uses_source_handle(tmp_path: Path) -> 
                 "def make() -> Remote[int] = Remote::empty\n"
             ),
             "entry": (
-                "import library.remote qualified as r using Alias, make\n"
+                "import library/remote as r using Alias, make\n"
                 "let value = r::make()\n"
                 "case value of | r::Alias::empty => 0\n"
             ),
@@ -1131,8 +1128,8 @@ def test_qualified_generic_identity_alias_uses_source_handle(tmp_path: Path) -> 
     )
     witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
 
-    assert witness.qualification == EnumWitnessQualification("Alias", ("r",))
-    assert render_witness(witness) == "r::Alias::item(value = _)"
+    assert witness.qualification == EnumWitnessQualification("Alias", None)
+    assert render_witness(witness) == "Alias::item(value = _)"
 
 
 def test_negative_alias_to_other_enum_is_not_selected_as_owner(tmp_path: Path) -> None:
@@ -1146,7 +1143,7 @@ def test_negative_alias_to_other_enum_is_not_selected_as_owner(tmp_path: Path) -
                 "def make() -> Remote = Remote::empty\n"
             ),
             "entry": (
-                "import library.remote using Wrong, make\n"
+                "import library/remote using Wrong, make\n"
                 "let value = make()\n"
                 "case value of | _ => 0\n"
             ),
@@ -1167,7 +1164,7 @@ def test_local_owner_form_blocks_shadowed_open_import_spelling(tmp_path: Path) -
                 "def make() -> Remote = Remote::empty\n"
             ),
             "entry": (
-                "import library.remote using Remote as Clash, make\n"
+                "import library/remote using Remote as Clash, make\n"
                 "enum Clash\n  | local\n"
                 "def inspect(empty: int, item: int) -> int =\n"
                 "  case make() of | _ => 0\n"
@@ -1178,7 +1175,7 @@ def test_local_owner_form_blocks_shadowed_open_import_spelling(tmp_path: Path) -
     unavailable = compile_case(replace(compiled.normalized, rows=()))
     issue = cast(NonExhaustiveIssue, unavailable.issues[0])
 
-    assert render_witness(issue.witness) == "library.remote::Clash::empty"
+    assert render_witness(issue.witness) == "remote::Clash::empty"
     assert not any(
         form.owner_name == "Clash" and form.kind is EnumOwnerFormKind.OPEN_IMPORT
         for form in compiled.normalized.case_context.enum_owner_forms
@@ -1194,9 +1191,9 @@ def test_reexported_alias_chain_uses_final_exposed_name(tmp_path: Path) -> None:
                 "type Alias = Remote\n"
                 "type Chained = Alias\n"
             ),
-            "library/facade": "export library.base using Chained as Public",
+            "library/facade": "export library/base using Chained as Public",
             "entry": (
-                "import library.facade using Public\n"
+                "import library/facade using Public\n"
                 "let value: Public = Public::empty\n"
                 "case value of | Public::empty => 0\n"
             ),
@@ -1225,7 +1222,7 @@ def test_nested_witness_selects_alias_for_each_concrete_instantiation(
                 ")\n"
             ),
             "entry": (
-                "import library.remote using IntRemote, TextRemote, Pair, make\n"
+                "import library/remote using IntRemote, TextRemote, Pair, make\n"
                 "let value = make()\n"
                 "case value of\n"
                 "  | Pair::pair(left = IntRemote::empty, right = _) => 0\n"
@@ -1257,7 +1254,7 @@ def test_polymorphic_nested_instantiation_selects_generic_alias_template(
                 "def make() -> Perfect[int] = Perfect::end\n"
             ),
             "entry": (
-                "import library.perfect using Root, Nested as N, make\n"
+                "import library/perfect using Root, Nested as N, make\n"
                 "let value = make()\n"
                 "case value of\n"
                 "  | Root::end => 0\n"
@@ -1271,7 +1268,7 @@ def test_polymorphic_nested_instantiation_selects_generic_alias_template(
     assert render_witness(witness) == "Root::next(value = N::value(item = _))"
 
 
-def test_local_type_uses_self_qualification_when_import_handle_conflicts(
+def test_local_type_uses_shortest_owner_when_alias_has_no_owner_member(
     tmp_path: Path,
 ) -> None:
     compiled = _compile_graph_case(
@@ -1279,7 +1276,7 @@ def test_local_type_uses_self_qualification_when_import_handle_conflicts(
         {
             "library/remote": "def value() -> int = 1",
             "entry": (
-                "import library.remote qualified as Choice\n"
+                "import library/remote as Choice\n"
                 "enum Choice\n  | empty\n  | item(value: int)\n"
                 "def inspect(item: int, value: ::Choice) -> int =\n"
                 "  case value of | ::Choice::empty => 0\n"
@@ -1290,17 +1287,17 @@ def test_local_type_uses_self_qualification_when_import_handle_conflicts(
     )
     witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
 
-    assert witness.qualification == EnumWitnessQualification("Choice", ())
-    assert render_witness(witness) == "::Choice::item(value = _)"
+    assert witness.qualification == EnumWitnessQualification("Choice", None)
+    assert render_witness(witness) == "Choice::item(value = _)"
 
 
 def test_rendered_self_qualified_generic_owner_round_trips_under_handle_conflict(
     tmp_path: Path,
 ) -> None:
     modules = {
-        "library/remote": "def value() -> int = 1",
+        "library/remote": "enum Remote | foreign\ndef item() -> int = 1",
         "entry": (
-            "import library.remote qualified as Remote\n"
+            "import library/remote as Remote\n"
             "enum Remote[T]\n  | empty\n  | item(value: T)\n"
             "def inspect(item: int, value: ::Remote[int]) -> int =\n"
             "  case value of | ::Remote::empty => 0\n"
@@ -1317,7 +1314,7 @@ def test_rendered_self_qualified_generic_owner_round_trips_under_handle_conflict
         {
             **modules,
             "entry": (
-                "import library.remote qualified as Remote\n"
+                "import library/remote as Remote\n"
                 "enum Remote[T]\n  | empty\n  | item(value: T)\n"
                 "def inspect(value: ::Remote[int]) -> int =\n"
                 "  case value of | ::Remote::item(value = _) => 0\n"
@@ -1898,6 +1895,14 @@ def test_source_spelling_model_rejects_inconsistent_structures() -> None:
             "Choice",
             None,
             kind=EnumOwnerFormKind.SELF,
+            type_template=TypeTemplate(EnumType("Choice")),
+        )
+    with pytest.raises(ValueError, match="non-empty module qualifier"):
+        EnumOwnerForm(
+            "Choice",
+            (),
+            kind=EnumOwnerFormKind.SELF,
+            qualifier_anchored=True,
             type_template=TypeTemplate(EnumType("Choice")),
         )
     assert EnumOwnerForm("Choice", None).match(EnumType("Choice")) is None

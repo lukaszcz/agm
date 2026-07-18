@@ -845,7 +845,7 @@ class TestExternError:
         write_companion_file(root, "lib/mod", "def boom():\n    raise ValueError('x')\n")
         driver = PipelineDriver()
         prepared = PipelineDriver.prepare_program(
-            "import lib.mod\nlib.mod::boom()",
+            "import lib/mod\nlib/mod::boom()",
             entry_path=None,
             roots=_roots(root),
             default_stdlib=False,
@@ -917,7 +917,7 @@ class TestEndToEndFileRuns:
         write_companion_file(root, "lib/mod", "def f(x):\n    return x + 1\n")
         driver = PipelineDriver()
         prepared = PipelineDriver.prepare_program(
-            "import lib.mod\nlet r = lib.mod::f(1)\nr\n",
+            "import lib/mod\nlet r = lib/mod::f(1)\nr\n",
             entry_path=None,
             roots=_roots(root),
             default_stdlib=False,
@@ -932,7 +932,7 @@ class TestEndToEndFileRuns:
         write_companion_file(root, "lib/mod", "def f(x):\n    return x + 1\n")
         driver = PipelineDriver()
         prepared = PipelineDriver.prepare_program(
-            "import lib.mod\nlet r = f(1)\nr\n",
+            "open import lib/mod\nlet r = f(1)\nr\n",
             entry_path=None,
             roots=_roots(root),
             default_stdlib=False,
@@ -952,7 +952,7 @@ class TestEndToEndFileRuns:
         driver = PipelineDriver()
 
         prepared = PipelineDriver.prepare_program(
-            "import lib.mod\nlet r = lib.mod::g(1)\nr\n",
+            "import lib/mod\nlet r = lib/mod::g(1)\nr\n",
             entry_path=None,
             roots=_roots(root),
             default_stdlib=False,
@@ -962,7 +962,7 @@ class TestEndToEndFileRuns:
         assert result.bindings["r"] == IntValue(3)
 
         outside_prepared = PipelineDriver.prepare_program(
-            "import lib.mod\nlib.mod::f(1)",
+            "import lib/mod\nlib/mod::f(1)",
             entry_path=None,
             roots=_roots(root),
             default_stdlib=False,
@@ -991,7 +991,7 @@ class TestDryRun:
         )
         driver = PipelineDriver()
         prepared = PipelineDriver.prepare_program(
-            "import lib.mod\nlib.mod::f(1)",
+            "import lib/mod\nlib/mod::f(1)",
             entry_path=None,
             roots=_roots(root),
             default_stdlib=False,
@@ -1007,7 +1007,7 @@ class TestDryRun:
         write_companion_file(root, "lib/mod", "raise RuntimeError('broken')\n")
         driver = PipelineDriver()
         prepared = PipelineDriver.prepare_program(
-            "import lib.mod\nlib.mod::f(1)",
+            "import lib/mod\nlib/mod::f(1)",
             entry_path=None,
             roots=_roots(root),
             default_stdlib=False,
@@ -1042,7 +1042,7 @@ class TestReplSmoke:
         session = ReplSession()
         session._roots = roots
 
-        result = session.eval_entry("import extlib\nadd_one(41)")
+        result = session.eval_entry("open import extlib\nadd_one(41)")
 
         assert result.ok, result.diagnostics
         assert result.value == IntValue(42)
@@ -1068,6 +1068,6 @@ class TestReplSmoke:
         session = ReplSession()
         session._roots = roots
 
-        result = session.eval_entry("import extlib\nadd_one(41)")
+        result = session.eval_entry("open import extlib\nadd_one(41)")
 
         assert result.ok is False

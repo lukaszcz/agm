@@ -2,8 +2,7 @@
 # a list[NodeA] (defined in tree_a), which in turn can hold a NodeB again via
 # BranchA. The list guards the recursion, exactly like a same-module
 # list-guarded record would.
-import tree_a
-
+open import tree_a
 record NodeB
   tag: text
   children: list[NodeA]

@@ -3,14 +3,13 @@
 # math.selective re-exports only `add` from math.ops.
 # math.renamed re-exports `add as plus` from math.ops.
 # types.public re-exports a record type and its constructor from types.geo.
-import math.facade
-import math.selective qualified as sel
-import math.renamed qualified as ren
-import math.masked qualified as masked
-import math.tools_facade qualified as tools
-import chain.top qualified as chain
-import types.public
-
+open import math/facade
+import math/selective as sel
+import math/renamed as ren
+import math/masked as masked
+import math/tools_facade as tools
+import chain/top as chain
+open import types/public
 # math.facade re-exports add and mul from math.ops.
 print(add(3, 4) as text)
 print(mul(2, 5) as text)

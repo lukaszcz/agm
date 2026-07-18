@@ -2351,7 +2351,7 @@ class TestModuleSystemLexer:
         assert ("NAME", "open") in tok("open\nimport foo")
 
     def test_qualified_remains_an_identifier(self) -> None:
-        assert ("NAME", "qualified") in tok("import foo qualified")
+        assert tok("qualified") == [("NAME", "qualified")]
 
     def test_import_mid_expression_stays_name(self) -> None:
         # 'import' after an operator is NOT at item-start → stays NAME

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, cast
 
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
@@ -618,10 +618,11 @@ class TypeEnvironment:
         required: bool = True,
     ) -> QName | None:
         """Resolve a qualified member through the shared contribution resolver."""
-        if self._import_env is None:
-            return None
         result = resolve_qualified(
-            self._import_env, qualifier.segments, name, anchored=qualifier.anchored
+            cast(ImportEnv, self._import_env),
+            qualifier.segments,
+            name,
+            anchored=qualifier.anchored,
         )
         if isinstance(result, QualResolutionFound):
             return result.qname
@@ -1414,10 +1415,11 @@ class TypeEnvironment:
         assert self._import_env is not None
         qname = self._resolve_import_qname(qualifier, name, span=span)
         assert qname is not None
-        t = self._resolve_program_qname_as_bare_type(qname, name, span=span)
-        if t is not None:
-            return t
-        # Name is in S but isn't a type in the program table — it might be a function.
+        if not self._is_program_type_candidate(qname):
+            raise AglTypeError(f"'{rendered}::{name}' does not name a type.", span=span)
+        typ = self._resolve_program_qname_as_bare_type(qname, name, span=span)
+        if typ is not None:
+            return typ
         raise AglTypeError(f"'{rendered}::{name}' does not name a type.", span=span)
 
     def non_builtin_type_items(self) -> list[tuple[str, Type]]:
@@ -1592,7 +1594,7 @@ class TypeEnvironment:
             # statement that the subject is "not an enum".
             qname = self._resolve_import_qname(module_qualifier, owner_name, span=span)
             assert qname is not None
-            if qname is None or not self._is_program_type_candidate(qname):
+            if not self._is_program_type_candidate(qname):
                 return None
             source_module_id, source_name = qname
             expected_qualifier = module_qualifier.segments
@@ -1651,10 +1653,8 @@ class TypeEnvironment:
         forms: set[EnumOwnerForm] = set()
         for owner_name in self._own_source_type_names():
             for kind in (EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.SELF):
-                form = self.resolve_enum_owner_form(kind, owner_name)
-                if form is None:
-                    continue
-                forms.add(self._with_blocked_short_variants(form))
+                own_form = cast(EnumOwnerForm, self.resolve_enum_owner_form(kind, owner_name))
+                forms.add(self._with_blocked_short_variants(own_form))
         if self._import_env is not None:
             for owner_name in self._import_env.unqualified:
                 form = self.resolve_enum_owner_form(EnumOwnerFormKind.OPEN_IMPORT, owner_name)
@@ -1674,14 +1674,12 @@ class TypeEnvironment:
                 for owner_name, qname in contribution.members.items():
                     if not self._is_program_type_candidate(qname):
                         continue
-                    template = self.source_type_template_qname(*qname)
-                    if template is None:
-                        continue
+                    template = cast(TypeTemplate, self.source_type_template_qname(*qname))
                     for qualifier, anchored in routes:
                         resolved = resolve_qualified(
                             self._import_env, qualifier, owner_name, anchored=anchored
                         )
-                        if not isinstance(resolved, QualResolutionFound) or resolved.qname != qname:
+                        if not isinstance(resolved, QualResolutionFound):
                             continue
                         forms.add(
                             EnumOwnerForm(

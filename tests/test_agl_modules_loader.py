@@ -216,7 +216,7 @@ class TestCycles:
         graph = load_graph("import a", entry_path=None, roots=_roots(root))
         assert ModuleId.from_path("a") in graph.modules
         assert ModuleId.from_path("b") in graph.modules
-        # Exactly 4 modules: std.core + entry + a + b
+        # Exactly 4 modules: std/core + entry + a + b
         assert len(graph.modules) == 4
 
     def test_longer_cycle_terminates(self, tmp_path: Path) -> None:
@@ -226,7 +226,7 @@ class TestCycles:
         _write_module(root, "y", "import z")
         _write_module(root, "z", "import x")
         graph = load_graph("import x", entry_path=None, roots=_roots(root))
-        assert len(graph.modules) == 5  # std.core + entry + x + y + z
+        assert len(graph.modules) == 5  # std/core + entry + x + y + z
 
     def test_cycle_nodes_linked_in_sccs(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
@@ -339,7 +339,7 @@ class TestCanonicalDedup:
         link.symlink_to(root)
         # Both roots would resolve 'shared.util' to the same canonical file
         graph = load_graph(
-            "import shared.util",
+            "open import shared/util",
             entry_path=None,
             roots=_roots(root, link),
         )
@@ -405,7 +405,7 @@ class TestWildcardImportInLoader:
         root.mkdir()
         _write_module(root, "pkg/a")
         _write_module(root, "pkg/b")
-        graph = load_graph("import pkg.*", entry_path=None, roots=_roots(root))
+        graph = load_graph("import pkg/*", entry_path=None, roots=_roots(root))
         assert ModuleId.from_path("pkg/a") in graph.modules
         assert ModuleId.from_path("pkg/b") in graph.modules
 
@@ -415,7 +415,7 @@ class TestWildcardImportInLoader:
         from agm.agl.modules.errors import ModulePrefixNotFound
 
         with pytest.raises(ModulePrefixNotFound):
-            load_graph("import noprefix.*", entry_path=None, roots=_roots(root))
+            load_graph("import noprefix/*", entry_path=None, roots=_roots(root))
 
     def test_wildcard_already_loaded_module_not_duplicated(self, tmp_path: Path) -> None:
         """Wildcard expansion encountering an already-loaded module (via
@@ -426,11 +426,11 @@ class TestWildcardImportInLoader:
         _write_module(root, "pkg/b")
         # pkg.a is loaded first (non-wildcard from entry), then pkg.a itself
         # issues a wildcard import that includes already-loaded pkg.a.
-        _write_module(root, "pkg/a", "import pkg.*")
+        _write_module(root, "pkg/a", "import pkg/*")
         # Entry imports pkg.a non-wildcard first, triggering the load of pkg.a,
-        # whose wildcard import pkg.* then encounters pkg.a as already-loaded.
+        # whose wildcard import pkg/* then encounters pkg.a as already-loaded.
         graph = load_graph(
-            "import pkg.a",
+            "open import pkg/a",
             entry_path=None,
             roots=_roots(root),
         )
@@ -455,7 +455,7 @@ class TestDeterminism:
         _write_module(root_b, "y/two")
         _write_module(root_a, "z/three")
 
-        entry = "import x.one\nimport y.two\nimport z.three"
+        entry = "open import x/one\nopen import y/two\nopen import z/three"
 
         graph1 = load_graph(entry, entry_path=None, roots=_roots(root_a, root_b))
         graph2 = load_graph(entry, entry_path=None, roots=_roots(root_b, root_a))
@@ -490,7 +490,7 @@ class TestDeterminism:
         (after discarding ENTRY_ID), proving the internal sort makes
         filesystem/glob order irrelevant.
         """
-        entry = "import pkg.*"
+        entry = "import pkg/*"
 
         # Layout 1: modules written in alphabetical order under a single root.
         r1 = tmp_path / "r1"
@@ -562,7 +562,7 @@ class TestFileBasedEntry:
         root = tmp_path / "r"
         root.mkdir()
         mod_path = _write_module(root, "deps/lib")
-        graph = load_graph("import deps.lib", entry_path=None, roots=_roots(root))
+        graph = load_graph("open import deps/lib", entry_path=None, roots=_roots(root))
         lib_mod = graph.modules[ModuleId.from_path("deps/lib")]
         assert lib_mod.source.label == str(mod_path.resolve())
         assert lib_mod.path == mod_path.resolve()
@@ -637,7 +637,7 @@ class TestBuildReplGraph:
     """Tests for :func:`~agm.agl.modules.loader.build_repl_graph`."""
 
     def test_simple_program_no_imports(self, tmp_path: Path) -> None:
-        """Graph for a program with no explicit imports still loads std.core."""
+        """Graph for a program with no explicit imports still loads std/core."""
         program = _parse_for_repl("let x = 1")
         graph, _next_id, new_modules = build_repl_graph(
             program, 1000, path=None, cached={}, roots=_roots(tmp_path)
@@ -680,7 +680,7 @@ class TestBuildReplGraph:
         assert mid not in new2
 
     def test_cached_std_core_not_reloaded(self, tmp_path: Path) -> None:
-        """The REPL graph builder reuses cached std.core when present."""
+        """The REPL graph builder reuses cached std/core when present."""
         program1 = _parse_for_repl("()")
         graph1, next_id, _new1 = build_repl_graph(
             program1, 0, path=None, cached={}, roots=_roots(tmp_path)
@@ -717,7 +717,7 @@ class TestBuildReplGraph:
         pkg.mkdir()
         (pkg / "a.agl").write_text("def fa() -> int = 1\n")
         (pkg / "b.agl").write_text("def fb() -> int = 2\n")
-        program = _parse_for_repl("import pkg.*\n()")
+        program = _parse_for_repl("import pkg/*\n()")
         graph, _next_id, new_modules = build_repl_graph(
             program, 0, path=None, cached={}, roots=_roots(tmp_path)
         )
@@ -745,7 +745,7 @@ class TestBuildReplGraph:
         mid_a = ModuleId(segments=("pkg", "a"))
 
         # First build: load pkg.a via explicit import to pre-cache it.
-        program1 = _parse_for_repl("import pkg.a\n()")
+        program1 = _parse_for_repl("open import pkg/a\n()")
         _, next_id, new1 = build_repl_graph(
             program1, 0, path=None, cached={}, roots=_roots(tmp_path)
         )
@@ -754,7 +754,7 @@ class TestBuildReplGraph:
         # Second build: wildcard pkg.* with pkg.a already cached.
         # pkg.a should not appear in new_modules (already in cached).
         cached: dict[ModuleId, LoadedModule] = {mid_a: new1[mid_a]}
-        program2 = _parse_for_repl("import pkg.*\n()")
+        program2 = _parse_for_repl("import pkg/*\n()")
         _, _next2, new2 = build_repl_graph(
             program2, next_id, path=None, cached=cached, roots=_roots(tmp_path)
         )
@@ -775,12 +775,12 @@ class TestBuildReplGraph:
         pkg = tmp_path / "pkg"
         pkg.mkdir()
         (pkg / "shared.agl").write_text("def f() -> int = 1\n")
-        (pkg / "other.agl").write_text("import pkg.shared\ndef g() -> int = f()\n")
+        (pkg / "other.agl").write_text("open import pkg/shared\ndef g() -> int = f()\n")
         # entry imports pkg.shared directly AND pkg.* (which includes pkg.shared)
         # so pkg.shared would be queued twice: once for direct import and once
         # via wildcard; BFS should handle the dedup via the 'if mid in modules'
         # check.
-        program = _parse_for_repl("import pkg.shared\nimport pkg.*\n()")
+        program = _parse_for_repl("open import pkg/shared\nimport pkg/*\n()")
         graph, _next_id, new_modules = build_repl_graph(
             program, 0, path=None, cached={}, roots=_roots(tmp_path)
         )

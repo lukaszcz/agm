@@ -718,7 +718,7 @@ class _Resolver:
     def _resolve_builtin_var(self, node: BuiltinVarDecl) -> None:
         """Resolve a standard-library engine setting into a mutable register binding.
 
-        ``builtin var`` is reserved to the canonical ``std.config`` module.
+        ``builtin var`` is reserved to the canonical ``std/config`` module.
         The typecheck pass then validates that the name is a known engine key
         with its canonical type.
         """
@@ -731,7 +731,7 @@ class _Resolver:
         if self._module_id != STD_CONFIG_ID:
             raise AglScopeError(
                 "'builtin var' declarations are only allowed in the standard-library "
-                "module 'std.config'.",
+                "module 'std/config'.",
                 span=node.span,
             )
         ref = BindingRef(

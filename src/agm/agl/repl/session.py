@@ -133,7 +133,7 @@ class ReplSession:
         # Persisted register values for the host-consumed engine settings
         # (runner/log/log-file).  Seeded from the engine defaults overlaid with
         # ``_engine_base``, threaded into every entry's interpreter, and read
-        # back after a successful entry so a ``std.config::KEY := VALUE`` write
+        # back after a successful entry so a ``std/config::KEY := VALUE`` write
         # persists.
         self._persisted_host_settings: dict[str, Value] = self._build_host_settings_base()
         self._persisted_timeout_setting = self._build_timeout_setting_base()
@@ -523,7 +523,7 @@ class ReplSession:
         pipeline_program, next_start_id = self._repl_wrap_trailing_binder(program, next_start_id)
 
         # [1d] REPL entries use the program pipeline by default because that
-        # is where the synthetic ``import std.core`` prelude is injected.  This
+        # is where the synthetic ``import std/core`` prelude is injected.  This
         # keeps the REPL aligned with ``agm exec``: stdlib names are open unless
         # a host explicitly opts out.
         return self._entry_pipeline.eval_entry(
@@ -1194,7 +1194,7 @@ class ReplSession:
 
         Restores the three live engine settings (strict-json/max-iters/timeout)
         to their values at session construction, undoing any effect-at-binding
-        from ``std.config`` writes entered during the session.
+        from ``std/config`` writes entered during the session.
         """
         from agm.agl.lower import LinkImage
         from agm.agl.scope.symbols import ScopeNode
@@ -1215,7 +1215,7 @@ class ReplSession:
         self._declared_agents = set()
         self._ambient_constructor_candidates = {}
         self._ambient_type_names = frozenset()
-        # Re-seed the host-consumed registers so a prior ``std.config::runner``
+        # Re-seed the host-consumed registers so a prior ``std/config::runner``
         # (etc.) write does not bleed past :reset.
         self._persisted_host_settings = self._build_host_settings_base()
         self._persisted_timeout_setting = self._build_timeout_setting_base()
@@ -1228,7 +1228,7 @@ class ReplSession:
             registry = self._runtime.host_environment().registry
             registry.set_default_agent(self._host_settings_policy.build_runner(runner.value))
         # Restore live engine settings to the session's initial defaults so that
-        # promoted ``std.config`` effects from prior entries do not bleed past :reset.
+        # promoted ``std/config`` effects from prior entries do not bleed past :reset.
         self._update_engine_settings(
             strict_json=self._initial_strict_json,
             loop_limit=self._initial_loop_limit,

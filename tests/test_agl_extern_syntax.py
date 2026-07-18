@@ -165,7 +165,7 @@ class TestScope:
         graph = make_graph_from_files(
             tmp_path,
             {
-                "entry": "import lib.mod\nlib.mod::f(1)",
+                "entry": "open import lib/mod\nlib/mod::f(1)",
                 "lib/mod": "extern def f(x: int) -> int",
             },
         )
@@ -242,7 +242,7 @@ class TestPlacement:
         graph = make_graph_from_files(
             tmp_path,
             {
-                "entry": "import lib.mod\nlib.mod::f(1)",
+                "entry": "open import lib/mod\nlib/mod::f(1)",
                 "lib/mod": "extern def f(x: int) -> int",
             },
         )

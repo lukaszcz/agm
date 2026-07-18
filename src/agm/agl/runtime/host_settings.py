@@ -2,7 +2,7 @@
 
 The host-consumed engine settings (``runner``, ``log``, ``log-file``) are backed
 by live host services — the agent registry's default agent and the trace store.
-When a program writes one of these settings (via ``std.config::runner := ...`` or
+When a program writes one of these settings (via ``std/config::runner := ...`` or
 the equivalent bare form), the interpreter reflects the change into those live
 services through a :class:`HostSettingsReconfigurer`.
 

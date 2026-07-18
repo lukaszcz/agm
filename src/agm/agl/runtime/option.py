@@ -1,4 +1,4 @@
-"""Constructors for ``std.core::Option`` runtime values.
+"""Constructors for ``std/core::Option`` runtime values.
 
 Shared by the config-value decoder (:mod:`agm.agl.runtime.params`) and the
 agent-request effect builder (:mod:`agm.agl.eval.effects`) so the Option enum
@@ -15,7 +15,7 @@ _OPTION_NOMINAL = NominalId(STD_CORE_ID, "Option")
 
 
 def some_value(value: Value) -> EnumValue:
-    """Build a ``std.core::Option`` ``Some(value)`` runtime value."""
+    """Build a ``std/core::Option`` ``Some(value)`` runtime value."""
     return EnumValue(
         nominal=_OPTION_NOMINAL,
         display_name="Option",
@@ -25,7 +25,7 @@ def some_value(value: Value) -> EnumValue:
 
 
 def none_value() -> EnumValue:
-    """Build a ``std.core::Option`` ``None`` runtime value."""
+    """Build a ``std/core::Option`` ``None`` runtime value."""
     return EnumValue(
         nominal=_OPTION_NOMINAL,
         display_name="Option",

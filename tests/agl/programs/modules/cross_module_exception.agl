@@ -1,8 +1,7 @@
-# Cross-module exception construction: open-import and qualified forms.
+# Cross-module exception construction: open-import and forms.
 # Regression for the bug where ExceptionType has no module_id, causing the
 # field-kinds lookup to use module_id=None and fail for cross-module exceptions.
-import exc
-
+open import exc
 param mode: text
 
 # Open-import form: Boom and BoomDetail visible by unqualified name.

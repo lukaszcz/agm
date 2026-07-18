@@ -1,9 +1,9 @@
-"""Cross-entry persistence of ``std.config`` engine settings in the REPL.
+"""Cross-entry persistence of ``std/config`` engine settings in the REPL.
 
 AgL exposes the six engine settings as ``builtin var`` declarations in the
-``std.config`` stdlib module.  A REPL user reads a setting with
-``std.config::KEY`` and writes it with ``std.config::KEY := VALUE`` after an
-``import std.config``.  These tests assert that such writes persist across REPL
+``std/config`` stdlib module.  A REPL user reads a setting with
+``std/config::KEY`` and writes it with ``std/config::KEY := VALUE`` after an
+``import std/config``.  These tests assert that such writes persist across REPL
 entries with full parity for all six keys:
 
 * reading a setting in a later entry reflects the most recent earlier write, and
@@ -62,7 +62,7 @@ def _ok(session: ReplSession, text: str) -> EntryResult:
 
 def _read(session: ReplSession, key: str) -> Value:
     """Import-and-read *key*, returning the read value of a later-entry read."""
-    result = _ok(session, f"std.config::{key}")
+    result = _ok(session, f"std/config::{key}")
     assert result.value is not None
     return result.value
 
@@ -77,22 +77,22 @@ class TestCrossEntryPersistence:
 
     def test_max_iters_write_persists_two_entries_later(self) -> None:
         s = _session()
-        _ok(s, "import std.config")
-        _ok(s, "std.config::max-iters := 7")
+        _ok(s, "import std/config")
+        _ok(s, "std/config::max-iters := 7")
         _ok(s, "let unrelated = 1")
         assert _read(s, "max-iters") == IntValue(7)
 
     def test_strict_json_write_persists_two_entries_later(self) -> None:
         s = _session()
-        _ok(s, "import std.config")
-        _ok(s, "std.config::strict-json := true")
+        _ok(s, "import std/config")
+        _ok(s, "std/config::strict-json := true")
         _ok(s, "let unrelated = 1")
         assert _read(s, "strict-json") == BoolValue(True)
 
     def test_timeout_write_persists_two_entries_later(self) -> None:
         s = _session()
-        _ok(s, "import std.config")
-        _ok(s, 'std.config::timeout := Some("45s")')
+        _ok(s, "import std/config")
+        _ok(s, 'std/config::timeout := Some("45s")')
         _ok(s, "let unrelated = 1")
         value = _read(s, "timeout")
         assert isinstance(value, EnumValue)
@@ -103,22 +103,22 @@ class TestCrossEntryPersistence:
 
     def test_runner_write_persists_two_entries_later(self) -> None:
         s = _session()
-        _ok(s, "import std.config")
-        _ok(s, 'std.config::runner := "codex"')
+        _ok(s, "import std/config")
+        _ok(s, 'std/config::runner := "codex"')
         _ok(s, "let unrelated = 1")
         assert _read(s, "runner") == TextValue("codex")
 
     def test_log_write_persists_two_entries_later(self) -> None:
         s = _session()
-        _ok(s, "import std.config")
-        _ok(s, "std.config::log := true")
+        _ok(s, "import std/config")
+        _ok(s, "std/config::log := true")
         _ok(s, "let unrelated = 1")
         assert _read(s, "log") == BoolValue(True)
 
     def test_log_file_write_persists_two_entries_later(self) -> None:
         s = _session()
-        _ok(s, "import std.config")
-        _ok(s, 'std.config::log-file := Some("trace.jsonl")')
+        _ok(s, "import std/config")
+        _ok(s, 'std/config::log-file := Some("trace.jsonl")')
         _ok(s, "let unrelated = 1")
         value = _read(s, "log-file")
         assert isinstance(value, EnumValue)
@@ -136,8 +136,8 @@ class TestRuntimeLiveEffectCarryForward:
 
     def test_max_iters_write_caps_later_unguarded_loop(self) -> None:
         s = _session()
-        _ok(s, "import std.config")
-        _ok(s, "std.config::max-iters := 2")
+        _ok(s, "import std/config")
+        _ok(s, "std/config::max-iters := 2")
         _ok(s, "let unrelated = 1")
         # An unguarded loop that would run far past the cap must be cut short.
         result = s.eval_entry("var i = 0\ndo\n  i := i + 1\nuntil i >= 1000\ni")
@@ -152,8 +152,8 @@ class TestRuntimeLiveEffectCarryForward:
         r_lenient = _ok(s, 'let a: int = ask """how many"""')
         assert r_lenient.value == IntValue(42)
 
-        _ok(s, "import std.config")
-        _ok(s, "std.config::strict-json := true")
+        _ok(s, "import std/config")
+        _ok(s, "std/config::strict-json := true")
         _ok(s, "let unrelated = 1")
         # In strict mode the fenced reply is rejected in a later entry.
         result = s.eval_entry('let b: int = ask """how many"""')
@@ -168,11 +168,11 @@ class TestRuntimeLiveEffectCarryForward:
 
 
 class TestDefaultsAndSeeding:
-    """A session that never writes ``std.config`` reads the engine defaults."""
+    """A session that never writes ``std/config`` reads the engine defaults."""
 
     def test_untouched_session_reads_engine_defaults(self) -> None:
         s = _session()
-        _ok(s, "import std.config")
+        _ok(s, "import std/config")
         assert _read(s, "runner") == TextValue(DEFAULT_AGENT_RUNNER)
         assert _read(s, "log") == BoolValue(False)
         log_file = _read(s, "log-file")
@@ -186,16 +186,16 @@ class TestDefaultsAndSeeding:
 
     def test_host_timeout_seed_round_trips_without_disabling_live_timeout(self) -> None:
         s = ReplSession(stdlib_root=_STDLIB_ROOT, shell_exec_timeout=0.0000001)
-        _ok(s, "import std.config")
+        _ok(s, "import std/config")
 
         value = _read(s, "timeout")
         assert isinstance(value, EnumValue)
         assert value.fields["value"] == TextValue("0.0000001s")
-        _ok(s, "std.config::timeout := std.config::timeout")
+        _ok(s, "std/config::timeout := std/config::timeout")
         assert s._shell_exec_timeout == 0.0000001
 
         s.reset()
-        value = _ok(s, "import std.config\nstd.config::timeout").value
+        value = _ok(s, "import std/config\nstd/config::timeout").value
         assert isinstance(value, EnumValue)
         assert value.fields["value"] == TextValue("0.0000001s")
 
@@ -204,18 +204,18 @@ class TestDefaultsAndSeeding:
 
         engine_base = build_engine_config_base({"runner": "gpt", "log": True})
         s = _session(engine_base=engine_base)
-        _ok(s, "import std.config")
+        _ok(s, "import std/config")
         # A fresh session reads the host-provided base value, not the bare default.
         assert _read(s, "runner") == TextValue("gpt")
         assert _read(s, "log") == BoolValue(True)
 
     def test_reset_clears_host_consumed_write(self) -> None:
         s = _session()
-        _ok(s, "import std.config")
-        _ok(s, 'std.config::runner := "codex"')
+        _ok(s, "import std/config")
+        _ok(s, 'std/config::runner := "codex"')
         assert _read(s, "runner") == TextValue("codex")
         s.reset()
-        _ok(s, "import std.config")
+        _ok(s, "import std/config")
         assert _read(s, "runner") == TextValue(DEFAULT_AGENT_RUNNER)
 
 
@@ -229,15 +229,15 @@ class TestPartialFailureDiscipline:
 
     def test_write_before_failure_persists(self) -> None:
         s = _session()
-        _ok(s, "import std.config")
-        result = s.eval_entry('std.config::runner := "codex"\nlet z: decimal = 1 / 0')
+        _ok(s, "import std/config")
+        result = s.eval_entry('std/config::runner := "codex"\nlet z: decimal = 1 / 0')
         assert not result.ok
         assert _read(s, "runner") == TextValue("codex")
 
     def test_runtime_live_write_before_failure_persists(self) -> None:
         s = _session()
-        _ok(s, "import std.config")
-        result = s.eval_entry("std.config::max-iters := 2\nlet z: decimal = 1 / 0")
+        _ok(s, "import std/config")
+        result = s.eval_entry("std/config::max-iters := 2\nlet z: decimal = 1 / 0")
         assert not result.ok
         assert _read(s, "max-iters") == IntValue(2)
 
@@ -258,8 +258,8 @@ class TestLiveHostReconfiguration:
             resolve_trace_path=lambda enabled, log_file: None,
         )
         s = _session(default_agent=old_agent, host_settings_policy=policy)
-        _ok(s, "import std.config")
-        _ok(s, 'std.config::runner := "new-runner"')
+        _ok(s, "import std/config")
+        _ok(s, 'std/config::runner := "new-runner"')
 
         result = _ok(s, 'ask("which")')
         assert result.value == TextValue("new-runner")
@@ -277,8 +277,8 @@ class TestLiveHostReconfiguration:
             ),
         )
         s = _session(host_settings_policy=policy)
-        _ok(s, "import std.config")
-        _ok(s, f'std.config::log-file := Some("{trace_path}")')
+        _ok(s, "import std/config")
+        _ok(s, f'std/config::log-file := Some("{trace_path}")')
         _ok(s, 'print "later"')
 
         assert trace_path.exists()
@@ -294,9 +294,9 @@ class TestLiveHostReconfiguration:
             ),
         )
         s = _session(host_settings_policy=policy, trace_path=trace_path)
-        _ok(s, "import std.config")
+        _ok(s, "import std/config")
         _ok(s, 'print "traced"')
-        _ok(s, "std.config::log := false")
+        _ok(s, "std/config::log := false")
 
         result = _ok(s, 'print "untraced"')
         assert result.trace_path is None

@@ -853,7 +853,7 @@ BUILTIN_PRELUDE_TYPE_NAMES: frozenset[str] = frozenset(BUILTIN_PRELUDE_TYPES)
 
 # Legacy built-in types kept for compatibility with already-compiled tests and
 # internal APIs.  They remain available as nominal types, but their constructors
-# are not exported into source scope because std.core replaces this surface.
+# are not exported into source scope because std/core replaces this surface.
 COMPATIBILITY_PRELUDE_TYPE_NAMES: frozenset[str] = frozenset(
     {"OutputContract", "OutputContractOption"}
 )

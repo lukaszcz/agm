@@ -48,7 +48,7 @@ def resolve_log_decision(
 
     Precedence (highest first): CLI > config file.
 
-    A program's own ``std.config::log``/``log-file`` write is deliberately not a
+    A program's own ``std/config::log``/``log-file`` write is deliberately not a
     layer here.  It is not resolved at startup at all: it takes effect at
     runtime, from its program point onward, through the host settings
     reconfigurer, and it overrides whichever value this function chose.  So for

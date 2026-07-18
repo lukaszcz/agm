@@ -198,7 +198,7 @@ class TestGraphLowering:
         graph = make_graph_from_files(
             tmp_path,
             {
-                "entry": "import lib.mod\nlib.mod::f(1)",
+                "entry": "open import lib/mod\nlib/mod::f(1)",
                 "lib/mod": "extern def f(x: int) -> int",
             },
         )
@@ -241,7 +241,7 @@ class TestDryRunInventory:
         write_companion_file(root, "lib/mod", "def f(x):\n    return x + 1\n")
         driver = PipelineDriver()
         prepared = PipelineDriver.prepare_program(
-            "import lib.mod\nlib.mod::f(1)",
+            "open import lib/mod\nlib/mod::f(1)",
             entry_path=None,
             roots=_roots(root),
             default_stdlib=False,

@@ -198,7 +198,7 @@ class TestResolvedProgramShape:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "def foo() -> int = 42",
             },
         )
@@ -212,7 +212,7 @@ class TestResolvedProgramShape:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "def pub() -> int = 1\nprivate def priv() -> int = 2",
             },
         )
@@ -227,7 +227,7 @@ class TestResolvedProgramShape:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "def foo() -> int = 1",
             },
         )
@@ -258,7 +258,7 @@ class TestOpenImport:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\nlet x = foo()",
+                "entry": "open import mylib\nlet x = foo()",
                 "mylib": "def foo() -> int = 42",
             },
         )
@@ -306,7 +306,7 @@ class TestOpenImport:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib hiding foo\nlet x = bar()",
+                "entry": "open import mylib hiding foo\nlet x = bar()",
                 "mylib": "def foo() -> int = 1\ndef bar() -> int = 2",
             },
         )
@@ -323,7 +323,7 @@ class TestOpenImport:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib hiding foo\nlet x = foo()",
+                "entry": "open import mylib hiding foo\nlet x = foo()",
                 "mylib": "def foo() -> int = 1\ndef bar() -> int = 2",
             },
         )
@@ -358,7 +358,7 @@ class TestOpenImport:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib qualified\nlet x = foo()",
+                "entry": "import mylib\nlet x = foo()",
                 "mylib": "def foo() -> int = 42",
             },
         )
@@ -370,7 +370,7 @@ class TestOpenImport:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib qualified\nlet x = mylib::foo()",
+                "entry": "import mylib\nlet x = mylib::foo()",
                 "mylib": "def foo() -> int = 42",
             },
         )
@@ -389,7 +389,7 @@ class TestOpenImport:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib as M\nlet x = M::foo()",
+                "entry": "open import mylib as M\nlet x = M::foo()",
                 "mylib": "def foo() -> int = 42",
             },
         )
@@ -408,7 +408,7 @@ class TestOpenImport:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib as M\nlet x = foo()",
+                "entry": "open import mylib as M\nlet x = foo()",
                 "mylib": "def foo() -> int = 42",
             },
         )
@@ -432,7 +432,7 @@ class TestQualifiedAccess:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib qualified using foo\nlet x = mylib::bar()",
+                "entry": "import mylib using foo\nlet x = mylib::bar()",
                 "mylib": "def foo() -> int = 1\ndef bar() -> int = 2",
             },
         )
@@ -444,7 +444,7 @@ class TestQualifiedAccess:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib qualified using foo\nlet x = mylib::foo()",
+                "entry": "import mylib using foo\nlet x = mylib::foo()",
                 "mylib": "def foo() -> int = 42",
             },
         )
@@ -481,7 +481,7 @@ class TestClashDeferred:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import libA\nimport libB\nlet x = foo()",
+                "entry": "open import libA\nopen import libB\nlet x = foo()",
                 "libA": "def foo() -> int = 1",
                 "libB": "def foo() -> int = 2",
             },
@@ -494,7 +494,7 @@ class TestClashDeferred:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import libA\nimport libB\nlet x = foo()",
+                "entry": "open import libA\nopen import libB\nlet x = foo()",
                 "libA": "def foo() -> int = 1",
                 "libB": "def foo() -> int = 2",
             },
@@ -565,26 +565,24 @@ class TestStaticImportErrors:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import libA as X\nimport libB as X\n()",
+                "entry": "open import libA as X\nopen import libB as X\n()",
                 "libA": "def foo() -> int = 1",
                 "libB": "def bar() -> int = 2",
             },
         )
-        with pytest.raises(AglScopeError, match="X"):
-            resolve_program(graph)
+        assert resolve_program(graph).entry_id == graph.entry_id
 
     def test_alias_root_collision(self, tmp_path: Path) -> None:
         """'import libA' + 'import libB as libA' → alias-root collision."""
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import libA\nimport libB as libA\n()",
+                "entry": "open import libA\nopen import libB as libA\n()",
                 "libA": "def foo() -> int = 1",
                 "libB": "def bar() -> int = 2",
             },
         )
-        with pytest.raises(AglScopeError, match="libA"):
-            resolve_program(graph)
+        assert resolve_program(graph).entry_id == graph.entry_id
 
 
 # ---------------------------------------------------------------------------
@@ -614,7 +612,7 @@ class TestSelfReference:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "def bar() -> int = 1\ndef baz() -> int = ::bar()",
             },
         )
@@ -714,7 +712,7 @@ class TestPrivateBoundary:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "private def secret() -> int = 1",
             },
         )
@@ -727,7 +725,7 @@ class TestPrivateBoundary:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\nlet x = secret()",
+                "entry": "open import mylib\nlet x = secret()",
                 "mylib": "private def secret() -> int = 1",
             },
         )
@@ -744,7 +742,7 @@ class TestPrivateBoundary:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\nlet x = mylib::secret()",
+                "entry": "open import mylib\nlet x = mylib::secret()",
                 "mylib": "def pub() -> int = 1\nprivate def secret() -> int = 2",
             },
         )
@@ -762,7 +760,7 @@ class TestPrivateBoundary:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\nlet x = mylib::secret()",
+                "entry": "open import mylib\nlet x = mylib::secret()",
                 "mylib": "def pub() -> int = 1\nprivate def secret() -> int = 2",
             },
         )
@@ -785,7 +783,7 @@ class TestPrivateBoundary:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import libA\nimport libB\nlet x = libA::secret()",
+                "entry": "open import libA\nopen import libB\nlet x = libA::secret()",
                 "libA": "def pub() -> int = 1",
                 "libB": "def other() -> int = 2\nprivate def secret() -> int = 99",
             },
@@ -810,25 +808,29 @@ class TestBuiltinVarPlacement:
             {"entry": "builtin var max-iters: int\n()"},
         )
 
-        with pytest.raises(AglScopeError, match="std.config"):
+        with pytest.raises(AglScopeError, match="std/config"):
             resolve_program(graph)
 
     def test_arbitrary_library_declaration_rejected(self, tmp_path: Path) -> None:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "builtin var max-iters: int",
             },
         )
 
-        with pytest.raises(AglScopeError, match="std.config"):
+        with pytest.raises(AglScopeError, match="std/config"):
             resolve_program(graph)
 
     def test_std_config_declarations_and_qualified_assignment_resolve(self, tmp_path: Path) -> None:
         graph = _make_graph_from_files(
             tmp_path,
-            {"entry": ("import std.config\nstd.config::max-iters := 3\nstd.config::max-iters")},
+            {
+                "entry": (
+                    "open import std/config\nstd/config::max-iters := 3\nstd/config::max-iters"
+                )
+            },
         )
 
         resolved = resolve_program(graph)
@@ -850,7 +852,7 @@ class TestDeclarationOnly:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "let x = 1",
             },
         )
@@ -862,7 +864,7 @@ class TestDeclarationOnly:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "var x = 1",
             },
         )
@@ -874,7 +876,7 @@ class TestDeclarationOnly:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "def foo() -> int = 1\n42",
             },
         )
@@ -886,7 +888,7 @@ class TestDeclarationOnly:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "def foo() -> int = 42",
             },
         )
@@ -907,7 +909,7 @@ class TestEntryOnlyConstructs:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": 'agent bot = "claude"',
             },
         )
@@ -919,7 +921,7 @@ class TestEntryOnlyConstructs:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "param x",
             },
         )
@@ -931,7 +933,7 @@ class TestEntryOnlyConstructs:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "program myname",
             },
         )
@@ -961,8 +963,8 @@ class TestHeaderOnlyImports:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
-                "mylib": "def foo() -> int = 1\nimport libB",
+                "entry": "open import mylib\n()",
+                "mylib": "def foo() -> int = 1\nopen import libB",
                 "libB": "def bar() -> int = 2",
             },
         )
@@ -973,8 +975,8 @@ class TestHeaderOnlyImports:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
-                "mylib": "infixl |> at 12\nimport libB\ndef |>(x: int, y: int) -> int = x",
+                "entry": "open import mylib\n()",
+                "mylib": "infixl |> at 12\nopen import libB\ndef |>(x: int, y: int) -> int = x",
                 "libB": "def bar() -> int = 2",
             },
         )
@@ -986,8 +988,8 @@ class TestHeaderOnlyImports:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
-                "mylib": "import libB\ndef foo() -> int = bar()",
+                "entry": "open import mylib\n()",
+                "mylib": "open import libB\ndef foo() -> int = bar()",
                 "libB": "def bar() -> int = 42",
             },
         )
@@ -1001,7 +1003,7 @@ class TestHeaderOnlyImports:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\ndef helper() -> int = foo()\n()",
+                "entry": "open import mylib\ndef helper() -> int = foo()\n()",
                 "mylib": "def foo() -> int = 42",
             },
         )
@@ -1026,7 +1028,7 @@ class TestWildcardImports:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import foo.*\nlet a = alpha()\nlet b = beta()",
+                "entry": "open import foo/*\nlet a = alpha()\nlet b = beta()",
                 "foo/alpha": "def alpha() -> int = 1",
                 "foo/beta": "def beta() -> int = 2",
             },
@@ -1040,12 +1042,12 @@ class TestWildcardImports:
         ref = result.modules[ENTRY_ID].resolved.resolution[alpha_var.node_id]
         assert ref.module_id == ModuleId.from_path("foo/alpha")
 
-    def test_wildcard_as_reroots_qualifier(self, tmp_path: Path) -> None:
-        "'import foo.* as F' makes 'F.alpha::alpha()' accessible via qualifier."
+    def test_wildcard_as_forms_a_member_filtered_facade(self, tmp_path: Path) -> None:
+        "'import foo/* as F' makes 'F::alpha()' accessible via the facade."
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import foo.* as F\nlet a = F.alpha::alpha()",
+                "entry": "import foo/* as F\nlet a = F::alpha()",
                 "foo/alpha": "def alpha() -> int = 1",
             },
         )
@@ -1062,11 +1064,11 @@ class TestWildcardImports:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import lib qualified as Color\nenum Color | Red\nlet x = Color::Red\nx",
-                "lib": "def f() -> int = 1",
+                "entry": "import lib as Color\nenum Color | Red\nlet x = Color::Red\nx",
+                "lib": "def Red() -> int = 1",
             },
         )
-        with pytest.raises(AglScopeError, match="both a type name and an import handle"):
+        with pytest.raises(AglScopeError, match="both a type name and a module route"):
             resolve_program(graph)
 
     def test_wildcard_compatible_overlap_idempotent(self, tmp_path: Path) -> None:
@@ -1074,7 +1076,7 @@ class TestWildcardImports:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import foo.*\nimport foo.alpha\nlet x = alpha()",
+                "entry": "open import foo/*\nopen import foo/alpha\nlet x = alpha()",
                 "foo/alpha": "def alpha() -> int = 1",
             },
         )
@@ -1092,7 +1094,7 @@ class TestWildcardImports:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import foo.*\nimport bar.*\nlet x = common()",
+                "entry": "open import foo/*\nopen import bar/*\nlet x = common()",
                 "foo/sub": "def common() -> int = 1",
                 "bar/sub": "def common() -> int = 2",
             },
@@ -1112,8 +1114,8 @@ class TestCrossFileMutualRecursion:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import modA\ncallA()",
-                "modA": "import modB\ndef callA() -> int = callB()",
+                "entry": "open import modA\ncallA()",
+                "modA": "open import modB\ndef callA() -> int = callB()",
                 "modB": "def callB() -> int = 42",
             },
         )
@@ -1139,9 +1141,9 @@ class TestCrossFileMutualRecursion:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import modA\nimport modB\nfuncA()",
-                "modA": "import modB\ndef funcA() -> int = funcB()",
-                "modB": "import modA\ndef funcB() -> int = funcA()",
+                "entry": "open import modA\nopen import modB\nfuncA()",
+                "modA": "open import modB\ndef funcA() -> int = funcB()",
+                "modB": "open import modA\ndef funcB() -> int = funcA()",
             },
         )
         result = resolve_program(graph)
@@ -1161,7 +1163,7 @@ class TestCrossFileMutualRecursion:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import modA\nmake()",
+                "entry": "open import modA\nmake()",
                 "modA": "def f(x: int) -> int = x\ndef make() -> int = f(?)",
             },
         )
@@ -1199,7 +1201,7 @@ class TestBindingRefModuleId:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\nlet y = foo()",
+                "entry": "open import mylib\nlet y = foo()",
                 "mylib": "def foo() -> int = 1",
             },
         )
@@ -1217,7 +1219,7 @@ class TestBindingRefModuleId:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "def foo() -> int = 1\ndef bar() -> int = foo()",
             },
         )
@@ -1305,7 +1307,7 @@ class TestAssignStmtModuleId:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "def setup() -> unit = ()\nx := 2",
             },
         )
@@ -1324,7 +1326,7 @@ class TestTypeDeclarationsInModules:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "record Point\n  x: int\n  y: int",
             },
         )
@@ -1337,7 +1339,7 @@ class TestTypeDeclarationsInModules:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "private record Hidden\n  x: int",
             },
         )
@@ -1350,7 +1352,7 @@ class TestTypeDeclarationsInModules:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "enum Color\n  | Red\n  | Green\n  | Blue",
             },
         )
@@ -1363,7 +1365,7 @@ class TestTypeDeclarationsInModules:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "type MyInt = int",
             },
         )
@@ -1377,7 +1379,7 @@ class TestTypeDeclarationsInModules:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\nlet x = mylib::secret()",
+                "entry": "open import mylib\nlet x = mylib::secret()",
                 "mylib": "def pub() -> int = 1\nprivate def secret() -> int = 2",
             },
         )
@@ -1410,7 +1412,7 @@ class TestSelfReferenceInNonEntryModule:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "def foo() -> int = ::noname()",
             },
         )
@@ -1429,7 +1431,7 @@ class TestModuleQualifiedCall:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import modA\nmodA::callA()",
+                "entry": "open import modA\nmodA::callA()",
                 "modA": "def callA() -> int = 42",
             },
         )
@@ -1458,7 +1460,7 @@ class TestFieldAccessCoverage:
                 "mylib": (
                     "enum Color\n  | Red\n  | Blue\ndef getDefault() -> Color = ::Color::Red"
                 ),
-                "entry": "import mylib\nmylib::getDefault()",
+                "entry": "open import mylib\nmylib::getDefault()",
             },
         )
         result = resolve_program(graph)
@@ -1474,7 +1476,7 @@ class TestFieldAccessCoverage:
             tmp_path,
             {
                 "mylib": "enum Color\n  | Red\n  | Blue",
-                "entry": "import mylib\nlet x = notimported::Color::Red\nx",
+                "entry": "open import mylib\nlet x = notimported::Color::Red\nx",
             },
         )
         with pytest.raises(AglScopeError):
@@ -1486,7 +1488,7 @@ class TestFieldAccessCoverage:
             tmp_path,
             {
                 "mylib": "enum Color\n  | Red\n  | Blue",
-                "entry": "import mylib qualified\nlet x = mylib::NonExistent::Red\nx",
+                "entry": "open import mylib\nlet x = mylib::NonExistent::Red\nx",
             },
         )
         with pytest.raises(AglScopeError):
@@ -1497,7 +1499,7 @@ class TestFieldAccessCoverage:
             tmp_path,
             {
                 "mylib": "private enum Hidden\n  | Red\ndef public() -> int = 1",
-                "entry": "import mylib qualified\nlet x = mylib::Hidden::Red\nx",
+                "entry": "open import mylib\nlet x = mylib::Hidden::Red\nx",
             },
         )
         with pytest.raises(AglScopeError, match="private"):
@@ -1508,7 +1510,7 @@ class TestFieldAccessCoverage:
             tmp_path,
             {
                 "mylib": "type Alias = int",
-                "entry": "import mylib qualified\nlet x = mylib::Alias::Ctor\nx",
+                "entry": "open import mylib\nlet x = mylib::Alias::Ctor\nx",
             },
         )
         with pytest.raises(AglScopeError, match="constructible"):
@@ -1527,7 +1529,7 @@ class TestFieldAccessCoverage:
                     "record Result\n  value: int\ndef compute(n: int) -> Result = Result(value = n)"
                 ),
                 "entry": (
-                    "import mylib qualified\n"
+                    "open import mylib\n"
                     # mylib::compute is a function, not a type — falls through to value resolution.
                     "mylib::compute.value"
                 ),
@@ -1550,7 +1552,7 @@ class TestFieldAccessCoverage:
             tmp_path,
             {
                 "mylib": "def foo() -> int = ::NonExistent::Red",
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
             },
         )
         with pytest.raises(AglScopeError):
@@ -1568,7 +1570,7 @@ class TestExceptionDefInGraph:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "exception MyErr(msg: text)",
             },
         )
@@ -1581,7 +1583,7 @@ class TestExceptionDefInGraph:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "exception MyErr(msg: text)",
             },
         )
@@ -1594,7 +1596,7 @@ class TestExceptionDefInGraph:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "private exception HiddenErr(code: int)",
             },
         )
@@ -1607,7 +1609,7 @@ class TestExceptionDefInGraph:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": 'import mylib\nMyErr(msg = "oops")',
+                "entry": 'open import mylib\nMyErr(msg = "oops")',
                 "mylib": "exception MyErr(msg: text)",
             },
         )
@@ -1633,7 +1635,7 @@ class TestExceptionDefInGraph:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": ("enum Status\n  | Ok\n  | Conflict\nexception Conflict(msg: text)\n"),
             },
         )
@@ -1684,7 +1686,7 @@ class TestResolveGraphReplSeams:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "def foo() -> int = 42",
             },
         )
@@ -1726,7 +1728,7 @@ class TestResolveGraphReplSeams:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "def foo() -> int = helper",
             },
         )
@@ -1760,7 +1762,7 @@ class TestResolveGraphReplSeams:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "def foo() -> int = 42",
             },
         )
@@ -1781,7 +1783,7 @@ class TestExportDecl:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import facade\n()",
+                "entry": "open import facade\n()",
                 "facade": "export lib",
                 "lib": "def foo() -> int = 1\nprivate def _bar() -> int = 2",
             },
@@ -1799,7 +1801,7 @@ class TestExportDecl:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import b\nlet x = foo()",
+                "entry": "open import b\nlet x = foo()",
                 "b": "export a",
                 "a": "def foo() -> int = 42",
             },
@@ -1815,7 +1817,7 @@ class TestExportDecl:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import facade\n()",
+                "entry": "open import facade\n()",
                 "facade": "export lib using foo",
                 "lib": "def foo() -> int = 1\ndef bar() -> int = 2",
             },
@@ -1833,7 +1835,7 @@ class TestExportDecl:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import facade\n()",
+                "entry": "open import facade\n()",
                 "facade": "export lib using foo as plus",
                 "lib": "def foo() -> int = 1",
             },
@@ -1851,7 +1853,7 @@ class TestExportDecl:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import facade\n()",
+                "entry": "open import facade\n()",
                 "facade": "export lib hiding secret",
                 "lib": "def foo() -> int = 1\ndef secret() -> int = 0",
             },
@@ -1869,8 +1871,8 @@ class TestExportDecl:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import facade\n()",
-                "facade": "import lib\ndef local() -> int = 1",
+                "entry": "open import facade\n()",
+                "facade": "open import lib\ndef local() -> int = 1",
                 "lib": "def foo() -> int = 42",
             },
         )
@@ -1885,7 +1887,7 @@ class TestExportDecl:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import a\nlet x = foo()",
+                "entry": "open import a\nlet x = foo()",
                 "a": "export b",
                 "b": "export c",
                 "c": "def foo() -> int = 99",
@@ -1902,8 +1904,8 @@ class TestExportDecl:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import facade\n()",
-                "facade": "export lib.*",
+                "entry": "open import facade\n()",
+                "facade": "export lib/*",
                 "lib/ops": "def add() -> int = 1",
             },
         )
@@ -1919,7 +1921,7 @@ class TestExportDecl:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import facade\n()",
+                "entry": "open import facade\n()",
                 "facade": "export a\nexport b",
                 "a": "def foo() -> int = 1",
                 "b": "def foo() -> int = 2",
@@ -1933,7 +1935,7 @@ class TestExportDecl:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import a\nlet x = foo()",
+                "entry": "open import a\nlet x = foo()",
                 "a": "export b using foo",
                 "b": "export c",
                 "c": "def foo() -> int = 99",
@@ -1950,7 +1952,7 @@ class TestExportDecl:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import facade\nlet x = foo()\nlet y = facade::foo()",
+                "entry": "open import facade\nlet x = foo()\nlet y = facade::foo()",
                 "facade": "export lib",
                 "lib": "def foo() -> int = 42",
             },
@@ -1981,7 +1983,7 @@ def test_bare_pattern_constructor_shared_spelling_defers_to_scrutinee(tmp_path: 
         {
             "foreign": "enum Foreign\n  | same",
             "entry": (
-                "import foreign\n"
+                "open import foreign\n"
                 "enum Local\n  | same\n"
                 "let value: Local = Local::same\n"
                 "case value of | same => 1"

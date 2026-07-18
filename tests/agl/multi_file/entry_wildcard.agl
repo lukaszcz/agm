@@ -1,4 +1,4 @@
-import utils.*
+open import utils/*
 let n = add(3, 4)
 let msg = greet("World")
 print n

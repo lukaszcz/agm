@@ -705,7 +705,7 @@ class TestBuiltinVarPlacement:
     def test_entry_module_declaration_rejected(self) -> None:
         err = reject_scope("builtin var max-iters: int\n()")
         _, message = diag(err)
-        assert "std.config" in message
+        assert "std/config" in message
 
 
 # ---------------------------------------------------------------------------
@@ -2591,7 +2591,7 @@ class TestImportDeclScope:
 
     def test_import_decl_does_not_raise(self) -> None:
         """A bare import declaration resolves without a scope error."""
-        r = parse_and_resolve("import foo.bar\n1")
+        r = parse_and_resolve("open import foo/bar\n1")
         assert r  # no exception
 
     def test_import_with_alias_does_not_raise(self) -> None:
@@ -2599,7 +2599,7 @@ class TestImportDeclScope:
         assert r
 
     def test_import_wildcard_does_not_raise(self) -> None:
-        r = parse_and_resolve("import foo.*\n1")
+        r = parse_and_resolve("import foo/*\n1")
         assert r
 
     def test_import_using_does_not_raise(self) -> None:

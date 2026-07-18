@@ -1,5 +1,5 @@
 # Test: engine-setting binding is readable at runtime
-import std.config
-std.config::max-iters := 5
-let n = std.config::max-iters
+import std/config
+std/config::max-iters := 5
+let n = std/config::max-iters
 print n

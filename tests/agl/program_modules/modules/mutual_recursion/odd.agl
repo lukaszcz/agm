@@ -1,5 +1,4 @@
 # Library module forming a cyclic import with `even`: `is_odd` calls `is_even`
 # from the imported module, which in turn calls back into `is_odd`.
-import even
-
+open import even
 def is_odd(n: int) -> bool = if n == 0 => false else => is_even(n - 1)

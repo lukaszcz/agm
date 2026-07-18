@@ -4,9 +4,8 @@
 # and selectively (`using to_int_or`), feeds host params and an agent response
 # through the imported casts, and catches the CastError / JsonParseError that the
 # imported `parse_point` raises across the module boundary.
-import parsing qualified as p
+import parsing as p
 import parsing using to_int_or
-
 agent source
 
 param amount

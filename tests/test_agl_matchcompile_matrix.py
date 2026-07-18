@@ -910,7 +910,7 @@ def test_imported_generic_signature_is_canonical_during_matrix_specialization(
         {
             "lib": "enum Choice[T]\n  | absent\n  | present(value: T, note: text)",
             "entry": (
-                "import lib\n"
+                "open import lib\n"
                 'let value: Choice[int] = present(value = 1, note = "x")\n'
                 "case value of | present(value = _) => 1 | absent => 0"
             ),

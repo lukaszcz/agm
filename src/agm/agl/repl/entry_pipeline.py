@@ -538,7 +538,7 @@ class EntryPipeline:
         # the entry; that is a transient I/O condition, not a destination the
         # session should adopt.  Keeping the session path lets the next entry
         # retry at the original destination.  A store that settled into no-log
-        # mode deliberately (``std.config::log := false``) does persist ``None``.
+        # mode deliberately (``std/config::log := false``) does persist ``None``.
         if not trace.disabled:
             self._ctx._trace_path = trace.path
 

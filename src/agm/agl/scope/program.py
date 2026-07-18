@@ -202,8 +202,8 @@ def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[str, QNa
             if not item.is_private:
                 result[item.name] = (self_id, item.name)
         elif isinstance(item, BuiltinVarDecl):
-            # The resolver admits these only in ``std.config``; its engine
-            # settings are public so callers can use ``std.config::name``.
+            # The resolver admits these only in ``std/config``; its engine
+            # settings are public so callers can use ``std/config::name``.
             result[item.name] = (self_id, item.name)
     return result
 
@@ -446,7 +446,7 @@ def resolve_program(
                     )
                     decl_info[key] = (item.node_id, item.span, kind)
             elif isinstance(item, BuiltinVarDecl):
-                # The resolver admits this declaration only in ``std.config``.
+                # The resolver admits this declaration only in ``std/config``.
                 # Record its mutable kind so qualified reads and writes resolve.
                 key = (mid, item.name)
                 decl_info[key] = (item.node_id, item.span, BinderKind.builtin_var_binding)

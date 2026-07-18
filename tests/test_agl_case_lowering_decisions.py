@@ -14,6 +14,7 @@ from agm.agl.ir import (
     IrEnumCaseKey,
     IrLiteralCaseKey,
     IrLiteralKind,
+    IrLoad,
     IrSequence,
 )
 from agm.agl.lower import lower_module
@@ -69,6 +70,25 @@ def test_wildcard_case_still_binds_root_subject_before_leaf() -> None:
     assert not program.symbols[root_binding.symbol].mutable
     assert program.symbols[root_binding.symbol].public_name is None
     assert not isinstance(leaf, IrCase)
+
+
+def test_as_patterns_lower_every_chained_binder_at_the_matched_occurrence() -> None:
+    program = _lower(
+        "def select(value: int) -> int = case value of | 0 as captured => captured | _ => 0\n"
+        "let value = 0\n"
+        "let result = case value of | 0 as first as second => first + second | _ => select(value)\n"
+        "()"
+    )
+    lowered = _public_binding(program, "result").value
+    assert isinstance(lowered, IrSequence)
+    switch = lowered.items[1]
+    assert isinstance(switch, IrCase)
+    body = switch.arms[0].body
+    assert isinstance(body, IrSequence)
+    bindings = [item for item in body.items if isinstance(item, IrBind)]
+    assert len(bindings) == 2
+    assert all(isinstance(binding.value, IrLoad) for binding in bindings)
+    assert bindings[0].value.symbol == bindings[1].value.symbol
 
 
 def test_enum_arm_binds_only_demanded_immediate_field_for_nested_switch() -> None:

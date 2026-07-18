@@ -4,7 +4,7 @@ The match compiler turns every checked source `case` into an immutable decision 
 
 ## Compilation Model
 
-Source patterns are normalized into typed pattern matrices, and compilation decomposes the matrices into a decision DAG: it preserves source priority while choosing tests with a deterministic heuristic (the `qba` composite from Maranget's decision-tree paper), and shares decision nodes rather than expanding paths, so compiled decisions stay compact even for overlapping patterns. Enum and boolean domains use their complete checked signatures from the type table; scalar and type-variable domains remain open.
+Source patterns are normalized into typed pattern matrices, retaining every binder for each matched occurrence, and compilation decomposes the matrices into a decision DAG: it preserves source priority while choosing tests with a deterministic heuristic (the `qba` composite from Maranget's decision-tree paper), and shares decision nodes rather than expanding paths, so compiled decisions stay compact even for overlapping patterns. Enum and boolean domains use their complete checked signatures from the type table; scalar and type-variable domains remain open.
 
 ## Diagnostics Cannot Disagree with Execution
 

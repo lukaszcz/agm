@@ -178,6 +178,7 @@ from agm.agl.semantics.types import (
 )
 from agm.agl.syntax.nodes import (
     AgentDecl,
+    AsPattern,
     AssignStmt,
     AssignTarget,
     BinaryOp,
@@ -523,6 +524,9 @@ class _Lowerer:
             case VarPattern():
                 if pattern.node_id not in self._checked.resolved.bare_variant_patterns:
                     out.add(pattern.node_id)
+            case AsPattern():
+                out.add(pattern.node_id)
+                self._pattern_binding_ids(pattern.pattern, out)
             case ConstructorPattern():
                 for p in pattern.positional:
                     self._pattern_binding_ids(p, out)

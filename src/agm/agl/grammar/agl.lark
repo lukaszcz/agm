@@ -682,22 +682,23 @@ dict_entry: template COLON expr     -> dict_entry_str
 // Patterns
 // ---------------------------------------------------------------------------
 
-// pattern: wildcard | literal | var_binder | constructor_pattern
-// Disambiguation:
+// Pattern `as` binders wrap the complete preceding pattern and associate left.
+// Disambiguation of pattern_atom:
 //   name with value "_" → wildcard (handled in AstBuilder.pat_var_or_wild)
 //   qual_prefix type_qual? name + optional fields → qualified constructor pattern
 //   name LPAR ... RPAR → unqualified constructor pattern with payload
 //   name (other) → var binder or bare constructor
 //   literal → literal pattern
-pattern: qual_prefix type_qual? name (LPAR pattern_fields? RPAR)? -> pat_qual_constructor
-       | name LPAR pattern_fields? RPAR                     -> pat_constructor
-       | name                                               -> pat_var_or_wild
-       | INT                                                -> pat_lit_int
-       | DECIMAL                                            -> pat_lit_decimal
-       | "true"                                             -> pat_lit_true
-       | "false"                                            -> pat_lit_false
-       | "null"                                             -> pat_lit_null
-       | template                                           -> pat_lit_str
+pattern: pattern_atom ("as" name)* -> pat_as
+pattern_atom: qual_prefix type_qual? name (LPAR pattern_fields? RPAR)? -> pat_qual_constructor
+            | name LPAR pattern_fields? RPAR                     -> pat_constructor
+            | name                                               -> pat_var_or_wild
+            | INT                                                -> pat_lit_int
+            | DECIMAL                                            -> pat_lit_decimal
+            | "true"                                             -> pat_lit_true
+            | "false"                                            -> pat_lit_false
+            | "null"                                             -> pat_lit_null
+            | template                                           -> pat_lit_str
 
 pattern_fields: pattern_field (COMMA pattern_field)* COMMA?
 

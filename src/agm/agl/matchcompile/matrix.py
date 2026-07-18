@@ -128,9 +128,10 @@ def _canonical_constructor(
 
 def _cell_binder_ids(cell: PatternCell) -> tuple[int, ...]:
     if isinstance(cell, WildcardCell):
-        return () if cell.binder is None else (cell.binder.node_id,)
-    return tuple(
-        binder_id for argument in cell.arguments for binder_id in _cell_binder_ids(argument)
+        return tuple(binder.node_id for binder in cell.binders)
+    return (
+        *(binder.node_id for binder in cell.binders),
+        *(binder_id for argument in cell.arguments for binder_id in _cell_binder_ids(argument)),
     )
 
 
@@ -432,14 +433,15 @@ def head_constructors(matrix: PatternMatrix, column: int) -> tuple[Constructor, 
     return matrix.column_profiles[column].heads
 
 
-def _migrate_binder(
-    row: MatrixRow, cell: WildcardCell, occurrence: Occurrence
+def _migrate_binders(
+    row: MatrixRow, cell: PatternCell, occurrence: Occurrence
 ) -> tuple[BinderAssignment, ...]:
-    if cell.binder is None:
+    binders = cell.binders
+    if not binders:
         return row.binder_assignments
     return (
         *row.binder_assignments,
-        BinderAssignment(occurrence=occurrence.id, binder=cell.binder),
+        *(BinderAssignment(occurrence=occurrence.id, binder=binder) for binder in binders),
     )
 
 
@@ -479,13 +481,13 @@ def specialize(
         cell = row.cells[column]
         if isinstance(cell, ConstructorCell):
             replacement = cell.arguments
-            assignments = row.binder_assignments
+            assignments = _migrate_binders(row, cell, selected)
         else:
             replacement = tuple(
                 WildcardCell(binder=None, provenance=cell.provenance)
                 for _ in range(canonical.arity)
             )
-            assignments = _migrate_binder(row, cell, selected)
+            assignments = _migrate_binders(row, cell, selected)
         rows.append(
             MatrixRow(
                 cells=(*row.cells[:column], *replacement, *row.cells[column + 1 :]),
@@ -532,7 +534,7 @@ def default_matrix(matrix: PatternMatrix, column: int) -> PatternMatrix:
             action_id=row.action_id,
             source_index=row.source_index,
             source_pattern_id=row.source_pattern_id,
-            binder_assignments=_migrate_binder(row, wildcard, selected),
+            binder_assignments=_migrate_binders(row, wildcard, selected),
         )
         for row in matrix.rows
         if isinstance((wildcard := row.cells[column]), WildcardCell)

@@ -30,6 +30,7 @@ from agm.agl.semantics.types import (
     UnitType,
 )
 from agm.agl.syntax.nodes import (
+    AsPattern,
     BoolLit,
     Case,
     ConstructorPattern,
@@ -298,6 +299,22 @@ def _canonical_literal(pattern: LiteralPattern, subject_type: Type) -> Construct
     )
 
 
+def _add_as_binder(cell: PatternCell, binder: BinderProvenance) -> PatternCell:
+    """Attach an as-pattern binder to the occurrence represented by *cell*."""
+    if isinstance(cell, WildcardCell):
+        return WildcardCell(
+            binder=cell.binder,
+            provenance=cell.provenance,
+            as_binders=(*cell.as_binders, binder),
+        )
+    return ConstructorCell(
+        constructor=cell.constructor,
+        arguments=cell.arguments,
+        provenance=cell.provenance,
+        binders=(*cell.binders, binder),
+    )
+
+
 def normalize_pattern(
     pattern: Pattern,
     subject_type: Type,
@@ -308,6 +325,11 @@ def normalize_pattern(
     match pattern:
         case WildcardPattern():
             return WildcardCell(binder=None, provenance=provenance)
+        case AsPattern(pattern=inner, node_id=node_id, name=name):
+            return _add_as_binder(
+                normalize_pattern(inner, subject_type, checked),
+                BinderProvenance(node_id=node_id, name=name, span=pattern.span),
+            )
         case VarPattern(node_id=node_id, name=name):
             if node_id not in checked.resolved.bare_variant_patterns:
                 return WildcardCell(

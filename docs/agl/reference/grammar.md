@@ -295,7 +295,8 @@ catch_pattern ::= name ("as" name)?
 ## Patterns
 
 ```ebnf
-pattern        ::= "_"
+pattern        ::= pattern_atom ("as" name)*
+pattern_atom   ::= "_"
                  | INT | DECIMAL | "true" | "false" | "null" | STRING
                  | name
                  | name "(" pattern_fields? ")"
@@ -307,6 +308,10 @@ pattern_field  ::= pattern              (* positional sub-pattern *)
                  | field_name "=" pattern
                                            (* named sub-pattern: field = subpattern *)
 ```
+
+`pattern as name` binds `name` to the complete value matched by `pattern`.
+It has the lowest pattern precedence, may be chained, and cannot use `_` as
+its binder name. The binder is always a variable binder.
 
 A qualified variant pattern (`Option::some(value)` or
 `module::Option::some(value)`) names the owning enum and variant with `::`.

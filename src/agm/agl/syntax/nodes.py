@@ -786,6 +786,16 @@ class VarPattern:
 
 
 @dataclass(frozen=True, slots=True)
+class AsPattern:
+    """A pattern annotated with a binder for its complete matched value."""
+
+    pattern: Pattern
+    name: str
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
 class PatternField:
     """A named field sub-pattern in a constructor pattern."""
 
@@ -818,7 +828,7 @@ class ConstructorPattern:
 
 
 # Closed union of all pattern nodes.
-Pattern = WildcardPattern | LiteralPattern | VarPattern | ConstructorPattern
+Pattern = WildcardPattern | LiteralPattern | VarPattern | AsPattern | ConstructorPattern
 
 
 # ---------------------------------------------------------------------------

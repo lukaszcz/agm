@@ -1,0 +1,32 @@
+# As-patterns bind the complete value matched by their inner pattern.
+enum Shape
+  | Dot
+  | Rect(w: int, h: int)
+
+enum Tagged
+  | Number(value: int)
+
+record Point
+  x: int
+  y: int
+
+param rectangle: bool
+
+let shape: Shape = if rectangle => Rect(3, 4) | else => Dot()
+case shape of
+  | Rect(w, h) as rect as whole => print "rect ${w}x${h} same ${rect == whole}"
+  | Dot as dot => print "dot same ${dot == shape}"
+
+let tagged = Number(0)
+case tagged of
+  | Number(value = 0 as zero) => print "zero ${zero}"
+  | Number(value = other) => print "other ${other}"
+
+let point = Point(6, 7)
+case point of
+  | _ as matched => print "point ${matched.x},${matched.y}"
+
+let scalar = if rectangle => 0 | else => 5
+case scalar of
+  | 0 as zero => print "scalar zero ${zero}"
+  | other => print "scalar other ${other}"

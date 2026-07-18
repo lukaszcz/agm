@@ -1,0 +1,20 @@
+{
+  "scenarios": [
+    {
+      "name": "rectangle_and_zero_scalar",
+      "params": {"rectangle": true},
+      "expect": {
+        "stdout": "rect 3x4 same true\nzero 0\npoint 6,7\nscalar zero 0\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "dot_and_other_scalar",
+      "params": {"rectangle": false},
+      "expect": {
+        "stdout": "dot same true\nzero 0\npoint 6,7\nscalar other 5\n",
+        "calls": {}
+      }
+    }
+  ]
+}

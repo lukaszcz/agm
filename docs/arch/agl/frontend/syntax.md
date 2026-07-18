@@ -8,7 +8,7 @@ The implementation-level token contract lives in `src/agm/agl/lexer/tokens.py` (
 
 ## The AST
 
-The AST is plain frozen dataclasses with no parser types — the firewall every later pass depends on. Because AgL is expression-oriented there is no statement/expression split: one unified node family covers blocks, bindings, control flow, and a single call node for every kind of invocation. Surface forms that need dedicated representation — partial-application placeholders, value-position type application, qualified constructor references, casts, divergence expressions — are explicit nodes whose shape the AST builder validates before they cross the firewall.
+The AST is plain frozen dataclasses with no parser types — the firewall every later pass depends on. Because AgL is expression-oriented there is no statement/expression split: one unified node family covers blocks, bindings, control flow, and a single call node for every kind of invocation. Surface forms that need dedicated representation — partial-application placeholders, value-position type application, qualified constructor references, casts, divergence expressions, and as-pattern binders — are explicit nodes whose shape the AST builder validates before they cross the firewall.
 
 Each node carries a stable id assigned at build time. Later passes never mutate nodes; they record conclusions in side tables keyed by that id. This is the universal annotation convention — it is why nodes can be frozen and shared, and why `id()`-based identity is never used.
 

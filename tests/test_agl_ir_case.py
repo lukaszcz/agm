@@ -115,6 +115,30 @@ r"""
     assert ir["r"] == TextValue("matched")
 
 
+def test_case_as_patterns_bind_scalar_record_and_named_enum_field() -> None:
+    """As-patterns bind their matched occurrence at every pattern depth."""
+    src = """\
+record Point
+  x: int
+  y: int
+enum Box
+  | value(item: int)
+let point = Point(2, 3)
+let scalar = 7
+let boxed = value(item = 4)
+let record_result = case point of | _ as whole => whole.x + whole.y
+let scalar_result = case scalar of | 7 as matched => matched | _ => 0
+let enum_result = case boxed of
+  | value(item = 4 as item) as first as second => item + (if first == second => 1 | else => 0)
+  | value(item = _) => 0
+record_result + scalar_result + enum_result
+"""
+    ir = evaluate_ir(src)
+    assert ir["record_result"] == IntValue(5)
+    assert ir["scalar_result"] == IntValue(7)
+    assert ir["enum_result"] == IntValue(5)
+
+
 def test_case_binder_does_not_leak() -> None:
     """Case binder symbol does not appear in top-level result names."""
     src = """\

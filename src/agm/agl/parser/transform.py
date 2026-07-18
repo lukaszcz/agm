@@ -199,6 +199,7 @@ _PATTERN_NODE_TYPES = (
     syntax.WildcardPattern,
     syntax.LiteralPattern,
     syntax.VarPattern,
+    syntax.AsPattern,
     syntax.ConstructorPattern,
 )
 
@@ -2019,6 +2020,25 @@ class AstBuilder(Transformer):
         return syntax.VarPattern(
             name=str(tok), span=self._span_from_meta(meta), node_id=self._next_id()
         )
+
+    def pat_as(self, meta: Meta, args: _Args) -> syntax.Pattern:
+        """pattern: pattern_atom ("as" name)* — build left-associated binders."""
+        pattern = next((a for a in args if isinstance(a, _PATTERN_NODE_TYPES)), None)
+        assert pattern is not None
+        assert isinstance(pattern, _PATTERN_NODE_TYPES)
+        for name_tok in (a for a in args if _is_name_token(a)):
+            name = str(name_tok)
+            if name == "_":
+                raise AglSyntaxError(
+                    "An as-pattern binder cannot be '_'.", span=_span_from_meta(meta)
+                )
+            pattern = syntax.AsPattern(
+                pattern=pattern,
+                name=name,
+                span=_span_from_meta(meta),
+                node_id=self._next_id(),
+            )
+        return pattern
 
     def pat_constructor(self, meta: Meta, args: _Args) -> syntax.ConstructorPattern:
         """pat_constructor: name LPAR pattern_fields? RPAR"""

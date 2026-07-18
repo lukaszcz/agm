@@ -67,6 +67,7 @@ if TYPE_CHECKING:
     from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.nodes import (
     AgentDecl,
+    AsPattern,
     AssignStmt,
     BinaryOp,
     Block,
@@ -1771,6 +1772,23 @@ class _Resolver:
                 if len(candidates) == 1:
                     self._bare_variant_refs[pattern.node_id] = candidates[0]
                 return
+            self._check_not_reserved(pattern.name, pattern.span)
+            ref = BindingRef(
+                name=pattern.name,
+                mutable=False,
+                decl_span=pattern.span,
+                decl_node_id=pattern.node_id,
+                kind=BinderKind.pattern_binding,
+                module_id=self._module_id,
+            )
+            if pattern.name in scope.bindings:
+                raise AglScopeError(
+                    f"Name '{pattern.name}' is bound more than once in this pattern.",
+                    span=pattern.span,
+                )
+            scope.define(pattern.name, ref)
+        elif isinstance(pattern, AsPattern):
+            self._bind_pattern_vars(pattern.pattern, scope)
             self._check_not_reserved(pattern.name, pattern.span)
             ref = BindingRef(
                 name=pattern.name,

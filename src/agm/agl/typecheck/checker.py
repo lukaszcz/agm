@@ -86,6 +86,7 @@ from agm.agl.semantics.types import (
 )
 from agm.agl.syntax.nodes import (
     AgentDecl,
+    AsPattern,
     AssignStmt,
     BinaryOp,
     BinOp,
@@ -3041,9 +3042,13 @@ class _Checker:
                     f"scrutinee of type '{subj_type!r}'.",
                     span=pattern.span,
                 )
+        elif isinstance(pattern, AsPattern):
+            self._bind_pattern_types(pattern.pattern, subj_type, owner)
+            self._env.set_binding_type(pattern.node_id, subj_type)
         elif isinstance(pattern, VarPattern):
-            if pattern.node_id in self._resolved.bare_variant_patterns:
-                # A bare name denoting an in-scope constructor: a nullary
+            if (
+                pattern.node_id in self._resolved.bare_variant_patterns
+            ):  # A bare name denoting an in-scope constructor: a nullary
                 # variant pattern, not a binder.  Validate it statically.
                 self._check_bare_variant_pattern(pattern, subj_type)
             else:

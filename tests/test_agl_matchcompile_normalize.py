@@ -209,6 +209,22 @@ def test_normalize_case_preserves_priority_actions_and_binder_provenance() -> No
     assert normalized.rows[1].binder_assignments == ()
 
 
+def test_as_patterns_preserve_all_current_occurrence_binders() -> None:
+    checked = _check(
+        "enum E\n  | A(value: int)\n  | B\nlet value = A(1)\n"
+        "case value of | A(value = inner) as whole as same => inner | B => 0"
+    )
+    normalized = normalize_case(_only_case(checked.resolved.program), checked)
+
+    cell = normalized.rows[0].cells[0]
+    assert isinstance(cell, ConstructorCell)
+    assert [binder.name for binder in cell.binders] == ["whole", "same"]
+    child = cell.arguments[0]
+    assert isinstance(child, WildcardCell)
+    assert child.binder is not None
+    assert child.binder.name == "inner"
+
+
 def test_numeric_literals_share_runtime_equality_canonical_form() -> None:
     checked = _check("let value: decimal = 1\ncase value of | 1 => 10 | 1.0 => 20 | _ => 30")
     normalized = normalize_case(_only_case(checked.resolved.program), checked)

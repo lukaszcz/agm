@@ -32,6 +32,7 @@ from agm.agl.semantics.values import (
     Value,
 )
 from agm.agl.syntax.nodes import (
+    AsPattern,
     BoolLit,
     Case,
     ConstructorPattern,
@@ -72,6 +73,8 @@ def _matches(
     match pattern:
         case WildcardPattern():
             return True
+        case AsPattern(pattern=inner):
+            return _matches(inner, subject_type, value, checked)
         case VarPattern(node_id=node_id, name=variant):
             if node_id not in checked.resolved.bare_variant_patterns:
                 return True

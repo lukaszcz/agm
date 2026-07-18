@@ -37,6 +37,7 @@ from agm.agl.syntax import (
     AgentDecl,
     AgentT,
     AppliedT,
+    AsPattern,
     AssignStmt,
     AssignTarget,
     BinaryOp,
@@ -1343,6 +1344,14 @@ class TestPatterns:
         p = VarPattern(name="x", span=self._s(), node_id=1)
         assert p.name == "x"
 
+    def test_as_pattern_is_frozen_and_wraps_an_inner_pattern(self) -> None:
+        inner = VarPattern(name="value", span=self._s(), node_id=2)
+        pattern = AsPattern(pattern=inner, name="whole", span=self._s(), node_id=1)
+        assert pattern.pattern is inner
+        assert pattern.name == "whole"
+        with pytest.raises((FrozenInstanceError, AttributeError)):
+            setattr(pattern, "name", "other")
+
     def test_constructor_pattern_no_fields(self) -> None:
         p = ConstructorPattern(
             qualifier=None, name="None_", positional=(), named=(), span=self._s(), node_id=1
@@ -1598,11 +1607,12 @@ class TestVisitorWalk:
         ctor_pat = ConstructorPattern(
             qualifier=None, name="Some", positional=(), named=(pat_field,), span=s, node_id=504
         )
+        as_pat = AsPattern(pattern=ctor_pat, name="whole", span=s, node_id=5040)
 
         # Case with multiple patterns
         case_branch_wildcard = CaseBranch(pattern=wildcard_pat, body=null_lit, span=s, node_id=505)
         case_branch_lit = CaseBranch(pattern=lit_pat, body=unit_lit, span=s, node_id=506)
-        case_branch_ctor = CaseBranch(pattern=ctor_pat, body=bool_lit, span=s, node_id=507)
+        case_branch_ctor = CaseBranch(pattern=as_pat, body=bool_lit, span=s, node_id=507)
         case_node = Case(
             subject=var_ref,
             branches=(case_branch_wildcard, case_branch_lit, case_branch_ctor),
@@ -1865,6 +1875,7 @@ class TestVisitorWalk:
             WildcardPattern,
             LiteralPattern,
             VarPattern,
+            AsPattern,
             ConstructorPattern,
             PatternField,
         }
@@ -2557,6 +2568,12 @@ class TestUnionAliases:
 
         args = typing.get_args(Expr)
         assert UnitLit in args
+
+    def test_as_pattern_is_pattern(self) -> None:
+        import typing
+
+        args = typing.get_args(Pattern)
+        assert AsPattern in args
 
     def test_wildcard_pattern_is_pattern(self) -> None:
         import typing

@@ -135,8 +135,7 @@ def _finalize_binders(matrix: PatternMatrix, row: MatrixRow) -> tuple[BinderAssi
     for cell, occurrence in zip(row.cells, matrix.occurrences, strict=True):
         if not isinstance(cell, WildcardCell):
             raise MatchCompileInvariantError("leaf finalization requires an irrefutable first row")
-        if cell.binder is not None:
-            assignments.append(BinderAssignment(occurrence.id, cell.binder))
+        assignments.extend(BinderAssignment(occurrence.id, binder) for binder in cell.binders)
 
     available = {occurrence.id: occurrence for occurrence in matrix.available_occurrences}
     binder_ids: set[int] = set()
@@ -604,9 +603,9 @@ def _source_binder_paths(
         path: _BinderPath,
         binders: dict[int, tuple[BinderProvenance, _BinderPath]],
     ) -> None:
+        for binder in cell.binders:
+            binders[binder.node_id] = (binder, path)
         if isinstance(cell, WildcardCell):
-            if cell.binder is not None:
-                binders[cell.binder.node_id] = (cell.binder, path)
             return
         for field_index, argument in enumerate(cell.arguments):
             collect(

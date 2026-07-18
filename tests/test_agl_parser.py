@@ -43,6 +43,7 @@ from agm.agl.parser import (
 from agm.agl.parser.errors import syntax_error_from_lark
 from agm.agl.syntax import (
     AgentDecl,
+    AsPattern,
     AssignStmt,
     BinaryOp,
     BinOp,
@@ -2191,6 +2192,33 @@ class TestPatterns:
         e = first(parse("case x of | 1 => a | 2 => b"))
         assert isinstance(e, Case)
         assert isinstance(e.branches[0].pattern, LiteralPattern)
+
+    def test_as_patterns_wrap_complete_patterns_and_chain(self) -> None:
+        expr = first(parse("case r of | Rect(w, h) as rect as shape => shape"))
+        assert isinstance(expr, Case)
+        outer = expr.branches[0].pattern
+        assert isinstance(outer, AsPattern)
+        assert outer.name == "shape"
+        assert isinstance(outer.pattern, AsPattern)
+        assert outer.pattern.name == "rect"
+        assert isinstance(outer.pattern.pattern, ConstructorPattern)
+
+    def test_as_pattern_nests_in_named_field(self) -> None:
+        expr = first(parse("case r of | Tagged(value = 0 as zero) => zero"))
+        assert isinstance(expr, Case)
+        outer = expr.branches[0].pattern
+        assert isinstance(outer, ConstructorPattern)
+        field = outer.named[0]
+        assert isinstance(field.pattern, AsPattern)
+        assert field.pattern.name == "zero"
+        assert isinstance(field.pattern.pattern, LiteralPattern)
+
+    def test_as_pattern_allows_wildcard_but_not_wildcard_binder(self) -> None:
+        expr = first(parse("case r of | _ as whole => whole"))
+        assert isinstance(expr, Case)
+        assert isinstance(expr.branches[0].pattern, AsPattern)
+        with pytest.raises(AglSyntaxError):
+            parse("case r of | 0 as _ => 0")
 
     def test_constructor_pattern_with_fields(self) -> None:
         src = "case r of | Issue(title = t, severity = s) => ok"

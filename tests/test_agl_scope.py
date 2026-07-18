@@ -24,6 +24,7 @@ from agm.agl.scope import (
 )
 from agm.agl.scope.symbols import BinderKind, BindingRef
 from agm.agl.syntax.nodes import (
+    AsPattern,
     AssignStmt,
     AssignTarget,
     Block,
@@ -1671,6 +1672,29 @@ class TestDirectASTConstruction:
         )
         r = resolve_program(let_x, case_node)
         assert r.resolution[issues_ref.node_id].kind == BinderKind.pattern_binding
+
+    def test_as_pattern_binds_even_when_name_is_a_constructor(self) -> None:
+        resolved = parse_and_resolve(
+            "enum E\n  | A\nlet value = A()\ncase value of | A() as A => A"
+        )
+        program = resolved.program
+        branch = program.body.items[-1].branches[0]
+        assert isinstance(branch.pattern, AsPattern)
+        bound_ref = _find_varref(program, "A")
+        binding = resolved.resolution[bound_ref.node_id]
+        assert binding.kind is BinderKind.pattern_binding
+        assert binding.decl_node_id == branch.pattern.node_id
+
+    def test_as_pattern_duplicate_with_inner_field_binder_rejected(self) -> None:
+        err = reject_scope(
+            "enum E\n  | A(value: int)\nlet value = A(1)\n"
+            "case value of | A(value = captured) as captured => captured | _ => 0"
+        )
+        assert "captured" in err.to_diagnostic().message
+
+    def test_as_pattern_duplicate_chain_binder_rejected(self) -> None:
+        err = reject_scope("case 0 of | _ as captured as captured => captured")
+        assert "captured" in err.to_diagnostic().message
 
     def test_duplicate_pattern_var_rejected(self) -> None:
         let_x = _make_let("x", _make_intlit(1))

@@ -47,6 +47,7 @@ from agm.agl.semantics.types import (
 )
 from agm.agl.syntax.nodes import (
     AgentDecl,
+    AsPattern,
     AssignStmt,
     AssignTarget,
     Block,
@@ -4219,6 +4220,32 @@ class TestMisc:
         do_node = r.resolved.program.body.items[1]
         assert isinstance(do_node, Do)
         assert r.node_types[do_node.node_id] == UnitType()
+
+    def test_as_pattern_binders_have_the_complete_subject_type(self) -> None:
+        checked = accept_type(
+            "record Point\n  x: int\n"
+            "enum E\n  | A(value: int)\n  | B\n"
+            "let e = A(1)\n"
+            "case e of | A(value = item) as enum_value => enum_value | B => B()\n"
+            "let point = Point(2)\n"
+            "case point of | _ as record_value => record_value.x\n"
+            "case 0 of | 0 as scalar_value => scalar_value | _ => 0"
+        )
+        enum_case = checked.resolved.program.body.items[3]
+        record_case = checked.resolved.program.body.items[5]
+        scalar_case = checked.resolved.program.body.items[6]
+        assert isinstance(enum_case, Case)
+        assert isinstance(record_case, Case)
+        assert isinstance(scalar_case, Case)
+        enum_pattern = enum_case.branches[0].pattern
+        record_pattern = record_case.branches[0].pattern
+        scalar_pattern = scalar_case.branches[0].pattern
+        assert isinstance(enum_pattern, AsPattern)
+        assert isinstance(record_pattern, AsPattern)
+        assert isinstance(scalar_pattern, AsPattern)
+        assert isinstance(checked.type_env.get_binding_type(enum_pattern.node_id), EnumType)
+        assert checked.type_env.get_binding_type(record_pattern.node_id) == RecordType("Point")
+        assert checked.type_env.get_binding_type(scalar_pattern.node_id) == IntType()
 
     def test_case_empty_branches_wildcard(self) -> None:
         r = accept_type('let x = 1\ncase x of | _ => "ok"')

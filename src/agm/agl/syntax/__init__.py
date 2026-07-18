@@ -15,6 +15,7 @@ from __future__ import annotations
 from agm.agl.syntax.nodes import (
     ELSE,
     AgentDecl,
+    AsPattern,
     AssignStmt,
     AssignTarget,
     BinaryOp,
@@ -207,6 +208,7 @@ __all__ = [
     # patterns
     "WildcardPattern",
     "LiteralPattern",
+    "AsPattern",
     "VarPattern",
     "ConstructorPattern",
     "PatternField",

@@ -30,6 +30,7 @@ from typing import cast
 
 from agm.agl.syntax.nodes import (
     AgentDecl,
+    AsPattern,
     AssignStmt,
     BinaryOp,
     Block,
@@ -239,6 +240,7 @@ class Visitor:
     def visit_WildcardPattern(self, node: WildcardPattern) -> None: ...
     def visit_LiteralPattern(self, node: LiteralPattern) -> None: ...
     def visit_VarPattern(self, node: VarPattern) -> None: ...
+    def visit_AsPattern(self, node: AsPattern) -> None: ...
     def visit_PatternField(self, node: PatternField) -> None: ...
     def visit_ConstructorPattern(self, node: ConstructorPattern) -> None: ...
 
@@ -338,6 +340,7 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         WildcardPattern,
         LiteralPattern,
         VarPattern,
+        AsPattern,
         PatternField,
         ConstructorPattern,
         # sentinel
@@ -636,6 +639,9 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
 
     elif isinstance(node, VarPattern):
         pass  # leaf
+
+    elif isinstance(node, AsPattern):
+        walk(node.pattern, callback)
 
     elif isinstance(node, PatternField):
         walk(node.pattern, callback)

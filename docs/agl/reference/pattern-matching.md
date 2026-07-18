@@ -9,7 +9,8 @@ each additional branch is introduced by `|`.
 ## Pattern forms
 
 ```ebnf
-pattern        ::= "_"                                    (* wildcard *)
+pattern        ::= pattern_atom ("as" name)*
+pattern_atom   ::= "_"                                    (* wildcard *)
                  | literal                                (* literal pattern *)
                  | name                                   (* binder or bare constructor *)
                  | name "(" pattern_fields? ")"          (* unqualified constructor *)
@@ -36,6 +37,21 @@ Matches anything, binds nothing:
 case result of
   | Complete(output) => artifact := output
   | _ => ()
+```
+
+### As-pattern binder
+
+`pattern as name` matches `pattern` and also binds `name` to the complete value
+matched at that position. It binds less tightly than every other pattern form,
+so it wraps the complete preceding pattern. Multiple `as` binders may be
+chained; each receives the same value. An `as` binder is always a variable
+binder, even when its spelling is also a constructor name. `_` is not a valid
+binder name.
+
+```agl
+case shape of
+  | Rect(w, h) as rectangle => print "${rectangle} has area ${w * h}"
+  | _ as other => print "other shape: ${other}"
 ```
 
 ### Variable binder

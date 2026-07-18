@@ -3388,9 +3388,8 @@ class TestConstructorRefDispatch:
         err = reject_type("record R\n  @pos\n  x: int\n  y: int\nR(x = 1, y = 2)")
         assert "positional-only" in str(err).lower() or "positional" in str(err).lower()
 
-    def test_multi_field_variant_nonbare_positional_rejected(self) -> None:
-        # Non-bare positional in named-only multi-field variant → error.
-        err = reject_type("enum E\n  | F(x: int, y: int)\nF(1, 2)")
+    def test_named_only_variant_nonbare_positional_rejected(self) -> None:
+        err = reject_type("enum E\n  | F(*, x: int, y: int)\nF(1, 2)")
         assert "named-only" in str(err).lower() or "positional" in str(err).lower()
 
     def test_get_constructor_field_kinds_no_graph_table(self) -> None:
@@ -6945,8 +6944,8 @@ class TestGenericConstructorErrors:
             or "bool" in str(err).lower()
         )
 
-    def test_positional_arg_rejected(self) -> None:
-        err = reject_type("record Box[T]\n  value: T\nBox(42)")
+    def test_positional_arg_to_named_only_constructor_rejected(self) -> None:
+        err = reject_type("record Box[T]\n  *\n  value: T\nBox(42)")
         assert "named" in str(err).lower() or "positional" in str(err).lower()
 
 
@@ -8387,13 +8386,12 @@ class TestFieldAssignmentSyntaxChecks:
                 "let e = B(r = R(x = 9), x)\ne"
             )
 
-    def test_positional_literal_to_constructor_rejected(self) -> None:
-        """A non-VarRef positional arg (a literal) is not shorthand — rejected."""
-        err = reject_type("record R\n  x: int\nR(1)")
+    def test_positional_literal_to_named_only_constructor_rejected(self) -> None:
+        err = reject_type("record R\n  *\n  x: int\nR(1)")
         assert "named" in str(err).lower() or "positional" in str(err).lower()
 
-    def test_positional_expr_to_constructor_rejected(self) -> None:
-        err = reject_type("record R\n  x: int\nlet x = 1\nR(x + 1)")
+    def test_positional_expr_to_named_only_constructor_rejected(self) -> None:
+        err = reject_type("record R\n  *\n  x: int\nlet x = 1\nR(x + 1)")
         assert "named" in str(err).lower() or "positional" in str(err).lower()
 
     def test_eq_eq_typechecks_to_bool(self) -> None:

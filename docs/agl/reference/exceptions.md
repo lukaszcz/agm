@@ -143,11 +143,19 @@ let x: int = if condition => 1 else => raise Abort(message = "!")
 raise Abort(message = "Cannot continue without repository access.")
 ```
 
-Exception fields are **named-only by default** — each is supplied as
-`field = value` or via the bare-name shorthand. Zone markers (`/`, `*`,
-`@pos`, `@std`, `@named`) may opt an exception's own fields into the standard
-or positional-only zone, but the inherited `message` field is always
-named-only, so exceptions are in practice constructed by name (or shorthand).
+An exception's own fields are **standard by default** and may be supplied
+positionally or by name. Zone markers (`/`, `*`, `@pos`, `@std`, `@named`)
+constrain an exception's own fields. The inherited `message` field is
+named-only, so it is supplied by name when constructing an exception with
+fields:
+
+```agl
+exception DeployError extends Exception
+  service: text
+  exit_code: int
+
+raise DeployError("api", 1, message = "deployment failed")
+```
 
 Any concrete built-in exception type is constructible with named arguments
 for its fields; `trace_id` is injected by the runtime and is not written

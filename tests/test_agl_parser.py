@@ -937,38 +937,27 @@ class TestParamKind:
         assert isinstance(lam, Lambda)
         assert lam.params[0].kind == ParamKind.STANDARD
 
-    def test_record_fields_are_named_only(self) -> None:
+    def test_unmarked_record_fields_are_standard(self) -> None:
         rec = first(parse("record Point(x: int, y: int)"))
         assert isinstance(rec, RecordDef)
-        assert all(f.kind == ParamKind.NAMED_ONLY for f in rec.fields)
+        assert all(f.kind == ParamKind.STANDARD for f in rec.fields)
 
-    def test_record_indent_fields_are_named_only(self) -> None:
+    def test_unmarked_indented_record_fields_are_standard(self) -> None:
         rec = first(parse("record Issue\n  title: text\n  severity: int"))
         assert isinstance(rec, RecordDef)
-        assert all(f.kind == ParamKind.NAMED_ONLY for f in rec.fields)
+        assert all(f.kind == ParamKind.STANDARD for f in rec.fields)
 
-    def test_exception_fields_are_named_only(self) -> None:
+    def test_unmarked_exception_fields_are_standard(self) -> None:
         exc = first(parse("exception MyErr(code: int, msg: text)"))
         assert isinstance(exc, ExceptionDef)
-        assert all(f.kind == ParamKind.NAMED_ONLY for f in exc.fields)
+        assert all(f.kind == ParamKind.STANDARD for f in exc.fields)
 
-    def test_single_field_enum_variant_is_standard(self) -> None:
-        en = first(parse("enum Opt\n  | None\n  | Some(value: int)"))
-        assert isinstance(en, EnumDef)
-        some = en.variants[1]
-        assert len(some.fields) == 1
-        assert some.fields[0].kind == ParamKind.STANDARD
-
-    def test_multi_field_enum_variant_is_named_only(self) -> None:
+    def test_unmarked_enum_payload_fields_are_standard_regardless_of_arity(self) -> None:
         en = first(parse("enum Result\n  | Ok(value: int, tag: text)\n  | Err(msg: text)"))
         assert isinstance(en, EnumDef)
-        ok = en.variants[0]
-        assert len(ok.fields) == 2
-        assert all(f.kind == ParamKind.NAMED_ONLY for f in ok.fields)
-        # Err has one field → STANDARD
-        err = en.variants[1]
-        assert len(err.fields) == 1
-        assert err.fields[0].kind == ParamKind.STANDARD
+        assert all(
+            field.kind == ParamKind.STANDARD for variant in en.variants for field in variant.fields
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1100,12 +1089,16 @@ class TestMarkerParams:
 
     # --- enum variant payload ---
 
-    def test_enum_variant_with_at_named(self) -> None:
-        """Single-field variant with @named makes it named-only (overrides default)."""
+    def test_named_marker_overrides_standard_field_defaults(self) -> None:
+        rec = first(parse("record R(*, x: int, y: int)"))
+        exc = first(parse("exception E(*, code: int, detail: text)"))
         en = first(parse("enum Opt\n  | None\n  | Some(@named, value: int)"))
+        assert isinstance(rec, RecordDef)
+        assert isinstance(exc, ExceptionDef)
         assert isinstance(en, EnumDef)
-        some = en.variants[1]
-        assert some.fields[0].kind == ParamKind.NAMED_ONLY
+        assert all(field.kind == ParamKind.NAMED_ONLY for field in rec.fields)
+        assert all(field.kind == ParamKind.NAMED_ONLY for field in exc.fields)
+        assert en.variants[1].fields[0].kind == ParamKind.NAMED_ONLY
 
     def test_enum_variant_with_slash(self) -> None:
         """Multi-field variant with / — first pos-only, rest standard."""

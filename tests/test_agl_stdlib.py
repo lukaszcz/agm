@@ -198,6 +198,7 @@ def test_builtin_exception_shape_must_match() -> None:
         _check(
             "builtin\n"
             "exception Exception\n"
+            "  *\n"
             "  message: text\n"
             "  trace_id: text\n"
             "builtin\n"

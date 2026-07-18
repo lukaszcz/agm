@@ -1,0 +1,25 @@
+{
+  "scenarios": [
+    {
+      "name": "base_zero",
+      "params": {"base": 0},
+      "expect": {
+        "stdout": "0\n1\n2\n3\n4\n5\n6\n7\n8\npositional\n9\nnamed\n10\n11\n"
+      }
+    },
+    {
+      "name": "base_three",
+      "params": {"base": 3},
+      "expect": {
+        "stdout": "3\n4\n5\n6\n7\n8\n9\n10\n11\npositional\n12\nnamed\n13\n14\n"
+      }
+    },
+    {
+      "name": "base_ten",
+      "params": {"base": 10},
+      "expect": {
+        "stdout": "10\n11\n12\n13\n14\n15\n16\n17\n18\npositional\n19\nnamed\n20\n21\n"
+      }
+    }
+  ]
+}

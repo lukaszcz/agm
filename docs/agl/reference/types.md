@@ -244,42 +244,35 @@ record Issue
   description: text
 ```
 
-All fields are required. By default, record fields are **named-only** — each must be
-supplied as `field = value` or via the bare-name shorthand `field` (which means
-`field = field`):
+All fields are required. By default, record fields are **standard**: they may be
+supplied positionally or as `field = value`:
 
 ```agl
-let issue = Issue(
+let positional = Issue("Missing tests", 3, "No failure-path tests exist.")
+let named = Issue(
   title = "Missing tests",
   severity = 3,
   description = "No failure-path tests exist."
 )
 ```
 
-**Zone markers** let you opt record fields into the standard (positional-or-named) or
-positional-only zones. Markers appear in the parenthesized field list, as comma-separated
-zone entries, or in the indented block form (as a leading marker on the header line or
-on its own line between fields):
+**Zone markers** constrain fields to positional-only or named-only zones. Markers appear
+in the parenthesized field list, as comma-separated zone entries, or in the indented block
+form (as a leading marker on the header line or on its own line between fields):
 
 ```agl
 # Inline / parenthesized forms: marker as comma entry
-record Pair[T1, T2](@std, fst: T1, snd: T2)        # both fields standard
+record Pair[T1, T2](fst: T1, snd: T2)                # both fields standard
 record R(x: int, /, y: int)                          # x pos-only, y standard
-
-# Block form: leading marker on header line
-record StdPair @std
-  fst: int
-  snd: int
+record NamedPair(*, fst: int, snd: int)              # both fields named-only
 
 # Block form: own-line marker between fields
 record Mixed
   id: int
-  @std
+  *
   value: int
   label: text
 ```
-
-With standard fields, construction may use positional arguments:
 
 ```agl
 let p = Pair(1, 2)             # positional (both fields are standard)
@@ -323,28 +316,26 @@ enum Review
   | Fail(issues: list[text])
 ```
 
-**Variant field zones.** By default, a variant with **exactly one field** has its field
-in the **standard** zone (positional-or-named); a variant with **two or more fields** has
-all fields named-only. This lets common single-value variants like `Ok(value)` and
-`Some(x)` be constructed positionally:
+**Variant field zones.** Payload fields are standard by default, regardless of
+payload arity. Common single-value variants and multi-field variants may both be
+constructed positionally or by name:
 
 ```agl
 enum Result
-  | Ok(value: int)          # single field → standard; Ok(5) works
-  | Err(reason: text, fatal: bool)  # two fields → named-only by default
-```
+  | Ok(value: int)
+  | Err(reason: text, fatal: bool)
 
-```agl
-let ok = Ok(42)             # positional: field 'value' is standard
-let ok2 = Ok(value = 42)    # named form also valid
-let err = Err(reason = "bad", fatal = false)   # named-only
+let ok = Ok(42)
+let ok2 = Ok(value = 42)
+let err = Err("bad", false)
+let named_err = Err(reason = "bad", fatal = false)
 ```
 
 Zone markers are also available on variant payloads:
 
 ```agl
 enum Triple
-  | T(@std, a: int, b: int, c: int)   # all three fields standard → T(1, 2, 3)
+  | T(*, a: int, b: int, c: int)   # all fields named-only
 ```
 
 Construction, qualification, and ambiguity rules are covered in

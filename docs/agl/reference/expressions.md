@@ -92,13 +92,11 @@ slots left to right; named arguments (`field = value`) follow. The optional
 value-position `::[…]` pins the type arguments of a generic constructor (see
 [Generic constructors](#generic-constructors)).
 
-**Per-type field zones.** The zone of each field depends on the declaration:
-- **Records** default to **named-only**. Markers (`/`, `*`, `@std`, etc.) opt
-  fields into the standard or positional-only zone.
-- **Enum variants**: a variant with exactly **one field** has that field in the
-  **standard** zone (positional or named); a variant with two or more fields has
-  all fields **named-only** by default. Markers can override the defaults.
-- **Exceptions** default to **named-only**; markers are available.
+**Per-type field zones.** Record fields, enum payload fields, and an
+exception's own fields default to the **standard** zone (positional or named),
+regardless of payload arity. Markers (`/`, `*`, `@pos`, `@std`, `@named`) can
+constrain fields to a different zone. An exception's inherited `message` field
+is named-only.
 
 **Bare-name shorthand.** A bare name `x` in a positional slot that lands on a
 **named-only** field (where positional binding is impossible) is reinterpreted as
@@ -128,18 +126,18 @@ let review: Review = Pass           # resolved by expected type
 An unqualified variant name resolves when the expected type is an enum
 containing it, or when exactly one declared enum has a variant of that name.
 A nullary variant is constructed by writing its name alone (no parentheses).
-Payload variants use positional-greedy binding: a variant with one field has
-it in the standard zone (positional or named); a variant with two or more
-fields has all fields named-only by default.
+Payload variants use positional-greedy binding. Every unmarked payload field
+is standard (positional or named), regardless of the number of fields.
 
 ```agl
 enum Result
-  | Ok(value: int)           # single field → standard
-  | Err(reason: text, fatal: bool)  # two fields → named-only by default
+  | Ok(value: int)
+  | Err(reason: text, fatal: bool)
 
-let ok = Ok(42)              # positional (standard zone)
-let ok2 = Ok(value = 42)     # named form also valid
-let err = Err(reason = "bad", fatal = false)  # named-only
+let ok = Ok(42)
+let ok2 = Ok(value = 42)
+let err = Err("bad", false)
+let named_err = Err(reason = "bad", fatal = false)
 ```
 
 ### Unqualified variant ambiguity

@@ -1,4 +1,4 @@
-# Construction with explicit zone markers: @std record, single-field variant positional,
+# Construction with explicit zone markers, positional and named fields,
 # reordered named fields, shorthand, and generic construction.
 record StdPair
   @std
@@ -6,6 +6,7 @@ record StdPair
   snd: int
 
 record Named
+  *
   x: int
   y: int
 
@@ -23,7 +24,7 @@ print p1.snd
 print p2.fst
 print p2.snd
 
-# Named record: named-only by default
+# Explicitly named-only record
 let n1 = Named(x = base, y = base + 1)
 let x = base
 let n2 = Named(x, y = base + 2)
@@ -32,7 +33,7 @@ print n1.y
 print n2.x
 print n2.y
 
-# Single-field variant: standard zone -> positional valid
+# Unmarked enum payload: positional construction
 let ok1 = Ok(base)
 let ok2 = Ok(value = base + 10)
 let err = Err(reason = "bad", fatal = false)

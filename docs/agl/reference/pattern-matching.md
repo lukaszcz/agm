@@ -151,13 +151,13 @@ qualification itself uses `::`, never `.`.
 
 ```agl
 enum Result
-  | Ok(value: int)           # single field, standard zone
-  | Err(reason: text, fatal: bool)   # two fields, named-only by default
+  | Ok(value: int)
+  | Err(reason: text, fatal: bool)
 
 # Each arm below is an alternative spelling for a separate case:
 case r of
   | Ok(v) => ...  # positional: binds field 'value' to v
-  | Err(reason, fatal) => ...  # shorthand for Err(reason = reason, fatal = fatal)
+  | Err(reason, fatal) => ...  # positional: binds fields in declaration order
 
 # The equivalent fully named spellings are Ok(value = v) and
 # Err(reason = r, fatal = f), respectively.

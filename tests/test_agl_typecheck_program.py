@@ -2150,13 +2150,10 @@ def test_two_library_functions_same_name_different_signatures(tmp_path: Path) ->
 # ---------------------------------------------------------------------------
 
 
-def test_cross_module_constructor_call_positional_args_rejected(tmp_path: Path) -> None:
-    """Coverage: _check_cross_module_constructor_call rejects positional arguments.
-
-    Calling a cross-module record constructor with positional arguments raises AglTypeError.
-    """
+def test_cross_module_named_only_constructor_rejects_positional_args(tmp_path: Path) -> None:
+    """A cross-module named-only record constructor rejects positional arguments."""
     modules = {
-        "lib": "record Point\n  x: int\n  y: int",
+        "lib": "record Point\n  *\n  x: int\n  y: int",
         "entry": "import lib qualified\nlib::Point(1, 2)",
     }
     with pytest.raises(AglTypeError, match="named"):

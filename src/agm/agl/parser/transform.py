@@ -522,25 +522,22 @@ class AstBuilder(Transformer):
     def record_indent_body(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
         # Grammar: param_marker? _INDENT block_entry (_NEWLINE block_entry)* _NEWLINE? _DEDENT
         # block_entry is ?field_def | ?param_marker — collect all in order, then resolve.
-        # Records are always named-only by default.
         entries: _RawEntries = tuple(a for a in args if isinstance(a, (syntax.Param, _ParamMarker)))
-        return _resolve_params(entries, default_kind=syntax.ParamKind.NAMED_ONLY)
+        return _resolve_params(entries, default_kind=syntax.ParamKind.STANDARD)
 
     def record_paren_body(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
         # Grammar: LPAR field_list? RPAR
-        # field_list returns _RawEntries; resolve with named-only default.
+        # field_list returns _RawEntries; resolve with the standard default.
         for a in args:
             if _is_field_tuple(a):
-                return _resolve_params(
-                    cast(_RawEntries, a), default_kind=syntax.ParamKind.NAMED_ONLY
-                )
+                return _resolve_params(cast(_RawEntries, a), default_kind=syntax.ParamKind.STANDARD)
         return ()
 
     record_inline_body = record_paren_body
 
     def field_def(self, meta: Meta, args: _Args) -> syntax.Param:
         # Grammar: field_name COLON type_expr
-        # Build with a provisional NAMED_ONLY kind; the owner builder
+        # Build with a provisional STANDARD kind; the owner builder
         # (record_indent_body, record_paren_body, variant_payload, exception bodies)
         # reassigns the kind via _resolve_params().
         name_tok = args[0]
@@ -549,7 +546,7 @@ class AstBuilder(Transformer):
         return syntax.Param(
             name=str(name_tok),
             type_expr=type_expr,
-            kind=syntax.ParamKind.NAMED_ONLY,
+            kind=syntax.ParamKind.STANDARD,
             default=None,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
@@ -602,16 +599,10 @@ class AstBuilder(Transformer):
 
     def variant_payload(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
         # Grammar: LPAR field_list? RPAR
-        # field_list returns _RawEntries; count only Param entries for the
-        # single-field→STANDARD default; markers don't count as fields.
+        # field_list returns _RawEntries; payload fields default to standard.
         for a in args:
             if _is_field_tuple(a):
-                raw = cast(_RawEntries, a)
-                param_count = sum(1 for x in raw if isinstance(x, syntax.Param))
-                default_kind = (
-                    syntax.ParamKind.STANDARD if param_count == 1 else syntax.ParamKind.NAMED_ONLY
-                )
-                return _resolve_params(raw, default_kind=default_kind)
+                return _resolve_params(cast(_RawEntries, a), default_kind=syntax.ParamKind.STANDARD)
         return ()
 
     def field_list(self, meta: Meta, args: _Args) -> _RawEntries:

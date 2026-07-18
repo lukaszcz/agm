@@ -1,5 +1,5 @@
 # User-defined exceptions: construction, raise, field access, and catch.
-# Exercises exception Boom (named-only fields, default for exceptions), both
+# Exercises exception Boom fields, both
 # triggered and non-triggered paths, and an escalating exception that propagates.
 exception Boom extends Exception
   code: int

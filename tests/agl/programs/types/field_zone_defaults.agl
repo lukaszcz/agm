@@ -1,0 +1,48 @@
+# Unmarked record, enum payload, and exception fields are standard;
+# an explicit * marker keeps bare-name shorthand for named-only fields.
+record Pair
+  left: int
+  right: int
+
+enum Result
+  | PairResult(left: int, right: int)
+
+exception Problem extends Exception
+  code: int
+  detail: text
+
+record NamedPair
+  *
+  left: int
+  right: int
+
+param base: int
+
+let positional_record = Pair(base, base + 1)
+let named_record = Pair(left = base + 2, right = base + 3)
+let positional_enum = PairResult(base + 4, base + 5)
+let named_enum = PairResult(left = base + 6, right = base + 7)
+let positional_exception = Problem(base + 8, "positional", message = "problem")
+let named_exception = Problem(code = base + 9, detail = "named", message = "problem")
+let left = base + 10
+let right = base + 11
+let shorthand = NamedPair(left, right)
+
+print positional_record.left
+print positional_record.right
+print named_record.left
+print named_record.right
+case positional_enum of
+  | PairResult(left, right) =>
+    print left
+    print right
+case named_enum of
+  | PairResult(left, right) =>
+    print left
+    print right
+print positional_exception.code
+print positional_exception.detail
+print named_exception.code
+print named_exception.detail
+print shorthand.left
+print shorthand.right

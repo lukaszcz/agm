@@ -1,6 +1,6 @@
 # AgL Match Compilation
 
-The match compiler turns every checked source `case` into an immutable decision DAG — the artifact lowering consumes to emit executable switches. It is the last static pass: it runs after type checking, consumes checked pattern metadata only, and depends on nothing downstream — not lowering, the IR, the evaluator, or runtime services. See [../index.md](../index.md) for the surrounding pipeline.
+The match compiler turns every checked source `case` into an immutable decision DAG — the artifact lowering consumes to emit executable switches. It is the last static pass: it runs after type checking, consumes checked pattern metadata only, and depends on nothing downstream — not lowering, the IR, the evaluator, or runtime services. See [index.md](agl/index.md) for the surrounding pipeline.
 
 ## Compilation Model
 
@@ -14,7 +14,7 @@ The same DAG provides reachable-arm information and deterministic structured wit
 
 Whole-program entry points visit every nested case after type checking, including cases in all reachable modules — entry code never calling a case does not exempt it. Success yields a `MatchCompiledProgram` or `MatchCompiledModuleGraph` wrapping the exact checked artifact plus a total case-to-DAG mapping; any issue yields sorted static diagnostics and no artifact, so lowering can only ever see fully compiled programs. Downstream pipelines reuse a static artifact only when its resolved-program identity and host capabilities match the consuming pipeline; otherwise they recheck before lowering.
 
-Artifact validation — source ownership, mapping totality, and decision semantics — is a self-check gated by the AgL self-validation toggle ([../../testing.md](../../testing.md)), so the suite re-verifies every compiled case while production lowering trusts the artifact.
+Artifact validation — source ownership, mapping totality, and decision semantics — is a self-check gated by the AgL self-validation toggle ([testing.md](testing.md)), so the suite re-verifies every compiled case while production lowering trusts the artifact.
 
 ## Package Boundary
 
@@ -26,5 +26,5 @@ The package API is deliberately limited to whole-program artifacts and stage ent
 - `src/agm/agl/matchcompile/matrix.py` — matrix decomposition and column selection.
 - `src/agm/agl/matchcompile/compiler.py` and `diagnostics.py` — decision DAGs, issues, and witnesses.
 - `src/agm/agl/matchcompile/stage.py` — whole-program artifacts and diagnostic adaptation.
-- `src/agm/agl/lower/` — the consumer side: decision DAGs lowered into one-level `IrCase` switches ([../execution/lowering.md](../execution/lowering.md)).
+- `src/agm/agl/lower/` — the consumer side: decision DAGs lowered into one-level `IrCase` switches ([execution/lowering.md](agl/execution/lowering.md)).
 - Tests: `tests/test_agl_matchcompile_*.py`.

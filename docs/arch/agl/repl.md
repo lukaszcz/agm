@@ -1,6 +1,6 @@
 # AgL REPL and Program Hosting
 
-Two commands host AgL programs: `agm exec` runs a whole program, and `agm repl` evaluates entries one at a time. Both run the same pipeline ([index.md](index.md)); they differ in how the program is supplied and how parameters, agents, and configuration are wired around it. This document covers that host-facing surface.
+Two commands host AgL programs: `agm exec` runs a whole program, and `agm repl` evaluates entries one at a time. Both run the same pipeline ([index.md](agl/index.md)); they differ in how the program is supplied and how parameters, agents, and configuration are wired around it. This document covers that host-facing surface.
 
 ## Incremental REPL Session
 
@@ -8,7 +8,7 @@ The REPL is a UI-free incremental driver that runs the full pipeline one entry a
 
 Every entry is an inference boundary: its checker regions close before promotion, and a failed entry promotes nothing, so later entries start clean. Runtime failure is deliberately non-transactional — initializers completed before a failure remain installed, and the static environment advances only for the symbols that actually reached the runtime frame. Redefining a nominal type invalidates prior bindings whose static type mentions it. Match compilation runs before the check-only early return, so non-exhaustive cases cannot bypass static validation.
 
-The REPL uses the graph pipeline ([modules.md](modules.md)) by default so it gets the same automatic `std.core` open import as `agm exec`; library modules are cached and incrementally linked, and open imports and user `infixl`/`infixr` fixity persist across entries by accumulation and replay. Type-focused surfaces (`:type`, check-only echoes) use a REPL-specific type formatter that expands records and enums to declaration-like listings while keeping ordinary echoes compact.
+The REPL uses the graph pipeline ([modules.md](agl/modules.md)) by default so it gets the same automatic `std.core` open import as `agm exec`; library modules are cached and incrementally linked, and open imports and user `infixl`/`infixr` fixity persist across entries by accumulation and replay. Type-focused surfaces (`:type`, check-only echoes) use a REPL-specific type formatter that expands records and enums to declaration-like listings while keeping ordinary echoes compact.
 
 ## Program Parameters
 
@@ -16,13 +16,13 @@ The REPL uses the graph pipeline ([modules.md](modules.md)) by default so it get
 
 ## Agent Declaration and Reconciliation
 
-Agents must be declared in source; the host backs declared names but never owns the name set. The pipeline prepares a program once (lex, parse, scope) and reuses that prepared object for both parameter discovery and execution. Before execution it reconciles declared agents against the host's registrations: a registration with no matching declaration, or a declared agent with no backing, is an error; a declared-but-uncalled agent is a warning. `agm exec` registers each declared name with a runner-backed factory, choosing the runner command by precedence across config, a source runner hint, CLI flags, and the built-in default floor (see [../agents.md](../agents.md)).
+Agents must be declared in source; the host backs declared names but never owns the name set. The pipeline prepares a program once (lex, parse, scope) and reuses that prepared object for both parameter discovery and execution. Before execution it reconciles declared agents against the host's registrations: a registration with no matching declaration, or a declared agent with no backing, is an error; a declared-but-uncalled agent is a warning. `agm exec` registers each declared name with a runner-backed factory, choosing the runner command by precedence across config, a source runner hint, CLI flags, and the built-in default floor (see [agents.md](agents.md)).
 
 ## Engine Settings
 
 The engine settings a program can tune — `runner`, `log`, `log-file`, `strict-json`, `max-iters`, `timeout` — are `builtin var` bindings declared in the standard-library module `std.config`; `src/agm/config/engine_keys.py` is the shared name/kind catalog. A `builtin var` is a body-less, runtime-backed mutable binding: the static passes treat it like any binding, while the lowerer routes reads and writes to dedicated IR operations keyed by setting name. The interpreter backs runtime-live settings (`strict-json`, `max-iters`, `timeout`) with live interpreter state, and host-consumed settings (`runner`, `log`, `log-file`) with registers that reconfigure the live host service on write.
 
-Because a write is an ordinary positional statement, settings take effect in program order and `agm exec` runs the program in a single phase — there is no separate startup pass. The CLI and config-file layers seed the initial values ([../config.md](../config.md)); a source write overrides them from its point onward. In the REPL a completed write persists across entries, matching the non-transactional runtime; `:reset` restores the seeded defaults.
+Because a write is an ordinary positional statement, settings take effect in program order and `agm exec` runs the program in a single phase — there is no separate startup pass. The CLI and config-file layers seed the initial values ([config.md](config.md)); a source write overrides them from its point onward. In the REPL a completed write persists across entries, matching the non-transactional runtime; `:reset` restores the seeded defaults.
 
 ## Console and Confirmation
 

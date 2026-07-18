@@ -12,7 +12,7 @@ The IR is a runtime-neutral data model: program-local identities and source loca
 
 The IR has exactly one loop primitive, `IrLoop`, plus `IrBreak`/`IrContinue` (and function-level `IrReturn`, which unwinds through loops). All richer loop forms — `for` over collections and ranges, `while` guards, `[n]` bounds, `until` — are desugared by the lowerer into ordinary pre-loop bindings and in-body checks around that single primitive; no richer loop node exists. The host's global `max-iters` safety valve caps only loops that are not self-bounded.
 
-`validate_ir` provides node-local and deep whole-program validation tiers. Like match-artifact validation, it re-checks output the lowerer just produced from already-checked source, so it runs only under the AgL self-validation toggle ([../../testing.md](../../testing.md)) — never in production.
+`validate_ir` provides node-local and deep whole-program validation tiers. Like match-artifact validation, it re-checks output the lowerer just produced from already-checked source, so it runs only under the AgL self-validation toggle ([testing.md](testing.md)) — never in production.
 
 ## Code Entry Points
 

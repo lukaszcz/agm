@@ -1,6 +1,6 @@
 # AgL Execution
 
-Execution is everything after successful match compilation: lowering the match-compiled artifact into a closed, typeless program, evaluating it, and the host runtime that backs agents, shell calls, codecs, and rendering. Frontend artifacts never reach the evaluator — lowering is the boundary, and no checked-only lowering path exists. See [../index.md](../index.md) for the surrounding pipeline.
+Execution is everything after successful match compilation: lowering the match-compiled artifact into a closed, typeless program, evaluating it, and the host runtime that backs agents, shell calls, codecs, and rendering. Frontend artifacts never reach the evaluator — lowering is the boundary, and no checked-only lowering path exists. See [index.md](agl/index.md) for the surrounding pipeline.
 
 ## Design Invariant: Typeless Downstream
 
@@ -8,6 +8,6 @@ Every decision that needs type information — which built-in path, which codec,
 
 ## What To Read Next
 
-- Read [lowering.md](lowering.md) for lowering/linking and the execution IR.
-- Read [evaluator.md](evaluator.md) for the interpreter and extern (Python FFI) dispatch.
-- Read [runtime.md](runtime.md) for the host runtime services, value rendering, and the pipeline orchestrator.
+- Read [lowering.md](agl/execution/lowering.md) for lowering/linking and the execution IR.
+- Read [evaluator.md](agl/execution/evaluator.md) for the interpreter and extern (Python FFI) dispatch.
+- Read [runtime.md](agl/execution/runtime.md) for the host runtime services, value rendering, and the pipeline orchestrator.

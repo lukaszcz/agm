@@ -38,7 +38,7 @@ The firewall is *semantic*, not an I/O boundary: it isolates the static passes f
 
 - **Agent invocation** goes through `agm.agent.runner` (the same prepare/run path as loop/review), with the default runner resolved from the shared `[loop]` config via `agm.agent.config.default_agent_runner`. AgL adds only its own dispatch/typed-request layer (`runtime/agents.py`) over that runner.
 - **Primitives** come from `agm.core`: shell `exec` and agent subprocesses use `core.process`, environments use `core.env`, file and trace I/O use `core.fs`/`core.log` (so AgL participates in dry-run for free), and generic helpers (`util.text`, `util.graph`) are reused for newline normalization and SCC computation (module-cycle detection and the type-table's finiteness/schema-planning analyses).
-- **Configuration** is loaded and layered by `agm.config`. The program's own engine settings are `builtin var` bindings in the standard-library module `std.config`; the evaluator reads and writes them through `IrBuiltinLoad`/`IrBuiltinStore`, backing runtime-live settings with live interpreter fields and host-consumed settings with registers that reconfigure the live host service on write (see [repl.md](repl.md)). The `exec`/`repl` commands seed the initial values from the CLI and config-file layers using shared helpers (`core.log`); a source write overrides them from its program point onward.
+- **Configuration** is loaded and layered by `agm.config`. The program's own engine settings are `builtin var` bindings in the standard-library module `std.config`; the evaluator reads and writes them through `IrBuiltinLoad`/`IrBuiltinStore`, backing runtime-live settings with live interpreter fields and host-consumed settings with registers that reconfigure the live host service on write (see [repl.md](agl/repl.md)). The `exec`/`repl` commands seed the initial values from the CLI and config-file layers using shared helpers (`core.log`); a source write overrides them from its program point onward.
 
 ## Expression-Oriented Design
 
@@ -46,7 +46,7 @@ AgL has no separate statement category. Every construct — bindings, assignment
 
 ## Single-File and Graph Modes
 
-AgL supports file-based modules. A single-file program runs through the single-module passes; a program with imports runs through graph-aware variants of scope, typecheck, match compilation, and lowering that operate over the whole module graph at once. The two modes share the same AST, value model, and evaluator. Module loading and the graph passes are described in [modules.md](modules.md).
+AgL supports file-based modules. A single-file program runs through the single-module passes; a program with imports runs through graph-aware variants of scope, typecheck, match compilation, and lowering that operate over the whole module graph at once. The two modes share the same AST, value model, and evaluator. Module loading and the graph passes are described in [modules.md](agl/modules.md).
 
 ## Package Map
 
@@ -71,9 +71,9 @@ Package layering is enforced by a dependency-contract test (`tests/test_agl_depe
 
 ## What To Read Next
 
-- Read [frontend/index.md](frontend/index.md) for the static passes — lexer, parser, AST, scope, typecheck, and match compilation.
-- Read [execution/index.md](execution/index.md) for lowering, the IR, the evaluator, value rendering, and the host runtime.
-- Read [modules.md](modules.md) for the file-based module system and the graph-aware passes.
-- Read [repl.md](repl.md) for the incremental REPL session, `agm exec` parameter/agent wiring, and engine settings.
+- Read [frontend/index.md](agl/frontend/index.md) for the static passes — lexer, parser, AST, scope, typecheck, and match compilation.
+- Read [execution/index.md](agl/execution/index.md) for lowering, the IR, the evaluator, value rendering, and the host runtime.
+- Read [modules.md](agl/modules.md) for the file-based module system and the graph-aware passes.
+- Read [repl.md](agl/repl.md) for the incremental REPL session, `agm exec` parameter/agent wiring, and engine settings.
 
 The language grammar and surface syntax are documented from the user's perspective in the AgL reference (`docs/agl/reference/grammar.md` and `docs/agl/reference/lexical-structure.md`). The implementation-level token contract — the canonical token-type names and the lexer's merge/disambiguation passes — lives in `src/agm/agl/lexer/tokens.py` (declared the single source of truth) and the pass docstrings in `src/agm/agl/lexer/lexer.py`.

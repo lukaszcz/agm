@@ -1,0 +1,18 @@
+{
+  "scenarios": [
+    {
+      "name": "positional_builtin_constructors",
+      "params": {"exit_code": 7, "retries": 3},
+      "expect": {
+        "stdout": "out\n7\n3\n"
+      }
+    },
+    {
+      "name": "zero_exit_code_and_single_retry",
+      "params": {"exit_code": 0, "retries": 1},
+      "expect": {
+        "stdout": "out\n0\n1\n"
+      }
+    }
+  ]
+}

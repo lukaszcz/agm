@@ -541,12 +541,12 @@ class TypeEnvironment:
             typedef = BUILTIN_PRELUDE_TYPE_DEFS[prelude_name]
             if typedef.kind == "record":
                 self._constructor_field_kinds[(prelude_name, None)] = tuple(
-                    (fname, ParamKind.NAMED_ONLY) for fname, _ in typedef.fields
+                    (fname, ParamKind.STANDARD) for fname, _ in typedef.fields
                 )
                 continue
             for variant, vfields in typedef.variants:
                 self._constructor_field_kinds[(prelude_name, variant)] = tuple(
-                    (fname, ParamKind.NAMED_ONLY) for fname, _ in vfields
+                    (fname, ParamKind.STANDARD) for fname, _ in vfields
                 )
         # Exception constructor field kinds are NOT pre-registered here: each
         # exception's own fields honor their declared @pos/@std/@named marker

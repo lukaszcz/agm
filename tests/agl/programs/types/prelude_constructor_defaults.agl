@@ -1,0 +1,12 @@
+# Built-in record and enum payload fields follow the standard default.
+param exit_code: int
+param retries: int
+
+let result = ExecResult("out", exit_code, "err", false)
+let policy = ParsePolicy::Retry(retries)
+
+print result.stdout
+print result.exit_code
+case policy of
+  | ParsePolicy::Retry(n) => print n
+  | ParsePolicy::Abort => print 0

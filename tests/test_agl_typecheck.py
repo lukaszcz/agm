@@ -3883,6 +3883,7 @@ class TestParsePolicy:
         assert "on_parse_error" in str(err).lower() or "ParsePolicy" in str(err)
 
     def test_on_parse_error_abort_with_extra_args_raises(self) -> None:
+        # Abort is nullary, so every supplied argument is surplus.
         err = reject_type('let n: int = ask("Q", on_parse_error = Abort(message = "x"))\nn')
         assert "on_parse_error" in str(err).lower() or "Abort" in str(err)
 

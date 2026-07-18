@@ -1,5 +1,5 @@
 # Library module defining exceptions consumed cross-module.
-# Named-only fields (the default for exceptions).
+# Unmarked fields use the standard positional-or-named default.
 exception Boom extends Exception
   code: int
 

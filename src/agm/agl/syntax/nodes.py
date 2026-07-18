@@ -100,11 +100,11 @@ class ImportItem:
 
 @dataclass(frozen=True, slots=True)
 class ImportDecl:
-    """``import MODPATH[.*] [qualified] [as ALIAS] [using…|hiding…]`` declaration."""
+    """``[open] import MODPATH[/*] [as ALIAS] [using…|hiding…]`` declaration."""
 
     module_path: tuple[str, ...]
     wildcard: bool
-    qualified: bool
+    is_open: bool
     alias: str | None
     mode: ImportMode
     items: tuple[ImportItem, ...]
@@ -124,7 +124,7 @@ class ExportItem:
 
 @dataclass(frozen=True, slots=True)
 class ExportDecl:
-    """``export MODPATH[.*] [using…|hiding…]`` declaration."""
+    """``export MODPATH[/*] [using…|hiding…]`` declaration."""
 
     module_path: tuple[str, ...]
     wildcard: bool
@@ -853,7 +853,7 @@ class NameTarget:
     """Assignment target for ``name := expr``.
 
     ``module_qualifier`` is set for a qualified assignment target such as
-    ``std.config::max-iters := expr``; it is ``None`` for a plain local target.
+    ``std/config::max-iters := expr``; it is ``None`` for a plain local target.
     """
 
     name: str

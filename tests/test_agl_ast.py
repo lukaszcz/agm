@@ -2380,29 +2380,29 @@ class TestVisitorWalk:
             walk(NotANode(), lambda n: None)
 
     def test_walk_qual_var_ref_visits_qualifier(self) -> None:
-        """walk() on a qualified VarRef (foo.bar::thing) must visit the Qualifier node."""
+        """walk() on a slash-qualified VarRef must visit the Qualifier node."""
         from agm.agl.parser import parse_program
         from agm.agl.syntax import Qualifier
         from agm.agl.syntax.visitor import walk
 
-        prog = parse_program("foo.bar::thing")
+        prog = parse_program("foo/bar::thing")
         visited: list[object] = []
         walk(prog, visited.append)
         assert any(isinstance(n, Qualifier) for n in visited), (
-            "Qualifier node not visited when walking foo.bar::thing"
+            "Qualifier node not visited when walking foo/bar::thing"
         )
 
     def test_walk_qual_constructor_visits_qualifier(self) -> None:
-        """walk() on a module-qualified reference (foo.bar::Color) must visit the Qualifier node."""
+        """walk() on a slash-qualified reference must visit the Qualifier node."""
         from agm.agl.parser import parse_program
         from agm.agl.syntax import Qualifier
         from agm.agl.syntax.visitor import walk
 
-        prog = parse_program("foo.bar::Color")
+        prog = parse_program("foo/bar::Color")
         visited: list[object] = []
         walk(prog, visited.append)
         assert any(isinstance(n, Qualifier) for n in visited), (
-            "Qualifier node not visited when walking foo.bar::Color"
+            "Qualifier node not visited when walking foo/bar::Color"
         )
 
     def test_walk_qual_name_t_visits_qualifier(self) -> None:
@@ -2412,7 +2412,7 @@ class TestVisitorWalk:
         from agm.agl.syntax.visitor import walk
 
         # A qualified type annotation forces a NameT with module_qualifier set.
-        prog = parse_program("let x: foo.bar::MyType = null")
+        prog = parse_program("let x: foo/bar::MyType = null")
         visited: list[object] = []
         walk(prog, visited.append)
         assert any(isinstance(n, Qualifier) for n in visited), (
@@ -2424,7 +2424,7 @@ class TestVisitorWalk:
         from agm.agl.syntax import Qualifier
         from agm.agl.syntax.visitor import walk
 
-        prog = parse_program("let x: foo.bar::Box[int] = null")
+        prog = parse_program("let x: foo/bar::Box[int] = null")
         visited: list[object] = []
         walk(prog, visited.append)
         assert any(isinstance(node, Qualifier) for node in visited)
@@ -2735,11 +2735,12 @@ class TestModuleSystemNodes:
         q = Qualifier(segments=(), span=self._sp(), node_id=0)
         assert q.segments == ()
 
-    def test_qualifier_dotted_segments(self) -> None:
+    def test_qualifier_slash_segments_and_anchor(self) -> None:
         from agm.agl.syntax import Qualifier
 
-        q = Qualifier(segments=("foo", "bar"), span=self._sp(), node_id=0)
+        q = Qualifier(segments=("foo", "bar"), anchored=True, span=self._sp(), node_id=0)
         assert q.segments == ("foo", "bar")
+        assert q.anchored is True
 
     def test_qualifier_equality_ignores_span_and_node_id(self) -> None:
         from agm.agl.syntax import Qualifier
@@ -2781,7 +2782,7 @@ class TestModuleSystemNodes:
         decl = ImportDecl(
             module_path=("foo", "bar"),
             wildcard=False,
-            qualified=False,
+            is_open=False,
             alias=None,
             mode=ImportMode.ALL,
             items=(),
@@ -2790,7 +2791,7 @@ class TestModuleSystemNodes:
         )
         assert decl.module_path == ("foo", "bar")
         assert decl.wildcard is False
-        assert decl.qualified is False
+        assert decl.is_open is False
         assert decl.alias is None
         assert decl.mode == ImportMode.ALL
         assert decl.items == ()
@@ -2801,7 +2802,7 @@ class TestModuleSystemNodes:
         decl = ImportDecl(
             module_path=("utils",),
             wildcard=True,
-            qualified=False,
+            is_open=False,
             alias=None,
             mode=ImportMode.ALL,
             items=(),
@@ -2810,20 +2811,20 @@ class TestModuleSystemNodes:
         )
         assert decl.wildcard is True
 
-    def test_import_decl_qualified_with_alias(self) -> None:
+    def test_open_import_decl_with_alias(self) -> None:
         from agm.agl.syntax import ImportDecl, ImportMode
 
         decl = ImportDecl(
             module_path=("foo",),
             wildcard=False,
-            qualified=True,
+            is_open=True,
             alias="f",
             mode=ImportMode.ALL,
             items=(),
             span=self._sp(),
             node_id=0,
         )
-        assert decl.qualified is True
+        assert decl.is_open is True
         assert decl.alias == "f"
 
     def test_import_decl_using_mode(self) -> None:
@@ -2836,7 +2837,7 @@ class TestModuleSystemNodes:
         decl = ImportDecl(
             module_path=("m",),
             wildcard=False,
-            qualified=False,
+            is_open=False,
             alias=None,
             mode=ImportMode.USING,
             items=items,
@@ -2853,7 +2854,7 @@ class TestModuleSystemNodes:
         decl = ImportDecl(
             module_path=("m",),
             wildcard=False,
-            qualified=False,
+            is_open=False,
             alias=None,
             mode=ImportMode.HIDING,
             items=items,
@@ -2868,7 +2869,7 @@ class TestModuleSystemNodes:
         decl = ImportDecl(
             module_path=("m",),
             wildcard=False,
-            qualified=False,
+            is_open=False,
             alias=None,
             mode=ImportMode.ALL,
             items=(),
@@ -2888,7 +2889,7 @@ class TestModuleSystemNodes:
         decl = ImportDecl(
             module_path=("m",),
             wildcard=False,
-            qualified=False,
+            is_open=False,
             alias=None,
             mode=ImportMode.USING,
             items=(item,),

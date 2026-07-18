@@ -2149,18 +2149,18 @@ class AstBuilder(Transformer):
     ) -> syntax.ImportDecl:
         """Shared builder for import_decl_plain and import_decl_wildcard."""
         module_path: tuple[str, ...] = ()
-        qualified = False
+        is_open = False
         alias: str | None = None
         mode = ImportMode.ALL
         items: tuple[syntax.ImportItem, ...] = ()
 
         for a in args:
-            if isinstance(a, Token) and a.type == "QUALIFIED":
-                qualified = True
+            if isinstance(a, Token) and a.type == "OPEN":
+                is_open = True
             elif isinstance(a, Token) and a.type == "MODPATH":
-                module_path = tuple(str(a).split("."))
+                module_path = tuple(str(a).split("/"))
             elif isinstance(a, Token):
-                # Skip IMPORT, DOT, STAR, etc.
+                # Skip IMPORT, SLASH, STAR, etc.
                 pass
             elif type(a) is str:
                 # import_alias result: plain str (not Token, which is also a str subclass)
@@ -2168,10 +2168,15 @@ class AstBuilder(Transformer):
             else:
                 mode, items = cast(tuple[ImportMode, tuple[syntax.ImportItem, ...]], a)
 
+        if is_open and mode is ImportMode.USING:
+            raise AglSyntaxError(
+                "`open import` cannot use a `using` clause.", span=self._span_from_meta(meta)
+            )
+
         return syntax.ImportDecl(
             module_path=module_path,
             wildcard=wildcard,
-            qualified=qualified,
+            is_open=is_open,
             alias=alias,
             mode=mode,
             items=items,
@@ -2180,11 +2185,11 @@ class AstBuilder(Transformer):
         )
 
     def import_decl_plain(self, meta: Meta, args: _Args) -> syntax.ImportDecl:
-        """import_decl_plain: IMPORT MODPATH QUALIFIED? import_alias? import_clause?"""
+        """import_decl_plain: OPEN? IMPORT MODPATH import_alias? import_clause?"""
         return self._import_decl_from_args(meta, args, wildcard=False)
 
     def import_decl_wildcard(self, meta: Meta, args: _Args) -> syntax.ImportDecl:
-        """import_decl_wildcard: IMPORT MODPATH DOT STAR QUALIFIED? import_alias? import_clause?"""
+        """import_decl_wildcard: OPEN? IMPORT MODPATH SLASH STAR import_alias? import_clause?"""
         return self._import_decl_from_args(meta, args, wildcard=True)
 
     def import_alias(self, meta: Meta, args: _Args) -> str:
@@ -2256,9 +2261,9 @@ class AstBuilder(Transformer):
 
         for a in args:
             if isinstance(a, Token) and a.type == "MODPATH":
-                module_path = tuple(str(a).split("."))
+                module_path = tuple(str(a).split("/"))
             elif isinstance(a, Token):
-                # Skip EXPORT, DOT, STAR, etc.
+                # Skip EXPORT, SLASH, STAR, etc.
                 pass
             else:
                 mode, items = cast(tuple[ImportMode, tuple[syntax.ExportItem, ...]], a)
@@ -2277,7 +2282,7 @@ class AstBuilder(Transformer):
         return self._export_decl_from_args(meta, args, wildcard=False)
 
     def export_decl_wildcard(self, meta: Meta, args: _Args) -> syntax.ExportDecl:
-        """export_decl_wildcard: EXPORT MODPATH DOT STAR export_clause?"""
+        """export_decl_wildcard: EXPORT MODPATH SLASH STAR export_clause?"""
         return self._export_decl_from_args(meta, args, wildcard=True)
 
     def _export_hiding_items(self, meta: Meta, args: _Args) -> tuple[syntax.ExportItem, ...]:
@@ -2461,22 +2466,28 @@ class AstBuilder(Transformer):
         tok = args[0]
         assert isinstance(tok, Token)
         if tok.type == "MODQUAL":
-            segments = tuple(str(tok).split("."))
+            spelling = str(tok)
+            anchored = spelling.startswith("/")
+            segments = tuple(spelling.removeprefix("/").split("/"))
         else:
             # DCOLON — self-reference, empty segments
+            anchored = False
             segments = ()
         return Qualifier(
             segments=segments,
             span=self._span_from_token(tok),
             node_id=self._next_id(),
+            anchored=anchored,
         )
 
     def type_qual(self, meta: Meta, args: _Args) -> TypeQualifier:
         """type_qual: MODQUAL."""
         tok = args[0]
         assert isinstance(tok, Token)
-        segments = tuple(str(tok).split("."))
-        if len(segments) != 1:
+        spelling = str(tok)
+        anchored = spelling.startswith("/")
+        segments = tuple(spelling.removeprefix("/").split("/"))
+        if anchored or len(segments) != 1:
             raise AglSyntaxError(
                 "A type qualifier after '::' must be a single type name.",
                 span=self._span_from_token(tok),

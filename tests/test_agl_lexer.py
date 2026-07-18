@@ -2261,7 +2261,7 @@ class TestCaseNeutralNames:
 
     def test_config_is_ordinary_name(self) -> None:
         # 'config' is an ordinary identifier everywhere, including at item-start
-        # and as the 'config' segment of a module path (e.g. std.config).
+        # and as the 'config' segment of a module path (e.g. std/config).
         assert tok("config") == [("NAME", "config")]
         assert ("NAME", "config") in tok("let config = 1")
 
@@ -2342,8 +2342,16 @@ class TestModuleSystemLexer:
     # --- import soft keyword ---
 
     def test_import_at_line_start_is_import_token(self) -> None:
-        result = tok("import foo.bar")
+        result = tok("import foo/bar")
         assert result[0] == ("IMPORT", "import")
+
+    def test_open_is_promoted_only_directly_before_item_start_import(self) -> None:
+        assert tok("open import foo")[0:2] == [("OPEN", "open"), ("IMPORT", "import")]
+        assert ("NAME", "open") in tok("let open = 1")
+        assert ("NAME", "open") in tok("open\nimport foo")
+
+    def test_qualified_remains_an_identifier(self) -> None:
+        assert ("NAME", "qualified") in tok("import foo qualified")
 
     def test_import_mid_expression_stays_name(self) -> None:
         # 'import' after an operator is NOT at item-start → stays NAME
@@ -2361,17 +2369,6 @@ class TestModuleSystemLexer:
         assert ("NAME", "private") in result
         types = [t for t, _ in result]
         assert "PRIVATE" not in types
-
-    def test_qualified_in_import_line(self) -> None:
-        result = tok("import foo qualified")
-        types = [t for t, _ in result]
-        assert "QUALIFIED" in types
-
-    def test_qualified_outside_import_line_stays_name(self) -> None:
-        result = tok("let qualified = 1")
-        assert ("NAME", "qualified") in result
-        types = [t for t, _ in result]
-        assert "QUALIFIED" not in types
 
     def test_using_in_import_line(self) -> None:
         result = tok("import foo using bar")
@@ -2401,25 +2398,34 @@ class TestModuleSystemLexer:
 
     # --- MODQUAL merging ---
 
-    def test_simple_name_dcolon_name_merges_to_modqual(self) -> None:
+    def test_tight_single_segment_qualifier_merges_to_modqual(self) -> None:
         result = lark_tok("foo::bar")
-        assert result[0] == ("MODQUAL", "foo")
-        assert result[1][0] == "NAME"
-        assert result[1][1] == "bar"
+        assert result[0:2] == [("MODQUAL", "foo"), ("NAME", "bar")]
 
-    def test_dotted_path_dcolon_merges_to_modqual(self) -> None:
-        result = lark_tok("foo.bar::baz")
-        assert result[0] == ("MODQUAL", "foo.bar")
-        assert result[1][1] == "baz"
+    def test_tight_slash_qualifier_and_anchor_merge_to_modqual(self) -> None:
+        assert lark_tok("foo/bar::baz")[0] == ("MODQUAL", "foo/bar")
+        assert lark_tok("/foo/bar::baz")[0] == ("MODQUAL", "/foo/bar")
 
-    def test_upper_name_dcolon_merges_to_modqual(self) -> None:
-        result = lark_tok("Foo::Bar")
-        assert result[0] == ("MODQUAL", "Foo")
-        assert result[1][0] == "NAME"
+    @pytest.mark.parametrize("source", ("foo ::bar", "foo / bar::baz", "foo/ bar::baz"))
+    def test_spaced_qualifier_parts_do_not_merge_into_the_preceding_path(self, source: str) -> None:
+        assert ("MODQUAL", "foo/bar") not in lark_tok(source)
+
+    def test_qualifier_does_not_absorb_division(self) -> None:
+        assert lark_tok("a/b::c")[0] == ("MODQUAL", "a/b")
+        assert lark_tok("a / b::c")[:3] == [("NAME", "a"), ("SLASH", "/"), ("MODQUAL", "b")]
+
+    def test_multi_segment_qualifier_requires_a_tight_final_dcolon(self) -> None:
+        assert lark_tok("foo/bar ::x") == [
+            ("NAME", "foo"),
+            ("SLASH", "/"),
+            ("NAME", "bar"),
+            ("DCOLON", "::"),
+            ("NAME", "x"),
+        ]
 
     def test_typed_call_dcolon_lsqb_not_merged(self) -> None:
         # NAME DCOLON LSQB — must NOT be merged to MODQUAL (typed call syntax)
-        result = lark_tok("foo::[int]()")
+        result = lark_tok("f::[int]()")
         types = [t for t, _ in result]
         assert "MODQUAL" not in types
         assert "DCOLON" in types
@@ -2430,6 +2436,14 @@ class TestModuleSystemLexer:
         types = [t for t, _ in result]
         assert "MODQUAL" not in types
         assert "DCOLON" in types
+
+    def test_slash_module_paths_merge_without_tightness(self) -> None:
+        assert tok("import foo / bar / *")[:4] == [
+            ("IMPORT", "import"),
+            ("MODPATH", "foo/bar"),
+            ("SLASH", "/"),
+            ("STAR", "*"),
+        ]
 
     def test_export_using_in_export_line(self) -> None:
         result = tok("export foo using bar")

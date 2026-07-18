@@ -41,7 +41,6 @@ from agm.agl.lexer.tokens import (
     CALL_LBRACE,
     DCOLON,
     DO_LSQB,
-    DOT,
     EXPORT,
     GRAMMAR_TOKEN_REMAP,
     HIDING,
@@ -54,9 +53,11 @@ from agm.agl.lexer.tokens import (
     MODQUAL,
     NAME,
     OP_NAME,
+    OPEN,
     PRIVATE,
-    QUALIFIED,
     RSQB,
+    SLASH,
+    STAR,
     TYPEARG_LSQB,
     USING,
 )
@@ -142,21 +143,17 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
     """Contextually promote soft keywords in the post-layout token stream.
 
     Rules:
-    - 'import' → IMPORT when preceded by start-of-file / _NEWLINE / _INDENT /
-      _DEDENT / SEMICOLON (i.e. at item-start position).
-    - 'private' → PRIVATE under the same item-start condition.
-    - 'export' → EXPORT under the same item-start condition.
-    - 'qualified' → QUALIFIED, 'using' → USING, 'hiding' → HIDING only
-      within an import declaration line (after IMPORT has been emitted on
-      the current logical line, up to the next line/statement terminator).
-    - 'using' → USING, 'hiding' → HIDING within an export declaration line.
+    - 'open' → OPEN only at item-start and only directly before 'import'.
+    - 'import' → IMPORT at item-start, or immediately after OPEN.
+    - 'private' → PRIVATE and 'export' → EXPORT at item-start.
+    - 'using' → USING and 'hiding' → HIDING within import or export lines.
     """
     result: list[Token] = []
     in_import_line = False
     in_export_line = False
     prev_type: str | None = None  # None means start-of-stream
 
-    for tok in tokens:
+    for index, tok in enumerate(tokens):
         tt = tok.type
         tv = str(tok)
 
@@ -167,7 +164,15 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
 
         if tt == NAME:
             at_item_start = prev_type is None or prev_type in _ITEM_START_TYPES
-            if tv == "import" and at_item_start:
+            if (
+                tv == "open"
+                and at_item_start
+                and index + 1 < len(tokens)
+                and tokens[index + 1].type == NAME
+                and str(tokens[index + 1]) == "import"
+            ):
+                tok = _retype(tok, OPEN)
+            elif tv == "import" and (at_item_start or prev_type == OPEN):
                 tok = _retype(tok, IMPORT)
                 in_import_line = True
             elif tv == "export" and at_item_start:
@@ -176,9 +181,7 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
             elif tv == "private" and at_item_start:
                 tok = _retype(tok, PRIVATE)
             elif in_import_line:
-                if tv == "qualified":
-                    tok = _retype(tok, QUALIFIED)
-                elif tv == "using":
+                if tv == "using":
                     tok = _retype(tok, USING)
                 elif tv == "hiding":
                     tok = _retype(tok, HIDING)
@@ -198,14 +201,13 @@ def _merge_modpath(tokens: list[Token]) -> list[Token]:
     """Merge import module paths into single MODPATH tokens.
 
     Pattern: immediately following an IMPORT or EXPORT token, consume
-    NAME (DOT NAME)* into a single MODPATH token whose value
-    is the dotted path (e.g. "foo.bar", "utils").
+    NAME (SLASH NAME)* into a single MODPATH token whose value
+    is the slash path (e.g. "foo/bar", "utils"). Whitespace around slash
+    separators is allowed in module headers.
 
-    This eliminates the LALR(1) shift/reduce conflict between
-    ``var_ref : NAME`` / ``postfix: postfix DOT ...`` (expression grammar)
-    and the ``module_path : NAME (DOT NAME)*`` (import grammar).
-    By merging the path in the lexer, the grammar sees a single MODPATH token
-    rather than the raw NAME DOT ... sequence.
+    This keeps slash-separated module headers distinct from division in the
+    expression grammar. By merging the path in the lexer, the grammar sees a
+    single MODPATH token rather than the raw NAME SLASH ... sequence.
     """
     result: list[Token] = []
     i = 0
@@ -215,15 +217,15 @@ def _merge_modpath(tokens: list[Token]) -> list[Token]:
         if tok.type in (IMPORT, EXPORT) and i + 1 < n and tokens[i + 1].type == NAME:
             result.append(tok)
             i += 1
-            # Absorb NAME (DOT NAME)*. Module path segments may begin with
+            # Absorb NAME (SLASH NAME)*. Module path segments may begin with
             # either lowercase or uppercase letters.
             j = i
             seg_parts: list[str] = [str(tokens[j])]
             j += 1
-            while j + 1 < n and tokens[j].type == DOT and tokens[j + 1].type == NAME:
+            while j + 1 < n and tokens[j].type == SLASH and tokens[j + 1].type == NAME:
                 seg_parts.append(str(tokens[j + 1]))
                 j += 2
-            modpath_value = ".".join(seg_parts)
+            modpath_value = "/".join(seg_parts)
             first_tok = tokens[i]
             last_tok = tokens[j - 1]
             merged = Token(
@@ -237,9 +239,40 @@ def _merge_modpath(tokens: list[Token]) -> list[Token]:
                 end_pos=last_tok.end_pos,
             )
             result.append(merged)
-            # If next token is DOT STAR, absorb into a separate STAR token
-            # (wildcard tail). We keep DOT STAR as two tokens for the grammar.
+            # A following SLASH STAR is the wildcard tail. The raw scanner
+            # makes a tight ``/*`` an OP_NAME, so split that header-local form
+            # back into the grammar's two punctuation tokens.
             i = j
+            if i < n and tokens[i].type == OP_NAME and str(tokens[i]) == "/*":
+                wildcard = tokens[i]
+                assert wildcard.start_pos is not None
+                assert wildcard.end_pos is not None
+                assert wildcard.column is not None
+                result.extend(
+                    (
+                        Token(
+                            SLASH,
+                            "/",
+                            start_pos=wildcard.start_pos,
+                            line=wildcard.line,
+                            column=wildcard.column,
+                            end_line=wildcard.line,
+                            end_column=wildcard.column + 1,
+                            end_pos=wildcard.start_pos + 1,
+                        ),
+                        Token(
+                            STAR,
+                            "*",
+                            start_pos=wildcard.start_pos + 1,
+                            line=wildcard.line,
+                            column=wildcard.column + 1,
+                            end_line=wildcard.end_line,
+                            end_column=wildcard.end_column,
+                            end_pos=wildcard.end_pos,
+                        ),
+                    )
+                )
+                i += 1
             continue
         result.append(tok)
         i += 1
@@ -247,64 +280,74 @@ def _merge_modpath(tokens: list[Token]) -> list[Token]:
 
 
 def _merge_modqual(tokens: list[Token]) -> list[Token]:
-    """Merge module-qualifier prefixes into single MODQUAL tokens.
+    """Merge byte-adjacent slash-qualified prefixes into ``MODQUAL`` tokens.
 
-    Pattern: NAME (DOT NAME)* DCOLON where the token AFTER DCOLON is NOT LSQB.
-
-    Merges the prefix including '::' into a single MODQUAL token whose value
-    is the dotted qualifier (e.g. "foo.bar", "A", "A.baz"). The DCOLON itself
-    is consumed into the MODQUAL token.
-
-    The `next != LSQB` guard preserves the existing typed-call atom
-    `callee::[T](args)` (NAME DCOLON LSQB must stay intact).
-
-    A leading '::name' (empty qualifier self-reference) has no preceding name,
-    so no merge fires; the bare DCOLON is handled by the grammar.
+    A qualifier is ``[SLASH] NAME (SLASH NAME)* DCOLON`` with every pair in
+    that run adjacent in the source. The token value retains its optional
+    leading slash so the AST builder can distinguish anchored references.
+    ``NAME DCOLON LSQB`` remains unmerged for typed calls.
     """
     result: list[Token] = []
     i = 0
     n = len(tokens)
     while i < n:
-        tok = tokens[i]
-        tt = tok.type
-        # Check if we start a potential module qualifier:
-        # NAME (DOT NAME)* DCOLON (not followed by LSQB)
-        if tt == NAME:
-            # Scan ahead: collect (DOT NAME)* then DCOLON
-            j = i + 1
-            while j + 1 < n and tokens[j].type == DOT and tokens[j + 1].type == NAME:
-                j += 2
-            # Now tokens[j] should be DCOLON (if this is a qualifier)
-            if j < n and tokens[j].type == DCOLON:
-                # Check the token after DCOLON is not LSQB
-                next_after = tokens[j + 1].type if j + 1 < n else None
-                if next_after != LSQB:
-                    # Merge tokens[i..j] (inclusive of DCOLON at j) into MODQUAL
-                    # Build the qualifier string: segments joined with '.'
-                    seg_parts: list[str] = [str(tokens[i])]
-                    k = i + 1
-                    while k < j:
-                        # skip DOT, take the name
-                        k += 1  # skip DOT
-                        seg_parts.append(str(tokens[k]))
-                        k += 1
-                    qualifier_value = ".".join(seg_parts)
-                    first_tok = tokens[i]
-                    last_tok = tokens[j]  # the DCOLON
-                    merged = Token(
-                        MODQUAL,
-                        qualifier_value,
-                        start_pos=first_tok.start_pos,
-                        line=first_tok.line,
-                        column=first_tok.column,
-                        end_line=last_tok.end_line,
-                        end_column=last_tok.end_column,
-                        end_pos=last_tok.end_pos,
-                    )
-                    result.append(merged)
-                    i = j + 1
-                    continue
-        result.append(tok)
+        start = tokens[i]
+        name_index = i
+        if start.type == SLASH:
+            name_index += 1
+            if (
+                name_index >= n
+                or tokens[name_index].type != NAME
+                or start.end_pos != tokens[name_index].start_pos
+            ):
+                result.append(start)
+                i += 1
+                continue
+        elif start.type != NAME:
+            result.append(start)
+            i += 1
+            continue
+
+        last_name = tokens[name_index]
+        segments = [str(last_name)]
+        j = name_index + 1
+        while (
+            j + 1 < n
+            and tokens[j].type == SLASH
+            and tokens[j + 1].type == NAME
+            and last_name.end_pos == tokens[j].start_pos
+            and tokens[j].end_pos == tokens[j + 1].start_pos
+        ):
+            last_name = tokens[j + 1]
+            segments.append(str(last_name))
+            j += 2
+
+        if (
+            j < n
+            and tokens[j].type == DCOLON
+            and last_name.end_pos == tokens[j].start_pos
+            and (j + 1 >= n or tokens[j + 1].type != LSQB)
+        ):
+            qualifier_value = "/".join(segments)
+            if start.type == SLASH:
+                qualifier_value = "/" + qualifier_value
+            last_tok = tokens[j]
+            result.append(
+                Token(
+                    MODQUAL,
+                    qualifier_value,
+                    start_pos=start.start_pos,
+                    line=start.line,
+                    column=start.column,
+                    end_line=last_tok.end_line,
+                    end_column=last_tok.end_column,
+                    end_pos=last_tok.end_pos,
+                )
+            )
+            i = j + 1
+            continue
+
+        result.append(start)
         i += 1
     return result
 

@@ -74,17 +74,17 @@ class ImportMode(enum.Enum):
 
 @dataclass(frozen=True, slots=True)
 class Qualifier:
-    """A module qualifier prefix, as parsed from ``MODQUAL::`` or leading ``::``.
+    """A module qualifier prefix, as parsed from ``MODQUAL`` or leading ``::``.
 
     ``segments == ()`` means the current module (written as ``::name``).
-    ``segments == ("foo", "bar")`` means the module at path ``foo.bar``.
-    Alias-rooted qualifiers carry the alias + any trailing segments; the AST
-    does not resolve alias vs. module-path — that is scope resolution's job.
+    ``anchored`` distinguishes ``/foo/bar::name`` from an ordinary suffix
+    qualifier with the same segments. Scope resolution determines the target.
     """
 
     segments: tuple[str, ...]
     span: SourceSpan = field(compare=False)
     node_id: int = field(compare=False)
+    anchored: bool = False
 
 
 @dataclass(frozen=True, slots=True)

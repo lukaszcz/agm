@@ -52,11 +52,11 @@ on a `type_alias` or on `extern_func_def`; `"private"` composes with
 ## Import declarations
 
 ```ebnf
-import_decl ::= "import" module_path ("." "*")? "qualified"?
+import_decl ::= "open"? "import" module_path ("/" "*")?
                 ("as" ref_name)?
                 (using_clause | hiding_clause)?
 
-module_path ::= NAME ("." NAME)*      (* all lower-case segments *)
+module_path ::= NAME ("/" NAME)*
 ref_name    ::= name
 
 using_clause  ::= "using" import_item ("," import_item)*
@@ -64,24 +64,21 @@ hiding_clause ::= "hiding" ref_name ("," ref_name)*
 import_item   ::= ref_name ("as" ref_name)?
 ```
 
-`"import"`, `"qualified"`, `"using"`, and `"hiding"` are contextual soft
-keywords — they remain valid identifiers outside import lines.
-
-`"private"` is a contextual soft keyword at item-start — it remains a valid
-identifier elsewhere.
+`"open"` is a contextual soft keyword only when it directly precedes an
+item-start `"import"`. `"import"` and `"private"` are contextual at
+item-start; `"using"` and `"hiding"` are contextual within import lines.
+They remain valid identifiers elsewhere.
 
 Examples:
 
 ```agl
-import foo.bar
-import foo.bar as A
-import foo.bar qualified
-import foo.bar qualified as A
-import foo.bar using x, y
-import foo.bar hiding x, y
-import foo.bar using x as X, y
-import foo.*
-import foo.bar.* as A
+import foo/bar
+open import foo/bar as A
+import foo/bar using x, y
+import foo/bar hiding x, y
+import foo/bar using x as X, y
+import foo/*
+import foo/bar/* as A
 ```
 
 ### Suites (indented blocks)
@@ -224,16 +221,16 @@ previously declared user operator.
 ```ebnf
 let_decl ::= "let" name (":" type_expr)? "=" expr
 var_decl ::= "var" name (":" type_expr)? "=" expr
-builtin_var_def ::= "builtin" "var" name ":" type_expr  (* body-less; std.config only *)
+builtin_var_def ::= "builtin" "var" name ":" type_expr  (* body-less; std/config only *)
 assign_expr ::= assign_target ":=" expr
 assign_target ::= name ("[" expr "]")*
-                | module_path "::" name
+                | qual_prefix name
 ```
 
 A `builtin var` is a body-less, host-backed mutable binding with a mandatory
 type and no initializer; the `builtin` modifier may sit on the same line or the
 line directly above (like `builtin def`). It may be declared only at the root of
-`std.config`; entry modules and other library modules cannot declare one.
+`std/config`; entry modules and other library modules cannot declare one.
 
 Assignment has type `unit` and returns `void`. A cross-module assignment target
 — written with a qualifier, or bare when an open import puts the name in scope —
@@ -300,7 +297,7 @@ pattern        ::= "_"
                  | name
                  | name "(" pattern_fields? ")"
                  | qual_prefix type_qual? name ("(" pattern_fields? ")")?
-qual_prefix    ::= module_path "::" | "::"
+qual_prefix    ::= "/"? module_path "::" | "::"
 type_qual      ::= name "::"
 pattern_fields ::= pattern_field ("," pattern_field)* ","?
 pattern_field  ::= pattern              (* positional sub-pattern *)
@@ -308,8 +305,11 @@ pattern_field  ::= pattern              (* positional sub-pattern *)
                                            (* named sub-pattern: field = subpattern *)
 ```
 
-A qualified variant pattern (`Option::some(value)` or
-`module::Option::some(value)`) names the owning enum and variant with `::`.
+A qualified variant pattern (`Option::some(value)`,
+`module::Option::some(value)`, or `/module::Option::some(value)`) names the
+owning enum and variant with `::`. A leading `/` is an anchored qualifier;
+without it, the qualifier is resolved as a suffix. The complete qualifier
+through `::` is byte-adjacent.
 Unqualified constructor ownership is selected by the scrutinee's static enum
 type, even when multiple enums share the variant name; a qualifier is optional
 and must agree with that type when present ([Generics](generics.md),

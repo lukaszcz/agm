@@ -3391,6 +3391,56 @@ class TestConstructorRefDispatch:
 
         assert checker._resolved.constructor_refs[node_id] == constructor_ref
 
+    @pytest.mark.parametrize(
+        ("outer_value", "inner_body"),
+        [
+            ("var on: int = 0", "on"),
+            ("var on: int = 0", "on := on + 1\n        on"),
+            ("var on: list[int] = [0]", "on[0] := 1\n        on[0]"),
+        ],
+    )
+    def test_nested_constructor_patterns_reach_outer_binding(
+        self, outer_value: str, inner_body: str
+    ) -> None:
+        source = (
+            "enum Flag\n  | on\n  | off\n"
+            "enum Packet\n  | packet(flag: Flag)\n"
+            f"{outer_value}\n"
+            "let item = packet(Flag::on)\n"
+            "case item of\n"
+            "  | packet(on) =>\n"
+            "    case item of\n"
+            "      | packet(on) =>\n"
+            f"        {inner_body}\n"
+            "      | packet(_) => 0\n"
+            "  | packet(_) => 0"
+        )
+        resolved = resolve_module(parse_program(source))
+        checked = check_module(resolved, default_capabilities())
+        outer_var = resolved.program.body.items[2]
+        assert isinstance(outer_var, VarDecl)
+
+        on_references = [ref for ref in checked.resolution.values() if ref.name == "on"]
+        assert on_references
+        assert {ref.decl_node_id for ref in on_references} == {outer_var.node_id}
+
+    def test_nested_constructor_pattern_reaches_outer_field_binder(self) -> None:
+        source = (
+            "enum Flag\n  | on\n  | off\n"
+            "enum Box\n  | box(on: int)\n"
+            "enum Packet\n  | packet(flag: Flag)\n"
+            "let box = box(3)\n"
+            "let item = packet(Flag::on)\n"
+            "case box of\n"
+            "  | box(on) =>\n"
+            "    case item of\n"
+            "      | packet(on) => on\n"
+            "      | packet(_) => 0\n"
+            "  | box(_) => 0"
+        )
+
+        assert check_module(resolve_module(parse_program(source)), default_capabilities())
+
     def test_bare_pattern_rejects_missing_or_stale_constructor_candidates(self) -> None:
         resolved = resolve_module(
             parse_program(

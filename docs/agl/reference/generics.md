@@ -430,8 +430,9 @@ case value of
 Inside a constructor pattern, a bare name is field-directed: it binds only
 when it has the matched field's name. A different bare name must be a nullary
 constructor of that field's type. When a field and a constructor share a name,
-write `name()` for the constructor or `_ as name` for the field value. Use
-`field as name` to give a field binding a different name.
+write `name()` for the constructor or `_ as name` for the field value.
+`field as name` adds `name` as an alias while still binding `field`; use
+`_ as name` when only the alternate name is wanted.
 
 ## No generic agent targets
 

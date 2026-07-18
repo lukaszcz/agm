@@ -43,7 +43,7 @@ import keyword
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from typing import Literal, TypeGuard, assert_never, cast
+from typing import Literal, TypeGuard, assert_never
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
@@ -55,6 +55,7 @@ from agm.agl.scope.symbols import (
     BuiltinKind,
     ConstructorRef,
     ModuleResolution,
+    ScopeNode,
 )
 from agm.agl.semantics.type_table import TypeTable, comparable_types
 from agm.agl.semantics.types import (
@@ -448,6 +449,11 @@ class _Checker:
         # ``None`` means a final binder; a ConstructorRef means a final bare
         # constructor pattern. Scope only supplied provisional nested binders.
         self._pattern_classifications: dict[int, ConstructorRef | None] = {}
+        # Provisional nested pattern names may shadow another provisional name
+        # from an enclosing case. This table records each provisional slot's
+        # final lexical meaning so nested reconciliation can continue past a
+        # constructor-classified slot or reach an enclosing final binder.
+        self._reconciled_pattern_binders: dict[int, VarPattern | AsPattern | None] = {}
         self._partial_calls: dict[int, PartialCallSpec] = {}
         # Extern provenance for first-class function values.  A value can name
         # one or more externs (e.g. through a branch); when such a function
@@ -3235,6 +3241,34 @@ class _Checker:
                 span=pattern.span,
             )
 
+    @staticmethod
+    def _scope_chain(scope: ScopeNode) -> tuple[ScopeNode, ...]:
+        """Return *scope* and each lexical ancestor."""
+        scopes: list[ScopeNode] = []
+        current: ScopeNode | None = scope
+        while current is not None:
+            scopes.append(current)
+            current = current.parent
+        return tuple(scopes)
+
+    def _reconciled_pattern_ref(self, ref: BindingRef) -> BindingRef | None:
+        """Return a provisional pattern reference's finalized lexical binding."""
+        binder = self._reconciled_pattern_binders.get(ref.decl_node_id, ref)
+        if binder is None:
+            return None
+        if isinstance(binder, (VarPattern, AsPattern)):
+            return replace(ref, decl_span=binder.span, decl_node_id=binder.node_id)
+        return ref
+
+    def _reconciled_lexical_lookup(self, scope: ScopeNode, name: str) -> BindingRef:
+        """Look up *name* through checker-finalized provisional pattern slots."""
+        return next(
+            resolved_ref
+            for current in self._scope_chain(scope)
+            if (ref := current.bindings.get(name)) is not None
+            if (resolved_ref := self._reconciled_pattern_ref(ref)) is not None
+        )
+
     def _reconcile_provisional_pattern_references(self, case: Case, pattern: Pattern) -> None:
         """Reconcile branch references with final field-directed classifications.
 
@@ -3268,6 +3302,9 @@ class _Checker:
                     span=binders[1].span,
                 )
             provisional_ids = {candidate.node_id for candidate in provisional}
+            final_binder = binders[0] if binders else None
+            for provisional_id in provisional_ids:
+                self._reconciled_pattern_binders[provisional_id] = final_binder
             reference_node_ids = [
                 ref_node_id
                 for ref_node_id, ref in self._resolved.resolution.items()
@@ -3275,15 +3312,14 @@ class _Checker:
             ]
             if not reference_node_ids:
                 continue
-            if binders:
-                binder = binders[0]
+            if final_binder is not None:
                 target_ref = replace(
                     self._resolved.resolution[reference_node_ids[0]],
-                    decl_span=binder.span,
-                    decl_node_id=binder.node_id,
+                    decl_span=final_binder.span,
+                    decl_node_id=final_binder.node_id,
                 )
             else:
-                target_ref = cast(BindingRef, case_scope.lookup(name))
+                target_ref = self._reconciled_lexical_lookup(case_scope, name)
                 candidates_for_name = self._resolved.constructor_candidates.get(name, ())
                 if (
                     target_ref.kind is BinderKind.constructor_binding

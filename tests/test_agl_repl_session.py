@@ -130,6 +130,20 @@ class TestPersistence:
         assert r.value is not None
         assert _int(r.value) == 8
 
+    def test_new_constructor_does_not_shadow_persisted_value(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("let on = 7").ok
+
+        result = s.eval_entry(
+            "enum Flag\n  | on\n"
+            "let matched = case Flag::on of\n"
+            "  | on => 8\n"
+            "on + matched"
+        )
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(15)
+
     def test_partial_application_closure_persists_into_next_entry(self) -> None:
         s = ReplSession()
 

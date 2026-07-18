@@ -590,6 +590,12 @@ class _Resolver:
                 # Constructors remain candidates for pattern resolution, but
                 # ordinary value bindings own the value namespace spelling.
                 continue
+            parent_ref = scope.parent.lookup(name) if scope.parent is not None else None
+            if parent_ref is not None and parent_ref.kind is not BinderKind.constructor_binding:
+                # A REPL entry's new constructors remain available to pattern
+                # classification, but an ordinary session binding retains its
+                # expression-position meaning.
+                continue
             # Use the first candidate's decl as the representative binding.
             rep = crefs[0]
             ref = BindingRef(
@@ -747,17 +753,25 @@ class _Resolver:
 
     @staticmethod
     def _snapshot_case_scope(scope: ScopeNode, names: Iterable[str]) -> ScopeNode:
-        """Capture only the names match diagnostics can inspect at a case site.
+        """Capture candidate-name bindings and their lexical ancestry at a case site."""
+        candidate_names = tuple(names)
 
-        Case normalization only queries constructor-candidate names to decide
-        whether a bare enum variant remains visible.  Recording those lookups
-        directly avoids copying every preceding binding for every case while
-        preserving the exact shadowing state at this source position.
-        """
-        return ScopeNode(
-            scope.node_id,
-            bindings={name: ref for name in names if (ref := scope.lookup(name)) is not None},
-        )
+        def snapshot(current: ScopeNode | None) -> ScopeNode | None:
+            if current is None:
+                return None
+            return ScopeNode(
+                current.node_id,
+                parent=snapshot(current.parent),
+                bindings={
+                    name: ref
+                    for name in candidate_names
+                    if (ref := current.bindings.get(name)) is not None
+                },
+            )
+
+        captured = snapshot(scope)
+        assert captured is not None
+        return captured
 
     @contextmanager
     def _child_scope(self, node_id: int) -> Iterator[ScopeNode]:

@@ -1393,7 +1393,7 @@ class _Resolver:
             owning_module: ModuleId = next(iter(qual_map.values()))[0]
             if self._private_info.get((owning_module, type_name)):
                 raise AglScopeError(
-                    f"'{type_name}' in module '{owning_module.dotted()}' is declared private "
+                    f"'{type_name}' in module '{owning_module.path_str()}' is declared private "
                     f"and cannot be accessed from outside the module.",
                     span=span,
                 )
@@ -1427,7 +1427,7 @@ class _Resolver:
             return None
         if len(qnames) > 1:
             # Clash-on-use: more than one module exposes this name.
-            qualifiers = sorted(qn[0].dotted() + "::" + qn[1] for qn in qnames)
+            qualifiers = sorted(qn[0].path_str() + "::" + qn[1] for qn in qnames)
             hint = ", ".join(qualifiers)
             raise AglScopeError(
                 f"'{name}' is ambiguous: imported from multiple modules. "
@@ -1486,7 +1486,7 @@ class _Resolver:
             # Check if the name is private in the OWNING module (gives better error).
             if self._private_info.get((owning_module, name)):
                 raise AglScopeError(
-                    f"'{name}' in module '{owning_module.dotted()}' is declared private "
+                    f"'{name}' in module '{owning_module.path_str()}' is declared private "
                     f"and cannot be accessed from outside the module.",
                     span=span,
                 )

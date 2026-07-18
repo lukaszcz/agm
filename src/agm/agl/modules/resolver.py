@@ -96,7 +96,7 @@ def expand_wildcard(
     Globs ``<root>/<prefix>.agl`` (the prefix module itself, if it exists) and
     ``<root>/<prefix>/**/*.agl`` (the full subtree) across **all** roots.
 
-    Each discovered file is mapped to its dotted :class:`~agm.agl.modules.ids.ModuleId`
+    Each discovered file is mapped to its slash-path :class:`~agm.agl.modules.ids.ModuleId`
     via the inverse of ``ModuleId.relpath()``.  Global uniqueness is enforced: if
     the same id is found in two roots as distinct canonical files, an
     :class:`~agm.agl.modules.errors.AmbiguousModule` error is raised.  The

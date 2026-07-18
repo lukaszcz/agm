@@ -57,7 +57,7 @@ box
     )
 
     assert result["box"] == RecordValue(
-        NominalId(ModuleId.from_dotted("lib"), "Box"), "Box", {"value": IntValue(1)}
+        NominalId(ModuleId.from_path("lib"), "Box"), "Box", {"value": IntValue(1)}
     )
 
 

@@ -1070,7 +1070,7 @@ class TestErrorMessageDeterminism:
             )
         msg = str(exc_info.value)
         assert "ghost" in msg
-        assert "foo.bar" in msg
+        assert "foo/bar" in msg
 
     def test_hiding_error_message_names_module(self) -> None:
         d = _decl(("foo", "bar"), mode=ImportMode.HIDING, items=(_item("ghost"),))
@@ -1082,7 +1082,7 @@ class TestErrorMessageDeterminism:
             )
         msg = str(exc_info.value)
         assert "ghost" in msg
-        assert "foo.bar" in msg
+        assert "foo/bar" in msg
 
     def test_wildcard_using_error_names_missing_name(self) -> None:
         d = _decl(("foo",), wildcard=True, mode=ImportMode.USING, items=(_item("ghost"),))

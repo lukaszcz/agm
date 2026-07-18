@@ -180,7 +180,7 @@ class RecordType:
         return "record"
 
     def __repr__(self) -> str:
-        prefix = "" if self.module_id.is_entry else f"{self.module_id.dotted()}::"
+        prefix = "" if self.module_id.is_entry else f"{self.module_id.path_str()}::"
         if self.type_args:
             args_str = ", ".join(repr(a) for a in self.type_args)
             return f"{prefix}{self.name}[{args_str}]"
@@ -209,7 +209,7 @@ class EnumType:
         return "enum"
 
     def __repr__(self) -> str:
-        prefix = "" if self.module_id.is_entry else f"{self.module_id.dotted()}::"
+        prefix = "" if self.module_id.is_entry else f"{self.module_id.path_str()}::"
         if self.type_args:
             args_str = ", ".join(repr(a) for a in self.type_args)
             return f"{prefix}{self.name}[{args_str}]"
@@ -247,7 +247,7 @@ class ExceptionType:
         # matches the record/enum qualification style.
         if self.module_id.is_entry or self.module_id == PRELUDE_ID:
             return self.name
-        return f"{self.module_id.dotted()}::{self.name}"
+        return f"{self.module_id.path_str()}::{self.name}"
 
 
 # ---------------------------------------------------------------------------

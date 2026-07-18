@@ -468,7 +468,7 @@ def _assign_defs_keys(
 
     Base key: the sanitized bare display form (``Tree``, ``Tree_int``).  If
     two DISTINCT instantiations sanitize to the same bare key, BOTH are
-    promoted to their module-qualified form (``mod.sub.Tree``) to disambiguate
+    promoted to their module-qualified form (``mod/sub.Tree``) to disambiguate
     — cross-module same-name collision, the common case.  Any collision
     still remaining after that (e.g. two same-module instantiations whose
     argument lists sanitize identically) is broken by a numeric suffix in
@@ -481,7 +481,7 @@ def _assign_defs_keys(
     candidates: dict[Instantiation, str] = {}
     for handle in order:
         if bare_counts[bare[handle]] > 1 and not handle.module_id.is_entry:
-            qualified = f"{handle.module_id.dotted()}.{_bare_display(handle, type_table)}"
+            qualified = f"{handle.module_id.path_str()}.{_bare_display(handle, type_table)}"
             candidates[handle] = _sanitize_key(qualified)
         else:
             candidates[handle] = bare[handle]

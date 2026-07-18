@@ -161,12 +161,12 @@ class TestScope:
         assert "root" in str(err).lower()
 
     def test_extern_exported_from_module_graph(self, tmp_path: Path) -> None:
-        write_companion_file(tmp_path / "root", "lib.mod", "def f(x):\n    return x\n")
+        write_companion_file(tmp_path / "root", "lib/mod", "def f(x):\n    return x\n")
         graph = make_graph_from_files(
             tmp_path,
             {
                 "entry": "import lib.mod\nlib.mod::f(1)",
-                "lib.mod": "extern def f(x: int) -> int",
+                "lib/mod": "extern def f(x: int) -> int",
             },
         )
         resolved = resolve_program(graph)
@@ -179,7 +179,7 @@ class TestScope:
             tmp_path,
             {
                 "entry": "()",
-                "lib.mod": "private extern def secret(x: int) -> int",
+                "lib/mod": "private extern def secret(x: int) -> int",
             },
         )
         resolved = resolve_program(graph)
@@ -238,12 +238,12 @@ class TestPlacement:
 
     def test_extern_in_library_module_accepts(self, tmp_path: Path) -> None:
         # A library module loaded from disk always carries a real path.
-        write_companion_file(tmp_path / "root", "lib.mod", "def f(x):\n    return x\n")
+        write_companion_file(tmp_path / "root", "lib/mod", "def f(x):\n    return x\n")
         graph = make_graph_from_files(
             tmp_path,
             {
                 "entry": "import lib.mod\nlib.mod::f(1)",
-                "lib.mod": "extern def f(x: int) -> int",
+                "lib/mod": "extern def f(x: int) -> int",
             },
         )
         resolved = resolve_program(graph)

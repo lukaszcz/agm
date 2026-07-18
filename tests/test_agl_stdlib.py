@@ -83,7 +83,7 @@ def test_stdlib_ask_signature_is_context_inferred_with_optional_arguments() -> N
     graph = load_graph("()\n", entry_path=None, roots=_ROOTS, default_stdlib=True)
     resolved = resolve_program(graph)
     checked = check_program(resolved, _CAPS)
-    std_core = checked.modules[ModuleId.from_dotted("std.core")]
+    std_core = checked.modules[ModuleId.from_path("std/core")]
 
     ask_sig = std_core.function_signatures["ask"]
 

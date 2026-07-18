@@ -8,16 +8,18 @@ path relative to the library search roots.
 
 ## Module identity
 
-A module's identity is its **dot-path** — the relative file path with `/`
-replaced by `.` and the `.agl` suffix stripped. For example, a file at
-`utils/strings.agl` under a library root has the dot-path `utils.strings`.
+A module's identity is its **slash path** — the relative file path without its
+`.agl` suffix. For example, a file at `utils/strings.agl` under a library root
+has the identity `utils/strings`. Current import and export declarations spell
+that path with dots (`utils.strings`); they resolve to the slash-path identity.
 
-The **entry module** is the program being run — it has no dot-path of its own
+The **entry module** is the program being run — it has no slash path of its own
 and is always the root of the import graph.
 
 ## Standard library
 
-The core standard library module is `std.core`. It defines common names such as
+The core standard library module has identity `std/core` (spelled `std.core`
+in import declarations). It defines common names such as
 `Option[T]`, `ExecResult`, `ParsePolicy`, `AgentRequest`, built-in exception
 types, and the host-implemented built-in functions.
 
@@ -133,8 +135,8 @@ import utils.*
 import utils.* as U
 ```
 
-Imports all modules whose dot-path starts with `utils.` — a glob over the
-library roots. The same modifiers (`qualified`, `as`, `using`, `hiding`) may be
+Imports all modules whose dotted import path starts with `utils.` — a glob over
+the library roots. The same modifiers (`qualified`, `as`, `using`, `hiding`) may be
 combined with `.*`.
 
 **Wildcard alias re-rooting** (`as A`): the matched prefix is replaced by the
@@ -229,8 +231,8 @@ let r = math::sqrt(2.0)
 ```
 
 The qualifier is the **handle** under which the module was imported — either
-the full dot-path (the default, e.g. `math` for `import math` or `foo.bar` for
-`import foo.bar`) or its `as` alias.
+the full dotted import path (the default, e.g. `math` for `import math` or
+`foo.bar` for `import foo.bar`) or its `as` alias.
 
 **Qualified access is bounded by the imported set S.** If you restricted the
 import with `using` or `hiding`, the qualifier can only reach the names in S.
@@ -331,10 +333,11 @@ let s = square(4)
 
 ## Module search roots
 
-A module's dot-path must resolve to **exactly one** module definition. If no
-module with that dot-path exists, a module-not-found error is raised. If two or
-more distinct definitions exist for the same dot-path, an ambiguity error is
-raised — there is no priority ordering and no silent shadowing.
+A module's slash-path identity must resolve to **exactly one** module
+definition. If no module with that identity exists, a module-not-found error is
+raised. If two or more distinct definitions exist for the same identity, an
+ambiguity error is raised — there is no priority ordering and no silent
+shadowing.
 
 ## Imports in an interactive session
 

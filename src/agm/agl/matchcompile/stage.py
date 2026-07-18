@@ -219,8 +219,8 @@ def _validate_cases(
         context = normalized.case_context
         if context.module_id != module_id:
             raise MatchCompileInvariantError(
-                f"compiled case {case_id} belongs to module {context.module_id.dotted()}, "
-                f"not {module_id.dotted()}"
+                f"compiled case {case_id} belongs to module {context.module_id.path_str()}, "
+                f"not {module_id.path_str()}"
             )
         if context.owner_program is not program:
             raise MatchCompileInvariantError(
@@ -247,8 +247,8 @@ def validate_match_compiled_program(compiled: MatchCompiledProgram) -> None:
     expected_modules = set(compiled.checked.modules)
     actual_modules = set(compiled.cases_by_module)
     if expected_modules != actual_modules:
-        missing = sorted((mid.dotted() for mid in expected_modules - actual_modules))
-        extra = sorted((mid.dotted() for mid in actual_modules - expected_modules))
+        missing = sorted((mid.path_str() for mid in expected_modules - actual_modules))
+        extra = sorted((mid.path_str() for mid in actual_modules - expected_modules))
         raise MatchCompileInvariantError(
             f"match-compiled program module mismatch; missing={missing}, extra={extra}"
         )

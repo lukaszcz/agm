@@ -781,7 +781,7 @@ def test_imported_enum_witness_uses_full_module_qualification_only_when_ambiguou
     compiled = _compile_graph_case(
         tmp_path,
         {
-            "library.remote": "enum Remote[T]\n  | empty\n  | item(value: T)",
+            "library/remote": "enum Remote[T]\n  | empty\n  | item(value: T)",
             "other": "enum Other\n  | empty\n  | item(value: int)",
             "entry": (
                 "import library.remote\n"
@@ -805,7 +805,7 @@ def test_qualified_only_imported_enum_witness_uses_source_alias(tmp_path: Path) 
     compiled = _compile_graph_case(
         tmp_path,
         {
-            "library.remote": "enum Remote\n  | empty\n  | item(value: int)",
+            "library/remote": "enum Remote\n  | empty\n  | item(value: int)",
             "entry": (
                 "import library.remote qualified as r\n"
                 "let value: r::Remote = r::Remote::empty\n"
@@ -823,8 +823,8 @@ def test_aliased_qualified_imports_choose_target_source_handle(tmp_path: Path) -
     compiled = _compile_graph_case(
         tmp_path,
         {
-            "library.left": "enum Shared\n  | empty\n  | item(value: int)",
-            "library.right": "enum Shared\n  | empty\n  | item(value: int)",
+            "library/left": "enum Shared\n  | empty\n  | item(value: int)",
+            "library/right": "enum Shared\n  | empty\n  | item(value: int)",
             "entry": (
                 "import library.left qualified as left\n"
                 "import library.right qualified as right\n"
@@ -875,7 +875,7 @@ def test_renamed_open_import_uses_exposed_type_name_when_bare_variant_is_shadowe
     compiled = _compile_graph_case(
         tmp_path,
         {
-            "library.remote": "enum Remote\n  | empty\n  | item(value: int)",
+            "library/remote": "enum Remote\n  | empty\n  | item(value: int)",
             "entry": (
                 "import library.remote using Remote as R\n"
                 "def inspect(item: int, value: R) -> int =\n"
@@ -897,7 +897,7 @@ def test_hidden_imported_type_allows_irrefutable_case_without_invented_spelling(
     compiled = _compile_graph_case(
         tmp_path,
         {
-            "library.remote": (
+            "library/remote": (
                 "enum Remote\n  | empty\n  | item(value: int)\ndef make() -> Remote = empty\n"
             ),
             "entry": (
@@ -948,7 +948,7 @@ def test_imported_transparent_alias_witness_uses_exposed_source_name(
     compiled = _compile_graph_case(
         tmp_path,
         {
-            "library.remote": (
+            "library/remote": (
                 "enum Remote\n  | empty\n  | item(value: int)\ntype Alias = Remote\n"
             ),
             "entry": (
@@ -970,7 +970,7 @@ def test_imported_transformed_generic_alias_matches_concrete_enum_owner(
     compiled = _compile_graph_case(
         tmp_path,
         {
-            "library.remote": (
+            "library/remote": (
                 "record Pair[A, B]\n  first: A\n  second: B\n"
                 "enum Remote[T]\n  | empty\n  | item(value: T)\n"
                 "type Flipped[A, B] = Remote[Pair[B, A]]\n"
@@ -1048,7 +1048,7 @@ def test_imported_generic_alias_with_fixed_argument_matches_enum_owner(
     compiled = _compile_graph_case(
         tmp_path,
         {
-            "library.remote": (
+            "library/remote": (
                 "record Pair[A, B]\n  first: A\n  second: B\n"
                 "enum Remote[T]\n  | empty\n  | item(value: T)\n"
                 "type Fixed[T] = Remote[Pair[T, int]]\n"
@@ -1071,7 +1071,7 @@ def test_qualified_generic_identity_alias_uses_source_handle(tmp_path: Path) -> 
     compiled = _compile_graph_case(
         tmp_path,
         {
-            "library.remote": (
+            "library/remote": (
                 "enum Remote[T]\n  | empty\n  | item(value: T)\n"
                 "type Alias[T] = Remote[T]\n"
                 "def make() -> Remote[int] = Remote::empty\n"
@@ -1093,7 +1093,7 @@ def test_negative_alias_to_other_enum_is_not_selected_as_owner(tmp_path: Path) -
     compiled = _compile_graph_case(
         tmp_path,
         {
-            "library.remote": (
+            "library/remote": (
                 "enum Remote\n  | empty\n  | item(value: int)\n"
                 "enum Other\n  | empty\n  | item(value: int)\n"
                 "type Wrong = Other\n"
@@ -1116,7 +1116,7 @@ def test_local_owner_form_blocks_shadowed_open_import_spelling(tmp_path: Path) -
     compiled = _compile_graph_case(
         tmp_path,
         {
-            "library.remote": (
+            "library/remote": (
                 "enum Remote\n  | empty\n  | item(value: int)\n"
                 "def make() -> Remote = Remote::empty\n"
             ),
@@ -1143,12 +1143,12 @@ def test_reexported_alias_chain_uses_final_exposed_name(tmp_path: Path) -> None:
     compiled = _compile_graph_case(
         tmp_path,
         {
-            "library.base": (
+            "library/base": (
                 "enum Remote\n  | empty\n  | item(value: int)\n"
                 "type Alias = Remote\n"
                 "type Chained = Alias\n"
             ),
-            "library.facade": "export library.base using Chained as Public",
+            "library/facade": "export library.base using Chained as Public",
             "entry": (
                 "import library.facade using Public\n"
                 "let value: Public = Public::empty\n"
@@ -1168,7 +1168,7 @@ def test_nested_witness_selects_alias_for_each_concrete_instantiation(
     compiled = _compile_graph_case(
         tmp_path,
         {
-            "library.remote": (
+            "library/remote": (
                 "enum Remote[T]\n  | empty\n  | item(value: T)\n"
                 "type IntRemote = Remote[int]\n"
                 "type TextRemote = Remote[text]\n"
@@ -1200,7 +1200,7 @@ def test_polymorphic_nested_instantiation_selects_generic_alias_template(
     compiled = _compile_graph_case(
         tmp_path,
         {
-            "library.perfect": (
+            "library/perfect": (
                 "enum Box[T]\n  | box(value: T)\n"
                 "enum Perfect[T]\n"
                 "  | end\n"
@@ -1231,7 +1231,7 @@ def test_local_type_uses_self_qualification_when_import_handle_conflicts(
     compiled = _compile_graph_case(
         tmp_path,
         {
-            "library.remote": "def value() -> int = 1",
+            "library/remote": "def value() -> int = 1",
             "entry": (
                 "import library.remote qualified as Choice\n"
                 "enum Choice\n  | empty\n  | item(value: int)\n"
@@ -1252,7 +1252,7 @@ def test_rendered_self_qualified_generic_owner_round_trips_under_handle_conflict
     tmp_path: Path,
 ) -> None:
     modules = {
-        "library.remote": "def value() -> int = 1",
+        "library/remote": "def value() -> int = 1",
         "entry": (
             "import library.remote qualified as Remote\n"
             "enum Remote[T]\n  | empty\n  | item(value: T)\n"

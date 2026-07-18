@@ -122,12 +122,12 @@ class TestUnification:
                 FunctionType((IntType(), ListType(TextType())), TextType()),
             ),
             (
-                RecordType("Box", (IntType(),), ModuleId.from_dotted("a")),
-                RecordType("Box", (IntType(),), ModuleId.from_dotted("a")),
+                RecordType("Box", (IntType(),), ModuleId.from_path("a")),
+                RecordType("Box", (IntType(),), ModuleId.from_path("a")),
             ),
             (
-                EnumType("Option", (IntType(),), ModuleId.from_dotted("a")),
-                EnumType("Option", (IntType(),), ModuleId.from_dotted("a")),
+                EnumType("Option", (IntType(),), ModuleId.from_path("a")),
+                EnumType("Option", (IntType(),), ModuleId.from_path("a")),
             ),
             (TypeVarType("T"), TypeVarType("T")),
         ],
@@ -145,8 +145,8 @@ class TestUnification:
             (FunctionType((IntType(),), IntType()), FunctionType((), IntType())),
             (TypeVarType("T"), TypeVarType("U")),
             (
-                RecordType("Box", (IntType(),), ModuleId.from_dotted("one")),
-                RecordType("Box", (IntType(),), ModuleId.from_dotted("two")),
+                RecordType("Box", (IntType(),), ModuleId.from_path("one")),
+                RecordType("Box", (IntType(),), ModuleId.from_path("two")),
             ),
             (RecordType("Box", (IntType(),)), EnumType("Box", (IntType(),))),
             (EnumType("Box", (IntType(),)), EnumType("Box", (IntType(), TextType()))),

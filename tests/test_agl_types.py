@@ -377,7 +377,7 @@ class TestTypeEnvironmentPrelude:
         env = TypeEnvironment()
 
         assert (
-            env.match_source_type_qname(ModuleId.from_dotted("library.remote"), "Remote", IntType())
+            env.match_source_type_qname(ModuleId.from_path("library/remote"), "Remote", IntType())
             is None
         )
 
@@ -724,7 +724,7 @@ class TestGenericNominalIdentity:
 
 class TestTypeTemplateMatch:
     def test_transformed_nominal_arguments_bind_in_declared_order(self) -> None:
-        module = ModuleId.from_dotted("library.remote")
+        module = ModuleId.from_path("library/remote")
         template = EnumType(
             "Remote",
             type_args=(
@@ -772,7 +772,7 @@ class TestTypeTemplateMatch:
         assert match_type_template(template, conflicting, ("T",)) is None
 
     def test_shape_nominal_and_rigid_leaf_mismatches_do_not_match(self) -> None:
-        module = ModuleId.from_dotted("library.remote")
+        module = ModuleId.from_path("library/remote")
 
         assert match_type_template(ListType(IntType()), DictType(IntType()), ()) is None
         assert (

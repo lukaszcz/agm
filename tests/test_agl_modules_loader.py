@@ -39,16 +39,16 @@ def _write_agl(path: Path, source: str = "") -> None:
     path.write_text(source)
 
 
-def _module_path(root: Path, dotted: str) -> Path:
-    mid = ModuleId.from_dotted(dotted)
+def _module_path(root: Path, module_path: str) -> Path:
+    mid = ModuleId.from_path(module_path)
     return root / mid.relpath().replace("/", os.sep)
 
 
 _MINIMAL = "()"  # Minimal valid AgL program
 
 
-def _write_module(root: Path, dotted: str, source: str = _MINIMAL) -> Path:
-    p = _module_path(root, dotted)
+def _write_module(root: Path, module_path: str, source: str = _MINIMAL) -> Path:
+    p = _module_path(root, module_path)
     _write_agl(p, source)
     return p
 
@@ -142,7 +142,7 @@ class TestGraphBuild:
         _write_module(root, "util")
         entry = "import util"
         graph = load_graph(entry, entry_path=None, roots=_roots(root))
-        assert ModuleId.from_dotted("util") in graph.modules
+        assert ModuleId.from_path("util") in graph.modules
 
     def test_imported_module_without_default_stdlib(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
@@ -154,8 +154,8 @@ class TestGraphBuild:
             roots=_roots(root),
             default_stdlib=False,
         )
-        assert ModuleId.from_dotted("util") in graph.modules
-        util = graph.modules[ModuleId.from_dotted("util")]
+        assert ModuleId.from_path("util") in graph.modules
+        util = graph.modules[ModuleId.from_path("util")]
         assert not any(decl.module_path == STD_CORE_ID.segments for decl in util.imports)
 
     def test_transitive_import_resolved(self, tmp_path: Path) -> None:
@@ -165,8 +165,8 @@ class TestGraphBuild:
         _write_module(root, "mid", "import base")
         entry = "import mid"
         graph = load_graph(entry, entry_path=None, roots=_roots(root))
-        assert ModuleId.from_dotted("mid") in graph.modules
-        assert ModuleId.from_dotted("base") in graph.modules
+        assert ModuleId.from_path("mid") in graph.modules
+        assert ModuleId.from_path("base") in graph.modules
 
     def test_imports_extracted_from_program_body(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
@@ -214,8 +214,8 @@ class TestCycles:
         _write_module(root, "a", "import b")
         _write_module(root, "b", "import a")
         graph = load_graph("import a", entry_path=None, roots=_roots(root))
-        assert ModuleId.from_dotted("a") in graph.modules
-        assert ModuleId.from_dotted("b") in graph.modules
+        assert ModuleId.from_path("a") in graph.modules
+        assert ModuleId.from_path("b") in graph.modules
         # Exactly 4 modules: std.core + entry + a + b
         assert len(graph.modules) == 4
 
@@ -235,8 +235,8 @@ class TestCycles:
         _write_module(root, "q", "import p")
         graph = load_graph("import p", entry_path=None, roots=_roots(root))
         # p and q must be in the same SCC
-        p_id = ModuleId.from_dotted("p")
-        q_id = ModuleId.from_dotted("q")
+        p_id = ModuleId.from_path("p")
+        q_id = ModuleId.from_path("q")
         found_scc = False
         for scc in graph.sccs:
             if p_id in scc and q_id in scc:
@@ -251,8 +251,8 @@ class TestCycles:
         _write_module(root, "mid", "import leaf")
         graph = load_graph("import mid", entry_path=None, roots=_roots(root))
         # Each of the three modules should be in its own SCC
-        leaf_id = ModuleId.from_dotted("leaf")
-        mid_id = ModuleId.from_dotted("mid")
+        leaf_id = ModuleId.from_path("leaf")
+        mid_id = ModuleId.from_path("mid")
         for scc in graph.sccs:
             if leaf_id in scc:
                 assert len(scc) == 1
@@ -334,7 +334,7 @@ class TestCanonicalDedup:
     def test_same_file_via_symlinked_roots_counts_once(self, tmp_path: Path) -> None:
         root = tmp_path / "lib"
         root.mkdir()
-        _write_module(root, "shared.util")
+        _write_module(root, "shared/util")
         link = tmp_path / "link"
         link.symlink_to(root)
         # Both roots would resolve 'shared.util' to the same canonical file
@@ -344,7 +344,7 @@ class TestCanonicalDedup:
             roots=_roots(root, link),
         )
         # Module appears exactly once
-        util_id = ModuleId.from_dotted("shared.util")
+        util_id = ModuleId.from_path("shared/util")
         assert util_id in graph.modules
         assert len([mid for mid in graph.modules if mid == util_id]) == 1
 
@@ -360,7 +360,7 @@ class TestCanonicalDedup:
             entry_path=None,
             roots=_roots(root),
         )
-        lib_id = ModuleId.from_dotted("lib")
+        lib_id = ModuleId.from_path("lib")
         assert list(graph.modules.keys()).count(lib_id) == 1
 
 
@@ -391,7 +391,7 @@ class TestRejectImportOfEntry:
         root.mkdir()
         _write_module(root, "lib")
         graph = load_graph("import lib", entry_path=None, roots=_roots(root))
-        assert ModuleId.from_dotted("lib") in graph.modules
+        assert ModuleId.from_path("lib") in graph.modules
 
 
 # ---------------------------------------------------------------------------
@@ -403,11 +403,11 @@ class TestWildcardImportInLoader:
     def test_wildcard_import_loads_all_matched_modules(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
         root.mkdir()
-        _write_module(root, "pkg.a")
-        _write_module(root, "pkg.b")
+        _write_module(root, "pkg/a")
+        _write_module(root, "pkg/b")
         graph = load_graph("import pkg.*", entry_path=None, roots=_roots(root))
-        assert ModuleId.from_dotted("pkg.a") in graph.modules
-        assert ModuleId.from_dotted("pkg.b") in graph.modules
+        assert ModuleId.from_path("pkg/a") in graph.modules
+        assert ModuleId.from_path("pkg/b") in graph.modules
 
     def test_wildcard_prefix_not_found_raises(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
@@ -422,11 +422,11 @@ class TestWildcardImportInLoader:
         a transitive import) must skip it, not re-queue or duplicate it."""
         root = tmp_path / "r"
         root.mkdir()
-        _write_module(root, "pkg.a")
-        _write_module(root, "pkg.b")
+        _write_module(root, "pkg/a")
+        _write_module(root, "pkg/b")
         # pkg.a is loaded first (non-wildcard from entry), then pkg.a itself
         # issues a wildcard import that includes already-loaded pkg.a.
-        _write_module(root, "pkg.a", "import pkg.*")
+        _write_module(root, "pkg/a", "import pkg.*")
         # Entry imports pkg.a non-wildcard first, triggering the load of pkg.a,
         # whose wildcard import pkg.* then encounters pkg.a as already-loaded.
         graph = load_graph(
@@ -434,8 +434,8 @@ class TestWildcardImportInLoader:
             entry_path=None,
             roots=_roots(root),
         )
-        pkg_a_id = ModuleId.from_dotted("pkg.a")
-        pkg_b_id = ModuleId.from_dotted("pkg.b")
+        pkg_a_id = ModuleId.from_path("pkg/a")
+        pkg_b_id = ModuleId.from_path("pkg/b")
         assert list(graph.modules.keys()).count(pkg_a_id) == 1
         assert pkg_b_id in graph.modules
 
@@ -451,9 +451,9 @@ class TestDeterminism:
         root_b = tmp_path / "b"
         root_a.mkdir()
         root_b.mkdir()
-        _write_module(root_a, "x.one")
-        _write_module(root_b, "y.two")
-        _write_module(root_a, "z.three")
+        _write_module(root_a, "x/one")
+        _write_module(root_b, "y/two")
+        _write_module(root_a, "z/three")
 
         entry = "import x.one\nimport y.two\nimport z.three"
 
@@ -495,16 +495,16 @@ class TestDeterminism:
         # Layout 1: modules written in alphabetical order under a single root.
         r1 = tmp_path / "r1"
         r1.mkdir()
-        _write_module(r1, "pkg.alpha")
-        _write_module(r1, "pkg.beta")
-        _write_module(r1, "pkg.gamma")
+        _write_module(r1, "pkg/alpha")
+        _write_module(r1, "pkg/beta")
+        _write_module(r1, "pkg/gamma")
 
         # Layout 2: same modules written in reverse order under a different root.
         r2 = tmp_path / "r2"
         r2.mkdir()
-        _write_module(r2, "pkg.gamma")
-        _write_module(r2, "pkg.beta")
-        _write_module(r2, "pkg.alpha")
+        _write_module(r2, "pkg/gamma")
+        _write_module(r2, "pkg/beta")
+        _write_module(r2, "pkg/alpha")
 
         # Layout 3: modules split across two roots, created in mixed order,
         # roots themselves passed in reversed order.
@@ -512,9 +512,9 @@ class TestDeterminism:
         r3b = tmp_path / "r3b"
         r3a.mkdir()
         r3b.mkdir()
-        _write_module(r3b, "pkg.gamma")
-        _write_module(r3a, "pkg.alpha")
-        _write_module(r3b, "pkg.beta")
+        _write_module(r3b, "pkg/gamma")
+        _write_module(r3a, "pkg/alpha")
+        _write_module(r3b, "pkg/beta")
 
         g1 = load_graph(entry, entry_path=None, roots=_roots(r1))
         g2 = load_graph(entry, entry_path=None, roots=_roots(r2))
@@ -561,9 +561,9 @@ class TestFileBasedEntry:
     def test_loaded_module_source_id_uses_canonical_path(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
         root.mkdir()
-        mod_path = _write_module(root, "deps.lib")
+        mod_path = _write_module(root, "deps/lib")
         graph = load_graph("import deps.lib", entry_path=None, roots=_roots(root))
-        lib_mod = graph.modules[ModuleId.from_dotted("deps.lib")]
+        lib_mod = graph.modules[ModuleId.from_path("deps/lib")]
         assert lib_mod.source.label == str(mod_path.resolve())
         assert lib_mod.path == mod_path.resolve()
 

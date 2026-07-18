@@ -99,9 +99,9 @@ class ImportEnv:
 # ---------------------------------------------------------------------------
 
 
-def _module_dotted(mid: ModuleId) -> str:
-    """Return the display dotted name of a module (for error messages)."""
-    return mid.dotted()
+def _module_path(mid: ModuleId) -> str:
+    """Return the display slash path of a module (for error messages)."""
+    return mid.path_str()
 
 
 def _compute_s(
@@ -136,7 +136,7 @@ def _compute_s(
                 # Single import: the name MUST be exported.
                 if item.name not in module_exports:
                     raise AglScopeError(
-                        f"name {item.name!r} is not exported by module {_module_dotted(module)!r}",
+                        f"name {item.name!r} is not exported by module {_module_path(module)!r}",
                         span=decl.span,
                     )
                 result.add(item.name)
@@ -151,7 +151,7 @@ def _compute_s(
         else:
             if item.name not in module_exports:
                 raise AglScopeError(
-                    f"name {item.name!r} is not exported by module {_module_dotted(module)!r}",
+                    f"name {item.name!r} is not exported by module {_module_path(module)!r}",
                     span=decl.span,
                 )
             hidden.add(item.name)
@@ -312,8 +312,8 @@ def _check_duplicate_single_alias(
             if bound_mod != mod:
                 raise AglScopeError(
                     f"alias {decl.alias!r} is already bound to module"
-                    f" {_module_dotted(bound_mod)!r};"
-                    f" cannot rebind to {_module_dotted(mod)!r}",
+                    f" {_module_path(bound_mod)!r};"
+                    f" cannot rebind to {_module_path(mod)!r}",
                     span=decl.span,
                 )
         else:
@@ -413,8 +413,8 @@ def _register_qname(
     if existing is not None and existing != qname:
         raise AglScopeError(
             f"qualifier {'.'.join(handle)!r} maps name {exposed!r}"
-            f" to both {_module_dotted(existing[0])!r} and"
-            f" {_module_dotted(qname[0])!r}",
+            f" to both {_module_path(existing[0])!r} and"
+            f" {_module_path(qname[0])!r}",
             span=decl.span,
         )
     qualified_acc[handle][exposed] = qname

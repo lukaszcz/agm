@@ -4,7 +4,7 @@ AgL has a file-based module system. Every production program is loaded into a `M
 
 ## Module Identity and Roots
 
-A module is identified by a dotted path mapping to a relative file path; a sentinel id keys the entry program. Modules are found by searching an unordered, canonicalized set of *roots* — the invocation directory, the installed standard library, a global library root, configured roots, and roots from CLI flags. Resolution requires exactly one match across all roots: zero is "not found", two distinct files is "ambiguous". There is deliberately no first-root-wins shadowing. Wildcard imports glob matching files across all roots under the same global-uniqueness rules.
+A module is identified by a slash-separated path (`foo/bar`) mapping to a relative `.agl` file; a sentinel id keys the entry program. `ModuleId` construction and display use this path form, while its segments remain the shared internal identity. Modules are found by searching an unordered, canonicalized set of *roots* — the invocation directory, the installed standard library, a global library root, configured roots, and roots from CLI flags. Resolution requires exactly one match across all roots: zero is "not found", two distinct files is "ambiguous". There is deliberately no first-root-wins shadowing. Wildcard imports glob matching files across all roots under the same global-uniqueness rules.
 
 ## Loading
 

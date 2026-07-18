@@ -387,10 +387,10 @@ class TestCompileCoercion:
         from agm.agl.modules.ids import ModuleId
 
         src, src_def = record_type(
-            "R", {"x": IntType(), "y": TextType()}, module_id=ModuleId.from_dotted("src_mod")
+            "R", {"x": IntType(), "y": TextType()}, module_id=ModuleId.from_path("src_mod")
         )
         tgt, tgt_def = record_type(
-            "R", {"x": DecimalType(), "y": TextType()}, module_id=ModuleId.from_dotted("tgt_mod")
+            "R", {"x": DecimalType(), "y": TextType()}, module_id=ModuleId.from_path("tgt_mod")
         )
         result = compile_coercion(src, tgt, type_table_for(src_def, tgt_def))
         assert result == MapRecordFields((("x", IntToDecimal()),))
@@ -399,12 +399,12 @@ class TestCompileCoercion:
         from agm.agl.modules.ids import ModuleId
 
         src, src_def = record_type(
-            "R", {"x": IntType(), "y": IntType()}, module_id=ModuleId.from_dotted("src_mod")
+            "R", {"x": IntType(), "y": IntType()}, module_id=ModuleId.from_path("src_mod")
         )
         tgt, tgt_def = record_type(
             "R",
             {"x": DecimalType(), "y": DecimalType()},
-            module_id=ModuleId.from_dotted("tgt_mod"),
+            module_id=ModuleId.from_path("tgt_mod"),
         )
         result = compile_coercion(src, tgt, type_table_for(src_def, tgt_def))
         assert result == MapRecordFields((("x", IntToDecimal()), ("y", IntToDecimal())))
@@ -413,11 +413,11 @@ class TestCompileCoercion:
         # Only shared fields are coerced; fields not in source are ignored
         from agm.agl.modules.ids import ModuleId
 
-        src, src_def = record_type("R", {"x": IntType()}, module_id=ModuleId.from_dotted("src_mod"))
+        src, src_def = record_type("R", {"x": IntType()}, module_id=ModuleId.from_path("src_mod"))
         tgt, tgt_def = record_type(
             "R",
             {"x": DecimalType(), "z": TextType()},
-            module_id=ModuleId.from_dotted("tgt_mod"),
+            module_id=ModuleId.from_path("tgt_mod"),
         )
         result = compile_coercion(src, tgt, type_table_for(src_def, tgt_def))
         assert result == MapRecordFields((("x", IntToDecimal()),))
@@ -433,10 +433,10 @@ class TestCompileCoercion:
         from agm.agl.modules.ids import ModuleId
 
         src, src_def = enum_type(
-            "E", {"A": {"x": IntType()}, "B": {}}, module_id=ModuleId.from_dotted("src_mod")
+            "E", {"A": {"x": IntType()}, "B": {}}, module_id=ModuleId.from_path("src_mod")
         )
         tgt, tgt_def = enum_type(
-            "E", {"A": {"x": DecimalType()}, "B": {}}, module_id=ModuleId.from_dotted("tgt_mod")
+            "E", {"A": {"x": DecimalType()}, "B": {}}, module_id=ModuleId.from_path("tgt_mod")
         )
         result = compile_coercion(src, tgt, type_table_for(src_def, tgt_def))
         assert result == MapEnumFields((("A", (("x", IntToDecimal()),)),))
@@ -448,12 +448,12 @@ class TestCompileCoercion:
         src, src_def = enum_type(
             "E",
             {"A": {"x": IntType()}, "B": {"y": TextType()}},
-            module_id=ModuleId.from_dotted("src_mod"),
+            module_id=ModuleId.from_path("src_mod"),
         )
         tgt, tgt_def = enum_type(
             "E",
             {"A": {"x": DecimalType()}, "B": {"y": TextType()}},
-            module_id=ModuleId.from_dotted("tgt_mod"),
+            module_id=ModuleId.from_path("tgt_mod"),
         )
         result = compile_coercion(src, tgt, type_table_for(src_def, tgt_def))
         assert result == MapEnumFields((("A", (("x", IntToDecimal()),)),))
@@ -463,12 +463,12 @@ class TestCompileCoercion:
         from agm.agl.modules.ids import ModuleId
 
         src, src_def = enum_type(
-            "E", {"A": {"x": IntType()}}, module_id=ModuleId.from_dotted("src_mod")
+            "E", {"A": {"x": IntType()}}, module_id=ModuleId.from_path("src_mod")
         )
         tgt, tgt_def = enum_type(
             "E",
             {"A": {"x": DecimalType(), "extra": TextType()}},
-            module_id=ModuleId.from_dotted("tgt_mod"),
+            module_id=ModuleId.from_path("tgt_mod"),
         )
         result = compile_coercion(src, tgt, type_table_for(src_def, tgt_def))
         # "extra" is not in source so it's skipped; only "x" coercion emitted
@@ -481,10 +481,10 @@ class TestCompileCoercion:
         src, src_def = enum_type(
             "E",
             {"A": {"x": IntType()}, "B": {"y": IntType()}},
-            module_id=ModuleId.from_dotted("src_mod"),
+            module_id=ModuleId.from_path("src_mod"),
         )
         tgt, tgt_def = enum_type(
-            "E", {"A": {"x": DecimalType()}}, module_id=ModuleId.from_dotted("tgt_mod")
+            "E", {"A": {"x": DecimalType()}}, module_id=ModuleId.from_path("tgt_mod")
         )
         result = compile_coercion(src, tgt, type_table_for(src_def, tgt_def))
         assert result == MapEnumFields((("A", (("x", IntToDecimal()),)),))
@@ -501,7 +501,7 @@ class TestCompileCoercion:
         from agm.agl.modules.ids import ModuleId
         from agm.agl.semantics.type_table import TypeDef, create_seeded_type_table
 
-        module_id = ModuleId.from_dotted("generics_mod")
+        module_id = ModuleId.from_path("generics_mod")
         table = create_seeded_type_table()
         table.register(
             TypeDef(
@@ -532,7 +532,7 @@ class TestCompileCoercion:
         from agm.agl.modules.ids import ModuleId
         from agm.agl.semantics.type_table import TypeDef, create_seeded_type_table
 
-        module_id = ModuleId.from_dotted("recursive_generics_mod")
+        module_id = ModuleId.from_path("recursive_generics_mod")
         table = create_seeded_type_table()
         table.register(
             TypeDef(
@@ -1827,7 +1827,7 @@ class TestLowerGraph:
 
         root = tmp_path / "root"
         root.mkdir()
-        lib_mid = ModuleId.from_dotted("lib")
+        lib_mid = ModuleId.from_path("lib")
         lib_path = root / lib_mid.relpath().replace("/", os.sep)
         lib_path.parent.mkdir(parents=True, exist_ok=True)
         lib_path.write_text(lib_source)
@@ -1927,7 +1927,7 @@ class TestLowerGraph:
 
         root = tmp_path / "root"
         root.mkdir()
-        lib_mid = ModuleId.from_dotted("lib")
+        lib_mid = ModuleId.from_path("lib")
         lib_path = root / lib_mid.relpath().replace("/", os.sep)
         lib_path.parent.mkdir(parents=True, exist_ok=True)
         lib_path.write_text(lib_source)

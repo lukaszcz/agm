@@ -244,8 +244,8 @@ def _resolve_reexports(
                         elif existing != qname:
                             raise AglScopeError(
                                 f"re-export name {exposed!r} has conflicting origins:"
-                                f" {existing[0].dotted()!r}::{existing[1]!r}"
-                                f" and {qname[0].dotted()!r}::{qname[1]!r}",
+                                f" {existing[0].path_str()!r}::{existing[1]!r}"
+                                f" and {qname[0].path_str()!r}::{qname[1]!r}",
                                 span=decl.span,
                             )
 

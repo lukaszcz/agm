@@ -3209,7 +3209,7 @@ class TestPrepareProgram:
         )
         assert prepared.resolved is None
         assert len(prepared.diagnostics) >= 1
-        assert "nonexistent.module" in prepared.diagnostics[0].message
+        assert "nonexistent/module" in prepared.diagnostics[0].message
 
     def test_prepare_program_with_valid_import(self, tmp_path: pathlib.Path) -> None:
         """A valid import resolves when the module file exists on disk."""
@@ -3317,7 +3317,7 @@ class TestRunPreparedProgram:
         rt = PipelineDriver()
         result = rt.run_prepared(prepared)
         assert result.ok is False
-        assert "missing.module" in result.diagnostics[0].message
+        assert "missing/module" in result.diagnostics[0].message
 
     def test_graph_agents_are_entry_owned(self, tmp_path: pathlib.Path) -> None:
         """Agents are entry-program-owned; a registered undeclared agent is an error."""

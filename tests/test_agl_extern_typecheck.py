@@ -612,12 +612,12 @@ class TestExternCallSiteRecording:
         assert sites[0].target_type == IntType()
 
     def test_graph_mode_imported_extern_call_recorded(self, tmp_path: Path) -> None:
-        write_companion_file(tmp_path / "root", "lib.mod", "def f(x):\n    return x\n")
+        write_companion_file(tmp_path / "root", "lib/mod", "def f(x):\n    return x\n")
         checked = check_extern_graph(
             tmp_path,
             {
                 "entry": "import lib.mod\nlib.mod::f(1)",
-                "lib.mod": "extern def f(x: int) -> int",
+                "lib/mod": "extern def f(x: int) -> int",
             },
         )
         entry_module = checked.modules[checked.entry_id]
@@ -627,12 +627,12 @@ class TestExternCallSiteRecording:
         assert sites[0].target_type == IntType()
 
     def test_graph_mode_generic_extern_call_has_concrete_inventory(self, tmp_path: Path) -> None:
-        write_companion_file(tmp_path / "root", "lib.mod", "def id(value):\n    return value\n")
+        write_companion_file(tmp_path / "root", "lib/mod", "def id(value):\n    return value\n")
         checked = check_extern_graph(
             tmp_path,
             {
                 "entry": "import lib.mod\nlib.mod::id(1)",
-                "lib.mod": "extern def id[T](value: T) -> T",
+                "lib/mod": "extern def id[T](value: T) -> T",
             },
         )
         entry_module = checked.modules[checked.entry_id]
@@ -665,12 +665,12 @@ class TestExternCallSiteRecording:
         assert {s.target_type for s in sites} == {IntType()}
 
     def test_graph_mode_own_module_extern_call_recorded(self, tmp_path: Path) -> None:
-        write_companion_file(tmp_path / "root", "lib.mod", "def f(x):\n    return x\n")
+        write_companion_file(tmp_path / "root", "lib/mod", "def f(x):\n    return x\n")
         checked = check_extern_graph(
             tmp_path,
             {
                 "entry": "import lib.mod\n()",
-                "lib.mod": "extern def f(x: int) -> int\ndef g() -> int = f(1)",
+                "lib/mod": "extern def f(x: int) -> int\ndef g() -> int = f(1)",
             },
         )
         from agm.agl.modules.ids import ModuleId

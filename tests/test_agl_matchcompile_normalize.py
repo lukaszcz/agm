@@ -422,7 +422,7 @@ def test_imported_generic_enum_normalizes_from_checked_metadata(tmp_path: Path) 
     assert isinstance(constructor_cell, ConstructorCell)
     constructor = constructor_cell.constructor
     assert isinstance(constructor, EnumConstructor)
-    assert constructor.enum_type == EnumType("Choice", (IntType(),), ModuleId.from_dotted("lib"))
+    assert constructor.enum_type == EnumType("Choice", (IntType(),), ModuleId.from_path("lib"))
     assert [(field.name, field.type) for field in constructor.fields] == [
         ("value", IntType()),
         ("note", TextType()),

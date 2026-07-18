@@ -57,9 +57,9 @@ def _build_checked(
     loader recorded, mirroring what ``PreparedProgram.companion_paths`` carries.
     """
     root = tmp_path / "root"
-    for dotted, source in modules.items():
-        if dotted != "entry":
-            write_module_file(root, dotted, source)
+    for module_path, source in modules.items():
+        if module_path != "entry":
+            write_module_file(root, module_path, source)
     graph = load_graph(
         modules.get("entry", "()"), entry_path=None, roots=_roots(root), default_stdlib=False
     )
@@ -77,11 +77,11 @@ def _build_checked(
 class TestCompanionPathDerivation:
     def test_non_extern_module_has_no_companion_path(self, tmp_path: Path) -> None:
         root = tmp_path / "root"
-        write_module_file(root, "lib.mod", "def f(x: int) -> int = x")
+        write_module_file(root, "lib/mod", "def f(x: int) -> int = x")
         graph = load_graph(
             "import lib.mod\n()", entry_path=None, roots=_roots(root), default_stdlib=False
         )
-        assert graph.modules[ModuleId.from_dotted("lib.mod")].companion_path is None
+        assert graph.modules[ModuleId.from_path("lib/mod")].companion_path is None
 
     def test_inline_entry_never_needs_a_companion(self, tmp_path: Path) -> None:
         root = tmp_path / "root"
@@ -90,28 +90,28 @@ class TestCompanionPathDerivation:
 
     def test_extern_module_companion_path_is_the_py_sibling(self, tmp_path: Path) -> None:
         root = tmp_path / "root"
-        write_module_file(root, "lib.mod", "extern def f(x: int) -> int")
-        write_companion_file(root, "lib.mod", "def f(x):\n    return x\n")
+        write_module_file(root, "lib/mod", "extern def f(x: int) -> int")
+        write_companion_file(root, "lib/mod", "def f(x):\n    return x\n")
         graph = load_graph(
             "import lib.mod\nlib.mod::f(1)",
             entry_path=None,
             roots=_roots(root),
             default_stdlib=False,
         )
-        mid = ModuleId.from_dotted("lib.mod")
+        mid = ModuleId.from_path("lib/mod")
         assert graph.modules[mid].companion_path == root / "lib" / "mod.py"
 
     def test_nested_module_directory_companion_path(self, tmp_path: Path) -> None:
         root = tmp_path / "root"
-        write_module_file(root, "a.b.c", "extern def f(x: int) -> int")
-        write_companion_file(root, "a.b.c", "def f(x):\n    return x\n")
+        write_module_file(root, "a/b/c", "extern def f(x: int) -> int")
+        write_companion_file(root, "a/b/c", "def f(x):\n    return x\n")
         graph = load_graph(
             "import a.b.c\na.b.c::f(1)",
             entry_path=None,
             roots=_roots(root),
             default_stdlib=False,
         )
-        mid = ModuleId.from_dotted("a.b.c")
+        mid = ModuleId.from_path("a/b/c")
         assert graph.modules[mid].companion_path == root / "a" / "b" / "c.py"
 
     def test_file_backed_entry_companion_path(self, tmp_path: Path) -> None:
@@ -127,7 +127,7 @@ class TestCompanionPathDerivation:
 
     def test_missing_companion_raises_naming_the_module(self, tmp_path: Path) -> None:
         root = tmp_path / "root"
-        write_module_file(root, "lib.mod", "extern def f(x: int) -> int")
+        write_module_file(root, "lib/mod", "extern def f(x: int) -> int")
         with pytest.raises(MissingExternCompanion) as excinfo:
             load_graph(
                 "import lib.mod\nlib.mod::f(1)",
@@ -135,11 +135,11 @@ class TestCompanionPathDerivation:
                 roots=_roots(root),
                 default_stdlib=False,
             )
-        assert "lib.mod" in str(excinfo.value)
+        assert "lib/mod" in str(excinfo.value)
 
     def test_missing_companion_becomes_prepared_program_diagnostic(self, tmp_path: Path) -> None:
         root = tmp_path / "root"
-        write_module_file(root, "lib.mod", "extern def f(x: int) -> int")
+        write_module_file(root, "lib/mod", "extern def f(x: int) -> int")
         prepared = PipelineDriver.prepare_program(
             "import lib.mod\nlib.mod::f(1)",
             entry_path=None,
@@ -148,7 +148,7 @@ class TestCompanionPathDerivation:
         )
         assert prepared.resolved is None
         assert len(prepared.diagnostics) == 1
-        assert "lib.mod" in prepared.diagnostics[0].message
+        assert "lib/mod" in prepared.diagnostics[0].message
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +160,7 @@ class TestExternRegistryLoadAndResolve:
     def test_resolve_returns_the_companion_callable(self, tmp_path: Path) -> None:
         py_path = tmp_path / "mod.py"
         py_path.write_text("def f(x):\n    return x + 1\n")
-        mid = ModuleId.from_dotted("lib.mod")
+        mid = ModuleId.from_path("lib/mod")
         registry = ExternRegistry()
         registry.load_companion(mid, py_path)
         fn = registry.resolve(mid, "f")
@@ -169,7 +169,7 @@ class TestExternRegistryLoadAndResolve:
     def test_import_runs_top_level_code_exactly_once_per_registry(self, tmp_path: Path) -> None:
         py_path = tmp_path / "mod.py"
         py_path.write_text("COUNTER = 0\nCOUNTER += 1\ndef f(x):\n    return COUNTER\n")
-        mid = ModuleId.from_dotted("lib.mod")
+        mid = ModuleId.from_path("lib/mod")
         registry = ExternRegistry()
         registry.load_companion(mid, py_path)
         registry.load_companion(mid, py_path)
@@ -180,15 +180,15 @@ class TestExternRegistryLoadAndResolve:
         py_path = tmp_path / "mod.py"
         py_path.write_text("COUNTER = 0\nCOUNTER += 1\ndef f(x):\n    return COUNTER\n")
         registry = ExternRegistry()
-        registry.load_companion(ModuleId.from_dotted("lib.mod"), py_path)
-        registry.load_companion(ModuleId.from_dotted("other.mod"), py_path)
-        assert registry.resolve(ModuleId.from_dotted("lib.mod"), "f")(None) == 1
-        assert registry.resolve(ModuleId.from_dotted("other.mod"), "f")(None) == 1
+        registry.load_companion(ModuleId.from_path("lib/mod"), py_path)
+        registry.load_companion(ModuleId.from_path("other/mod"), py_path)
+        assert registry.resolve(ModuleId.from_path("lib/mod"), "f")(None) == 1
+        assert registry.resolve(ModuleId.from_path("other/mod"), "f")(None) == 1
 
     def test_separate_registries_import_independently(self, tmp_path: Path) -> None:
         py_path = tmp_path / "mod.py"
         py_path.write_text("COUNTER = 0\nCOUNTER += 1\ndef f(x):\n    return COUNTER\n")
-        mid = ModuleId.from_dotted("lib.mod")
+        mid = ModuleId.from_path("lib/mod")
         registry_a = ExternRegistry()
         registry_a.load_companion(mid, py_path)
         registry_b = ExternRegistry()
@@ -199,18 +199,18 @@ class TestExternRegistryLoadAndResolve:
     def test_missing_attribute_raises_resolution_error(self, tmp_path: Path) -> None:
         py_path = tmp_path / "mod.py"
         py_path.write_text("def wrong_name(x):\n    return x\n")
-        mid = ModuleId.from_dotted("lib.mod")
+        mid = ModuleId.from_path("lib/mod")
         registry = ExternRegistry()
         registry.load_companion(mid, py_path)
         with pytest.raises(ExternResolutionError) as excinfo:
             registry.resolve(mid, "f")
-        assert "lib.mod" in str(excinfo.value)
+        assert "lib/mod" in str(excinfo.value)
         assert "'f'" in str(excinfo.value)
 
     def test_non_callable_attribute_raises_resolution_error(self, tmp_path: Path) -> None:
         py_path = tmp_path / "mod.py"
         py_path.write_text("f = 5\n")
-        mid = ModuleId.from_dotted("lib.mod")
+        mid = ModuleId.from_path("lib/mod")
         registry = ExternRegistry()
         registry.load_companion(mid, py_path)
         with pytest.raises(ExternResolutionError):
@@ -219,11 +219,11 @@ class TestExternRegistryLoadAndResolve:
     def test_companion_top_level_exception_raises_import_error(self, tmp_path: Path) -> None:
         py_path = tmp_path / "mod.py"
         py_path.write_text("raise RuntimeError('boom')\n")
-        mid = ModuleId.from_dotted("lib.mod")
+        mid = ModuleId.from_path("lib/mod")
         registry = ExternRegistry()
         with pytest.raises(ExternImportError) as excinfo:
             registry.load_companion(mid, py_path)
-        assert "lib.mod" in str(excinfo.value)
+        assert "lib/mod" in str(excinfo.value)
 
     def test_companion_does_not_pollute_sys_path_or_linger_in_sys_modules(
         self, tmp_path: Path
@@ -232,7 +232,7 @@ class TestExternRegistryLoadAndResolve:
 
         py_path = tmp_path / "mod.py"
         py_path.write_text("def f(x):\n    return x\n")
-        mid = ModuleId.from_dotted("lib.mod")
+        mid = ModuleId.from_path("lib/mod")
         before = set(sys.path)
         registry = ExternRegistry()
         registry.load_companion(mid, py_path)
@@ -242,7 +242,7 @@ class TestExternRegistryLoadAndResolve:
     def test_resolve_before_load_companion_is_a_programming_error(self) -> None:
         registry = ExternRegistry()
         with pytest.raises(AssertionError):
-            registry.resolve(ModuleId.from_dotted("lib.mod"), "f")
+            registry.resolve(ModuleId.from_path("lib/mod"), "f")
 
     def test_resolve_caches_the_callable_across_repeated_calls(self, tmp_path: Path) -> None:
         """A second ``resolve`` for the same name returns the first lookup's object.
@@ -254,7 +254,7 @@ class TestExternRegistryLoadAndResolve:
         """
         py_path = tmp_path / "mod.py"
         py_path.write_text("def f(x):\n    return x + 1\n")
-        mid = ModuleId.from_dotted("lib.mod")
+        mid = ModuleId.from_path("lib/mod")
         registry = ExternRegistry()
         module = registry.load_companion(mid, py_path)
 
@@ -273,7 +273,7 @@ class TestExternRegistryLoadAndResolve:
         new_path = tmp_path / "new.py"
         old_path.write_text("def f(x):\n    return 'old'\n")
         new_path.write_text("def f(x):\n    return 'new'\n")
-        mid = ModuleId.from_dotted("lib.mod")
+        mid = ModuleId.from_path("lib/mod")
         registry = ExternRegistry()
 
         registry.load_companion(mid, old_path)
@@ -290,12 +290,12 @@ class TestExternRegistryLoadAndResolve:
 
 class TestCapabilityGate:
     def test_extern_program_rejected_when_capability_off(self, tmp_path: Path) -> None:
-        write_companion_file(tmp_path / "root", "lib.mod", "def f(x):\n    return x\n")
+        write_companion_file(tmp_path / "root", "lib/mod", "def f(x):\n    return x\n")
         checked, companion_paths = _build_checked(
             tmp_path,
             {
                 "entry": "import lib.mod\nlib.mod::f(1)",
-                "lib.mod": "extern def f(x: int) -> int",
+                "lib/mod": "extern def f(x: int) -> int",
             },
         )
         caps_off = HostCapabilities(supports_extern=False)
@@ -321,12 +321,12 @@ class TestCapabilityGate:
         assert diagnostics == []
 
     def test_extern_program_accepted_when_capability_on(self, tmp_path: Path) -> None:
-        write_companion_file(tmp_path / "root", "lib.mod", "def f(x):\n    return x\n")
+        write_companion_file(tmp_path / "root", "lib/mod", "def f(x):\n    return x\n")
         checked, companion_paths = _build_checked(
             tmp_path,
             {
                 "entry": "import lib.mod\nlib.mod::f(1)",
-                "lib.mod": "extern def f(x: int) -> int",
+                "lib/mod": "extern def f(x: int) -> int",
             },
         )
         diagnostics = _wire_extern_registry(
@@ -340,12 +340,12 @@ class TestCapabilityGate:
 
 class TestFailFastDiagnostics:
     def test_missing_attribute_diagnostic_names_module_and_function(self, tmp_path: Path) -> None:
-        write_companion_file(tmp_path / "root", "lib.mod", "def wrong_name(x):\n    return x\n")
+        write_companion_file(tmp_path / "root", "lib/mod", "def wrong_name(x):\n    return x\n")
         checked, companion_paths = _build_checked(
             tmp_path,
             {
                 "entry": "import lib.mod\nlib.mod::f(1)",
-                "lib.mod": "extern def f(x: int) -> int",
+                "lib/mod": "extern def f(x: int) -> int",
             },
         )
         diagnostics = _wire_extern_registry(
@@ -355,16 +355,16 @@ class TestFailFastDiagnostics:
             companion_paths=companion_paths,
         )
         assert len(diagnostics) == 1
-        assert "lib.mod" in diagnostics[0].message
+        assert "lib/mod" in diagnostics[0].message
         assert "'f'" in diagnostics[0].message
 
     def test_non_callable_attribute_is_a_diagnostic(self, tmp_path: Path) -> None:
-        write_companion_file(tmp_path / "root", "lib.mod", "f = 5\n")
+        write_companion_file(tmp_path / "root", "lib/mod", "f = 5\n")
         checked, companion_paths = _build_checked(
             tmp_path,
             {
                 "entry": "import lib.mod\nlib.mod::f(1)",
-                "lib.mod": "extern def f(x: int) -> int",
+                "lib/mod": "extern def f(x: int) -> int",
             },
         )
         diagnostics = _wire_extern_registry(
@@ -380,7 +380,7 @@ class TestFailFastDiagnostics:
     ) -> None:
         write_companion_file(
             tmp_path / "root",
-            "lib.mod",
+            "lib/mod",
             "COUNTER = 0\nCOUNTER += 1\n"
             "def f(x):\n    return COUNTER\n"
             "def g(x):\n    return COUNTER\n",
@@ -389,7 +389,7 @@ class TestFailFastDiagnostics:
             tmp_path,
             {
                 "entry": "import lib.mod\nlib.mod::f(1)\nlib.mod::g(1)",
-                "lib.mod": "extern def f(x: int) -> int\nextern def g(x: int) -> int",
+                "lib/mod": "extern def f(x: int) -> int\nextern def g(x: int) -> int",
             },
         )
         registry = ExternRegistry()
@@ -400,19 +400,19 @@ class TestFailFastDiagnostics:
             companion_paths=companion_paths,
         )
         assert diagnostics == []
-        mid = ModuleId.from_dotted("lib.mod")
+        mid = ModuleId.from_path("lib/mod")
         assert registry.resolve(mid, "f")(None) == 1
         assert registry.resolve(mid, "g")(None) == 1
 
     def test_one_import_failure_reports_once_for_every_extern_in_that_module(
         self, tmp_path: Path
     ) -> None:
-        write_companion_file(tmp_path / "root", "lib.mod", "raise RuntimeError('boom')\n")
+        write_companion_file(tmp_path / "root", "lib/mod", "raise RuntimeError('boom')\n")
         checked, companion_paths = _build_checked(
             tmp_path,
             {
                 "entry": "import lib.mod\nlib.mod::f(1)\nlib.mod::g(1)",
-                "lib.mod": "extern def f(x: int) -> int\nextern def g(x: int) -> int",
+                "lib/mod": "extern def f(x: int) -> int\nextern def g(x: int) -> int",
             },
         )
         diagnostics = _wire_extern_registry(
@@ -425,8 +425,8 @@ class TestFailFastDiagnostics:
 
     def test_diagnostics_via_run_prepared_before_lowering(self, tmp_path: Path) -> None:
         """The same wiring runs from the real pipeline entry point, cleanly (no crash)."""
-        write_module_file(tmp_path / "root", "lib.mod", "extern def f(x: int) -> int")
-        write_companion_file(tmp_path / "root", "lib.mod", "def wrong_name(x):\n    return x\n")
+        write_module_file(tmp_path / "root", "lib/mod", "extern def f(x: int) -> int")
+        write_companion_file(tmp_path / "root", "lib/mod", "def wrong_name(x):\n    return x\n")
         driver = PipelineDriver()
         prepared = PipelineDriver.prepare_program(
             "import lib.mod\nlib.mod::f(1)",
@@ -437,17 +437,17 @@ class TestFailFastDiagnostics:
         result = driver.run_prepared(prepared)
         assert result.ok is False
         assert len(result.diagnostics) == 1
-        assert "lib.mod" in result.diagnostics[0].message
+        assert "lib/mod" in result.diagnostics[0].message
         assert "'f'" in result.diagnostics[0].message
 
 
 class TestOrdering:
     def test_type_error_reported_before_any_companion_import(self, tmp_path: Path) -> None:
         marker = tmp_path / "marker.txt"
-        write_module_file(tmp_path / "root", "lib.mod", "extern def f(x: int) -> int")
+        write_module_file(tmp_path / "root", "lib/mod", "extern def f(x: int) -> int")
         write_companion_file(
             tmp_path / "root",
-            "lib.mod",
+            "lib/mod",
             f"open({str(marker)!r}, 'w').write('imported')\ndef wrong_name(x):\n    return x\n",
         )
         driver = PipelineDriver()
@@ -466,10 +466,10 @@ class TestOrdering:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         marker = tmp_path / "marker.txt"
-        write_module_file(tmp_path / "root", "lib.mod", "extern def f(x: int) -> int")
+        write_module_file(tmp_path / "root", "lib/mod", "extern def f(x: int) -> int")
         write_companion_file(
             tmp_path / "root",
-            "lib.mod",
+            "lib/mod",
             f"open({str(marker)!r}, 'w').write('imported')\ndef f(x):\n    return x\n",
         )
         monkeypatch.setattr(
@@ -496,8 +496,8 @@ class TestRegistryPopulatedViaPipeline:
     def test_registry_resolves_every_declared_extern_before_evaluation(
         self, tmp_path: Path
     ) -> None:
-        write_module_file(tmp_path / "root", "lib.mod", "extern def f(x: int) -> int")
-        write_companion_file(tmp_path / "root", "lib.mod", "def f(x):\n    return x + 1\n")
+        write_module_file(tmp_path / "root", "lib/mod", "extern def f(x: int) -> int")
+        write_companion_file(tmp_path / "root", "lib/mod", "def f(x):\n    return x + 1\n")
         driver = PipelineDriver()
         prepared = PipelineDriver.prepare_program(
             "import lib.mod\nlib.mod::f(1)",
@@ -515,13 +515,13 @@ class TestRegistryPopulatedViaPipeline:
             companion_paths=prepared.companion_paths,
         )
         assert diagnostics == []
-        fn = driver.host_environment().extern_registry.resolve(ModuleId.from_dotted("lib.mod"), "f")
+        fn = driver.host_environment().extern_registry.resolve(ModuleId.from_path("lib/mod"), "f")
         assert fn(1) == 2
 
     def test_run_prepared_wires_the_registry_before_evaluation(self, tmp_path: Path) -> None:
         """``run_prepared`` itself performs real-run extern wiring."""
-        write_module_file(tmp_path / "root", "lib.mod", "extern def f(x: int) -> int")
-        write_companion_file(tmp_path / "root", "lib.mod", "def f(x):\n    return x + 1\n")
+        write_module_file(tmp_path / "root", "lib/mod", "extern def f(x: int) -> int")
+        write_companion_file(tmp_path / "root", "lib/mod", "def f(x):\n    return x + 1\n")
         driver = PipelineDriver()
         prepared = PipelineDriver.prepare_program(
             "import lib.mod\nlib.mod::f(1)",
@@ -531,5 +531,5 @@ class TestRegistryPopulatedViaPipeline:
         )
         result = driver.run_prepared(prepared)
         assert result.ok is True
-        fn = driver.host_environment().extern_registry.resolve(ModuleId.from_dotted("lib.mod"), "f")
+        fn = driver.host_environment().extern_registry.resolve(ModuleId.from_path("lib/mod"), "f")
         assert fn(1) == 2
